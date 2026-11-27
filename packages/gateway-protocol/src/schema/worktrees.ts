@@ -117,6 +117,7 @@ export const WorktreesBranchesResultSchema = closedObject({
   defaultBranch: Type.Optional(NonEmptyString),
   headBranch: Type.Optional(NonEmptyString),
   repositoryStatus: Type.Optional(WorktreeRepositoryStatusSchema),
+  requiresWorktree: Type.Optional(Type.Boolean()),
   branchesUnavailable: Type.Optional(Type.Boolean()),
   refreshing: Type.Optional(Type.Boolean()),
 });

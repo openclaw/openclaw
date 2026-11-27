@@ -24,11 +24,11 @@ import { applyMemoryConsolidationPlan, consolidateMemory } from "./dreaming-cons
 import { buildBudgetedMemoryAppend } from "./memory-budget-append.js";
 import { DEFAULT_MEMORY_FILE_MAX_CHARS } from "./memory-budget.js";
 import { pruneMemoryEntryOrigins, reserveMemoryEntryOrigins } from "./memory-entry-origins.js";
+import { commitMemoryRewrite } from "./memory-rewrite.js";
 import { readWorkspaceFile } from "./memory-workspace-files.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import {
   buildPromotionMarker,
-  commitMemoryContent,
   extractPromotionKeys,
   hashMemoryContent,
   isAtomicReplacePermissionError,
@@ -373,6 +373,11 @@ export async function applyShortTermPromotions(
   let alreadyWritten = rehydratedSelected.filter((candidate) => existingMarkers.has(candidate.key));
   let toAppend = rehydratedSelected.filter((candidate) => !existingMarkers.has(candidate.key));
   const consolidationBaseMemoryHash = hashMemoryContent(existingMemory);
+  // Provenance readers classify the physical target, so record there, not at the alias.
+  const resolveMemoryProvenancePath = async () =>
+    path
+      .relative(await resolveMemoryWritePath(workspaceDir, workspaceDir), memoryWritePath)
+      .replaceAll(path.sep, "/");
   const plannedCandidateFingerprints = new Map(
     toAppend.map((candidate) => [candidate.key, consolidationCandidateFingerprint(candidate)]),
   );
@@ -505,10 +510,11 @@ export async function applyShortTermPromotions(
           operations: consolidationPlan.operations,
         });
         try {
-          await commitMemoryContent({
+          await commitMemoryRewrite({
             workspaceDir,
             workspaceFileMode: options.workspaceFileMode,
             filePath: memoryWritePath,
+            relativePath: await resolveMemoryProvenancePath(),
             tempPrefix: `${path.basename(memoryPath)}.promotion`,
             expectedHash: consolidationBaseMemoryHash,
             content: consolidationResult.content,
@@ -572,10 +578,11 @@ export async function applyShortTermPromotions(
           } else {
             // Append fallback keeps the historical read-modify-replace contract. Policy accepts
             // its external-editor race because OpenClaw writers remain serialized by this sweep lock.
-            await commitMemoryContent({
+            await commitMemoryRewrite({
               workspaceDir,
               workspaceFileMode: options.workspaceFileMode,
               filePath: memoryWritePath,
+              relativePath: await resolveMemoryProvenancePath(),
               tempPrefix: `${path.basename(memoryPath)}.promotion`,
               expectedHash: hashMemoryContent(existingMemory),
               expectedContent: existingMemory,

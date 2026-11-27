@@ -1,8 +1,8 @@
 import { For, Show, createMemo, type Element } from "solid-js";
+import { buildContextBudgetCategories } from "../../../../../src/shared/context-budget-categories.js";
 import { formatCompactTokenCount } from "../../../lib/format.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { SessionCostTotal } from "../../../lib/session-context-report.ts";
-import { buildChatContextCategories } from "./chat-context-breakdown-model.ts";
 import {
   ChatContextReport,
   contextLabelKeys,
@@ -47,7 +47,7 @@ export function ChatContextBreakdown(
             >
               {(report) => {
                 const categories = createMemo(() =>
-                  buildChatContextCategories(report(), props.used),
+                  buildContextBudgetCategories(report(), props.used),
                 );
                 return (
                   <>
@@ -98,11 +98,11 @@ export function ChatContextBreakdown(
 
 /** Shares the breakdown's usage read, so the popover issues one request for both. */
 export function ChatSessionCost(
-  props: ContextReportProps & { children: (cost: () => SessionCostTotal) => Element },
+  props: ContextReportProps & { children: (cost: () => SessionCostTotal | null) => Element },
 ) {
   return (
     <ChatContextReport {...props}>
-      {(result) => <Show when={result().cost}>{(cost) => props.children(cost)}</Show>}
+      {(result) => props.children(() => result().cost)}
     </ChatContextReport>
   );
 }

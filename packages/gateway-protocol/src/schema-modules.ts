@@ -3,6 +3,7 @@ export * from "./schema/primitives.js";
 export * from "./schema/agent.js";
 export * from "./schema/agents-files.js";
 export * from "./schema/agents-models-skills.js";
+export * from "./schema/models-auth.js";
 export * from "./schema/agents-workspace.js";
 export * from "./schema/artifacts.js";
 export * from "./schema/approvals.js";

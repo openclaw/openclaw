@@ -97,13 +97,28 @@ export class DraftRepositoryStateOwner {
     );
   }
 
-  get checkoutVisible(): boolean {
+  checkoutVisible(projectSelected: boolean): boolean {
+    if (this.repositoryValue.kind === "direct" && !projectSelected) {
+      return false;
+    }
     return (
-      this.refreshing ||
+      this.checkoutPending ||
+      projectSelected ||
       this.repositoryValue.kind === "unavailable" ||
       this.available() ||
       ((this.read().remotePlacement || this.worktree) && !this.remoteRepository)
     );
+  }
+
+  get checkoutPending(): boolean {
+    // Project eligibility owns the checkout choice; branch suggestions load independently.
+    const options = this.checkoutOptions;
+    return this.read().selectedProject && !this.read().remotePlacement
+      ? this.currentCheckoutUnavailable === "checking" ||
+          (typeof options === "object" &&
+            options.refreshing === true &&
+            this.checkoutSubmissionBlocked)
+      : this.repositoryValue.kind === "checking" && !this.worktree;
   }
 
   private selectionRevision = 0;
@@ -125,8 +140,11 @@ export class DraftRepositoryStateOwner {
 
   get currentCheckoutUnavailable(): "checking" | "unavailable" | "worktree" | undefined {
     const snapshot = this.read();
-    if (!snapshot.selectedProject || snapshot.remotePlacement) {
+    if (snapshot.remotePlacement) {
       return undefined;
+    }
+    if (!snapshot.selectedProject) {
+      return this.requiresWorktree ? "worktree" : undefined;
     }
     const options = this.checkoutOptions;
     if (!this.matchesProjectCheckout() || !options || options === "loading") {
@@ -171,8 +189,16 @@ export class DraftRepositoryStateOwner {
     }
   }
 
+  private get requiresWorktree(): boolean {
+    return (
+      this.repositoryValue.kind === "git" &&
+      this.repositoryValue.requiresWorktree === true &&
+      this.matchesCurrentRepo()
+    );
+  }
+
   get worktree(): boolean {
-    return this.worktreeValue;
+    return this.worktreeValue || this.requiresWorktree;
   }
 
   get preferenceWorktree(): boolean {
@@ -283,7 +309,7 @@ export class DraftRepositoryStateOwner {
 
   select(value: boolean): boolean {
     if (
-      this.worktreeValue === value ||
+      this.worktree === value ||
       this.read().remotePlacement ||
       (value ? !this.available() : Boolean(this.currentCheckoutUnavailable))
     ) {
@@ -516,6 +542,10 @@ export class DraftRepositoryStateOwner {
       this.read().remotePlacement
     ) {
       return;
+    }
+    if (this.preferredWorktreeRestore && !this.worktreeSelectedByUser) {
+      this.worktreeValue = true;
+      this.preferredWorktreeRestore = false;
     }
     const selectedAvailable = this.worktreeValue ? options.worktree : options.current;
     if (!selectedAvailable && (options.current || options.worktree)) {

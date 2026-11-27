@@ -56,7 +56,6 @@ export function createNativeGitHubReadFixture(branch: string, sourceHead: string
   const thread = {
     id: "thread-1",
     isResolved: false,
-    isOutdated: false,
     comments: connection([finding]),
   };
   const graph = {

@@ -1,6 +1,7 @@
 import type {
   FastMode,
   GatewaySessionRow,
+  ModelAuthStatusResult,
   ModelCatalogEntry,
   ModelCatalogResult,
   SessionsListResult,
@@ -233,6 +234,42 @@ export function hasChatModelCatalogSelection(
   );
   return catalog.some(
     (entry) => entry.manualSelectionAllowed !== false && catalogModelAvailabilityKey(entry) === key,
+  );
+}
+
+function hasConfiguredChatModelRoute(
+  entry: Pick<ModelCatalogEntry, "available" | "unavailableReason">,
+): boolean {
+  // Failed credentials and cooldowns still describe a configured route.
+  return (
+    entry.available !== false ||
+    entry.unavailableReason === "auth-failed" ||
+    entry.unavailableReason === "cooldown"
+  );
+}
+
+/** An empty catalog alone cannot establish that a configured model needs initial setup. */
+export function hasNoConnectedChatModel(
+  catalog: readonly ModelCatalogEntry[],
+  auth: ModelAuthStatusResult | null | undefined,
+): boolean {
+  return Boolean(
+    catalog.length > 0 &&
+    auth &&
+    auth.ts > 0 &&
+    !auth.unavailable &&
+    auth.providers.every(
+      (provider) =>
+        provider.status === "missing" &&
+        provider.profiles.length === 0 &&
+        !provider.apiKey &&
+        !provider.nativeAuth,
+    ) &&
+    !catalog.some(
+      (entry) =>
+        hasConfiguredChatModelRoute(entry) ||
+        entry.runtimeChoices?.some(hasConfiguredChatModelRoute),
+    ),
   );
 }
 

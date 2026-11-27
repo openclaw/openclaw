@@ -608,7 +608,7 @@ try {
       compositorLayers: values.trace,
     },
     compositorLayerContract:
-      "--trace retains the latest LayerTree.layerTreeDidChange event. Before fixture counters and the CPU window start, layers.json records each reported layer's compositing reasons and backend-node matches for all seven meter spans. Layers retired during metadata collection are marked stale. This is a pre-sample snapshot. LayerTree instrumentation is diagnostic overhead; DOM/reason queries and artifact writes run outside the measured interval.",
+      "--trace retains the latest LayerTree.layerTreeDidChange event. Before fixture counters and the CPU window start, layers.json records each reported layer's compositing reasons and backend-node matches for the meter host and its canvas. Layers retired during metadata collection are marked stale. This is a pre-sample snapshot. LayerTree instrumentation is diagnostic overhead; DOM/reason queries and artifact writes run outside the measured interval.",
     nativeAudioContract:
       "--compare-suspend-native-audio is a counterfactual diagnostic, never a product win or audio/latency proof. Supply the same frozen bundle in both slots to isolate native audio cost: AB side 1 suspends audio; AB side 0 and both A/A sides retain normal audio. Alternating side order and --aa provide interleaved shared-host controls. Only the suspended side wraps the native AudioContext constructor; after state/visibility setup it awaits suspension of every tracked live context and pauses every native audio element, without disconnecting the media graph, stopping tracks, or changing the meter JS timer. Every row records whether suspension is enabled; suspended rows record context states/counts and paused playback before suspension and at both sample endpoints. Native Stop still owns cleanup; each next state suspends again after any visibility-driven resume.",
     processCpuContract:
@@ -1257,13 +1257,17 @@ try {
                     }
                     // Collect metadata before fixture.start() opens the counter window.
                     const { root } = await cdp.send("DOM.getDocument");
-                    const selector = ".agent-chat__voice-activity-bar";
+                    // The meter draws on one canvas inside its host; both are layer candidates.
+                    const selector =
+                      ".agent-chat__voice-activity, .agent-chat__voice-activity-canvas";
                     const { nodeIds } = await cdp.send("DOM.querySelectorAll", {
                       nodeId: root.nodeId,
                       selector,
                     });
-                    if (nodeIds.length !== 7) {
-                      throw new Error(`Expected seven Talk meter spans, found ${nodeIds.length}`);
+                    if (nodeIds.length !== 2) {
+                      throw new Error(
+                        `Expected the Talk meter host and canvas, found ${nodeIds.length} nodes`,
+                      );
                     }
                     const meterNodes = await Promise.all(
                       nodeIds.map(async (nodeId: number, index: number) => {

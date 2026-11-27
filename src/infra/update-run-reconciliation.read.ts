@@ -1,11 +1,19 @@
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "./kysely-sync.js";
 import { readRestartSentinelRowSync } from "./restart-sentinel-store.js";
 import type { EngineConnection } from "./sql-connection.js";
 import { runSqliteReadSnapshotSync } from "./sqlite-transaction.js";
 import { inspectUpdateRunAbandonment } from "./update-run-activity.js";
-import { decodeRun, hasStoredUpdateRecovery } from "./update-run-read.kernel.js";
+import {
+  decodeRun,
+  hasStoredUpdateRecovery,
+  readUpdateRunRecord,
+} from "./update-run-read.kernel.js";
 import type {
   UpdateRunReconciliationCandidate,
   UpdateRunReconciliationInput,
@@ -45,16 +53,9 @@ export function inspectUpdateRunReconciliation(
   return { record, rule };
 }
 
-function readUpdateRunReconciliationRows(
-  db: EngineConnection,
-  input: UpdateRunReconciliationInput,
-) {
-  if (!tableExists(db, "update_runs")) {
-    return [];
-  }
+function selectRunningUpdateRuns(db: EngineConnection, input: UpdateRunReconciliationInput) {
   let query = getNodeSqliteKysely<LedgerDatabase>(db)
     .selectFrom("update_runs")
-    .selectAll()
     .where("status", "=", "running");
   if (input.runIds) {
     query = query.where("run_id", "in", [...input.runIds]);
@@ -62,20 +63,40 @@ function readUpdateRunReconciliationRows(
   if (input.excludeRunId) {
     query = query.where("run_id", "!=", input.excludeRunId);
   }
-  return executeSqliteQuerySync(db, query.orderBy("run_id")).rows;
+  return query;
+}
+
+export function readUpdateRunReconciliationCandidate(db: EngineConnection, runId: string) {
+  return runSqliteReadSnapshotSync(db, () => {
+    const run = tableExists(db, "update_runs") ? readUpdateRunRecord(db, runId) : undefined;
+    return run ? inspectUpdateRunReconciliation(db, run, {}) : undefined;
+  });
 }
 
 export function readUpdateRunReconciliationCandidates(
   db: EngineConnection,
   input: UpdateRunReconciliationInput,
 ): UpdateRunReconciliationCandidate[] {
-  // An empty selection needs no composite snapshot; nonempty reads start over inside it.
-  if (!db.isTransaction && readUpdateRunReconciliationRows(db, input).length === 0) {
+  const pinned = db.isTransaction;
+  if (!pinned && !tableExists(db, "update_runs")) {
     return [];
   }
-  return runSqliteReadSnapshotSync(db, () =>
-    readUpdateRunReconciliationRows(db, input).map((row) =>
+  const selection = selectRunningUpdateRuns(db, input);
+  if (!pinned) {
+    // Broad probes can stop at the first active index entry. Preserve primary-key seeks
+    // for explicit IDs even when SQLite has no planner statistics for the ledger.
+    const probe = input.runIds ? selection.orderBy("run_id") : selection;
+    if (!executeSqliteQueryTakeFirstSync(db, probe.select("status").limit(1))) {
+      return [];
+    }
+  }
+  // Rows or the table itself may disappear between the probe and BEGIN.
+  return runSqliteReadSnapshotSync(db, () => {
+    if (!tableExists(db, "update_runs")) {
+      return [];
+    }
+    return executeSqliteQuerySync(db, selection.selectAll().orderBy("run_id")).rows.map((row) =>
       inspectUpdateRunReconciliation(db, decodeRun(row), input),
-    ),
-  );
+    );
+  });
 }

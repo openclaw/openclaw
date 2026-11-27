@@ -1,5 +1,6 @@
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import type { ReplyBackendTurnAssessment } from "./session-controller.turn-status.types.js";
+import type { DiagnosticToolAwaiting } from "./session-controller.watchdog.types.js";
 
 export class SessionWatchdogError extends Error {
   override name = "AbortError";
@@ -9,7 +10,13 @@ export class SessionWatchdogError extends Error {
   constructor(
     message: string,
     readonly staleReason: "no_activity" | "rate_limited",
-    readonly pendingTools: { toolName: string; toolCallId: string; elapsedMs: number }[],
+    readonly pendingTools: {
+      toolName: string;
+      toolCallId: string;
+      elapsedMs: number;
+      explicitDeadline: boolean;
+      awaiting?: readonly DiagnosticToolAwaiting[];
+    }[],
     assessment?: ReplyBackendTurnAssessment & { durationMs: number },
   ) {
     super(message);

@@ -23,7 +23,7 @@ export async function resolveTrustedPluginGitHubAccount(
       method: "users.list",
       scope,
       resolveGatewayContext,
-      callerAuthorityError: "GitHub account lookup caller authority is no longer active",
+      callerAuthorityError: "GitHub account lookup request ended. Start a new request.",
     },
     async (_resolved, assertCurrent) => {
       const signals = [signal, scope?.signal].filter((value) => value !== undefined);

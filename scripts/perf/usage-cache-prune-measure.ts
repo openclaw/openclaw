@@ -16,7 +16,7 @@ import { loadavg } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
-import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
+import { startCollectedHeapSampling, sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -97,12 +97,7 @@ try {
     const inspector = new Session();
     try {
       if (values.mode === "allocation") {
-        inspector.connect();
-        await inspector.post("HeapProfiler.startSampling", {
-          samplingInterval: 4096,
-          includeObjectsCollectedByMajorGC: true,
-          includeObjectsCollectedByMinorGC: true,
-        });
+        await startCollectedHeapSampling(inspector, 4096);
       }
       let finished = false;
       const pendingProbes: Promise<void>[] = [];

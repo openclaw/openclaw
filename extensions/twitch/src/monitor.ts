@@ -1,38 +1,20 @@
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { createChannelInboundEnvelopeBuilderAsync } from "openclaw/plugin-sdk/channel-inbound";
-import {
-  defineStableChannelIngressIdentity,
-  type ChannelIngressContextBinding,
-  type ChannelIngressIdentitySubjectInput,
+import type {
+  ChannelIngressContextBinding,
+  ChannelIngressIdentitySubjectInput,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getOrCreateClientManager } from "./client-manager-registry.js";
+import { twitchRoleIdentity, twitchUserIdentity } from "./ingress-identity.js";
 import { getTwitchRuntime } from "./runtime.js";
 import { sendMessageTwitchInternal } from "./send.js";
 import { createTwitchIngress } from "./twitch-ingress.js";
 import type { TwitchAccountConfig, TwitchChatMessage } from "./types.js";
 
 type TwitchPolicyKind = "open" | "allowFrom" | "role";
-
-const twitchUserIdentity = defineStableChannelIngressIdentity({
-  key: "sender-id",
-  entryIdPrefix: "twitch-user-entry",
-});
-
-const twitchRoleIdentity = defineStableChannelIngressIdentity({
-  // Roles authorize the sender; only the native user ID identifies the participant.
-  key: "sender-id",
-  normalizeEntry: () => null,
-  aliases: ["moderator", "owner", "vip", "subscriber"].map((role) => ({
-    key: `role-${role}`,
-    kind: "role",
-    normalizeEntry: (entry) => (normalizeTwitchRole(entry) === role ? role : null),
-    normalizeSubject: normalizeTwitchRole,
-  })),
-  resolveEntryId: ({ entryIndex }) => `twitch-role-entry-${entryIndex + 1}`,
-});
 
 function resolveTwitchPolicyKind(account: TwitchAccountConfig): TwitchPolicyKind {
   if (account.allowFrom !== undefined) {
@@ -54,13 +36,6 @@ function twitchSubject(message: TwitchChatMessage): ChannelIngressIdentitySubjec
       "role-subscriber": message.isSub ? "subscriber" : undefined,
     },
   };
-}
-
-function normalizeTwitchRole(value: string): string | null {
-  const role = normalizeLowercaseStringOrEmpty(value);
-  return role === "moderator" || role === "owner" || role === "vip" || role === "subscriber"
-    ? role
-    : null;
 }
 
 function mentionsBot(message: string, botUsername: string): boolean {

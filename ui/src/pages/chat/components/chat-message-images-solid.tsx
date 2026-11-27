@@ -9,7 +9,10 @@ import { listen } from "../../../lib/reactive/listener.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { observeChatAttachmentViewport } from "./chat-attachment-viewport.ts";
 import { ImageFrame, type ImagePresentation } from "./chat-image-frame.tsx";
-import { resolveChatImagePreviewSize } from "./chat-image-preview-size.ts";
+import {
+  resolveChatImagePreviewSize,
+  type ChatImagePreviewSize,
+} from "./chat-image-preview-size.ts";
 import { chatImageRenditionWidth } from "./chat-image-rendition.ts";
 import {
   isManagedOutgoingMediaSource,
@@ -45,7 +48,11 @@ registerEnglishCatalog(registerChatComposerEnglish);
 
 registerEnglishCatalog(registerChatMediaEnglish);
 
-type MessageImageProps = { image: ImageBlock; options: ImageRenderOptions };
+type MessageImageProps = {
+  image: ImageBlock;
+  options: ImageRenderOptions;
+  previewBounds?: ChatImagePreviewSize;
+};
 
 const CANONICAL_IMAGE_HANDOFF_TIMEOUT_MS = 30_000;
 
@@ -574,6 +581,7 @@ function createMessageImagePresentation(props: MessageImageProps) {
 
 export type MessageImagesProps = {
   images: ImageBlock[];
+  previewBounds?: ChatImagePreviewSize;
   options?: ImageRenderOptions;
   previews?: JSX.Element[];
 };
@@ -678,7 +686,13 @@ export function MessageImages(props: MessageImagesProps): JSX.Element {
         ]}
       >
         <For each={projection()} keyed={(slot) => slot.key}>
-          {(slot) => <MessageImage image={slot().image} options={slot().options} />}
+          {(slot) => (
+            <MessageImage
+              image={slot().image}
+              options={slot().options}
+              previewBounds={props.previewBounds}
+            />
+          )}
         </For>
         {props.previews}
       </div>
@@ -696,7 +710,12 @@ function MessageImage(props: MessageImageProps): JSX.Element {
         return (
           <Show when={view.model().key} keyed>
             {(_key) => (
-              <ImageFrame model={view.model()} presentation={view} options={props.options} />
+              <ImageFrame
+                model={view.model()}
+                presentation={view}
+                options={props.options}
+                previewBounds={props.previewBounds}
+              />
             )}
           </Show>
         );

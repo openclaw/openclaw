@@ -736,6 +736,15 @@ const workerProtocolModules = new Map<string, ReadonlySet<string>>([
       "src/session-cards/progress-card-store.worker.ts",
     ]),
   ],
+  [
+    "startHostedWorker",
+    new Set([
+      "src/agents/plugin-model-catalog-read.worker.ts",
+      "src/config/sessions/session-transcript.worker.ts",
+      "src/infra/sqlite-store.worker.ts",
+      "src/state/openclaw-state-read.worker.ts",
+    ]),
+  ],
 ]);
 
 function analyzeExportNames(modules: SourceModule[]) {

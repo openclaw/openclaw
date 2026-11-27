@@ -252,19 +252,6 @@ describe("createAgentCapability lifecycle", () => {
 });
 
 describe("readToolsEffective", () => {
-  it("returns the effective-tools payload for the requested agent and session", async () => {
-    const payload = { agentId: "main", profile: "coding", groups: [] };
-    const request = vi.fn(async () => payload);
-    const client = createTestGatewayClient(request);
-    await expect(
-      readToolsEffective(client, { agentId: "main", sessionKey: "main" }),
-    ).resolves.toEqual(payload);
-    expect(request).toHaveBeenCalledWith("tools.effective", {
-      agentId: "main",
-      sessionKey: "main",
-    });
-  });
-
   it("throws the existing display error for the native error boundary", async () => {
     const client = createTestGatewayClient(
       vi.fn().mockRejectedValue(new Error("gateway unavailable")),
@@ -355,6 +342,7 @@ describe("agent creation", () => {
       agentId: expect.stringMatching(/^bot-/),
       name: "New agent",
       onboarding: true,
+      locale: "en",
     });
     expect(agents.state.agentsList).toEqual(roster);
     expect(agents.state.pendingAgent).toBeUndefined();

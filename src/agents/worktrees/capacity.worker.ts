@@ -92,7 +92,7 @@ function reserveWorktreeCapacityInDatabase(
     db,
     k
       .selectFrom("state_leases")
-      .select(["lease_key", "owner", "heartbeat_at", "payload_json"])
+      .select(["lease_key", "owner", "payload_json"])
       .where("scope", "=", WORKTREE_CAPACITY_RESERVATION_SCOPE),
   ).rows;
   const pending = new Map<string, { bytes: number; reserve: number; key: string }>();
@@ -104,10 +104,7 @@ function reserveWorktreeCapacityInDatabase(
     const isOwn = row.lease_key === key && row.owner === key;
     if (
       !isOwn &&
-      readStateLeaseProcessOwnerStatus(
-        parseStateLeaseProcessOwner(row.payload_json),
-        row.heartbeat_at ?? undefined,
-      ) === "dead"
+      readStateLeaseProcessOwnerStatus(parseStateLeaseProcessOwner(row.payload_json)) === "dead"
     ) {
       executeSqliteQuerySync(
         db,

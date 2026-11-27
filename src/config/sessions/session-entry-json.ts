@@ -1,5 +1,6 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { decodeQueuedOperatorRecoverySource } from "../../gateway/operator-run-recovery-source.codec.js";
 import { projectSessionEntryNumericSnapshot } from "./session-entry-numeric-snapshot.js";
 import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import type { SessionEntry } from "./types.js";
@@ -46,6 +47,11 @@ export function parseSqliteSessionEntryRecord(
 /** Admit unknown persisted or imported metadata once, before typed consumers use it. */
 export function admitCanonicalSessionEntry(value: Record<string, unknown>): SessionEntry {
   const entry = projectCanonicalSessionEntryShape(value);
+  if (value.delegatedOperatorSource !== undefined) {
+    entry.delegatedOperatorSource = decodeQueuedOperatorRecoverySource(
+      value.delegatedOperatorSource,
+    );
+  }
   return { ...entry, ...projectSessionEntryNumericSnapshot(entry) };
 }
 

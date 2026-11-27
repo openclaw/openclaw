@@ -22,7 +22,11 @@ import { assertPreparedSkillLibrarySelection } from "../../skills/library/select
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { errorShapeFromError } from "../error-shape.js";
 import { isNamedOperatorRoleEnforcementEnabled } from "../operator-role-enforcement.js";
-import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
+import {
+  resolveOperatorRolePolicyForProfile,
+  authorizeGatewaySessionCreation,
+  resolveCreatorSandbox,
+} from "../operator-role-policy.js";
 import {
   assertExpectedExistingSession,
   ExpectedExistingSessionChangedError,
@@ -205,8 +209,10 @@ export async function persistAgentSessionPhase(
       const delegatedCreation =
         !freshEntry &&
         !params.creation.actor &&
-        isNamedOperatorRoleEnforcementEnabled(params.cfg) &&
-        operatorRoleActor?.kind === "operator"
+        operatorRoleActor?.kind === "operator" &&
+        (isNamedOperatorRoleEnforcementEnabled(params.cfg) ||
+          resolveOperatorRolePolicyForProfile(operatorRoleActor.profileId, params.cfg) !==
+            undefined)
           ? {
               ...params.creation,
               actor: {

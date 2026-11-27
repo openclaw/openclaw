@@ -125,7 +125,9 @@ export function createNodeWorkerMcpTurn(
               tool: tool.tool,
               ...(tool.allowElicitation === true && { elicitationId: tool.id }),
               arguments: frame.arguments,
-              signal: AbortSignal.any([lifetime.signal, session.signal, controller.signal]),
+              // Policy revocation prevents new calls. An admitted write must still
+              // settle so its result is not lost after it reached the server.
+              signal: AbortSignal.any([lifetime.signal, controller.signal]),
             }),
           );
           // Only forward the MCP fields consumed by the model and its Code Mode guest.
@@ -151,11 +153,7 @@ export function createNodeWorkerMcpTurn(
         pending.delete(requestId);
       }
       if (!lifetime.signal.aborted && !controller.signal.aborted) {
-        await send(
-          session.signal.aborted
-            ? { ...reply, error: "Worker MCP admission was revoked" }
-            : response,
-        );
+        await send(response);
       }
     },
     cancel(requestId: string) {

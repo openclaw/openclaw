@@ -18,8 +18,8 @@ import { useTempSessionsFixture } from "../../config/sessions/test-helpers.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import { completeUserTurnProcessing } from "../../sessions/user-turn-transcript-processing.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import {
   ensureCanonicalUserProfileForEmail,
   setCanonicalUserProfileDisplayName,
@@ -65,6 +65,7 @@ function makeTurnParams(
     offloadedRefs: [],
     runId,
     client: null,
+    senderIsOwner: false,
     context: createAgentTurnTestContext(),
     ...overrides,
     request: { message, idempotencyKey: runId, ...overrides.request },
@@ -449,6 +450,34 @@ describe("requester-settle processing survives later user turns", () => {
     const before = await loadTranscriptEvents(scope());
     await expectCompletedReplay(before, preparePeer);
     expect(reads.command).not.toHaveBeenCalled();
+  });
+
+  it("persists hidden returned peer-delivery notices with display=false", async () => {
+    const delivery: Parameters<typeof withSessionSendDelivery>[0]["delivery"] = {
+      version: 1,
+      runId,
+      source: { agentId: "main", sessionId: "peer-source", sessionKey: sourceSessionKey },
+      target: { agentId: "main", sessionId, sessionKey },
+      sandboxed: false,
+      message: "sessions_send delivery failed",
+      returnedResult: { extraSystemPrompt: "Report the failure.", hideInput: true },
+    };
+    const hidden = await withSessionSendDelivery({ delivery }, () =>
+      prepare({
+        settleWakeReplay: undefined,
+        inputProvenance: { kind: "inter_session", sourceSessionKey, sourceTool: "sessions_send" },
+      }),
+    );
+    expect(hidden.recorder!.getPendingInputMessage!()).toMatchObject({ display: false });
+    await hidden.recorder!.persistApproved();
+    await complete(hidden);
+    await release(hidden);
+    expect(await loadTranscriptEvents(scope())).toContainEqual(
+      expect.objectContaining({
+        type: "message",
+        message: expect.objectContaining({ role: "user", display: false }),
+      }),
+    );
   });
 });
 

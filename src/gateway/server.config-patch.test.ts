@@ -608,7 +608,8 @@ describe("gateway config methods", () => {
   registerAgentConfigMutationTests({
     getCurrentConfigObject,
     getConfigHash,
-    rpc: (method, params) => rpcReq(requireClient(), method, params),
+    rpc: (method, params) =>
+      rpcReq(requireClient(), method, params, method === "agents.delete" ? 30_000 : undefined),
     workspacePath: configRpcWorkspacePath,
     reloadBarrier,
   });

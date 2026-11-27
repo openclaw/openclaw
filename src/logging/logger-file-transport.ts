@@ -1,11 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isMainThread } from "node:worker_threads";
 import { appendRegularFileSync } from "@openclaw/fs-safe/advanced";
 import { resolveStateDir } from "../config/state-dir.js";
 import { registerProcessExitCleanup } from "../infra/process-exit-cleanup.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { formatConsoleDiagnosticLine } from "./json-console-line.js";
 import {
+  executeFileLogIO,
   prepareFileLogTarget,
   resolveDefaultFileLogTarget,
   rotateLogFile,
@@ -19,8 +21,14 @@ import { formatTimestamp } from "./timestamps.js";
 async function runFileLogIO<Request extends FileLogIORequest>(
   request: Request,
 ): Promise<FileLogIOResults[Request["type"]]> {
+  // Worker threads write directly: their first flush can follow SIGTERM,
+  // after an update has replaced the old hashed chunks.
+  if (!isMainThread) {
+    // SAFETY: The filesystem switch returns the result for this request discriminant.
+    return (await executeFileLogIO(request)) as FileLogIOResults[Request["type"]];
+  }
   const { runFileLogIOInWorker } = await import("./logger-file-worker.js");
-  return runFileLogIOInWorker(request);
+  return runFileLogIOInWorker(request, () => fileLogTransport.flush());
 }
 
 type DefaultFileLogRootPreparation = {

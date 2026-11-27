@@ -317,6 +317,42 @@ describe("DirectDictationControl", () => {
   });
 });
 
+it.each([
+  { draft: "ask me", start: 6, end: 6, limit: 8, spoken: "🌱", expected: "ask me " },
+  {
+    draft: "ask basil about peas?",
+    start: 4,
+    end: 9,
+    limit: 21,
+    spoken: "🌱 basil",
+    expected: "ask 🌱 ba about peas?",
+  },
+])(
+  "fits the dictated replacement into the available space in '$draft'",
+  ({ draft, start, end, limit, spoken, expected }) => {
+    const target = document.createElement("textarea");
+    target.maxLength = limit;
+    target.value = draft;
+    target.setSelectionRange(start, end);
+    const editor = createDirectDictationTextarea(() => target);
+    editor.captureSelection();
+    expect(editor.previewTranscript(placeComposerDictation, spoken)).toBe(expected);
+    expect(editor.insertTranscript(placeComposerDictation, spoken)).toBe(expected);
+    expect(target.value).toBe(expected);
+  },
+);
+
+it("keeps edits made after Stop when a late replacement reaches the limit", () => {
+  const target = document.createElement("textarea");
+  target.maxLength = 12;
+  target.value = "old";
+  const editor = createDirectDictationTextarea(() => target);
+  editor.captureSelection();
+  target.value = "pick a pear";
+  target.setSelectionRange(5, 6);
+  expect(editor.insertTranscript(placeComposerDictation, "ripe", true)).toBe("pick ri pear");
+});
+
 it("keeps a newer preview provisional when earlier dictation text arrives", () => {
   const target = document.createElement("textarea");
   target.value = "base";

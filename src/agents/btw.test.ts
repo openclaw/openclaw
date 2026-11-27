@@ -808,13 +808,13 @@ describe("runBtwSideQuestion", () => {
     expect(btw.registerProviderStreamForModelMock).not.toHaveBeenCalled();
   });
 
-  it("rejects CLI session forks before backend preparation or provider I/O", async () => {
+  it("hands CLI session forks to the fork owner instead of the CLI side question", async () => {
     btw.mockCliOutput({ text: "CLI side answer." });
     const params = { cfg: btw.createCliRuntimeConfig(), model: "claude-opus-4-7" };
-    const sessionFork = async () => ({ text: "built-in fork" });
-    await expect(btw.runSideQuestion({ ...params, sessionFork })).rejects.toThrow(
-      "Session forks are not supported for CLI runtime claude-cli",
-    );
+    const sessionFork = async () => ({ text: "fork owner answer" });
+    await expect(btw.runSideQuestion({ ...params, sessionFork })).resolves.toEqual({
+      text: "fork owner answer",
+    });
     expect(btw.prepareCliRunContextMock).not.toHaveBeenCalled();
     expect(executePreparedCliRunMock).not.toHaveBeenCalled();
     expect(btw.streamSimpleMock).not.toHaveBeenCalled();

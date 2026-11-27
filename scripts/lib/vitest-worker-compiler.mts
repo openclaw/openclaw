@@ -4,7 +4,6 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { runtimeProcessEntrypoints } from "../../src/infra/runtime-process-entrypoints.ts";
-import { resolveBuildInfo } from "../write-build-info.ts";
 import { createFsSafeWindowsHelperAssetPlugin } from "./fs-safe-windows-helper-asset.mts";
 import { createManagedHandoffBuildConfigs } from "./managed-handoff-build-config.mts";
 import { vitestWorkerRuntimeAssets } from "./package-root-modules.mts";
@@ -15,7 +14,7 @@ import {
   getStandaloneRuntimeProcessOutputOptions,
   sharedRuntimeProcessBuildEntries,
   shouldBundleRuntimeSqliteDependency,
-  standaloneRuntimeProcessBuildEntries,
+  standaloneRuntimeProcessBuildGroups,
 } from "./runtime-process-core-build-entries.mts";
 import { createSqliteSchemaAssetsPlugin } from "./sqlite-schema-assets.mts";
 import { createStateSchemaInlinePlugin } from "./state-schema-inline-plugin.mts";
@@ -30,6 +29,7 @@ import {
   preservedModuleBuildSources,
   vitestWorkerBuildEntries,
 } from "./vitest-worker-build-entries.mts";
+import { resolveVitestWorkerBuildInfo } from "./vitest-worker-build-info.mts";
 import { useVitestWorkerCache } from "./vitest-worker-cache-policy.mts";
 import {
   runtimeProcessDeclarationEntries,
@@ -404,14 +404,11 @@ async function compileVitestWorkerArtifacts(
     if (preset === "tooling") {
       return;
     }
-    for (const [name, source] of Object.entries(entry)) {
-      if (!Object.hasOwn(standaloneRuntimeProcessBuildEntries, name)) {
-        continue;
-      }
+    for (const group of standaloneRuntimeProcessBuildGroups(entry)) {
       await build({
         ...config,
-        entry: { [name]: source },
-        outputOptions: getStandaloneRuntimeProcessOutputOptions(name),
+        entry: group,
+        outputOptions: getStandaloneRuntimeProcessOutputOptions(Object.keys(group)[0]!),
       });
     }
     reportPhase("standalone workers compiled");
@@ -540,9 +537,7 @@ async function prepareVitestWorkerManifest(
   { restored = false, cacheSignature }: { restored?: boolean; cacheSignature?: string } = {},
 ): Promise<VitestWorkerManifest> {
   const outDir = path.join(directory, "dist");
-  // Version consumers need the built source identity without making this
-  // disposable generation a competing OpenClaw installation root.
-  const buildInfo = `${JSON.stringify(resolveBuildInfo({ rootDir: root }), null, 2)}\n`;
+  const buildInfo = `${JSON.stringify(resolveVitestWorkerBuildInfo(root), null, 2)}\n`;
   fs.writeFileSync(path.join(outDir, "build-info.json"), buildInfo, restored ? {} : { flag: "wx" });
   outputs["build-info.json"] = hashVitestWorkerArtifact(buildInfo);
   const sortedInputs = Object.fromEntries(

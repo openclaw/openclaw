@@ -3,7 +3,6 @@ import {
   ErrorCodes,
   errorShape,
   missingScopeErrorShape,
-  type SessionsPatchManyResult,
   type SessionsPatchManyParams,
   type SessionsPatchParams,
   validateSessionsAssignOwnerParams,
@@ -23,7 +22,8 @@ import {
   runSessionMutation,
 } from "../../sessions/session-controller.lifecycle.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { operatorSessionCap } from "../operator-role-policy.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { prepareSessionFastModePresentation } from "../session-fast-mode-presentation.js";
@@ -33,6 +33,7 @@ import {
 } from "../session-identity-projection.js";
 import { loadSessionLifecycleRuntime } from "../session-lifecycle-runtime-loader.js";
 import { sessionMutationForbiddenError } from "../session-mutation-authorization-error.js";
+import { usesLegacySessionPins } from "../session-pin-compatibility.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { prepareSessionMutationFacts } from "../session-sharing-preparation.js";
 import {
@@ -49,9 +50,13 @@ import { respondError } from "./response.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { SessionPatchTargetIdentity } from "./session-unread-ack.js";
+import { admitArchiveUndo } from "./sessions-patch-archive-undo.js";
 import { startSessionPatchDiagnostics } from "./sessions-patch-diagnostics.js";
 import { executeSessionPatchMutations } from "./sessions-patch-engine.js";
 import { createCommitGuard } from "./sessions-patch-errors.js";
+import { patchPersonalSessionPins } from "./sessions-patch-personal-pins.js";
+import { projectSessionPatchManyResult } from "./sessions-patch-response.js";
+import { getDeferredSelfSnoozeChat } from "./sessions-patch-self-snooze.js";
 import { requireSessionKey } from "./sessions-shared.js";
 import { sharingExpectedEntry } from "./sessions-sharing-authority.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -73,7 +78,7 @@ function createSessionPatchHandler(
     const requestAuthority = readGatewayRequestMutationAuthority(options);
     const diagnostics = startSessionPatchDiagnostics(method);
     let archivedSessionsCommitted = false;
-    let preparingOperator: ReturnType<typeof captureGatewayOperatorRunAuthority> | undefined;
+    let preparingOperator: ReturnType<typeof prepareGatewayOperatorRunAuthority> | undefined;
     try {
       let request:
         | { many: true; params: SessionsPatchManyParams }
@@ -120,6 +125,19 @@ function createSessionPatchHandler(
         patch = singlePatch;
         targets = [singlePatch];
       }
+      const archive = admitArchiveUndo(options, patch, targets);
+      if (!archive.ok) {
+        respond(false, undefined, archive.error);
+        return;
+      }
+      if (archive.caller) {
+        // Do not carry private controls into events, hooks or metadata projections.
+        delete patch.requestArchiveUndo;
+        delete patch.archiveUndoToken;
+      }
+      if (patch.pinned !== undefined && !usesLegacySessionPins(client)) {
+        return await patchPersonalSessionPins(options, targets, patch, request.many);
+      }
       const assertCurrent = () => {
         requestAuthority.assertCurrent();
         if (!request.many) {
@@ -131,7 +149,7 @@ function createSessionPatchHandler(
         patch.agentRuntime !== undefined ||
         patch.cyberAccessProgram !== undefined
       ) {
-        preparingOperator = captureGatewayOperatorRunAuthority({
+        preparingOperator = prepareGatewayOperatorRunAuthority({
           client,
           context,
           hasCurrentClientAuthority,
@@ -144,7 +162,12 @@ function createSessionPatchHandler(
         context,
         signal,
         diagnostics,
+        archiveUndo: archive.caller,
+        participationOnly: sessionMutationAuthorization?.participationCeiling !== undefined,
+        deferredSelfSnooze: request.many ? undefined : getDeferredSelfSnoozeChat(request.params),
         operatorAuthority: preparingOperator,
+        followSharingRegistration: sessionMutationAuthorization?.followRegistration,
+        readSessionSharing: sessionMutationAuthorization?.readTargetSharing,
         onCreatedSessionCommitted: request.many
           ? undefined
           : sessionMutationAuthorization?.recordCreatedSession,
@@ -153,6 +176,11 @@ function createSessionPatchHandler(
           ...target,
           commitGuard: createCommitGuard(target.key.trim(), () => {
             assertCurrent();
+            // Each Archive checks the receipt issuer immediately before its drain starts.
+            // Once started it settles under ordinary Archive guards; Undo never detaches.
+            if (archive.caller?.token) {
+              archive.caller.assertCurrent();
+            }
             if (request.many) {
               sessionMutationAuthorization?.assertTargetCurrent({
                 sessionKey: target.key.trim(),
@@ -168,20 +196,12 @@ function createSessionPatchHandler(
       }
       archivedSessionsCommitted = executed.archivedSessionsCommitted;
       if (request.many) {
+        if (archive.caller) {
+          assertCurrent();
+          archive.caller.assertCurrent();
+        }
         diagnostics?.scope("response");
-        const outcomes: SessionsPatchManyResult["outcomes"] = executed.outcomes.map(
-          (outcome, index) => {
-            const target = targets[index]!;
-            const identity = {
-              key: target.key,
-              ...(target.agentId ? { agentId: target.agentId } : {}),
-            };
-            return outcome.ok
-              ? { ok: true, ...identity }
-              : { ok: false, ...identity, error: outcome.error };
-          },
-        );
-        respond(true, { outcomes }, undefined);
+        respond(true, projectSessionPatchManyResult(targets, executed.outcomes), undefined);
         return;
       }
       const outcome = executed.outcomes[0]!;
@@ -191,31 +211,34 @@ function createSessionPatchHandler(
       }
       const prepared = executed.preparedByIndex[0]!;
       diagnostics?.scope("response");
-      const catalog = await executed.catalogs.available(prepared.targetAgentId);
+      const { targetAgentId: agentId, canonicalKey: sessionKey } = prepared;
+      const catalog = await executed.catalogs.available(agentId);
       const [acpMeta] = await readAcpSessionMetaForEntries({
         cfg: executed.cfg,
-        entries: [
-          {
-            agentId: prepared.targetAgentId,
-            sessionKey: prepared.canonicalKey,
-            entry: outcome.entry,
-          },
-        ],
+        entries: [{ agentId, sessionKey, entry: outcome.entry }],
       });
       assertCurrent();
+      archive.caller?.assertCurrent();
+      const result = projectSessionPatchResult({
+        ...prepared,
+        cfg: executed.cfg,
+        preparedAcpMeta: acpMeta ?? null,
+        entry: {
+          ...outcome.entry,
+          fastMode: prepareSessionFastModePresentation(client)(outcome.entry.fastMode),
+        },
+        modelCatalog: catalog?.entries,
+        modelCatalogRouteVariants: catalog?.routeVariants,
+      });
+      if (!usesLegacySessionPins(client)) {
+        // This shared metadata patch did not read the requester's sidebar.
+        delete result.entry.pinnedAt;
+      }
       respond(
         true,
-        projectSessionPatchResult({
-          ...prepared,
-          cfg: executed.cfg,
-          preparedAcpMeta: acpMeta ?? null,
-          entry: {
-            ...outcome.entry,
-            fastMode: prepareSessionFastModePresentation(client)(outcome.entry.fastMode),
-          },
-          modelCatalog: catalog?.entries,
-          modelCatalogRouteVariants: catalog?.routeVariants,
-        }),
+        outcome.archiveUndoToken
+          ? { ...result, archiveUndoToken: outcome.archiveUndoToken }
+          : result,
         undefined,
       );
     } finally {
@@ -476,6 +499,12 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
               {
                 owner,
                 assignedBy,
+                // Re-assigning the current owner keeps when they became owner; spawned
+                // children compare it with their creation to detect a re-owned parent.
+                ...(target.entry.owner?.actor.type === owner.type &&
+                target.entry.owner.actor.id === owner.id
+                  ? { assignedAt: target.entry.owner.assignedAt }
+                  : {}),
                 expectedSessionId,
                 expectedEntry: {
                   ...sharingExpectedEntry(target),
@@ -610,7 +639,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
 
     const reason = p.reason === "new" ? "new" : "reset";
     const { performGatewaySessionReset } = await loadSessionLifecycleRuntime();
-    const captured = await captureGatewayOperatorRunAuthority({
+    const captured = await prepareGatewayOperatorRunAuthority({
       client,
       context,
       hasCurrentClientAuthority,
@@ -622,6 +651,8 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     try {
       const result = await performGatewaySessionReset({
         operatorAuthority: captured?.authority,
+        readSessionSharing: sessionMutationAuthorization?.readTargetSharing,
+        getCurrentSessionAccessCap: () => operatorSessionCap(client, context.getRuntimeConfig()),
         key,
         ...(p.agentId ? { agentId: p.agentId } : {}),
         reason,

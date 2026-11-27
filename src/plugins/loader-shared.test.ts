@@ -10,7 +10,6 @@ import type { PluginCandidate } from "./discovery.js";
 import {
   createPluginCandidatesFromManifestRegistry,
   preparePluginLoadRecord,
-  validatePluginConfig as validatePluginConfigByOrigin,
 } from "./loader-shared.js";
 import type { PluginLoadOptions } from "./loader-types.js";
 import { loadOpenClawPluginCliRegistry, loadOpenClawPlugins } from "./loader.js";
@@ -22,6 +21,7 @@ import {
 import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
 import { waitForPluginCacheRetirement } from "./plugin-cache.js";
 import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
+import { validatePluginConfig as validatePluginConfigByOrigin } from "./schema-validator.js";
 
 function validatePluginConfig(
   params: Omit<Parameters<typeof validatePluginConfigByOrigin>[0], "origin">,

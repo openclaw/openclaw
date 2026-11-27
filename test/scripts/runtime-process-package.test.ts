@@ -15,6 +15,7 @@ it("packs every core runtime process without exposing the portable worker graph"
   ) as { files: string[] };
   const runtimePaths = [
     ...runtimeProcessCoreEntrypoints.map((entry) => `dist/${entry.distWorkerPath}`),
+    "dist/native-resource-private/shared-fixture.mjs",
     "dist/state/openclaw-state-lease-heartbeat.worker-postgres-fixture.mjs",
     "dist/process/supervisor/service-child-group-anchor-lineage-fixture.mjs",
   ];

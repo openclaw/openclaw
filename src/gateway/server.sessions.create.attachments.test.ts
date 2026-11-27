@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
+import { nextEventLoopTurn } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareSandboxWorkspaceForSession } from "../agents/sandbox/context.js";
 import { withFullRuntimeReplyConfig } from "../auto-reply/reply/get-reply-fast-path.js";
@@ -9,22 +10,58 @@ import * as replyRun from "../auto-reply/reply/get-reply-run.js";
 import { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
+import { registerChatAbortController } from "./chat-abort.js";
 import {
   controlUiClient,
   initializeRepository,
   removeOwnedSessionWorktree,
   settleWorkspaceRuns,
   successfulSessionRequest,
+  waitForCreatedSessionRun,
 } from "./server.sessions.create.projects.test-support.js";
 import { dispatchInboundMessageMock, gatewayReplyMock, testState } from "./test-helpers.js";
 import { setupGatewaySessionsHandlerTestHarness } from "./test/server-sessions.test-helpers.js";
 
 const temporaryDirs = useAutoCleanupTempDirTracker(afterEach);
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
+
+test("joins accepted terminal persistence before checking removed creation sources", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const sessionKey = "agent:main:dashboard:creation-cleanup";
+  const persisted = createDeferredCore();
+  const registration = registerChatAbortController({
+    target: captureSessionTarget({
+      storeScope: storePath,
+      sessionKey,
+      incarnation: "creation-cleanup",
+    }),
+    runId: "creation-cleanup",
+    sessionId: "creation-cleanup",
+    sessionKey,
+    timeoutMs: 60_000,
+    sourceWork: persisted.promise,
+  });
+  const entry = registration.entry;
+  assert(entry, "the cleanup fixture did not register its source");
+  entry.adapter.projectSessionTerminalPersistence = persisted.promise;
+  const clearPersistence = persisted.promise.then(() => {
+    entry.adapter.projectSessionTerminalPersistence = undefined;
+  });
+  const settled = waitForCreatedSessionRun({}, storePath, sessionKey);
+  registration.cleanup();
+  rpcSourceTesting.deleteExpected("creation-cleanup", entry);
+  await nextEventLoopTurn();
+  persisted.resolve();
+  await clearPersistence;
+  expect(await settled).toBe(true);
+});
 
 afterEach(async () => {
   gatewayReplyMock.mockReset();

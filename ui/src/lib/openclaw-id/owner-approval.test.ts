@@ -18,6 +18,7 @@ import {
   type MailboxMessage,
   type SignedStatement,
 } from "../../../../packages/openclaw-id-protocol/src/index.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createOwnerApproval, type OwnerApproval } from "./owner-approval.ts";
 import type { OpenClawIdPeopleLink, OpenClawIdRecoveryUse } from "./types.ts";
@@ -144,6 +145,7 @@ async function setup(
   const queue: MailboxMessage[] = [first];
   let wake: (() => void) | undefined;
   let reads = 0;
+  let deliveredBatches = 0;
   let shared: Uint8Array;
   let transcript: Uint8Array;
   let matching: string | undefined;
@@ -156,6 +158,7 @@ async function setup(
       : [{ accountId: "alice", displayName: "Alice", email: "alice@example.test" }];
   const recoveryUses: OpenClawIdRecoveryUse[] = [];
   const mockClient = {
+    connected: true,
     request: vi.fn(async (_method: string, params: Record<string, unknown>) => {
       if (params.action === "submit") {
         operations.push("submit");
@@ -202,7 +205,10 @@ async function setup(
             wake = resolve;
           });
         }
-        return { status: 200, body: JSON.stringify({ messages: queue.splice(0), cursor: "1" }) };
+        return {
+          status: 200,
+          body: JSON.stringify({ messages: queue.splice(0), cursor: String(++deliveredBatches) }),
+        };
       }
       if (params.operation === "send") {
         const { payload } = JSON.parse(params.body as string);
@@ -248,6 +254,10 @@ async function setup(
   }
   return {
     client,
+    mockClient,
+    /** Answers the pending long poll with no new mail. */
+    poke: () => wake?.(),
+    reads: () => reads,
     removeMember: () => {
       members = [];
     },
@@ -266,8 +276,7 @@ async function setup(
         device_pub: formatEd25519PublicKey(device.publicKey),
         peer_key: formatIrohEndpointKey(device.publicKey),
       };
-      const before = reads;
-      queue.push({
+      const replacement: MailboxMessage = {
         ...first,
         received_at: receivedAt,
         from: { ...first.from, device_fp: await fingerprint(next.device_pub) },
@@ -281,9 +290,18 @@ async function setup(
             commit: await sasCommitment(ephN.publicKey, next),
           },
         },
-      });
+      };
+      const cursor = String(deliveredBatches + 1);
+      queue.push(replacement);
       wake?.();
-      await vi.waitFor(() => expect(reads).toBeGreaterThan(before));
+      // The next poll acknowledges this batch only after every message has been handled.
+      await vi.waitFor(() =>
+        expect(mockClient.request).toHaveBeenCalledWith(
+          "openclawId.authority",
+          expect.objectContaining({ operation: "receive", after: cursor }),
+          expect.anything(),
+        ),
+      );
       return next.request_id;
     },
     recoveryUses,
@@ -610,5 +628,160 @@ describe("local original-D SAS approval", () => {
     await owner.decide(f.id, true, null, "482917");
     expect(f.operations).toEqual(["accept"]);
     expect(f.read().submitted).toBeUndefined();
+  });
+});
+
+describe("owner approval across transport failures", () => {
+  const unavailable = () =>
+    new GatewayRequestError({
+      code: "UNAVAILABLE",
+      message: "Owner-device mail could not be delivered",
+      retryable: true,
+    });
+  // The claw lists N once the submitted change applied, as the Gateway reports after admission.
+  const admitOnSubmit = (f: Awaited<ReturnType<typeof setup>>) => {
+    const original = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (...args) => {
+      const result = await original(...args);
+      const submitted = f.read().submitted;
+      if (args[1].operation === "context" && submitted?.body.target.op === "add_owner_device") {
+        const link = (result as { link: OpenClawIdPeopleLink }).link;
+        const cert = submitted.body.target.cert;
+        link.ownerDevices = [
+          ...(link.ownerDevices ?? []),
+          { ...link.ownerDevices![0]!, devicePub: cert.body.device_pub, deviceFp: "fp:new", cert },
+        ];
+      }
+      return result;
+    });
+    return original;
+  };
+
+  // The first sealed send fails as the connection drops; the claw has already applied the change.
+  const dropFirstSealed = (f: Awaited<ReturnType<typeof setup>>, onContext = () => {}) => {
+    admitOnSubmit(f);
+    const admitted = f.request.getMockImplementation()!;
+    let dropped = false;
+    f.request.mockImplementation(async (...args) => {
+      if (
+        args[1].operation === "send" &&
+        JSON.parse(args[1].body as string).payload.step === "sealed" &&
+        !dropped
+      ) {
+        dropped = true;
+        f.mockClient.connected = false;
+        throw new Error("gateway closed (1006): ");
+      }
+      if (dropped && args[1].operation === "context") {
+        onContext();
+      }
+      return admitted(...args);
+    });
+    return admitted;
+  };
+
+  it.each([false, true])(
+    "finishes an admitted approval whose sealed handoff was lost to a dropped connection (moved client: %s)",
+    async (moved) => {
+      const f = await setup();
+      const admitted = dropFirstSealed(f);
+      await owner.decide(f.id, true);
+      expect(owner.read().requests[0]).toMatchObject({ uncertain: true });
+      const next = { connected: true, request: vi.fn(admitted) };
+      if (moved) {
+        owner.suspend();
+        owner.resume(next as unknown as GatewayBrowserClient);
+      } else {
+        f.mockClient.connected = true;
+      }
+      f.poke();
+      await vi.waitFor(() => expect(f.read().handoff).toBeDefined());
+      expect(f.operations.filter((op) => op === "submit")).toHaveLength(1);
+      expect(owner.read().requests).toEqual([]);
+      expect(next.request.mock.calls.some(([, p]) => p.operation === "send")).toBe(moved);
+    },
+  );
+
+  it("holds mail and decisions while a reconnected client is being admitted", async () => {
+    const f = await setup();
+    owner.suspend();
+    const before = f.reads();
+    f.poke();
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 300);
+    });
+    expect(f.reads()).toBe(before);
+    await owner.decide(f.id, true);
+    expect(f.operations).not.toContain("submit");
+    expect(owner.read().requests[0]?.error).toContain("Reconnecting");
+    owner.resume(f.client);
+    await vi.waitFor(() => expect(f.reads()).toBeGreaterThan(before));
+    await owner.decide(f.id, true);
+    expect(f.read().handoff).toBeDefined();
+  });
+
+  it("withholds a recovered handoff when the attempt expires during the admission check", async () => {
+    const f = await setup();
+    dropFirstSealed(f, () => vi.spyOn(Date, "now").mockReturnValue(Date.now() + 301_000));
+    await owner.decide(f.id, true);
+    f.poke();
+    const contexts = () => f.request.mock.calls.filter(([, p]) => p.operation === "context").length;
+    await vi.waitFor(() => expect(contexts()).toBeGreaterThan(2));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 100);
+    });
+    expect(f.read().handoff).toBeUndefined();
+  });
+
+  it("never sends a handoff for an uncertain submit the claw did not apply", async () => {
+    const f = await setup(true);
+    await owner.decide(f.id, true);
+    const before = f.reads();
+    f.poke();
+    await vi.waitFor(() => expect(f.reads()).toBeGreaterThan(before));
+    expect(f.operations).toEqual(["accept", "submit"]);
+    expect(f.read().handoff).toBeUndefined();
+  });
+
+  it("keeps reading mail after an unavailable relay instead of waiting for Retry", async () => {
+    const f = await setup();
+    const original = f.request.getMockImplementation()!;
+    let failures = 1;
+    f.request.mockImplementation(async (...args) => {
+      if (args[1].operation === "receive" && failures > 0) {
+        failures -= 1;
+        throw unavailable();
+      }
+      return original(...args);
+    });
+    f.poke();
+    await vi.waitFor(() => expect(owner.read().error).toContain("could not be delivered"));
+    const before = f.reads();
+    await vi.waitFor(() => expect(f.reads()).toBeGreaterThan(before), { timeout: 3_000 });
+    f.poke();
+    await vi.waitFor(() => expect(owner.read().error).toBeNull());
+    await owner.decide(f.id, true);
+    expect(f.read().handoff).toBeDefined();
+  });
+
+  it("stops on a refusal and leaves it to an explicit Retry", async () => {
+    const f = await setup();
+    const original = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (...args) => {
+      if (args[1].operation === "receive") {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "Only an active owner device can use device mail",
+        });
+      }
+      return original(...args);
+    });
+    f.poke();
+    await vi.waitFor(() => expect(owner.read().error).toContain("Only an active owner"));
+    const reads = f.request.mock.calls.filter(([, p]) => p.operation === "receive").length;
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 1_500);
+    });
+    expect(f.request.mock.calls.filter(([, p]) => p.operation === "receive")).toHaveLength(reads);
   });
 });

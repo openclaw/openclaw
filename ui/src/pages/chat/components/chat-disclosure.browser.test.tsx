@@ -125,6 +125,9 @@ describe.runIf(browserMode)("chat disclosure activation", () => {
       const label = (button.querySelector<HTMLElement>(
         ".chat-activity-group__label, .chat-tool-msg-summary__label, .chat-tool-msg-summary__names",
       ) ?? button.querySelector<HTMLElement>("span"))!;
+      if (kind === "work") {
+        expect(label.textContent).toBe("Worked");
+      }
       expect(button.getAttribute("aria-expanded")).toBe("false");
       // Real pointer events exercise browser word selection before the second click.
       await userEvent.dblClick(label);

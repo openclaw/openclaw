@@ -17,6 +17,7 @@ import { guardSessionManager } from "../../src/agents/session-tool-result-guard-
 import { SessionManager } from "../../src/agents/sessions/session-manager.js";
 import type { Message } from "../../src/llm/types.js";
 import { isDeeplyFrozenPlainData } from "../../src/shared/immutable-data.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 
 const { values } = parseArgs({
@@ -118,12 +119,7 @@ await setImmediate();
 global.gc();
 const inspector = values.allocation ? new Session() : undefined;
 if (inspector) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 512,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 512);
 }
 const gc: { kind: number; ms: number }[] = [];
 const observer = new PerformanceObserver((list) =>

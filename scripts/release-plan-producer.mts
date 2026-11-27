@@ -47,6 +47,7 @@ const TOOLING_MODULE_PATHS = [
   "scripts/lib/release-plan-source.mts",
   "scripts/lib/release-upgrade-baseline.mjs",
   "scripts/lib/release-validation-waivers.mjs",
+  "scripts/lib/release-validation-waivers.json",
   "scripts/lib/release-version.mjs",
   "scripts/release-plan-contract.mjs",
   "scripts/release-plan-producer-core.mts",
@@ -386,15 +387,7 @@ function captureQualificationIdentity(params: ReleaseInventorySource, runGh: Run
   api("actions/artifacts/" + artifactId);
   api("actions/runs/" + runId + "/attempts/" + runAttempt + "/jobs?per_page=100");
   api("actions/artifacts/" + artifactId + "/zip", true);
-  if (params.candidateSha !== params.toolingSha) {
-    // Independent Q must be a main ancestor. Retain the exact observation for
-    // the verified child; P still owns descriptor, tuple, and authority validation.
-    verifyRemoteTooling(
-      { ...params, toolingFullRef: "refs/heads/main" },
-      (args) => String(capture(args)),
-      false,
-    );
-  }
+  api("contents/scripts/lib/release-validation-waivers.json?ref=" + params.toolingSha);
   const finalAuthorityStart = responses.length;
   api("actions/artifacts/" + artifactId);
   producer();
@@ -796,6 +789,10 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     main();
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
+    // Identity lookups wrap the gh failure; retain its diagnostic without dumping captured stdout.
+    if (error instanceof Error && error.cause instanceof Error) {
+      console.error(`Caused by: ${error.cause.message}`);
+    }
     console.error("[release-plan-producer] FAILED (exit 1)");
     process.exitCode = 1;
   }

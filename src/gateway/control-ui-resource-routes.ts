@@ -12,26 +12,28 @@ export function resolveAssistantMediaRoutePath(basePath?: string): string {
   return `${normalizedBasePath}${CONTROL_UI_ASSISTANT_MEDIA_PREFIX}`;
 }
 
-const CONTROL_UI_RESOURCE_ROUTES = {
-  agentAvatar: { prefix: "/avatar", suffix: "" },
-  catalogIcon: { prefix: "/__openclaw__/catalog-icon", suffix: "" },
-  channelAvatar: { prefix: "/__openclaw__/channel-avatar", suffix: "" },
-  linkFavicon: { prefix: "/__openclaw__/link-favicon", suffix: "" },
-  pluginIcon: { prefix: "/__openclaw__/plugin-icon", suffix: "" },
-  providerIcon: { prefix: "/__openclaw__/provider-icon", suffix: "" },
-  pluginActivityIcon: { prefix: "/__openclaw__/plugin-activity-icon", suffix: "" },
-  pluginThemeArt: { prefix: "/__openclaw__/plugin-theme-art", suffix: "" },
-  userAvatar: {
-    prefix: CONTROL_UI_USER_AVATAR_PATH_PREFIX.slice(0, -1),
-    suffix: CONTROL_UI_USER_AVATAR_PATH_SUFFIX,
-  },
-  workspaceIcon: { prefix: "/__openclaw__/workspace-icon", suffix: "" },
+const CONTROL_UI_RESOURCE_PREFIXES = {
+  agentAvatar: "/avatar",
+  catalogIcon: "/__openclaw__/catalog-icon",
+  channelAvatar: "/__openclaw__/channel-avatar",
+  linkFavicon: "/__openclaw__/link-favicon",
+  pluginIcon: "/__openclaw__/plugin-icon",
+  providerIcon: "/__openclaw__/provider-icon",
+  pluginActivityIcon: "/__openclaw__/plugin-activity-icon",
+  pluginThemeArt: "/__openclaw__/plugin-theme-art",
+  projectIcon: "/__openclaw__/project-icon",
+  userAvatar: CONTROL_UI_USER_AVATAR_PATH_PREFIX.slice(0, -1),
+  workspaceIcon: "/__openclaw__/workspace-icon",
 } as const;
 
-export type ControlUiResourceRoute = keyof typeof CONTROL_UI_RESOURCE_ROUTES;
+export type ControlUiResourceRoute = keyof typeof CONTROL_UI_RESOURCE_PREFIXES;
 type ControlUiResourcePathMatch =
   | { matched: false }
   | { matched: true; value: string | null; segments?: string[] };
+
+function resourceSuffix(route: ControlUiResourceRoute): string {
+  return route === "userAvatar" ? CONTROL_UI_USER_AVATAR_PATH_SUFFIX : "";
+}
 
 /** Builds one canonical, encoded Control UI resource path. */
 export function buildControlUiResourcePath(
@@ -40,9 +42,9 @@ export function buildControlUiResourcePath(
   value: string,
   segments: readonly string[] = [],
 ): string {
-  const definition = CONTROL_UI_RESOURCE_ROUTES[route];
+  const prefix = CONTROL_UI_RESOURCE_PREFIXES[route];
   const encoded = [value, ...segments].map(encodeURIComponent).join("/");
-  return `${normalizeControlUiBasePath(basePath)}${definition.prefix}/${encoded}${definition.suffix}`;
+  return `${normalizeControlUiBasePath(basePath)}${prefix}/${encoded}${resourceSuffix(route)}`;
 }
 
 /** Parses exact encoded resource components while retaining malformed-route ownership. */
@@ -54,16 +56,16 @@ export function parseControlUiResourcePath(
   if (!pathname) {
     return { matched: false };
   }
-  const definition = CONTROL_UI_RESOURCE_ROUTES[route];
-  const prefix = `${normalizeControlUiBasePath(basePath)}${definition.prefix}/`;
+  const prefix = `${normalizeControlUiBasePath(basePath)}${CONTROL_UI_RESOURCE_PREFIXES[route]}/`;
   if (!pathname.startsWith(prefix)) {
     return { matched: false };
   }
   const remainder = pathname.slice(prefix.length);
-  if (!remainder.endsWith(definition.suffix)) {
+  const suffix = resourceSuffix(route);
+  if (!remainder.endsWith(suffix)) {
     return { matched: true, value: null };
   }
-  const encoded = definition.suffix ? remainder.slice(0, -definition.suffix.length) : remainder;
+  const encoded = suffix ? remainder.slice(0, -suffix.length) : remainder;
   const parts = encoded.split("/");
   if (parts.length !== (route === "pluginThemeArt" ? 4 : 1) || parts.some((part) => !part)) {
     return { matched: true, value: null };

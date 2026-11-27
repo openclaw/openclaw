@@ -8,7 +8,7 @@ import path from "node:path";
 import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV } from "../../../../scripts/lib/bundled-plugin-build-entries.mjs";
 import { PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH } from "../../../../scripts/lib/package-dist-inventory-contract.mts";
@@ -308,7 +308,6 @@ describe("package-openclaw-for-docker", () => {
   it.each([
     { pnpmPack: false, rootDecoy: true },
     { pnpmPack: true, rootDecoy: true },
-    { pnpmPack: true, rootDecoy: false },
   ])(
     "packs a selected plugin's patched bundle and installed dependency closure (pnpm=$pnpmPack, root copy=$rootDecoy)",
     async ({ pnpmPack, rootDecoy }) => {

@@ -8816,7 +8816,7 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.composerPermissionMutationDisabledReason } ==
             "Changing permissions requires operator.write or operator.admin access.")
         #expect(await MainActor.run { vm.composerPermissionDisabledReason(.full) } ==
-            "Full permission requires operator.admin access.")
+            "You don’t have permission to turn on Full access.")
         #expect(await MainActor.run { vm.composerToolOverrideMutationDisabledReason } ==
             "Session tool controls require operator.admin access.")
         #expect(await MainActor.run { vm.composerWebSearchMutationDisabledReason } ==

@@ -9,10 +9,18 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import {
+  compactCronJobFixture,
+  createCronJob,
+  cronJobsListResponse,
+  cronListResponseFixture,
+} from "../test-helpers/cron.ts";
+import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
   holdModuleResponse,
 } from "./control-ui-e2e-suite.test-support.ts";
+import { cronSidebarFeatureMethods } from "./cron-fixtures.test-support.ts";
+import { captureSidebarUiProof } from "./sidebar-customization.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI shell module loading",
@@ -43,6 +51,43 @@ function visibleHitTarget(element: Locator) {
 }
 
 suite.define(() => {
+  it("aligns the Automations loading rows with the navigation items they replace", async () => {
+    await suite.withPage(
+      { viewport: { width: 1280, height: 800 }, colorScheme: "dark" },
+      async ({ page }) => {
+        const job = createCronJob("digest", "Weekly digest");
+        const list = cronJobsListResponse([job]);
+        const match = { compact: true };
+        const gateway = await installMockGateway(page, {
+          featureMethods: cronSidebarFeatureMethods,
+          heldRequests: [{ method: "cron.list", match }],
+          methodResponses: { "cron.list": cronListResponseFixture(list) },
+        });
+        const sidebar = page.locator("openclaw-app-sidebar:visible");
+        const anchors = (items: Locator) =>
+          items.evaluateAll((nodes) =>
+            nodes.map((node) => {
+              const box = node.getBoundingClientRect();
+              return { x: box.left, y: box.top + box.height / 2 };
+            }),
+          );
+        await page.goto(suite.server.baseUrl + "new");
+        await sidebar.getByRole("link", { name: "Automations", exact: true }).click();
+        const lines = sidebar.locator('.sidebar-view-loading[aria-busy="true"] .skeleton-line');
+        await lines.first().waitFor({ timeout: 10000 });
+        const loading = (await anchors(lines)).slice(0, 2);
+        await captureSidebarUiProof(suite, page, "automations-loading.png");
+        await gateway.resolveDeferred(
+          "cron.list",
+          { ...list, jobs: [compactCronJobFixture(job)] },
+          { match },
+        );
+        const actions = sidebar.locator(".sidebar-automations > .nav-item .nav-item__icon");
+        await actions.nth(1).waitFor();
+        expect(loading).toEqual(await anchors(actions));
+      },
+    );
+  });
   it("insets pairing fallback content and recovers the real lazy dialog", async () => {
     await suite.withPage(
       { ...createControlUiE2eContextOptions(), viewport: { width: 390, height: 360 } },

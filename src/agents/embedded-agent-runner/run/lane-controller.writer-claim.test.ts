@@ -461,7 +461,7 @@ describe("embedded run durable writer admission", () => {
         const claiming = claimAgentSessionWriter(writerParams({ admittedRunContext }));
         if (revoke) {
           await expect(claiming).rejects.toMatchObject({
-            message: "admitted run authority is no longer active",
+            message: "This agent run is no longer active. Start a new turn to retry.",
             cause: revoked,
           });
         } else {

@@ -24,7 +24,6 @@ const mocks = vi.hoisted(() => {
     capturedGatewayClientOptions: [] as GatewayClientOptions[],
     capturedConfiguredGatewayConfigs: [] as Array<{ contextPath?: string }>,
     capturedGatewayClients: [] as ReturnType<typeof createClient>[],
-    mcpDescriptors: [] as Array<Record<string, unknown>>,
     mcpDescriptorsChanged: undefined as (() => void) | undefined,
     nodePluginTools: [] as Array<Record<string, unknown>>,
     nodeSkillDescriptors: [] as Array<Record<string, unknown>>,
@@ -179,7 +178,7 @@ vi.mock("./mcp.js", () => ({
     async (_servers: unknown, deps?: { onDescriptorsChanged?: () => void }) => {
       mocks.mcpDescriptorsChanged = deps?.onDescriptorsChanged;
       return {
-        descriptors: mocks.mcpDescriptors,
+        descriptors: [],
         callMcpTool: vi.fn(),
         close: mocks.closeMcpManager,
       };

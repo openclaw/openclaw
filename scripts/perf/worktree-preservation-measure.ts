@@ -3,12 +3,16 @@
  * GC selection advances 25h; lease clocks/timers remain real. Baseline overlay
  * uses OPENCLAW_BENCH_BASELINE_DIR and the existing worker loader. CPU includes
  * workers, excludes Git children; allocated bytes cover the main V8 isolate.
- * --kind nested|missing selects the refusal; first-attempt and later sweeps are
+ * --kind nested|missing|scratch selects the refusal; first-attempt and later sweeps are
  * separate. --operation remove measures repeated explicit removals instead of GC.
  * Removal acceptance: zero further attempts and lower wall/CPU/allocation after
  * the first terminal receipt; explicit retry behavior is covered by owner tests.
  * GC acceptance: preserved bytes, at most 1/3 attempts respectively,
  * zero snapshot retries after terminal preservation; no disk-reclamation claim.
+ * Scratch recovery seeds an old terminal receipt and a real hardlinked local clone.
+ * Acceptance: baseline retains it; candidate removes it through GC, preserves the
+ * tracked snapshot, and releases the base pack's second link. The supplied large
+ * agent DB is background storage shape only in this mode, never opened or copied.
  */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -31,7 +35,7 @@ const { values } = parseArgs({
   },
 });
 assert(values.repo && values.output && values["agent-db"]);
-assert(values.kind === "nested" || values.kind === "missing");
+assert(["nested", "missing", "scratch"].includes(values.kind));
 assert(values.operation === "gc" || values.operation === "remove");
 assert(values.operation !== "remove" || values.kind === "nested");
 const output = path.resolve(values.output);
@@ -61,11 +65,13 @@ fs.mkdirSync(process.env.TMPDIR!);
 const agentDir = path.join(process.env.OPENCLAW_STATE_DIR!, "agents/main/agent");
 fs.mkdirSync(agentDir, { recursive: true });
 execFileSync("chattr", ["+C", agentDir]);
-fs.copyFileSync(
-  values["agent-db"],
-  path.join(agentDir, "openclaw-agent.sqlite"),
-  fs.constants.COPYFILE_FICLONE_FORCE,
-);
+if (values.kind !== "scratch") {
+  fs.copyFileSync(
+    values["agent-db"],
+    path.join(agentDir, "openclaw-agent.sqlite"),
+    fs.constants.COPYFILE_FICLONE_FORCE,
+  );
+}
 const clockKey = Symbol.for("openclaw.perf.preservation-now");
 let now = Date.now();
 Object.defineProperty(globalThis, clockKey, { value: () => now, configurable: true });
@@ -94,6 +100,7 @@ const hooks = registerHooks({
 const { setRuntimeConfigSnapshot } = await import("../../src/config/runtime-snapshot.js");
 const { ManagedWorktreeService } = await import("../../src/agents/worktrees/service.js");
 const { updateRegistryWorktree } = await import("../../src/agents/worktrees/registry.js");
+const { deferWorktreeCleanup } = await import("../../src/agents/worktrees/registry-retirement.js");
 const { drainGlobalSingletonLifecycleState } = await import("../../src/shared/global-singleton.js");
 const config = {
   worktreeAcceleration: false,
@@ -106,7 +113,10 @@ const config = {
 setRuntimeConfigSnapshot(config, config);
 const service = new ManagedWorktreeService({ env: process.env, getConfig: () => config });
 const git = (...args: string[]) =>
-  execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
+  execFileSync("git", ["-C", repo, ...args], {
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  }).trim();
 try {
   const created = await service.create({
     repoRoot: repo,
@@ -119,7 +129,27 @@ try {
     .split("\n")
     .find((name) => !name.startsWith("."))!;
   const payload = fs.readFileSync(path.join(created.path, tracked));
-  if (values.kind === "nested") {
+  let sharedPack: string | undefined;
+  if (values.kind === "scratch") {
+    git("repack", "-ad");
+    const packs = path.join(repo, ".git/objects/pack");
+    sharedPack = path.join(
+      packs,
+      fs.readdirSync(packs).find((name) => name.endsWith(".pack"))!,
+    );
+    const clone = path.join(created.path, ".openclaw/tmp/landing/native");
+    fs.mkdirSync(path.dirname(clone), { recursive: true });
+    git("clone", "--local", "--no-checkout", repo, clone);
+    assert.equal(fs.statSync(sharedPack).nlink, 2);
+    const observed = (await service.listRegistryRecords()).find(
+      (entry) => entry.id === created.id,
+    )!;
+    await deferWorktreeCleanup(process.env, {
+      observed,
+      reason: "Checkout preserved: nested-repository; automatic retries stopped",
+      retry: { stage: "nested-repository", attempts: 3, elapsedMs: 0, retryAt: null },
+    });
+  } else if (values.kind === "nested") {
     const nested = path.join(created.path, "inner");
     fs.mkdirSync(nested);
     execFileSync("git", ["-C", nested, "init", "-q", "-b", "main"]);
@@ -136,7 +166,7 @@ try {
     assert(Number.isFinite(allocation));
     const started = performance.now();
     const outcome: Awaited<ReturnType<typeof service.remove | typeof service.gc>> | string =
-      pass === 0 || values.operation === "remove"
+      (pass === 0 && values.kind !== "scratch") || values.operation === "remove"
         ? await service
             .remove({ id: created.id, reason: "synthetic refusal" })
             .catch((error: unknown) => String(error))
@@ -145,15 +175,25 @@ try {
     const used = process.cpuUsage(cpu);
     const allocatedBytes = getHeapStatistics().total_allocated_bytes - allocation;
     const record = (await service.listRegistryRecords()).find((entry) => entry.id === created.id)!;
-    assert.equal(record.removedAt, undefined);
-    assert.deepEqual(fs.readFileSync(path.join(created.path, tracked)), payload);
+    if (values.kind === "scratch" && !baseline) {
+      assert(record.removedAt !== undefined);
+      assert(!fs.existsSync(created.path));
+      assert.equal(fs.statSync(sharedPack!).nlink, 1);
+      assert.deepEqual(
+        execFileSync("git", ["-C", repo, "show", `${record.snapshotRef}:${tracked}`]),
+        payload,
+      );
+    } else {
+      assert.equal(record.removedAt, undefined);
+      assert.deepEqual(fs.readFileSync(path.join(created.path, tracked)), payload);
+    }
     if (values.kind === "nested") {
       assert.equal(
         fs.readFileSync(path.join(created.path, "inner/valuable.txt"), "utf8"),
         "inner unsaved content\n",
       );
     }
-    if (!baseline && pass >= (values.kind === "nested" ? 0 : 2)) {
+    if (!baseline && values.kind !== "scratch" && pass >= (values.kind === "nested" ? 0 : 2)) {
       assert.equal(record.gcRetry?.retryAt, null);
       if (values.operation === "remove" && pass > 0) {
         assert.equal(record.gcRetry.attempts, 1);
@@ -168,6 +208,7 @@ try {
       outcome,
       retry: record.gcRetry,
       protection: record.gcProtection,
+      ...(sharedPack ? { basePackLinks: fs.statSync(sharedPack).nlink } : {}),
     });
   }
   fs.writeFileSync(

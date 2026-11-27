@@ -3,7 +3,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { resolveDefaultAgentWorkspaceDir } from "../../src/agents/workspace-default.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
-import { hasActiveStartupMigrationLease } from "../../src/infra/startup-migration-checkpoint.js";
+import { hasActiveStartupMigrationLeaseForTest } from "../../src/infra/startup-migration-checkpoint.test-support.js";
 import { writePersistedInstalledPluginIndex } from "../../src/plugins/installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndexSync } from "../../src/plugins/installed-plugin-index-store.js";
 import { clearPluginMetadataLifecycleCaches } from "../../src/plugins/plugin-metadata-lifecycle.js";
@@ -73,7 +73,7 @@ it("starts with current metadata and refreshes the stale persisted index after r
     expect.stringMatching(/^dist\/index\.(?:js|mjs)$/u),
   ]);
   await instance.startGateway();
-  expect(hasActiveStartupMigrationLease({ env: instance.env }), instance.logs()).toBe(false);
+  expect(hasActiveStartupMigrationLeaseForTest({ env: instance.env }), instance.logs()).toBe(false);
 
   const child = instance.child;
   if (!child) {

@@ -14,7 +14,7 @@ import { ChatPaneStateOwner } from "./chat-pane-state-owner.ts";
 import {
   ChatSessionCompanionThreads,
   type ChatSessionCompanionTurn,
-  requestSessionCompanionAnswer,
+  createSessionCompanionAsk,
 } from "./chat-session-companion.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
@@ -688,17 +688,12 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
       return;
     }
     // The question carries the model controls shown when it was asked.
-    const modelSelection = this.sessionCompanionThreads.view(sessionKey, agentId).modelSelection;
-    const ask = (key: string, value: string, requestedAttachments?: ChatAttachment[]) =>
-      requestSessionCompanionAnswer(
-        client,
-        key,
-        value,
-        agentId,
-        requestedAttachments,
-        state.uploadConfig,
-        modelSelection,
-      );
+    const ask = createSessionCompanionAsk(
+      client,
+      agentId,
+      state.uploadConfig,
+      this.sessionCompanionThreads.view(sessionKey, agentId).modelSelection,
+    );
     await this.sessionCompanionThreads.submit(sessionKey, question, ask, agentId);
   };
 

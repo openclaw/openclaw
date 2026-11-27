@@ -435,8 +435,8 @@ describe("guardSessionManager transcript updates", () => {
           message: { role: "user", content: "[approved] Unstaged source" },
         });
       } finally {
-        source.finishPendingInput?.("interrupted");
-        ambient.finishPendingInput?.("interrupted");
+        source.finishPendingInput?.("interrupted", "failed");
+        ambient.finishPendingInput?.("interrupted", "failed");
       }
     },
   );

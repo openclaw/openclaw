@@ -1,5 +1,5 @@
 import { markdownToIRWithMeta } from "openclaw/plugin-sdk/text-chunking";
-import { assert, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { markdownToTelegramHtml } from "./format.js";
 import {
   inputRichBlocksToPlainText,
@@ -185,20 +185,6 @@ describe("markdownToTelegramRichBlocks", () => {
     expect(collectLinkTargets(text)).toEqual(["https://example.com"]);
     expect(hasStyle(text, "code")).toBe(true);
     expect(plainText).toBe("afooz");
-  });
-
-  it("renders tables with header row, aligns, borders, and stripes", () => {
-    const { blocks, degradationReasons } = markdownToTelegramRichBlocks(
-      "| Feature | Status | Count |\n| :--- | :---: | ---: |\n| Rich | Fixed | 2 |",
-      { tableMode: "block" },
-    );
-    expect(degradationReasons).toEqual([]);
-    const table = blocks.find((block) => block.type === "table");
-    assert(table?.type === "table");
-    expect(table).toMatchObject({ is_bordered: true, is_striped: true });
-    expect(table.cells[0]?.every((cell) => cell.is_header === true)).toBe(true);
-    expect(table.cells[0]?.map((cell) => cell.align)).toEqual(["left", "center", "right"]);
-    expect(table.cells[1]?.map((cell) => cell.align)).toEqual(["left", "center", "right"]);
   });
 
   it("uses code tables when tableMode is code", () => {

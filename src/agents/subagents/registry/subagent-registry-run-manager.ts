@@ -36,6 +36,7 @@ import {
 import { SubagentLaunchManager } from "./subagent-registry-run-launch.js";
 import type { SubagentManagerOptions } from "./subagent-registry-run-wait.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 import { shouldSuppressSubagentSessionEffects } from "./subagent-session-effects-policy.js";
 
@@ -122,7 +123,7 @@ class SubagentRunManager extends SubagentLaunchManager {
           !isSameSubagentRunOwner(entry, claimParams.expected) ||
           entry.killReconciliation ||
           entry.killIntent ||
-          (typeof entry.execution.endedAt === "number" && entry.pauseReason !== "sessions_yield")
+          (typeof entry.execution.endedAt === "number" && !isSubagentPausedByYield(entry))
         ) {
           return { value: undefined };
         }
@@ -311,7 +312,7 @@ class SubagentRunManager extends SubagentLaunchManager {
                 isAgentEventLifecycleGenerationCurrent(existingKillIntent.lifecycleGeneration);
               if (
                 typeof entry.execution.endedAt === "number" &&
-                entry.pauseReason !== "sessions_yield" &&
+                !isSubagentPausedByYield(entry) &&
                 !wasKilledLifecycle
               ) {
                 // An abort lifecycle event can mark the run killed before this shared
@@ -319,7 +320,7 @@ class SubagentRunManager extends SubagentLaunchManager {
                 // it receives the same reconciliation tombstone as a direct kill.
                 continue;
               }
-              const wasYielded = entry.pauseReason === "sessions_yield";
+              const wasYielded = isSubagentPausedByYield(entry);
               const wasQueuedCollector = entry.collect && entry.execution.status === "queued";
               const collectorLaunchInFlight =
                 wasQueuedCollector &&

@@ -1,5 +1,7 @@
+import { writeFile } from "node:fs/promises";
 import { expect as browserExpect } from "playwright/test";
 import { expect, it } from "vitest";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   chatSessionListResponse,
   controlUiSessionUrl,
@@ -8,6 +10,7 @@ import {
   installMockGateway,
 } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
+import { installNativeWebChrome } from "./native-nav.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const reducedMotionOptions = {
@@ -16,6 +19,83 @@ const reducedMotionOptions = {
 } as const;
 
 suite.define(() => {
+  it.each([1240, 390])("keeps empty Main permissions compact at %i px", (width) =>
+    suite.withPage(
+      { ...reducedMotionOptions, viewport: { width, height: 794 } },
+      async ({ page }) => {
+        const session = {
+          key: "agent:main:main",
+          kind: "direct",
+          label: "Main",
+          permissionMode: "full",
+          updatedAt: 2,
+        };
+        await installMockGateway(page, {
+          models: [],
+          sessions: [session],
+          sessionKey: session.key,
+          historyMessages: [],
+        });
+        if (width === 1240) {
+          await installNativeWebChrome(page);
+        }
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, session.key));
+        if (width === 390) {
+          await page.locator(".agent-chat__input textarea").click();
+        }
+        const trigger = page.locator('[data-chat-permission-select="true"]');
+        await trigger.click();
+        const menu = page.locator(".chat-controls__permission-menu:visible");
+        const options = menu.locator("[data-chat-permission-option]");
+        await browserExpect(options).toHaveCount(5);
+        await browserExpect(options.last()).toBeVisible();
+        const bounds = expectDefined(await menu.boundingBox(), "permissions menu bounds");
+        const button = expectDefined(await trigger.boundingBox(), "permissions trigger bounds");
+        expect(bounds.height).toBeLessThan(420);
+        expect(bounds.y).toBeGreaterThanOrEqual(0);
+        expect(bounds.y + bounds.height).toBeLessThanOrEqual(button.y);
+        const heading = expectDefined(
+          await menu.locator(".oc-menu-heading").boundingBox(),
+          "permissions heading bounds",
+        );
+        const learnMore = menu.getByRole("menuitem", { name: "Learn more" });
+        const link = expectDefined(await learnMore.boundingBox(), "Learn more bounds");
+        expect(link.y).toBeGreaterThanOrEqual(heading.y);
+        expect(link.y + link.height).toBeLessThanOrEqual(heading.y + heading.height);
+        expect(link.x).toBeGreaterThanOrEqual(heading.x + heading.width);
+        const heights = await options.evaluateAll((rows) =>
+          rows.map((row) => row.getBoundingClientRect().height),
+        );
+        for (const height of heights) {
+          expect(height).toBeGreaterThan(30);
+          expect(height).toBeLessThan(80);
+        }
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          const frame = await takeControlUiScreenshotFrame(page, menu, [trigger, options.last()], {
+            animations: "disabled",
+            elements: [menu],
+          });
+          await writeFile(`${suite.artifactDir}/permissions-empty-main-${width}.png`, frame.png);
+          await writeFile(
+            `${suite.artifactDir}/permissions-empty-main-${width}.json`,
+            JSON.stringify({ bounds, button, heights }),
+          );
+        }
+        await page.keyboard.press("ArrowDown");
+        await page.keyboard.press("Home");
+        await browserExpect(learnMore).toBeFocused();
+        await page.keyboard.press("ArrowDown");
+        await browserExpect(options.first()).toBeFocused();
+        await page.keyboard.press("5");
+        await browserExpect(menu).toBeHidden();
+        await trigger.click();
+        await page.keyboard.press("Escape");
+        await browserExpect(menu).toBeHidden();
+        await browserExpect(trigger).toBeFocused();
+      },
+    ),
+  );
+
   it("distinguishes the selected permission and honors reduced motion", () =>
     suite.withPage(reducedMotionOptions, async ({ page }) => {
       const session = {
