@@ -579,7 +579,11 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     snapshot?: ReturnType<typeof collectMemoryStatusSnapshot>,
   ): MemoryProviderStatus {
     const aggregateState = snapshot?.aggregate;
-    if (this.embeddingBootstrapFailure) {
+    // A recorded refusal means search runs keyword-only, as it does after a bootstrap failure.
+    const keywordOnly = Boolean(
+      this.embeddingBootstrapFailure || (snapshot?.embeddingRefusal && !this.provider),
+    );
+    if (keywordOnly) {
       this.refreshKeywordFallbackIndexIdentity();
     } else {
       this.refreshIndexIdentityDirty({
@@ -589,8 +593,8 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     // Status projects the effective keyword-only search mode while degraded.
     // Sync generations still snapshot this.provider so recovery can rebuild vectors.
     const providerInfo = resolveStatusProviderInfo({
-      provider: this.embeddingBootstrapFailure ? null : this.provider,
-      providerInitialized: this.embeddingBootstrapFailure ? true : this.providerInitialized,
+      provider: keywordOnly ? null : this.provider,
+      providerInitialized: keywordOnly ? true : this.providerInitialized,
       requestedProvider: this.settings.provider,
       resolveConfiguredModel: () =>
         this.resolveConfiguredIndexIdentity()?.provider.model || this.settings.model,
@@ -644,13 +648,9 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         dims: this.vector.dims,
       },
       batch: {
-        enabled: this.batch.enabled,
+        ...this.batch,
         failures: this.batchFailure.count,
         limit: this.batchFailureLimit,
-        wait: this.batch.wait,
-        concurrency: this.batch.concurrency,
-        pollIntervalMs: this.batch.pollIntervalMs,
-        timeoutMs: this.batch.timeoutMs,
         lastError: this.batchFailure.lastError,
         lastProvider: this.batchFailure.lastProvider,
       },
@@ -662,6 +662,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         providerUnavailableReason: this.providerUnavailableReason,
         indexIdentity: this.indexIdentityState,
         automaticRebuildNotice: this.automaticRebuildNotice,
+        embeddingRefusal: snapshot?.embeddingRefusal,
       },
     };
   }

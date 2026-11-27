@@ -277,7 +277,7 @@ function createMemoryEmbeddingOwner(generation: MemorySemanticProviderGeneration
     syncProviderGeneration: generation,
     cache: { enabled: false },
     settings: { sync: {} },
-    markLocalEmbeddingProviderDegraded: () => {},
+    markEmbeddingProviderFailure: () => {},
   }) as {
     settings: {
       sync: object;

@@ -26,7 +26,8 @@ import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { resolveEmbeddingProviderAdapterTransport } from "./embeddings.js";
 import { MemoryManagerReloadError } from "./lifecycle.js";
 import { runMemoryIndexState } from "./manager-cpu-worker-runtime.js";
-import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
+import { MemoryEmbeddingRefusalOps } from "./manager-embedding-refusal-ops.js";
+import { formatMemoryEmbeddingRefusal } from "./manager-embedding-refusal.js";
 import {
   resolveMemoryPrimaryProviderRequest,
   resolveMemoryProviderLifecycle,
@@ -101,17 +102,15 @@ export function resolveMemoryEmbeddingProviderRequirement(params: {
   };
 }
 
-export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps {
+export abstract class MemoryProviderLifecycle extends MemoryEmbeddingRefusalOps {
   protected abstract getEmbeddingProbeOwners(): readonly MemoryEmbeddingProviderAdapter[];
   protected abstract readonly embeddingProbeCache: Map<string, MemoryEmbeddingProbeCacheEntry>;
   protected abstract readonly cacheKey: string;
   protected abstract readonly purpose: MemoryIndexManagerPurpose;
-  protected abstract readonly providerRequirement: MemoryEmbeddingProviderRequirement;
   protected providerInitPromise: Promise<void> | null = null;
   protected embeddingBootstrapFailure?: MemoryEmbeddingBootstrapDebug;
   protected providerRetirementPromise: Promise<void> = Promise.resolve();
   protected providersPendingRetirement = new Set<MemoryEmbeddingProvider>();
-  protected activeBackgroundCleanup = new Set<Promise<void>>();
   protected indexIdentityDirty = false;
   private primaryRecoveryPromise: Promise<void> | null = null;
   private primaryRecoveryRetryAt = 0;
@@ -393,7 +392,10 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     }
   }
 
-  protected async ensureProviderInitialized(): Promise<void> {
+  protected async ensureProviderInitialized(options?: {
+    /** An explicit probe re-checks an endpoint that refused embeddings earlier. */
+    recheckRefusal?: boolean;
+  }): Promise<void> {
     if (this.providerInitialized) {
       const bootstrapRetryDue =
         this.embeddingBootstrapFailure !== undefined &&
@@ -421,6 +423,14 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
           return;
         }
         const providerResult = await this.createConfiguredEmbeddingProvider();
+        const refusal = options?.recheckRefusal
+          ? undefined
+          : await this.recordedEmbeddingRefusal(providerResult.runtime);
+        if (refusal) {
+          // Same contract as a missing credential: no provider, so no embedding calls.
+          await this.retireProvider(providerResult.provider);
+          throw new Error(formatMemoryEmbeddingRefusal(refusal));
+        }
         this.applyProviderResult(providerResult);
       })();
     }
@@ -446,8 +456,9 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     this.providerLifecycle = { mode: "pending", requestedProvider: this.settings.provider };
   }
 
-  protected markLocalEmbeddingProviderDegraded(err: unknown): void {
+  protected markEmbeddingProviderFailure(err: unknown): void {
     if (this.provider?.id !== "local") {
+      this.markImplicitEmbeddingEndpointFailure(err);
       return;
     }
     const message = formatErrorMessage(err);
@@ -718,7 +729,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
       if (cached) {
         return cached;
       }
-      await this.ensureProviderInitialized();
+      await this.ensureProviderInitialized({ recheckRefusal: true });
       // Diagnostics must describe the provider search actually uses. A published index that
       // belongs to the configured fallback is adopted on the search path, so adopt it here
       // too instead of probing a provider this workspace's index cannot be read with.
@@ -734,6 +745,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
       const signal = getAsyncWorkSignal();
       try {
         await this.probeEmbeddingProvider(this.provider, this.providerRuntime, signal);
+        await this.forgetEmbeddingRefusal();
         return this.cacheProbeResult({ ok: true });
       } catch (err) {
         // Ctrl+C stops the check; it must not be remembered as a provider failure.

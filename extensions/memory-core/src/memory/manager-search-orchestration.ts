@@ -491,11 +491,11 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
               throw err;
             }
             if (fallbackAttempt) {
-              this.markLocalEmbeddingProviderDegraded(err);
+              this.markEmbeddingProviderFailure(err);
               throw err;
             }
             opts?.onPartialResults?.(null);
-            this.markLocalEmbeddingProviderDegraded(err);
+            this.markEmbeddingProviderFailure(err);
             const message = formatErrorMessage(err);
             const activatedFallback =
               isMemoryEmbeddingOperationError(err) && (await this.activateSearchFallback(message));
