@@ -281,7 +281,7 @@ export function resolveAnnounceCleanupOutcome(
   return facts.delivered ? "delivered" : facts.handedOff ? "requester_waiting" : outcome;
 }
 
-export type AnnounceCleanupAction =
+type AnnounceCleanupAction =
   | "not_required"
   | "delivered"
   | "requester_waiting"
