@@ -110,7 +110,9 @@ it.each([30, 10])("funds the capped custody transfer from %s actual base pins", 
   write(owner, comparison.repeat(2));
   write(baseline, `${caller}\t10\n${owner}\t4\n`);
   expect(main(root, ["--base", "HEAD"])).toBe(1);
-  expect(errors).toHaveBeenCalledWith(expect.stringContaining(`${owner}: 4 > 2`));
+  expect(errors).toHaveBeenCalledWith(
+    expect.stringContaining(`${owner}: 4 > ${baseCount === 30 ? 2 : 0}`),
+  );
 
   write(owner, comparison);
   for (const callerCount of [28, 30]) {

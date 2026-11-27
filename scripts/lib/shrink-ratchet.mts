@@ -418,8 +418,8 @@ export function runPerFileCountRatchet(
           0,
         );
       for (const [filePath, count] of options.approvedTransfers ?? []) {
-        const added = (current.get(filePath) ?? 0) - options.countAtRef(baseRef, filePath);
-        if (removed > added && totalCount(baseline) < totalCount(baseBaseline)) {
+        const transferred = current.get(filePath) ?? 0;
+        if (removed > transferred && totalCount(baseline) < totalCount(baseBaseline)) {
           allowedBaseline.set(filePath, Math.max(allowedBaseline.get(filePath) ?? 0, count));
         }
       }
