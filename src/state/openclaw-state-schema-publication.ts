@@ -1,7 +1,11 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parse as parseSemver } from "semver";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { invalidateSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
@@ -229,15 +233,19 @@ export function hasCurrentStateSchemaVersionWork(db: DatabaseSync): boolean {
   }
   if (published === OPENCLAW_STATE_SCHEMA_VERSION && tableExists(db, "config_machine_state")) {
     const hasFloor = tableHasColumn(db, "config_machine_state", "min_reader");
-    const row = db
-      .prepare(
-        `SELECT value_json${hasFloor ? ", min_reader" : ""} FROM config_machine_state WHERE state_key = ?`,
-      )
-      .get(CONTENT_VERSION_KEY);
+    const contentRows = getNodeSqliteKysely<PublicationDatabase>(db)
+      .selectFrom("config_machine_state")
+      .where("state_key", "=", CONTENT_VERSION_KEY);
+    const row = executeSqliteQueryTakeFirstSync(
+      db,
+      hasFloor
+        ? contentRows.select(["value_json", "min_reader"])
+        : contentRows.select(["value_json"]),
+    );
     if (
       row &&
       (row.value_json !== String(OPENCLAW_STATE_SCHEMA_VERSION) ||
-        (hasFloor && row.min_reader !== null))
+        ("min_reader" in row && row.min_reader !== null))
     ) {
       return true;
     }
@@ -250,8 +258,12 @@ export function hasCurrentStateSchemaVersionWork(db: DatabaseSync): boolean {
   ) {
     return false;
   }
-  const metadata = db
-    .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
-    .get();
+  const metadata = executeSqliteQueryTakeFirstSync(
+    db,
+    getNodeSqliteKysely<Pick<DB, "schema_meta">>(db)
+      .selectFrom("schema_meta")
+      .select("schema_version")
+      .where("meta_key", "=", "primary"),
+  );
   return metadata !== undefined && metadata.schema_version !== published;
 }
