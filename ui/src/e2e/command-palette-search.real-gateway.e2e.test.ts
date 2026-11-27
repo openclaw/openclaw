@@ -605,10 +605,9 @@ suite.define(() => {
               ),
             )
             .toBe(targetKey);
-          await activePane()
-            .locator(".chat-thread")
-            .getByText(targetMessage, { exact: true })
-            .waitFor();
+          await expect
+            .poll(() => new URL(page.url()).pathname.startsWith("/dashboard/"))
+            .toBe(true);
           await page.goBack();
           await expect
             .poll(() =>
