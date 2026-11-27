@@ -28,11 +28,13 @@ import { normalizeAgentId } from "../sessions/session-key.ts";
 type AgentRosterEntry = {
   id: string;
   kind?: "agent" | "system";
+  /** Hidden from chat-facing pickers; administrative and automation surfaces still offer it. */
+  hidden?: boolean;
   name?: string;
   identity?: { name?: string };
 };
 
-/** Ordinary agent targets; system rows remain available to diagnostic surfaces. */
+/** Ordinary agent targets for administrative and automation surfaces; system rows stay diagnostic-only. */
 export function listSelectableAgents<T extends AgentRosterEntry>(agents: readonly T[]): T[] {
   return agents.filter((agent) => agent.kind !== "system");
 }
@@ -44,8 +46,13 @@ export function findSelectableAgent<T extends AgentRosterEntry>(agents: readonly
   );
 }
 
-export function selectableAgentsList(agentsList: AgentsListResult): AgentsListResult {
-  return { ...agentsList, agents: listSelectableAgents(agentsList.agents) };
+/** Chat-facing agent targets: system rows and picker-hidden agents stay out of direct-chat choices. */
+export function listChatAgents<T extends AgentRosterEntry>(agents: readonly T[]): T[] {
+  return agents.filter((agent) => agent.kind !== "system" && !agent.hidden);
+}
+
+export function chatAgentsList(agentsList: AgentsListResult): AgentsListResult {
+  return { ...agentsList, agents: listChatAgents(agentsList.agents) };
 }
 
 type AgentDisplayTools = Pick<ToolsConfig, "allow" | "alsoAllow" | "deny"> & {

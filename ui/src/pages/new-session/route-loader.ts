@@ -1,6 +1,6 @@
 import type { RouteLoadCause } from "@openclaw/uirouter";
 import type { ApplicationContext } from "../../app/context.ts";
-import { listSelectableAgents } from "../../lib/agents/display.ts";
+import { listChatAgents } from "../../lib/agents/display.ts";
 import { resolveAgentId, resolveCreateTarget } from "./catalog-target.ts";
 import { takeInstantThreadRestore } from "./instant-thread-restore.ts";
 import type { NewSessionRouteData } from "./location.ts";
@@ -64,7 +64,7 @@ export async function load(
   ) {
     return unresolved();
   }
-  const availableAgents = listSelectableAgents(loadedAgentsList.agents);
+  const availableAgents = listChatAgents(loadedAgentsList.agents);
   const fallbackAgentId = availableAgents.some((agent) => agent.id === loadedAgentsList.defaultId)
     ? loadedAgentsList.defaultId
     : availableAgents[0]?.id;
