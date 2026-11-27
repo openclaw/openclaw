@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  isTrustedHarnessOwnedUpgradeSurvivorScenario,
   parseUpgradeSurvivorScenarios,
   readUpgradeSurvivorScenarioCatalog,
   supportsUpgradeSurvivorScenarioAtBaseline,
@@ -7,6 +8,18 @@ import {
 
 const scenarios = { scenarios: ["base"], assertionOnlyScenarios: ["codex-allowlist-survival"] };
 describe("inert upgrade-survivor catalog", () => {
+  it("runs manual boot plugin convergence only against latest stable when explicitly selected", () => {
+    const scenario = "boot-plugin-convergence";
+    expect(parseUpgradeSurvivorScenarios(scenario)).toEqual([scenario]);
+    expect(isTrustedHarnessOwnedUpgradeSurvivorScenario(scenario)).toBe(true);
+    for (const aggregate of ["far-reaching", "reported-issues"]) {
+      expect(parseUpgradeSurvivorScenarios(aggregate)).not.toContain(scenario);
+    }
+    expect(supportsUpgradeSurvivorScenarioAtBaseline(scenario, "openclaw@latest")).toBe(true);
+    for (const baseline of ["openclaw@beta", "openclaw@2026.9.4", "openclaw@2026.11.5"]) {
+      expect(supportsUpgradeSurvivorScenarioAtBaseline(scenario, baseline)).toBe(false);
+    }
+  });
   it("keeps the shipped group-only fixture explicit and pinned to its audited baseline", () => {
     expect(parseUpgradeSurvivorScenarios("session-share")).toEqual(["session-share"]);
     expect(parseUpgradeSurvivorScenarios("far-reaching")).not.toContain("session-share");

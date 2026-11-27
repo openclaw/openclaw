@@ -52,6 +52,7 @@ const TRUSTED_HARNESS_OWNED_SCENARIOS = new Set([
   "release-update",
   "mobile-pairing-reconnect",
   "abandoned-update",
+  "boot-plugin-convergence",
   "projects-doctor",
   "channel-owner-policy",
   "projects-startup-migration",
@@ -72,6 +73,7 @@ export function isTrustedHarnessOwnedUpgradeSurvivorScenario(scenario) {
 const aggregateScenarios = UPGRADE_SURVIVOR_SCENARIOS.filter(
   (scenario) =>
     scenario !== "abandoned-update" &&
+    scenario !== "boot-plugin-convergence" &&
     scenario !== "git-release" &&
     scenario !== "release-update" &&
     scenario !== "backup-schedule" &&
@@ -241,6 +243,9 @@ function comparePublishedReleaseVersion(a, b) {
 }
 
 export function supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec) {
+  if (scenario === "boot-plugin-convergence") {
+    return baselineSpec === "openclaw@latest";
+  }
   if (scenario === "git-release") {
     return baselineSpec === "openclaw@2026.11.5";
   }

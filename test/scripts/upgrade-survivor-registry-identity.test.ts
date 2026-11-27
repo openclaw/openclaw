@@ -155,6 +155,7 @@ else if (command === "pack") {
       OPENCLAW_NPM_REGISTRY_MERGE_UPSTREAM: "0",
       OPENCLAW_NPM_REGISTRY_BIND_HOST: "127.0.0.1",
       OPENCLAW_NPM_REGISTRY_PORT: "0",
+      OPENCLAW_NPM_REGISTRY_REQUEST_LOG: join(root, "registry-requests.jsonl"),
       FIXTURE_ROOT: root,
       OPENCLAW_STATE_DIR: state,
       OPENCLAW_CONFIG_PATH: join(state, "openclaw.json"),
@@ -317,6 +318,17 @@ read -r done
       }
       child.stdin.end("done\n");
       expect(await withinTest(closed, signal), output).toBe(0);
+      const requests = readFileSync(env.OPENCLAW_NPM_REGISTRY_REQUEST_LOG, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      for (const { name } of packages) {
+        expect(requests).toContainEqual({
+          path: `/${encodeURIComponent(name).replace("%40", "@")}`,
+          statusCode: 200,
+          atMs: expect.any(Number),
+        });
+      }
     } finally {
       await stop();
       lines.close();
