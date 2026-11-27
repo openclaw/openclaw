@@ -16,6 +16,8 @@ export async function runLocalProviderLogin(provider: string | undefined, signal
     {
       provider,
       signal,
+      // A queued credential write checks this after acquiring the profile lock.
+      assertCurrent: () => signal.throwIfAborted(),
       refreshAfterLogin: async () => {
         const { refreshActiveProviderAuthRuntimeSnapshot } = await import("../secrets/runtime.js");
         // A session's first turn prepares its own snapshot.

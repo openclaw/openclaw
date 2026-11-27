@@ -7,6 +7,7 @@ import type { ModelAuthRefreshOutcome } from "./auth-refresh.js";
 
 export type ModelsAuthLoginOptions = {
   signal?: AbortSignal;
+  assertCurrent?: () => void;
   /** A host running the login can publish credentials into its own runtime. */
   refreshAfterLogin?: (agentId: string) => Promise<void>;
   provider?: string;
@@ -37,7 +38,6 @@ export type ModelsAuthLoginFlowResult = {
 export type ModelsAuthLoginFlowOptions = ModelsAuthLoginOptions & {
   ownerPluginId?: string;
   credentialOnly?: boolean;
-  assertCurrent?: () => void;
   config?: OpenClawConfig;
   runtime: RuntimeEnv;
   prompter: WizardPrompter;

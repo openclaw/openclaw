@@ -109,10 +109,11 @@ export async function withCliCommandCleanup<T>(
         try {
           return await run(cleanup);
         } finally {
-          // Owned shutdown runs before this drain; expired disposers keep their recorded outcome.
+          // Model generations can hold native workers. Let them settle before shared-state cleanup.
+          await runCliDisposerAfterPending("prepared-model-runtime", () =>
+            resetGlobalSingletonLifecycleState(PREPARED_MODEL_RUNTIME_LIFETIMES_KEY),
+          );
           await runCliDisposerAfterPending("shared-state", async () => {
-            // Model generations may still own plugin sources backed by native workers.
-            await resetGlobalSingletonLifecycleState(PREPARED_MODEL_RUNTIME_LIFETIMES_KEY);
             await resetGlobalSingletonLifecycleState(STATE_DATABASE_LIFECYCLE_KEY);
             await resetGlobalSingletonLifecycleState(NATIVE_WORKER_LIFETIMES_KEY);
             await closePostgresPool();
