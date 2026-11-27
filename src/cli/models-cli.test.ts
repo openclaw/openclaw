@@ -183,14 +183,8 @@ describe("models cli", () => {
   });
 
   it.each([
-    [
-      "models --agent other-person fallbacks list",
-      "does not support --agent",
-    ],
-    [
-      "models --agent other-person image-fallbacks list",
-      "does not support --agent",
-    ],
+    ["models --agent other-person fallbacks list", "does not support --agent"],
+    ["models --agent other-person image-fallbacks list", "does not support --agent"],
   ] as const)("rejects unsupported agent scope: %s", async (args, message) => {
     const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
     const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
