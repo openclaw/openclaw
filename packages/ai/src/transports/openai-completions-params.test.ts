@@ -939,8 +939,8 @@ describe("OpenAI completions compatibility and tools", () => {
     }
   });
 
-  // Strict needs a route that declares it and a schema strict-compatible as written.
-  it("sends strict only for a declared route and a strict-as-written schema", () => {
+  // A declared route sends strict: false even for a schema closed as written; others omit it.
+  it("sends strict: false only on a route that declares the field", () => {
     const closed = objectSchema(
       { path: { type: "string" } },
       { additionalProperties: false, required: ["path"] },
@@ -951,14 +951,10 @@ describe("OpenAI completions compatibility and tools", () => {
     expect(strictOf(proxy, closed)).not.toHaveProperty("strict");
     expect(strictOf({ ...proxy, compat: { supportsStrictMode: true } }, closed)).toHaveProperty(
       "strict",
-      true,
+      false,
     );
-    expect(strictOf(toolsNative, closed)).toHaveProperty("strict", true);
-    // An optional key or an open root keeps a declared route's tool non-strict and unchanged.
-    expect(strictOf(toolsNative, { ...closed, required: [] })).toHaveProperty("strict", false);
-    expect(
-      strictOf(toolsNative, objectSchema({ path: { type: "string" } }, { required: ["path"] })),
-    ).toHaveProperty("strict", false);
+    expect(strictOf(toolsNative, closed)).toHaveProperty("strict", false);
+    expect(strictOf(toolsNative, closed)).toHaveProperty("parameters", closed);
   });
 
   it("fails required choice when every schema is quarantined", () => {
