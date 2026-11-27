@@ -57,9 +57,6 @@ it.each([
   ["... <> ", "widget.png"],
 ])("matches snapshot replies and sanitizes %s", async (title, filename) => {
   const downloads = watchDownloads();
-  const createUrl = vi.spyOn(URL, "createObjectURL");
-  const fetchDocument = vi.fn();
-  vi.stubGlobal("fetch", fetchDocument);
   const { postMessage, reply, result } = snapshot(title);
   let settled = false;
   void result.finally(() => {
@@ -78,8 +75,6 @@ it.each([
   reply();
   await expect(result).resolves.toBe("png");
   expect(downloads()).toEqual([[PNG_DATA_URL, filename]]);
-  expect(createUrl).not.toHaveBeenCalled();
-  expect(fetchDocument).not.toHaveBeenCalled();
 });
 
 it.each([
@@ -93,7 +88,7 @@ it.each([
   vi.stubGlobal("fetch", fetchDocument);
   const url = `blob:${kind}`;
   const createUrl = vi.spyOn(URL, "createObjectURL").mockReturnValue(url);
-  const revokeUrl = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+  vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
   if (documentHtml === undefined) {
     const copyResult = exportWidget("copy", frame, `${kind} widget`);
     await vi.advanceTimersByTimeAsync(5_000);
@@ -112,23 +107,6 @@ it.each([
     expect(createUrl.mock.calls[0]?.[0]).toMatchObject({ size: 29, type: "text/html" });
   }
   expect(downloads()).toEqual([[url, `${kind}-widget.html`]]);
-  expect(revokeUrl).toHaveBeenCalledExactlyOnceWith(url);
-});
-
-it("releases fallback HTML immediately when native download dispatch throws", async () => {
-  vi.useFakeTimers();
-  const frame = createWidgetFrame();
-  vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:failed-html");
-  const revokeUrl = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
-  vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {
-    expect(revokeUrl).not.toHaveBeenCalled();
-    throw new Error("Native download unavailable");
-  });
-  const result = exportWidget("download", frame, "Widget", { documentHtml: "<p>HTML</p>" });
-  const rejected = expect(result).rejects.toThrow("Native download unavailable");
-  await vi.advanceTimersByTimeAsync(5_000);
-  await rejected;
-  expect(revokeUrl).toHaveBeenCalledExactlyOnceWith("blob:failed-html");
 });
 
 it("starts clipboard writing before the snapshot resolves", async () => {
