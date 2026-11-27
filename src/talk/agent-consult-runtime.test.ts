@@ -444,6 +444,14 @@ describe("realtime voice agent consult runtime", () => {
     );
   });
 
+  it("tells the caller there is no answer when no fallback is configured", async () => {
+    const { runtime } = createAgentRuntime([{ text: "hidden", isReasoning: true }]);
+
+    await expect(runConsult(runtime, { logger: { warn: vi.fn() } })).resolves.toEqual({
+      text: "I couldn't find an answer to that.",
+    });
+  });
+
   it("returns a yielded acknowledgement immediately without waiting for a visible final", async () => {
     const warn = vi.fn();
     const { runtime, runEmbeddedAgent } = createAgentRuntime();
