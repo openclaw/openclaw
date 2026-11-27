@@ -8,6 +8,7 @@ import { resetGlobalSingletonLifecycleState } from "../shared/global-singleton.j
 import {
   getGatewayResourceProfile,
   initializeGatewayResourceProfile,
+  predictGatewayResourceProfile,
 } from "./gateway-resource-profile.js";
 
 vi.mock("node:fs", async (importOriginal) => ({
@@ -101,6 +102,24 @@ it.each(["max", "invalid", undefined])(
   },
 );
 
+it.each([
+  [0.75, 12, "lean"],
+  [12, 0.75, "standard"],
+] as const)(
+  "uses the delegated service's %i GiB limit despite a %i GiB sibling",
+  (limit, sibling, profile) => {
+    files.set("/proc/self/cgroup", "0::/pod/service/gateway\n");
+    files.set("/proc/self/mountinfo", "31 1 0:27 /pod /sys/fs/cgroup rw - cgroup2 cgroup rw\n");
+    files.set("/sys/fs/cgroup/service/memory.max", String(limit * GiB));
+    files.set("/sys/fs/cgroup/pod/service/memory.max", String(sibling * GiB));
+    expect(initializeGatewayResourceProfile(undefined)).toMatchObject({
+      profile,
+      memoryLimitBytes: limit * GiB,
+      memoryLimitSource: "cgroup-v2",
+    });
+  },
+);
+
 it.each([4, 8, 16])("uses host RAM with cgroup v1 (%i GiB)", (memoryGiB) => {
   files.set("/proc/self/cgroup", "5:memory:/service/gateway\n");
   files.set("/sys/fs/cgroup/memory/service/gateway/memory.limit_in_bytes", String(GiB));
@@ -140,6 +159,24 @@ it("explicit profiles win and readers retain the startup decision until restart"
   await resetGlobalSingletonLifecycleState(Symbol.for("openclaw.gatewayResourceProfile"));
   expect(getGatewayResourceProfile()).toBeUndefined();
 });
+
+it.each([
+  [undefined, 1.5 * GiB, "lean"],
+  ["auto", 4 * GiB, "lean"],
+  ["auto", 8 * GiB, "standard"],
+  ["lean", 16 * GiB, "lean"],
+  ["standard", 1.5 * GiB, "standard"],
+] as const)(
+  "predicts %s at %i bytes as startup will resolve it (%s)",
+  (configured, memory, profile) => {
+    files.set("/sys/fs/cgroup/service/gateway/memory.max", String(memory));
+    expect(predictGatewayResourceProfile(configured)).toBe(profile);
+    expect(getGatewayResourceProfile()).toBeUndefined();
+    expect(
+      initializeGatewayResourceProfile(configured ? { profile: configured } : undefined).profile,
+    ).toBe(profile);
+  },
+);
 
 it("uses host RAM off Linux and accepts only the documented config values", () => {
   vi.spyOn(process, "platform", "get").mockReturnValue("darwin");

@@ -45,7 +45,12 @@ export function resolveBundledPluginStateOperationCapture(params: {
     ["dist", "dist-runtime"]
       .map((directory) => path.join(hostRoot, directory))
       .find((directory) => isPathInside(path.join(directory, "extensions"), operationDirectory));
-  return { rootDir: buildRoot || params.rootDir, source: entries, standalone: true as const };
+  return {
+    rootDir: buildRoot || params.rootDir,
+    source: entries,
+    standalone: true as const,
+    independentOperationSource: true as const,
+  };
 }
 
 /** Bundled worker modules share captured bytes across logical recovery of the same host code. */

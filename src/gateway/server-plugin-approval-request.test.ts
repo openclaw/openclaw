@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, type TestContext } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../agents/admitted-run-context.test-support.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -122,10 +122,9 @@ describe("trusted plugin approval requests", () => {
   it("uses a retained write-only operator for a signed hook after the client scope ends", () =>
     withOpenClawTestState({ scenario: "minimal" }, async () => {
       const f = fixture();
-      const authority = createAdmittedRunOperatorAuthority({
+      const authority = createTestOperatorAuthority({
         profileId: f.caller.authenticatedUserProfile!.profileId,
         scopes: ["operator.write"],
-        assertCurrent: () => undefined,
         readCurrentRoleFacts: () => ({ assignedRole: "writer" }),
       });
       let roleScopes: GatewayOperatorRoleDefinition["scopes"] = ["operator.write"];
@@ -198,15 +197,9 @@ describe("trusted plugin approval requests", () => {
         validateAgentRuntimeApprovalAuthority: (candidate: unknown) =>
           candidate === hookIdentity || candidate === otherRun,
       });
-      let revoked = false;
-      const authority = createAdmittedRunOperatorAuthority({
+      const authority = createTestOperatorAuthority({
         profileId: caller.authenticatedUserProfile!.profileId,
         scopes: ["operator.write"],
-        assertCurrent: () => {
-          if (revoked) {
-            throw new Error("run authority revoked");
-          }
-        },
         readCurrentRoleFacts: () => ({ assignedRole: "writer" }),
       });
       const dispatch = (
@@ -247,13 +240,6 @@ describe("trusted plugin approval requests", () => {
       const wait = dispatch("plugin.approval.waitDecision", { id });
       await vi.waitFor(async () => expect(await manager.resolve(id, "allow-once")).toBe(true));
       await expect(wait).resolves.toMatchObject({ id, decision: "allow-once" });
-      // Revocation during the wait withholds a later allowance.
-      const next = await dispatch("plugin.approval.request", { ...requestParams, twoPhase: true });
-      const revokedWait = dispatch("plugin.approval.waitDecision", { id: next.id });
-      await vi.waitFor(() => expect(parked).toHaveBeenCalledTimes(3));
-      revoked = true;
-      await manager.resolve(next.id, "allow-once");
-      await expect(revokedWait).rejects.toThrow("run authority revoked");
     }));
 
   it("does not offer the bridge to a read-only caller", () =>

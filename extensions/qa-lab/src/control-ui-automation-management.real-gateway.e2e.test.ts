@@ -338,25 +338,36 @@ suite.define(() => {
           senderId,
           text: `${text} [automation-proof:${marker}]`,
         });
-      provider.requests.set(
-        "create",
+      provider.requests.set("create", [
+        { action: "plan", names: [automationName] },
         disabledJob(automationName, "Complete this synthetic reminder."),
-      );
+      ]);
       await send("100001", "create", "Create a disabled hourly reminder.");
       await transport.waitForOutbound({ textIncludes: "create:", timeoutMs: 60_000 });
       const created = readResult(provider.results.get("create") ?? "null");
       expect(created).toMatchObject({
         id: expect.any(String),
         name: automationName,
+        enabled: false,
         owner: { sessionKey: expect.stringContaining(":telegram:") },
         scheduledToolPolicy: { mode: "account" },
         payload: { kind: "agentTurn", toolsAllow: ["*"] },
       });
-      if (!isRecord(created.payload)) {
-        throw new Error("Created automation has no payload");
+      if (
+        !isRecord(created.payload) ||
+        !isRecord(created.owner) ||
+        typeof created.owner.sessionKey !== "string"
+      ) {
+        throw new Error("Created automation has no payload or owner session");
       }
       const creatorPayload = created.payload;
       const jobId = String(created.id);
+      expect(
+        await gateway.call("cron.list", {
+          sessionKey: created.owner.sessionKey,
+          includeDisabled: true,
+        }),
+      ).toMatchObject({ jobs: [expect.objectContaining({ id: jobId, enabled: false })] });
       const updatedJob = {
         id: jobId,
         name: "Reminder updated from Control UI",

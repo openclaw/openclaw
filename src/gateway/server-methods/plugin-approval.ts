@@ -100,7 +100,7 @@ export function createPluginApprovalHandlers(
           trustedAgentRuntime &&
           context.validateAgentRuntimeApprovalAuthority?.(trustedAgentRuntime) !== true
         ) {
-          reject("agent runtime approval authority is no longer active");
+          reject("The approval run ended. Start a new turn to request approval again.");
           return;
         }
 

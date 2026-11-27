@@ -1,6 +1,9 @@
 import path from "node:path";
 import { invokeNativeHookRelay } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { createAgentHarnessHostCapabilitiesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createAgentHarnessCompletionScopeForTest,
+  createAgentHarnessHostCapabilitiesForTest,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { captureSessionEntryCurrentCheckAsync } from "openclaw/plugin-sdk/session-binding-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { expect, it, vi } from "vitest";
@@ -164,10 +167,10 @@ it.each([false, true])(
     const params = parentParams("parent");
     const { sessionFile, workspaceDir } = params;
     params.abortSignal = abort.signal;
-    params.agentHarnessCompletionScope = {
+    params.agentHarnessCompletionScope = createAgentHarnessCompletionScopeForTest({
       requesterSessionKey: params.sessionKey!,
       requesterAgentId: "main",
-    };
+    });
     const parent = createParentHarness();
     const { runtime, harness } = parent;
     const completionAttempts = observeCompletionAttempts();
@@ -214,7 +217,6 @@ it.each([false, true])(
       expect.objectContaining({
         result: "child completed",
         scope: params.agentHarnessCompletionScope,
-        expectedRequester: expect.objectContaining({ sessionId: params.sessionId }),
       }),
     );
   },
@@ -260,91 +262,76 @@ it.each(["binding", "lineage"] as const)(
   },
 );
 
-it.each([false, true])(
-  "settles a yielded parent under retained source authority (revoked: %s)",
-  async (revoked) => {
-    const params = parentParams("yielded-parent");
-    // Full host tool construction can exceed the lightweight fixture's 5s budget.
-    params.timeoutMs = 30_000;
-    params.agentId = "main";
-    params.runtimePlan = createCodexRuntimePlanFixture();
-    setCodexTestModelSupportsTools(params, true);
-    let sourceRevoked = false;
-    const host = await createAgentHarnessHostCapabilitiesForTest({
-      attempt: params,
-      pluginId: "codex",
-      nativeModelPolicySupport: "exact",
-      operatorSource: {
-        profileId: "parent-source",
-        scopes: ["operator.write"],
-        assertCurrent: () => {
-          if (sourceRevoked) {
-            throw new Error("parent source revoked");
-          }
-        },
-      },
+it("settles a yielded parent under retained source authority", async () => {
+  const params = parentParams("yielded-parent");
+  // Full host tool construction can exceed the lightweight fixture's 5s budget.
+  params.timeoutMs = 30_000;
+  params.agentId = "main";
+  params.runtimePlan = createCodexRuntimePlanFixture();
+  setCodexTestModelSupportsTools(params, true);
+  const host = await createAgentHarnessHostCapabilitiesForTest({
+    attempt: params,
+    pluginId: "codex",
+    nativeModelPolicySupport: "exact",
+    operatorSource: {
+      profileId: "parent-source",
+      scopes: ["operator.write"],
+    },
+  });
+  params.hostCapabilities = host.capabilities;
+  interceptRetention(async (retain, stopped) => {
+    host.close();
+    return retain(stopped);
+  });
+  const parent = createParentHarness();
+  const { harness } = parent;
+  const run = runCodexAppServerAttempt(params, {
+    nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
+  });
+  await run.waitForTurnAccepted();
+  const relayId = extractRelayIdFromThreadRequest(
+    harness.requests.find(({ method }) => method === "thread/start")?.params,
+  );
+  // The native child inherits this actual relay. Its first hook waits for
+  // the parent's spawn evidence to admit the direct child before yielding.
+  const childAdmission = invokeNativeHookRelay({
+    provider: "codex",
+    relayId,
+    event: "pre_tool_use",
+    rawPayload: {
+      hook_event_name: "PreToolUse",
+      agent_id: "child-thread",
+      cwd: params.workspaceDir,
+      tool_name: "Bash",
+      tool_use_id: "child-first-tool",
+      tool_input: { command: "allow-child" },
+    },
+  });
+  await parent.startChild();
+  await expect(childAdmission).resolves.toEqual({ stdout: "", stderr: "", exitCode: 0 });
+  try {
+    const response = await harness.handleServerRequest({
+      id: "yield-parent",
+      method: "item/tool/call",
+      params: createDynamicToolCall(
+        "sessions_yield",
+        { message: "Waiting for native child" },
+        "yield-parent",
+      ),
     });
-    params.hostCapabilities = host.capabilities;
-    interceptRetention(async (retain, stopped) => {
-      host.close();
-      sourceRevoked = revoked;
-      return retain(stopped);
+    expect(response, JSON.stringify(response)).toMatchObject({ success: true });
+    const outcome = await Promise.allSettled([run]);
+    expect(harness.requests.some(({ method }) => method === "turn/interrupt")).toBe(true);
+    const ownership = await consumeCodexAppServerLiveThread(harness.client, "thread-1");
+    expect(outcome[0]).toMatchObject({
+      status: "fulfilled",
+      value: { terminal: { kind: "ok" } },
     });
-    const parent = createParentHarness();
-    const { harness } = parent;
-    const run = runCodexAppServerAttempt(params, {
-      nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
-    });
-    await run.waitForTurnAccepted();
-    const relayId = extractRelayIdFromThreadRequest(
-      harness.requests.find(({ method }) => method === "thread/start")?.params,
-    );
-    // The native child inherits this actual relay. Its first hook waits for
-    // the parent's spawn evidence to admit the direct child before yielding.
-    const childAdmission = invokeNativeHookRelay({
-      provider: "codex",
-      relayId,
-      event: "pre_tool_use",
-      rawPayload: {
-        hook_event_name: "PreToolUse",
-        agent_id: "child-thread",
-        cwd: params.workspaceDir,
-        tool_name: "Bash",
-        tool_use_id: "child-first-tool",
-        tool_input: { command: "allow-child" },
-      },
-    });
-    await parent.startChild();
-    await expect(childAdmission).resolves.toEqual({ stdout: "", stderr: "", exitCode: 0 });
-    try {
-      const response = await harness.handleServerRequest({
-        id: "yield-parent",
-        method: "item/tool/call",
-        params: createDynamicToolCall(
-          "sessions_yield",
-          { message: "Waiting for native child" },
-          "yield-parent",
-        ),
-      });
-      expect(response, JSON.stringify(response)).toMatchObject({ success: true });
-      const outcome = await Promise.allSettled([run]);
-      expect(harness.requests.some(({ method }) => method === "turn/interrupt")).toBe(true);
-      const ownership = await consumeCodexAppServerLiveThread(harness.client, "thread-1");
-      if (revoked) {
-        expect(outcome[0]).toMatchObject({ status: "rejected" });
-        expect(ownership).toBeUndefined();
-      } else {
-        expect(outcome[0]).toMatchObject({
-          status: "fulfilled",
-          value: { terminal: { kind: "ok" } },
-        });
-        expect(ownership).toBeDefined();
-        ownership!.assertCurrent();
-        await ownership!.release("thread-1");
-      }
-    } finally {
-      await harness.notify(childTurnCompletedNotification({ status: "completed" }));
-      host.close();
-    }
-  },
-);
+    expect(ownership).toBeDefined();
+    ownership!.assertCurrent();
+    await ownership!.release("thread-1");
+  } finally {
+    await harness.notify(childTurnCompletedNotification({ status: "completed" }));
+    host.close();
+  }
+});

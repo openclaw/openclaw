@@ -7,6 +7,7 @@ import { SessionRunStatusSchema } from "../../../packages/gateway-protocol/src/s
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { deriveSessionTitle, prepareSessionTitleRead } from "../../gateway/session-utils-core.js";
+import { createSessionVisibilityDecisionChecker } from "../../plugin-sdk/session-visibility-internal.js";
 import { classifySessionKeyShape, isIncognitoSessionKey } from "../../routing/session-key.js";
 import { getSessionStateVersions } from "../../sessions/session-state-events.js";
 import { largestFittingValue } from "../../shared/largest-fitting-value.js";
@@ -29,7 +30,6 @@ import {
   readToolStringParam,
 } from "./common.js";
 import {
-  captureGatewayToolCallerAssertion,
   resolveGatewayToolOperatorSelection,
   wrapGatewayPersonalToolExecution,
 } from "./gateway-caller-context.js";
@@ -41,7 +41,6 @@ import {
 } from "./in-process-gateway.js";
 import { resolveSessionToolTargetAgentId } from "./scoped-session-access.js";
 import {
-  createSessionVisibilityRowChecker,
   classifySessionListKind,
   deriveChannel,
   resolveDisplaySessionKey,
@@ -123,30 +122,33 @@ function projectInventoryActor(actor: NonNullable<SessionListRow["createdActor"]
 
 export function createSessionsListTool(opts?: {
   agentSessionKey?: string;
+  sessionReadAgentOnly?: boolean;
   requesterAgentIdOverride?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
   callGateway?: GatewayCaller;
   sessionLinkBase?: string;
   requesterProfileId?: string;
-  supportsActiveOnly?: boolean;
+  gatewayBacked?: boolean;
   requireSessionReadOwner?: boolean;
 }): AnyAgentTool {
   return {
     label: "Sessions",
     name: "sessions_list",
     displaySummary: SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
-    description: describeSessionsListTool({ sessionLinkBase: opts?.sessionLinkBase }),
+    description: describeSessionsListTool({
+      sessionLinkBase: opts?.sessionLinkBase,
+      gatewayBacked: opts?.gatewayBacked,
+    }),
     parameters:
-      opts?.supportsActiveOnly === false
-        ? Type.Omit(SessionsListToolSchema, ["activeOnly"])
+      opts?.gatewayBacked === false
+        ? Type.Omit(SessionsListToolSchema, ["activeOnly", "pinned"])
         : SessionsListToolSchema,
     outputSchema: SessionsListOutputSchema,
     execute: wrapGatewayPersonalToolExecution(async (_toolCallId, args, signal) => {
       const params = args as Record<string, unknown>;
-      const assertCallerCurrent = captureGatewayToolCallerAssertion();
       const gatewayContext = getInProcessGatewayToolContext();
-      if (params.activeOnly === true && opts?.supportsActiveOnly === false) {
+      if (params.activeOnly === true && opts?.gatewayBacked === false) {
         throw new Error("activeOnly requires a Gateway-backed inventory with live run state");
       }
       const {
@@ -177,7 +179,9 @@ export function createSessionsListTool(opts?: {
       const activeMinutes = readPositiveIntegerParam(params, "activeMinutes");
       const messageLimit = Math.min(readNonNegativeIntegerParam(params, "messageLimit") ?? 0, 20);
       const label = readToolStringParam(params, "label");
-      const agentId = readToolStringParam(params, "agentId");
+      const agentId = opts?.sessionReadAgentOnly
+        ? requesterAgentId
+        : readToolStringParam(params, "agentId");
       const search = readToolStringParam(params, "search");
       const archived = params.archived === "all" ? "all" : params.archived === true;
       const relationship = readToolStringParam(params, "relationship", {
@@ -214,11 +218,12 @@ export function createSessionsListTool(opts?: {
         Boolean(gatewayContext) ||
         hasGatewayToolRoutingContext();
       const hydrateTranscriptFieldsAfterFiltering = includeDerivedTitles || includeLastMessage;
-      const visibilityGuard = createSessionVisibilityRowChecker({
+      const visibilityGuard = createSessionVisibilityDecisionChecker({
         action: "list",
         defaultAgentId: requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
         mainSessionKey,
+        sessionReadAgentOnly: opts?.sessionReadAgentOnly,
         visibility,
         a2aPolicy,
       });
@@ -446,7 +451,7 @@ export function createSessionsListTool(opts?: {
           kind,
           channel: derivedChannel,
           archived: entry.archived === true,
-          pinned: entry.pinned === true,
+          ...(typeof entry.pinned === "boolean" ? { pinned: entry.pinned } : {}),
           sidebarRoot: entry.sidebarRoot === true,
           ...(typeof entry.hasBoard === "boolean" ? { hasBoard: entry.hasBoard } : {}),
           ...(rowLabel ? { label: rowLabel } : {}),
@@ -594,8 +599,14 @@ export function createSessionsListTool(opts?: {
         );
       }
 
-      const visibilityMetadata =
-        visibility === "all"
+      const visibilityMetadata = opts?.sessionReadAgentOnly
+        ? {
+            mode: visibility === "all" ? ("agent" as const) : visibility,
+            restricted: true,
+            warning:
+              "This run can list only its own agent's sessions. Other configured limits still apply.",
+          }
+        : visibility === "all"
           ? undefined
           : {
               mode: visibility,
@@ -605,7 +616,6 @@ export function createSessionsListTool(opts?: {
 
       const finalize = (visible: readonly boolean[]) => {
         signal?.throwIfAborted();
-        assertCallerCurrent?.("sessions.list");
         if (gatewayContext && getInProcessGatewayToolContext() !== gatewayContext) {
           throw new Error("Gateway instance unavailable for sessions.list");
         }

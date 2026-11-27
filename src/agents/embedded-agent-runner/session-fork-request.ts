@@ -193,6 +193,8 @@ export type SessionForkRequest = {
   pin?: SessionForkPin;
   /** The caller set its own output limit; keep it over the parent's. */
   ownOutputLimit: boolean;
+  /** Read the session's cached prefix without output (`StreamOptions.cachePrewarm`). */
+  cachePrewarm?: true;
 };
 
 /**
@@ -223,11 +225,10 @@ export function listSessionForkTools(pin: SessionForkPin, tools: AnyAgentTool[])
 }
 
 /**
- * Makes one fork request the parent's request plus the fork's own suffix. The parent's tools
- * stay listed and the run gates which may execute (`allowedTools`); with none allowed,
- * tool_choice none also stops provider-hosted tools. The rebuilt request is sent instead when
- * the parent never listed a tool the fork may run, or listed a provider-hosted tool that
- * would run before the gate.
+ * Makes one fork request the parent's request plus the fork's own suffix. The parent's tools,
+ * including provider-hosted ones, stay listed and the run gates which client tools may execute
+ * (`allowedTools`); with none allowed, tool_choice none also stops provider-hosted tools. The
+ * rebuilt request is sent instead when the parent never listed a tool the fork may run.
  */
 export function applySessionForkRequest(
   payload: Record<string, unknown>,
@@ -238,12 +239,7 @@ export function applySessionForkRequest(
   const prepared = fork.preparedRequest;
   const toolFree = allowedTools.length === 0;
   const listed = prepared && !toolFree ? requestToolNames(prepared) : undefined;
-  if (
-    prepared &&
-    (toolFree ||
-      (requestTools(prepared).every(isClientTool) &&
-        allowedTools.every((name) => listed?.has(name))))
-  ) {
+  if (prepared && (toolFree || allowedTools.every((name) => listed?.has(name)))) {
     const own = OUTPUT_LIMIT_KEYS.map((key) => [key, payload[key]] as const);
     replayPreparedRequest(payload, prepared);
     if (fork.ownOutputLimit) {
@@ -256,7 +252,9 @@ export function applySessionForkRequest(
       }
     }
   }
-  if (!toolFree) {
+  // A prewarm generates nothing, so no tool can run; changing tool_choice would change
+  // the cached prefix it exists to read.
+  if (!toolFree || fork.cachePrewarm) {
     return;
   }
   const shape = TOOL_CHOICE_NONE.get(api);

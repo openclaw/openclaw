@@ -647,18 +647,13 @@ export function createGatewayHttpRequestHandler(
             });
             return !pluginAuthorization;
           },
-          () => {
-            if (pluginAuthorization?.requestAuth.hasCurrentClientAuthority?.() === false) {
-              sendGatewayAuthFailure(res, { ok: false, reason: "unauthorized" });
-              return true;
-            }
-            return handlePluginRequest(req, res, pluginPathContext, {
+          () =>
+            handlePluginRequest(req, res, pluginPathContext, {
               gatewayAuthSatisfied: pluginAuthorization !== null,
               gatewayRequestAuth: pluginAuthorization?.requestAuth,
               gatewayRequestOperatorScopes: pluginAuthorization?.operatorScopes,
               gatewayRequestClientIp: requestClientIp,
-            });
-          },
+            }),
         );
       }
 

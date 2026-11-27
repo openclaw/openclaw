@@ -14,6 +14,7 @@ import {
 import { makeProviderModel } from "../../packages/ai/src/providers/provider-model.test-support.js";
 import type { AssistantMessageEvent } from "../../packages/llm-core/src/types.js";
 import type { MutableAssistantMessageEventStream } from "../../src/agents/stream-compat.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 type LayerStream = AsyncIterable<unknown> & { result?: () => Promise<unknown> };
 type Layer = (events: number) => LayerStream | Promise<LayerStream>;
@@ -364,12 +365,7 @@ export async function measureStreamLayers(options: {
     const allocation = options.mode === "allocation";
     const session = new Session();
     if (allocation) {
-      session.connect();
-      await session.post("HeapProfiler.startSampling", {
-        samplingInterval: 512,
-        includeObjectsCollectedByMajorGC: true,
-        includeObjectsCollectedByMinorGC: true,
-      });
+      await startCollectedHeapSampling(session, 512);
     }
     const hostLoad = loadavg();
     const cpu = process.cpuUsage();

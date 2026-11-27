@@ -99,6 +99,15 @@ of treating them as a complete inventory.
 These inventories do not authorize later reads or writes against concurrent path
 replacement; use the root-bound file APIs for that boundary.
 
+### Root-scoped file errors
+
+`describeRootFileOpenFailure({ failure, subject, boundaryLabel, filePath })` from
+`openclaw/plugin-sdk/file-access-runtime` describes an unsuccessful `openRootFile`
+result as missing, unreadable, or rejected by boundary/alias checks. It does not
+authorize access. If outside-path existence must stay private, first compare the
+requested path with the authorized root using `isPathInside` and reject outside
+paths uniformly before opening them or describing the failure.
+
 ### File-watch capacity errors
 
 `getFileWatchCapacityCode(error)` from `openclaw/plugin-sdk/file-access-runtime`

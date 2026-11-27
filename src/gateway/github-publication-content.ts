@@ -4,13 +4,17 @@ import { appendPrAttribution, preparePrAttribution } from "../agents/pr-attribut
 import { resolveControlUiPublicSessionUrl } from "../config/control-ui-link-base.js";
 import { resolveSessionPublicShare } from "../config/sessions/session-public-share.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
+import { sanitizeChatDisplayText } from "../shared/text/chat-display.js";
+import { escapeMarkdownText } from "../shared/text/escape-markdown.js";
 import type { GitHubPublicationExecutionRow } from "../state/github-publication-read.types.js";
+import { getResidentUserProfileDisplay } from "../state/user-profile-list.js";
 import { currentGitHubPublicationConfig } from "./github-publication-availability.js";
 import { GitHubPublicationCreditChangedError } from "./github-publication-failure.js";
 import {
   appendGitHubPublicationMessage,
   type createGitHubPublicationCommandRunner,
 } from "./github-publication-git-transport.js";
+import type { GitHubPublicationRequesterPolicyV2 } from "./github-publication-requester.js";
 
 type BranchHistory = {
   cwd: string;
@@ -69,6 +73,8 @@ export async function prepareGitHubPublicationContent(params: {
     "request_id" | "agent_id" | "session_id" | "session_key" | "branch" | "title" | "body"
   >;
   requesterProfileId?: string;
+  // The admitted participant's display name, never the creator or publisher identity.
+  participantDisplayName?: string;
   storePath: string;
   accountId: number;
   host: string;
@@ -117,10 +123,11 @@ export async function prepareGitHubPublicationContent(params: {
     incognito: initialEntry?.incognito,
   });
   params.assertCurrent();
-  // The publication commit holds only what the branch's own commits left out, so without a
-  // requested title it names the branch. The pull request describes the branch's work.
-  const commitTitle = row.title?.trim() || `Publish ${row.branch}`;
-  const title = row.title?.trim() || firstCommit?.title || commitTitle;
+
+  const participantName = escapeMarkdownText(
+    sanitizeChatDisplayText(params.participantDisplayName?.replace(/\s+/gu, " ").trim() ?? ""),
+  );
+  const requestedBy = participantName ? `\n\nRequested by ${participantName} via OpenClaw` : "";
   const trailers = prepared.attribution?.trailers ?? [];
   const credit = prepared.attribution?.logins.map((login) => `- @${login}`).join("\n");
   return {
@@ -148,10 +155,20 @@ export async function prepareGitHubPublicationContent(params: {
           ? `\n\n---\n[View the OpenClaw team session](${sessionUrl})`
           : "";
       const body = appendPrAttribution(
-        `${description}${participants}\n\n<!-- openclaw-publication:${row.request_id} -->`,
+        `${description}${requestedBy}${participants}\n\n<!-- openclaw-publication:${row.request_id} -->`,
         attributionEnabled() && !currentEntry?.incognito,
       );
       return `${body}${footer}`;
     },
   };
+}
+
+/** Shared attribution names the retained participant, never the session creator or API writer. */
+export function publicationParticipantDisplayName(
+  requester?: GitHubPublicationRequesterPolicyV2,
+): string | undefined {
+  const ceiling = requester?.snapshot.participation?.ceiling;
+  return ceiling
+    ? getResidentUserProfileDisplay(ceiling.profileId).displayName || "Participant"
+    : undefined;
 }

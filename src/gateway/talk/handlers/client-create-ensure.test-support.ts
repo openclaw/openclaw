@@ -29,12 +29,8 @@ import * as voiceWriters from "../../../talk/client-voice-session-write.js";
 import * as voiceSessions from "../../../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
 import { captureGatewayDeviceRevocation } from "../../device-revocation.js";
-import {
-  bindGatewayRequestHandlerMutationAuthority,
-  bindWebSocketRequestMutationAuthority,
-} from "../../server-methods/session-mutation-guards.js";
+import { bindGatewayRequestHandlerMutationAuthority } from "../../server-methods/session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions } from "../../server-methods/types.js";
-import { SharedGatewaySessionGenerationState } from "../../server-shared-auth-generation.js";
 import { resolveSessionMutationAuthorizationAsync } from "../../session-sharing-authorization-async.js";
 import * as sharingGrants from "../../session-sharing-worker-grant.js";
 import { rolePolicyConfig, sharingPolicyClient } from "../../session-sharing.test-utils.js";
@@ -78,21 +74,14 @@ export async function authorizeBrowserCreate(
   };
 }
 
-export function browserAuthority(
-  context: object,
-  client: Parameters<typeof bindWebSocketRequestMutationAuthority>[1],
-) {
+export function browserAuthority(context: object) {
   const lifetime = captureGatewayDeviceRevocation(context, {}, () => true);
-  const generation = new SharedGatewaySessionGenerationState({
-    current: undefined,
-    required: undefined,
-  });
   return {
     ...lifetime,
     [Symbol.dispose]: lifetime.release,
     bind(options: GatewayRequestHandlerOptions) {
       options.hasCurrentClientAuthority = lifetime.isCurrent;
-      return bindWebSocketRequestMutationAuthority(options, client, generation.reader);
+      return options;
     },
   };
 }

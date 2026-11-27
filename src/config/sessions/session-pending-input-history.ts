@@ -173,7 +173,11 @@ async function readPendingInputRows(
 
 export async function listSessionPendingInputs(
   scope: Scope,
-  options: { limit?: number; before?: number } = {},
+  options: {
+    limit?: number;
+    before?: number;
+    audience?: import("./session-pending-input-audience.js").PendingInputAudience;
+  } = {},
 ): Promise<SessionPendingInputPage> {
   const { rows, total, nextBefore } = await readPendingInputRows(scope, options);
   return {

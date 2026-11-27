@@ -12,10 +12,6 @@ WORKER_RUNTIME_HOST_ROOT=""
 LIMITS_SUMMARY=""
 run_completed="0"
 diagnostics_ready=0
-is_scheduler_installed_recovery() {
-  # Only the scheduler's retained producer identity assigns host finalization.
-  [ -n "${DOCKER_E2E_CONTAINER_CIDFILE:-}" ]
-}
 cleanup_outer() {
   local exit_status="$?"
   trap - EXIT
@@ -26,13 +22,7 @@ cleanup_outer() {
     echo "Upgrade survivor exited before the scenario completed." >&2
     exit_status=1
   fi
-  # These finite scheduler cells publish after the lane group is joined. Its
-  # timeout can kill this shell, so it must not own the required host receipt.
-  local scheduler_recovery=0
-  if is_scheduler_installed_recovery; then
-    scheduler_recovery=1
-  fi
-  if [ "$exit_status" -ne 0 ] && [ "$scheduler_recovery" = "0" ]; then
+  if [ "$exit_status" -ne 0 ]; then
     if [ "$diagnostics_ready" = "1" ]; then
       publish_diagnostics ||
         echo "Upgrade survivor diagnostics missing; preserving original lane failure." >&2
@@ -174,8 +164,6 @@ if [ "$UPGRADE_TARGET_TRAIN" = extended-stable ]; then
   cp "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/native-assignment-summary.mjs" "$UPGRADE_SCENARIO_STAGE/native-assignment-summary.mjs"
   cp "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/plugin-policy-summary.mjs" "$UPGRADE_SCENARIO_STAGE/plugin-policy-summary.mjs"
   cp "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/observations.mjs" "$UPGRADE_SCENARIO_STAGE/observations.mjs"
-  cp "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/installed-recovery-observations.mjs" "$UPGRADE_SCENARIO_STAGE/installed-recovery-observations.mjs"
-  cp "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/installed-recovery-cases.mjs" "$UPGRADE_SCENARIO_STAGE/installed-recovery-cases.mjs"
   cp "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/package-activation-recovery.mjs" "$UPGRADE_SCENARIO_STAGE/package-activation-recovery.mjs"
   chmod 0755 "$UPGRADE_SCENARIO_STAGE"
   UPGRADE_SCENARIO_ARGS+=(
@@ -198,16 +186,20 @@ SURVIVOR_RUNTIME_ROOT="${OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT:-/tmp/openclaw-u
 UPDATE_RESTART_MODE="${OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE:-manual}"
 if [ "$SCENARIO" = "git-release" ]; then
   export OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1
-  # The baseline is main commit 7db69bedeab6, which reports 2026.11.5 and has the
-  # node_modules release layout; the published v2026.11.5 tag does not.
+  # The lane's package label; the Git baseline is OPENCLAW_UPGRADE_SURVIVOR_GIT_BASELINE_SHA.
   BASELINE_SPEC="${BASELINE_SPEC:-openclaw@2026.11.5}"
-  # Three full source builds (baseline, first hop, second hop) run in the container.
-  DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-3600s}"
+  # Every candidate update builds a release, and the kill points rerun their updates.
+  DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-14400s}"
+  # The outer `docker run` bound (3600s by default) must outlast the in-container one.
+  export OPENCLAW_DOCKER_E2E_RUN_TIMEOUT="${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-14700s}"
 fi
 if [ "$SCENARIO" = "abandoned-update" ] && [ -z "${OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE:-}" ]; then
   UPDATE_RESTART_MODE="auto-auth"
 fi
 COMMAND_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT:-900s}"
+if [ "$SCENARIO" = "git-release" ]; then
+  COMMAND_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT:-1800s}"
+fi
 START_BUDGET_SECONDS="$(openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS 300)"
 STATUS_BUDGET_SECONDS="$(openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS 30)"
 PROBE_TIMEOUT_MS="$(openclaw_e2e_read_nonnegative_int_env OPENCLAW_UPGRADE_SURVIVOR_PROBE_TIMEOUT_MS 60000)"
@@ -266,8 +258,6 @@ if [ "$SCENARIO" = "abandoned-update" ] && {
   exit 1
 fi
 
-# Current-writer interruption proof is separate from released baseline coverage.
-# In particular, do not normalize a file tarball into a historical release cell.
 if [ "$SCENARIO" = "package-installed-recovery" ] && {
   [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" != "0" ] ||
   [ -n "$BASELINE_SPEC" ] || [ "$UPDATE_RESTART_MODE" != "manual" ] ||
@@ -351,11 +341,7 @@ prepare_limit_summary() {
 DOCKER_RUN_USER_ARGS=()
 UPGRADE_ENTRYPOINT=()
 if [ "$UPDATE_RESTART_MODE" = auto-auth ] ||
-  { [ "$SCENARIO" = package-installed-recovery ] && {
-    [ "${OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT:-}" = older-runtime ] ||
-      [ "${OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT:-}" = live-gateway ] ||
-      [ "${OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT:-}" = owed-plugin-retry ]
-  }; }; then
+  [ "$SCENARIO" = package-installed-recovery ]; then
   # MAC_OVERRIDE permits replacing unconfined; the entrypoint drops every capability.
   DOCKER_RUN_USER_ARGS+=(--user root --cgroupns private --cap-add SYS_ADMIN --cap-add MAC_OVERRIDE --security-opt apparmor=unconfined)
   UPGRADE_ENTRYPOINT=(bash /tmp/openclaw-release-harness/scripts/e2e/lib/upgrade-survivor/cgroup-entrypoint.sh)
@@ -423,16 +409,41 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
   if [ "$SCENARIO" = "git-release" ]; then
     if [ "$BASELINE_SPEC" != "openclaw@2026.11.5" ] || [ "$CANDIDATE_RAW" != current ] ||
       [ "$UPDATE_RESTART_MODE" != manual ] || [ "$LIVE_ENABLED" != 0 ]; then
-      echo "git-release requires baseline 2026.11.5 (main 7db69bedeab6), candidate current, manual restart, and no live models" >&2
+      echo "git-release requires the 2026.11.5 lane label, candidate current, manual restart, and no live models" >&2
       exit 2
     fi
     CANDIDATE_KIND="git"
     CANDIDATE_SPEC="$(git -C "$ROOT_DIR" rev-parse HEAD)"
     source_git="$(git -C "$ROOT_DIR" rev-parse --path-format=absolute --git-common-dir)"
-    baseline_sha="$(git -C "$ROOT_DIR" rev-parse '7db69bedeab6^{commit}')"
+    # A tag (v2026.11.5), a commit (7db69bedeab6, the default), or main (origin/main).
+    git_baseline_label="${OPENCLAW_UPGRADE_SURVIVOR_GIT_BASELINE_SHA:-7db69bedeab6}"
+    git_baseline_ref="$git_baseline_label"
+    [ "$git_baseline_ref" != main ] || git_baseline_ref=origin/main
+    baseline_sha="$(git -C "$ROOT_DIR" rev-parse "$git_baseline_ref^{commit}")"
+    # The container shares this repository's objects read-only. A partial clone lacks
+    # blobs it never checked out, which the container cannot fetch; fetch them here.
+    for git_tree in "$baseline_sha" "$CANDIDATE_SPEC"; do
+      git_missing="$(git -C "$ROOT_DIR" ls-tree -r "$git_tree" | awk '$2 == "blob" { print $3 }' |
+        GIT_NO_LAZY_FETCH=1 git -C "$ROOT_DIR" cat-file --batch-check | awk '$2 == "missing" { print $1 }')"
+      if [ -n "$git_missing" ]; then
+        # shellcheck disable=SC2086 # one object ID per word
+        git -C "$ROOT_DIR" -c fetch.negotiationAlgorithm=noop fetch --no-tags --no-write-fetch-head \
+          --recurse-submodules=no --filter=blob:none origin $git_missing
+      fi
+    done
+    git_package_spec="${OPENCLAW_UPGRADE_SURVIVOR_GIT_PACKAGE_SPEC:-openclaw@latest}"
+    # `current` installs this checkout's packed package, so its own updater runs the switch.
+    if [ "$git_package_spec" = current ]; then
+      PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz upgrade-survivor)"
+      git_package_spec=/tmp/openclaw-current.tgz
+    fi
     UPGRADE_SCENARIO_ARGS+=(
       -v "$source_git:/tmp/openclaw-source.git:ro"
       -e "OPENCLAW_UPGRADE_SURVIVOR_GIT_BASELINE_SHA=$baseline_sha"
+      -e "OPENCLAW_UPGRADE_SURVIVOR_GIT_BASELINE_LABEL=$git_baseline_label"
+      -e "OPENCLAW_UPGRADE_SURVIVOR_GIT_ROUTE=${OPENCLAW_UPGRADE_SURVIVOR_GIT_ROUTE:-baseline}"
+      -e "OPENCLAW_UPGRADE_SURVIVOR_GIT_KILL_POINTS=${OPENCLAW_UPGRADE_SURVIVOR_GIT_KILL_POINTS:-stage build publish link-switch launcher-restore}"
+      -e "OPENCLAW_UPGRADE_SURVIVOR_GIT_PACKAGE_SPEC=$git_package_spec"
     )
   elif [ -n "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}" ] || [ "$CANDIDATE_RAW" = "current" ]; then
     PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz upgrade-survivor)"
@@ -566,6 +577,50 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
 fi
 
 PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz upgrade-survivor "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}")"
+if [ "$SCENARIO" = "release-update" ]; then
+  docker_e2e_package_mount_args "$PACKAGE_TGZ"
+  mkdir -p "$ARTIFACT_DIR"
+  chmod a+rwx "$ARTIFACT_DIR"
+  UPGRADE_SCENARIO_STAGE="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-release-fixtures.XXXXXX")"
+  if [ "${OPENCLAW_UPGRADE_SURVIVOR_RELEASE_CASE:-}" != downgrade ]; then
+    node "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/release-fixture.mjs" \
+      "$ROOT_DIR" "$PACKAGE_TGZ" "$UPGRADE_SCENARIO_STAGE"
+  fi
+  OPENCLAW_UPGRADE_SURVIVOR_BULK_RECEIPT="$ARTIFACT_DIR/migration-bulk-access.json" \
+    node "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/schema-downgrade-source.mjs" \
+    "$ROOT_DIR" "$PACKAGE_TGZ" "$UPGRADE_SCENARIO_STAGE" "${OPENCLAW_SCHEMA_DOWNGRADE_BASE_SHA:-}"
+  docker_e2e_build_or_reuse "$IMAGE_NAME" upgrade-survivor "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "bare" "$SKIP_BUILD"
+  case "${OPENCLAW_UPGRADE_SURVIVOR_RELEASE_CASE:-}" in
+    "") release_cases=(healthy crash) ;;
+    healthy|crash|downgrade) release_cases=("$OPENCLAW_UPGRADE_SURVIVOR_RELEASE_CASE") ;;
+    *) echo "Unknown release survivor case" >&2; exit 1 ;;
+  esac
+  downgrade_selected="$(node -p "require(process.argv[1]).selected" "$UPGRADE_SCENARIO_STAGE/downgrade-source.json")"
+  if [ -z "${OPENCLAW_UPGRADE_SURVIVOR_RELEASE_CASE:-}" ] && [ "$downgrade_selected" = true ]; then
+    release_cases+=(downgrade)
+  fi
+  for release_case in "${release_cases[@]}"; do
+    mkdir -p "$ARTIFACT_DIR/$release_case"
+    release_runner=release-update.mjs
+    if [ "$release_case" = downgrade ]; then
+      [ "$downgrade_selected" = true ] || { echo "Downgrade requires a schema/migration change and pinned fork." >&2; exit 1; }
+      release_runner=schema-downgrade-run.mjs
+    fi
+    docker_e2e_run_with_harness \
+      --init \
+      --user root \
+      -e OPENCLAW_UPGRADE_SURVIVOR_RELEASE_CASE="$release_case" \
+      -e OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT=/tmp/openclaw-upgrade-survivor-artifacts \
+      -v "$ARTIFACT_DIR/$release_case:/tmp/openclaw-upgrade-survivor-artifacts" \
+      -v "$UPGRADE_SCENARIO_STAGE:/tmp/openclaw-release-fixtures:ro" \
+      "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
+      "$IMAGE_NAME" \
+      timeout --kill-after=30s "$DOCKER_RUN_TIMEOUT" \
+      node "scripts/e2e/lib/upgrade-survivor/$release_runner"
+  done
+  run_completed="1"
+  exit 0
+fi
 if [ "$SCENARIO" != "package-installed-recovery" ] && [ -z "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
   AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT="$(
     mktemp -d "${TMPDIR:-/tmp}/openclaw-upgrade-survivor-plugin-registry.XXXXXX"
@@ -584,25 +639,12 @@ fi
 docker_e2e_package_mount_args "$PACKAGE_TGZ"
 OPENCLAW_TEST_STATE_FUNCTION_B64="$(docker_e2e_test_state_function_b64)"
 mkdir -p "$ARTIFACT_DIR"
-if is_scheduler_installed_recovery; then
-  # The host owns the private outer directory and setgid evidence mount. Keep
-  # appuser/HOME unchanged; only this group can read new private producer files.
-  DOCKER_RUN_USER_ARGS+=(--group-add "$(id -g)")
-else
-  chmod -R a+rwX "$ARTIFACT_DIR" || true
-fi
+chmod -R a+rwX "$ARTIFACT_DIR" || true
 prepare_diagnostics_capture
 prepare_limit_summary
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" upgrade-survivor "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "bare" "$SKIP_BUILD"
 if [ "$SCENARIO" = "package-installed-recovery" ]; then
-  recovery_image="$IMAGE_NAME"
-  recovery_name=""
-  if is_scheduler_installed_recovery && [ "$OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT" = partial-previous ]; then
-    recovery_name="openclaw-recovery-$(basename "$(dirname "$ARTIFACT_DIR")")"
-    recovery_image="$(docker_e2e_docker_with_timeout 10s image inspect --format '{{.Id}}' "$IMAGE_NAME")"
-    [[ "$recovery_image" =~ ^sha256:[a-f0-9]{64}$ ]]
-  fi
   docker_e2e_run_with_harness \
     --init \
     ${UPGRADE_LIMITS_ARGS[@]+"${UPGRADE_LIMITS_ARGS[@]}"} \
@@ -616,42 +658,10 @@ if [ "$SCENARIO" = "package-installed-recovery" ]; then
     ${DOCKER_E2E_PACKAGE_ARGS[@]+"${DOCKER_E2E_PACKAGE_ARGS[@]}"} \
     -e OPENCLAW_E2E_COMMAND_TIMEOUT="$COMMAND_TIMEOUT" \
     ${DOCKER_RUN_USER_ARGS[@]+"${DOCKER_RUN_USER_ARGS[@]}"} \
-    "$recovery_image" \
+    "$IMAGE_NAME" \
     ${UPGRADE_ENTRYPOINT[@]+"${UPGRADE_ENTRYPOINT[@]}"} \
     timeout --kill-after=30s "$DOCKER_RUN_TIMEOUT" \
     bash /tmp/openclaw-release-harness/scripts/e2e/lib/upgrade-survivor/installed-recovery.sh
-  if [ -n "$recovery_name" ]; then
-    # A joined host CLI alone does not prove container settlement. These two
-    # serial, offline readers consume the same image only after that proof.
-    docker_e2e_settle_container_cidfile "${DOCKER_E2E_CONTAINER_CIDFILE:?missing scheduler producer CID path}"
-    read -r producer_uid reader_uid reader_gid < <(node -e '
-      const fs = require("node:fs"), path = require("node:path");
-      const root = process.argv[1], host = process.getuid(), group = process.getgid();
-      if ((fs.lstatSync(path.dirname(root)).mode & 0o777) !== 0o700) process.exit(1);
-      const producer = fs.lstatSync(path.join(root, "installed-recovery.json")).uid;
-      let uid = 65534, gid = 65534;
-      while (uid === producer || uid === host) uid--;
-      while (gid === group) gid--;
-      console.log(producer, uid, gid);
-    ' "$ARTIFACT_DIR")
-    for access in shared outsider; do
-      reader_name="${recovery_name}-${access}"
-      reader_group=()
-      [ "$access" != shared ] || reader_group=(--group-add "$(id -g)")
-      status=0
-      docker_e2e_docker_with_timeout 30s run --name "$reader_name" --pull=never --rm \
-        --network=none --cap-drop=ALL --security-opt=no-new-privileges --read-only \
-        --user "$reader_uid:$reader_gid" --workdir=/ ${reader_group[@]+"${reader_group[@]}"} \
-        -v "$ARTIFACT_DIR:/evidence:ro" -v "$(dirname "$ARTIFACT_DIR"):/private:ro" \
-        -v "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/installed-recovery-access.mjs:/check.mjs:ro" \
-        --entrypoint node "$recovery_image" /check.mjs "$access" "$reader_uid" "$reader_gid" "$(id -g)" "$producer_uid" || status="$?"
-      docker_e2e_docker_with_timeout 10s rm -f "$reader_name" >/dev/null 2>&1 || true
-      state="$(docker_e2e_docker_with_timeout 10s ps -a --filter "name=^/${reader_name}$" --format '{{.State}}')"
-      [ -z "$state" ]
-      [ "$status" -eq 0 ] || exit "$status"
-    done
-    printf 'Installed recovery access proved with image %s\n' "$recovery_image"
-  fi
   run_completed="1"
   exit 0
 fi
@@ -918,6 +928,22 @@ if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
   prepare_update_restart_probe_current_install "$PORT" "$GATEWAY_LOG"
   pre_update_service_pid="$(cat "$SYSTEMCTL_SHIM_PID_FILE")"
   pre_update_systemctl_lines="$(wc -l <"$SYSTEMCTL_SHIM_LOG")"
+else
+  # This inline lane installs the candidate first and seeds deliberately retired
+  # config. Repair it before update: the installed preflight refuses invalid
+  # config, rather than starting a release trial to migrate it.
+  echo "Running non-interactive doctor repair for dirty-state config..."
+  CURRENT_PHASE="doctor"
+  if ! openclaw_e2e_maybe_timeout "$command_timeout" openclaw doctor --fix --non-interactive >"$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/doctor.log" 2>&1; then
+    echo "openclaw doctor failed" >&2
+    openclaw_e2e_print_log "$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/doctor.log" >&2
+    exit 1
+  fi
+  if ! openclaw_e2e_maybe_timeout "$command_timeout" openclaw config validate >>"$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/doctor.log" 2>&1; then
+    echo "post-doctor config validation failed" >&2
+    openclaw_e2e_print_log "$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/doctor.log" >&2
+    exit 1
+  fi
 fi
 
 echo "Running package update against the mounted tarball..."
@@ -944,19 +970,6 @@ if [ "$update_status" -ne 0 ]; then
 fi
 if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
   echo "Skipping doctor repair until after restart proof."
-else
-  echo "Running non-interactive doctor repair..."
-  CURRENT_PHASE="doctor"
-  if ! openclaw_e2e_maybe_timeout "$command_timeout" openclaw doctor --fix --non-interactive >"$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/doctor.log" 2>&1; then
-    echo "openclaw doctor failed" >&2
-    openclaw_e2e_print_log "$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/doctor.log" >&2
-    exit 1
-  fi
-  if ! openclaw_e2e_maybe_timeout "$command_timeout" openclaw config validate >>"$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/doctor.log" 2>&1; then
-    echo "post-doctor config validation failed" >&2
-    openclaw_e2e_print_log "$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/doctor.log" >&2
-    exit 1
-  fi
 fi
 
 echo "Verifying config and state survived update..."

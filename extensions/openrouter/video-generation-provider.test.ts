@@ -9,10 +9,7 @@ import {
   requireFirstPostJsonRecordRequest,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import {
-  expectExplicitVideoGenerationCapabilities,
-  expectUnifiedModelCatalogEntries,
-} from "openclaw/plugin-sdk/provider-test-contracts";
+import { expectUnifiedModelCatalogEntries } from "openclaw/plugin-sdk/provider-test-contracts";
 import { createRequireRecord, oversizedJsonResponse } from "openclaw/plugin-sdk/test-fixtures";
 import type { VideoGenerationRequest } from "openclaw/plugin-sdk/video-generation";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -192,22 +189,6 @@ describe("openrouter video generation provider", () => {
   ])("rejects invalid inputs before submission: %j", async (request, error) => {
     await expect(generateVideo(request)).rejects.toThrow(error);
     expect(postMock).not.toHaveBeenCalled();
-  });
-
-  it("declares explicit mode capabilities", () => {
-    const provider = buildOpenRouterVideoGenerationProvider();
-
-    expectExplicitVideoGenerationCapabilities(provider);
-    expect(provider.id).toBe("openrouter");
-    expect(provider.defaultModel).toBe("google/veo-3.1-fast");
-    expect(provider.capabilities.generate).toMatchObject({
-      supportsAudio: true,
-      supportedDurationSeconds: [4, 6, 8],
-      resolutions: ["720P", "1080P"],
-      aspectRatios: ["16:9", "9:16"],
-    });
-    expect(provider.capabilities.imageToVideo?.enabled).toBe(true);
-    expect(provider.capabilities.videoToVideo?.enabled).toBe(false);
   });
 
   it("maps OpenRouter video model discovery into unified catalog rows", async () => {

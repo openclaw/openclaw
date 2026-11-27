@@ -40,7 +40,7 @@ import {
   createRequesterPublicationFixture,
 } from "./github-publication-requester.test-support.js";
 import { commandResult, githubPublicationTestMocks } from "./github-publication.test-support.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayRequestOptions } from "./server-methods/types.js";
 import { createContext as createRequestContext } from "./server-plugin-in-process-dispatch.test-support.js";
@@ -377,7 +377,7 @@ export async function fixture(
     const operator =
       caller === null
         ? undefined
-        : await captureGatewayOperatorRunAuthority({
+        : await prepareGatewayOperatorRunAuthority({
             ...callerSource,
             client: invocation.client ?? callerSource.client,
           });

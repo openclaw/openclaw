@@ -10,7 +10,7 @@ export async function collectHooksModelIssues(cfg: OpenClawConfig): Promise<Hook
   if (!model?.trim()) {
     return [];
   }
-  const { DEFAULT_MODEL, DEFAULT_PROVIDER } = await import("../agents/defaults.js");
+  const { DEFAULT_PROVIDER } = await import("../agents/defaults.js");
   const { readPreparedModelCatalog } = await import("../agents/prepared-model-catalog.js");
   const { getModelRefStatus, resolveConfiguredModelRef, resolveHooksGmailModel } =
     await import("../agents/model-selection.js");
@@ -18,11 +18,7 @@ export async function collectHooksModelIssues(cfg: OpenClawConfig): Promise<Hook
   if (!ref) {
     return [{ kind: "unresolved", model }];
   }
-  const defaultModel = resolveConfiguredModelRef({
-    cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-  });
+  const defaultModel = resolveConfiguredModelRef({ cfg, defaultProvider: DEFAULT_PROVIDER });
   const catalog = await readPreparedModelCatalog({
     config: cfg,
     readOnly: true,
@@ -32,7 +28,7 @@ export async function collectHooksModelIssues(cfg: OpenClawConfig): Promise<Hook
     cfg,
     catalog,
     ref,
-    defaultProvider: defaultModel.provider,
+    defaultProvider: defaultModel?.provider ?? DEFAULT_PROVIDER,
     defaultModel,
   });
   const issues: HooksModelIssue[] = [];

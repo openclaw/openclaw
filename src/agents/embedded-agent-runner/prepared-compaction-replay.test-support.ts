@@ -5,7 +5,7 @@ import { sanitizeGoogleAssistantFirstOrdering } from "../../shared/google-turn-o
 import { isRealConversationMessage } from "../compaction-real-conversation.js";
 import { sanitizeSessionMessagesImages } from "../embedded-agent-helpers/images.js";
 import { validateReplayTurnsForPolicy } from "../embedded-agent-helpers/turns.js";
-import { annotateInterSessionUserMessages } from "../replay-provenance.js";
+import { annotateCrossSessionMessages } from "../replay-provenance.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { sanitizeToolUseResultPairingForModel } from "../session-transcript-repair.js";
 import { projectSessionModelContextData } from "../sessions/session-manager-codec.js";
@@ -47,7 +47,7 @@ export async function prepareCompactionReplay(
   let generic = await sanitizeGenericReplayHistory(
     {
       ...options,
-      messages: annotateInterSessionUserMessages(messages),
+      messages: annotateCrossSessionMessages(messages),
       latestModelSwitchTimestamp,
       preserveLatestAssistantThinking: false,
     },

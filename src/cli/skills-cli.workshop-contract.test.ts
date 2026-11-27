@@ -74,9 +74,10 @@ async function runProgram(args: string[]): Promise<string> {
   }
 }
 
-function expectArchivedReleaseNotes(archived: string, format: "text" | "json") {
+function archiveRestoreArgs(archived: string, format: "text" | "json"): string[] {
   if (format === "json") {
-    expect(JSON.parse(archived)).toMatchObject({
+    const result = JSON.parse(archived);
+    expect(result).toMatchObject({
       change: {
         agentId: "writer",
         skillName: "release-notes",
@@ -86,11 +87,19 @@ function expectArchivedReleaseNotes(archived: string, format: "text" | "json") {
         versionId: expect.stringMatching(/^\d{8}T\d{9}Z-archive$/),
       },
     });
-  } else {
-    expect(archived).toBe(
-      "Archived release-notes. Undo with: openclaw skills workshop restore release-notes --agent writer\n",
-    );
+    return [
+      "restore",
+      "release-notes",
+      "--agent",
+      "writer",
+      "--version",
+      result.change.versionId,
+      "--json",
+    ];
   }
+  const prefix = "Archived release-notes. Undo with: openclaw skills workshop ";
+  expect(archived.startsWith(prefix)).toBe(true);
+  return archived.slice(prefix.length).trimEnd().split(" ");
 }
 
 async function dispatch(config: OpenClawConfig, method: string, params: unknown) {
@@ -249,9 +258,12 @@ afterEach(() => {
 });
 
 describe("openclaw skills workshop persisted CLI contract", () => {
-  it.each(["text", "json"] as const)(
-    "lists, reads and filters changes through the real dispatcher (%s)",
-    async (format) => {
+  it.each([
+    ["text", "500"],
+    ["json", "501"],
+  ] as const)(
+    "lists, reads and filters changes through the real dispatcher (%s, --limit %s)",
+    async (format, limit) => {
       await fixture(async (state, config) => {
         const lock = await claimState("gateway");
         transport.call.mockImplementation(({ method, params }) =>
@@ -287,9 +299,15 @@ describe("openclaw skills workshop persisted CLI contract", () => {
             "--agent",
             "writer",
             "--limit",
-            "1",
+            limit,
             ...output,
           ]);
+          expect(transport.call).toHaveBeenCalledWith(
+            expect.objectContaining({
+              method: "skills.workshop.changes",
+              params: { agentId: "writer", limit: 500 },
+            }),
+          );
           if (format === "json") {
             expect(JSON.parse(changes)).toMatchObject({
               changes: [
@@ -397,7 +415,7 @@ describe("openclaw skills workshop persisted CLI contract", () => {
           "superseded",
           ...output,
         ]);
-        expectArchivedReleaseNotes(archived, format);
+        const restoreArgs = archiveRestoreArgs(archived, format);
         const live = path.join(state.agentDir("writer"), "workshop-skills", "release-notes");
         await expect(fs.stat(live)).rejects.toMatchObject({ code: "ENOENT" });
         const rows = await persistedChanges(state);
@@ -409,15 +427,12 @@ describe("openclaw skills workshop persisted CLI contract", () => {
           actor: "user",
           summary: "archived: superseded",
         });
-        const restored = await runProgram([
-          "restore",
-          "release-notes",
-          "--agent",
-          "writer",
-          "--version",
-          String(rows[1]?.version_id),
-          ...output,
-        ]);
+        // Recreate and archive a different bundle under the same name before using the first Undo.
+        const recreated = skill.replace("Use the merged changelog.", "Use the new release plan.");
+        await fs.mkdir(live);
+        await fs.writeFile(path.join(live, "SKILL.md"), recreated);
+        await runProgram(["archive", "release-notes", "--agent", "writer"]);
+        const restored = await runProgram(restoreArgs);
         expect(format === "json" ? JSON.parse(restored) : restored).toEqual(
           format === "json"
             ? {
@@ -435,7 +450,41 @@ describe("openclaw skills workshop persisted CLI contract", () => {
         expect(await fs.readFile(path.join(live, "references", "release.md"), "utf8")).toBe(
           support,
         );
-        expect(await persistedChanges(state)).toHaveLength(3);
+        expect(await fs.readdir(path.join(live, "references"))).toEqual(["release.md"]);
+        expect((await fs.readdir(live)).toSorted()).toEqual(["SKILL.md", "references"]);
+        const main = path.join(state.agentDir("main"), "workshop-skills", "release-notes");
+        expect(await fs.readFile(path.join(main, "SKILL.md"), "utf8")).toBe(
+          "Default agent must not be selected.\n",
+        );
+        expect(await fs.readFile(path.join(main, "references", "release.md"), "utf8")).toBe(
+          support,
+        );
+        const changes = await persistedChanges(state);
+        expect(changes).toHaveLength(4);
+        if (format === "text") {
+          const archiveId = rows[1]?.version_id;
+          if (typeof archiveId !== "string") {
+            throw new Error("Expected a saved archive version");
+          }
+          expect(restoreArgs.slice(-2)).toEqual(["--version", archiveId]);
+          // Model expiration while the newer archive remains available.
+          await fs.rm(path.join(path.dirname(live), ".archive", "release-notes", archiveId), {
+            recursive: true,
+          });
+          const diagnostic = vi.spyOn(console, "error").mockImplementation(() => {});
+          await expect(runProgram(restoreArgs)).rejects.toThrow("exit 1");
+          expect(diagnostic).toHaveBeenCalledWith(
+            expect.stringContaining(`no version "${archiveId}"`),
+          );
+          diagnostic.mockRestore();
+          expect(await persistedChanges(state)).toEqual(changes);
+          expect(await fs.readFile(path.join(live, "SKILL.md"), "utf8")).toBe(skill);
+          expect(await fs.readFile(path.join(live, "references", "release.md"), "utf8")).toBe(
+            support,
+          );
+          await runProgram(["restore", "release-notes", "--agent", "writer"]);
+          expect(await fs.readFile(path.join(live, "SKILL.md"), "utf8")).toBe(recreated);
+        }
         expect(transport.call).not.toHaveBeenCalled();
       });
     },
@@ -461,15 +510,13 @@ describe("openclaw skills workshop persisted CLI contract", () => {
             "superseded",
             ...output,
           ]);
-          expectArchivedReleaseNotes(archived, format);
+          const restoreArgs = archiveRestoreArgs(archived, format);
           await expect(fs.stat(live)).rejects.toMatchObject({ code: "ENOENT" });
-          const restored = await runProgram([
-            "restore",
-            "release-notes",
-            "--agent",
-            "writer",
-            ...output,
-          ]);
+          const restored = await runProgram(
+            format === "json"
+              ? ["restore", "release-notes", "--agent", "writer", "--json"]
+              : restoreArgs,
+          );
           if (format === "json") {
             expect(JSON.parse(restored)).toMatchObject({
               change: {
@@ -513,6 +560,30 @@ describe("openclaw skills workshop persisted CLI contract", () => {
       });
     },
   );
+
+  it("reports an archive without an Undo command when the Gateway returns no saved version", async () => {
+    await fixture(async () => {
+      const lock = await claimState("gateway");
+      try {
+        transport.call.mockResolvedValue({
+          change: {
+            id: changeId,
+            agentId: "writer",
+            skillName: "release-notes",
+            action: "archive",
+            actor: "user",
+            summary: "archived",
+            createdAtMs: 1_790_643_723_004,
+          },
+        });
+        expect(await runProgram(["archive", "release-notes", "--agent", "writer"])).toBe(
+          "Archived release-notes. No saved version was reported for Undo.\n",
+        );
+      } finally {
+        await lock.release();
+      }
+    });
+  });
 
   it("does not replay a committed restore locally after the Gateway loses its reply and releases custody", async () => {
     await fixture(async (state, config) => {

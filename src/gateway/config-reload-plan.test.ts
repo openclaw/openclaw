@@ -157,6 +157,7 @@ describe("Gateway core reload policy", () => {
   it.each([
     { change: "allow", mode: "noop" },
     { change: "remove-policy", mode: "noop" },
+    { change: "project-grant", mode: "noop" },
     { change: "default", mode: "hot" },
     { change: "github-assignment", mode: "hot" },
     { change: "remove-role", mode: "hot" },
@@ -193,6 +194,10 @@ describe("Gateway core reload policy", () => {
         break;
       case "remove-policy":
         delete role.modelPolicy;
+        break;
+      case "project-grant":
+        role.projects = ["handbook"];
+        roles.definitions.staff!.projects = "*";
         break;
       case "default":
         roles.default = "staff";

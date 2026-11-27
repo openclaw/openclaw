@@ -6,10 +6,8 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
-import {
-  createAdmittedRunOperatorAuthority,
-  prepareSystemAgentRunAdmission,
-} from "../../agents/admitted-run-context.js";
+import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { createOpenClawCodingToolsInternalAsync } from "../../agents/agent-tools.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -49,10 +47,9 @@ it("returns an approved change after its requesting run ends before result deliv
     const sessionKey = "agent:main:approved-result";
     const sessionId = "approved-result-caller";
     replaceSessionEntrySync({ agentId: "main", sessionKey }, { sessionId, updatedAt: 1 });
-    const operator = createAdmittedRunOperatorAuthority({
+    const operator = createTestOperatorAuthority({
       profileId: GATEWAY_OWNER_PROFILE_ID,
       scopes: ["operator.admin"],
-      assertCurrent: () => {},
     });
     const admission = prepareSystemAgentRunAdmission(
       config,

@@ -1,6 +1,7 @@
 import { it } from "vitest";
 import * as S from "./agents-models-skills.js";
 import { ModelsListParamsSchema } from "./model-catalog.js";
+import * as Auth from "./models-auth.js";
 import { accepts, rejects } from "./schema.test-support.js";
 import { ToolsEffectiveResultSchema } from "./tools-catalog.js";
 
@@ -59,7 +60,7 @@ it.each([
   ],
   [
     "agent-scoped auth status",
-    S.ModelsAuthStatusParamsSchema,
+    Auth.ModelsAuthStatusParamsSchema,
     [
       {},
       { refresh: true, agentId: "writer" },
@@ -70,13 +71,18 @@ it.each([
   ],
   [
     "agent-scoped logout",
-    S.ModelsAuthLogoutParamsSchema,
-    [auth({ profileIds: ["openai:writer"], agentId: "writer" }), auth(), auth({ agentId: "" })],
-    [auth({ profileIds: [] })],
+    Auth.ModelsAuthLogoutParamsSchema,
+    [
+      auth({ profileIds: ["openai:writer"], agentId: "writer" }),
+      auth(),
+      auth({ agentId: "" }),
+      auth({ profileIds: ["openai:writer"], revoke: true }),
+    ],
+    [auth({ profileIds: [] }), auth({ profileIds: ["openai:writer"], revoke: false })],
   ],
   [
     "nonempty unique auth order",
-    S.ModelsAuthOrderSetParamsSchema,
+    Auth.ModelsAuthOrderSetParamsSchema,
     [auth({ profileIds: ["openai:writer"] }), auth({ agentId: "writer" })],
     [
       auth({ profileIds: [] }),

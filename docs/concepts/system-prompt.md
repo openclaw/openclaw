@@ -223,7 +223,7 @@ See [Timezones](/concepts/timezone) and [Date & Time](/date-time) for full behav
 
 ## Skills
 
-When eligible skills exist, OpenClaw injects a compact `<available_skills>` list (`formatSkillsForPrompt`) with the **file path** for each skill. The prompt instructs the model to use `read` to load the SKILL.md at the listed location (workspace, managed, or bundled). If no skills are eligible, the Skills section is omitted.
+When eligible skills exist, OpenClaw injects a compact `<available_skills>` list. When `skills_read` is available, the list holds skill names only: the agent loads an exact name with `skills_read`, and `skills_search` matches descriptions on demand for unfamiliar workflows. Without `skills_read`, the list keeps each skill's description and **file path**, and the prompt instructs the model to `read` the SKILL.md at the listed location (workspace, managed, or bundled). If no skills are eligible, the Skills section is omitted.
 
 In Code Mode, when installed skill search and reading are both available, the
 prompt keeps discovery instructions and omits the static catalog. The agent uses

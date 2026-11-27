@@ -206,7 +206,6 @@ export async function handleUserProfileAvatarHttpRequest(
   if (!authResult) {
     return true;
   }
-  authResult.assertCurrent();
   // Cached misses would hide a later uploaded image behind the unversioned route.
   res.setHeader("Cache-Control", "no-store");
   const profileId = parsed.value;
@@ -224,7 +223,6 @@ export async function handleUserProfileAvatarHttpRequest(
     const reader = createProfileAvatarReader(profileId);
     for (;;) {
       const prepared = await reader.inspect();
-      authResult.assertCurrent();
       const profile = prepared.profile;
       if (!profile) {
         throw new UserProfileNotFoundError(profileId);
@@ -235,8 +233,6 @@ export async function handleUserProfileAvatarHttpRequest(
         const needsBytes =
           method !== "HEAD" && !matchesHttpIfNoneMatch(req.headers["if-none-match"], etag);
         const bytes = needsBytes ? await prepared.loadBytes() : undefined;
-        // Device grants may be revoked while image preparation is pending.
-        await authResult.revalidate();
         if (!prepared.isCurrent() || (needsBytes && !bytes)) {
           continue;
         }
@@ -248,7 +244,6 @@ export async function handleUserProfileAvatarHttpRequest(
         profileId === GATEWAY_OWNER_PROFILE_ID && profile.id === profileId && !profile.mergedInto
           ? await resolveHostAccountAvatar()
           : null;
-      await authResult.revalidate();
       if (!prepared.isCurrent()) {
         continue;
       }
@@ -266,7 +261,6 @@ export async function handleUserProfileAvatarHttpRequest(
       break;
     }
   } catch (error) {
-    authResult.assertCurrent();
     if (error instanceof UserProfileNotFoundError) {
       sendJson(res, 404, { ok: false, error: { type: "not_found" } });
       return true;
@@ -306,7 +300,6 @@ export async function handleUserProfileAvatarHttpRequest(
       waiterSignal.throwIfAborted();
       const result = await racePromiseWithAbortSignal(resolveRemoteAvatar(url), waiterSignal);
       waiterSignal.throwIfAborted();
-      await authResult.revalidate();
       if (result.kind === "hit") {
         sendAvatar(req, res, { ...result, byteLength: result.bytes.byteLength });
         return true;
@@ -327,7 +320,6 @@ export async function handleUserProfileAvatarHttpRequest(
   if (clientAbort.signal.aborted) {
     return true;
   }
-  await authResult.revalidate();
   if (
     !transientFailure &&
     new URL(req.url ?? "/", "http://localhost").searchParams.get("v") === revision

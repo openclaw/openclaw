@@ -33,6 +33,7 @@ import { getHeapStatistics } from "node:v8";
 import type { Worker } from "node:worker_threads";
 import type { DB as StateDatabase } from "../../src/state/openclaw-state-db.generated.js";
 import type { OpenClawStateDatabase } from "../../src/state/openclaw-state-db.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -261,12 +262,7 @@ try {
   const loadBefore = loadavg();
   const memoryBefore = process.memoryUsage();
   if (values.allocations) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   }
   const allocatedBefore = values.runtime ? mainAllocatedBytes() : undefined;
   const mainBefore = process.threadCpuUsage();

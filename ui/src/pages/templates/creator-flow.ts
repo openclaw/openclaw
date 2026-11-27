@@ -14,6 +14,7 @@ import { t } from "../../i18n/index.ts";
 import { registerAgentsHomeEnglish } from "../../i18n/locales/en-agents-home.ts";
 import { registerTemplateCreatorEnglish } from "../../i18n/locales/en-template-creator.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import {
@@ -29,6 +30,7 @@ import {
   type TemplatePackagePreview,
   type TemplateReviewTarget,
 } from "./creator-publication.ts";
+import { TemplateCreatorSignIn } from "./creator-sign-in.ts";
 import { canCreateTemplateDraft } from "./draft-navigation.ts";
 import { readTemplatePackagePreview } from "./template-package-preview.ts";
 
@@ -109,9 +111,46 @@ export class TemplateCreatorFlow implements TemplateCreator {
   readonly subscribe = this.listeners.subscribe;
 
   private readonly changed = this.listeners.publish;
+  private readonly clawHubSignIn = new TemplateCreatorSignIn(this.changed, () => {
+    const target = this.target;
+    if (!target) {
+      return;
+    }
+    // Re-read this same private draft, not a new chat turn. Revision polling
+    // also covers approval while the agent is still drafting.
+    this.error = null;
+    this.seenRevision = null;
+    this.changed();
+    this.schedulePoll(target, this.generation, 0);
+  });
+
+  get signIn() {
+    return this.clawHubSignIn.state;
+  }
+
+  startClawHubSignIn() {
+    if (this.target) {
+      void this.clawHubSignIn.start(this.target);
+    }
+  }
+
+  cancelClawHubSignIn() {
+    if (this.target) {
+      void this.clawHubSignIn.cancel(this.target);
+    }
+  }
+
+  private canSignIn() {
+    return canCallGatewayMethod(
+      this.context.gateway.snapshot,
+      "templates.drafts.signIn",
+      "operator.admin",
+    );
+  }
 
   retirePresentation() {
     this.presentationActive = false;
+    this.clawHubSignIn.retire();
     if (this.pollTimer) {
       clearTimeout(this.pollTimer);
     }
@@ -149,6 +188,7 @@ export class TemplateCreatorFlow implements TemplateCreator {
   private reset(target: Target | null) {
     this.retirePendingStart();
     this.retirePresentation();
+    this.clawHubSignIn.reset();
     this.generation += 1;
     this.reviewRequest += 1;
     if (this.pollTimer) {
@@ -268,6 +308,9 @@ export class TemplateCreatorFlow implements TemplateCreator {
       return;
     }
     if (this.matches({ agentId, draftId, sessionKey })) {
+      if (this.canSignIn()) {
+        this.clawHubSignIn.show(this.target!);
+      }
       this.inlineReview = true;
       this.presentationActive = true;
       this.changed();
@@ -287,6 +330,9 @@ export class TemplateCreatorFlow implements TemplateCreator {
     this.busy = null;
     const target = { agentId, draftId, sessionKey, client };
     const generation = this.reset(target);
+    if (this.canSignIn()) {
+      this.clawHubSignIn.show(target);
+    }
     this.inlineReview = true;
     this.presentationActive = true;
     this.changed();
@@ -334,7 +380,7 @@ export class TemplateCreatorFlow implements TemplateCreator {
           this.reviewCurrent = false;
         }
         this.seenRevision = draft.revision;
-        if (hasCompleteScope(draft.content)) {
+        if (!this.signIn && !this.clawHubSignIn.checking && hasCompleteScope(draft.content)) {
           await this.refreshReview(target, generation);
         } else if (this.review) {
           // No refresh will notify the card to retire its stale preview.
@@ -383,7 +429,15 @@ export class TemplateCreatorFlow implements TemplateCreator {
       this.error = null;
     } catch (error) {
       if (this.current(target, generation) && request === this.reviewRequest) {
-        this.error = formatUiError(error);
+        const details =
+          error instanceof GatewayRequestError ? asOptionalRecord(error.details) : null;
+        if (this.canSignIn() && asOptionalRecord(details?.templateSignIn)?.required === true) {
+          this.clawHubSignIn.require();
+          this.clawHubSignIn.show(target);
+          this.error = null;
+        } else {
+          this.error = formatUiError(error);
+        }
       }
     } finally {
       if (this.current(target, generation) && request === this.reviewRequest) {

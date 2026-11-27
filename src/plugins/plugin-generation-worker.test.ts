@@ -23,6 +23,7 @@ import { resolvePluginInstallRoots, withPluginInstallRoots } from "./install-roo
 import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
+import * as captureResource from "./plugin-capture-native-resource.client.js";
 import { createFixture } from "./plugin-generation-artifact.admission.test-support.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import { expectBytes } from "./plugin-generation-capture.test-support.js";
@@ -388,6 +389,146 @@ it.each(["sync", "async"] as const)(
     });
   },
 );
+
+it.each([false, true])(
+  "hands off operation bytes while a sibling owns the preparation worker (seeded: %s)",
+  async (seeded) => {
+    await withWorkerFixture("worker-operation-handoff", async ({ fixture, cache }) => {
+      const posts = vi.spyOn(NativeWorker.prototype, "postMessage");
+      preparePluginNativeAdmissions(fixture.index, cache);
+      const entry = path.join(fixture.root, "native-operation-api.js");
+      fs.writeFileSync(entry, "import './fixture.so'; export { default } from './index.js';");
+      const sibling = await prepare(fixture);
+      try {
+        const worker = posts.mock.contexts.find(
+          (owner): owner is NativeWorker =>
+            owner instanceof NativeWorker &&
+            owner.sourcePath?.includes("plugin-generation-preparation") === true,
+        )!;
+        expect(worker).toBeDefined();
+        const capture = () =>
+          preparePluginGenerationArtifact({
+            rootDir: fixture.root,
+            source: [entry],
+            standalone: true,
+            independentOperationSource: true,
+          });
+        let directory: string | undefined;
+        await withPrepared(
+          seeded ? withPluginGenerationSourceCustody(capture) : capture(),
+          async (artifact) => {
+            directory = artifact.boundaryRoot;
+            expect(
+              new Set(
+                posts.mock.contexts.filter(
+                  (owner) =>
+                    owner instanceof NativeWorker && owner.sourcePath === worker.sourcePath,
+                ),
+              ),
+            ).toEqual(new Set([worker]));
+            expect(worker.executionStopped).toBe(false);
+            expectSource(sibling.artifact, fixture.entry);
+            await sibling.artifact.disposeAsync();
+            expect(worker.executionStopped).toBe(true);
+            fs.unlinkSync(fixture.filename);
+            expectBytes(artifact.resolve(fixture.filename), fixture.bytes);
+            expectSource(artifact, entry, "index.js");
+            const absentAtCapture = path.join(fixture.root, "unadmitted.so");
+            fs.writeFileSync(absentAtCapture, "outside the captured graph");
+            expect(() => artifact.resolve(absentAtCapture)).toThrow(
+              "outside its captured source package",
+            );
+          },
+        );
+        expect(fs.existsSync(directory!)).toBe(false);
+      } finally {
+        await sibling.artifact.disposeAsync();
+      }
+    });
+  },
+);
+
+function instrumentRecoveryOwner(
+  instrument: (owner: Awaited<ReturnType<typeof captureResource.createPluginCaptureOwner>>) => void,
+) {
+  const createOwner = captureResource.createPluginCaptureOwner;
+  vi.spyOn(captureResource, "createPluginCaptureOwner").mockImplementation(async (...args) => {
+    const owner = await createOwner(...args);
+    if (!args[1]) {
+      instrument(owner);
+    }
+    return owner;
+  });
+}
+
+it("joins a pending broker release when operation binding starts synchronous disposal", async () => {
+  const { root, source, entry } = sourceFixture();
+  const requested = createDeferredCore();
+  const allowRelease = createDeferredCore();
+  instrumentRecoveryOwner((owner) => {
+    const release = owner.releaseSource;
+    owner.releaseSource = async (id) => {
+      requested.resolve();
+      await allowRelease.promise;
+      await release(id);
+    };
+  });
+  await withArtifactPreservingStateReads(() =>
+    withStorage(root, async () => {
+      const { artifact } = await preparePluginGenerationArtifact({
+        rootDir: source,
+        source: entry,
+        standalone: true,
+        independentOperationSource: true,
+      });
+      try {
+        artifact.dispose();
+        await requested.promise;
+        let settled = false;
+        const joined = artifact.disposeAsync().then(() => {
+          settled = true;
+        });
+        await nextTimer(0);
+        expect(settled).toBe(false);
+        allowRelease.resolve();
+        await joined;
+        expect(fs.existsSync(artifact.boundaryRoot)).toBe(false);
+      } finally {
+        allowRelease.resolve();
+        await artifact.disposeAsync();
+      }
+    }),
+  );
+});
+
+it("joins both physical owners when the operation source handoff fails", async () => {
+  const { root, source, entry } = sourceFixture();
+  const failure = new Error("fixture recovery reply failed");
+  let copied: string | undefined;
+  instrumentRecoveryOwner((owner) => {
+    const copyRecovery = owner.copyRecovery.bind(owner);
+    owner.copyRecovery = async (...input) => {
+      const destination = await copyRecovery(...input);
+      copied = destination.root.directory;
+      throw failure;
+    };
+  });
+  await withArtifactPreservingStateReads(() =>
+    withStorage(root, async () => {
+      await expect(
+        preparePluginGenerationArtifact({
+          rootDir: source,
+          source: entry,
+          standalone: true,
+          independentOperationSource: true,
+        }),
+      ).rejects.toBe(failure);
+      expect(copied).toBeDefined();
+      expect(fs.existsSync(copied!)).toBe(false);
+      expect(workersActive()).toBe(false);
+    }),
+  );
+});
 
 it("keeps a prepared child's native bytes after its source custody retires", async () => {
   await withWorkerFixture("worker-child-native-custody", async ({ fixture, cache }) => {

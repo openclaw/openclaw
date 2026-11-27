@@ -67,7 +67,12 @@ export function validatePreparedPluginSchemaValue(
     origin: params.origin,
     input,
     applyDefaults: Boolean(params.applyDefaults),
-    result: structuredClone(result),
+    // An unchanged success can share the cache's private input snapshot. Cache hits
+    // still clone the result before returning it to callers.
+    result:
+      result.ok && result.value === params.value
+        ? { ok: true, value: input }
+        : structuredClone(result),
   });
   return result;
 }

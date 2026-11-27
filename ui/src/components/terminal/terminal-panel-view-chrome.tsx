@@ -6,7 +6,6 @@ import { Icon } from "../solid/icon.tsx";
 import { PanelEmptyState } from "../solid/panel-empty-state.tsx";
 import { PanelIconButton } from "../solid/panel-icon-button.tsx";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
-import { useScrollState } from "../solid/scroll-state.ts";
 import "../tooltip.ts";
 import "../../styles/session-panel-rail.css";
 import type { TerminalPanelViewState } from "./terminal-panel-view-types.ts";
@@ -163,7 +162,7 @@ export function SessionMenu(props: {
                     </Show>
                     <Show when={props.mobile} fallback={<SessionRows state={props.state} />}>
                       <div class="tp-session-rows">
-                        <SessionRows state={props.state} mobile />
+                        <SessionRows state={props.state} />
                       </div>
                     </Show>
                   </>
@@ -186,16 +185,7 @@ export function SessionMenu(props: {
   );
 }
 
-function MobileSessionName(props: { name: string | undefined }) {
-  const nameScrollState = useScrollState(true, false);
-  return (
-    <span class="tp-session__name" ref={nameScrollState} title={props.name}>
-      {props.name}
-    </span>
-  );
-}
-
-function SessionRows(props: { state: TerminalSessionPickerState; mobile?: boolean }) {
+function SessionRows(props: { state: TerminalSessionPickerState }) {
   return (
     <For each={props.state.sessions()} keyed={(session) => session.sessionId}>
       {(session) => {
@@ -213,22 +203,17 @@ function SessionRows(props: { state: TerminalSessionPickerState; mobile?: boolea
             <span class="tp-session__icon">
               <Icon name="terminal" />
             </span>
-            <span class="tp-session__identity">
-              <Show
-                when={props.mobile}
-                fallback={
-                  <span class="tp-session__name">
-                    {session().title ?? session().shell.split(/[\\/]/).pop()}
-                  </span>
-                }
-              >
-                <MobileSessionName name={session().title ?? session().shell.split(/[\\/]/).pop()} />
-              </Show>
-              <span class="tp-session__cwd">
-                {session().agentId} · {session().cwd}
+            <span class="tp-session__body">
+              <span class="tp-session__identity">
+                <span class="tp-session__name">
+                  {session().title ?? session().shell.split(/[\\/]/).pop()}
+                </span>
+                <span class="tp-session__cwd">
+                  {session().agentId} · {session().cwd}
+                </span>
               </span>
+              <span class="tp-session__state">{label()}</span>
             </span>
-            <span class="tp-session__state">{label()}</span>
             <span class={["tp-session__indicator", { "is-current": current() }]}>
               <Icon name={current() ? "check" : "chevronRight"} />
             </span>

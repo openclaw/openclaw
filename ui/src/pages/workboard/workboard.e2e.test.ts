@@ -201,6 +201,48 @@ suite.define(() => {
     });
   });
 
+  it("keeps the linked session name and status readable with mobile card actions", async () => {
+    const sessionKey = "agent:main:pilot-review";
+    const sessionName = "Atlas pilot review";
+    const linked = card({
+      id: "pilot",
+      title: "Review pilot release notes",
+      agentId: "main",
+      sessionKey,
+    });
+    await suite.withPage(
+      { hasTouch: true, viewport: { width: 390, height: 844 } },
+      async ({ page }) => {
+        await installWorkboard(page, [linked], {
+          methodResponses: {
+            "sessions.list": {
+              ts: 1,
+              count: 1,
+              defaults: {},
+              sessions: [
+                { key: sessionKey, displayName: sessionName, kind: "direct", status: "running" },
+              ],
+            },
+            "workboard.cards.get": { card: linked, events: [], notes: [] },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "workboard");
+        await cardInColumn(page, "Todo", linked.title).click();
+        const overview = page.getByRole("tabpanel", { name: "Overview" });
+        await button(overview, "Stop session").click({ trial: true });
+        await button(overview, "Open session").click({ trial: true });
+        for (const text of [sessionName, "Active run in progress"]) {
+          const lines = await overview.getByText(text, { exact: true }).evaluate((element) => {
+            const range = document.createRange();
+            range.selectNodeContents(element);
+            return new Set(Array.from(range.getClientRects(), (rect) => rect.top)).size;
+          });
+          expect(lines, text).toBe(1);
+        }
+      },
+    );
+  });
+
   it("keeps card titles visible when a column overflows its height", async () => {
     const overflowTitle = (index: number) =>
       `Overflowing backlog card ${index + 1} with a long title that wraps onto two lines`;

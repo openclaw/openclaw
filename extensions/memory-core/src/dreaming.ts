@@ -131,7 +131,7 @@ async function runShortTermDreamingPromotion(params: {
   ] = await Promise.all([
     import("./dreaming-markdown.js"),
     import("./dreaming-narrative.js"),
-    import("./dreaming-phases.js"),
+    import("./dreaming-sweep-phases.js"),
     import("./short-term-promotion.js"),
   ]);
   for (const { agentId, agentIds, workspaceDir } of workspaces) {

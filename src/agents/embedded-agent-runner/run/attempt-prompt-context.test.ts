@@ -171,7 +171,7 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
       "Check server reachability",
     );
     expect(JSON.stringify(fixture.input.messages)).toBe(history);
-    expect(fixture.input.systemPromptText).toBe("Base system prompt");
+    expect(prepared.systemPromptForHook).toBe("Base system prompt");
   });
 
   it("preserves fallback context envelopes and canonical input across route switches and replay", async () => {

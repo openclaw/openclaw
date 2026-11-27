@@ -49,7 +49,9 @@ type AgentConfigEntry = Pick<
   | "agentDir"
   | "decisionModel"
   | "utilityModel"
+  | "subagents"
   | "skills"
+  | "fastModeDefault"
   | "thinkingDefault"
 > & {
   model?: unknown;
@@ -61,7 +63,14 @@ type ConfigSnapshot = {
   agents?: {
     defaults?: Pick<
       AgentConfigEntry,
-      "workspace" | "model" | "decisionModel" | "utilityModel" | "models" | "skills"
+      | "workspace"
+      | "model"
+      | "decisionModel"
+      | "utilityModel"
+      | "subagents"
+      | "models"
+      | "skills"
+      | "fastModeDefault"
     >;
     entries?: Record<string, AgentConfigEntry>;
   };
@@ -127,6 +136,12 @@ export function resolveAgentConfig(config: Record<string, unknown> | null, agent
     defaults: cfg?.agents?.defaults,
     globalTools: cfg?.tools,
   };
+}
+
+/** The agent's configured primary model, inherited from defaults; null when none is chosen. */
+export function resolveAgentModelPrimary(config: Record<string, unknown> | null, agentId: string) {
+  const { entry, defaults } = resolveAgentConfig(config, agentId);
+  return resolveModelPrimary(entry?.model) ?? resolveModelPrimary(defaults?.model);
 }
 
 /** Resolves the effective skill allowlist, including inherited agent defaults. */
@@ -216,7 +231,7 @@ export function resolveModelFallbacks(model?: unknown): string[] | null {
   return fallbacks ? fallbacks.filter((entry): entry is string => typeof entry === "string") : null;
 }
 
-export function resolveEffectiveModelFallbacks(
+function resolveEffectiveModelFallbacks(
   entryModel?: unknown,
   defaultModel?: unknown,
 ): string[] | null {

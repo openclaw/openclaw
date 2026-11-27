@@ -21,6 +21,8 @@ title: "Quick rules"
   <Accordion title="Adding provider auth does not change your primary model">
     `openclaw configure` preserves an existing `agents.defaults.model.primary` when you add or reauth a provider. `openclaw models auth login` does the same unless you pass `--set-default`. Provider plugins may still return a recommended default model in their auth config patch, but OpenClaw treats that as "make this model available" when a primary model already exists, not "replace the current primary model."
 
+    A provider sign-in in the Control UI follows the same rule. When the agent has no model yet, the Control UI tests and selects the model that the provider's sign-in recommends. If the provider recommends none, it uses the catalog's recommended model, then the first available one. An agent that already has a model keeps it.
+
     To intentionally switch the default model, use `openclaw models set <provider/model>` or `openclaw models auth login --provider <id> --set-default`.
 
   </Accordion>

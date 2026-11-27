@@ -2,7 +2,7 @@ import { ok } from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import childProcess from "node:child_process";
 import { once } from "node:events";
-import { readFile } from "node:fs/promises";
+import { readFile, rename, symlink, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { text } from "node:stream/consumers";
@@ -23,6 +23,7 @@ import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/pro
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createRemoteShellSandboxSession } from "../../agents/sandbox/remote-shell-transport.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { openCommandStdinFile } from "../command-stdin-file.js";
 import { spawnCommand, withCommandProcessScope } from "../exec-spawn.js";
 import { runCommandBuffered, runCommandWithTimeout, runExec } from "../exec.js";
 import { prepareOomScoreAdjustedSpawn } from "../linux-oom-score.js";
@@ -53,6 +54,35 @@ describe.skipIf(!supportsSpawnBrokerCommandTransport())("broker command transpor
   }
   const start = (source: string, options: CommandSpawnOptions, broker = true) =>
     launch(nodeArgv(source), options, broker);
+
+  it.each(["replacement", "symlink"] as const)(
+    "refuses a stdin file swapped for a %s before broker admission",
+    async (swap) => {
+      const file = path.join(tempDirs.make("broker-stdin-file-"), "input");
+      await writeFile(file, "original input");
+      await using input = await openCommandStdinFile(file);
+      await rename(file, `${file}.original`);
+      if (swap === "symlink") {
+        await symlink(`${file}.original`, file);
+      } else {
+        await writeFile(file, "replaced input");
+      }
+      await expect(
+        runWithSpawnBroker(host, () =>
+          runExec(process.execPath, ["-e", "process.stdin.pipe(process.stdout)"], {
+            stdinFile: input.stdinFile,
+            logOutput: false,
+          }),
+        ),
+      ).rejects.toMatchObject({
+        code: "ERR_COMMAND_STDIN_FILE",
+        message:
+          swap === "replacement"
+            ? expect.stringContaining("identity changed")
+            : expect.stringContaining("ELOOP"),
+      });
+    },
+  );
 
   async function readyCommand(command: ReturnType<typeof start>, required = true) {
     const child = command.nodeChildProcess;

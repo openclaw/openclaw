@@ -23,10 +23,7 @@ import type { RoutePeer } from "../routing/resolve-route.js";
 import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
 import { deliveryContextKey } from "../utils/delivery-context.shared.js";
-import {
-  commitBackgroundPayloadsToSession,
-  type BackgroundPayloadsCommit,
-} from "./background-result-payloads.js";
+import type { BackgroundPayloadsCommit } from "./background-result-payloads.js";
 import type { BackgroundSessionResultProvenance } from "./background-session-result.js";
 
 /** Inputs describing one payload the channel confirmed as delivered. */
@@ -128,6 +125,9 @@ export async function commitConfirmedVisibleMessage(
   if (!entry) {
     return { ok: false, reason: "destination conversation is unavailable" };
   }
+  // Loaded at use: only a confirmed external send needs this commit graph (gateway media
+  // helpers), and a one-shot turn would otherwise load it on its startup path.
+  const { commitBackgroundPayloadsToSession } = await import("./background-result-payloads.js");
   // The destination is another conversation, so the producer's write claim must not apply.
   return await runWithoutOwnedSessionTranscriptWrites(() =>
     commitBackgroundPayloadsToSession({

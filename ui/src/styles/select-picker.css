@@ -36,7 +36,6 @@
   flex-direction: column;
   overflow: hidden;
   max-width: calc(100vw - 16px);
-  max-height: min(400px, var(--oc-overlay-available-height, calc(100dvh - 16px)));
 }
 
 /* Select keeps its own slower presentation; the wrapper alone animates, never its list.
@@ -132,13 +131,23 @@
   color: var(--accent);
 }
 
+/* The flat list shares the icon and 8px gap (20px artwork, 24px for channels).
+   A window sizer contains the leading icons even when their rows are offscreen. */
+.picker-select__menu:not(.picker-select__menu--grouped):has(.picker-select__leading)
+  .picker-select__copy:first-child {
+  margin-inline-start: var(--picker-icon-inset, 28px);
+}
+
+.channel-picker {
+  --picker-icon-inset: 32px;
+}
+
 .picker-select__leading {
   display: inline-flex;
   align-items: center;
 }
 
 .picker-select__label {
-  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -156,7 +165,6 @@
 }
 
 .picker-select__description {
-  min-width: 0;
   overflow: hidden;
   color: color-mix(in srgb, var(--muted) 80%, var(--text));
   font-size: 0.75rem;
@@ -244,7 +252,6 @@ openclaw-select-picker {
   /* Keep the picker budget when the shared overlay stylesheet loads later. */
   max-height: min(400px, var(--oc-overlay-available-height, calc(100dvh - 16px)));
   min-width: anchor-size(width);
-  width: max-content;
 }
 
 @media (max-width: 640px) {
@@ -393,7 +400,8 @@ openclaw-select-picker {
   animation: picker-sheet-page-in var(--motion-sheet);
 }
 
-.picker-select--sheet .picker-select__options {
+.picker-select--sheet .picker-select__options,
+.picker-select__menu--phone-sheet .picker-select__options {
   flex: 1 1 auto;
   overscroll-behavior: contain;
 }
@@ -544,11 +552,6 @@ openclaw-select-picker {
     .header-search[data-searching]
   ) {
   height: calc(var(--shell-canvas-height, 100dvh) - var(--safe-area-top) - var(--space-7));
-}
-
-.picker-select__menu--phone-sheet .picker-select__options {
-  flex: 1 1 auto;
-  overscroll-behavior: contain;
 }
 
 @keyframes picker-sheet-in {

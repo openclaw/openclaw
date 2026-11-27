@@ -161,7 +161,7 @@ it("isolates the existing-entry context when first read during the update", asyn
 });
 
 it("protects required profile provenance and an absent surface during replacement", async () => {
-  const stamp = creationStamp(10);
+  const stamp = { ...creationStamp(10), createdIndependently: true as const };
   await seed(stamp);
   const replacement: InternalSessionEntry = {
     sessionId: "replacement",
@@ -206,6 +206,7 @@ it("does not mint creator authority when replacing an unstamped node", async () 
       createdVia: "operator",
       createdActor: { type: "human", source: "profile", id: "new-profile" },
       createdSurface: "plugin-dock",
+      createdIndependently: true,
     }),
     { replaceEntry: true },
   );
@@ -213,6 +214,7 @@ it("does not mint creator authority when replacing an unstamped node", async () 
   expect(persisted).toMatchObject({ sessionId: "replacement", createdVia: "operator" });
   expect(persisted?.createdActor).toBeUndefined();
   expect(persisted?.createdSurface).toBeUndefined();
+  expect(persisted?.createdIndependently).toBeUndefined();
   expect(persisted).not.toHaveProperty("sandbox");
   expect(persisted).not.toHaveProperty("label");
 });

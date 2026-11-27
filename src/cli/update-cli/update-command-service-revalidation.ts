@@ -36,6 +36,7 @@ import { UpdatePreMutationError } from "./shared.js";
 import type {
   ManagedGatewayUpdateVerdict,
   ManagedGatewayServiceObservation,
+  ManagedServiceStopParams,
   PreManagedServiceStop,
 } from "./update-command-service-context-types.js";
 import {
@@ -171,8 +172,9 @@ export async function assertManagedGatewayArtifactPublication(params: {
       `Cannot replace Git runtime artifacts in ${servingVerdict.root}: its Gateway${serving.servicePid === undefined ? "" : ` (PID ${serving.servicePid})`} is still running and this update did not stop it. Stop that Gateway through its service manager, then rerun \`${formatCliCommand("openclaw update", serving.serviceEnv)}\` without \`--no-restart\`. The serving runtime was left unchanged.`,
     );
   }
+  // A release replaces no root (it builds beside the serving one), so no live Gateway is at risk.
   const warning =
-    params.updateInstallKind === "git" && params.phase !== "before-stop"
+    params.updateInstallKind === "git" && params.phase !== "before-stop" && params.roots.length > 0
       ? await inspectGatewayArtifactConsumer(params)
       : undefined;
   const bindings = await discoverManagedGatewayBindings(params.env);
@@ -305,6 +307,7 @@ export async function assertManagedGatewayArtifactPublication(params: {
 export async function revalidateManagedGatewayServiceAfterUpdate(params: {
   state: GatewayServiceState;
   root: string;
+  updateInstallKind?: ManagedServiceStopParams["updateInstallKind"];
   preManagedServiceStop?: ManagedGatewayServiceObservation;
   allowInstallRootChange?: boolean;
   /** Restoration still rejects observed identity drift when a native probe fails. */

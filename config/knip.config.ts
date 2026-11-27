@@ -10,6 +10,7 @@ import { runtimeProcessBuildEntries } from "../scripts/lib/runtime-process-build
 import {
   isInlineUpdateCompatibilityExport,
   readUpdateCompatibilityInventory,
+  resolveUpdateCompatibilityOrigin,
 } from "../scripts/lib/update-compat-chunks.mts";
 import { ModuleGraph } from "../scripts/lib/update-compat-module-graph.mts";
 import { buildPackageDistEntriesFromExports } from "../scripts/lib/workspace-package-entries.mts";
@@ -44,7 +45,9 @@ const repositoryScriptEntries = [
   "scripts/build-iroh.mjs!",
   // The macOS packager verifies the staged app before signing.
   "scripts/lib/mac-runtime-portability.mjs!",
+  "scripts/lib/tsdown-memory-admission.mts!",
   "scripts/perf/agent-deletion-cancellation-measure.ts",
+  "scripts/perf/gateway-catalog-context-retention.mjs!",
   "scripts/perf/template-retirement-measure.mts",
   "scripts/windows-release-promotion.mjs!",
   "scripts/windows-gateway-release.mjs!",
@@ -61,14 +64,19 @@ const repositoryScriptEntries = [
   "scripts/perf/clickclack-credential-read.ts!",
   "scripts/perf/github-managed-profile-read.ts!",
   "scripts/perf/github-managed-profile-write.ts!",
+  "scripts/perf/worktree-fast-forward-measure.ts!",
   // Spawned directly by native-allocation-profile.test.ts.
   "test/scripts/fixtures/native-profile-census.mjs!",
   // Spawned directly by mantis-telegram-failure.test.ts.
   "test/scripts/fixtures/mantis-telegram-failure.mts",
   // Spawned directly by beam-handoff.joined.e2e.test.ts.
   "test/fixtures/beam-live-handoff-client/beam.mjs",
+  // Spawned directly by fs-safe-drvfs-calls.test.ts under Node and Bun.
+  "test/fixtures/fs-safe-drvfs-calls.mjs!",
   // Forked by update-command-doctor-child.test.ts to model the successor's state swap.
   "src/cli/update-cli/update-command-state-handoff.process.test-support.ts!",
+  // Forked by server-startup-legacy-completion.test.ts to model a schema-40 verifier.
+  "src/gateway/legacy-schema40-driver.test-support.ts!",
   // Their source headers document standalone benchmark and measurement commands.
   "scripts/bench-ci-lint-plan.mts!",
   "scripts/bench-ci-planner.mts!",
@@ -157,6 +165,8 @@ const repositoryScriptEntries = [
   "scripts/ci-build-manifest.mjs!",
   // Full release validation invokes child-evidence reuse through a shell variable.
   "scripts/find-reusable-release-child.mjs!",
+  // The release candidate checklist spawns its Parallels preflight by exact path.
+  "scripts/e2e/parallels/candidate-preflight.ts!",
   // CI security-fast runs this from its trusted harness checkout.
   "scripts/ci-production-audit.mjs!",
   // tsdown builds this private macOS app worker protocol entry by path.
@@ -190,6 +200,8 @@ const repositoryScriptEntries = [
   "scripts/bench-usage-gateway.ts!",
   "scripts/lib/usage-bench-child.ts!",
   "scripts/lib/usage-bench-observer.mjs!",
+  // scripts/README.md invokes the trusted Usage route/open benchmark by path.
+  "scripts/bench-usage-open.ts!",
   // scripts/README.md invokes the Chromium/WebKit companion with shared scenarios.
   "scripts/bench-control-ui-engines.ts!",
   // The event-load guide invokes the isolated Gateway wire fixture directly.
@@ -279,6 +291,7 @@ const repositoryScriptEntries = [
   "scripts/perf/prepared-gateway-startup-measure.mjs!",
   "scripts/perf/sandbox-paths-measure.ts!",
   "scripts/perf/github-publication-snapshot-measure.ts!",
+  "scripts/perf/github-detail-retention.ts!",
   "scripts/perf/workspace-reconciliation-measure.ts!",
   "scripts/perf/workspace-snapshot-read-measure.ts!",
   "scripts/perf/workspace-git-main-thread-measure.mjs!",
@@ -420,6 +433,9 @@ const repositoryScriptEntries = [
   // run.sh invokes this CLI and preloads it into updater/Doctor children.
   "scripts/e2e/lib/upgrade-survivor/dreaming-cron.mjs!",
   "scripts/e2e/lib/upgrade-survivor/formerly-bundled-plugin-doctor.mjs!",
+  // git-release.sh runs this helper and preloads the launcher-kill hook by path.
+  "scripts/e2e/lib/upgrade-survivor/git-release.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/git-release-launcher-kill.mjs!",
   // Installed recovery launches its driver/access probe and preloads its fault observer by path.
   "scripts/e2e/lib/upgrade-survivor/installed-recovery-access.mjs!",
   "scripts/e2e/lib/upgrade-survivor/installed-recovery-fault.mjs!",
@@ -447,6 +463,8 @@ const repositoryScriptEntries = [
   // published-driver-update-docker.sh launches this managed-update proof inside Docker.
   "scripts/e2e/lib/upgrade-survivor/published-driver.mjs!",
   "scripts/e2e/lib/upgrade-survivor/published-driver-plugin-publication.mjs!",
+  // Published driver CI executes the PostgreSQL upgrade against its service database.
+  "scripts/e2e/lib/upgrade-survivor/published-driver-postgres.mjs!",
   "scripts/e2e/lib/upgrade-survivor/published-plugin-registry.mjs!",
   "scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs!",
   // The compiler below exposes the runner's inline Node imports.
@@ -464,6 +482,10 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/update-timeout-diagnostics.mjs!",
   "scripts/e2e/lib/upgrade-survivor/mobile-pairing-client.mts!",
   "scripts/e2e/lib/upgrade-survivor/watchos-direct-node.mjs!",
+  // upgrade-survivor-docker.sh builds the successor fixture and runs the scenario by path.
+  "scripts/e2e/lib/upgrade-survivor/release-fixture.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/release-update.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/schema-downgrade-run.mjs!",
   "scripts/embedded-run-abort-leak.ts!",
   "scripts/embedded-run-liveness-leak.ts!",
   "scripts/fixtures/packed-plugin-sdk-type-smoke.ts!",
@@ -508,6 +530,7 @@ const repositoryScriptEntries = [
   "scripts/oxlint-boundary-guards.mjs!",
   // Standalone Linux workload compares pinned boundary-reference initialization.
   "scripts/perf/boundary-reference-measure.mts!",
+  "scripts/perf/extension-boundary-compile-measure.mts!",
   "scripts/plugin-prerelease-liveish-matrix.mts!",
   "scripts/pre-commit/guard-staged-content.mjs!",
   // Frozen-target contract admission is invoked as a standalone Node CLI.
@@ -562,6 +585,16 @@ const repositoryScriptEntries = [
   "scripts/run-vitest-child.mts",
   // The isolated Vitest adapter executes this entry by path inside its container.
   "scripts/lib/vitest-isolated-entry.mts",
+  // docs/reference/fast-track-release-approval.md runs this manual-only Vitest config by path.
+  "test/manual-release-approval.config.ts",
+  "test/manual-release-approval.checks.ts",
+  "test/manual-build-only-workflow.checks.ts",
+  "test/manual-build-only-artifacts.checks.ts",
+  "test/manual-build-only-evidence.checks.ts",
+  "test/manual-build-only-parent.checks.ts",
+  "test/manual-fast-track-button.checks.ts",
+  "test/manual-fast-track-publication.checks.ts",
+  "test/manual-fast-track-receipt.checks.ts",
   "scripts/secrets/openclaw-bws-resolver.mjs!",
   // Security Review stages these entrypoints from isolated checkout attempts.
   "scripts/github/security-review-event.mjs!",
@@ -576,6 +609,8 @@ const repositoryScriptEntries = [
   "scripts/test-ios-shell-gateway.mjs!",
   "scripts/test-ios-sidebar-attention-gateway.mjs!",
   "scripts/update-clawtributors.ts!",
+  // scripts/update-gateway.sh runs this source-update build by path.
+  "scripts/update-gateway-build.mts!",
   // The candidate binder invokes this trusted producer-identity verifier by path.
   "scripts/verify-full-release-producer-job.mjs!",
   // Staging and signed-app packaging execute this verifier with each bundled Bun.
@@ -1071,9 +1106,8 @@ function compileUpdateCompatibilityConsumers(rootDir: string): string[] {
       );
       continue;
     }
-    const currentOrigin = graph.localOrigin(sourceFile, origin.symbol);
+    const currentOrigin = resolveUpdateCompatibilityOrigin(origin, rootDir, graph);
     if (
-      !currentOrigin ||
       (currentOrigin.module === origin.module && currentOrigin.symbol === origin.symbol) ||
       !graph.names(path.join(rootDir, currentOrigin.module)).includes(currentOrigin.symbol)
     ) {
@@ -1081,6 +1115,9 @@ function compileUpdateCompatibilityConsumers(rootDir: string): string[] {
         `Recorded updater binding ${origin.module}:${origin.symbol} is neither a named export nor an imported named binding`,
       );
     }
+    imports.push(
+      `import { ${currentOrigin.symbol} as __updateCompatibilityConsumer${index} } from ${JSON.stringify(`./${currentOrigin.module}`)};`,
+    );
   }
   return imports;
 }
@@ -1219,6 +1256,9 @@ const config = {
   // Script exports are checked with every script as an entry and entry-export
   // reporting enabled. Suppress them only in this application-production scan.
   ignoreIssues: {
+    // Direct release-checkout and global-package boundary tests consume these helpers;
+    // the full-tree scan still audits their exports against those consumers.
+    "src/cli/update-cli/update-command-git.ts": ["exports"],
     // These in-module helpers are direct seams in compaction-floor.test.ts and
     // package-release-retention.test.ts. The full-tree scan verifies those consumers.
     "packages/agent-core/src/harness/compaction/compaction-floor.ts": ["exports"],
@@ -1243,6 +1283,16 @@ const config = {
     "src/auto-reply/reply/request-native-subagent.ts": ["exports"],
     // Scheduled-command tests exercise registry replacement and persisted-job validation at the owner.
     "src/gateway/plugin-command-scheduled-run.ts": ["exports"],
+    // Cron regression fixtures reset the process-wide provider backoff between cases.
+    "src/cron/service/provider-backoff.ts": ["exports"],
+    // Cookie and plugin-route tests exercise the authorization step directly.
+    "src/gateway/http-auth-plugin-cookie.ts": ["exports"],
+    // Post-ready release tests drive the lean deferral clock with these bounds.
+    "src/gateway/server-post-ready-release.ts": ["exports"],
+    // Launcher rollback tests age the trial record against this budget.
+    "src/update/launcher.ts": ["exports"],
+    // Session and cron state type this slot through `import(...)` type queries.
+    "src/cron/service/timer-execution-timeout.ts": ["types"],
     // Diagnostic fixtures reset owner-private state; the full-tree audit checks these consumers.
     "src/logging/diagnostic-memory.ts": ["exports"],
     "src/logging/diagnostic-phase.ts": ["exports"],
@@ -1366,6 +1416,8 @@ const config = {
         "solid-js",
         "playwright-core",
         "partial-json",
+        // Performance measurement resolves Tokenjuice from extensions/tokenjuice/package.json.
+        "tokenjuice",
         // The bundled AI runtime loads Bun proxy support through a computed import.
         "proxy-from-env",
         // The native Canvas bundle falls back without optional Markdown support.
@@ -1394,6 +1446,8 @@ const config = {
         "ngrok",
         "open",
         "openclaw",
+        // The release-update upgrade-survivor scenario mints its registry TLS certificate with it.
+        "openssl",
         // Native checkpoint measurements run their synthetic guest through the host engine.
         "podman",
         "sleep",
@@ -1552,6 +1606,10 @@ const config = {
       "test/fixtures/codex-app-server.mjs!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/azure-speech`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/beam`]: bundledPluginWorkspace([
+      // Invoked by the plugin's release packaging hook.
+      "scripts/package-cleaners.mjs!",
+    ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/browser`]: bundledPluginWorkspace([
       // Core and plugin-SDK facades resolve these shipped Browser surfaces by basename.
       "browser-control-auth.ts!",

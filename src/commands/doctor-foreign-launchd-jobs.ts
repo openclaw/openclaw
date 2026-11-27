@@ -11,12 +11,27 @@ import {
 import { readGatewayForcedRestartSummary } from "../daemon/restart-storm.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
+import type { DoctorMaintenancePending } from "./doctor-maintenance-pending.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
 import {
   resolveServiceRepairPolicy,
   isServiceRepairDeferred,
   shouldManageGatewayService,
 } from "./doctor-service-repair-policy.js";
+
+const selectRemovableJobs = (jobs: readonly ForeignLaunchdJob[]) =>
+  jobs.filter((job) => job.safeToRemove);
+
+/** Read-only: whether `noteMacForeignLaunchdJobs` would try to remove a stray job. */
+export async function checkMacForeignLaunchdJobRepairPending(
+  options: DoctorOptions,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<DoctorMaintenancePending> {
+  if (process.platform !== "darwin" || options.repair !== true) {
+    return "none";
+  }
+  return selectRemovableJobs(await findForeignLaunchdJobs(env)).length > 0 ? "work" : "none";
+}
 
 /** Reports foreign launchd jobs; only explicit Doctor repair may remove lifecycle jobs. */
 export async function noteMacForeignLaunchdJobs(
@@ -47,7 +62,7 @@ export async function noteMacForeignLaunchdJobs(
       `${restarts.count} external forced Gateway restart(s) in the last ${Math.round(restarts.windowMs / 60_000)} minutes. Listed lifecycle jobs may be responsible; this is not proof of attribution.`,
     );
   }
-  const candidates = jobs.filter((job) => job.safeToRemove);
+  const candidates = selectRemovableJobs(jobs);
   if (candidates.length > 0) {
     lines.push(
       `Run ${formatCliCommand("openclaw doctor --fix", env)} to remove confirmed stray Gateway lifecycle jobs.`,

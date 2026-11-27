@@ -449,7 +449,7 @@ export function withPublicationGuestRole(
   };
 }
 
-export async function prepareVisitorPublicationFixture(f: {
+async function prepareVisitorPublicationFixture(f: {
   config: OpenClawConfig;
   session: { sessionKey: string };
   maintainer: Requester;

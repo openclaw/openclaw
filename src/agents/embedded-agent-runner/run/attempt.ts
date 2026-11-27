@@ -289,6 +289,8 @@ async function runEmbeddedAttemptOwned(
           yieldAcknowledgment = acknowledgment;
           yieldMessageWaitRegistered = messageWaitRegistered;
           yieldResumesInPlace = options?.resumesInPlace === true;
+          // An armed command still resumes the chat if a later yield of this turn arms none.
+          yieldExecWakeArmed ||= options?.execWakeArmed === true;
           if (options?.terminal) {
             runAbortController.abort(options.terminal);
             abortTerminalYield?.(options.terminal);
@@ -331,6 +333,7 @@ async function runEmbeddedAttemptOwned(
     let yieldAcknowledgment: string | undefined;
     let yieldMessageWaitRegistered: boolean | undefined;
     let yieldResumesInPlace = false;
+    let yieldExecWakeArmed = false;
     let yieldAbortSettled: Promise<void> | null = null;
     let abortTerminalYield: ((reason: unknown) => void) | undefined;
     const preparedBundleTools = await prepare("attempt.bundle-tools", () =>
@@ -467,6 +470,7 @@ async function runEmbeddedAttemptOwned(
                 yieldMessage = null;
                 yieldAcknowledgment = undefined;
                 yieldMessageWaitRegistered = undefined;
+                yieldExecWakeArmed = false;
                 return;
               }
               // Keep sibling execution and authority live until their results settle.
@@ -553,6 +557,7 @@ async function runEmbeddedAttemptOwned(
             yieldMessage,
             yieldAcknowledgment,
             yieldMessageWaitRegistered,
+            yieldExecWakeArmed,
           }),
           setToolSearchCatalogExecutor: (executor) => {
             toolSearchCatalogExecutor = executor;

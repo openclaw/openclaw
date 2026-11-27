@@ -5,11 +5,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PreparedDecisionBillingFacts } from "../../decisions/host-billing.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { markHostPluginUsageDiagnosticEvent } from "../../infra/diagnostic-plugin-usage-provenance.js";
-import {
-  estimateAggregateUsageCostAsync,
-  estimateUsageCost,
-  resolveModelCostConfig,
-} from "../../utils/usage-format.js";
+import { resolveModelCostConfig } from "../../model-catalog/usage-pricing.js";
+import { estimateAggregateUsageCostAsync, estimateUsageCost } from "../../utils/usage-format.js";
 import type { LlmCompleteUsage } from "./runtime-llm.types.js";
 
 function readExplicitCostUsd(raw: unknown): number | undefined {

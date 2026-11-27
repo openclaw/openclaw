@@ -1,5 +1,5 @@
---- telegram-direct-codex-message-tool.md	sha256=a6d65e7f877753d27c69c98f28c296f9c41c7d1d3a9d2e5b4c26aa373f69fd1d
-+++ discord-group-codex-message-tool.md	sha256=ea97d167f97513762bee4815d1a60bcc8827667be64c4c0505b3319b6c8a2376
+--- telegram-direct-codex-message-tool.md	sha256=ac8aee445b72035aa8a77dbcb6a3f7a181fd21300b470b0acab0234692945ced
++++ discord-group-codex-message-tool.md	sha256=64d01eb6a6aeba9183e81a55201f12de8b86f8bf78b6ce38b1053efa870c105b
 @@ -1,1 +1,1 @@
 -# Telegram Direct Codex Message Tool Turn
 +# Discord Group Codex Message Tool Turn
@@ -34,25 +34,25 @@
 +    "chars": 972,
 +    "roughTokens": 243
 @@ -250,2 +250,2 @@
--    "chars": 105880,
--    "roughTokens": 26470
-+    "chars": 104450,
-+    "roughTokens": 26113
+-    "chars": 105997,
+-    "roughTokens": 26500
++    "chars": 104201,
++    "roughTokens": 26051
 @@ -258,2 +258,2 @@
 -    "chars": 3683,
 -    "roughTokens": 921
 +    "chars": 4559,
 +    "roughTokens": 1140
 @@ -266,2 +266,2 @@
--    "chars": 13567,
--    "roughTokens": 3392
-+    "chars": 14812,
-+    "roughTokens": 3703
+-    "chars": 12989,
+-    "roughTokens": 3248
++    "chars": 14234,
++    "roughTokens": 3559
 @@ -270,2 +270,2 @@
--    "chars": 119449,
--    "roughTokens": 29863
-+    "chars": 119264,
-+    "roughTokens": 29816
+-    "chars": 118988,
+-    "roughTokens": 29747
++    "chars": 118437,
++    "roughTokens": 29610
 @@ -274,2 +274,2 @@
 -    "chars": 879,
 -    "roughTokens": 220
@@ -92,104 +92,3 @@
 @@ -484,1 +490,1 @@
 -Full JSON: `codex-dynamic-tools.telegram-direct.json`
 +Full tool overrides: `codex-dynamic-tools.discord-group.json` (base: `codex-dynamic-tools.telegram-direct.json`)
-@@ -529,4 +534,0 @@
--        "asVideoNote": {
--          "description": "Send one video attachment as a round Telegram video note. Captions are delivered separately.",
--          "type": "boolean"
--        },
-@@ -569,5 +571,3 @@
--        "contentType": {
--          "type": "string"
--        },
--        "delivery": {
--          "description": "Delivery prefs; pin when supported.",
-+        "components": {
-+          "additionalProperties": true,
-+          "description": "Discord Components V2 payload for send actions. Accepts the same object consumed by the Discord components adapter.",
-@@ -575,21 +575,11 @@
--            "pin": {
--              "anyOf": [
--                {
--                  "type": "boolean"
--                },
--                {
--                  "properties": {
--                    "enabled": {
--                      "type": "boolean"
--                    },
--                    "notify": {
--                      "type": "boolean"
--                    },
--                    "required": {
--                      "type": "boolean"
--                    }
--                  },
--                  "required": ["enabled"],
--                  "type": "object"
--                }
--              ]
-+            "blocks": {
-+              "description": "Discord Components V2 blocks such as text, buttons, selects, media, containers, and separators.",
-+              "items": {},
-+              "type": "array"
-+            },
-+            "modal": {
-+              "additionalProperties": true,
-+              "description": "Optional Discord modal triggered by generated components.",
-+              "properties": {},
-+              "required": [],
-+              "type": "object"
-@@ -599,0 +590,3 @@
-+        "contentType": {
-+          "type": "string"
-+        },
-@@ -612,1 +605,1 @@
--          "description": "Telegram reaction emoji: use a supported Unicode reaction, or pass the numeric custom_emoji_id identifier returned by action:\"emoji-list\" directly as emoji. Use action:\"emoji-list\" to inspect reactions allowed in the current chat; arbitrary Unicode may be rejected by Telegram.",
-+          "description": "Unicode emoji or custom name:id (also <:name:id> / <a:name:id>). Use action:\"emoji-list\" for server emojis.",
-@@ -638,33 +630,0 @@
--        "location": {
--          "description": "Standalone Telegram location. Coordinates send a pin; name plus address sends a venue. Do not combine with message or media.",
--          "properties": {
--            "accuracy": {
--              "description": "Pin uncertainty radius in meters.",
--              "maximum": 1500,
--              "minimum": 0,
--              "type": "number"
--            },
--            "address": {
--              "description": "Venue address; requires name.",
--              "minLength": 1,
--              "type": "string"
--            },
--            "latitude": {
--              "maximum": 90,
--              "minimum": -90,
--              "type": "number"
--            },
--            "longitude": {
--              "maximum": 180,
--              "minimum": -180,
--              "type": "number"
--            },
--            "name": {
--              "description": "Venue name; requires address.",
--              "minLength": 1,
--              "type": "string"
--            }
--          },
--          "required": ["latitude", "longitude"],
--          "type": "object"
--        },
-@@ -690,12 +649,0 @@
--        "pollAnonymous": {
--          "description": "Send a display-only anonymous poll. Anonymous votes do not create agent turns. This is the default unless pollPublic is true.",
--          "type": "boolean"
--        },
--        "pollDurationSeconds": {
--          "minimum": 1,
--          "type": "integer"
--        },
--        "pollPublic": {
--          "description": "Send a public poll whose votes route into the originating agent conversation. Voter identities are visible.",
--          "type": "boolean"
--        },

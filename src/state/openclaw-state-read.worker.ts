@@ -162,7 +162,8 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
       const locationArgs = [
         input.databasePath,
         input.location,
-        command.type === "updateRuns.recoveryAdmission"
+        command.type === "updateRuns.recoveryAdmission" ||
+        command.type === "updateRuns.pluginCohortRecovery"
           ? openDoctorStateSchemaReadAdmission
           : undefined,
         input.expectedIdentity,
@@ -355,7 +356,7 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
   }
 };
 
-serveOwnedWorkerTasks(
+export const startHostedWorker = serveOwnedWorkerTasks(
   async (message, channel, control) => {
     // SAFETY: The typed state-read pool owns this private task input.
     const input = message as OpenClawStateReadRequest;
@@ -371,6 +372,7 @@ serveOwnedWorkerTasks(
   },
   {
     closeResource: closeRetainedOpenClawStateReadConnections,
+    releaseRetainedResources: () => closeRetainedOpenClawStateReadConnections(),
     transferList: (reply) =>
       reply.ok && reply.type === "localWorkspace.manifest" ? [reply.snapshot.buffer] : [],
   },

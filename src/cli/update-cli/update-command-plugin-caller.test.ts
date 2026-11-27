@@ -385,7 +385,7 @@ async function exercisePersistence(state: OpenClawTestState, scenario: (typeof s
     const reported = json.mock.calls[0]?.[0];
     assert(terminalFailure instanceof UpdateCommandPendingRecoveryFailure);
     expect(terminalFailure.cause).toBe(refused);
-    expect(reported).toEqual({ ...terminalFailure.result, reportPath: expect.any(String) });
+    expect(reported).toEqual(terminalFailure.result);
     expect(reported).toMatchObject({
       status: "error",
       reason: "update-recovery-pending",
