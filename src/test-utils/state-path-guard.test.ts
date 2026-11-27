@@ -2,12 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import * as boundaryPath from "../infra/boundary-path.js";
 import {
   openNodeSqliteDatabase,
   resolveExistingSqliteFileUri,
   resolveImmutableSqliteFileUri,
 } from "../infra/node-sqlite.js";
+import * as pathExistence from "../infra/path-existence.js";
 import { cleanupSessionStateForTest } from "./session-state-cleanup.js";
 import { useIsolatedStateGuard } from "./state-path-guard.js";
 
@@ -103,7 +103,7 @@ describe("isolated state path guard", () => {
   it("checks the decoded Windows producer path before opening", () => {
     const pathname = String.raw`Z:\outside-state\state ?#%.sqlite`;
     const namespaced = String.raw`\\?\Z:\outside-state\state ?#%.sqlite`;
-    const resolveIdentity = vi.spyOn(boundaryPath, "resolveIdentityPathViaExistingAncestorSync");
+    const resolveIdentity = vi.spyOn(pathExistence, "resolveIdentityPathViaExistingAncestorSync");
     try {
       expect(() =>
         openNodeSqliteDatabase(resolveExistingSqliteFileUri(pathname, "win32")).close(),
