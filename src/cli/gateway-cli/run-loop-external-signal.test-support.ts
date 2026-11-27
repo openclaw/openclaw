@@ -12,7 +12,7 @@ export function registerExternalRestartSignalTests(waitForLoopTurn: () => Promis
       const intent = Promise.withResolvers<{ force: true }>();
       mocks.consumeGatewayRestartIntentPayload.mockReturnValueOnce(intent.promise);
       mocks.consumeGatewayRestartAuthorization.mockReturnValueOnce(false);
-      mocks.isGatewayRestartExternallyAllowed.mockReturnValue(allowed);
+      mocks.isGatewayRestartExternallyAllowed.mockReturnValueOnce(allowed);
       await mocks.withRunningGateway(({ captureSignal, close }) =>
         withLifecycleClock(async () => {
           captureSignal("SIGUSR2")();
@@ -29,8 +29,8 @@ export function registerExternalRestartSignalTests(waitForLoopTurn: () => Promis
   it("accepts another SIGUSR2 after scheduling a timed-out signal throws", async () => {
     const intent = Promise.withResolvers<null>();
     mocks.consumeGatewayRestartIntentPayload.mockReturnValueOnce(intent.promise);
-    mocks.consumeGatewayRestartAuthorization.mockReturnValue(false);
-    mocks.isGatewayRestartExternallyAllowed.mockReturnValue(true);
+    mocks.consumeGatewayRestartAuthorization.mockReturnValueOnce(false).mockReturnValueOnce(false);
+    mocks.isGatewayRestartExternallyAllowed.mockReturnValueOnce(true).mockReturnValueOnce(true);
     mocks.scheduleGatewayRestart.mockImplementationOnce(() => {
       throw new Error("scheduler unavailable");
     });
