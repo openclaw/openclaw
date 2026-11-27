@@ -148,21 +148,25 @@ export function createSubagentSweepContext(
     }
   }
 
-  async function sweepRun(runId: string, entry: SubagentRunRecord) {
+  async function sweepRun(runId: string, observedEntry: SubagentRunRecord) {
+    let entry = observedEntry;
     if (entry.collect && entry.collectorCompletion) {
       if (entry.collectorLaunchCleanupPending) {
         let suppressSessionCleanup = false;
         try {
           const result = await removeSession(entry);
-          if (result === "pending") return;
+          if (result === "pending") {
+            return;
+          }
           suppressSessionCleanup = result === "changed";
           if (result === "deleted") {
             if (
               !isCleanupCurrent(runs.get(runId), entry) ||
               !(await options.cleanupCollectorLaunchResources(entry)) ||
               !isCleanupCurrent(runs.get(runId), entry)
-            )
+            ) {
               return;
+            }
             emitSessionLifecycleEvent({
               sessionKey: entry.childSessionKey,
               reason: "delete",
@@ -241,10 +245,12 @@ export function createSubagentSweepContext(
     if (entry.archiveAtMs > now) {
       return;
     }
-    let sessionOwnershipChanged = false;
+    let sessionOwnershipChanged: boolean;
     try {
       const result = await removeSession(entry);
-      if (result === "pending") return;
+      if (result === "pending") {
+        return;
+      }
       sessionOwnershipChanged = result === "changed";
     } catch (error) {
       options.warn("sessions.delete failed during subagent sweep; keeping run for retry", {
@@ -314,7 +320,9 @@ export function createSubagentSweepContext(
         }
         try {
           const result = await removeSession(current);
-          if (result === "pending") continue collectorGroups;
+          if (result === "pending") {
+            continue collectorGroups;
+          }
           if (result === "changed") {
             const updated = await mutateCleanup(
               runs,
@@ -324,7 +332,9 @@ export function createSubagentSweepContext(
                 draft.execution.suppressSessionEffects = true;
               },
             );
-            if (!updated) continue collectorGroups;
+            if (!updated) {
+              continue collectorGroups;
+            }
             current = updated;
           }
         } catch (error) {
