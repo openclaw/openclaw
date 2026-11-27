@@ -37,7 +37,7 @@ const SECOND_CATALOG =
   "<available_skills><skill><name>weather</name><description>edited</description></skill></available_skills>";
 
 describe("Codex app-server skill catalog delivery", () => {
-  it("keeps managed catalogs fresh and parent-local without thread refreshes", async () => {
+  it("refreshes managed catalogs on the thread and keeps the personal overlay parent-local", async () => {
     const sessionKey = "agent:main:dashboard:incognito-managed-skills";
     await seedRunSessionOwnerForTest("session-1", sessionKey);
     const received: string[] = [];
@@ -89,16 +89,23 @@ describe("Codex app-server skill catalog delivery", () => {
         );
       }
     }
-    expect(received[0]).toContain(FIRST_CATALOG);
-    expect(received[1]).toContain(SECOND_CATALOG);
-    expect(received[1]).not.toContain(FIRST_CATALOG);
-    expect(received[2]).not.toContain("available_skills");
-    expect(received[3]).toContain(SECOND_CATALOG);
-    const nativeRequests = harness.requests.filter(({ method }) =>
-      ["thread/start", "thread/resume", "thread/inject_items"].includes(method),
+    expect(received.join("\n")).not.toContain("available_skills");
+    const nativeRequests = harness.requests.filter(
+      ({ method, params }) =>
+        ["thread/start", "thread/resume", "thread/inject_items"].includes(method) &&
+        !isCodexTurnContextHandoff(params),
     );
-    expect(nativeRequests.map(({ method }) => method)).toEqual(["thread/start"]);
-    expect(JSON.stringify(nativeRequests)).not.toContain("available_skills");
+    expect(nativeRequests.map(({ method }) => method)).toEqual([
+      "thread/start",
+      "thread/inject_items",
+      "thread/inject_items",
+      "thread/inject_items",
+    ]);
+    const delivered = nativeRequests.map((request) => JSON.stringify(request));
+    expect(delivered[0]).toContain(FIRST_CATALOG);
+    expect(delivered[1]).toContain(SECOND_CATALOG);
+    expect(delivered[2]).not.toContain("available_skills");
+    expect(delivered[3]).toContain(SECOND_CATALOG);
     expect(JSON.stringify(harness.requests)).not.toContain(personalUser);
   });
 
@@ -242,8 +249,9 @@ it("delivers fresh prompt-hook parent context on the same protected thread", asy
     for (const [index, hookContext] of contexts.entries()) {
       expect(received[index]?.split(`${hookContext} clock`)).toHaveLength(2);
       expect(received[index]?.split(hookContext)).toHaveLength(3);
+      expect(received[index]).not.toContain("<available_skills>");
       expect(received[index]).toMatch(
-        /Native model-owned policy[\s\S]*<available_skills>[\s\S]*OpenClaw plugin-injected system context\./,
+        /Native model-owned policy[\s\S]*OpenClaw plugin-injected system context\./,
       );
     }
     expect(received[1]).not.toContain("Synthetic first-turn recall");

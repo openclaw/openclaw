@@ -7,7 +7,7 @@
 - Default happy path: OpenAI model through the Codex harness/runtime, Telegram direct conversation, and message-tool-only visible replies.
 - A quiet turn is represented by not calling `message(action=send)`; the normal final assistant text is private to OpenClaw/Codex.
 - This captures the OpenClaw-owned Codex app-server inputs and reconstructs the stable Codex model/permission layers from committed Codex prompt fixtures.
-- This also simulates Codex workspace bootstrap routing: `AGENTS.md` through native project-doc discovery, `SOUL.md`, `IDENTITY.md`, and `USER.md` as parent-local request instructions, and `MEMORY.md` in turn input.
+- This also simulates Codex workspace bootstrap routing: `AGENTS.md` through native project-doc discovery, `SOUL.md`, `IDENTITY.md`, and `USER.md` as thread developer instructions, and `MEMORY.md` in turn input.
 
 ## Scenario Metadata
 
@@ -196,7 +196,7 @@
 
 ## Reconstructed Model-Bound Prompt Layers
 
-This is the deterministic model-bound layer stack OpenClaw can snapshot for the Codex happy path. It uses OpenClaw's thread/start base instructions in place of Codex's model prompt, appends the current parent-local context to the model request instructions, then adds the Codex permission developer text, Codex thread config instructions when present, OpenClaw developer instructions including managed collaboration policy, any supplied per-turn collaboration text, supplied additional context with its native role, turn input with OpenClaw runtime context, and the OpenClaw dynamic tool catalog. Codex can still add runtime-owned context such as native workspace `AGENTS.md`, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions inside the Codex runtime.
+This is the deterministic model-bound layer stack OpenClaw can snapshot for the Codex happy path. It uses OpenClaw's thread/start base instructions in place of Codex's model prompt, appends any parent-local context (a selected personal profile overlay or cron policy) to the model request instructions, then adds the Codex permission developer text, Codex thread config instructions when present, OpenClaw developer instructions including managed collaboration policy and workspace persona, any supplied per-turn collaboration text, supplied additional context with its native role, turn input with OpenClaw runtime context, and the OpenClaw dynamic tool catalog. Codex can still add runtime-owned context such as native workspace `AGENTS.md`, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions inside the Codex runtime.
 
 ### Layer Metadata
 
@@ -255,12 +255,12 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 1802
   },
   "openClawDeveloperInstructions": {
-    "chars": 3683,
-    "roughTokens": 921
+    "chars": 4192,
+    "roughTokens": 1048
   },
   "openClawParentLocalInstructions": {
-    "chars": 507,
-    "roughTokens": 127
+    "chars": 0,
+    "roughTokens": 0
   },
   "totalTextOnly": {
     "chars": 13567,
@@ -343,21 +343,7 @@ Connected app tools are exposed directly or load through `tool_search`; app ment
 Appended to the same top-level model request instructions, not to native conversation history.
 
 ```text
-## OpenClaw Agent Soul
 
-OpenClaw loaded these workspace instruction files from the active agent workspace. They are the canonical definitions of who you are, how you think and work, and the human you work alongside. Internalize and follow them accordingly.
-
-### /tmp/openclaw-happy-path/workspace/IDENTITY.md
-
-<IDENTITY.md contents will be here>
-
-### /tmp/openclaw-happy-path/workspace/SOUL.md
-
-<SOUL.md contents will be here>
-
-### /tmp/openclaw-happy-path/workspace/USER.md
-
-<USER.md contents will be here>
 ```
 
 ### Developer: Codex Permission Instructions
@@ -412,6 +398,22 @@ You are in a Telegram direct conversation. Normal final replies are private and 
 <collaboration_mode>
 Prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. Ask the user directly when required input prevents progress; silence is not an answer or approval.
 </collaboration_mode>
+
+## OpenClaw Agent Soul
+
+OpenClaw loaded these workspace instruction files from the active agent workspace. They are the canonical definitions of who you are, how you think and work, and the human you work alongside. Internalize and follow them accordingly.
+
+### /tmp/openclaw-happy-path/workspace/IDENTITY.md
+
+<IDENTITY.md contents will be here>
+
+### /tmp/openclaw-happy-path/workspace/SOUL.md
+
+<SOUL.md contents will be here>
+
+### /tmp/openclaw-happy-path/workspace/USER.md
+
+<USER.md contents will be here>
 </thread_policy>
 ````
 

@@ -293,12 +293,10 @@ export async function prepareCodexAttemptTurnRequest(
       const inferenceInstructions = joinPresentSections(
         usesSupervisionConnection
           ? undefined
-          : (buildCodexParentLocalInstructions(runtimeParams, {
-              personaInstructions: workspaceBootstrapContext.personaInstructions,
-              skillsInstructions: context.skillsInstructions,
-              memoryInstructions: workspaceBootstrapContext.memoryInstructions,
-              sessionProjectGuidance: workspaceBootstrapContext.sessionProjectGuidance,
-            }) ?? undefined),
+          : (buildCodexParentLocalInstructions(
+              runtimeParams,
+              workspaceBootstrapContext.personalPersonaInstructions,
+            ) ?? undefined),
         turnState.promptBuild.turnDeveloperInstructions,
         buildCodexConversationTurnInstructions(
           runtimeParams,
