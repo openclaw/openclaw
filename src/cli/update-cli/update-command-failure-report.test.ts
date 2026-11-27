@@ -55,10 +55,10 @@ it.each([false, true])(
     expect(runtime.error).not.toHaveBeenCalled();
     if (consented) {
       expect(submitGithubIssue).toHaveBeenCalledOnce();
-      const [report] = vi.mocked(submitGithubIssue).mock.calls[0];
-      expect(report.body).toContain("Result: failed");
-      expect(report.body).toContain("Reason code: build-failed");
-      expect(report.body).toContain("Failed phase build: exit 1");
+      const report = vi.mocked(submitGithubIssue).mock.calls[0]?.[0];
+      expect(report?.body).toContain("Result: failed");
+      expect(report?.body).toContain("Reason code: build-failed");
+      expect(report?.body).toContain("Failed phase build: exit 1");
       expect(runtime.log).toHaveBeenCalledWith(
         "Created GitHub issue: https://github.com/openclaw/openclaw/issues/123",
       );

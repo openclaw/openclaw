@@ -1288,7 +1288,6 @@ src/infra/update-database-generations.ts	1
 src/infra/update-doctor-migration-attribution.ts	1
 src/infra/update-doctor-process-custody.ts	4
 src/infra/update-doctor-scan-receipts.ts	2
-src/infra/update-failure-report-prepare.ts	2
 src/infra/update-immutable-activation.ts	3
 src/infra/update-immutable-generation.ts	2
 src/infra/update-immutable-protection.ts	1
