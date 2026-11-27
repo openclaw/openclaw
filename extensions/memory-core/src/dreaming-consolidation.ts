@@ -69,7 +69,7 @@ function buildConsolidationPrompt(
   return JSON.stringify({
     currentMemory: existingMemory,
     candidates: candidates.map((candidate) => ({
-      key: candidate.key,
+      candidateKey: candidate.key,
       text: truncateUtf16Safe(candidate.snippet, maxSnippetChars),
       resultEntry: buildCandidateResultEntry(candidate, maxPromotedSnippetTokens),
       sourceRef: candidateSourceRef(candidate),

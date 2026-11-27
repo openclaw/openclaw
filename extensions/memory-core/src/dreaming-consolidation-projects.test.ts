@@ -13,14 +13,14 @@ const planDefaults = {
 const consolidationDefaults = { ...planDefaults, logger };
 const addDecisions = (prompt: ConsolidationPrompt) => ({
   operations: prompt.candidates.map((item) => ({
-    candidateKey: item.key,
+    candidateKey: item.candidateKey,
     action: "added" as const,
     priorEntries: [],
   })),
 });
 
 type ConsolidationPrompt = {
-  candidates: Array<{ key: string; resultEntry: string; projectKey: string | null }>;
+  candidates: Array<{ candidateKey: string; resultEntry: string; projectKey: string | null }>;
 };
 
 function projectCandidate(key: string, snippet: string, projectKey?: string): PromotionCandidate {
@@ -108,7 +108,7 @@ describe("memory consolidation project groups", () => {
       return {
         operations: [
           {
-            candidateKey: item.key,
+            candidateKey: item.candidateKey,
             action: crossProject ? "merged" : "added",
             priorEntries: crossProject ? [betaPrior] : [],
           },

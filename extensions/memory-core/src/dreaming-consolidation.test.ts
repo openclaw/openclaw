@@ -103,6 +103,34 @@ async function prepareRecall(
 }
 
 describe("memory consolidation", () => {
+  it("supplies each candidate under the candidateKey the model must return", async () => {
+    const promoted = candidate("owner");
+    // A model following the instructions echoes the identifier it was given.
+    const subagent = {
+      complete: vi.fn(async ({ message }: { message: string }) => {
+        const prompt = JSON.parse(message) as { candidates: Array<{ candidateKey?: unknown }> };
+        return {
+          text: JSON.stringify({
+            operations: prompt.candidates.map(({ candidateKey }) => ({
+              candidateKey,
+              action: "added",
+              priorEntries: [],
+            })),
+          }),
+        };
+      }),
+    };
+    const plan = await consolidateMemory({
+      existingMemory: "# Memory\n",
+      candidates: [promoted],
+      ...consolidationDefaults,
+      subagent,
+    });
+    expect(plan?.operations).toEqual([
+      expect.objectContaining({ candidateKey: promoted.key, action: "added" }),
+    ]);
+  });
+
   it("retains the bounded default when no timeout is supplied", async () => {
     const promoted = candidate("owner");
     const output = decisionOutput(promoted);
