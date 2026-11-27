@@ -5,13 +5,13 @@ import { Icon } from "../../components/solid/icon.tsx";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { registerPreferencesEnglish } from "../../i18n/locales/en-preferences.ts";
-import { isCronJobActiveFailure } from "../../lib/cron-status.ts";
+import { resolveCronJobAttention } from "../../lib/cron-status.ts";
 import { jobToForm } from "../../lib/cron/form.ts";
 import { formatCronCadence } from "../../lib/presenter.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { createMediaQuery } from "../../lib/reactive/platform.ts";
 import { failedRunId } from "./route-model.ts";
-import { FailureDetails } from "./view-attention.tsx";
+import { AttentionDetails } from "./view-attention.tsx";
 import {
   AdminRequired,
   BackRow,
@@ -47,9 +47,11 @@ export function DetailView(
   );
   // A saved automation opens on its prompt and history; Edit (the settings tab) swaps in the form.
   const editing = () => props.mode !== "job" || props.detailTab !== "history";
-  const failedJob = () => {
+  const attentionJob = () => {
     const job = selectedJob();
-    return job && isCronJobActiveFailure(job) ? job : undefined;
+    // Show compares its condition by identity. Wrap the retained job so runtime
+    // refreshes reach its child accessor without remounting the open panel.
+    return job && resolveCronJobAttention(job) ? { job } : undefined;
   };
   const conditionActivity = () => {
     const job = selectedJob();
@@ -90,14 +92,19 @@ export function DetailView(
               {(job) => (
                 <>
                   <SavedPrompt {...props} job={job} />
-                  <Show when={failedJob()}>
-                    {(failed) => (
-                      <FailureDetails
-                        job={failed()}
+                  <Show when={attentionJob()}>
+                    {(current) => (
+                      <AttentionDetails
+                        job={current().job}
                         onReviewRun={(() => {
-                          // Review opens the failed run in the history below; without one there is none.
-                          const runId = failedRunId(failed());
-                          return runId ? () => props.onSelectJob(failed(), runId) : undefined;
+                          const currentJob = current().job;
+                          // A retained blocker may predate the last quiet run. Only execution
+                          // failures identify that last run; never link an old result to it.
+                          if (resolveCronJobAttention(currentJob) !== "error") {
+                            return undefined;
+                          }
+                          const runId = failedRunId(currentJob);
+                          return runId ? () => props.onSelectJob(currentJob, runId) : undefined;
                         })()}
                       />
                     )}

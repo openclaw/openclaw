@@ -325,6 +325,15 @@ it.each(["active", "replaced extension"])("binds atomic creation to %s", async (
   await flush();
   expect(frames(socket, "attach")).toEqual([]);
   if (lifecycle === "active") {
+    // The attach keeps the tab rendering while hidden before announcing the target.
+    const focus = frames(socket, "cdp")[0];
+    expect(focus).toMatchObject({
+      tabId: 99,
+      method: "Emulation.setFocusEmulationEnabled",
+      params: { enabled: true },
+    });
+    sendResult(extension, focus?.seq, {});
+    await flush();
     expect(client.frames().map((frame) => frame.method ?? frame.id)).toEqual([
       "Target.attachedToTarget",
       1,
@@ -662,6 +671,10 @@ it.each(["attach", "createTab"])(
     await flush();
     expect(finished).toBe(false);
     sendResult(extension, command?.seq, { tabId: 1, targetId: "target-1" });
+    if (operation === "attach") {
+      await vi.waitFor(() => expect(frames(extensionSocket, "cdp").length > 0).toBe(true));
+      sendResult(extension, frames(extensionSocket, "cdp")[0]?.seq, {});
+    }
     await vi.waitFor(() => expect(frames(extensionSocket, "detach").length > 0).toBe(true));
     expect(finished).toBe(false);
     const detach = frames(extensionSocket, "detach")[0];

@@ -25,6 +25,31 @@ function textOf(root: ParentNode, selector: string) {
   return Array.from(root.querySelectorAll(selector), (node) => node.textContent).join("\n");
 }
 
+it("renders named references in conversation text and preserves their spelling in inline code", async () => {
+  const source = "&copy; *&copy;* `&copy;`";
+  const { document } = await render([
+    { role: "user", content: source },
+    { role: "assistant", content: [{ type: "text", text: source }] },
+  ]);
+  for (const role of ["user", "assistant"]) {
+    const paragraph = element(document, `#messages .${role}-message .markdown-content p`);
+    expect(paragraph.textContent).toBe("© © &copy;");
+    expect(element(paragraph, "em").textContent).toBe("©");
+    expect(element(paragraph, "code").textContent).toBe("&copy;");
+  }
+});
+
+it("keeps typed autolink labels literal and renders explicit link labels as Markdown", async () => {
+  const url = "https://example.test/&copy;";
+  const { document } = await render([{ role: "user", content: `<${url}> [*&copy;*](${url})` }]);
+
+  const links = document.querySelectorAll("#messages .user-message .markdown-content a");
+  expect(Array.from(links, (link) => [link.textContent, link.getAttribute("href")])).toEqual([
+    [url, url],
+    ["©", url],
+  ]);
+});
+
 it.each([
   ["bash", "", false],
   ["bash", "", true],

@@ -473,25 +473,6 @@ describe("mcp-app-view localization", () => {
     );
   });
 
-  it("forwards update-model-context through the bound Gateway view", async () => {
-    const { bridge, request } = await mountBridge(`view-context-${crypto.randomUUID()}`);
-    expect(bridge.capabilities).toMatchObject({ updateModelContext: { text: {} } });
-    await expect(
-      bridge.updateModelContextHandler?.({
-        content: [{ type: "text", text: "selected item" }],
-      }),
-    ).resolves.toBeDefined();
-    expect(request).toHaveBeenCalledWith(
-      "mcp.app.updateModelContext",
-      {
-        sessionKey: "agent:main:main",
-        viewId: expect.any(String),
-        content: [{ type: "text", text: "selected item" }],
-      },
-      { signal: expect.any(AbortSignal) },
-    );
-  });
-
   it("retains model context when its refresh fails and clears only a confirmed null", async () => {
     const state = {
       updateId: "retained-context",
@@ -512,6 +493,15 @@ describe("mcp-app-view localization", () => {
     request.mockResolvedValueOnce({}).mockRejectedValueOnce(new Error("Context read interrupted"));
     await expect(bridge.updateModelContextHandler!({ content: state.content })).resolves.toEqual(
       {},
+    );
+    expect(request).toHaveBeenCalledWith(
+      "mcp.app.updateModelContext",
+      {
+        sessionKey: "agent:main:main",
+        viewId: "view-context-read-failure",
+        content: state.content,
+      },
+      { signal: expect.any(AbortSignal) },
     );
     expectHost(bridge, { "openai/modelContext": state });
     expect(received).toHaveLength(0);
@@ -708,6 +698,7 @@ describe("mcp-app-view localization", () => {
   it("does not let App parameters replace the mounted session, agent, or view", async () => {
     const viewId = "bound-view";
     const { bridge, request } = await mountBridge(viewId);
+    expect(bridge.capabilities).toMatchObject({ updateModelContext: { text: {} } });
     const hostileAppInput = {
       content: [{ type: "text", text: "context" }],
       sessionKey: "foreign",

@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { getByText, isInaccessible, queryByText } from "@solidjs/testing-library";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { projectAgentToolActivity } from "../../../../../src/infra/agent-activity-events.js";
 import { createNestedToolActivity } from "../../../../../src/sessions/nested-tool-activity.js";
@@ -265,9 +266,13 @@ describe("grouped chat rendering", () => {
     });
     await renderHistory([call, abort]);
     expect(elementText(".chat-activity-group__label")).toBe("Interrupted actions");
-    expect(harness.view.textContent).toContain("No result available.");
+    const operation = requireElement(".chat-tool-msg-collapse--manual", HTMLElement);
+    expect(isInaccessible(getByText(operation, "interrupted"))).toBe(false);
+    expect(elementText(".chat-tool-card__outcome")).toBe("No result available.");
     await renderHistory([{ ...call, __openclaw: { id: "next-call", runId: "next-run" } }, abort]);
     expect(elementText(".chat-activity-group__label")).toBe("Commands");
+    expect(queryByText(harness.view, "interrupted")).toBeNull();
+    expect(elementText(".chat-tool-card__outcome")).toBe("No result available.");
     const completed = await renderHistory([
       call,
       abort,
@@ -281,8 +286,45 @@ describe("grouped chat rendering", () => {
     expect(elementText(".chat-tool-row__cmd")).toBe("check-workspace");
     expect(harness.view.textContent).not.toContain("outcome unknown");
     expect(harness.view.textContent).toContain("Workspace checked.");
+    expect(queryByText(harness.view, "interrupted")).toBeNull();
     expectCount(".chat-tool-row", 1);
     expectAbsent(".chat-tool-row--running");
+  });
+
+  it("distinguishes missing results from unknown outcomes in raw command history", async () => {
+    const call = createAssistantMessage(
+      [
+        createToolCall("check", "exec", { command: "check-workspace" }),
+        createToolCall("list", "exec", { command: "list-workspace" }),
+      ],
+      { timestamp: 1 },
+    );
+    const completed = createToolResultMessage("list", "exec", "Files listed.", {
+      timestamp: 2,
+      isError: false,
+    });
+    const renderRawHistory = async (messages: TestMessage[]) => {
+      renderActivityGroup(groupsOf(buildItems({ messages })), {
+        showReasoning: false,
+        runActive: false,
+        ...expandedTools,
+      });
+      await settleToolBridges(harness.view);
+    };
+
+    await renderRawHistory([call, completed]);
+    expect(elementText(".chat-activity-group__summary")).toContain("Ran commands");
+    expect(elementText(".chat-activity-group__summary")).not.toContain("Outcome unknown");
+    expect(harness.view.textContent).toContain("No result available.");
+
+    const unknown = createToolResultMessage("check", "exec", "Execution response.", {
+      timestamp: 3,
+      __openclaw: {
+        toolOutput: { source: "execution", modelInput: "unverified", outcome: "unknown" },
+      },
+    });
+    await renderRawHistory([call, completed, unknown]);
+    expect(elementText(".chat-activity-group__summary")).toContain("Outcome unknown");
   });
 
   it("keeps aggregate expansion and accessibility ids stable when groups append", () => {
@@ -416,7 +458,9 @@ describe("grouped chat rendering", () => {
       for (const expanded of [false, true, false]) {
         await renderToolGroups(groups, { isToolMessageExpanded: () => expanded });
         if (order === "image only") {
-          expect(elementText(".chat-tool-msg-summary")?.trim()).toBe("Viewed 3 images");
+          expect(elementText(".chat-tool-msg-summary")?.trim()).toBe(
+            expanded ? "Viewed 3 images" : undefined,
+          );
         }
         expectCount(".chat-group.assistant .chat-message-image", 3);
         expectCount(".chat-tool-msg-collapse .chat-message-image", expanded ? 3 : 0);

@@ -71,7 +71,7 @@ export async function prepareRestartBeforeScheduling(params: {
     ingressPermitted = false;
     await expect(
       prepareSessionSystemTurnAuthority({ ...target, context, preserveRecordedSource: true }),
-    ).rejects.toThrow(/ingress|authority|grant/i);
+    ).rejects.toThrow("The sign-in it was started with is no longer valid.");
     expect(await readJobs()).toEqual([]);
     service.abort();
     return false;

@@ -192,6 +192,7 @@ export async function resolveCommandsSystemPromptBundle(params: HandleCommandsPa
     preparedModelRuntime,
     agentId: sessionAgentId,
     prepareSessionProjectGuidance: sessionProjectGuidanceSource({
+      workspaceDir,
       config: params.cfg,
       agentId: sessionAgentId,
       sessionKey: params.sessionKey,

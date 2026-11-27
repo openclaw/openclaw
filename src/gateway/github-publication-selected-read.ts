@@ -61,17 +61,19 @@ export async function prepareSelectedGitHubPullRequestReader(params: {
         "GitHub PR state is unavailable; check the publisher's repository access and retry inspect.",
       ),
   });
-  const fullWrite = roleScopesAllow({
-    role: "operator",
-    requestedScopes: ["operator.write"],
-    allowedScopes: requester.snapshot.scopes,
-  });
+  const fullWrite =
+    !requester.snapshot.participation &&
+    roleScopesAllow({
+      role: "operator",
+      requestedScopes: ["operator.write"],
+      allowedScopes: requester.snapshot.scopes,
+    });
   let inspection: Awaited<ReturnType<typeof inspectOwnGitHubPullRequest>> | undefined;
   const readJson: typeof nativeRead = async (endpoint, query) => {
     assertCurrent();
-    if (binding && !fullWrite) {
+    if ((binding || requester.snapshot.participation) && !fullWrite) {
       inspection = await inspectOwnGitHubPullRequest({
-        pullRequestUrl: binding.url,
+        pullRequestUrl: pullRequest.url,
         session,
         requester,
         assertCurrent,

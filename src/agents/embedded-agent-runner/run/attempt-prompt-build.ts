@@ -31,7 +31,7 @@ import type { AgentSession, SessionManager } from "../../sessions/index.js";
 import {
   appendModelIdentitySystemPrompt,
   buildModelIdentityPromptLine,
-} from "../../system-prompt.js";
+} from "../../system-prompt-model-identity.js";
 import { log } from "../logger.js";
 import { normalizeAssistantReplayContent } from "../replay-history.js";
 import {
@@ -562,10 +562,12 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
       ? { currentUserTimestamp: preparedUserTurnTimestamp }
       : {}),
   };
-  const hookMessagesForCurrentPrompt = normalizeMessagesForCurrentPromptBoundary({
-    ...boundaryInput,
-    messages: messagesForCurrentPrompt,
-  });
+  const projectHistoryForCurrentPrompt = (messages: AgentMessage[]) =>
+    normalizeMessagesForCurrentPromptBoundary({
+      ...boundaryInput,
+      messages,
+    });
+  const hookMessagesForCurrentPrompt = projectHistoryForCurrentPrompt(messagesForCurrentPrompt);
   if (input.systemPromptReport) {
     input.systemPromptReport.currentTurn = {
       ...(attempt.currentInboundEventKind ? { kind: attempt.currentInboundEventKind } : {}),
@@ -596,6 +598,7 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
     prePromptMessageCount,
     promptForModel,
     promptForSession,
+    projectHistoryForCurrentPrompt,
     promptSubmission,
     promptToolResultAggregateMaxChars,
     promptToolResultMaxChars,

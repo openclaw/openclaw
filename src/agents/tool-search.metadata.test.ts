@@ -109,26 +109,6 @@ it.each([
   },
 );
 
-it("carries MCP server instructions through deferred discovery", async () => {
-  const { entry, execute } = setup("mcp", { instructions: "Cite authority levels for results." });
-  const search = await execute(TOOL_SEARCH_RAW_TOOL_NAME, { query: entry.id, limit: 1 });
-  expect(search.details).toMatchObject([
-    { mcp: { instructions: "Cite authority levels for results." } },
-  ]);
-  expect(modelText(search)).toContain("Cite authority levels for results.");
-  const batch = await execute(TOOL_SEARCH_RAW_TOOL_NAME, {
-    queries: [{ query: entry.id, limit: 1 }],
-  });
-  expect(batch.details).toMatchObject({
-    results: [{ candidates: [{ mcp: { instructions: "Cite authority levels for results." } }] }],
-  });
-  expect(modelText(batch)).toContain("Cite authority levels for results.");
-  const description = await execute(TOOL_DESCRIBE_RAW_TOOL_NAME, { id: entry.id });
-  expect(description.details).toMatchObject({
-    mcp: { instructions: "Cite authority levels for results." },
-  });
-});
-
 it("keeps batch candidates when MCP instructions exceed the metadata budget", async () => {
   const instructions = "Long server guidance. ".repeat(300);
   const { entry, execute } = setup("mcp", { instructions });

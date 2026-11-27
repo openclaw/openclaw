@@ -14,6 +14,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { BundleMcpToolRuntime } from "../../src/agents/agent-bundle-mcp-types.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -162,12 +163,7 @@ try {
   if (values.profile) {
     await mkdir(values.profile, { recursive: true });
     inspector = new Session();
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 32768,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 32768);
     await inspector.post("Profiler.enable");
     await inspector.post("Profiler.start");
   }

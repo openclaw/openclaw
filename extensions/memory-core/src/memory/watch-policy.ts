@@ -17,7 +17,7 @@ import type { MemoryWorkspaceWatchRequest } from "openclaw/plugin-sdk/memory-cor
 import type { MemoryWatchFile } from "./watch-settle.js";
 
 type Settings = MemoryWorkspaceWatchRequest["settings"];
-type Target = { path: string; kind: WatchScope["kind"]; core: boolean };
+type Target = { path: string; kind: WatchScope["kind"]; core: boolean; depth?: number };
 type Selection = {
   scope: WatchScope;
   resolved: string;
@@ -36,6 +36,18 @@ const IGNORED = new Set([
   ".tox",
   "__pycache__",
 ]);
+
+// Without a globstar or syntax that can span "/", a pattern cannot match below its
+// segment count, so polling deeper only walks files the index never reads.
+function patternDepth(pattern: string | undefined): number | undefined {
+  if (!pattern || /[{[(]/.test(pattern)) {
+    return undefined;
+  }
+  const segments = pattern.split("/");
+  return segments.some((segment) => segment === "**" || segment === "." || segment === "..")
+    ? undefined
+    : Math.min(segments.length, 128);
+}
 
 // Lists only the configured path's prefixes, never a second recursive watcher.
 // The first symbolic entry must be observed instead of a scope through that link.
@@ -76,7 +88,12 @@ export class MemoryWatchPolicy {
       { path: path.resolve(workspace, "memory"), kind: "tree", core: true },
       // A tree scope also selects an extra path that is a regular file. Missing
       // configured roots stay observed and do not require a Gateway restart.
-      ...this.extras.map((entry) => ({ path: entry.path, kind: "tree" as const, core: false })),
+      ...this.extras.map((entry) => ({
+        path: entry.path,
+        kind: "tree" as const,
+        core: false,
+        depth: patternDepth(entry.pattern),
+      })),
     ];
   }
 
@@ -124,7 +141,7 @@ export class MemoryWatchPolicy {
         add(admitted, {
           scope: link
             ? { path: link, kind: "entry" }
-            : { path: relative, kind: target.kind, depth: 128 },
+            : { path: relative, kind: target.kind, depth: target.depth ?? 128 },
           resolved: path.resolve(authority.rootDir, link ?? relative),
           lexical: target.path,
           core: target.core,

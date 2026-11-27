@@ -50,7 +50,7 @@ function spawnedChildAttempt(kind: "stale" | "unverified") {
   fakeSessionOwner.rows.set(ROOT_KEY, parent);
   fakeSessionOwner.rows.set(CHILD_KEY, child);
   if (kind === "stale") {
-    fakeSessionOwner.rows.set(ROOT_KEY, { ...parent, lifecycleRevision: randomUUID() });
+    fakeSessionOwner.rows.delete(ROOT_KEY);
   } else {
     fakeSessionOwner.pendingKeys.add(ROOT_KEY);
   }
@@ -78,7 +78,7 @@ it.each(["legacy", "stale", "unverified"] as const)(
     if (kind === "stale") {
       const [message] = mocks.warn.mock.calls[0] as [string];
       expect(message).toContain(`session ${CHILD_KEY} has stale lineage`);
-      expect(message).toContain("Respawn or recreate it from a current session");
+      expect(message).toContain("Respawn it from a current session");
     }
     if (kind === "legacy") {
       expect(fakeSessionOwner.workerReads).toEqual([]);

@@ -5,15 +5,11 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { rethrowStartupConfigFailure } from "../../commands/doctor-startup-migration-refusal.js";
 import type {
-  ConfigFileSnapshot,
-  ConfigSnapshotReadOptions,
   GatewayBindMode,
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "../../config/config.js";
 import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "../../config/future-version-guard.js";
 import {
-  createConfigReadError,
-  isConfigReadFailure,
   isDoctorRecoverableInvalidConfigError,
   isInvalidConfigError,
 } from "../../config/io.invalid-config.js";
@@ -89,6 +85,7 @@ import {
   toOptionString,
 } from "./run-option-values.js";
 import type { GatewayRunOpts } from "./run-options.js";
+import { readGatewayStartupConfig } from "./run-startup-config.js";
 import type { GatewayRunRuntimeHooks } from "./runtime-hooks.js";
 import {
   handleGatewayLockFailure,
@@ -111,29 +108,6 @@ type GatewayRunLogger = Pick<ReturnType<typeof createSubsystemLogger>, "info" | 
  * restart storm that can render low-resource hosts unresponsive.
  */
 const EXIT_CONFIG_ERROR = 78;
-
-async function readGatewayStartupConfig(
-  startupTrace: ReturnType<typeof createGatewayCliStartupTrace>,
-  readOptions: Pick<ConfigSnapshotReadOptions, "lowerPrecedenceEnv"> = {},
-): Promise<{
-  cfg: OpenClawConfig;
-  snapshot: ConfigFileSnapshot;
-  startupConfigSnapshotRead: ReadConfigFileSnapshotWithPluginMetadataResult;
-}> {
-  const { readConfigFileSnapshotWithPluginMetadata } = await import("../../config/config.js");
-  const snapshotRead = await startupTrace.measure("cli.config-snapshot", () =>
-    readConfigFileSnapshotWithPluginMetadata({ isolateEnv: true, observe: false, ...readOptions }),
-  );
-  const { snapshot } = snapshotRead;
-  if (!snapshot.valid && isConfigReadFailure(snapshot)) {
-    throw createConfigReadError(snapshot);
-  }
-  return {
-    cfg: snapshot.config,
-    snapshot,
-    startupConfigSnapshotRead: snapshotRead,
-  };
-}
 
 type GatewayRunShellEnvFallbackPlan =
   | { enabled: false }
@@ -470,7 +444,11 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     defaultRuntime.exit(1);
     return;
   }
-  const port = portOverride ?? resolveGatewayPort(cfg);
+  const launchPortEnv = {
+    OPENCLAW_GATEWAY_PORT: process.env.OPENCLAW_GATEWAY_PORT,
+    OPENCLAW_PROFILE: process.env.OPENCLAW_PROFILE,
+  };
+  let port = portOverride ?? resolveGatewayPort(cfg, launchPortEnv);
   if (!Number.isFinite(port) || port <= 0 || port > 65_535) {
     defaultRuntime.error(formatInvalidConfigPort("gateway.port"));
     defaultRuntime.exit(EXIT_CONFIG_ERROR);
@@ -787,7 +765,16 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   const startLoop = async (lifecycleLockDeadlineMs?: number) => {
     const code = await runGatewayLoop({
       ownsProcessLifecycle: true,
-      lockPort: port,
+      get lockPort() {
+        return port;
+      },
+      resolveRestartPort: async () => {
+        const next = await readGatewayStartupConfig(startupTrace, { lowerPrecedenceEnv });
+        startupConfigSnapshotReadForNextStart = next.startupConfigSnapshotRead;
+        // Bootstrap exports the serving port; only launch-time env may override config.
+        port = portOverride ?? resolveGatewayPort(next.cfg, launchPortEnv);
+        return port;
+      },
       lifecycleLockDeadlineMs,
       healthHost,
       healthConfig: cfg,

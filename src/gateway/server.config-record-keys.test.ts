@@ -12,7 +12,9 @@ import { getRuntimeConfig } from "../config/config.js";
 import { configRawPayload } from "./server.config-patch.test-support.js";
 
 async function apply(config: Record<string, unknown>, hash: string) {
-  const result = await sendConfigApply(configRawPayload(config, hash));
+  // config.apply joins the real config reload. The numeric round trip has
+  // taken more than 40s across its RPCs on hosted Node runners.
+  const result = await sendConfigApply(configRawPayload(config, hash), 45_000);
   expect(result.ok, result.error?.message).toBe(true);
 }
 

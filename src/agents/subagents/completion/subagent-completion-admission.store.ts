@@ -37,6 +37,7 @@ import {
   captureRequesterSettleWakeProgress,
   sameRequesterSettleRunIdentity,
 } from "../registry/subagent-requester-settle-identity.js";
+import { isSubagentPausedByYield } from "../registry/subagent-requester-turn-custody.js";
 import {
   compareSubagentRunGeneration,
   isSameSubagentRunOwner,
@@ -120,7 +121,7 @@ async function appendChildStatusToRequester(batch: readonly SubagentRunRecord[])
     (child) =>
       child.expectsCompletionMessage !== false &&
       child.execution.status === "terminal" &&
-      child.pauseReason !== "sessions_yield" &&
+      !isSubagentPausedByYield(child) &&
       !hasConsumedRequesterInput(child) &&
       child.delivery?.status !== "delivered",
   );
@@ -597,8 +598,8 @@ function currentRequesterEntries(
     // A pause notice belongs to this child, even when a resumed sibling rekeys the cohort.
     const settlesPauseNotice =
       operation === "settle" &&
-      current?.pauseReason === "sessions_yield" &&
-      expected.pauseReason === "sessions_yield" &&
+      isSubagentPausedByYield(current) &&
+      isSubagentPausedByYield(expected) &&
       current.requesterSettleWake?.pauseNotice;
     if (
       !current ||

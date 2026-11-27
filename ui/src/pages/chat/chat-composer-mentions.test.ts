@@ -360,6 +360,22 @@ describe.each(["chat", "new-session"] as const)("%s human mentions", (kind) => {
   }
 });
 
+it.each(["𐐀ri", "Àri", "Ari"])(
+  "replaces the remaining name %s on Tab and keeps the caret after the mention",
+  async (word) => {
+    const view = composerFixture("chat", `🌱 ${word}🌿 later`);
+    const person = { profileId: "profile-iri", displayName: "𐐀ri", online: true };
+    view.request.mockResolvedValue({ users: [person], truncated: false });
+
+    await view.search(`🌱 @${word}🌿 later`, { start: 3, caret: 4, data: "@" });
+    expect(view.key("Tab").defaultPrevented).toBe(true);
+    await vi.advanceTimersByTimeAsync(0);
+
+    view.expectValue("🌱 @𐐀ri 🌿 later", [mention(person.profileId, 3, 8)]);
+    expect(view.query("textarea")).toMatchObject({ selectionStart: 9, selectionEnd: 9 });
+  },
+);
+
 it("blocks unsupported sends until editing removes the selected mention binding", () => {
   const view = composerFixture("chat", "@Alex", [mention("alex")]);
   view.setUnsupported();
@@ -369,4 +385,135 @@ it("blocks unsupported sends until editing removes the selected mention binding"
   view.edit("Alex", { start: 0, end: 1, caret: 0, inputType: "deleteContentForward", data: null });
   view.key("Enter");
   expect(view.send).toHaveBeenCalledWith({ draft: "Alex", mentions: [] });
+});
+
+it.each(["chat", "new-session"] as const)(
+  "%s defaults ceiling invitations to read and preserves a selected level",
+  async (kind) => {
+    const view = composerFixture(kind, "", [], undefined, true);
+    view.request.mockResolvedValue({
+      users: [{ ...peter, inviteAccessOptions: ["read", "suggest"] }],
+      truncated: false,
+    });
+    await view.search("@Peter");
+    view.key("Enter");
+    await vi.dynamicImportSettled();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(view.value().mentions).toEqual([
+      { profileId: peter.profileId, start: 0, end: 18, access: "read" },
+    ]);
+    expect(view.container.textContent).toContain("Invite Peter Steinberger");
+    view.query<HTMLButtonElement>(".chat-invite-access button")!.click();
+    await vi.dynamicImportSettled();
+    const options = Array.from(
+      view.container.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
+    );
+    expect(options.map((option) => option.textContent?.trim())).toEqual([
+      "Can read",
+      "Can suggest",
+    ]);
+    options[1]!.click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(view.value().mentions[0]?.access).toBe("suggest");
+    await view.search("@Peter Steinberger @Peter");
+    view.key("Enter");
+    expect(view.value().mentions.map((entry) => entry.access)).toEqual(["suggest", "suggest"]);
+    view.key("Enter");
+    expect(view.send).toHaveBeenCalledWith(view.value());
+  },
+);
+
+it.each(["new-session"] as const)(
+  "%s keeps recovered invitation grants visible and permits lowering without stale options",
+  async (kind) => {
+    const view = composerFixture(
+      kind,
+      "@Peter Steinberger ",
+      [{ profileId: peter.profileId, start: 0, end: 18, access: "suggest" }],
+      undefined,
+      true,
+    );
+    await vi.dynamicImportSettled();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(view.container.textContent).toContain("Can suggest");
+    view.replaceOwner();
+    await vi.dynamicImportSettled();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(view.container.textContent).toContain("Can suggest");
+    view.query<HTMLButtonElement>(".chat-invite-access button")!.click();
+    await vi.dynamicImportSettled();
+    await vi.advanceTimersByTimeAsync(0);
+    const options = Array.from(
+      view.container.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
+    );
+    expect(options.map((option) => option.textContent?.trim())).toEqual([
+      "Can read",
+      "Can suggest",
+    ]);
+    options[0]!.click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(view.value().mentions[0]?.access).toBe("read");
+  },
+);
+
+it.each([
+  { advertised: true, user: peter },
+  { advertised: false, user: { ...peter, inviteAccessOptions: ["read", "suggest"] } },
+])(
+  "keeps ordinary mentions unextended with advertisement=$advertised",
+  async ({ advertised, user }) => {
+    const view = composerFixture("chat", "", [], undefined, advertised);
+    view.request.mockResolvedValue({ users: [user], truncated: false });
+    await view.search("@Peter");
+    view.key("Enter");
+    await vi.dynamicImportSettled();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(view.query(".chat-invite-access")).toBeNull();
+    expect(view.value().mentions).toEqual([{ profileId: peter.profileId, start: 0, end: 18 }]);
+    view.key("Enter");
+    expect(view.send).toHaveBeenCalledWith(view.value());
+  },
+);
+
+it.each([true, false, undefined])(
+  "offers an invitation only for a non-member (member evidence: %s)",
+  async (member) => {
+    const view = composerFixture("chat", "", [], undefined, true);
+    view.setMembers(
+      member === undefined ? undefined : member ? [{ identityId: peter.profileId }] : [],
+    );
+    view.request.mockResolvedValue({
+      users: [{ ...peter, inviteAccessOptions: ["read", "suggest"] }],
+      truncated: false,
+    });
+    await view.search("@Peter");
+    view.key("Enter");
+    await vi.dynamicImportSettled();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(Boolean(view.query(".chat-invite-access"))).toBe(member !== true);
+    expect(view.value().mentions).toEqual([
+      {
+        profileId: peter.profileId,
+        start: 0,
+        end: 18,
+        ...(member === true ? {} : { access: "read" }),
+      },
+    ]);
+  },
+);
+
+it("normalizes a recovered invitation before an unchanged draft is submitted", async () => {
+  const view = composerFixture(
+    "chat",
+    "@Peter Steinberger ",
+    [{ profileId: peter.profileId, start: 0, end: 18, access: "send" }],
+    undefined,
+    true,
+  );
+  view.setMembers([{ identityId: peter.profileId }]);
+  view.key("Enter");
+  expect(view.send).toHaveBeenCalledWith({
+    draft: "@Peter Steinberger ",
+    mentions: [{ profileId: peter.profileId, start: 0, end: 18 }],
+  });
 });

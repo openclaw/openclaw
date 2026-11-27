@@ -15,7 +15,6 @@ export function codexModel(model = "gpt-5.4", id = model) {
     model,
     upgrade: null,
     upgradeInfo: null,
-    availabilityNux: null,
     displayName: id,
     description: "test model",
     hidden: false,
@@ -23,11 +22,9 @@ export function codexModel(model = "gpt-5.4", id = model) {
     inputModalities: ["text"],
     supportedReasoningEfforts: [{ reasoningEffort: "low", description: "fast" }],
     defaultReasoningEffort: "low",
-    supportsPersonality: false,
     multiAgentVersion: null,
     additionalSpeedTiers: [],
     serviceTiers: [],
-    defaultServiceTier: null,
   };
 }
 

@@ -16,6 +16,8 @@ type SessionTargetPolicy = {
 
 const SESSION_TARGET_POLICY_BY_METHOD = new Map<string, SessionTargetPolicy>([
   ["worktrees.recoverFile", { fields: ["sessionKey"], required: true }],
+  // The restore handler supplies the owning session from the worktree record.
+  ["worktrees.restore", { fields: ["sessionKey"] }],
   ["skills.library.activate", { fields: ["sessionKey"], required: true }],
   ["agent", { fields: ["sessionKey"], runStart: true }],
   ["board.event", { fields: ["sessionKey"], required: true }],

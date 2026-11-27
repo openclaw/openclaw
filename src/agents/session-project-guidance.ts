@@ -3,22 +3,28 @@ import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SessionProjectRequester } from "../gateway/session-project-move-policy.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveUserPath } from "../utils.js";
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
 
 export function isSessionProjectMoveEligible(
   config: OpenClawConfig | undefined,
   agentId: string,
   entry: Partial<InternalSessionEntry> | null | undefined,
+  workingDirectory: string,
 ): boolean {
-  return Boolean(
-    config &&
-    entry &&
-    isUnboundProjectSession(entry, agentId, resolveAgentWorkspaceDir(config, agentId)),
+  if (!config || !entry) {
+    return false;
+  }
+  const defaultWorkspace = resolveAgentWorkspaceDir(config, agentId);
+  return (
+    resolveUserPath(workingDirectory) === defaultWorkspace &&
+    isUnboundProjectSession(entry, agentId, defaultWorkspace)
   );
 }
 
 /** The harness requests this guidance only if it actually offers session_project. */
 export function sessionProjectGuidanceSource(params: {
+  workspaceDir: string;
   config?: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
@@ -31,7 +37,7 @@ export function sessionProjectGuidanceSource(params: {
     !config ||
     !agentId ||
     !entry ||
-    !isSessionProjectMoveEligible(config, agentId, entry) ||
+    !isSessionProjectMoveEligible(config, agentId, entry, params.workspaceDir) ||
     !sessionKey ||
     !(params.senderIsOwner || operatorAuthority)
   ) {

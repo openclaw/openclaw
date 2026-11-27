@@ -2013,6 +2013,12 @@ prepare_restart_inference() {
     openclaw_e2e_start_mock_openai 44213 "$ARTIFACT_ROOT/restart-model.log")" || return "$?"
   openclaw_e2e_wait_mock_openai 44213 || return "$?"
   node scripts/e2e/lib/release-scenarios/assertions.mjs configure-mock-openai 44213 || return "$?"
+  if [ "$SCENARIO" = "base" ] && [ "$LIVE_ENABLED" = "0" ]; then
+    # The first hop already proved the Anthropic config survives. This OpenAI-only
+    # restart must not send the fake Anthropic credential to its public catalog.
+    openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw config set \
+      plugins.entries.anthropic.enabled false --strict-json || return "$?"
+  fi
   restart_inference="mock-openai"
 }
 
@@ -2146,6 +2152,11 @@ repair_update_restart_auth() {
     phase recovery-update-restart update_candidate 1 "file:$restart_fixture_package" "$restart_fixture_version"
     local recovery_status=$?
     [ "$recovery_status" -eq 0 ] || return "$recovery_status"
+    if [ "${last_update_restart_route:-}" = resident ]; then
+      # A resident Gateway finishes the core run before its watcher records plugin
+      # maintenance; the plugin assertions below read that terminal result.
+      phase await-recovery-plugin-maintenance await_recovery_plugin_maintenance || return "$?"
+    fi
     if [ "$membership_mode" = absent ] && [ "${last_update_restart_route:-}" != resident ]; then
       phase recovery-membership-warning assert_managed_membership_warning || return "$?"
     fi
@@ -2160,6 +2171,52 @@ repair_update_restart_auth() {
         assert-recovered-plugin-installs "$UPDATE_JSON" "$candidate_version" "$initial_update_observation_root" "$baseline_version"
     fi
   fi
+}
+
+await_recovery_plugin_maintenance() {
+  local status_json="$ARTIFACT_ROOT/recovery-plugin-status.json" state
+  local deadline=$((SECONDS + ${RECOVERY_PLUGIN_MAINTENANCE_TIMEOUT_SECONDS:-720}))
+  while :; do
+    state=pending
+    if openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw update status --json \
+      >"$status_json" 2>"$ARTIFACT_ROOT/recovery-plugin-status.err"; then
+      state="$(node --input-type=module - "$ARTIFACT_ROOT/recovery-update.json" "$status_json" <<'NODE'
+import fs from "node:fs";
+const read = (file) => {
+  const text = fs.readFileSync(file, "utf8");
+  return JSON.parse(text.slice(text.indexOf("{")));
+};
+const { runId } = read(process.argv[2]);
+if (!runId) throw new Error("recovery update receipt has no runId");
+let status;
+try {
+  status = read(process.argv[3]);
+} catch {
+  process.stdout.write("pending");
+  process.exit(0);
+}
+const step = status.lastRun?.runId === runId
+  ? status.lastRun.steps?.find((entry) => entry.step === "plugins")
+  : undefined;
+if (step?.detail) console.error(`recovery plugin maintenance: ${step.detail}`);
+process.stdout.write(step?.status === "completed" || step?.status === "failed" ? step.status : "pending");
+NODE
+)" || return "$?"
+    fi
+    case "$state" in
+      completed) return 0 ;;
+      failed)
+        echo "Resident plugin maintenance failed for the recovery update" >&2
+        return 1
+        ;;
+    esac
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      echo "Resident plugin maintenance did not finish for the recovery update" >&2
+      openclaw_e2e_print_log "$status_json" >&2
+      return 1
+    fi
+    sleep 1
+  done
 }
 
 assert_managed_membership_warning() {
@@ -2800,8 +2857,10 @@ if [ "$SCENARIO" = "custom-plugin-siblings" ]; then
   if [ "$baseline_version" = "2026.9.6" ]; then
     phase refuse-sibling-candidate assert_sibling_published_refusal
   fi
+  # Isolate the successful update’s registrations from the baseline and refusal trial.
+  : > "$ARTIFACT_ROOT/sibling-registrations.jsonl"
   phase update-sibling-candidate update_candidate
-  phase canary-sibling-runtime node scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs assert-canary
+  phase assert-sibling-update-imports node scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs assert-update-imports "$UPDATE_JSON"
   phase candidate-sibling-runtime node scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs candidate
   phase sibling-activation-previous-gateway-stop stop_gateway
   OPENCLAW_UPGRADE_SURVIVOR_CONTEXT_ACTIVATION=1 phase sibling-activation-gateway-start start_gateway

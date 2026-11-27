@@ -253,6 +253,21 @@ describe("SQLite transcript readers release the read snapshot before parsing", (
     }
   });
 
+  it("reads small SQLite rows in one transaction while they fit the byte budget", async () => {
+    const { events: seeded, scope } = await seedSession();
+    const rows = Array.from({ length: 600 }, (_, index) => ({
+      type: "message",
+      id: `small-${index}`,
+      parentId: index === 0 ? "entry-3" : `small-${index - 1}`,
+      timestamp: "2026-04-01T05:46:41.000Z",
+      message: userMessage(`small ${index}`),
+    }));
+    const events = [...seeded, ...rows];
+    await replaceTranscriptEvents(scope, events);
+    expect(readEvents(scope)).toEqual(events);
+    expect(transactionLog.entries).toEqual(["transaction"]);
+  });
+
   it("continues an incremental export after the previous projection in slices", async () => {
     const { events, scope } = await seedSession();
     const first = readTranscriptExportSnapshotReadOnlySync(scope, { previous: null });

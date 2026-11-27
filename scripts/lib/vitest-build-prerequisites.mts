@@ -22,6 +22,7 @@ const aiPackageConsumer = {
 const doctorUiConsumers = [
   "extensions/qa-lab/src/gateway-child-initializer.e2e.test.ts",
   "src/commands/doctor.auth-profile-consumers.e2e.test.ts",
+  "test/doctor-guest-session-upgrade.e2e.test.ts",
   "test/e2e/line-doctor-group-allowlist.built-cli.e2e.test.ts",
   "test/e2e/qa-lab/runtime/codex-auth-doctor-migration-product-proof.e2e.test.ts",
   "test/e2e/qa-lab/runtime/codex-auth-product-proof.e2e.test.ts",
@@ -138,12 +139,6 @@ const runtimeConsumers = [
     mode: "runtime" as const,
     dir: "",
   })),
-  {
-    file: "src/channels/plugins/contracts/plugin-shape.contract.test.ts",
-    configs: ["test/vitest/vitest.contracts-channel-registry.config.ts"],
-    mode: "private-qa",
-    dir: "",
-  },
   {
     file: "src/plugin-sdk/channel-entry-contract.lifecycle.test.ts",
     configs: ["test/vitest/vitest.plugin-sdk.config.ts"],

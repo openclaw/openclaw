@@ -17,9 +17,14 @@ import { selectModelCatalogRuntimeEntry } from "../agents/model-catalog-view.js"
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
-import { resolveDefaultModelForAgent, type ModelRef } from "../agents/model-selection.js";
+import {
+  isCliProvider,
+  resolveDefaultModelForAgent,
+  type ModelRef,
+} from "../agents/model-selection.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
+import type { SessionForkAdmission } from "../auto-reply/reply/session-fork.js";
 import { inheritSessionSelection } from "../config/sessions/session-entry-selection.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -411,16 +416,34 @@ export function resolveSessionCreateCatalogSelectionError(
     : undefined;
 }
 
-export async function resolveSessionForkMaxTokens(params: {
+export async function resolveSessionForkAdmission(params: {
+  explicitChatFork: boolean;
   cfg: OpenClawConfig;
   agentId: string;
   sessionKey: string;
   entry: SessionEntry;
   loadGatewayModelCatalogSnapshot?: () => Promise<ModelCatalogSnapshot>;
-}): Promise<number | undefined> {
+}): Promise<SessionForkAdmission> {
   const childModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
   if (!childModel) {
-    return undefined;
+    return { enforceTokenLimit: true };
+  }
+  const runtimeId = resolveEffectiveAgentRuntime({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    provider: childModel.provider,
+    modelId: childModel.model,
+    sessionKey: params.sessionKey,
+    sessionEntry: params.entry,
+  });
+  // The built-in API runner budgets the child's working context at request time.
+  // Native sessions may resume their own history; keep their existing admission policy.
+  if (
+    params.explicitChatFork &&
+    runtimeId === "openclaw" &&
+    !isCliProvider(childModel.provider, params.cfg)
+  ) {
+    return { enforceTokenLimit: false };
   }
   const childCatalog = params.loadGatewayModelCatalogSnapshot
     ? await params.loadGatewayModelCatalogSnapshot()
@@ -434,14 +457,7 @@ export async function resolveSessionForkMaxTokens(params: {
       ? selectModelCatalogRuntimeEntry({
           entry: childLogicalEntry,
           routeVariants: childCatalog.routeVariants,
-          runtimeId: resolveEffectiveAgentRuntime({
-            cfg: params.cfg,
-            agentId: params.agentId,
-            provider: childModel.provider,
-            modelId: childModel.model,
-            sessionKey: params.sessionKey,
-            sessionEntry: params.entry,
-          }),
+          runtimeId,
           allowApiFallback: false,
         }).entry
       : undefined;
@@ -457,10 +473,13 @@ export async function resolveSessionForkMaxTokens(params: {
     modelContextWindow: childContextWindow.contextTokens,
     allowCacheLookup: false,
   });
-  return childContextWindow.contextTokens
-    ? Math.min(
-        resolvedForkMaxTokens ?? childContextWindow.contextTokens,
-        childContextWindow.contextTokens,
-      )
-    : resolvedForkMaxTokens;
+  return {
+    enforceTokenLimit: true,
+    maxTokens: childContextWindow.contextTokens
+      ? Math.min(
+          resolvedForkMaxTokens ?? childContextWindow.contextTokens,
+          childContextWindow.contextTokens,
+        )
+      : resolvedForkMaxTokens,
+  };
 }

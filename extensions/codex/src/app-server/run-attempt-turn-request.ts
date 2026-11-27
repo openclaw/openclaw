@@ -379,7 +379,9 @@ export async function prepareCodexAttemptTurnRequest(
       if (
         !params.skipPreparedUserTurnMessage &&
         !recorder?.isBlocked() &&
-        recorder?.captureModelPromptProjection
+        recorder?.captureModelPromptProjection &&
+        // An earlier fallback candidate may already have frozen this turn's projection.
+        recorder.getPersistedMessage?.()?.["__openclaw"]?.modelPromptProjection === undefined
       ) {
         const { prompt: builtPrompt, promptInputRange } = turnState.promptBuild;
         if (!promptInputRange) {

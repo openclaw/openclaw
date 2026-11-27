@@ -23,6 +23,7 @@ import { withFullRuntimeReplyConfig } from "../../auto-reply/reply/get-reply-fas
 import * as replyRunHelpers from "../../auto-reply/reply/get-reply-run-helpers.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import { listSessionPendingInputs } from "../../config/sessions/session-pending-input-history.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import * as runAuthority from "../../infra/agent-run-registry.js";
@@ -448,7 +449,7 @@ it("quietly queues another requester and drains once with their current policy",
   }
 });
 
-it("refuses a queued followup when its requester loses operator.write before it starts", async ({
+it("refuses a queued /followup when its requester loses operator.write and says why in chat", async ({
   signal,
 }) => {
   const steering = await createHumanSteeringFixture("queued", signal);
@@ -472,7 +473,7 @@ it("refuses a queued followup when its requester loses operator.write before it 
   const bob = ensureProfileForEmail("queued-steer-bob@example.test");
   setClientProfile(fixture.client, setUserProfileRole(bob.id, "writer"));
   fixture.params.idempotencyKey = "demoted-steer-bob-input";
-  fixture.params.message = "Answer Bob's separate request.";
+  fixture.params.message = "/followup Answer Bob's separate request.";
   const dispatchActual = await loadRealChatDispatch();
   const queued = createDeferred();
   const dispatched = createDeferred();
@@ -502,6 +503,20 @@ it("refuses a queued followup when its requester loses operator.write before it 
       { timeout: 10_000 },
     );
     expect(runtime.execute).not.toHaveBeenCalled();
+    // The person sees the cause-table sentence in the chat transcript, not only a log line.
+    await vi.waitFor(
+      async () =>
+        expect(await loadTranscriptEvents(fixture.scope)).toContainEqual(
+          expect.objectContaining({
+            customType: "run-failed-before-reply",
+            display: true,
+            content: expect.stringContaining(
+              "I did not run your queued request. Your role on this Gateway does not allow it.",
+            ),
+          }),
+        ),
+      { timeout: 10_000 },
+    );
   } finally {
     steering.release.resolve();
     operation.complete();

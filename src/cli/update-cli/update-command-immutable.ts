@@ -6,8 +6,7 @@ import {
   prepareImmutableUpdate,
 } from "../../infra/update-immutable-install.js";
 import { defaultRuntime } from "../../runtime.js";
-import { hasReleaseUpdateOwner } from "../../update/installation-identity.js";
-import { resolvePrefix } from "../../update/store.js";
+import { hasReleaseUpdateOwner, resolvePrefix } from "../../update/store.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { quoteCliArg } from "../quote-cli-arg.js";
 import { parseUpdateTimeoutMs, resolveUpdateRoot, type UpdateCommandOptions } from "./shared.js";

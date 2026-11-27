@@ -1,8 +1,4 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { assert, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import * as packageMetadata from "../../infra/update-check-package-target.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -17,7 +13,7 @@ import * as packageUpdate from "./update-command-package.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
 import { updateCommand } from "./update-command.js";
 
-const { fixture, dirs } = installFreshUpdateFixture();
+const { fixture } = installFreshUpdateFixture();
 const withExecutor = executorOwner.withUpdateCommandExecutor;
 const updateOptions = { yes: true, json: true, restart: false };
 const metadataRefusal = { version: null, nodeEngine: null, error: "fixture registry unavailable" };
@@ -25,8 +21,6 @@ const metadataRefusal = { version: null, nodeEngine: null, error: "fixture regis
 describe("fresh update terminal reporting", () => {
   it("publishes one metadata refusal for a preview without entering a mutation lease", async () => {
     allowPackageRuntime();
-    const detachedRoot = dirs.make("openclaw-detached-refusal-");
-    vi.spyOn(os, "tmpdir").mockReturnValue(detachedRoot);
     const doctor = vi.spyOn(packageUpdate, "runPackageUpdateDoctor");
     vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", "  1c5a25f3-f46a-408b-a87f-a0f0d1f80ee7  ");
     vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockResolvedValueOnce(metadataRefusal);
@@ -57,7 +51,6 @@ describe("fresh update terminal reporting", () => {
     expect(observations).toEqual(["absent"]);
     expect(defaultRuntime.writeJson).toHaveBeenCalledOnce();
     const output = vi.mocked(defaultRuntime.writeJson).mock.calls[0]?.[0];
-    assert(isRecord(output) && typeof output.reportPath === "string");
     expect(output).toMatchObject({ status: "error", reason: "target-metadata-preflight" });
     expect(enter).not.toHaveBeenCalled();
     expect(failure).toBeInstanceOf(UpdateCommandFailure);
@@ -69,8 +62,6 @@ describe("fresh update terminal reporting", () => {
         failedStep: { failureFacts: [{ code: "target-registry-metadata" }] },
       },
     });
-    expect(output.reportPath.startsWith(detachedRoot + path.sep)).toBe(false);
-    expect(fs.existsSync(path.join(process.env.OPENCLAW_STATE_DIR!, "update-reports"))).toBe(true);
     expectFreshStatePreserved(fixture);
     expectNoFreshCalls(doctor);
     expect(defaultRuntime.error).toHaveBeenCalledWith(

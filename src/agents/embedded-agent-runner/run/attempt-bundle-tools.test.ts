@@ -7,6 +7,7 @@ import { withDiagnosticsTimelineObserver } from "../../../infra/diagnostics-time
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { withStateDirEnv } from "../../../test-helpers/state-dir-env.js";
 import { readAdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
+import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import { gateAgentToolExecution } from "../../agent-tool-availability.js";
 import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
 import { prepareParticipationTestRun } from "../../participation-ceiling.test-support.js";
@@ -70,6 +71,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     return {
       agentDir: "/tmp/agent",
       attempt: {
+        admittedRunContext: createTestAdmittedRunContext("run"),
         config: {},
         model: {},
         modelId: "model",
@@ -299,8 +301,8 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       ).toEqual(["read"]);
     }));
 
-  it("keeps an unavailable message tool listed when the session lists one fixed set", async () => {
-    // A cron turn without a delivery route must not freeze a series without `message`.
+  it("omits an unavailable message tool from a fixed listing", async () => {
+    // `agent --local` without a channel: no source, no configured route.
     const input = createInput([], [createStubTool("message")]);
     input.preparedToolBase = {
       ...input.preparedToolBase,
@@ -308,7 +310,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       fixedListing: true,
     } as typeof input.preparedToolBase;
     const result = await prepare(input);
-    expect(toolNames(result.uncompactedEffectiveTools)).toContain("message");
+    expect(toolNames(result.uncompactedEffectiveTools)).not.toContain("message");
   });
 
   it.each([

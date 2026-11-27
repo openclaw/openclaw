@@ -494,10 +494,10 @@ async function exerciseTabbedPanel(page: Page) {
   const divider = page.locator(".sidebar-column__divider");
   await dragDivider(page, divider, "x", -90);
   await expect.poll(() => panelSize(page, "width")).toBeGreaterThan(panelWidth + 70);
-  // The visible line borders the panel, so a press just past it must still grab.
+  // Both sides of the centered line must grab without covering panel content.
   const widenedWidth = await panelSize(page, "width");
   const gutterWidth = (await divider.boundingBox())!.width;
-  await dragDivider(page, divider, "x", 40, gutterWidth + 2);
+  await dragDivider(page, divider, "x", 40, gutterWidth / 2 + 2);
   await expect.poll(() => panelSize(page, "width")).toBeLessThan(widenedWidth - 20);
   const resizedWidth = await panelSize(page, "width");
 
@@ -511,6 +511,10 @@ async function exerciseTabbedPanel(page: Page) {
   const bottomHeight = await panelSize(page, "height");
   await dragDivider(page, divider, "y", -70);
   await expect.poll(() => panelSize(page, "height")).toBeGreaterThan(bottomHeight + 50);
+  const tallerHeight = await panelSize(page, "height");
+  const gutterHeight = (await divider.boundingBox())!.height;
+  await dragDivider(page, divider, "y", 30, gutterHeight / 2 + 2);
+  await expect.poll(() => panelSize(page, "height")).toBeLessThan(tallerHeight - 15);
   const resizedHeight = await panelSize(page, "height");
   await page.mouse.move(80, 80);
   await page.mouse.click(300, 100);

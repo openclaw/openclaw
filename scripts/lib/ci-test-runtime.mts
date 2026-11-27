@@ -14,7 +14,11 @@ import {
   getUnitFastTimerTestFiles,
 } from "../../test/vitest/vitest.unit-fast-paths.mjs";
 import { buildVitestRunPlans } from "../test-projects.test-support.mts";
-import { listNodeTestConfigFiles, listWholeConfigFiles } from "./ci-node-test-inventory.mts";
+import {
+  listNodeTestConfigFiles,
+  listNodeTestVolumeConfigFiles,
+  listWholeConfigFiles,
+} from "./ci-node-test-inventory.mts";
 import nativeBunQualification from "./ci-test-native-bun-qualification.json" with { type: "json" };
 import { vitestOptionConsumesNextArg } from "./vitest-cli-mode.mts";
 
@@ -94,6 +98,8 @@ const nodeRequiredFiles = new Set([
   ...nodeRequiredProcessFiles,
   // Bun reports peer ECONNRESET when destroying a socket with a pending reply; fork compat review pending.
   "src/infra/exec-host.socket.test.ts",
+  // Cron uses Node/libuv headroom on delegated Linux cgroup mounts.
+  "src/cron/service.delegated-memory-admission.test.ts",
   // The macOS directory watch helper serves Node's libuv watchers only.
   "src/infra/directory-watch-host.test.ts",
   // Git release launchers and service units are Node contracts; the suite skips on Bun.
@@ -129,6 +135,8 @@ const nodeRequiredFiles = new Set([
 // Physical schema and worker lifecycle proofs exercise both host runtimes. Keep Bun coverage
 // while qualifying Node workers independently of any guest runtime choice.
 const bothHostFiles = new Set([
+  "test/scripts/node-cache-disabled-control.test.ts",
+  "test/scripts/node-cache-qualification.test.ts",
   "test/scripts/vitest-pair-benchmark.test.ts",
   // Cache fixtures spawn the host executable, so Bun cannot qualify Node's cache policy.
   "test/vitest-performance-config.test.ts",
@@ -344,7 +352,14 @@ function resolveAllRuntimeSelections(
         )
       : [];
   const inventories = ownerConfigs.map((config) => {
-    const inventory = listNodeTestConfigFiles(config);
+    // These whole configs keep their isolation and argv; only exception membership
+    // needs their effective inventory instead of one general plan per candidate.
+    const inventory =
+      listNodeTestConfigFiles(config) ??
+      (config === "test/vitest/vitest.unit-fast-fake-timers.config.ts" ||
+      config === "test/vitest/vitest.unit-fast-isolated.config.ts"
+        ? listNodeTestVolumeConfigFiles(config)
+        : undefined);
     if (inventory) {
       return inventory;
     }

@@ -70,10 +70,11 @@ export async function mount(
   return panel;
 }
 
-export function open(panel: Panel, url = itemUrl(1), trigger?: HTMLElement, newTab = false) {
+/** Opens an item, or the empty tab the region's "+" asks for when `url` is null. */
+export function open(panel: Panel, url: string | null = itemUrl(1), trigger?: HTMLElement) {
   panel.handleToggleRequest(
     new CustomEvent(LINK_READER_PANEL_TOGGLE_EVENT, {
-      detail: { url, open: true, trigger, newTab },
+      detail: url === null ? { open: true, newTab: true } : { url, open: true, trigger },
       cancelable: true,
     }),
   );

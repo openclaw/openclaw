@@ -270,7 +270,6 @@ export async function previewUpdateCommand(params: {
         {
           record: run,
           ...(!canReadHistory ? { readHistory: false } : {}),
-          ...(params.malformedConfig ? { writeArtifacts: false } : {}),
         },
       );
     }

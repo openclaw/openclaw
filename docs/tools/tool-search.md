@@ -38,13 +38,18 @@ keeps its configured behavior, including `true`, an object, or `false`. Known
 hosted Ollama routes and the OpenAI-compatible transport keep the general default.
 
 When enabled for OpenClaw runs, the model automatically receives a bounded
-directory of the available trusted tool names and descriptions, plus the
-structured `tool_search`, `tool_describe`, and `dispatch_action` controls. Setting
-`tools.toolSearch: true` or an object without a mode selects this structured
-surface. Direct-only tools remain visible alongside the controls.
+directory of the available trusted tool names, plus the structured
+`tool_search`, `tool_describe`, and `dispatch_action` controls. The directory
+lists names only: `tool_search` returns input signatures and `tool_describe`
+full schemas on demand, so descriptions are not repeated on every request.
+Setting `tools.toolSearch: true` or an object without a mode selects this
+structured surface. Direct-only tools remain visible alongside the controls. On
+the default OpenClaw runner, an admitted `progress_card` also appears with its
+full schema in the first model request, so the agent can update the card
+without searching.
 
-The directory scales with the active model's context window. When space is tight,
-descriptions shorten before tool names are omitted; every authorized catalog
+The directory scales with the active model's context window. When space is
+tight, trailing names are omitted and counted; every authorized catalog
 entry remains searchable and callable. Invalid arguments for OpenClaw-owned
 tools include a bounded expected input signature when one can be rendered,
 plus the received type at the rejected field. Short scalar previews can show
@@ -58,7 +63,7 @@ to the skill’s complete instructions instead of sending the model through tool
 
 The optional [usage-ranked tool index](/concepts/experimental-features#usage-ranked-tool-index)
 can prioritize frequently and recently used tools in the embedded runtime’s
-deferred-schema directory and [MCP tool directory](#mcp-tool-directory). It is
+deferred tool directory and [MCP tool directory](#mcp-tool-directory). It is
 off by default and keeps the existing budgets, reserves room for newcomers, and
 freezes the selection preference for the prompt series. It does not rank search
 results, change permissions, or affect Codex-native surfaces.
@@ -416,6 +421,32 @@ Turn-authority gates preserve their refusal text without running the target;
 Code Mode also includes that guidance in the returned value's `message` field.
 This exemption uses private runtime provenance, not tool-authored `gated` or
 `status` fields.
+
+### On-demand tools
+
+Tools marked `catalogMode: "on-demand"` (currently `computer` and, on
+unsandboxed or adopting sessions, `github_publish`) start in the catalog with a
+short entry whose `call` field says they load as top-level tools once looked up.
+The prompt directory marks their rows `[loads on lookup]` and the Code Mode
+index marks them `[top-level call only; not from exec]`.
+
+In the embedded harness, looking one up loads it: `tool_describe` adds its
+definition to the next provider request in the same turn, so the model can call
+it by name right away. A refused `dispatch_action` loads it the same way, and so
+does a direct call by name. In Code Mode, `describe()` or a refused guest call
+loads it for the following turns.
+The tool is recorded in the session's tool pin, so every later turn of the
+prompt series sends it as a normal direct tool, including after a Gateway
+restart. `/new`, `/reset`, compaction and a model change start a new series,
+and the tool is deferred again until it is looked up again. Loading changes the
+provider tool list once, on the request after the lookup.
+
+`dispatch_action` and Code Mode guest calls never run on-demand tools, because
+a catalog bridge cannot carry a screenshot result or a turn handoff; they load
+the tool and say to call it directly. Harnesses that cannot load a tool
+mid-session (Copilot, Codex, cloud workers, headless catalogs) keep on-demand
+tools direct.
+With Tool Search and Code Mode off, every tool is direct as before.
 
 If `dispatch_action` names a direct-only tool declared for the current turn, it returns
 guidance to call that tool directly by its declared name and parameters. It does

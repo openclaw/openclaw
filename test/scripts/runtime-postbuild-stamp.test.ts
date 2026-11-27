@@ -2,17 +2,88 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { RUNTIME_POSTBUILD_STAMP_FILE } from "../../scripts/lib/local-build-metadata-paths.mts";
-import { writeRuntimePostBuildStamp } from "../../scripts/lib/local-build-metadata.mts";
+import {
+  writeBuildStamp,
+  writeRuntimePostBuildStamp,
+} from "../../scripts/lib/local-build-metadata.mts";
 import { resolveRunNodeInputSignature } from "../../scripts/lib/run-node-input-state.mts";
 import {
   copyStaticExtensionAssets,
   copyStaticExtensionAssetsToRuntimeOverlay,
 } from "../../scripts/lib/static-extension-assets.mts";
-import { resolveRuntimePostBuildRequirement } from "../../scripts/run-node.mts";
+import {
+  resolveBuildRequirement,
+  resolveRuntimePostBuildRequirement,
+} from "../../scripts/run-node.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { setupStampedProject, trackProjectWithGit } from "./run-node.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it("reuses build and runtime stamps across install timestamps while retaining dependency identity", async () => {
+  const cwd = tempDirs.make("runtime-stamp-install-");
+  const metadata = {
+    packageManager: "pnpm@12.15.0",
+    layoutVersion: 5,
+    virtualStoreDir: ".pnpm",
+    hoistedDependencies: { "demo@1.0.0": { demo: "private" } },
+    included: { dependencies: true },
+    prunedAt: "Thu, 26 Nov 2026 01:00:00 GMT",
+  };
+  await setupStampedProject(cwd, {
+    files: {
+      ".gitignore": "node_modules/\ndist/\n",
+      "node_modules/.modules.yaml": JSON.stringify(metadata),
+    },
+  });
+  const { deps } = await trackProjectWithGit(cwd);
+  for (const scope of ["build", "runtime"] as const) {
+    const inputSignature = resolveRunNodeInputSignature(deps, scope);
+    expect(inputSignature).not.toBeNull();
+    const writeStamp = scope === "build" ? writeBuildStamp : writeRuntimePostBuildStamp;
+    writeStamp({ cwd, env: deps.env, inputSignature });
+  }
+  const buildStamp = fs.readFileSync(deps.buildStampPath, "utf8");
+  const runtimeStamp = fs.readFileSync(deps.runtimePostBuildStampPath, "utf8");
+  const requirement = () => [
+    resolveBuildRequirement(deps, { allowEquivalentInputs: true }).shouldBuild,
+    resolveRuntimePostBuildRequirement(deps, { allowEquivalentInputs: true }).shouldSync,
+  ];
+  expect(requirement()).toEqual([false, false]);
+  const writeMetadata = (value: unknown) =>
+    fs.writeFileSync(path.join(cwd, "node_modules/.modules.yaml"), JSON.stringify(value));
+  writeMetadata({ ...metadata, prunedAt: "Fri, 27 Nov 2026 09:00:00 GMT" });
+  expect(requirement()).toEqual([false, false]);
+  for (const change of [
+    { packageManager: "pnpm@12.16.0" },
+    { layoutVersion: 6 },
+    { virtualStoreDir: "another-store" },
+    { hoistedDependencies: { "demo@2.0.0": { demo: "private" } } },
+    { included: { dependencies: false } },
+    { allowBuilds: { demo: false } },
+    { futureInstallInput: "changed" },
+    { prunedAt: { unknown: true } },
+  ]) {
+    writeMetadata({ ...metadata, ...change });
+    expect(requirement()).toEqual([true, true]);
+  }
+  for (const unrecognized of ["layoutVersion: 5\n", "{malformed", "[]"]) {
+    fs.writeFileSync(path.join(cwd, "node_modules/.modules.yaml"), unrecognized);
+    expect(requirement()).toEqual([true, true]);
+  }
+  for (const unsupported of [{ packageManager: "pnpm@13.0.0" }, { layoutVersion: 6 }]) {
+    writeMetadata({ ...metadata, ...unsupported });
+    const signatures = (["build", "runtime"] as const).map((scope) =>
+      resolveRunNodeInputSignature(deps, scope),
+    );
+    writeMetadata({ ...metadata, ...unsupported, prunedAt: "Fri, 27 Nov 2026 09:00:00 GMT" });
+    for (const [index, scope] of (["build", "runtime"] as const).entries()) {
+      expect(resolveRunNodeInputSignature(deps, scope)).not.toBe(signatures[index]);
+    }
+  }
+  expect(fs.readFileSync(deps.buildStampPath, "utf8")).toBe(buildStamp);
+  expect(fs.readFileSync(deps.runtimePostBuildStampPath, "utf8")).toBe(runtimeStamp);
+});
 
 it.each([
   ["clean", "", true],

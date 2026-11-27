@@ -1,4 +1,3 @@
-import { readFile } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
@@ -451,19 +450,14 @@ async function assertWorktreeGitOperationsIdle(
     if (primary.some((name) => ["rebase-merge", "rebase-apply", "BISECT_LOG"].includes(name))) {
       throw busy();
     }
-    // Expected-missing reservations otherwise pay fs/promises' rejection and async stack capture.
-    const read = (directory: string, name: string) =>
-      new Promise<string | undefined>((resolve, reject) => {
-        readFile(path.join(directory, name), "utf8", (error, contents) => {
-          if (error && error.code !== "ENOENT") {
-            reject(error);
-          } else {
-            resolve(error ? undefined : contents);
-          }
-        });
-      });
-    // Rebase exec can reattach HEAD; reservations cannot be inferred from detached status.
-    // Read only reservation files, with bounded I/O and no per-worktree directory listing.
+    const read = (directory: string, file: string) =>
+      fs.readFile(path.join(directory, file), "utf8").catch(ignoreMissingPath);
+    const rebaseReservations = [
+      ["rebase-merge", "rebase-merge/head-name"],
+      ["rebase-apply", "rebase-apply/head-name"],
+      ["rebase-merge", "rebase-merge/update-refs"],
+    ] as const;
+    // Git merge does not check linked reservations, even when a rebase reattaches HEAD.
     const checked = await runTasksWithConcurrency({
       limit: 16,
       errorMode: "stop",
@@ -471,20 +465,23 @@ async function assertWorktreeGitOperationsIdle(
         options.signal?.throwIfAborted();
         options.beforeRun?.();
         const directory = path.join(worktreesDir, name);
-        for (const file of [
-          "rebase-merge/head-name",
-          "rebase-apply/head-name",
-          "rebase-merge/update-refs",
-        ]) {
-          if ((await read(directory, file))?.trim().split("\n").includes(localRef)) {
+        const names = (await fs.readdir(directory).catch(ignoreMissingPath)) ?? [];
+        for (const [state, file] of rebaseReservations) {
+          if (
+            names.includes(state) &&
+            (await read(directory, file))?.trim().split("\n").includes(localRef)
+          ) {
             throw busy();
           }
         }
-        const bisect = (await read(directory, "BISECT_START"))?.trim();
-        if (bisect === localRef || bisect === localRef.slice("refs/heads/".length)) {
-          if ((await read(directory, "BISECT_LOG")) !== undefined) {
-            throw busy();
-          }
+        const bisect = names.includes("BISECT_START")
+          ? (await read(directory, "BISECT_START"))?.trim()
+          : undefined;
+        if (
+          (bisect === localRef || bisect === localRef.slice("refs/heads/".length)) &&
+          (await read(directory, "BISECT_LOG")) !== undefined
+        ) {
+          throw busy();
         }
       }),
     });
@@ -534,7 +531,6 @@ async function fastForwardLocalDefault(
     () =>
       withWorktreeGitConfig(repoRoot, true, options, async (git) => {
         try {
-          await assertWorktreeGitOperationsIdle(commonDir, localRef, options);
           const checkouts = (await listGitWorktrees(repoRoot, options)).filter(
             (entry) => entry.branch === localRef,
           );
@@ -567,6 +563,7 @@ async function fastForwardLocalDefault(
           if (dirty.termination !== "exit" || dirty.code !== 0 || dirty.stdout.trim()) {
             throw new LocalDefaultBusyError();
           }
+          await assertWorktreeGitOperationsIdle(commonDir, localRef, options);
           const current = await runGit(repoRoot, ["symbolic-ref", "--quiet", "HEAD"], options);
           if (
             current.termination !== "exit" ||

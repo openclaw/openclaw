@@ -585,8 +585,8 @@ describe("sessions.patch", () => {
         gateway: { roles: { default: "member", definitions: { member } } },
       };
       const requestContext = context(cfg);
-      const patch = async (pinned: boolean) => {
-        const request = { key: sessionKey, pinned };
+      const patch = async (color: string | null) => {
+        const request = { key: sessionKey, color };
         const resolved = await resolveSessionMutationAuthorizationAsync({
           client: requestClient,
           method: "sessions.patch",
@@ -605,9 +605,10 @@ describe("sessions.patch", () => {
         expectSuccess(respond, expect.any(Object));
       };
 
-      await patch(true);
+      await patch("purple");
       const entry = readEntry(state.env, sessionKey);
       expect(entry).toMatchObject({
+        color: "purple",
         createdVia: "operator",
         createdActor: { type: "human", source: "profile", id: profileId },
         createdAt: expect.any(Number),
@@ -619,8 +620,8 @@ describe("sessions.patch", () => {
         createSessionListEntryFilter({ client: requestClient, cfg })?.(sessionKey, entry),
       ).toBe(true);
 
-      await patch(false);
-      expect(readEntry(state.env, sessionKey)?.pinnedAt).toBeUndefined();
+      await patch(null);
+      expect(readEntry(state.env, sessionKey)?.color).toBeUndefined();
     }));
 });
 
@@ -698,6 +699,29 @@ describe("sessions.assignOwner", () => {
         }
       }),
   );
+
+  it("keeps the assignment time when the current owner is assigned again", () =>
+    withSessionMutationState(async (state) => {
+      const sessionKey = "agent:main:same-owner";
+      await seedEntry(state.env, sessionKey, {
+        sessionId: "session-same-owner",
+        visibility: "shared",
+        createdActor: creator,
+      });
+      await invoke({ key: sessionKey, owner: researchAgent() });
+      const assignedAt = readEntry(state.env, sessionKey)?.owner?.assignedAt;
+      expect(assignedAt).toEqual(expect.any(Number));
+      // Hold the clock past the first assignment so a refreshed time would differ.
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        vi.setSystemTime(assignedAt! + 60_000);
+        const again = await invoke({ key: sessionKey, owner: researchAgent() });
+        expectOwnerResponse(again.responses, { actor: researchAgent(), assignedAt });
+        expect(readEntry(state.env, sessionKey)?.owner?.assignedAt).toBe(assignedAt);
+      } finally {
+        vi.useRealTimers();
+      }
+    }));
 
   it("assigns an agent-created session to a human without changing its provenance", () =>
     withSessionMutationState(async (state) => {

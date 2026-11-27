@@ -1074,18 +1074,15 @@ export function createModelAuthAvailabilityResolver(
       routeAuthDecision.selection.route.authRequirement === "subscription"
         ? routeAuthDecision.selection
         : undefined;
-    const accountListedModelIds =
+    if (
       subscriptionSelection &&
-      params.accountListedModelIds?.(
+      params.accountListsModel?.(
         provider,
         subscriptionSelection.source.kind === "profile"
           ? subscriptionSelection.source.profileId
           : undefined,
-      );
-    if (
-      subscriptionSelection &&
-      accountListedModelIds &&
-      !accountListedModelIds.has(normalizeLowercaseStringOrEmpty(ref.modelId))
+        normalizeLowercaseStringOrEmpty(ref.modelId),
+      ) === false
     ) {
       // The ready account listing did not return this dual-route id, so its subscription route
       // is not entitled. A usable Platform credential keeps today's selection and preference.

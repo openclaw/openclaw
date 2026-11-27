@@ -22,7 +22,12 @@ describe("application projections", () => {
         const { gateway } = createGatewayStoreTestStore();
         return {
           source: gateway,
-          update: () => gateway.setSessionKey("agent:main:projected"),
+          update: () =>
+            gateway.setSessionKey(
+              gateway.snapshot.sessionKey === "agent:main:projected"
+                ? "agent:main:other"
+                : "agent:main:projected",
+            ),
           dispose: () => gateway.stop(),
         };
       },

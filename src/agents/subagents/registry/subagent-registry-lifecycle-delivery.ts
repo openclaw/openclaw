@@ -25,6 +25,7 @@ import type {
 import { getCurrentSubagentRunOwner } from "./subagent-registry-memory.js";
 import { resolveYieldedRunContinuation } from "./subagent-registry-run-pause.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
 
@@ -199,7 +200,7 @@ export const captureSubagentRunResult = async (
     // A yield pauses capture only while a continuation could still extend the transcript.
     return (
       current !== undefined &&
-      (current.pauseReason !== "sessions_yield" ||
+      (!isSubagentPausedByYield(current) ||
         resolveYieldedRunContinuation(current).state === "unreachable") &&
       !context.newerGenerationOwnsSession(current)
     );
@@ -242,7 +243,7 @@ export const captureSubagentRunResult = async (
             outcome,
             ...(sessionTarget ? { sessionTarget } : {}),
             // Only unreachable yielded collectors need a historical execution window.
-            ...(entry.collect === true && entry.pauseReason === "sessions_yield"
+            ...(entry.collect === true && isSubagentPausedByYield(entry)
               ? {
                   completedCollectorTurn: {
                     startedAt: outcome.startedAt ?? entry.execution.startedAt ?? entry.createdAt,

@@ -2,7 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { createDoctorPrompter } from "../../doctor-prompter.js";
 import type { DoctorOptions } from "../../doctor.types.js";
-import { maybeOfferModelAllowlistWildcards } from "./legacy-runtime-model-policy.js";
+import {
+  checkModelAllowlistWildcardsPending,
+  maybeOfferModelAllowlistWildcards,
+} from "./legacy-runtime-model-policy.js";
 
 const mocks = vi.hoisted(() => ({ confirm: vi.fn(), note: vi.fn() }));
 
@@ -67,6 +70,33 @@ describe("doctor model allowlist wildcard offer", () => {
       "- agents.defaults.modelPolicy.allow: openai/*, clawrouter/anthropic/*",
     ]);
     expect(mocks.note).toHaveBeenCalledOnce();
+  });
+
+  it("has pending work only where the offer can ask", async () => {
+    const prompter = (options: DoctorOptions, tty: boolean) => {
+      Object.defineProperty(process.stdin, "isTTY", { value: tty, configurable: true });
+      return createDoctorPrompter({
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        options,
+      });
+    };
+    const cfg = config(copied);
+
+    expect(checkModelAllowlistWildcardsPending({ cfg, prompter: prompter({}, true) })).toBe("work");
+    expect(
+      checkModelAllowlistWildcardsPending({
+        cfg,
+        prompter: prompter({ nonInteractive: true, repair: true }, true),
+      }),
+    ).toBe("none");
+    expect(
+      checkModelAllowlistWildcardsPending({
+        cfg: config(copied.slice(0, 3)),
+        prompter: prompter({}, true),
+      }),
+    ).toBe("none");
+    expect(mocks.confirm).not.toHaveBeenCalled();
+    expect(mocks.note).not.toHaveBeenCalled();
   });
 
   it("keeps the list when the operator declines", async () => {

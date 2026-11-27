@@ -17,6 +17,7 @@ import { CommandLane } from "../process/lanes.js";
 import { createReplyOperation } from "../sessions/session-controller.operation.js";
 import * as clocks from "../test-utils/gateway-scheduler-clock.js";
 import { createTestCronOperatorSource } from "./execution-context.test-support.js";
+import { mockCronAvailableMemory } from "./service.test-harness.js";
 import { handOver, start, stop } from "./service/ops-lifecycle.js";
 import {
   captureCronProviderBackoff,
@@ -56,7 +57,7 @@ function blockedJob(id: string, nowMs: number, nextRunAtMs: number) {
 afterEach(work.resetGatewayWorkAdmission);
 // Capacity cases fill the default run slots; no spare memory admits an extra run.
 beforeEach(() => {
-  vi.spyOn(process, "availableMemory").mockReturnValue(0);
+  mockCronAvailableMemory(0);
 });
 
 it("runs the next future wake under its own Gateway root while an earlier batch runs", async () => {
@@ -447,7 +448,7 @@ it("starts one run past the eight default slots per drain while 1 GiB is free", 
       return { status: "ok" as const, summary: job.id };
     },
   });
-  const free = vi.spyOn(process, "availableMemory").mockReturnValue(1024 ** 3);
+  const free = mockCronAvailableMemory(1024 ** 3);
   const running = await captureCronSchedulerWakeForTest(() => start(state));
   try {
     nowMs = dueAtMs;
@@ -516,7 +517,7 @@ it("recovers after default runs finish and resumes the same parked condition", a
     nowMs = dueAtMs;
     await wake(state);
     await vi.waitFor(() => expect(started).toHaveLength(8));
-    vi.spyOn(process, "availableMemory").mockReturnValue(1024 ** 3);
+    mockCronAvailableMemory(1024 ** 3);
     for (let count = 9; count <= 16; count++) {
       await wake(state);
       await vi.waitFor(() => expect(started).toHaveLength(count));
@@ -614,7 +615,7 @@ it("moves an extra slot to the fallback provider and limits new runs on that pro
     rateLimited("source");
     rateLimited("destination");
     vi.setSystemTime(Date.now() + 60_000);
-    vi.spyOn(process, "availableMemory").mockReturnValue(1024 ** 3);
+    mockCronAvailableMemory(1024 ** 3);
     await advance(1_000);
     await vi.waitFor(() => expect(started).toContain("switches"));
     fallBack.resolve();

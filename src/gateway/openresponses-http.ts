@@ -109,7 +109,7 @@ export async function handleOpenResponsesHttpRequest(
   if (!handled) {
     return handled !== false;
   }
-  const { payload, abortController, senderIsOwner } = handled;
+  const { payload, abortController } = handled;
   const hasMedia =
     Array.isArray(payload.input) &&
     payload.input.some(
@@ -313,7 +313,7 @@ export async function handleOpenResponsesHttpRequest(
     agentId: resolved.agentId,
     sessionKey,
     requestAuth: handled.requestAuth,
-    senderIsOwner,
+    senderIsOwner: handled.grant.owner,
   });
   if (!sessionAuth.allowed) {
     sendJson(res, 403, { error: { message: sessionAuth.message, type: "forbidden" } });

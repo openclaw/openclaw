@@ -64,11 +64,15 @@ function resolveInterfaceHostIp(): string {
   return "";
 }
 
+export function detectParallelsHostIp(): string {
+  return resolveConfiguredSharedHostIp() || resolveInterfaceHostIp();
+}
+
 export function resolveHostIp(explicit = ""): string {
   if (explicit) {
     return explicit;
   }
-  const hostIp = resolveConfiguredSharedHostIp() || resolveInterfaceHostIp();
+  const hostIp = detectParallelsHostIp();
   if (!hostIp) {
     die("failed to detect Parallels host IP; pass --host-ip");
   }

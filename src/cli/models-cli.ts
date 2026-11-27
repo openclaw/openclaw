@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Command } from "commander";
-import type { ModelsAuthSetApiKeyResult } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+import type { ModelsAuthSetApiKeyResult } from "../../packages/gateway-protocol/src/schema/models-auth.js";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { ModelsAccountsOptions } from "../commands/models/accounts.js";
