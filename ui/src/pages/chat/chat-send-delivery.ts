@@ -75,10 +75,10 @@ export async function sendQueuedChatMessage(
   }
   // Live replies can use standard Markdown while the optional formatter loads.
   void loadStreamingMarkdown().catch(() => undefined);
-  const [sendPrepared, preparationError] = await import("./chat-send-delivery.runtime.ts").then(
-    ({ sendPreparedChatQueueItem }) => [sendPreparedChatQueueItem] as const,
-    (error: unknown) => [undefined, error] as const,
-  );
+  const { sendPreparedChatQueueItem: prepared } =
+    await import("./chat-send-delivery.runtime.ts").catch((error: unknown) => ({
+      sendPreparedChatQueueItem: { error },
+    }));
   if (!connectionIsCurrent()) {
     return "pending";
   }
@@ -89,11 +89,11 @@ export async function sendQueuedChatMessage(
   if (!retryOwnerIsCurrent()) {
     return "failed";
   }
-  if (!sendPrepared) {
-    failPreparation(formatUiError(preparationError));
+  if (typeof prepared !== "function") {
+    failPreparation(formatUiError(prepared.error));
     return "failed";
   }
-  return sendPrepared(
+  return prepared(
     host,
     current,
     expectedLeafEntryId,
