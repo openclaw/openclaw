@@ -5,8 +5,10 @@ import { makeTempDir } from "../../test/helpers/temp-dir.js";
 import { MEDIA_ROWS_MIGRATION_META_KEY } from "../state/openclaw-agent-db-contract.js";
 import * as maintenanceLease from "../state/openclaw-agent-db-maintenance-lease.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { installDeletedAgentDatabaseFences } from "./agent-database-readers.js";
 import * as nodeSqlite from "./node-sqlite.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { corruptSqliteIndexKey } from "./sqlite-index-corruption.test-support.js";
@@ -366,6 +368,25 @@ describe("agent database migration plan", () => {
       realPath: databasePath,
       source: "disk" as const,
     };
+    // An incognito store at its sentinel locator is never read as a durable database.
+    const incognitoPath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
+    fs.copyFileSync(databasePath, incognitoPath);
+    const incognito = await planAgentDatabaseMaintenance(
+      { ...target, path: incognitoPath, realPath: incognitoPath },
+      { env },
+    );
+    expect(incognito.conditions["schema-version"]).toBe("undecidable");
+
+    // A store whose agent was deleted in this process reads as missing.
+    installDeletedAgentDatabaseFences([[path.resolve(databasePath), "main"]]);
+    try {
+      const deleted = await planAgentDatabaseMaintenance(target, { env });
+      expect(deleted.conditions["schema-version"]).toBe("undecidable");
+      expect(deleted.pending).toBe("undecidable");
+    } finally {
+      installDeletedAgentDatabaseFences([]);
+    }
+
     fs.rmSync(databasePath);
     const missing = await planAgentDatabaseMaintenance(target, { env });
     expect(missing.conditions["schema-version"]).toBe("undecidable");
