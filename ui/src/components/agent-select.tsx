@@ -17,6 +17,7 @@ import { MenuHeading } from "./solid/menu-heading.tsx";
 
 type AgentSelectProps = {
   options: readonly AgentSelectOption[];
+  pendingOptions: Promise<unknown> | null;
   value: string;
   placeholder: string;
   accessibleLabel: string;
@@ -195,6 +196,9 @@ defineSolidBridge<AgentSelectProps>(
             get options() {
               return props.options;
             },
+            get pendingOptions() {
+              return props.pendingOptions;
+            },
             get disabled() {
               return props.disabled || props.options.length === 0;
             },
@@ -225,6 +229,7 @@ defineSolidBridge<AgentSelectProps>(
   {
     properties: {
       options: { default: [], attribute: false },
+      pendingOptions: { default: null, attribute: false },
       value: { default: "", attribute: false },
       placeholder: { default: "", attribute: false },
       accessibleLabel: { default: "", attribute: false },

@@ -65,6 +65,7 @@ export type SettingsSidebarProps = {
   activePluginTab?: GatewayControlUiPluginTab;
   embeddedPluginTitle?: string;
   agents: readonly AgentRosterRow[];
+  agentRosterRead?: Promise<unknown> | null;
   agentIdentity: AgentIdentityCapability;
   settingsAgentSelection: AgentSelectionCapability;
   activePathname?: string;
@@ -287,6 +288,7 @@ function SettingsAgentSelector(props: SettingsSidebarProps & { inHeader?: boolea
     <div class={["settings-sidebar__agent", { "settings-sidebar__agent--header": props.inHeader }]}>
       <openclaw-agent-select
         prop:options={options()}
+        prop:pendingOptions={props.agentRosterRead ?? null}
         prop:identityTargetsRef={(read) => {
           readIdentityTargets = read;
         }}
