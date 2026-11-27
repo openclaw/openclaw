@@ -115,6 +115,21 @@ describe("managed orphan branch cleanup", () => {
     ]);
   });
 
+  it("skips branch discovery and Git maintenance while the source repository is missing", async () => {
+    const record = await materialize("gone");
+    await service.remove({ id: record.id, reason: "archive" });
+    const moved = `${repo}-moved`;
+    await fs.rename(repo, moved);
+    try {
+      expect((await service.gc()).failedCount).toBe(0);
+    } finally {
+      await fs.rename(moved, repo);
+    }
+    await git(repo, "branch", "openclaw/orphan");
+    expect((await service.gc()).failedCount).toBe(0);
+    expect(await git(repo, "branch", "--list", "openclaw/orphan")).toBe("");
+  });
+
   it("revalidates caller authority after awaited Git admission", async () => {
     await git(repo, "branch", "openclaw/late");
     const reached = createDeferred();
