@@ -808,11 +808,8 @@ final class NodeAppModel {
         return self.isOperatorGatewayConnected ? "operator" : "offline"
     }
 
-    func makeChatTransport(outboxGatewayID: String? = nil) -> any OpenClawChatTransport {
-        if let fixture = self.localChatFixture {
-            return LocalFixtureChatTransport(fixture: fixture)
-        }
-        let connectionProvider: IOSMediaArtifactLoader.ConnectionProvider = { [weak self] in
+    var chatMediaConnection: IOSMediaArtifactLoader.ConnectionProvider {
+        { [weak self] in
             guard let config = self?.activeGatewayConnectConfig else { return nil }
             return IOSMediaArtifactLoader.Connection(
                 config: config,
@@ -820,6 +817,13 @@ final class NodeAppModel {
                 customHeaders: GatewaySettingsStore.loadGatewayCustomHeaders(
                     gatewayStableID: config.effectiveStableID))
         }
+    }
+
+    func makeChatTransport(outboxGatewayID: String? = nil) -> any OpenClawChatTransport {
+        if let fixture = self.localChatFixture {
+            return LocalFixtureChatTransport(fixture: fixture)
+        }
+        let connectionProvider = self.chatMediaConnection
         return IOSGatewayChatTransport(
             gateway: self.operatorSession,
             widgetGateway: self.nodeGateway,

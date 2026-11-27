@@ -20,15 +20,16 @@ struct ChatActionsMenu: View {
     nonisolated static func sections(
         isMainChat: Bool,
         isSaved: Bool,
+        hasInfoPage: Bool,
         hasContextUsage: Bool,
         canArchive: Bool,
         canDelete: Bool) -> [[Item]]
     {
         let sections: [[Item]] = [
             isMainChat ? [] : [.newChat],
-            isSaved ? [.pin, .rename, .moveToGroup] : [],
-            hasContextUsage ? [.contextUsage] : [],
-            (isSaved && canArchive ? [.archive] : []) + (isSaved && canDelete ? [.delete] : []),
+            isSaved ? [.pin] + (isMainChat || !hasInfoPage ? [.rename] : []) + [.moveToGroup] : [],
+            !hasInfoPage && hasContextUsage ? [.contextUsage] : [],
+            (!hasInfoPage && isSaved && canArchive ? [.archive] : []) + (isSaved && canDelete ? [.delete] : []),
         ]
         return sections.filter { !$0.isEmpty }
     }
@@ -41,6 +42,7 @@ struct ChatActionsMenu: View {
     @Environment(NodeAppModel.self) private var appModel
     let viewModel: OpenClawChatViewModel?
     let isMainChat: Bool
+    let hasInfoPage: Bool
     let isDisabled: Bool
     let newChat: () -> Void
 
@@ -61,6 +63,7 @@ struct ChatActionsMenu: View {
         return Self.sections(
             isMainChat: self.isMainChat,
             isSaved: session != nil,
+            hasInfoPage: self.hasInfoPage,
             hasContextUsage: self.viewModel?.contextUsage != nil,
             canArchive: session.map { ChatSessionSidebarModel.canArchiveSession($0, mainSessionKey: mainKey) }
                 ?? false,

@@ -213,20 +213,7 @@ private struct ChatPRHeader: View {
             if let files = self.pr.details?.changedFiles {
                 Text(files == 1 ? "1 file" : "\(files) files").foregroundStyle(.secondary)
             }
-            HStack(spacing: 5) {
-                if let n = self.pr.details?.additions, n > 0 {
-                    Text(verbatim: "+\(n)").foregroundStyle(ChatPRInk.green)
-                        .accessibilityLabel(n == 1 ? Text("1 line added") : Text(verbatim: String(
-                            format: String(localized: "%lld lines added"),
-                            n)))
-                }
-                if let n = self.pr.details?.deletions, n > 0 {
-                    Text(verbatim: "−\(n)").foregroundStyle(ChatPRInk.red)
-                        .accessibilityLabel(n == 1 ? Text("1 line removed") : Text(verbatim: String(
-                            format: String(localized: "%lld lines removed"),
-                            n)))
-                }
-            }
+            OpenClawChatLineCounts(additions: self.pr.details?.additions, deletions: self.pr.details?.deletions)
         }
         .font(OpenClawChatTypography.footnote).monospacedDigit().accessibilityElement(children: .combine)
     }
@@ -255,6 +242,35 @@ private struct ChatPRButtonStyle: ViewModifier {
         } else {
             content.buttonStyle(.bordered).buttonBorderShape(.capsule).tint(.primary)
         }
+    }
+}
+
+/// Signed checkout and pull-request counts share visible and spoken formatting.
+public struct OpenClawChatLineCounts: View {
+    let additions: Int?
+    let deletions: Int?
+
+    public init(additions: Int?, deletions: Int?) {
+        self.additions = additions
+        self.deletions = deletions
+    }
+
+    public var body: some View {
+        HStack(spacing: 5) {
+            if let n = self.additions, n > 0 {
+                Text(verbatim: "+\(n.formatted())").foregroundStyle(ChatPRInk.green)
+                    .accessibilityLabel(n == 1 ? Text("1 line added") : Text(verbatim: String(
+                        format: String(localized: "%lld lines added"),
+                        n)))
+            }
+            if let n = self.deletions, n > 0 {
+                Text(verbatim: "−\(n.formatted())").foregroundStyle(ChatPRInk.red)
+                    .accessibilityLabel(n == 1 ? Text("1 line removed") : Text(verbatim: String(
+                        format: String(localized: "%lld lines removed"),
+                        n)))
+            }
+        }
+        .font(OpenClawChatTypography.footnote).monospacedDigit()
     }
 }
 #endif
