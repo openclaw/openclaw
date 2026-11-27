@@ -447,7 +447,7 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
   }
 
   return {
-    preferShared(slot: Slot<Input, Output>) {
+    preferShared(this: void, slot: Slot<Input, Output>) {
       if (
         options.burstIdleTimeoutMs === undefined ||
         idleSlots ||
