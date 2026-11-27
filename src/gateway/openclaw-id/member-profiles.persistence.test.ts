@@ -407,46 +407,46 @@ for (const change of ["merged", "deleted", "taken", "account-linked", "same-acco
   });
 }
 
-// A personal profile without an OpenClaw ID subject row is never bound by a colliding email.
-async function expectUnlinkedVictim(victimId: string, accountId: string) {
-  expect(await readOpenClawIdLinksOfProfile(victimId)).toEqual([]);
-  expect((await readOpenClawIdLinkedProfile(accountId))?.profileId).not.toBe(victimId);
-  expect((await ensureCanonicalUserProfileForEmail("alice@example.test")).id).toBe(victimId);
+// A personal profile without an OpenClaw ID subject row is never linked by a matching email.
+async function expectProfileStaysUnlinked(profileId: string, accountId: string) {
+  expect(await readOpenClawIdLinksOfProfile(profileId)).toEqual([]);
+  expect((await readOpenClawIdLinkedProfile(accountId))?.profileId).not.toBe(profileId);
+  expect((await ensureCanonicalUserProfileForEmail("person@example.test")).id).toBe(profileId);
 }
 
 it("never binds an unlinked profile to an account that reports its email", async ({ state }) => {
   state.applyEnv();
-  const victim = await ensureCanonicalUserProfileForEmail("alice@example.test");
-  await setCanonicalUserProfileDisplayName(victim.id, "Alice");
+  const existingProfile = await ensureCanonicalUserProfileForEmail("person@example.test");
+  await setCanonicalUserProfileDisplayName(existingProfile.id, "Person");
   const direct = await ensureCanonicalUserProfileForOpenClawIdIdentity({
     accountId: "acct-direct",
-    email: "ALICE@example.test",
-    name: "Alice",
+    email: "PERSON@example.test",
+    name: "Person",
   });
-  expect(direct.id).not.toBe(victim.id);
-  await expectUnlinkedVictim(victim.id, "acct-direct");
+  expect(direct.id).not.toBe(existingProfile.id);
+  await expectProfileStaysUnlinked(existingProfile.id, "acct-direct");
   // Profile Link binds the caller's own profile; the account's email never redirects it.
-  const caller = await ensureCanonicalUserProfileForEmail("mallory@example.test");
+  const caller = await ensureCanonicalUserProfileForEmail("caller@example.test");
   expect(
     await linkCanonicalOpenClawIdUserProfile({
       profileId: caller.id,
       accountId: "acct-linked",
-      email: "alice@example.test",
+      email: "person@example.test",
     }),
   ).toEqual({ ok: true });
   expect((await readOpenClawIdLinkedProfile("acct-linked"))?.profileId).toBe(caller.id);
-  await expectUnlinkedVictim(victim.id, "acct-linked");
+  await expectProfileStaysUnlinked(existingProfile.id, "acct-linked");
 
-  // The invite audience is the victim's address, and the redeemer reports exactly that.
+  // The invite audience is the profile's address, and the redeemer reports exactly that.
   const claw = await linkedClaw({ read: readStoredClaw, write: writeStoredClaw });
-  const invite = await ownerInvite(claw, { email: "alice@example.test" });
+  const invite = await ownerInvite(claw, { email: "person@example.test" });
   await claw.authority.registerInvite({ cap: invite.cap, proofKey: invite.proofKey }, "tunnel");
   const mail = await redemptionMail({
     clawId: claw.clawId,
     inviteId: invite.inviteId,
     proofKey: invite.proofKey,
-    accountId: "acct-mallory",
-    email: "alice@example.test",
+    accountId: "ocid-other",
+    email: "person@example.test",
   });
   expect(
     await claw.authority.redeem(mail.message.payload.redemption, mail.message.from),
@@ -455,7 +455,7 @@ it("never binds an unlinked profile to an account that reports its email", async
     await claw.authority.submit(
       await claw.sign({
         op: "add",
-        account_id: "acct-mallory",
+        account_id: "ocid-other",
         role: "operator",
         peer_keys: [mail.peerKey],
         invite_id: invite.inviteId,
@@ -464,14 +464,14 @@ it("never binds an unlinked profile to an account that reports its email", async
     ),
   ).toMatchObject({ ok: true });
   expect(await claw.authority.resolvePeer(mail.peerKey)).toMatchObject({ kind: "member" });
-  await expectUnlinkedVictim(victim.id, "acct-mallory");
+  await expectProfileStaysUnlinked(existingProfile.id, "ocid-other");
   // Tunnel admission resolves the member by subject only.
   const admitted = await ensureCanonicalUserProfileForOpenClawIdIdentity({
-    accountId: "acct-mallory",
+    accountId: "ocid-other",
   });
-  expect(admitted.id).not.toBe(victim.id);
+  expect(admitted.id).not.toBe(existingProfile.id);
   await closeOpenClawStateDatabaseAsync();
-  await expectUnlinkedVictim(victim.id, "acct-mallory");
+  await expectProfileStaysUnlinked(existingProfile.id, "ocid-other");
 });
 
 // After remote access setup the claw has an owner account and the admin's profile stays

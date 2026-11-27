@@ -1,5 +1,5 @@
-// A device-code grant proves only that someone with the user code approved it (RFC 8628), so
-// it must not create the first OpenClaw ID binding of a personal profile. Real profile state.
+// A device-code approval (RFC 8628) does not show who approved it, so a device sign-in only
+// recognizes an existing OpenClaw ID link and never creates a profile's first one. Real profile state.
 import { afterAll, beforeAll, expect, vi } from "vitest";
 import { stateTest } from "../../plugin-state/plugin-state-fixtures.test-support.js";
 import {
@@ -11,7 +11,7 @@ import { ensureCanonicalUserProfileForEmail } from "../../state/user-profile-wri
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
 
 const ISSUER = "https://issuer.example.test/api/auth";
-const VICTIM_EMAIL = "victim@id-eval.local";
+const PROFILE_EMAIL = "person@example.test";
 
 // The personal-profile authority owner has its own tests; here it admits the caller's profile.
 vi.mock("../server-methods/personal-profile-authorization.js", async (importOriginal) => ({
@@ -30,8 +30,8 @@ function idToken(claims: Record<string, unknown>) {
   return `${part({ alg: "RS256" })}.${part(claims)}.sig`;
 }
 
-// Whoever approved the user code: a different account that reports the victim's email.
-let approver = "ocid-collider";
+// The account that approved the user code; by default a second account with the profile's email.
+let approver = "ocid-other";
 let handlers: typeof import("../server-methods/openclaw-id.js").openclawIdHandlers;
 
 beforeAll(async () => {
@@ -62,7 +62,7 @@ beforeAll(async () => {
           aud: "control-ui",
           sub: approver,
           exp: Math.floor(Date.now() / 1000) + 3600,
-          email: VICTIM_EMAIL,
+          email: PROFILE_EMAIL,
         }),
       });
     }),
@@ -111,49 +111,49 @@ it("a device grant from another account never creates a profile's first link", a
   state,
 }) => {
   state.applyEnv();
-  approver = "ocid-collider";
-  const victim = await ensureCanonicalUserProfileForEmail(VICTIM_EMAIL);
+  approver = "ocid-other";
+  const existingProfile = await ensureCanonicalUserProfileForEmail(PROFILE_EMAIL);
   const connection = {
-    connId: "conn-victim",
+    connId: "conn-person",
     connect: { role: "operator", scopes: ["operator.read"] },
     internal: { authenticatedOperator: true },
-    authenticatedUserProfile: { profileId: victim.id },
+    authenticatedUserProfile: { profileId: existingProfile.id },
   };
 
   const polled = await deviceSignIn(connection, true);
   expect(polled).toMatchObject({
     ok: true,
-    payload: { account: { sub: "ocid-collider" }, link: "link_approval_required" },
+    payload: { account: { sub: "ocid-other" }, link: "link_approval_required" },
   });
   const { idToken: held } = polled.payload as { idToken: string };
   expect(await call(connection, { action: "link_held", idToken: held })).toMatchObject({
     ok: true,
     payload: { link: "link_approval_required" },
   });
-  expect(await readOpenClawIdLinkedProfile("ocid-collider")).toBeNull();
-  expect(await readOpenClawIdLinksOfProfile(victim.id)).toEqual([]);
+  expect(await readOpenClawIdLinkedProfile("ocid-other")).toBeNull();
+  expect(await readOpenClawIdLinksOfProfile(existingProfile.id)).toEqual([]);
 
   // A binding approved elsewhere (here written directly) is still recognized after sign-in.
-  approver = "ocid-victim";
+  approver = "ocid-person";
   expect(
     await linkCanonicalOpenClawIdUserProfile({
-      profileId: victim.id,
-      accountId: "ocid-victim",
-      email: VICTIM_EMAIL,
+      profileId: existingProfile.id,
+      accountId: "ocid-person",
+      email: PROFILE_EMAIL,
     }),
   ).toEqual({ ok: true });
   expect(await deviceSignIn(connection, true)).toMatchObject({
     ok: true,
-    payload: { account: { sub: "ocid-victim" }, link: "linked" },
+    payload: { account: { sub: "ocid-person" }, link: "linked" },
   });
   // Another account on the now-linked profile is told to unlink first, and is not added.
-  approver = "ocid-collider";
+  approver = "ocid-other";
   expect(await deviceSignIn(connection, true)).toMatchObject({
     ok: true,
-    payload: { account: { sub: "ocid-collider" }, link: "profile_linked" },
+    payload: { account: { sub: "ocid-other" }, link: "profile_linked" },
   });
-  expect(await readOpenClawIdLinkedProfile("ocid-collider")).toBeNull();
-  expect(await readOpenClawIdLinksOfProfile(victim.id)).toEqual([
-    { accountId: "ocid-victim", email: VICTIM_EMAIL },
+  expect(await readOpenClawIdLinkedProfile("ocid-other")).toBeNull();
+  expect(await readOpenClawIdLinksOfProfile(existingProfile.id)).toEqual([
+    { accountId: "ocid-person", email: PROFILE_EMAIL },
   ]);
 });
