@@ -5,6 +5,7 @@ import { INTERNAL_WAKE_TRANSCRIPT_PROMPTS } from "../auto-reply/heartbeat.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { createGatewaySession } from "../gateway/session-create-service.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { repairLegacySessionTitles } from "./doctor-session-title-repair.js";
 import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";
@@ -146,6 +147,89 @@ it.each(Object.entries(INTERNAL_WAKE_TRANSCRIPT_PROMPTS))(
     );
   },
 );
+
+it.each([
+  ["event", INTERNAL_WAKE_TRANSCRIPT_PROMPTS.event, INTERNAL_WAKE_TRANSCRIPT_PROMPTS.event],
+  [
+    "exec",
+    INTERNAL_WAKE_TRANSCRIPT_PROMPTS.exec,
+    "[OpenClaw exec completion] Disable automatic completion…",
+  ],
+])(
+  "repairs retained %s wake titles without changing explicit names or session activity",
+  async (_kind, content, marker) => {
+    await withSession(
+      async (params) => {
+        await sessionAccessor.patchSessionEntryCore(params, () => ({ displayName: marker }));
+        const before = expectDefined(sessionAccessor.loadSessionEntry(params), params.sessionKey);
+        const preview = await repairLegacySessionTitles({ cfg, env: process.env, apply: false });
+        expect(preview).toMatchObject({ found: 1, repaired: 0 });
+        expect(sessionAccessor.loadSessionEntry(params)).toEqual(before);
+        await repair();
+        const { displayName: _displayName, ...expected } = before;
+        expect(sessionAccessor.loadSessionEntry(params)).toEqual(expected);
+        await repair();
+        expect(sessionAccessor.loadSessionEntry(params)).toEqual(expected);
+        for (const mutation of [
+          { displayName: marker, label: "Personal main chat" },
+          { displayName: "My session event notes", label: undefined },
+        ]) {
+          await sessionAccessor.patchSessionEntryCore(params, () => mutation);
+          const named = sessionAccessor.loadSessionEntry(params);
+          await repair();
+          expect(sessionAccessor.loadSessionEntry(params)).toEqual(named);
+        }
+      },
+      [user(content)],
+      "agent:main:main",
+    );
+  },
+);
+
+it("preserves an explicitly created wake-marker display name without transcript evidence", async () => {
+  await withOpenClawTestState(
+    { scenario: "minimal", label: "doctor-explicit-marker" },
+    async (state) => {
+      setRuntimeConfigSnapshot(cfg);
+      const sessionKey = "agent:main:dashboard:explicit-marker";
+      const created = await createGatewaySession({
+        cfg,
+        key: sessionKey,
+        displayName: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.event,
+        commandSource: "test",
+        operatorRoleActor: { kind: "system" },
+      });
+      expect(created.ok).toBe(true);
+      const scope = {
+        sessionKey,
+        storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
+      };
+      const before = expectDefined(sessionAccessor.loadSessionEntry(scope), sessionKey);
+      await repair();
+      expect(sessionAccessor.loadSessionEntry(scope)).toEqual(before);
+    },
+  );
+});
+
+it("preserves an explicitly named external-user quote of an exec wake", async () => {
+  await withSession(
+    async (params) => {
+      await sessionAccessor.patchSessionEntryCore(params, () => ({
+        displayName: "[OpenClaw exec completion] Disable automatic completion…",
+      }));
+      const before = expectDefined(sessionAccessor.loadSessionEntry(params), params.sessionKey);
+      await repair();
+      expect(sessionAccessor.loadSessionEntry(params)).toEqual(before);
+    },
+    [
+      {
+        role: "user",
+        content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.exec,
+        provenance: { kind: "external_user" },
+      },
+    ],
+  );
+});
 
 const relay = { ...user("Internal relay"), provenance: { kind: "inter_session" } };
 const later = user("A later task must not become the title");

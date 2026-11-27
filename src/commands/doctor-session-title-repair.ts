@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { INTERNAL_WAKE_TRANSCRIPT_PROMPTS } from "../auto-reply/heartbeat.js";
 import {
   isSessionTranscriptProjectionUnavailableError,
   patchSessionEntryCore,
@@ -17,10 +18,22 @@ import {
 } from "../infra/session-sqlite-migration-readers.js";
 import { prepareArtifactPreservingSqliteRead } from "../infra/sqlite-snapshot-source.js";
 import { isIncognitoSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
-import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
+import { normalizeInputProvenance } from "../sessions/input-provenance.js";
 import { getActiveOpenClawStateDatabaseReadSnapshotAsync } from "../state/openclaw-state-db-readonly.js";
 import { runDoctorAgentDatabaseOperation } from "./doctor-agent-database-operation.js";
 import type { DoctorSqliteMaintenanceAuthority } from "./doctor-sqlite-maintenance-lock.js";
+
+// Snapshot of the title formatter before internal wakes were excluded (#179219).
+// Its exec title collapsed whitespace and truncated at the preceding word boundary.
+const legacyWakeTitleByPrompt = new Map<string, string>(
+  Object.values(INTERNAL_WAKE_TRANSCRIPT_PROMPTS).map((prompt) => [
+    prompt,
+    prompt === INTERNAL_WAKE_TRANSCRIPT_PROMPTS.exec
+      ? "[OpenClaw exec completion] Disable automatic completion…"
+      : prompt,
+  ]),
+);
+const legacyWakeTitles = new Set(legacyWakeTitleByPrompt.values());
 
 function readLegacySessionTitle(
   scope: Parameters<typeof readSessionTranscriptBoundedMessageTailPage>[0],
@@ -45,9 +58,18 @@ function readLegacySessionTitle(
     for (const event of head.events) {
       const message = asOptionalRecord(asOptionalRecord(event.event)?.message);
       const projected = projectSessionDisplayMessage(message);
-      if (projected?.role === "user" && !hasInterSessionUserProvenance(message)) {
-        const displayName = deriveGoalSessionTitle(projected.text);
-        return displayName || undefined;
+      if (projected?.role === "user") {
+        const provenance = normalizeInputProvenance(message?.provenance);
+        if (provenance?.kind === "inter_session") {
+          continue;
+        }
+        return {
+          displayName: deriveGoalSessionTitle(projected.text) || undefined,
+          legacyWakeTitle:
+            provenance?.kind === "external_user"
+              ? undefined
+              : legacyWakeTitleByPrompt.get(projected.text),
+        };
       }
     }
     return undefined;
@@ -62,7 +84,7 @@ function readLegacySessionTitle(
   }
 }
 
-/** Derive missing historical titles while Doctor owns session maintenance. */
+/** Repair historical titles while Doctor owns session maintenance. */
 export async function repairLegacySessionTitles(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -99,19 +121,30 @@ export async function repairLegacySessionTitles(params: {
       agentId: target.agentId,
       path: target.sqlitePath,
       run: () => {
-        const sessions: Array<{ sessionKey: string; sessionId: string }> = [];
+        const sessions: Array<{
+          sessionKey: string;
+          sessionId: string;
+          legacyWakeTitle?: string;
+        }> = [];
         scanDoctorSessionEntriesTolerant(
           scope,
           ({ entry, sessionKey, recoveredFromProjections }) => {
+            // A matching name only selects a candidate; the first transcript input must
+            // corroborate the same historical wake before Doctor may clear it.
+            const legacyWakeTitle = legacyWakeTitles.has(entry.displayName ?? "")
+              ? entry.displayName
+              : undefined;
             if (
               !recoveredFromProjections &&
               !entry.incognito &&
               !isIncognitoSessionKey(sessionKey) &&
               // Spawn owns child labels; its first user message is a runtime task envelope.
               !isSubagentSessionKey(sessionKey) &&
-              !hasExplicitSessionName(entry)
+              !hasExplicitSessionName(
+                legacyWakeTitle ? { ...entry, displayName: undefined } : entry,
+              )
             ) {
-              sessions.push({ sessionKey, sessionId: entry.sessionId });
+              sessions.push({ sessionKey, sessionId: entry.sessionId, legacyWakeTitle });
             }
           },
         );
@@ -121,14 +154,18 @@ export async function repairLegacySessionTitles(params: {
     if (!scan.ok) {
       continue;
     }
-    for (const { sessionKey, sessionId } of scan.value) {
+    for (const { sessionKey, sessionId, legacyWakeTitle } of scan.value) {
       if (params.apply) {
         assertRepairAuthority();
       }
       try {
         const session = { ...scope, sessionKey, sessionId };
-        const title = readLegacySessionTitle(session);
-        if (!title) {
+        const source = readLegacySessionTitle(session);
+        if (legacyWakeTitle && source?.legacyWakeTitle !== legacyWakeTitle) {
+          continue;
+        }
+        const title = source?.displayName;
+        if (!title && !legacyWakeTitle) {
           continue;
         }
         report.found++;
