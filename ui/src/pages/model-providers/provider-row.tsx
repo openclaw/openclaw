@@ -562,7 +562,9 @@ export function ProviderRow(props: ProviderRowProps) {
     Boolean(message()) ||
     Boolean(props.probeResults[card().id]) ||
     Boolean(props.busy[`probe:${card().id}`]) ||
-    needsCredentialFix(card());
+    needsCredentialFix(card()) ||
+    // Voice notices link here; open on the missing key they point to.
+    (props.providerQuery === card().id && Boolean(card().voiceApiKeyRequired));
   const open = () => expanded() ?? startsOpen();
   // Once the account owns the reading, don't report the older sample as its status or plan.
   const summaryCard = createMemo(() =>
@@ -607,6 +609,18 @@ export function ProviderRow(props: ProviderRowProps) {
       <Show when={open()}>
         <div class="provider-row__detail" id={detailId()}>
           <ProviderCredentials {...props} />
+          <Show when={card().voiceApiKeyRequired}>
+            <CredentialRow
+              title={t("modelProviders.voice.title")}
+              detail={t(
+                card().id === "openai"
+                  ? "modelProviders.voice.detail"
+                  : "modelProviders.voice.providerDetail",
+                { provider: providerName(card()) },
+              )}
+              action={<SettingsStatus kind="warn" label={t("modelProviders.voice.status")} />}
+            />
+          </Show>
           <KeyEditor {...props} onCancel={() => summary?.focus()} />
           <Show when={limits()}>
             {(usage) => (

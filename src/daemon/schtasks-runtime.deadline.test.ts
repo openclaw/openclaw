@@ -25,8 +25,10 @@ let now = 0;
 let processOutput = "";
 let portOutput = "";
 let processElapsed = 0;
+let processExit = 0;
 let schedulerElapsed = 0;
 let schedulerMissing = true;
+let schedulerState = 4;
 let portElapsed = 0;
 let portExit = 0;
 let portError: Error | undefined;
@@ -53,6 +55,8 @@ beforeEach(() => {
   mockProcessPlatform("win32");
   vi.spyOn(performance, "now").mockImplementation(() => now);
   now = processElapsed = portElapsed = portExit = schedulerElapsed = 0;
+  processExit = 0;
+  schedulerState = 4;
   schedulerMissing = true;
   portError = portThrow = undefined;
   processOutput = snapshot();
@@ -62,11 +66,13 @@ beforeEach(() => {
     const script = args?.join(" ") ?? "";
     if (args?.includes("-EncodedCommand")) {
       now += schedulerElapsed;
-      return schedulerMissing ? result("-2147024894", 1) : result('{"state":4}');
+      return schedulerMissing
+        ? result("-2147024894", 1)
+        : result(JSON.stringify({ state: schedulerState }));
     }
     if (script.includes("Get-CimInstance Win32_Process")) {
       now += processElapsed;
-      return result(processOutput);
+      return result(processOutput, processExit);
     }
     if (script.includes("Get-NetTCPConnection")) {
       now += portElapsed;
@@ -234,4 +240,39 @@ it.each([
     await expect(inspection).rejects.toThrow("Scheduled Task inspection deadline expired");
     expect(native).toHaveBeenCalledTimes(1);
   }
+});
+
+it.each([
+  { timeoutMs: undefined, elapsedMs: 5_480, expired: false, nativeBudget: 60_000 },
+  { timeoutMs: 10_000, elapsedMs: 5_480, expired: false, nativeBudget: 10_000 },
+  { timeoutMs: 100, elapsedMs: 100, expired: true, nativeBudget: 100 },
+  { timeoutMs: undefined, elapsedMs: 60_000, expired: true, nativeBudget: 60_000 },
+])(
+  "observes a matching process within budget $timeoutMs after $elapsedMs ms",
+  async ({ timeoutMs, elapsedMs, expired, nativeBudget }) => {
+    schedulerMissing = false;
+    processElapsed = elapsedMs;
+    processOutput = snapshot({
+      ProcessId: 4242,
+      CommandLine: command("gateway").programArguments.join(" "),
+    });
+    const inspection = readScheduledTaskRuntime({}, { timeoutMs });
+    if (expired) {
+      await expect(inspection).rejects.toThrow("Scheduled Task inspection deadline expired");
+    } else {
+      await expect(inspection).resolves.toMatchObject({ status: "running", pid: 4242 });
+    }
+    const processCalls = native.mock.calls.filter(([, args]) =>
+      args?.join(" ").includes("Get-CimInstance Win32_Process"),
+    );
+    expect(processCalls).toHaveLength(1);
+    expect(processCalls[0]?.[2]?.timeout).toBe(nativeBudget);
+  },
+);
+
+it("does not treat native process inspection failure as stopped proof", async () => {
+  schedulerMissing = false;
+  schedulerState = 3;
+  processExit = 1;
+  await expect(readScheduledTaskRuntime({})).resolves.toMatchObject({ status: "unknown" });
 });

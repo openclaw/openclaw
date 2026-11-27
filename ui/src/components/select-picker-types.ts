@@ -4,6 +4,8 @@ import type { IconName } from "./icon-data.ts";
 export type PickerOption = {
   value: string;
   label: string;
+  /** Trailing part of the full label to keep visible in a compact picker. */
+  labelSuffix?: string;
   description?: string;
   labelStyle?: string;
   disabled?: boolean;

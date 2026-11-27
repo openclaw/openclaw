@@ -76,19 +76,15 @@ suite.define(() => {
       },
     );
   });
-  it("keeps the initial connection distinct from terminal unavailability", async () => {
+  it("shows the current shell after the initial connection without refreshing", async () => {
     await suite.withPage(
       { serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
       async ({ page }) => {
         await nativeAuth(page, "synthetic-terminal-auth");
         const gateway = await installMockGateway(page, {
-          deferredMethods: ["connect"],
+          deferredMethods: ["connect", "terminal.open"],
           terminalEnabled: true,
           featureMethods: [...defaultControlUiFeatureMethods, "terminal.open"],
-          methodResponses: {
-            "terminal.list": { sessions: [] },
-            "terminal.open": terminalSession("audit-cold-terminal"),
-          },
         });
         await page.goto(new URL("/terminal", suite.server.baseUrl).toString());
         await gateway.waitForRequest("connect");
@@ -117,6 +113,9 @@ suite.define(() => {
         expect(
           await page.locator("openclaw-terminal-page > openclaw-panel-loading-skeleton").count(),
         ).toBe(0);
+        await gateway.resolveDeferred("terminal.open");
+        await content.locator(".tp-session.is-current").waitFor({ timeout: 5_000 });
+        expect(await content.locator(".tp-session-empty").count()).toBe(0);
       },
     );
   });

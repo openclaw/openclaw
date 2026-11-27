@@ -76,6 +76,7 @@ import { bindHostSkillCatalog, prepareHostSkillLibraryResources } from "./host-s
 import { cloneHostSnapshot as cloneSnapshot } from "./host-snapshot.js";
 import {
   bindHarnessHostSourceAuthority,
+  createHarnessHostLifetime,
   bindHarnessModelExecution,
   bindHarnessNativeSpawnAuthority,
   retainHarnessSource,
@@ -120,13 +121,11 @@ export function createAgentHarnessHostCapabilities(params: AgentHarnessHostCapab
   const { lifecycleGeneration } = delegatedAuthority;
   const { runId } = delegatedAuthority.operationalRunInstance;
   const coreTtsToolResults = new WeakSet<object>();
-  // Lexical closure must also fence work already past its entry guard. The
-  // result guards below cover exact authority loss that does not use close().
-  const capabilityAbortController = new AbortController();
-  const bindAbortSignal = (signal: AbortSignal | undefined) =>
-    signal
-      ? AbortSignal.any([signal, capabilityAbortController.signal])
-      : capabilityAbortController.signal;
+  const lifetime = createHarnessHostLifetime(
+    !attempt.sessionManager && attempt.sessionPersistence !== "detached"
+      ? operationalRunInstance
+      : undefined,
+  );
   const inheritedCaller = getGatewayToolCallerIdentity();
   const sourceCaller =
     inheritedCaller?.operationalRunInstance === operationalRunInstance
@@ -148,7 +147,7 @@ export function createAgentHarnessHostCapabilities(params: AgentHarnessHostCapab
   const assertActive = bindHarnessHostSourceAuthority({
     attempt,
     sourceCaller,
-    isActive: () => !capabilityAbortController.signal.aborted,
+    isActive: () => !lifetime.signal.aborted,
     isGatewayCurrent: () =>
       !boundGatewayContext || callerIdentity?.gatewayContextResolver?.() !== undefined,
     inactiveError,
@@ -156,7 +155,7 @@ export function createAgentHarnessHostCapabilities(params: AgentHarnessHostCapab
   const callerIdentity = createAdmittedGatewayToolCallerIdentity({
     admittedRunContext: attempt.admittedRunContext,
     receiptAuthority: assertActive,
-    approvalSignals: [capabilityAbortController.signal, ...(attemptSignal ? [attemptSignal] : [])],
+    approvalSignals: [lifetime.signal, ...(attemptSignal ? [attemptSignal] : [])],
     agentId: attempt.agentId,
     sessionKey: attempt.sessionKey,
     turnSourceChannel: attempt.messageChannel ?? attempt.messageProvider,
@@ -179,7 +178,7 @@ export function createAgentHarnessHostCapabilities(params: AgentHarnessHostCapab
     attempt,
     config,
     assertActive,
-    signal: capabilityAbortController.signal,
+    signal: lifetime.signal,
   });
   const recorder = attempt.userTurnTranscriptRecorder;
   const sessionTarget = attempt.sessionTarget ? cloneSnapshot(attempt.sessionTarget) : undefined;
@@ -203,7 +202,7 @@ export function createAgentHarnessHostCapabilities(params: AgentHarnessHostCapab
           },
           runId: attempt.runId,
           config,
-          abortSignal: bindAbortSignal(attempt.abortSignal),
+          abortSignal: lifetime.bindAbortSignal(attempt.abortSignal),
           assertCurrent: () => {
             assertActive();
             if (
@@ -371,7 +370,7 @@ export function createAgentHarnessHostCapabilities(params: AgentHarnessHostCapab
       observeResult,
       callerIdentity,
       hookContext: hookContextForOperation(options),
-      abortSignal: bindAbortSignal(attempt.abortSignal),
+      abortSignal: lifetime.bindAbortSignal(attempt.abortSignal),
       workspaceReadiness: workspaceReadiness.readiness,
     });
   const bindModelExecution: AgentHarnessHostCapabilities["bindModelExecution"] =
@@ -481,7 +480,7 @@ export function createAgentHarnessHostCapabilities(params: AgentHarnessHostCapab
     },
     ...(annotateCurrentUserTurn ? { annotateCurrentUserTurn } : {}),
     ...media.capabilities,
-    ...bindBoundedSeed(attempt, assertActive, withCaller, capabilityAbortController.signal, media),
+    ...bindBoundedSeed(attempt, assertActive, withCaller, lifetime.signal, media),
     ...bindHarnessTrajectory(attempt, assertActive.assertScopeCurrent),
     preparedEnvironment: () => {
       assertActive.assertScopeCurrent();
@@ -537,7 +536,7 @@ export function createAgentHarnessHostCapabilities(params: AgentHarnessHostCapab
           undefined,
           {
             assertCurrent: library?.assertCurrent ?? assertActive,
-            signal: bindAbortSignal(attemptSignal),
+            signal: lifetime.bindAbortSignal(attemptSignal),
           },
         ),
       );
@@ -702,7 +701,7 @@ export function createAgentHarnessHostCapabilities(params: AgentHarnessHostCapab
         params.pluginId,
         requiredNodeCommands,
         assertActive,
-        bindAbortSignal(attempt.abortSignal),
+        lifetime.bindAbortSignal(attempt.abortSignal),
       );
       try {
         return await withPluginRuntimeGatewayRequestScope(
@@ -717,6 +716,6 @@ export function createAgentHarnessHostCapabilities(params: AgentHarnessHostCapab
         release?.();
       }
     },
-    close: () => capabilityAbortController.abort(),
+    close: lifetime.bindCapabilities(capabilities),
   };
 }

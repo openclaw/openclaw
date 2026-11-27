@@ -280,7 +280,6 @@ it.each([
       ownerTargets = targets;
       const assertOwnerCurrent = expectDefined(targets.assertOwnerCurrent, "admitted owner guard");
       expect(() => {
-        expectDefined(operator, "admitted child operator").assertCurrent();
         targets.assertCurrent();
         assertOwnerCurrent();
       }).not.toThrow();

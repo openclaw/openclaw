@@ -538,6 +538,7 @@ export function retainSessionEntryWorkerPublication(params: {
                 ? {
                     entry: sharingEntry,
                     membership: new Set(sharingProjection.membership[2]),
+                    memberAccess: sharingProjection.membership[5],
                   }
                 : undefined;
         }

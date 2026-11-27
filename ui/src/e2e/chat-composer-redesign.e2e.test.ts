@@ -85,7 +85,7 @@ suite.define(() => {
             await page
               .locator('[data-chat-model-auth-state] [data-chat-model-setup="true"]')
               .click();
-            await page.waitForURL("**/settings/model-providers?connect=1");
+            await page.waitForURL("**/settings/model-providers?provider=openai&connect=1");
           } else {
             expect(await option.isDisabled()).toBe(true);
             expect(await page.locator(".chat-controls__model-menu").textContent()).not.toContain(
@@ -98,7 +98,7 @@ suite.define(() => {
     },
   );
 
-  it("does not repeat an auth failure below the composer when the run error is visible", async () => {
+  it("opens Models from an auth-refresh failure without repeating the composer warning", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const message =
         "Your refresh token has already been used to generate a new access token. Please try signing in again.";
@@ -131,13 +131,23 @@ suite.define(() => {
         sessionKey: "main",
         state: "error",
       });
-      await polledText(page.locator(".chat-error")).toContain(message);
+      const notice = page.locator(".chat-error--reply");
+      await polledText(notice.locator(".app-toast__message")).toBe(
+        `${message}\n\nProvider: openai\nHTTP status: 401\nReason: refresh_token_reused\nType: invalid_request_error`,
+      );
+      const openModels = notice.getByRole("button", { name: "Open Models", exact: true });
+      await polledVisible(openModels).toBe(true);
+      expect(await notice.getByRole("button", { name: "Refresh", exact: true }).count()).toBe(0);
+      expect(await notice.locator("details, [aria-expanded], .report-issue-link").count()).toBe(0);
       await polledCount(page.locator(".agent-chat__composer-status-band")).toBe(0);
       const textarea = page.locator(".agent-chat__input textarea");
       await expect.poll(() => textarea.isDisabled()).toBe(false);
       await textarea.fill("Try the message again.");
       await expect.poll(() => exactButton(page, "Send message").isDisabled()).toBe(true);
       expect(await textarea.inputValue()).toBe("Try the message again.");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      await openModels.click();
+      await page.waitForURL("**/settings/model-providers");
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
     });
   });

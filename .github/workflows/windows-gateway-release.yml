@@ -22,10 +22,10 @@ concurrency:
 
 jobs:
   request:
-    name: Request Gateway Store Production or Development approval
+    name: Request signed Gateway release and Store handoff
     if: github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
@@ -40,7 +40,7 @@ jobs:
         with:
           node-version: "24.22.1"
           package-manager-cache: false
-      - name: Create cross-repository build and approval request token
+      - name: Create cross-repository build request token
         id: packaging_token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
@@ -50,7 +50,6 @@ jobs:
           repositories: |
             openclaw
             openclaw-windows-packaging
-            releases
           permission-actions: write
           permission-contents: read
       - name: Request publication of the exact published Gateway source

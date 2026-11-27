@@ -3,6 +3,7 @@ import type {
   OpenClawPluginNodeInvokePolicyContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GoogleMeetConfig } from "./src/config.js";
 import { GOOGLE_MEET_NODE_COMMAND } from "./src/transports/google-meet-platform-constants.js";
@@ -15,6 +16,7 @@ const lazyModules = [
   "./src/node-invoke-policy.js",
   "./src/cli.js",
   "openclaw/plugin-sdk/gateway-runtime",
+  "openclaw/plugin-sdk/meeting-runtime",
   "openclaw/plugin-sdk/param-readers",
   "openclaw/plugin-sdk/routing",
   "openclaw/plugin-sdk/transcripts",
@@ -90,6 +92,34 @@ describe("google-meet lazy imports", () => {
     await twice(() => expect(policy.handle(policyContext)).resolves.toEqual({ ok: true }));
     expect(createPolicy).toHaveBeenCalledTimes(1);
     expect(delegateHandle).toHaveBeenCalledTimes(2);
+  });
+
+  it("dispatches the first hosted tool call without loading meeting or CLI runtimes", async () => {
+    for (const id of [
+      "openclaw/plugin-sdk/meeting-runtime",
+      "openclaw/plugin-sdk/gateway-runtime",
+    ]) {
+      vi.doMock(id, () => {
+        throw new Error(`Unexpected hosted tool import: ${id}`);
+      });
+    }
+    const runtime = createPluginRuntimeMock();
+    const request = vi.spyOn(runtime.gateway, "request").mockResolvedValue({ joined: true });
+    const { callGoogleMeetGatewayFromTool } = await import("./src/plugin-registration.js");
+    const { resolveGoogleMeetConfig } = await import("./src/config.js");
+    const raw = { agentId: "support" };
+    await expect(
+      callGoogleMeetGatewayFromTool({
+        config: resolveGoogleMeetConfig({}),
+        action: "join",
+        raw,
+        runtime,
+      }),
+    ).resolves.toEqual({ joined: true });
+    expect(request).toHaveBeenCalledExactlyOnceWith("googlemeet.join", raw, {
+      timeoutMs: 60_000,
+      scopes: ["operator.admin"],
+    });
   });
 
   it.each(["load", "delegate"])("preserves the node policy %s failure boundary", async (stage) => {

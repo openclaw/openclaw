@@ -4,8 +4,8 @@ import { z } from "zod";
 import { validateNpmPublishBoundary } from "../openclaw-npm-extended-stable-release.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./release-version.mjs";
 
-export const FAST_TRACK_POLICY = "approved-fast-track-v1";
-export const FAST_TRACK_ACTION = "Approve skipping release validation";
+const FAST_TRACK_POLICY = "approved-fast-track-v1";
+const FAST_TRACK_ACTION = "Approve skipping release validation";
 // Excluded from LOC only. Commits, blob integrity and unmeasurable-change checks still apply.
 const packageFiles = new Set([
   "package.json",
@@ -50,8 +50,9 @@ const commonRequestSchema = z.strictObject({
   releaseTag,
   channel: z.enum(["beta", "latest", "extended-stable"]),
   candidateSha: sha,
-  reference: z.strictObject({ releaseTag, targetSha: sha, validationEvidenceDigest: digest }),
-  delta: z.strictObject({ commits: count, added: count, deleted: count }),
+  // Delta-ceiling evidence. Beta-prerelease fast-tracks omit both (see superRefine).
+  reference: z.strictObject({ releaseTag, targetSha: sha }).optional(),
+  delta: z.strictObject({ commits: count, added: count, deleted: count }).optional(),
   artifacts: z.array(artifact).min(1).max(256),
   publicationScope: z
     .array(
@@ -101,7 +102,7 @@ const partialValidationSnapshot = z.strictObject({
     .max(80),
 });
 
-export const fastTrackRequestSchema = z
+const fastTrackRequestSchema = z
   .discriminatedUnion("policy", [
     commonRequestSchema.extend({
       policy: z.literal(FAST_TRACK_POLICY),
@@ -115,6 +116,22 @@ export const fastTrackRequestSchema = z
     }),
   ])
   .superRefine((request, context) => {
+    // Beta prereleases have no delta ceiling and need no non-fast-tracked predecessor.
+    // Stable promotion still requires its own passing stable FRV or stable fast-track.
+    const ceilingExempt =
+      request.policy === FAST_TRACK_POLICY && isBetaPrereleaseTag(request.releaseTag);
+    if (
+      ceilingExempt
+        ? request.reference !== undefined || request.delta !== undefined
+        : request.reference === undefined || request.delta === undefined
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: ceilingExempt
+          ? "Beta prerelease fast-tracks have no delta ceiling; omit reference and delta."
+          : "Fast-track requests require a published reference release and delta.",
+      });
+    }
     if (request.policy === "approved-partial-frv-v1") {
       const snapshot = request.validationSnapshot;
       if (
@@ -165,6 +182,10 @@ export const fastTrackRequestSchema = z
   });
 export type FastTrackRequest = z.infer<typeof fastTrackRequestSchema>;
 
+function isBetaPrereleaseTag(tag: string): boolean {
+  return parseReleaseVersion(tag.slice(1))?.channel === "beta";
+}
+
 export function parseFastTrackRequest(value: unknown): FastTrackRequest {
   return fastTrackRequestSchema.parse(value);
 }
@@ -196,16 +217,13 @@ const validatedReferenceSchema = z.strictObject({
   repository,
   releaseTag,
   targetSha: sha,
-  validationEvidenceDigest: digest,
-  validationMode: z.literal("full-release-validation"),
   published: z.literal(true),
 });
-export type ValidatedFastTrackReference = z.infer<typeof validatedReferenceSchema>;
 
 /**
- * Eligibility only. The publisher must separately authenticate reference evidence, verify the
- * human decision for fastTrackRequestDigest(request), and retain package/publication gates.
- * A previous fast-track release is not valid reference evidence.
+ * Eligibility only. The publisher must confirm the reference release was published and bind
+ * the request digest to the existing npm-release approval receipt, retaining
+ * package/publication gates. A previous fast-track release is not a valid reference.
  */
 export function collectFastTrackEligibility(input: {
   repositoryRoot: string;
@@ -218,14 +236,17 @@ export function collectFastTrackEligibility(input: {
       "This verifier requires authenticated partial-FRV evidence before admitting the partial-FRV policy; publisher integration is not enabled.",
     );
   }
+  const { delta: requestDelta, reference: requestReference } = request;
+  if (!requestReference || !requestDelta) {
+    throw new Error("Beta prerelease fast-tracks have no delta ceiling to verify.");
+  }
   const reference = validatedReferenceSchema.parse(input.validatedReference);
   if (
     reference.repository !== request.repository ||
-    reference.releaseTag !== request.reference.releaseTag ||
-    reference.targetSha !== request.reference.targetSha ||
-    reference.validationEvidenceDigest !== request.reference.validationEvidenceDigest
+    reference.releaseTag !== requestReference.releaseTag ||
+    reference.targetSha !== requestReference.targetSha
   ) {
-    throw new Error("Published fully validated reference does not match the request.");
+    throw new Error("Published reference does not match the request.");
   }
   const git = (...args: string[]) =>
     execFileSync("git", ["--no-replace-objects", "-C", input.repositoryRoot, ...args], {
@@ -245,7 +266,7 @@ export function collectFastTrackEligibility(input: {
   try {
     git("merge-base", "--is-ancestor", reference.targetSha, request.candidateSha);
   } catch {
-    throw new Error("Published fully validated reference must be an ancestor of the candidate.");
+    throw new Error("Published reference release must be an ancestor of the candidate.");
   }
   const commits = Number(
     git("rev-list", "--count", `${reference.targetSha}..${request.candidateSha}`).trim(),
@@ -299,17 +320,17 @@ export function collectFastTrackEligibility(input: {
   if (
     !Number.isSafeInteger(commits) ||
     !Number.isSafeInteger(added + deleted) ||
-    commits > 10 ||
-    added + deleted > 10000
+    commits > 20 ||
+    added + deleted > 15000
   ) {
     throw new Error(
-      "Fast-track requires at most 10 commits and at most 10000 added/deleted lines.",
+      "Fast-track requires at most 20 commits and at most 15000 added/deleted lines.",
     );
   }
   if (
-    commits !== request.delta.commits ||
-    added !== request.delta.added ||
-    deleted !== request.delta.deleted
+    commits !== requestDelta.commits ||
+    added !== requestDelta.added ||
+    deleted !== requestDelta.deleted
   ) {
     throw new Error("Publisher-computed delta does not match the approval request.");
   }

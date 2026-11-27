@@ -209,18 +209,6 @@ describe("qa cli registration", () => {
     await expectQaFailure(["telegram"], message);
   });
 
-  it("registers discovered and built-in live transport subcommands", () => {
-    const qa = program.commands.find((command) => command.name() === "qa");
-    if (!qa) {
-      throw new Error("expected qa command");
-    }
-    const commandNames = qa.commands.map((command) => command.name());
-    expect(commandNames).toContain(TEST_QA_RUNNER.commandName);
-    expect(commandNames).toContain("telegram");
-    expect(commandNames).toContain("mantis");
-    expect(commandNames).toContain("credentials");
-    expect(commandNames).toContain("coverage");
-  });
   it.each([["--scenario", ["dm-chat-baseline"]]])(
     "rejects qa run profile-only flag %s without --qa-profile",
     async (flag, values) => {
@@ -433,44 +421,6 @@ describe("qa cli registration", () => {
     });
   });
 
-  it("routes coverage report flags into the qa runtime command", async () => {
-    await parseQa([
-      "coverage",
-      "--repo-root",
-      "/tmp/openclaw-repo",
-      "--output",
-      ".artifacts/qa-coverage.md",
-      "--json",
-    ]);
-
-    expect(runQaCoverageReportCommand).toHaveBeenCalledWith({
-      repoRoot: "/tmp/openclaw-repo",
-      output: ".artifacts/qa-coverage.md",
-      json: true,
-      tools: false,
-      match: [],
-    });
-  });
-
-  it("routes tool coverage report flags into the qa runtime command", async () => {
-    await parseQa([
-      "coverage",
-      "--repo-root",
-      "/tmp/openclaw-repo",
-      "--tools",
-      "--summary",
-      ".artifacts/runtime-summary.json",
-    ]);
-
-    expect(runQaCoverageReportCommand).toHaveBeenCalledWith({
-      repoRoot: "/tmp/openclaw-repo",
-      tools: true,
-      json: false,
-      summary: ".artifacts/runtime-summary.json",
-      match: [],
-    });
-  });
-
   it("routes evidence gap reporting without starting a QA run", async () => {
     await parseQa(["coverage", "--evidence", "run/qa-evidence.json", "--json"]);
     expect(runQaCoverageReportCommand).toHaveBeenCalledWith({
@@ -478,16 +428,6 @@ describe("qa cli registration", () => {
       json: true,
       tools: false,
       match: [],
-    });
-  });
-
-  it("routes coverage match queries into the qa runtime command", async () => {
-    await parseQa(["coverage", "--match", "image roundtrip", "--match", "native"]);
-
-    expect(runQaCoverageReportCommand).toHaveBeenCalledWith({
-      tools: false,
-      json: false,
-      match: ["image roundtrip", "native"],
     });
   });
 

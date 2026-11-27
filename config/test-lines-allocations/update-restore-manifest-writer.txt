@@ -1,0 +1,9 @@
+# Candidate restore-manifest writer: 479 net test lines, 79 above the default budget.
+# Covers distinct native/durable contracts: crashed-writer WAL folding plus inode
+# preservation, immutable retry and real frozen-source rollback, write-ahead plan
+# ordering, missing/malformed recovery refusal, link fallback, leaf symlinks,
+# explicit removals, per-release old-preparer retries, captured delayed cleanup,
+# nonblocking retained-image warnings, and no-upgrade Gateway startup.
+# The two startup/plan integration regressions run against the pre-writer base;
+# direct writer tests do not substitute for that base proof or the real update lane.
+79

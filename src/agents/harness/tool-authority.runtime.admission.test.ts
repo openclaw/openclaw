@@ -392,7 +392,7 @@ describe("host-prepared embedded tool authority", () => {
                 publish(preparedHandle(previousFingerprint)),
               ),
             ),
-          ).rejects.toThrow("no longer active");
+          ).rejects.toThrow("The agent run ended. Start a new turn to retry.");
         },
       );
     });

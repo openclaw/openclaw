@@ -1,3 +1,4 @@
+import { deserialize } from "node:v8";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { encodeNativeWorkerFailure } from "../../infra/worker-native-error.js";
 import { BrokerResourceClaims } from "./resource-host.js";
@@ -15,7 +16,7 @@ function fixture() {
     failed: vi.fn<(error: Error) => void>(),
   };
   const claims = new BrokerResourceClaims({
-    transmit,
+    transmit: (request) => transmit(Buffer.isBuffer(request) ? deserialize(request) : request),
     markReady: vi.fn(),
     refreshReference: vi.fn(),
   });

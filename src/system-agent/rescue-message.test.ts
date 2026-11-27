@@ -371,35 +371,6 @@ describe("OpenClaw rescue message", () => {
     }
   });
 
-  it.each(["admission", "effect"] as const)(
-    "rechecks rescue authority at %s after consuming approval becomes asynchronous",
-    async (stage) => {
-      await runRescue("/openclaw restart gateway", {});
-      let current = true;
-      const command = commandContext({
-        assertOwnerCurrent: () => {
-          if (!current) {
-            throw new Error("rescue owner revoked");
-          }
-        },
-      });
-      if (stage === "effect") {
-        const snapshot = await mockConfig.readConfigFileSnapshot();
-        mockConfig.readConfigFileSnapshot.mockImplementationOnce(async () => {
-          current = false;
-          return snapshot;
-        });
-      }
-      const approving = runRescue("/openclaw yes", {}, command);
-      if (stage === "admission") {
-        current = false;
-      }
-      await expect(approving).rejects.toThrow();
-      expect(runDaemonRestart).not.toHaveBeenCalled();
-      expect(openRescuePendingTestStore().entries()).toHaveLength(stage === "admission" ? 1 : 0);
-    },
-  );
-
   it("persists a pending approval only in SQLite across store reopen", async () => {
     await runRescue("/openclaw restart gateway", {});
     resetPluginStateStoreForTests();

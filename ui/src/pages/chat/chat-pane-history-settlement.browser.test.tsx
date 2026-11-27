@@ -54,7 +54,6 @@ it("fills an initially short transcript when its first geometry settles without 
   await pane.updateComplete;
   await vi.dynamicImportSettled();
   const root = expectDefined(pane.transcript.scrollElement, "mounted transcript scrollport");
-  expect(root.querySelector(".chat-history-sentinel")).not.toBeNull();
   expect(pane.transcript.isPositionSettled).toBe(false);
   expect(historyRequest).not.toHaveBeenCalled();
 

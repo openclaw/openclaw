@@ -264,7 +264,7 @@ function assertPredicate(db: EngineConnection, predicate: WorktreeRegistryPredic
         )
       ) {
         throw new SessionWorktreeLifecycleError(
-          "Managed worktree binding authority changed.",
+          "Managed worktree binding changed.",
           "owner-mismatch",
         );
       }

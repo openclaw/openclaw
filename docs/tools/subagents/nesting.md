@@ -119,28 +119,24 @@ synthetic launch authority; voice consults take it only from the caller's
 ingress authentication. Missing or false owner status does not grant owner
 access.
 
-For memory access, OpenClaw validates every parent hop against the current parent
-incarnation and lifecycle, including same-id resets. It then supplies the
-host-minted root audience to memory providers and plugin tools. Providers must
-consume that prepared audience and must not walk session lineage or infer memory
-authority from session lookups.
+For memory access, OpenClaw checks that every recorded parent still exists and
+was not recreated or assigned to another owner after its child was created. A
+parent reset keeps the parent's session and owner, so its children keep their
+memory audience and resolve it against the parent's current incarnation. It then
+supplies the host-minted root audience to memory providers and plugin tools.
+Providers must consume that prepared audience and must not walk session lineage
+or infer memory authority from session lookups.
 
-Spawn records the parent incarnation captured during preparation. If the parent
-resets before creation finishes, the child can still be created, but memory
-access rejects its stale lineage; respawn it from the current parent session.
-
-A child reset preserves its recorded parent grant, so a newly resolved audience
-can still inherit from the same root. A reset or removal of any recorded parent
-invalidates an already captured audience, so the next protected provider or tool
-operation fails its audience currency check. Later turns of that child receive
-no memory audience. With a native memory provider, the Gateway log warns that the
-child's lineage is stale and that it must be respawned or recreated from a current
-session; resetting the child keeps the stale lineage. Legacy children without the
-complete lineage stamps receive no inherited memory audience: their turns run
-without private or conversation memory, and the Gateway log warns that the
-session predates memory lineage receipts and must be respawned from its parent.
-Children whose parents lack a lifecycle revision must be respawned after the
-parent's next reset, which establishes a current lifecycle revision.
+A reset or removal of any recorded parent invalidates an already captured
+audience, so the next protected provider or tool operation fails its audience
+currency check. The child's next turn resolves a new audience. When a parent was
+removed, recreated, or assigned to another owner after the spawn, later turns of
+that child receive no memory audience, and with a native memory provider the
+Gateway log warns that the child's lineage is stale and that it must be respawned
+from a current session. Legacy children without the complete lineage stamps
+receive no inherited memory audience: their turns run without private or
+conversation memory, and the Gateway log warns that the session predates memory
+lineage receipts and must be respawned from its parent.
 
 A child spawned into a different agent inherits only the owner's private
 audience, applied to the child agent's own memory, and only when an owner turn

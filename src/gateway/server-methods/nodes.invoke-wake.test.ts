@@ -1828,7 +1828,6 @@ describe("node.invoke APNs wake path", () => {
                     operatorRunAuthority: createTestOperatorAuthority({
                       profileId: "operator",
                       scopes: ["operator.write"],
-                      assertCurrent() {},
                     }),
                   },
                 },

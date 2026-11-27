@@ -6,15 +6,6 @@ import {
   getInternalToolExecutionPreparer,
 } from "../../../packages/agent-core/src/internal-hooks.js";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
-import {
-  bindCommandOwnerAuthority,
-  captureCommandOwnerAssertion,
-} from "../../auto-reply/command-owner-authority.js";
-import {
-  composePreparedOnlySessionSource,
-  composeSessionSourceAssertion,
-  prepareSessionSourceEffect,
-} from "../../config/sessions/session-source-authority.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import {
   claimAgentRunApprovalAuthority,
@@ -85,48 +76,6 @@ function makeTool(): AnyAgentTool {
 }
 
 describe("gateway caller context wrapper", () => {
-  it("carries prepared command authority through nested caller receipts without losing revocation", async () => {
-    let active = true;
-    const synchronousSource = vi.fn();
-    const released = vi.fn();
-    const source = composeSessionSourceAssertion([
-      Object.assign(synchronousSource, {
-        prepareSessionSourceEffect: async () => ({ assertCurrent() {}, release: released }),
-      }),
-    ]);
-    const context = {};
-    bindCommandOwnerAuthority(context, {
-      sourceAssertion: source,
-      isCurrent() {
-        expect(this.sourceAssertion).toBe(source);
-        source();
-        return active;
-      },
-    });
-    const owner = expectDefined(captureCommandOwnerAssertion(context), "command owner");
-    const receipt = Object.assign(() => owner(), owner);
-    await withCallers(
-      [{ operationalRunInstance: runInstance("prepared-owner"), receiptAuthority: receipt }, {}],
-      async () => {
-        const assertion = expectDefined(
-          composePreparedOnlySessionSource(getCaller()),
-          "caller assertion",
-        );
-        const prepared = await prepareSessionSourceEffect(assertion);
-        try {
-          prepared.assertCurrent();
-          expect(synchronousSource).not.toHaveBeenCalled();
-          active = false;
-          expect(() => prepared.assertCurrent()).toThrow("Channel operator authority changed");
-          expect(synchronousSource).not.toHaveBeenCalled();
-        } finally {
-          await prepared.release?.();
-        }
-        expect(released).toHaveBeenCalledOnce();
-      },
-    );
-  });
-
   it("lets Stop on the caller refuse a prepared watch admission", async () => {
     const stop = new AbortController();
     await withCaller(

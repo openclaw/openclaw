@@ -102,6 +102,8 @@ async function open(route: string) {
 }
 
 suite.define(() => {
+  // Under contention with a cold Vite build, browser and CLI startup can exhaust the
+  // outer budget alongside the real 30 s silent-provider check. Keep phase deadlines strict.
   it("reports failures promptly and passes a reasoning provider from Test & use", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
@@ -156,5 +158,5 @@ suite.define(() => {
         expect(reasonCaps).not.toContain(256);
       },
     );
-  });
+  }, 180_000);
 });

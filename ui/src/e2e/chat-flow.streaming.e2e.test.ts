@@ -187,19 +187,12 @@ suite.define(() => {
       );
       const alert = page.locator(".chat-error");
       await alert.waitFor();
-      const summary = alert.locator("summary");
-      const copy = alert.getByRole("button", { name: "Copy error", exact: true });
-      expect(await copy.isVisible()).toBe(false);
-      await summary.press("Enter");
-      await alert.locator(".lazy-view-error__detail").waitFor();
-      await summary.press("Space");
-      await alert.locator(".lazy-view-error__detail").waitFor({ state: "hidden" });
-      if (label === "mobile") {
-        await summary.tap();
-        await alert.locator(".lazy-view-error__detail").waitFor();
-        await summary.tap();
-        await alert.locator(".lazy-view-error__detail").waitFor({ state: "hidden" });
-      }
+      expect(await alert.locator(".app-toast__message").textContent()).toBe(gatewayErrorText);
+      expect(
+        await alert
+          .locator("details, [aria-expanded], .lazy-view-error__detail, .report-issue-link")
+          .count(),
+      ).toBe(0);
       const [alertBox, composerBox] = await Promise.all([
         alert.boundingBox(),
         page.locator(".agent-chat__composer-shell").boundingBox(),

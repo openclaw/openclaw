@@ -21,6 +21,7 @@ import {
   GATEWAY_SHUTDOWN_TIMEOUT_MS,
 } from "../../infra/gateway-shutdown-budget.js";
 import { inspectPortUsage } from "../../infra/ports-inspect.js";
+import { readLinuxProcessStat } from "../../shared/pid-alive.js";
 import { sleep } from "../../utils/sleep.js";
 import { resolveGatewayRestartProbeContext } from "../daemon-cli/restart-health-probe.js";
 import { allListenersOwnedByRuntimePid } from "../daemon-cli/restart-port-ownership.js";
@@ -188,9 +189,9 @@ export async function withGatewayMaintenanceDrain<T>(
     assertResidentCurrent();
     return usage.status === "busy" && allListenersOwnedByRuntimePid(usage.listeners, pid);
   };
-  // Runtime recovery reruns a Gateway whose Node fails admission under another
-  // Node; the launcher stays the service's main process and its direct child
-  // serves the port and stops with the service.
+  // The resident launcher (release installs, and runtime recovery of a Gateway
+  // whose Node fails admission) stays the service's main process; its direct
+  // child serves the port and stops with the service.
   const isServiceResident = async (pid: number | undefined) => {
     const runtimePid = params.state.runtime?.pid;
     if (pid === undefined || runtimePid === undefined) {
@@ -204,10 +205,17 @@ export async function withGatewayMaintenanceDrain<T>(
     }
     const usage = await inspectPortUsage(connection.port, { probeHosts: ["127.0.0.1"] });
     assertResidentCurrent();
-    return (
-      usage.status === "busy" &&
-      usage.listeners.length > 0 &&
-      usage.listeners.every((listener) => listener.pid === pid && listener.ppid === runtimePid)
+    if (usage.status !== "busy") {
+      return false;
+    }
+    if (usage.listeners.every((listener) => listener.pid === undefined)) {
+      // No listener names its process (no lsof or ss, or ss cannot see the owner).
+      // The Gateway that answered reported its own PID; its kernel parent ties it
+      // to the service.
+      return readLinuxProcessStat(pid)?.parentPid === runtimePid;
+    }
+    return usage.listeners.every(
+      (listener) => listener.pid === pid && listener.ppid === runtimePid,
     );
   };
   const call = async <R>(

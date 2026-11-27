@@ -21,6 +21,8 @@ Where a finished run sends its output, what happens when a run or a delivery fai
 
 A successful primary webhook run with no nonblank summary intentionally skips the POST and records `deliverySuppressionReason: "empty"`, matching announce delivery's optional-output contract. Execution errors still send the error event even without a summary.
 
+When a Gateway restart interrupts a running script before webhook delivery, OpenClaw sends the usual `finished` / `error` POST by default. Its error says that the Gateway restarted during the run and the script was not rerun. The run remains failed; the script is not replayed. This terminal notice has a five-second delivery budget during shutdown and uses the existing webhook destination and outbound policy. Operator cancellation does not send this notice, and a webhook already in progress is not resent. A hard process kill or an unavailable receiver can still prevent delivery; restart recovery does not retry the notice.
+
 Primary webhooks record delivery after an HTTP 2xx acknowledgment. An HTTP rejection
 records **Not delivered**. If the request may have reached the receiver but its
 response is lost or times out, delivery stays **Unknown**; the transport does not
@@ -45,7 +47,7 @@ A newly committed visible result refreshes the destination's idle freshness, so 
 - `none` and `webhook` do not write a conversation result.
 
 If the destination chat belongs to a different agent, the result is sent but not added to either agent’s conversation.
-Channel-native payloads without a text projection are sent without a conversation entry and record a warning.
+Channel-native payloads without a text projection are sent without a conversation entry and record a warning. Without an external route, they are **Not delivered**.
 
 Execution context is separate: `isolated` starts without conversation history, `current` reads bounded creating-conversation context in a child run of that conversation, and `session:<key>` uses a persistent execution session. The private run transcript and tool history are not copied into the destination.
 When a persistent execution session is already the destination conversation, its final assistant message is the result; OpenClaw does not append a second copy.
@@ -251,6 +253,8 @@ While a provider network failure, request timeout, overload, rate limit, or serv
 Script setup refreshes retired tools after a plugin reload before execution begins. If that recovery fails, the alert explains that tools could not be refreshed and the script did not run, then points to automation history and plugin status. A monitor that could not run has no new evidence about the system it monitors.
 
 A provider rejection of an unsupported model records `model_not_found` in the job state and run history. The failure notice points to `openclaw doctor --fix` for provider-declared retirements, or changing/removing the automation's model override. Known retired automation model routes fail before another inference request. Doctor replaces an override with the provider's declared successor when the agent's model policy allows it. Without a declared successor, it clears the override so the job inherits the agent default. If a pinned override's successor is disallowed, Doctor retains the reference and reports the required policy change. A missing account catalog entry or a discovery outage alone does not authorize a migration.
+
+When a run is refused because its automation has no recorded inference account, direct chat failure alerts name the cause and repair without naming the stored account. Owner-conversation repair requests still include the last error so the agent can identify and repair the account selection; generated repair replies are not covered by the direct-alert redaction. Automation history keeps the full refusal; webhook failure routes receive the raw last error as before.
 
 A failed run never turns a job off. A recurring job keeps its schedule, waits out its error backoff, and records the last error; a successful run resets the failure streak. A one-shot job ends after its final attempt. Only repeated schedule-computation failures auto-disable a job: after 3 errors it records `state.autoDisabled.reason` as `schedule-errors`, which `openclaw doctor` reports, and its owning agent receives a notice. Jobs disabled by earlier releases can still carry `consecutive-failures`. Raw errors stay in automation history. After fixing the cause, run `openclaw automations enable <jobId>`; enabling clears the recorded reason and failure streaks. Because disabled jobs are hidden by the default list, use `openclaw automations list --all` to inspect them.
 

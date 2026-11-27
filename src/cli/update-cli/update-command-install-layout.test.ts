@@ -194,7 +194,7 @@ it.skipIf(process.platform === "win32").each([false, true])(
 
     lines = [];
     await expect(updateCommand({ yes: true })).rejects.toMatchObject({ code: 0 });
-    expect(lines.join("\n")).toContain("OpenClaw update skipped: unmanaged-package-install");
+    expect(lines.join("\n")).toContain("OpenClaw wasn't updated.");
     expect(lines.join("\n")).toContain("brew upgrade openclaw-cli");
     expect(lines.join("\n")).toContain("openclaw gateway restart");
     expect(triage).not.toHaveBeenCalled();

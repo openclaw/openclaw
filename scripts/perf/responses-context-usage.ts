@@ -27,6 +27,7 @@ import type { ResponsesContinuationRequest } from "../../packages/ai/src/transpo
 import { readResponsesInputReplayState } from "../../packages/ai/src/transports/openai-responses-input-replay.js";
 import { freezeJsonSnapshot, isDeeplyFrozenPlainData } from "../../src/shared/immutable-data.js";
 import { summarizeGcByKind } from "../lib/gc-profile-summary.ts";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -178,12 +179,7 @@ if (values.retention) {
 globalThis.gc();
 const inspector = new Session();
 if (values.allocation) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 32_768,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 32_768);
 }
 const gc = new GCProfiler();
 gc.start();

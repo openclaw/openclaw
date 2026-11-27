@@ -83,7 +83,7 @@ type StandalonePricing = {
   provider: Map<string, SourcedPricing>;
 };
 const MODEL_CATALOG_MIN_VERSION = "2026.7.0";
-export const MODEL_CATALOG_MIN_MODELS = 200;
+const MODEL_CATALOG_MIN_MODELS = 200;
 
 const SCRIPT_LABEL = "publish-model-catalog";
 const PRICING_FETCH_TIMEOUT_MS = 60_000;

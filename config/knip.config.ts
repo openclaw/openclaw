@@ -45,7 +45,9 @@ const repositoryScriptEntries = [
   "scripts/build-iroh.mjs!",
   // The macOS packager verifies the staged app before signing.
   "scripts/lib/mac-runtime-portability.mjs!",
+  "scripts/lib/tsdown-memory-admission.mts!",
   "scripts/perf/agent-deletion-cancellation-measure.ts",
+  "scripts/perf/gateway-catalog-context-retention.mjs!",
   "scripts/perf/template-retirement-measure.mts",
   "scripts/windows-release-promotion.mjs!",
   "scripts/windows-gateway-release.mjs!",
@@ -62,6 +64,7 @@ const repositoryScriptEntries = [
   "scripts/perf/clickclack-credential-read.ts!",
   "scripts/perf/github-managed-profile-read.ts!",
   "scripts/perf/github-managed-profile-write.ts!",
+  "scripts/perf/worktree-fast-forward-measure.ts!",
   // Spawned directly by native-allocation-profile.test.ts.
   "test/scripts/fixtures/native-profile-census.mjs!",
   // Spawned directly by mantis-telegram-failure.test.ts.
@@ -72,6 +75,8 @@ const repositoryScriptEntries = [
   "test/fixtures/fs-safe-drvfs-calls.mjs!",
   // Forked by update-command-doctor-child.test.ts to model the successor's state swap.
   "src/cli/update-cli/update-command-state-handoff.process.test-support.ts!",
+  // Forked by server-startup-legacy-completion.test.ts to model a schema-40 verifier.
+  "src/gateway/legacy-schema40-driver.test-support.ts!",
   // Their source headers document standalone benchmark and measurement commands.
   "scripts/bench-ci-lint-plan.mts!",
   "scripts/bench-ci-planner.mts!",
@@ -160,6 +165,8 @@ const repositoryScriptEntries = [
   "scripts/ci-build-manifest.mjs!",
   // Full release validation invokes child-evidence reuse through a shell variable.
   "scripts/find-reusable-release-child.mjs!",
+  // The release candidate checklist spawns its Parallels preflight by exact path.
+  "scripts/e2e/parallels/candidate-preflight.ts!",
   // CI security-fast runs this from its trusted harness checkout.
   "scripts/ci-production-audit.mjs!",
   // tsdown builds this private macOS app worker protocol entry by path.
@@ -475,6 +482,10 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/update-timeout-diagnostics.mjs!",
   "scripts/e2e/lib/upgrade-survivor/mobile-pairing-client.mts!",
   "scripts/e2e/lib/upgrade-survivor/watchos-direct-node.mjs!",
+  // upgrade-survivor-docker.sh builds the successor fixture and runs the scenario by path.
+  "scripts/e2e/lib/upgrade-survivor/release-fixture.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/release-update.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/schema-downgrade-run.mjs!",
   "scripts/embedded-run-abort-leak.ts!",
   "scripts/embedded-run-liveness-leak.ts!",
   "scripts/fixtures/packed-plugin-sdk-type-smoke.ts!",
@@ -574,6 +585,16 @@ const repositoryScriptEntries = [
   "scripts/run-vitest-child.mts",
   // The isolated Vitest adapter executes this entry by path inside its container.
   "scripts/lib/vitest-isolated-entry.mts",
+  // docs/reference/fast-track-release-approval.md runs this manual-only Vitest config by path.
+  "test/manual-release-approval.config.ts",
+  "test/manual-release-approval.checks.ts",
+  "test/manual-build-only-workflow.checks.ts",
+  "test/manual-build-only-artifacts.checks.ts",
+  "test/manual-build-only-evidence.checks.ts",
+  "test/manual-build-only-parent.checks.ts",
+  "test/manual-fast-track-button.checks.ts",
+  "test/manual-fast-track-publication.checks.ts",
+  "test/manual-fast-track-receipt.checks.ts",
   "scripts/secrets/openclaw-bws-resolver.mjs!",
   // Security Review stages these entrypoints from isolated checkout attempts.
   "scripts/github/security-review-event.mjs!",
@@ -1262,6 +1283,16 @@ const config = {
     "src/auto-reply/reply/request-native-subagent.ts": ["exports"],
     // Scheduled-command tests exercise registry replacement and persisted-job validation at the owner.
     "src/gateway/plugin-command-scheduled-run.ts": ["exports"],
+    // Cron regression fixtures reset the process-wide provider backoff between cases.
+    "src/cron/service/provider-backoff.ts": ["exports"],
+    // Cookie and plugin-route tests exercise the authorization step directly.
+    "src/gateway/http-auth-plugin-cookie.ts": ["exports"],
+    // Post-ready release tests drive the lean deferral clock with these bounds.
+    "src/gateway/server-post-ready-release.ts": ["exports"],
+    // Launcher rollback tests age the trial record against this budget.
+    "src/update/launcher.ts": ["exports"],
+    // Session and cron state type this slot through `import(...)` type queries.
+    "src/cron/service/timer-execution-timeout.ts": ["types"],
     // Diagnostic fixtures reset owner-private state; the full-tree audit checks these consumers.
     "src/logging/diagnostic-memory.ts": ["exports"],
     "src/logging/diagnostic-phase.ts": ["exports"],
@@ -1413,6 +1444,8 @@ const config = {
         "ngrok",
         "open",
         "openclaw",
+        // The release-update upgrade-survivor scenario mints its registry TLS certificate with it.
+        "openssl",
         // Native checkpoint measurements run their synthetic guest through the host engine.
         "podman",
         "sleep",
@@ -1571,6 +1604,10 @@ const config = {
       "test/fixtures/codex-app-server.mjs!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/azure-speech`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/beam`]: bundledPluginWorkspace([
+      // Invoked by the plugin's release packaging hook.
+      "scripts/package-cleaners.mjs!",
+    ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/browser`]: bundledPluginWorkspace([
       // Core and plugin-SDK facades resolve these shipped Browser surfaces by basename.
       "browser-control-auth.ts!",

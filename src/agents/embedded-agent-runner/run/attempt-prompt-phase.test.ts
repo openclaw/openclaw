@@ -290,7 +290,7 @@ describe("runEmbeddedAttemptPromptPhase", () => {
     >("./attempt-prompt-submit.js");
     mocks.submitPrompt.mockImplementation(submitEmbeddedAttemptPrompt);
     streamMocks.streamSimple.mockImplementation((requestModel: Model) =>
-      createAssistantResultStream(createAssistant(requestModel, "Done.", "stop", 800_000)),
+      createAssistantResultStream(createAssistant(requestModel, "Done.", "stop", 870_000)),
     );
 
     await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);

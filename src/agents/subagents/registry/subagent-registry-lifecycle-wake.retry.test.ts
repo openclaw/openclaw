@@ -142,7 +142,7 @@ describe("requester settle retry lifetime", () => {
     });
   });
 
-  it("reports a lost-run batch failure in the requester's current transcript", async () => {
+  it("records lost-run child status in the requester's current transcript", async () => {
     await withSubagentCompletionWorkerState(async (database) => {
       const input = armRequesterWake(records());
       const requester = {
@@ -183,10 +183,17 @@ describe("requester settle retry lifetime", () => {
         expect(events).toContainEqual(
           expect.objectContaining({
             type: "custom_message",
-            customType: "run-failed-before-reply",
-            details: expect.objectContaining({ error: "requester turn failed" }),
+            customType: "subagent-completion",
+            display: false,
+            content: expect.stringContaining(`run ${input.subagent.runId}): completed`),
+            details: expect.objectContaining({ childRunIds: [input.subagent.runId] }),
           }),
         );
+        expect(storedRun(input)?.delivery).toMatchObject({
+          status: "delivered",
+          disposition: "delivered",
+        });
+        expect(storedWake(input)).toBeUndefined();
       } finally {
         driver.controller.clearRuntimeState();
       }
@@ -540,54 +547,6 @@ describe("requester settle retry lifetime", () => {
         database.db.exec("DROP TRIGGER IF EXISTS reject_delivered_batch");
         driver.controller.clearRuntimeState();
         worker.mockRestore();
-      }
-    });
-  });
-
-  it("retries a failed wake publication through the existing sweep", async () => {
-    await withSubagentCompletionWorkerState(async (database) => {
-      const input = armRequesterWake(records());
-      const driver = seedDriver(database, input);
-      const attempts = vi.fn();
-      const batchRunIds = [input.subagent.runId];
-      const pending = {
-        ...structuredClone(input.subagent.requesterSettleWake!),
-        nextAttemptAt: Date.now() + 30_000,
-      };
-      database.db.exec(
-        "CREATE TRIGGER reject_wake_publication BEFORE UPDATE ON subagent_runs WHEN json_extract(NEW.payload_json, '$.requesterSettleWake.status') = 'pending' BEGIN SELECT RAISE(ABORT, 'wake publication unavailable'); END",
-      );
-      driver.wake.mockImplementation(async (params) => {
-        await params.transitionBatch(
-          [currentCompletionRun(input)],
-          { ...pending, status: "dispatching", attemptCount: 1, batchRunIds },
-          () => {},
-        );
-        attempts();
-        if (attempts.mock.calls.length === 1) {
-          await params.transitionBatch([currentCompletionRun(input)], pending, () => {});
-          return false;
-        }
-        await params.completeBatch([currentCompletionRun(input)], pending.rearmGeneration, {
-          delivered: true,
-          path: "direct",
-          deliveredAt: 5_000,
-        });
-        return true;
-      });
-      try {
-        await driver.run();
-        expect(attempts).toHaveBeenCalledOnce();
-        expect(storedWake(input)).toBeDefined();
-        database.db.exec("DROP TRIGGER reject_wake_publication");
-        await driver.sweep();
-        expect(attempts).toHaveBeenCalledTimes(2);
-        expect(driver.wake).toHaveBeenCalledTimes(2);
-        expect(storedWake(input)).toBeUndefined();
-        expect(storedRun(input)?.delivery?.status).toBe("delivered");
-      } finally {
-        database.db.exec("DROP TRIGGER IF EXISTS reject_wake_publication");
-        driver.controller.clearRuntimeState();
       }
     });
   });

@@ -47,11 +47,16 @@ import {
 import { recordCommandPoll, resetCommandPollCount } from "./command-poll-backoff.js";
 import { encodeKeySequence, encodePaste, hasCursorModeSensitiveKeys } from "./pty-keys.js";
 import type { AgentToolResult } from "./runtime/index.js";
+import { markShellPollResult } from "./shell-call-receipt.js";
 import { PROCESS_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import { ToolInputError, type AgentToolWithMeta } from "./tools/common.js";
 import { failText, textResult } from "./tools/tool-results.js";
 
 export type ProcessToolDefaults = {
+  /** Observe existing processes without inheriting their launch authority. */
+  readOnly?: boolean;
+  /** Session invites do not grant visibility into ancestor sessions. */
+  includeAncestors?: boolean;
   hasCronTool?: boolean;
   inputWaitIdleMs?: number;
   scopeKey?: string;
@@ -203,6 +208,7 @@ function finishedPollResult(
   sessionId: string,
   finished: ProcessSession,
   pollScope: object | undefined,
+  pollCallId: string,
 ): AgentToolResult<unknown> {
   resetPollRetrySuggestion(sessionId);
   const delivery = prepareSessionPoll(finished, pollScope);
@@ -222,15 +228,19 @@ function finishedPollResult(
       `\n\n${finishedSessionText(finished)}`,
     finished.exitReason,
   );
-  return attachInternalToolResultAcknowledgement(
-    textResult(text, {
-      ...finishedSessionDetails(sessionId, finished),
-      aggregated: finished.aggregated,
-    }),
-    () => {
-      delivery.acknowledge();
-      acknowledgeNotifyOnExit(finished);
-    },
+  return markShellPollResult(
+    attachInternalToolResultAcknowledgement(
+      textResult(text, {
+        ...finishedSessionDetails(sessionId, finished),
+        aggregated: finished.aggregated,
+      }),
+      () => {
+        delivery.acknowledge();
+        acknowledgeNotifyOnExit(finished);
+      },
+    ),
+    finished,
+    pollCallId,
   );
 }
 
@@ -287,7 +297,7 @@ export function createProcessTool(
     interruptible: isProcessObservationAction,
     repeatable: PROCESS_OBSERVATION_REPEATABLE,
     outputSchema: ProcessToolOutputSchema,
-    execute: async (_toolCallId, args, signal, _onUpdate): Promise<AgentToolResult<unknown>> => {
+    execute: async (toolCallId, args, signal, _onUpdate): Promise<AgentToolResult<unknown>> => {
       const assertCallerCurrent = () => {
         signal?.throwIfAborted();
       };
@@ -297,6 +307,11 @@ export function createProcessTool(
       if (!PROCESS_TOOL_ACTIONS.includes(action as ProcessToolAction)) {
         return failText(
           `Invalid process action. Expected one of: ${PROCESS_TOOL_ACTIONS.join(", ")}`,
+        );
+      }
+      if (defaults?.readOnly && !isProcessObservationAction(args)) {
+        return failText(
+          "This turn can only list, poll, or log processes. Start a separately approved exec command instead of controlling an existing process.",
         );
       }
       const params = args as Omit<Static<typeof processSchema>, "timeout"> & {
@@ -424,7 +439,7 @@ export function createProcessTool(
           if (!scopedSession) {
             if (scopedFinished) {
               assertCurrent();
-              return finishedPollResult(sessionId, scopedFinished, pollScope);
+              return finishedPollResult(sessionId, scopedFinished, pollScope, toolCallId);
             }
             resetPollRetrySuggestion(sessionId);
             return failText(missingProcessMessage(sessionId));
@@ -449,7 +464,7 @@ export function createProcessTool(
             // Retention admission survives clear/eviction on this exact object.
             // A process removed before exit was never retained; never read a successor.
             if (scopedSession.endedAt !== undefined && isInScope(scopedSession)) {
-              return finishedPollResult(sessionId, scopedSession, pollScope);
+              return finishedPollResult(sessionId, scopedSession, pollScope, toolCallId);
             }
             resetPollRetrySuggestion(sessionId);
             return failText(missingProcessMessage(sessionId));

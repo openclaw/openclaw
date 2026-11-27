@@ -284,6 +284,67 @@ it.each([
   }),
 );
 
+it.each(["missing", "replaced", "same"] as const)(
+  "checks an opted-in physical destination before preparing a %s session",
+  (state) =>
+    withAdmissionTest("chat-send-explicit-session-" + state, async (f) => {
+      const expectedSessionId = "resolved-incarnation";
+      if (state !== "missing") {
+        f.seed({ sessionId: state === "same" ? expectedSessionId : "replacement" });
+      }
+      const request = await normalizeChatSendRequest({
+        client: null,
+        params: { ...f.scope, expectedSessionId, message: "Hello", idempotencyKey: f.runId },
+      });
+      assert(request.ok, "request normalization failed");
+      const prepared = await prepareChatSendSession({
+        request: request.value,
+        client: null,
+        context: f.context,
+      });
+      expect(prepared).toMatchObject(
+        state === "same"
+          ? { ok: true, value: { entry: { sessionId: expectedSessionId } } }
+          : {
+              ok: false,
+              error: {
+                code: "INVALID_REQUEST",
+                details: { reason: "session-incarnation-changed" },
+              },
+            },
+      );
+    }),
+);
+
+it("refuses a replacement at the same key after send preparation", () =>
+  withAdmissionTest("chat-send-incarnation-race", async (f) => {
+    const original = f.seed();
+    const admission = await f.prepare({ params: { expectedSessionId: original.sessionId } });
+    replaceSessionEntrySync(f.scope, {
+      ...original,
+      sessionId: "replacement",
+      updatedAt: original.updatedAt + 1,
+    });
+    const respond = vi.fn();
+    let admitted: Admission | undefined;
+    try {
+      admitted = await admitChatSend({ ...admission, respond });
+      expect(admitted.ok).toBe(false);
+      expectAdmissionError(respond, {
+        code: "INVALID_REQUEST",
+        details: { reason: "session-incarnation-changed" },
+      });
+      expect(
+        await sessionAccessor.readSessionSubmittedInput(
+          { ...f.scope, sessionId: "replacement" },
+          f.runId,
+        ),
+      ).toBeUndefined();
+    } finally {
+      cleanupAdmission(admitted, f.runId);
+    }
+  }));
+
 it("uses current worker-prepared admission settings without host SQL", () =>
   withAdmissionTest(
     "chat-admission-read-count",

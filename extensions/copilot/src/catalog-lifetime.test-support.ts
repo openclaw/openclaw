@@ -77,7 +77,8 @@ export async function createCopilotFaultPeer() {
             send({
               id: request.id,
               error: {
-                code: -32603,
+                // This protocol-v3 peer uses the SDK's legacy send fallback.
+                code: request.method === "session.sendAndWait" ? -32601 : -32603,
                 message: error instanceof Error ? error.message : String(error),
               },
             }),

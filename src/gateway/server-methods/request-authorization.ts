@@ -48,7 +48,7 @@ import { isGatewayAdmin, SessionMutationAuthorizationChangedError } from "../ses
 import type { SessionSubscribePhase } from "../slow-request-diagnostics.js";
 import { gatewayRouterUploadPolicyError } from "./core-handlers.js";
 import { authorizeAuthenticatedProfileForMethod } from "./gateway-client-identity.js";
-import { authorizeGatewayMethod, authorizeGatewayMethodScopes } from "./method-authorization.js";
+import { authorizeGatewayMethod } from "./method-authorization.js";
 import {
   prepareStartupReadAgents,
   prepareStartupStoreAgents,
@@ -383,6 +383,7 @@ export async function authorizeGatewayRequestPreDispatch(params: {
       requestParams,
       context: params.context,
       sessionScope: scopeAuthorization.sessionScope,
+      participationRequired: scopeAuthorization.participationRequired,
       databaseAdmission:
         params.methodRegistry.getScope(params.method) === "operator.read"
           ? ("read" as const)
@@ -397,22 +398,6 @@ export async function authorizeGatewayRequestPreDispatch(params: {
       if (authorizationError) {
         release?.();
         return authorizationError;
-      }
-      // Profile/catalog preparation must not switch the admitted dispatch ceiling.
-      const client = params.client;
-      if (client) {
-        const currentScope = withPluginRuntimeRegistryScope(pluginRegistry, () =>
-          authorizeGatewayMethodScopes(
-            params.method,
-            client.connect.scopes ?? [],
-            params.requestParams,
-            params.methodRegistry,
-          ),
-        );
-        if (currentScope.allowed && currentScope.sessionScope !== scopeAuthorization.sessionScope) {
-          release?.();
-          return errorShape(ErrorCodes.FORBIDDEN, "Gateway requester authority changed");
-        }
       }
       try {
         params.expectedProfileBinding?.assertCurrent();
@@ -446,6 +431,10 @@ export async function authorizeGatewayRequestPreDispatch(params: {
             const result = authorizeSession();
             if (result.error) {
               return result;
+            }
+            // A participant turn never lends the owner's unrestricted host-file authority.
+            if (result.authorization?.participationCeiling) {
+              return { error: errorShape(ErrorCodes.FORBIDDEN, "outside session boundary") };
             }
             const { target, consume } = params.consumeSessionTurn!;
             const admitted = result.authorization?.admittedTarget;

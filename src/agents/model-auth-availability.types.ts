@@ -92,13 +92,14 @@ export type CreateModelAuthAvailabilityResolverParams = {
   preparedRuntimeAuthMaterializations?: readonly RuntimeAuthMaterialization[];
   preparedSyntheticAuthComplete?: boolean;
   /**
-   * Ids the credential's own ready account listing returned, including hidden rows; absent when
+   * Checks the credential's own ready account listing, including hidden rows; unknown when
    * that credential has no ready listing. Another account's listing says nothing about this one.
    */
-  accountListedModelIds?: (
+  accountListsModel?: (
     provider: string,
     profileId: string | undefined,
-  ) => ReadonlySet<string> | undefined;
+    normalizedModelId: string,
+  ) => boolean | undefined;
 };
 
 export type AuthTarget = ModelAuthAvailabilityRef & {

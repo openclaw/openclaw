@@ -2,8 +2,10 @@
 import path from "node:path";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveUserPath } from "../utils.js";
+import { isForeignBundledPluginRoot } from "./bundled-dir.js";
 import { normalizeBundledLookupPath } from "./bundled-load-path-aliases.js";
 import { resolveBundledPluginSources, type BundledPluginSource } from "./bundled-sources.js";
+import { isBundledPluginInsideDevSourceRoot } from "./dev-source-root.js";
 
 /** Stale install record that points at old compiled bundled plugin output. */
 export type StaleLocalBundledPluginInstallRecord = {
@@ -25,26 +27,6 @@ function primaryInstallRecordPath(record: PluginInstallRecord): string | null {
     return record.sourcePath;
   }
   return null;
-}
-
-function looksLikeCompiledBundledPluginPath(targetPath: string, pluginId: string): boolean {
-  const segments = normalizeBundledLookupPath(targetPath).split(/[\\/]+/u);
-  return segments.some((segment, index) => {
-    return (
-      (segment === "dist" || segment === "dist-runtime") &&
-      segments[index + 1] === "extensions" &&
-      segments[index + 2] === pluginId
-    );
-  });
-}
-
-function hasStaleBundledVersion(
-  record: PluginInstallRecord,
-  bundledSource: BundledPluginSource,
-): boolean {
-  const recordVersion = record.version?.trim();
-  const bundledVersion = bundledSource.version?.trim();
-  return Boolean(recordVersion && bundledVersion && recordVersion !== bundledVersion);
 }
 
 /** Lists path install records that still point at stale compiled bundled plugin output. */
@@ -72,9 +54,6 @@ export function listStaleLocalBundledPluginInstallRecords(params: {
     if (!bundledSource?.localPath) {
       continue;
     }
-    if (!hasStaleBundledVersion(record, bundledSource)) {
-      continue;
-    }
     const recordPath = primaryInstallRecordPath(record);
     if (!recordPath) {
       continue;
@@ -84,7 +63,10 @@ export function listStaleLocalBundledPluginInstallRecords(params: {
     if (stalePath === bundledPath) {
       continue;
     }
-    if (!looksLikeCompiledBundledPluginPath(stalePath, pluginId)) {
+    if (
+      !isForeignBundledPluginRoot(stalePath, params.env) ||
+      isBundledPluginInsideDevSourceRoot({ rootDir: stalePath, env: params.env ?? process.env })
+    ) {
       continue;
     }
     stale.push({
@@ -96,24 +78,4 @@ export function listStaleLocalBundledPluginInstallRecords(params: {
   }
 
   return stale;
-}
-
-/** Removes stale compiled bundled plugin path records from an install record map. */
-export function pruneStaleLocalBundledPluginInstallRecords(
-  params: Parameters<typeof listStaleLocalBundledPluginInstallRecords>[0],
-): {
-  records: Record<string, PluginInstallRecord>;
-  stale: StaleLocalBundledPluginInstallRecord[];
-} {
-  const stale = listStaleLocalBundledPluginInstallRecords(params);
-  if (stale.length === 0) {
-    return { records: params.installRecords, stale };
-  }
-  const staleIds = new Set(stale.map((record) => record.pluginId));
-  return {
-    records: Object.fromEntries(
-      Object.entries(params.installRecords).filter(([pluginId]) => !staleIds.has(pluginId)),
-    ),
-    stale,
-  };
 }

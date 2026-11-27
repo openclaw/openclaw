@@ -312,7 +312,6 @@ export function createImageTool(options?: {
           : suppliedSignal;
         const assertCurrent = () => {
           capturedOperator.assertInvocationCurrent?.();
-          operatorAuthority?.assertCurrent();
           signal?.throwIfAborted();
         };
         assertCurrent();

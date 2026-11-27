@@ -17,6 +17,60 @@ const child = sessionRow(firstKey, "Check release notes", baseTime - 2_000, chil
 const nextChild = sessionRow(nextKey, "Check package metadata", baseTime - 3_000, childScope);
 
 suite.define(() => {
+  it("does not restore the previous chat's auto-opened branch for a different chat", () =>
+    ui.withSessionPage(
+      suite,
+      async (page) => {
+        const gateway = await support.installMockGateway(page, {
+          sessionKey: firstKey,
+          sessions: [parent, peer, child],
+          heldMethods: ["connect"],
+          authMethod: "token",
+          authMode: "token",
+          presenceUsers: [
+            { id: "profile-a", self: true, identity: { type: "profile", id: "profile-a" } },
+          ],
+          methodResponses: {
+            "sessions.list": {
+              cases: [
+                { match: childScope, response: support.sessionsListResponse([child]) },
+                { response: support.sessionsListResponse([parent, peer]) },
+              ],
+            },
+          },
+        });
+        const sidebar = page.locator("aside.sidebar");
+        const toggle = sidebar.locator(`[data-child-session-toggle="${parentKey}"]`);
+        const childRow = ui.sessionRows(sidebar)(firstKey);
+        await page.goto(
+          support.controlUiSessionUrl(suite.server.baseUrl, firstKey) + "#token=test-token",
+        );
+        await gateway.waitForRequest("connect");
+        await gateway.resolveDeferred("connect");
+        await childRow.waitFor();
+        await sidebar.and(page.locator('[data-snapshot-saved="true"]')).waitFor();
+
+        await page.reload();
+        await gateway.waitForRequest("connect");
+        await sidebar.and(page.locator('[data-snapshot-state="cached"]')).waitFor();
+        await childRow.waitFor();
+        await gateway.resolveDeferred("connect");
+        await sidebar.and(page.locator('[data-snapshot-state="live"]')).waitFor();
+
+        await page.goto(support.controlUiSessionUrl(suite.server.baseUrl, peerKey));
+        await gateway.waitForRequest("connect");
+        await sidebar.and(page.locator('[data-snapshot-state="cached"]')).waitFor();
+        await toggle.waitFor();
+        await support.captureUiProof(suite, page, "sidebar-disclosure-reload.png");
+        expect(await toggle.getAttribute("aria-expanded")).toBe("false");
+        expect(await childRow.count()).toBe(0);
+        await gateway.resolveDeferred("connect");
+        await sidebar.and(page.locator('[data-snapshot-state="live"]')).waitFor();
+        expect(await toggle.getAttribute("aria-expanded")).toBe("false");
+      },
+      { colorScheme: "dark", serviceWorkers: "block" },
+    ));
+
   it("keeps a background parent collapsed when its child list changes", () =>
     ui.withSessionPage(
       suite,

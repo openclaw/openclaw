@@ -14,6 +14,18 @@ who contributed, with links to the source changes.
 ### November 2026
 
 <CardGroup cols={2}>
+  <Card title="v2026.11.10" href="/releases/2026.11.10">
+    Deep Research with cited sources, the bundled Knowledge memory plugin, browser tab handoff, and improvements across every part of OpenClaw.
+  </Card>
+  <Card title="v2026.11.9" href="/releases/2026.11.9">
+    Fixes for provider caching, Tool Search, Claude CLI, ACP replies, headed Chrome screenshots, and security.
+  </Card>
+  <Card title="v2026.11.8" href="/releases/2026.11.8">
+    Reliability fixes across chats, updates, models, automations, apps, plugins, and the Web UI.
+  </Card>
+  <Card title="v2026.11.7" href="/releases/2026.11.7">
+    Changes to updates, messaging, models and session reliability.
+  </Card>
   <Card title="v2026.11.6" href="/releases/2026.11.6">
     Bug fixes and quality-of-life improvements throughout OpenClaw.
   </Card>

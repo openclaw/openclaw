@@ -303,9 +303,10 @@ suite.define(() => {
         await tabCount(panelHeader, 1);
         await named(active, "link", "Related pull request").click();
         await heading(panel, pull.title);
-        expect(await panelHeader.getByRole("tab").count()).toBe(1);
+        // A link inside the reader opens its own tab; the same item from chat selects that tab.
+        await tabCount(panelHeader, 2);
         expect(context.pages()).toHaveLength(1);
-        await clickButton(panel, "Back");
+        await named(panelHeader, "tab", issue.title).click();
         await heading(panel, issue.title);
 
         await named(chat, "link", "pull request").click();
@@ -329,14 +330,14 @@ suite.define(() => {
               await page.keyboard.press("ArrowRight");
             }
           }
-          const direct = named(panel.locator(".lr-toolbar"), "link", "Open on GitHub");
+          const direct = named(active.locator(".lr-document-header"), "link", "Open on GitHub");
           await direct.waitFor();
           expect(await direct.getAttribute("href")).toBe(pull.url);
-          expect(
-            await direct
-              .locator(size === "wide" ? ".lr-external-label" : ".lr-external-provider")
-              .isVisible(),
-          ).toBe(true);
+          // The full check list, with its escape link, opens on request.
+          const checksToggle = active.locator(".lr-checks-summary");
+          if ((await checksToggle.getAttribute("aria-expanded")) === "false") {
+            await checksToggle.click();
+          }
           const checksSource = named(
             panel.locator(".lr-note"),
             "link",
@@ -372,7 +373,7 @@ suite.define(() => {
         await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
         await active.locator(".lr-files .lr-file summary").click();
 
-        const external = named(panel.locator(".lr-toolbar"), "link", "Open on GitHub");
+        const external = named(active.locator(".lr-document-header"), "link", "Open on GitHub");
         expect(await external.getAttribute("href")).toBe(commit.url);
         expect(await external.getAttribute("target")).toBe("_blank");
         expect(await external.getAttribute("rel")).toBe("noopener noreferrer");
@@ -380,12 +381,6 @@ suite.define(() => {
         await popup.waitForLoadState("domcontentloaded");
         expect(popup.url()).toBe(commit.url);
         await popup.close();
-        const address = panel.locator(".lr-url");
-        await address.fill(issue.url);
-        await address.press("Enter");
-        await heading(panel, issue.title);
-        await clickButton(panel, "Back");
-        await heading(panel, commit.title);
         await panelHeader.locator(".tabstrip-tab__close").last().click();
         await tabCount(panelHeader, 2);
         await selectChatLayoutAction(page, "Minimize side panel");
@@ -403,10 +398,13 @@ suite.define(() => {
         expect(mobileBox!.x).toBeGreaterThanOrEqual(0);
         expect(mobileBox!.x + mobileBox!.width).toBeLessThanOrEqual(391);
         expect(mobileBox!.width).toBeGreaterThanOrEqual(300);
-        const mobileExternal = named(panel.locator(".lr-toolbar"), "link", "Open on GitHub");
+        const mobileExternal = named(
+          active.locator(".lr-document-header"),
+          "link",
+          "Open on GitHub",
+        );
         await mobileExternal.waitFor();
         expect(await mobileExternal.getAttribute("href")).toBe(issue.url);
-        expect(await mobileExternal.locator(".lr-external-provider").isVisible()).toBe(true);
         await selectChatLayoutAction(page, "Minimize side panel");
         await expect.poll(() => panel.locator(".link-reader-panel").isVisible()).toBe(false);
       },
@@ -432,10 +430,10 @@ suite.define(() => {
       await page.goto(suite.server.baseUrl + "chat");
       await named(page, "link", "pull request").click();
       const panel = page.locator("openclaw-link-reader-panel");
-      const disclosure = panel.locator("details.lr-checks");
-      const summary = disclosure.locator("summary");
+      const disclosure = panel.locator(".lr-checks");
+      const summary = disclosure.locator(".lr-checks-summary");
       await waitText(summary, "Checks unavailable");
-      expect(await disclosure.getAttribute("open")).toBeNull();
+      expect(await summary.getAttribute("aria-expanded")).toBe("false");
       const icon = await summary.locator(".lr-checks-icon svg").boundingBox();
       expect(icon).not.toBeNull();
       expect(Math.max(icon!.width, icon!.height)).toBeLessThanOrEqual(24);
