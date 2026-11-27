@@ -4,11 +4,10 @@ import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveStateDir } from "../config/paths.js";
 import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
-import {
-  hasRetiredSessionCostUsageCacheEntries,
-  retireLegacySessionCostUsageCache,
-} from "../infra/session-cost-usage-cache.sqlite.js";
+import { hasRetiredSessionCostUsageCacheEntriesInDatabase } from "../infra/session-cost-usage-cache.kernel.js";
+import { retireLegacySessionCostUsageCache } from "../infra/session-cost-usage-cache.sqlite.js";
 import { openUsageCostRefreshFailures } from "../infra/session-cost-usage-refresh-health.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { listOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db.js";
 import { shortenHomePath } from "../utils.js";
 import { runDoctorAgentDatabaseOperationAsync } from "./doctor-agent-database-operation.js";
@@ -194,16 +193,27 @@ async function maybeRemoveObsoleteControlUiAssetCache(params: {
   return [];
 }
 
+/**
+ * Read-only: whether `retireLegacySessionCostUsageCache` would delete a row in this database.
+ * A database without the agent schema counts, so the retire path keeps owning it.
+ */
+function hasRetiredSessionCostUsageCacheEntries(
+  entry: { agentId: string; path: string },
+  env?: NodeJS.ProcessEnv,
+): boolean {
+  const inspected = withOpenClawAgentDatabaseReadOnly(
+    ({ db }) => hasRetiredSessionCostUsageCacheEntriesInDatabase(db),
+    { agentId: entry.agentId, env, path: entry.path },
+  );
+  return inspected.found ? inspected.value : inspected.reason === "schema-missing";
+}
+
 function retiredUsageCacheEntriesMayExist(
   entry: { agentId: string; path: string },
   env?: NodeJS.ProcessEnv,
 ): boolean {
   try {
-    return hasRetiredSessionCostUsageCacheEntries({
-      agentId: entry.agentId,
-      env,
-      databasePath: entry.path,
-    });
+    return hasRetiredSessionCostUsageCacheEntries(entry, env);
   } catch {
     // The retire path reports an unreadable database.
     return true;
@@ -225,14 +235,7 @@ export async function checkLegacyRuntimeFilesPending(
   }
   for (const entry of listOpenClawRegisteredAgentDatabases({ env })) {
     const stats = await readFilesystemEntryOrMissing(entry.path, () => fs.stat(entry.path));
-    if (
-      stats?.isFile() &&
-      hasRetiredSessionCostUsageCacheEntries({
-        agentId: entry.agentId,
-        env,
-        databasePath: entry.path,
-      })
-    ) {
+    if (stats?.isFile() && hasRetiredSessionCostUsageCacheEntries(entry, env)) {
       return "work";
     }
   }

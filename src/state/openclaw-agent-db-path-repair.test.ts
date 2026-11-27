@@ -2,9 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
-import { noteDoctorAgentDatabasePathHealth } from "../commands/doctor-agent-database-paths.js";
+import {
+  countOpenClawAgentDatabasePathRepairs,
+  noteDoctorAgentDatabasePathHealth,
+} from "../commands/doctor-agent-database-paths.js";
 import { createUpdateRun, finishUpdateRun } from "../infra/update-run-ledger.js";
-import { countOpenClawAgentDatabasePathRepairs } from "./openclaw-agent-db-path-repair.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
