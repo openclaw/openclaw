@@ -250,6 +250,7 @@ extension IOSGatewayChatTransport {
         idempotencyKey: String,
         attachments: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
     {
+        if ScreenshotFixtureMode.failsSends { throw ScreenshotFixtureMode.sendTimeoutError }
         guard let route = await self.currentSessionMutationRoute(),
               let supportsRoutingContract = await gateway.supportsServerCapability(
                   .chatSendRoutingContract,

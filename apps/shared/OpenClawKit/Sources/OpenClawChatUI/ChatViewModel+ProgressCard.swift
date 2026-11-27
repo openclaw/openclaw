@@ -97,7 +97,7 @@ extension OpenClawChatViewModel {
                 self?.scheduleProgressCardFetch(for: session)
             } catch {
                 guard let self, self.isCurrentSession(session), !(error is CancellationError) else { return }
-                self.errorText = String(localized: "Could not clear the saved plan. Retry or dismiss it locally.")
+                self.errorText = String(localized: "Couldn’t clear the plan.")
             }
         }
     }
@@ -146,7 +146,7 @@ extension OpenClawChatViewModel {
                     {
                         self?.progressCardRefreshIntent = nil
                     }
-                    self?.errorText = String(localized: "Could not refresh the plan. Try Refresh again.")
+                    self?.errorText = String(localized: "Couldn’t refresh the plan.")
                 }
             }
             self?.progressCardRefreshPending = false

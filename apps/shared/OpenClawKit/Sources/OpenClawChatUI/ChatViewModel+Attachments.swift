@@ -253,6 +253,26 @@ extension OpenClawChatViewModel {
         }
     }
 
+    /// What the composer shows: everything except what a send took at its tap.
+    public var composerAttachments: [OpenClawPendingAttachment] {
+        self.heldAttachmentIDs.isEmpty ? self.attachments : self.attachments.filter {
+            !self.heldAttachmentIDs.contains($0.id)
+        }
+    }
+
+    public var composerPreparingAttachments: [OpenClawPreparingAttachment] {
+        self.heldAttachmentIDs.isEmpty ? self.preparingAttachments : self.preparingAttachments.filter {
+            !self.heldAttachmentIDs.contains($0.id)
+        }
+    }
+
+    /// A tile still preparing goes with the message, which waits for it; a failed tile waits for its retry or
+    /// removal. A read without a tile (no tile outside iPhone) still holds the send back.
+    var composerPreparationAllowsSend: Bool {
+        let tiles = self.composerPreparingAttachments
+        return tiles.allSatisfy { $0.failure == nil } && (self.attachmentStagingCount == 0 || !tiles.isEmpty)
+    }
+
     /// True while replacing this model could move an attachment across chats.
     /// An attachment saved in its session's durable draft belongs to that draft instead.
     public var isAttachmentOwnerPinned: Bool {
@@ -387,7 +407,7 @@ extension OpenClawChatViewModel {
         guard self.ownsAttachmentSession(expectedSession) else { return }
         let errors = [
             unreadable.isEmpty ? nil : String(
-                format: String(localized: "Could not attach: %@"), Self.attachmentNames(unreadable)),
+                format: String(localized: "Couldn’t attach %@."), Self.attachmentNames(unreadable)),
             oversized.isEmpty ? nil : String(
                 format: String(localized: "Too large to send: %@"), Self.attachmentNames(oversized)),
         ].compactMap(\.self)
