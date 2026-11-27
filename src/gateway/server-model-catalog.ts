@@ -16,6 +16,7 @@ import { getRuntimeConfig } from "../config/io.js";
 import type { PreparedGatewayModelCatalogSnapshot } from "./server-model-catalog-auth.js";
 import { createPreparedGatewayModelCatalog } from "./server-model-catalog-view.js";
 import type {
+  GatewayModelCatalogLoadParams,
   GatewayModelCatalogSnapshot,
   PreparedGatewayModelCatalog,
   PreparedGatewayModelCatalogReadResult,
@@ -34,15 +35,10 @@ type LoadPublishedPreparedModelCatalogOwnerSnapshot = (params: {
   providerDiscoveryProviderIds?: readonly string[];
   workspaceDir?: string;
 }) => Promise<PublishedModelCatalogOwnerCandidate>;
-type LoadGatewayModelCatalogParams = {
-  agentId?: string;
-  agentDir?: string;
+type LoadGatewayModelCatalogParams = GatewayModelCatalogLoadParams & {
   getConfig?: () => GatewayModelCatalogConfig;
   loadPublishedPreparedModelCatalogOwnerSnapshot?: LoadPublishedPreparedModelCatalogOwnerSnapshot;
-  readOnly?: boolean;
   refreshFullCatalog?: LoadPreparedModelCatalogParams["refreshFullCatalog"];
-  providerDiscoveryProviderIds?: readonly string[];
-  workspaceDir?: string;
 };
 type LoadPreparedGatewayModelCatalogParams = LoadGatewayModelCatalogParams & {
   authScope?: PreparedModelRuntimeAuthScope;
@@ -113,20 +109,44 @@ function projectPreparedGatewayModelCatalogSnapshot(
 export async function loadPreparedGatewayModelCatalogSnapshot(
   params?: LoadPreparedGatewayModelCatalogParams,
 ): Promise<PreparedGatewayModelCatalogSnapshot> {
-  const { candidate, owner } = await loadGatewayModelCatalogOwnerSnapshot(params);
-  const refreshedAuth = params?.refreshAuth
-    ? await loadPreparedModelRuntimeAuth(
-        candidate,
-        params.authScope ?? {
-          providerIds: owner.modelCatalog.entries.map((entry) => entry.provider),
-        },
-      )
-    : undefined;
-  return projectPreparedGatewayModelCatalogSnapshot(
-    owner,
-    owner.authMaterializations,
-    refreshedAuth,
-  );
+  for (;;) {
+    const { candidate, owner } = await loadGatewayModelCatalogOwnerSnapshot(params);
+    const refreshedAuth = params?.refreshAuth
+      ? await loadPreparedModelRuntimeAuth(
+          candidate,
+          params.authScope ?? {
+            providerIds: owner.modelCatalog.entries.map((entry) => entry.provider),
+          },
+        )
+      : undefined;
+    let modelCatalog = owner.modelCatalog;
+    const providerIds = params?.providerDiscoveryProviderIds;
+    if (providerIds?.length) {
+      if (!owner.isCurrent()) {
+        continue;
+      }
+      const { loadPreparedModelCatalogSnapshot: loadScoped } =
+        await import("../agents/prepared-model-catalog.js");
+      modelCatalog = await loadScoped({
+        agentId: owner.agentId,
+        agentDir: owner.agentDir,
+        config: owner.config,
+        providerDiscoveryProviderIds: providerIds,
+        readOnly: true,
+        ...(params?.scopedLiveProviderDiscovery ? { scopedLiveProviderDiscovery: true } : {}),
+        workspaceDir: owner.workspaceDir,
+      });
+      // A scoped read must not publish capabilities from a retired owner.
+      if (!owner.isCurrent()) {
+        continue;
+      }
+    }
+    return projectPreparedGatewayModelCatalogSnapshot(
+      { ...owner, modelCatalog },
+      owner.authMaterializations,
+      refreshedAuth,
+    );
+  }
 }
 
 export async function loadGatewayModelCatalogSnapshot(

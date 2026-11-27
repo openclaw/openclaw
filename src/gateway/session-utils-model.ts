@@ -45,7 +45,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { resolveSessionCommunicationPolicy } from "../sessions/communication-policy.js";
-import type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
+import type {
+  GatewayModelCatalogLoadParams,
+  GatewayModelCatalogSnapshot,
+} from "./server-model-catalog.types.js";
 import { resolveSessionProjectedAutoRuntime } from "./session-runtime-resolution.js";
 import {
   createSessionRowModelCacheKey,
@@ -501,14 +504,10 @@ function resolveGatewayProviderStaticModel(params: {
 }
 
 export async function resolveGatewayModelSupportsImages(params: {
-  loadGatewayModelCatalog: (params?: {
-    agentId?: string;
-    readOnly?: boolean;
-  }) => Promise<ModelCatalogEntry[]>;
-  loadGatewayModelCatalogSnapshot?: (params?: {
-    agentId?: string;
-    readOnly?: boolean;
-  }) => Promise<GatewayModelCatalogSnapshot>;
+  loadGatewayModelCatalog: (params?: GatewayModelCatalogLoadParams) => Promise<ModelCatalogEntry[]>;
+  loadGatewayModelCatalogSnapshot?: (
+    params?: GatewayModelCatalogLoadParams,
+  ) => Promise<GatewayModelCatalogSnapshot>;
   agentId?: string;
   provider?: string;
   model?: string;
@@ -518,13 +517,16 @@ export async function resolveGatewayModelSupportsImages(params: {
   }
 
   try {
-    // Attachment admission first consumes lifecycle-prepared capabilities. Runtime-only models
-    // retain the evidence-based live fallback without making known models wait for discovery.
-    for (const readOnly of [true, false]) {
-      const loadParams = {
-        ...(params.agentId ? { agentId: params.agentId } : {}),
-        readOnly,
-      };
+    // Prepared capabilities stay fast; runtime-only models use provider-scoped live discovery.
+    const liveLoadPlan = params.provider
+      ? {
+          providerDiscoveryProviderIds: [params.provider],
+          readOnly: true,
+          scopedLiveProviderDiscovery: true,
+        }
+      : { readOnly: false };
+    for (const loadPlan of [{ readOnly: true }, liveLoadPlan]) {
+      const loadParams = { ...loadPlan, ...(params.agentId ? { agentId: params.agentId } : {}) };
       const snapshot = params.loadGatewayModelCatalogSnapshot
         ? await params.loadGatewayModelCatalogSnapshot(loadParams)
         : undefined;
@@ -588,7 +590,7 @@ export async function resolveGatewayModelSupportsImages(params: {
         return true;
       }
       if (
-        readOnly &&
+        loadPlan.readOnly &&
         !snapshot?.catalogComplete &&
         (!modelEntry ||
           !snapshot ||

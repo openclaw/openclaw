@@ -24,7 +24,10 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
-import type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
+import type {
+  GatewayModelCatalogLoadParams,
+  GatewayModelCatalogSnapshot,
+} from "./server-model-catalog.types.js";
 import { registerSessionAutomationSource } from "./session-automation-index.js";
 import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
@@ -1538,15 +1541,19 @@ describe("resolveGatewayModelSupportsImages", () => {
       modes = [true, false],
     }) => {
       const loadGatewayModelCatalog = vi.fn(async () => (facts instanceof Error ? [vision] : []));
-      const loadGatewayModelCatalogSnapshot = vi.fn(async (params?: { readOnly?: boolean }) => {
-        if (facts instanceof Error) {
-          throw facts;
-        }
-        if (modes.length === 1 && params?.readOnly !== true) {
-          throw new Error("full catalog discovery must not restart");
-        }
-        return snapshot(params?.readOnly ? facts : (full ?? facts));
-      });
+      const loadGatewayModelCatalogSnapshot = vi.fn(
+        async (params?: GatewayModelCatalogLoadParams) => {
+          if (facts instanceof Error) {
+            throw facts;
+          }
+          if (modes.length === 1 && params?.readOnly !== true) {
+            throw new Error("full catalog discovery must not restart");
+          }
+          return snapshot(
+            params?.readOnly && !params.scopedLiveProviderDiscovery ? facts : (full ?? facts),
+          );
+        },
+      );
       await expect(
         resolveGatewayModelSupportsImages({
           agentId: "qa",
@@ -1557,7 +1564,16 @@ describe("resolveGatewayModelSupportsImages", () => {
         }),
       ).resolves.toBe(expected);
       expect(loadGatewayModelCatalogSnapshot.mock.calls.map(([params]) => params)).toEqual(
-        modes.map((readOnly) => ({ agentId: "qa", readOnly })),
+        modes.map((readOnly) => ({
+          agentId: "qa",
+          ...(readOnly || !provider
+            ? { readOnly }
+            : {
+                readOnly: true,
+                providerDiscoveryProviderIds: [provider],
+                scopedLiveProviderDiscovery: true,
+              }),
+        })),
       );
       expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
     },
