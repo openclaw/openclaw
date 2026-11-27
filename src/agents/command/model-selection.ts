@@ -160,10 +160,11 @@ export async function resolveEmbeddedModelSelection(params: {
     typeof params.opts.provider === "string"
       ? normalizeExplicitOverrideInput(params.opts.provider, "provider")
       : undefined;
-  const explicitModelOverride =
+  const explicitModelSelection =
     typeof params.opts.model === "string"
-      ? normalizeExplicitOverrideInput(params.opts.model, "model")
+      ? splitTrailingAuthProfile(normalizeExplicitOverrideInput(params.opts.model, "model"))
       : undefined;
+  const explicitModelOverride = explicitModelSelection?.model;
   const hasExplicitRunOverride = Boolean(explicitProviderOverride || explicitModelOverride);
   if (hasExplicitRunOverride && isModelSelectionLocked(sessionEntry)) {
     throw new ModelSelectionLockedError();
@@ -568,6 +569,15 @@ export async function resolveEmbeddedModelSelection(params: {
         });
       }
     }
+  }
+
+  if (explicitModelSelection?.profile) {
+    sessionEntryForAttempt = {
+      ...(sessionEntryForAttempt ?? { sessionId: params.sessionId, updatedAt: Date.now() }),
+      authProfileOverride: explicitModelSelection.profile,
+      authProfileOverrideSource: "user",
+      authProfileOverrideCompactionCount: undefined,
+    };
   }
 
   const configuredThinkLevel = normalizeThinkLevel(
