@@ -46,6 +46,10 @@ export type MemoryIndexPreparationInput = {
   hardMaxInputTokens: number;
 };
 
+function isHeadingOrBlank(line: string): boolean {
+  return !line.trim() || /^ {0,3}#{1,6}(?:\s|$)/u.test(line);
+}
+
 export function prepareMemoryIndexChunks({
   entry,
   source,
@@ -66,7 +70,7 @@ export function prepareMemoryIndexChunks({
   // All chunks share one source snapshot; splitting per chunk makes indexing quadratic.
   const sourceLines = source === "memory" ? content.replace(/\r\n/gu, "\n").split("\n") : [];
   const chunkOptions = { ...chunking, perEntry };
-  // Match chunkMarkdown's character budget so heading repair cannot grow a chunk without bound.
+  // Bound heading-only runs. A heading can still join its body up to the provider input limit.
   const maxMergedChunkEstimatedChars = Math.max(32, chunking.tokens * 4);
   const baseChunks: MemoryChunk[] = [];
   for (const chunk of source === "sessions"
@@ -91,7 +95,7 @@ export function prepareMemoryIndexChunks({
         .split("\n")
         .every(
           (line, index) =>
-            (!line.trim() || /^ {0,3}#{1,6}(?:\s|$)/u.test(line)) &&
+            isHeadingOrBlank(line) &&
             !line.includes("<!--") &&
             line.trimEnd() === (sourceLines[previous.startLine + index - 1] ?? "").trimEnd(),
         )
@@ -101,7 +105,10 @@ export function prepareMemoryIndexChunks({
         .split("\n")
         .slice(Math.max(0, previous.endLine - chunk.startLine + 1));
       const mergedText = [previous.text, ...following].join("\n");
-      if (estimateStringChars(mergedText) <= maxMergedChunkEstimatedChars) {
+      if (
+        !following.every(isHeadingOrBlank) ||
+        estimateStringChars(mergedText) <= maxMergedChunkEstimatedChars
+      ) {
         chunk.text = mergedText;
         chunk.startLine = previous.startLine;
         chunk.hash = hashText(chunk.text);

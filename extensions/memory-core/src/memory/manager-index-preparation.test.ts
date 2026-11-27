@@ -47,12 +47,11 @@ it("keeps a heading fragment's curated-entry annotations", () => {
   ]);
 });
 
-it.each([0, 2])("respects the chunk budget for heading and body when overlap is %s", (overlap) => {
+it.each([0, 2])("keeps an over-budget heading with its body when overlap is %s", (overlap) => {
   const content = "# Plan\nThe irrigation starts at dawn.";
   const { chunks } = prepareHeading(content, overlap);
-  expect(chunks.every((chunk) => chunk.text.length <= 32)).toBe(true);
-  expect(chunks.some((chunk) => chunk.text.includes("# Plan"))).toBe(true);
-  expect(chunks.some((chunk) => chunk.text.includes("The irrigation starts at dawn."))).toBe(true);
+  const hash = createHash("sha256").update(content).digest("hex");
+  expect(chunks).toMatchObject([{ startLine: 1, endLine: 2, text: content, hash }]);
 });
 
 it("preserves a heading continuation sharing the next chunk's source line", () => {
