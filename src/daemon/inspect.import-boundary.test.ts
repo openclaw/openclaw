@@ -2,9 +2,11 @@ import fs from "node:fs/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { findExtraGatewayServices, findSystemGatewayServices } from "./inspect.js";
 
+// mock-isolation: Evaluating real launcher code is the import regression this fixture detects.
 vi.mock("./schtasks-layout.js", () => {
   throw new Error("non-Windows and shallow inventory must not load Scheduled Task launchers");
 });
+// mock-isolation: Native task probes must stay unloaded outside deep Windows discovery.
 vi.mock("./schtasks-state-probe.js", () => {
   throw new Error("non-Windows and shallow inventory must not load Scheduled Task probes");
 });
