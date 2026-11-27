@@ -19,6 +19,7 @@ import {
 } from "./card-ux-approval.js";
 import { resolveFeishuChatType } from "./chat-type.js";
 import { createFeishuClient } from "./client.js";
+import { authorizeFeishuQuestionCallback } from "./question-admission.js";
 import { FEISHU_QUESTION_ACTION, parseFeishuQuestionEnvelope } from "./question-callback.js";
 import { sendCardFeishu, sendMessageFeishu } from "./send.js";
 
@@ -274,6 +275,26 @@ export async function handleFeishuCardAction(params: {
         const question = parseFeishuQuestionEnvelope(envelope);
         if (!question) {
           await sendInvalidInteractionNotice("malformed");
+          return;
+        }
+        const answerChatType = await resolveCardActionChatType(envelope.c?.t);
+        if (!answerChatType) {
+          await sendNotice("This question card no longer resolves to a known conversation.");
+          return;
+        }
+        const authorized = await authorizeFeishuQuestionCallback({
+          cfg,
+          accountId,
+          chatId: event.context.chat_id,
+          chatType: answerChatType === "group" ? "group" : "p2p",
+          senderOpenId: event.operator.open_id,
+          senderUserId: event.operator.user_id,
+        });
+        if (!authorized) {
+          log(
+            `feishu[${account.accountId}]: rejected question answer from ${event.operator.open_id}: sender is not admitted in this conversation`,
+          );
+          await sendNotice("Your Feishu account is not allowed to answer this question here.");
           return;
         }
         const result = await questionGatewayRuntime.resolveOption({

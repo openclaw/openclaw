@@ -41,6 +41,8 @@ import {
   type SendMediaResult,
 } from "./media.js";
 import { readNativeFeishuCardJson } from "./native-card.js";
+import { resolveFeishuQuestionCardBinding } from "./question-callback.js";
+import { registerFeishuQuestionDelivery } from "./question-delivery.js";
 import type { FeishuOutboundSendMedia } from "./outbound-types.js";
 import {
   assertFeishuCardWithinEnvelope,
@@ -466,7 +468,27 @@ export const feishuOutbound: ChannelOutboundAdapter = withFeishuOutboundSendCont
       payload,
       text: ctx.text,
       identity: ctx.identity,
+      questionBinding: resolveFeishuQuestionCardBinding(ctx.to),
     });
+    const sendQuestionCard = async (replyMode: {
+      replyToMessageId?: string;
+      replyInThread?: boolean;
+    }) => {
+      const result = await sendCardFeishu({
+        cfg: ctx.cfg,
+        to: ctx.to,
+        card,
+        accountId: ctx.accountId ?? undefined,
+        ...replyMode,
+      });
+      registerFeishuQuestionDelivery({
+        cfg: ctx.cfg,
+        accountId: ctx.accountId ?? undefined,
+        payload,
+        result,
+      });
+      return result;
+    };
     if (!card) {
       const { presentation } = resolveFeishuRichReply(payload);
       const fallbackPayload = presentation
@@ -514,14 +536,7 @@ export const feishuOutbound: ChannelOutboundAdapter = withFeishuOutboundSendCont
           return attachChannelToResult(
             "feishu",
             toFeishuOutboundResult(
-              await sendCardFeishu({
-                cfg: ctx.cfg,
-                to: ctx.to,
-                card,
-                replyToMessageId,
-                replyInThread,
-                accountId: ctx.accountId ?? undefined,
-              }),
+              await sendQuestionCard({ replyToMessageId, replyInThread }),
             ),
           );
         },
@@ -569,14 +584,7 @@ export const feishuOutbound: ChannelOutboundAdapter = withFeishuOutboundSendCont
           },
           finalize: async () => {
             const { replyToMessageId, replyInThread } = nextReplyMode();
-            return await sendCardFeishu({
-              cfg: ctx.cfg,
-              to: ctx.to,
-              card,
-              replyToMessageId,
-              replyInThread,
-              accountId: ctx.accountId ?? undefined,
-            });
+            return await sendQuestionCard({ replyToMessageId, replyInThread });
           },
         }),
       ),

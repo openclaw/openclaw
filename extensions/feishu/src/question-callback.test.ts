@@ -3,6 +3,7 @@ import {
   buildFeishuQuestionButtonEnvelope,
   FEISHU_QUESTION_ACTION,
   parseFeishuQuestionEnvelope,
+  resolveFeishuQuestionCardBinding,
 } from "./question-callback.js";
 
 const QUESTION_ID = "ask_0123456789abcdef0123456789abcdef";
@@ -100,5 +101,33 @@ describe("parseFeishuQuestionEnvelope", () => {
         m: { questionId: QUESTION_ID, optionIndex: 1.5 },
       }),
     ).toBeUndefined();
+  });
+});
+
+describe("resolveFeishuQuestionCardBinding", () => {
+  it("binds DM questions to the user and group questions to the chat", () => {
+    expect(resolveFeishuQuestionCardBinding("user:ou_abc")).toEqual({
+      userId: "ou_abc",
+      chatType: "p2p",
+    });
+    expect(resolveFeishuQuestionCardBinding("chat:oc_abc")).toEqual({
+      chatId: "oc_abc",
+      chatType: "group",
+    });
+    expect(resolveFeishuQuestionCardBinding("")).toBeUndefined();
+  });
+});
+
+describe("question card binding", () => {
+  it("carries the conversation binding into the envelope", () => {
+    const envelope = buildFeishuQuestionButtonEnvelope({
+      button: {
+        label: "Yes",
+        action: { type: "question", questionId: QUESTION_ID, optionValue: "Yes" },
+      },
+      questionOptionIndices: optionIndices,
+      binding: { chatId: "oc_chat", chatType: "group" },
+    });
+    expect(envelope?.c).toEqual({ h: "oc_chat", t: "group" });
   });
 });
