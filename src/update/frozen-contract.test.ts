@@ -214,7 +214,7 @@ it("exchanges real candidate ready and stop frames with a pinned format-4 peer",
       ),
       signal,
     );
-    // Accept the existing launcher acknowledgment without imposing a separate client deadline.
+    // Returning can also use the supported file fallback; this does not pin ACK parsing latency.
     expect(child.exitCode).toBeNull();
     expect(child.signalCode).toBeNull();
     child.send({ type: "openclaw.stop" });
