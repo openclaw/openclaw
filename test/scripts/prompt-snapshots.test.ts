@@ -39,8 +39,8 @@ function renderedPromptSection(content: string, heading: string, nextHeading: st
   return content.slice(start, end);
 }
 
-// Codex app-server Telegram turn: measured on main plus 5%, rounded up to 256 B. A change that
-// shrinks either surface lowers its ceiling in the same PR.
+// Codex app-server Telegram turn: the bytes measured on main when set, plus 5%, rounded up to
+// 256 B. Growth within that margin passes; lower a ceiling when a change shrinks its surface.
 const CODEX_APP_SERVER_PROMPT_BUDGET_BYTES = 13_824;
 const CODEX_APP_SERVER_TOOLS_BUDGET_BYTES = 65_792;
 
@@ -152,17 +152,16 @@ describe("happy path prompt snapshots", () => {
       }
       return file.content;
     };
-    // Every model-bound layer is a `text` fence after this heading; renderer prose is not.
+    // Every model-bound layer is a fenced block after this heading; metadata fences are `json`.
     const snapshot = content(CODEX_PROMPT_SNAPSHOT_FILES["telegram-direct"]);
     const layersStart = snapshot.indexOf("## Reconstructed Model-Bound Prompt Layers");
     if (layersStart === -1) {
       throw new Error("Missing model-bound prompt layers");
     }
     const layers = snapshot.slice(layersStart);
-    const promptBytes = [...layers.matchAll(/^(`{3,})text\n([\s\S]*?)\n\1$/gmu)].reduce(
-      (sum, match) => sum + Buffer.byteLength(match[2], "utf8"),
-      0,
-    );
+    const promptBytes = [...layers.matchAll(/^(`{3,})(\w*)\n([\s\S]*?)\n\1$/gmu)]
+      .filter((match) => match[2] !== "json")
+      .reduce((sum, match) => sum + Buffer.byteLength(match[3], "utf8"), 0);
     expect.soft(promptBytes).toBeLessThanOrEqual(CODEX_APP_SERVER_PROMPT_BUDGET_BYTES);
     const tools = JSON.stringify(JSON.parse(content("codex-dynamic-tools.telegram-direct.json")));
     expect

@@ -64,6 +64,8 @@ async function prepareRoute(route: {
   sessionKey: string;
   attempt: Partial<EmbeddedRunAttemptInternalParams>;
   contextFiles: Array<{ path: string; content: string }>;
+  /** A fresh install still runs BOOTSTRAP.md; a configured agent recorded setup complete. */
+  bootstrapMode: "full" | "none";
 }) {
   setRuntimeConfigSnapshot(config);
   await using resources = new AsyncDisposableStack();
@@ -137,7 +139,14 @@ async function prepareRoute(route: {
   const prepared = await prepareEmbeddedAttemptSystemPrompt({
     attempt,
     activeContextEngine: undefined,
-    bootstrap: { ...createEmptyPromptBootstrap(), contextFiles: route.contextFiles },
+    bootstrap: {
+      ...createEmptyPromptBootstrap(),
+      contextFiles: route.contextFiles,
+      bootstrapMode: route.bootstrapMode,
+      bootstrapCompleted: route.bootstrapMode === "none",
+    },
+    // The checkout path appears in the prompt; pin it so every host measures the same bytes.
+    referencePaths: { docsPath: "/repo/docs", sourcePath: "/repo" },
     capabilityToolNames: catalog.toolSearchRunPlan.capabilityToolNames,
     effectiveTools: catalog.effectiveTools,
     setup,
@@ -175,6 +184,7 @@ it("keeps a fresh Gateway WebChat turn within its prompt and tool budgets", asyn
         origin: { provider: "webchat", surface: "webchat", chatType: "direct" },
       }),
     },
+    bootstrapMode: "full",
     contextFiles: [
       { path: "/workspace/AGENTS.md", content: "[MISSING] Expected at: /workspace/AGENTS.md" },
     ],
@@ -209,6 +219,7 @@ it("keeps a configured Telegram agent within its prompt and tool budgets", async
         origin: { provider: "telegram", surface: "telegram", chatType: "direct" },
       }),
     },
+    bootstrapMode: "none",
     contextFiles: [
       { path: "/workspace/AGENTS.md", content: "# AGENTS.md\n\nRead SOUL.md first." },
       { path: "/workspace/SOUL.md", content: "# SOUL.md\n\nYou are Pip." },
