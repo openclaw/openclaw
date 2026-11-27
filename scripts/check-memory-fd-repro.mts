@@ -7,7 +7,6 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { setTimeout as sleep } from "node:timers/promises";
-import { pathToFileURL } from "node:url";
 import { safeParseJson } from "../packages/normalization-core/src/json-coercion.ts";
 import { resolveTimerTimeoutMs } from "../packages/normalization-core/src/number-coercion.ts";
 import { asNullableRecord as asRecord } from "../packages/normalization-core/src/record-coerce.ts";
@@ -15,6 +14,7 @@ import { readNonBlankString } from "../packages/normalization-core/src/string-co
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mts";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 import { createBuildSmokeEnv } from "./lib/build-smoke-env.mts";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { formatErrorMessage } from "./lib/error-format.mts";
 import { hasUnjoinedWork, runManagedCommand } from "./lib/managed-child-process.mts";
 import { parseStrictNonNegativeDecimal as parseNonNegativeInteger } from "./lib/numeric-options.mjs";
@@ -911,7 +911,7 @@ async function main() {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   main().catch((error: unknown) => {
     console.error(
       `[memory-fd-repro] failed: ${error instanceof Error ? error.message : String(error)}`,
