@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
+import * as triageUpdate from "../../commands/triage-update.js";
 import * as config from "../../config/config.js";
 import * as launchd from "../../daemon/launchd.js";
 import * as scheduledTasks from "../../daemon/schtasks-control.js";
@@ -15,7 +16,6 @@ import { resolvePackageActivationAnchor } from "../../infra/package-update-activ
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
-import * as failureArtifacts from "../../infra/update-failure-report-artifact.js";
 import {
   POST_CORE_UPDATE_CHANNEL_ENV,
   POST_CORE_UPDATE_ENV,
@@ -200,7 +200,7 @@ function pendingPackageInvocation(
         .spyOn(launchd, "disableCurrentOpenClawUpdateLaunchdJob")
         .mockResolvedValue(false),
       prepareTriage: vi.spyOn(triage, "prepareUpdateFailureTriage").mockResolvedValue(runTriage),
-      writeTriage: vi.spyOn(failureArtifacts, "writeTriageUpdateFailure"),
+      writeTriage: vi.spyOn(triageUpdate, "writeTriageUpdateFailure"),
       runTriage,
       loadPlugins: vi.spyOn(installedPlugins, "loadInstalledPluginIndexInstallRecords"),
       resumePostCore: vi

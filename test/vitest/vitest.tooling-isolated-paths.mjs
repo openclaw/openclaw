@@ -1,5 +1,7 @@
 // Tooling tests that need fresh module or process state instead of shared workers.
 export const toolingIsolatedTestFiles = [
+  // Native request screening reopens a real chat through the host-owned SQLite broker.
+  "test/model-request-provider-policy.test.ts",
   // Personal account authority uses the host-owned shared-state broker.
   "test/codex-account-usage.integration.test.ts",
   // The real migration owner acquires maintenance authority through the main-thread broker.
