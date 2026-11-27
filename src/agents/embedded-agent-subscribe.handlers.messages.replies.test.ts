@@ -153,6 +153,40 @@ describe("consumePendingToolMediaIntoReply", () => {
 });
 
 describe("pending tool-media reply ownership", () => {
+  it("omits queued tool media that a message tool already delivered", () => {
+    const state = {
+      pendingToolMediaUrls: ["file:///tmp/already-sent.jpg", "/tmp/keep.jpg"],
+      pendingToolMediaAttachments: [
+        { type: "image" as const, path: "/tmp/already-sent.jpg" },
+        { type: "image" as const, path: "/tmp/keep.jpg" },
+      ],
+      pendingToolMediaTrustByUrl: new Map([
+        ["file:///tmp/already-sent.jpg", true],
+        ["/tmp/keep.jpg", false],
+      ]),
+      pendingToolAudioAsVoice: false,
+      messagingToolSentMediaUrls: ["/tmp/already-sent.jpg"],
+    };
+
+    expect(readPendingToolMediaReply(state)).toEqual({
+      mediaUrls: ["/tmp/keep.jpg"],
+      attachments: [{ type: "image", path: "/tmp/keep.jpg" }],
+      audioAsVoice: undefined,
+    });
+  });
+
+  it("does not return a voice-only reply when all queued media was already delivered", () => {
+    const state = {
+      pendingToolMediaUrls: ["/tmp/already-sent.opus"],
+      pendingToolMediaAttachments: [{ type: "audio" as const, path: "/tmp/already-sent.opus" }],
+      pendingToolMediaTrustByUrl: new Map([["/tmp/already-sent.opus", true]]),
+      pendingToolAudioAsVoice: true,
+      messagingToolSentMediaUrls: ["/tmp/already-sent.opus"],
+    };
+
+    expect(readPendingToolMediaReply(state)).toBeNull();
+  });
+
   it("reads a media-only reply without consuming queued tool media", () => {
     const state = {
       pendingToolMediaUrls: ["/tmp/reply.opus"],

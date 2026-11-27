@@ -4,6 +4,7 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-directives.js";
+import { normalizeMediaReferenceForComparison } from "../media/media-reference-comparison.js";
 import type { BlockReplyPayload } from "./embedded-agent-payloads.js";
 import type { EmbeddedAgentSubscribeState } from "./embedded-agent-subscribe.handlers.types.js";
 
@@ -13,7 +14,8 @@ type PendingToolMediaState = Pick<
   | "pendingToolMediaAttachments"
   | "pendingToolMediaTrustByUrl"
   | "pendingToolAudioAsVoice"
->;
+> &
+  Partial<Pick<EmbeddedAgentSubscribeState, "messagingToolSentMediaUrls">>;
 
 export function hasReplyDirectiveMetadata(
   parsed: ReplyDirectiveParseResult | null | undefined,
@@ -113,10 +115,21 @@ export function readPendingToolMediaReply(state: PendingToolMediaState): BlockRe
   if (state.pendingToolMediaUrls.length === 0 && !state.pendingToolAudioAsVoice) {
     return null;
   }
+  // A message tool may directly deliver the same artifact whose media reference
+  // is also present in its result. That reference is still queued for assistant
+  // auto-delivery unless we filter it using the confirmed send evidence.
+  const sentMedia = new Set(
+    (state.messagingToolSentMediaUrls ?? [])
+      .map(normalizeMediaReferenceForComparison)
+      .filter(Boolean),
+  );
   const seen = new Set<string>();
   const mediaUrls: string[] = [];
   const attachments: NonNullable<BlockReplyPayload["attachments"]> = [];
   for (const [index, url] of state.pendingToolMediaUrls.entries()) {
+    if (sentMedia.has(normalizeMediaReferenceForComparison(url))) {
+      continue;
+    }
     if (seen.has(url)) {
       continue;
     }
@@ -135,10 +148,16 @@ export function readPendingToolMediaReply(state: PendingToolMediaState): BlockRe
   const allPendingMediaTrusted =
     mediaUrls.length > 0 &&
     mediaUrls.every((url) => state.pendingToolMediaTrustByUrl.get(url) === true);
+  const audioAsVoice =
+    state.pendingToolAudioAsVoice &&
+    (mediaUrls.length > 0 || state.pendingToolMediaUrls.length === 0);
+  if (mediaUrls.length === 0 && !audioAsVoice) {
+    return null;
+  }
   return {
     mediaUrls: mediaUrls.length ? mediaUrls : undefined,
     attachments: alignedAttachments,
-    audioAsVoice: state.pendingToolAudioAsVoice || undefined,
+    audioAsVoice: audioAsVoice || undefined,
     ...(allPendingMediaTrusted ? { trustedLocalMedia: true } : {}),
   };
 }
