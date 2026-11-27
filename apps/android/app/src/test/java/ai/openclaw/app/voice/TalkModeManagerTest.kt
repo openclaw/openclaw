@@ -1013,6 +1013,29 @@ class TalkModeManagerTest {
       }
     }
 
+  @Test
+  fun nativeTalkKeepsSpeakFailureNoticeAfterListeningResumes() =
+    runBlocking {
+      withNativeTalk { proof, _ ->
+        proof.synthesizer.result.complete(TalkSpeakResult.Failure("synthesis failed"))
+        currentRecognizer().triggerOnResults(recognitionResults("Speak this reply"))
+        advanceTalkSilence(proof)
+        awaitTalkWork(proof) { proof.manager.isListening.value }
+        val resumed = currentRecognizer()
+        resumed.triggerOnReadyForSpeech(Bundle())
+        resumed.triggerOnError(SpeechRecognizer.ERROR_SPEECH_TIMEOUT)
+
+        val notice = checkNotNull(proof.manager.failureNotice.value) { "The failed reply must stay noticed while Talk listens again" }
+        assertEquals("Speak failed: synthesis failed", notice.text)
+        proof.manager.acknowledgeFailure(notice)
+        assertNull(proof.manager.failureNotice.value)
+        assertEquals(
+          "Listening — Native Talk: Gateway did not advertise GPT-Live relay support; using device speech recognition and configured Talk voice.",
+          proof.manager.statusText.value,
+        )
+      }
+    }
+
   private fun nativeTalkConfig(
     locale: String,
     interrupt: Boolean? = null,

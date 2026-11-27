@@ -143,6 +143,12 @@ private data class TalkStatus(
   val owner: TalkStatusOwner = TalkStatusOwner(),
   val route: TalkModeRoute? = null,
   val failureAcknowledged: Boolean = false,
+  val turnFailure: TalkTurnFailure? = null,
+)
+
+/** A failed native Talk turn; its identity is the notice owner. */
+private class TalkTurnFailure(
+  val text: NativeText,
 )
 
 private val TalkModeRoute.description: NativeText?
@@ -249,9 +255,11 @@ class TalkModeManager internal constructor(
   /** The current unacknowledged failure; dismissal leaves the diagnostic status intact. */
   internal val failureNotice: StateFlow<TalkFailureNotice?> =
     LocaleResolvingStateFlow(status) { status ->
-      status
-        .takeIf { it.state == TalkStatusState.TalkFailure && !it.failureAcknowledged }
-        ?.let { TalkFailureNotice(it.text.resolveNativeText(), it.owner) }
+      if (status.state == TalkStatusState.TalkFailure && !status.failureAcknowledged) {
+        TalkFailureNotice(status.text.resolveNativeText(), status.owner)
+      } else {
+        status.turnFailure?.let { TalkFailureNotice(it.text.resolveNativeText(), it) }
+      }
     }
 
   private fun setStatus(
@@ -264,11 +272,24 @@ class TalkModeManager internal constructor(
   }
 
   private fun setStatus(next: TalkStatus) {
-    status.value = if (next.state == TalkStatusState.Active) next else next.copy(route = null)
+    status.update { current ->
+      when {
+        next.state != TalkStatusState.Active -> next.copy(route = null)
+
+        // Resumed listening keeps a failed turn's notice until the next turn starts or it is dismissed.
+        !next.awaitingAgent && next.turnFailure == null -> next.copy(turnFailure = current.turnFailure)
+
+        else -> next
+      }
+    }
   }
 
   private fun setTalkFailure(text: NativeText) {
     setStatus(text, state = TalkStatusState.TalkFailure)
+  }
+
+  private fun setTurnFailure(text: NativeText) {
+    setStatus(TalkStatus(text = text, state = TalkStatusState.Active, route = currentStatus.route, turnFailure = TalkTurnFailure(text)))
   }
 
   /** Dismisses this failure across Chat recreation while retaining its terminal status. */
@@ -277,6 +298,8 @@ class TalkModeManager internal constructor(
       status.update { current ->
         if (current.state == TalkStatusState.TalkFailure && current.owner === notice.owner) {
           current.copy(failureAcknowledged = true)
+        } else if (current.turnFailure === notice.owner) {
+          current.copy(turnFailure = null)
         } else {
           current
         }
@@ -2435,7 +2458,7 @@ class TalkModeManager internal constructor(
       val ack = sendChat(transcript)
       val runId = ack.runId ?: throw IllegalStateException("chat.send returned no run id")
       if (ack.isTerminalFailure) {
-        setStatus(if (ack.normalizedStatus == "error") nativeText("Chat error") else nativeText("Aborted"))
+        if (ack.normalizedStatus == "error") setTurnFailure(nativeText("Chat error")) else setStatus(nativeText("Aborted"))
         return
       }
       val ok = if (ack.isTerminalSuccess) true else waitForChatFinal(runId)
@@ -2450,7 +2473,7 @@ class TalkModeManager internal constructor(
             if (ok) 12_000 else 25_000,
           )
       if (assistant.isNullOrBlank()) {
-        setStatus(nativeText("No reply"))
+        setTurnFailure(nativeText("No reply"))
         Log.w(tag, "assistant text timeout runId=$runId")
         return
       }
@@ -2460,7 +2483,7 @@ class TalkModeManager internal constructor(
       supervisorScope {
         val playback = async { playAssistant(assistant, playbackToken) }
         try {
-          playback.await()
+          playback.await()?.let(::setTurnFailure)
         } catch (err: CancellationException) {
           currentCoroutineContext().ensureActive()
         }
@@ -2470,7 +2493,7 @@ class TalkModeManager internal constructor(
         Log.d(tag, "finalize speech cancelled")
         return
       }
-      setTalkFailure(nativeText("Talk failed: \$message", err.message ?: err::class.simpleName.orEmpty()))
+      setTurnFailure(nativeText("Talk failed: \$message", err.message ?: err::class.simpleName.orEmpty()))
       Log.w(tag, "finalize failed: ${err.message ?: err::class.simpleName}")
     } finally {
       if (currentCoroutineContext().isActive && _isEnabled.value) start()
@@ -2750,10 +2773,11 @@ class TalkModeManager internal constructor(
     return null
   }
 
+  /** Returns the playback failure, which the caller may raise as a notice. */
   private suspend fun playAssistant(
     text: String,
     playbackToken: Long,
-  ) {
+  ): NativeText? {
     val lease = PlaybackLease(playbackToken, checkNotNull(coroutineContext[Job]))
     var shouldResumeAfterSpeak = false
     var failure: NativeText? = null
@@ -2770,7 +2794,7 @@ class TalkModeManager internal constructor(
       if (parsed.unknownKeys.isNotEmpty()) Log.w(tag, "Unknown talk directive keys: count=${parsed.unknownKeys.size}")
       val directive = parsed.directive
       val cleaned = parsed.stripped.trim()
-      if (cleaned.isEmpty()) return
+      if (cleaned.isEmpty()) return null
       synchronized(playbackLock) {
         ensurePlaybackActive(playbackToken)
         lastSpokenText = cleaned
@@ -2803,7 +2827,7 @@ class TalkModeManager internal constructor(
       } catch (err: Throwable) {
         if (err is CancellationException || !playbackEnabled || playbackToken != playbackGeneration.get()) {
           Log.d(tag, "assistant speech cancelled")
-          return
+          return null
         }
         failure = nativeText("Speak failed: \$message", err.message ?: err::class.simpleName.orEmpty())
         Log.w(tag, "talk playback failed: ${err.message ?: err::class.simpleName}")
@@ -2827,6 +2851,7 @@ class TalkModeManager internal constructor(
         }
       }
     }
+    return failure
   }
 
   private fun cancelActivePlayback(): Long {
