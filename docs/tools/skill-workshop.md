@@ -58,11 +58,12 @@ Gateway, see [Personal library authoring](/tools/skill-workshop/personal-library
 - **Skill diet:** once a day, one oversized learned skill is shrunk without
   changing its rules. See [Skill diet](#skill-diet).
 
-When you edit a local, file-backed Workshop skill, the current turn keeps the
-skill catalog it received in its prompt. A later `skills_read` call for that
-skill in the same turn reads the updated `SKILL.md`. Once OpenClaw publishes
-the refreshed catalog, the next turn uses it, whether you continue the same
-session or start a new one.
+When you edit a Workshop skill, the current turn keeps the skill catalog it
+received in its prompt. If the run reads the local file directly, a later
+`skills_read` call in that turn sees the updated `SKILL.md`. A worker that
+received a copy keeps using that copy for the rest of the turn. Once OpenClaw
+publishes the refreshed catalog, the next turn uses it in the same session or
+a new one.
 
 <a id="changes-and-recovery" />
 
