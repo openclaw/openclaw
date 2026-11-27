@@ -99,6 +99,10 @@ struct SettingsSectionTitle: View {
         self.text = Text(title)
     }
 
+    init(verbatim title: String) {
+        self.text = Text(verbatim: title)
+    }
+
     var body: some View {
         self.text
             .font(SettingsType.sectionTitle)

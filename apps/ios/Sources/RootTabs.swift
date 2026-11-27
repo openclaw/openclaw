@@ -781,6 +781,8 @@ struct RootTabs: View {
                             self.presentedSheet = nil
                             self.selectSidebarDestination(destination)
                         },
+                        onTrySkill: self.trySkillAction,
+                        toolQuery: self.settingsToolQuery,
                         gatewaySetupRequest: self.gatewaySetupRequest,
                         onGatewaySetupRequestHandled: self.handleGatewaySetupRequest)
                         .presentationDragIndicator(.visible)
@@ -887,6 +889,16 @@ extension RootTabs {
             isSceneActive: true,
             isOnboardingPresented: self.showOnboarding,
             hasGatewayConfiguration: self.hasExistingGatewayConfig() || self.appModel.gatewayServerName != nil)
+    }
+
+    private var trySkillAction: ((String) -> Void)? {
+        guard let viewModel = self.appModel.chatPresentation.viewModel else { return nil }
+        return { draft in
+            guard self.appModel.chatPresentation.viewModel === viewModel else { return }
+            viewModel.input = viewModel.input.isEmpty ? draft : viewModel.input + "\n\n" + draft
+            self.presentedSheet = nil
+            self.selectSidebarDestination(.chat)
+        }
     }
 
     private func showSettings(path: [SettingsRoute] = [], toolQuery: String = "") {

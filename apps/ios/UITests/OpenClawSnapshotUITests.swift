@@ -323,6 +323,10 @@ final class OpenClawSnapshotUITests: XCTestCase {
         for _ in 0..<8 where !gateway.isHittable {
             hub.swipeUp()
         }
+        let chat = hub.buttons["Chat"]
+        let skills = hub.buttons["Skills"]
+        XCTAssertLessThan(chat.frame.minY, skills.frame.minY)
+        XCTAssertLessThan(skills.frame.minY, gateway.frame.minY)
         gateway.tap()
         let details = app.buttons["Connection details"]
         XCTAssertTrue(details.waitForExistence(timeout: 5))

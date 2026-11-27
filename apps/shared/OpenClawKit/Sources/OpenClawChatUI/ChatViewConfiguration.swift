@@ -115,9 +115,30 @@ public struct OpenClawChatDisplayOptions: OptionSet, Sendable {
     public static let reasoning = Self(rawValue: 1 << 0)
     public static let toolActivity = Self(rawValue: 1 << 1)
     public static let assistantTrace: Self = [.reasoning, .toolActivity]
+    /// Commentary streamed between tool calls goes away once its run finishes (web "Keep commentary"
+    /// off, chat-thread-facts.ts `isHiddenChatCommentary`). The running turn keeps its own.
+    public static let hidesFinishedCommentary = Self(rawValue: 1 << 2)
 
     public static func assistantTrace(_ isVisible: Bool) -> Self {
         isVisible ? .assistantTrace : []
+    }
+}
+
+extension OpenClawChatDisplayOptions {
+    /// What the View switches decide before the row's own content does; nil leaves it to the content.
+    func presetVisibility(of message: OpenClawChatMessage, activeRunIDs: Set<String>) -> Bool? {
+        if self.contains(.hidesFinishedCommentary), message.streamSegmentID != nil,
+           !(message.workRunID.map(activeRunIDs.contains) ?? false)
+        {
+            return false
+        }
+        // Hidden tool calls keep the rows that hand work off (web chat-thread-build.ts:339-349).
+        if !self.contains(.toolActivity), message.content.contains(where: { block in
+            block.isToolCall && block.name.map { ChatToolActivityItem.handoffToolNames.contains($0) } == true
+        }) {
+            return true
+        }
+        return nil
     }
 }
 
