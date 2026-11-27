@@ -477,7 +477,11 @@ export async function planOpenClawModelsJson(params: {
   )}\n`;
 
   if (params.existingRaw === nextContents && Object.keys(pluginCatalogWrites).length === 0) {
-    return { action: "noop", pluginCatalogWrites, skippedProviders: [...skippedProviders] };
+    return {
+      action: "noop",
+      pluginCatalogWrites,
+      ...(skippedProviders.size > 0 ? { skippedProviders: [...skippedProviders] } : {}),
+    };
   }
 
   return {
