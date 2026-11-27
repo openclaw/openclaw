@@ -7,6 +7,7 @@ import { isSubagentDeliveryClosed } from "./subagent-delivery-state.js";
 import { getSubagentRunsForChildSession } from "./subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import { latestSubagentRun } from "./subagent-run-generation.js";
 
 type ProgressItem = Parameters<ProgressContinuationDraft["push"]>[0];
@@ -79,7 +80,7 @@ function projectActivity(event: AgentEventPayload, itemId: string): ProgressItem
 }
 
 function projectChild(entry: SubagentRunRecord): ProgressItem {
-  const paused = entry.pauseReason === "sessions_yield";
+  const paused = isSubagentPausedByYield(entry);
   const ended = entry.execution.status === "terminal" && !paused;
   const outcome = ended ? entry.execution.outcome?.status : undefined;
   return {

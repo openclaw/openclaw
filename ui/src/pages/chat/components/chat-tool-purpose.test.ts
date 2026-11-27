@@ -676,7 +676,7 @@ it("uses names already available to chat rows without exposing unresolved routin
 it.each([
   [undefined, "Delivery unconfirmed · Release review"],
   [{ status: "other" }, "Delivery unconfirmed · Release review"],
-  [{ status: "accepted", targetDisposition: "queued" }, "Message accepted for Release review"],
+  [{ status: "accepted", targetDisposition: "queued" }, "Sent message to Release review"],
   [{ status: "queued", runStarted: false }, "Queued message to Release review"],
   [
     { status: "started", retained: { acceptance: "not_accepted" } },
@@ -684,7 +684,7 @@ it.each([
   ],
   [{ status: "ok", reply: "Received" }, "Sent message to Release review"],
   [{ status: "no_reply" }, "Sent message to Release review"],
-] as const)("does not equate a completed send call with delivery: %j", async (receipt, label) => {
+] as const)("labels session sends from their receipts: %j", async (receipt, label) => {
   const args = { label: "Release review", message: "Please review the change" };
   const container = await mountCard(
     {
@@ -739,7 +739,7 @@ it.each([
         result: { content: [{ type: "text", text: JSON.stringify({ status: "accepted" }) }] },
       }),
     },
-    "Message accepted for Review",
+    "Sent message to Review",
   ],
 ] as const)(
   "keeps the actual phase and receipt through display normalization: %j",

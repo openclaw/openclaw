@@ -1249,9 +1249,15 @@ Document cards show a labeled **Download** action without hovering, both in the
 transcript and in the **Files** panel when no preview is available.
 Uploaded images also retain their names in accessible transcript image and image-viewer labels after sending and reloading; descriptive alt text takes precedence when provided.
 Select **Open** on an uploaded text attachment to read it directly in the **Files** side
-panel. Plain-text attachments, CSV, and JSON preserve line breaks and indentation. Markdown attachments render as documents
-with interactive code blocks. When an open attachment refreshes with unchanged
-text, its code blocks keep your expansion and wrapping choices after loading.
+panel. Plain-text attachments, CSV, and JSON preserve line breaks and indentation.
+CSV attachments open as tables with the first record as column headers. If the
+file declares `text/csv; header=absent`, every record appears as a data row.
+Use **View raw text** to see the original CSV. Files with malformed quoting or
+more than 10,000 cells open directly as raw text.
+
+Markdown attachments render as documents with interactive code blocks. When an
+open attachment refreshes with unchanged text, its code blocks keep your
+expansion and wrapping choices after loading.
 A different attachment or changed text starts with fresh controls. Long previews
 scroll inside their file tab; switching tabs preserves your reading position. HTML files
 (`.html`, `.htm`, or `text/html`, including MIME parameters) render as a sandboxed

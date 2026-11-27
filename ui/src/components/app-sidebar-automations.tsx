@@ -43,7 +43,7 @@ function automationByline(job: CronCompactJob): string {
   return [next, cadence].filter(Boolean).join(" · ");
 }
 
-/** The Automations section: New automation, Activity, then active and (collapsed) paused
+/** The Automations section: New automation, Activity, then failing, active and (collapsed) paused
     automations. */
 export function SidebarAutomations(props: {
   host: Pick<AppSidebarRenderHost, "basePath" | "activeRouteId" | "onNavigate">;
@@ -149,10 +149,17 @@ export function SidebarAutomations(props: {
           : direction * (leftMs - rightMs);
       });
   });
-  const activeJobs = () =>
-    automationsFilter().status === "paused" ? [] : shown().filter((job) => job.enabled);
-  const pausedJobs = () =>
-    automationsFilter().status === "active" ? [] : shown().filter((job) => !job.enabled);
+  // Failing automations get their own group above Active and Paused, so a collapsed group never
+  // hides them.
+  const failing = (job: CronCompactJob) => job.autoDisabled || job.lastRunStatus === "error";
+  const listedJobs = () => {
+    const status = automationsFilter().status;
+    return shown().filter((job) => status === "all" || (status === "active") === job.enabled);
+  };
+  const failedJobs = () => listedJobs().filter(failing);
+  const activeJobs = () => listedJobs().filter((job) => job.enabled && !failing(job));
+  const pausedJobs = () => listedJobs().filter((job) => !job.enabled && !failing(job));
+  const [failedOpen, setFailedOpen] = createSignal(true);
   const [activeOpen, setActiveOpen] = createSignal(true);
   const [pausedOpen, setPausedOpen] = createSignal(false);
   // What the page has open, as the page records it for returning to Automations.
@@ -179,7 +186,7 @@ export function SidebarAutomations(props: {
           <span class="sidebar-automations__name">{row.job.displayName ?? row.job.name}</span>
           <span class="sidebar-automations__byline">{automationByline(row.job)}</span>
         </span>
-        <Show when={row.job.autoDisabled || row.job.lastRunStatus === "error"}>
+        <Show when={failing(row.job)}>
           <span class="sidebar-automations__failed" role="img" aria-label={t("common.failed")} />
         </Show>
       </a>
@@ -232,6 +239,17 @@ export function SidebarAutomations(props: {
         </span>
         <span class="nav-item__text">{t("cron.list.runHistory")}</span>
       </a>
+      <Show when={failedJobs().length > 0}>
+        <SidebarListGroup
+          label={t("chat.sessionDetails.automationAttention")}
+          open={failedOpen()}
+          onToggle={() => setFailedOpen(!failedOpen())}
+        >
+          <For each={failedJobs()} keyed={(job) => job.id}>
+            {(job) => <Row job={job()} />}
+          </For>
+        </SidebarListGroup>
+      </Show>
       <Show when={activeJobs().length > 0}>
         <SidebarListGroup
           label={t("cron.tabs.active")}

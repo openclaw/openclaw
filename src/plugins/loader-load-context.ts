@@ -421,11 +421,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     selectContextEngineOwner(
       manifestPlugins: readonly ContextEngineOwnerMetadata[],
     ): PluginRuntimeLoadContextState["selectedContextEngine"] {
-      const records =
-        currentMetadataSnapshot?.registryIndex.plugins.map((plugin) => ({
-          id: plugin.pluginId,
-          contextEngineIds: plugin.contextEngineIds,
-        })) ?? manifestPlugins;
+      const records = currentMetadataSnapshot?.registryIndex.plugins ?? manifestPlugins;
       const current = capture();
       const engineId = current.normalized.slots.contextEngine;
       const eligibleOwners = resolveEligibleContextEngineOwnerIds(

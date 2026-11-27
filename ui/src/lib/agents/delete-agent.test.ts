@@ -55,7 +55,9 @@ it.each(["cancel", "selection", "client", "permission", "method", "roster", "onl
         current = false;
       }
       if (change === "client") {
-        source.publish({ ...source.gateway.snapshot, client: createTestGatewayClient(vi.fn()) });
+        source.publish({ ...source.gateway.snapshot, client: createTestGatewayClient(request) });
+        await context.agents.ensureList();
+        expect(canDeleteAgent(context, "research")).toBe(true);
       }
       if (change === "permission" || change === "method") {
         source.publish({
@@ -83,11 +85,14 @@ it.each(["cancel", "selection", "client", "permission", "method", "roster", "onl
 it("excludes system and absent agents and preserves the last normal agent", async () => {
   const { context, roster } = await fixture();
   try {
+    roster.agents = [{ id: "main" }, { id: "research" }, { id: "system", kind: "system" }];
+    await context.agents.refreshList();
+    expect(canDeleteAgent(context, "research")).toBe(true);
+    expect(canDeleteAgent(context, "system")).toBe(false);
+    expect(canDeleteAgent(context, "missing")).toBe(false);
     roster.agents = [{ id: "research" }, { id: "system", kind: "system" }];
     await context.agents.refreshList();
     expect(canDeleteAgent(context, "research")).toBe(false);
-    expect(canDeleteAgent(context, "system")).toBe(false);
-    expect(canDeleteAgent(context, "missing")).toBe(false);
     await deleteAgent(context, { id: "research", name: "Research" });
     expect(confirm).not.toHaveBeenCalled();
   } finally {

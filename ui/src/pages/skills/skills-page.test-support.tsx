@@ -162,9 +162,7 @@ export function mountSkills(
       return mounted.container.querySelector<HTMLElement>("openclaw-skills-page")!;
     },
     container: mounted.container,
-    unmount: mounted.unmount,
     connection,
-    agents,
     context,
     router,
     changeSurface(this: void, next: "discovery" | "settings") {
@@ -175,12 +173,6 @@ export function mountSkills(
       const { report: fixtureReport = report, ...route } = patch;
       nextReport = fixtureReport;
       setRouteData({ ...initialRouteData, ...route });
-      flush();
-      nextReport = null;
-    },
-    refreshRouteData: () => {
-      nextReport = report;
-      setRouteData({ ...initialRouteData });
       flush();
       nextReport = null;
     },

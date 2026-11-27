@@ -13,6 +13,32 @@ read_when:
 
 OpenClaw loads `USER.md` beside `MEMORY.md` at session start. It has a separate small bootstrap budget, and edits are picked up on later turns in a long-lived session. If the file is absent, startup continues without it.
 
+## One USER.md for several agents
+
+Agents with separate workspaces each load their own `USER.md` by default. To
+give several agents the same file, keep one `USER.md` in a directory you own
+and opt each agent in with `sharedUserDir`:
+
+```json5
+{
+  agents: {
+    entries: {
+      work: { workspace: "~/.openclaw/workspace-work", sharedUserDir: "~/openclaw-user" },
+      home: { workspace: "~/.openclaw/workspace-home", sharedUserDir: "~/openclaw-user" },
+    },
+  },
+}
+```
+
+An opted-in agent loads `~/openclaw-user/USER.md` in place of its workspace
+`USER.md`, which it then ignores. Agents without `sharedUserDir` keep their own.
+The file is read on every turn through the same guarded reader as a workspace
+file, confined to that directory, and the `USER.md` cap and personal files below
+still apply. The directory is not part of
+any workspace, so workspace file tools and **Agents → Files** do not show or edit
+it; edit it directly. If it is missing, the agent runs without a `USER.md` and
+logs a warning.
+
 ## Personal USER files on a shared Gateway
 
 Single-user Gateways use only the agent workspace's root `USER.md`, editable in

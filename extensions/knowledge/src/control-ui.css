@@ -2973,6 +2973,7 @@ details[open] > summary > .knowledge-disclosure-label > .knowledge-icon {
 
 /* Conversation-owned Knowledge activity: shared host dock, plugin-owned content. */
 .knowledge-session-panel {
+  max-width: none;
   padding: 18px;
   height: 100%;
   overflow: auto;
