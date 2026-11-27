@@ -206,6 +206,8 @@ export type SidebarRecentSession = Readonly<{
   isChild: boolean;
   loadingChildren: boolean;
   containsActiveDescendant: boolean;
+  /** Loaded descendant work, excluding queue-only and unclassified Gateway activity. */
+  hasRunningDescendant?: boolean;
   runningChildCount: number;
 }>;
 
