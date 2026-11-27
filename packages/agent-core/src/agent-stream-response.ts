@@ -460,11 +460,23 @@ export async function streamAgentResponse(
                         code: DEGENERATE_OUTPUT_ERROR_CODE,
                       }),
                     );
+                    const block = message.content[event.contentIndex];
                     return await finalizeAssistantMessage({
                       ...message,
                       stopReason: "error",
                       errorCode: DEGENERATE_OUTPUT_ERROR_CODE,
                       errorMessage: DEGENERATE_OUTPUT_ERROR_MESSAGE,
+                      // The partial call is dropped; keep attribution without its arguments.
+                      diagnostics: [
+                        ...(message.diagnostics ?? []),
+                        {
+                          type: DEGENERATE_OUTPUT_ERROR_CODE,
+                          timestamp: Date.now(),
+                          details: {
+                            toolName: block?.type === "toolCall" ? block.name : undefined,
+                          },
+                        },
+                      ],
                     });
                   }
                   whitespaceRuns.set(event.contentIndex, run);
