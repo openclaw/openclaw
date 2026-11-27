@@ -101,6 +101,16 @@ describe.each(profiles)("validateToolArguments (%s)", (profile) => {
       }),
     ).toEqual({ path: "a.md", note: null, attachments: [{ media: "a.png" }] });
   });
+  // A non-matching union branch must not drop a null the matching branch requires.
+  it("keeps a null that one union branch requires", () => {
+    const validate = validator({
+      anyOf: [
+        requiredObject({ kind: { const: "clear" }, value: nil }),
+        objectSchema({ kind: { const: "set" }, value: string }, { required: ["kind"] }),
+      ],
+    });
+    expect(validate({ kind: "clear", value: null })).toEqual({ kind: "clear", value: null });
+  });
   it.each([
     { label: "a missing required field", value: {} },
     { label: "an invalid field type", value: { leaf: "invalid" } },

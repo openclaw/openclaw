@@ -428,8 +428,9 @@ function schemaAcceptsNull(schema: unknown): boolean {
 
 /**
  * A strict tool schema makes every key required, so the model sends null for a key the tool
- * leaves optional. Absent is what the tool means: drop those nulls before validation, at every
- * depth the strict projection reaches (properties, array items and union branches).
+ * leaves optional. Absent is what the tool means: drop those nulls before validation, in
+ * properties and array items. Union branches are never projected that way (their tool stays
+ * non-strict), so a null inside a branch is the tool's own value and is left alone.
  */
 function dropNullOptionalArguments(args: unknown, schema: unknown): void {
   if (!isObjectBackedRecord(schema)) {
@@ -443,14 +444,6 @@ function dropNullOptionalArguments(args: unknown, schema: unknown): void {
   }
   if (!isObjectBackedRecord(args)) {
     return;
-  }
-  for (const key of ["anyOf", "oneOf", "allOf"] as const) {
-    const branches = schema[key];
-    if (Array.isArray(branches)) {
-      for (const branch of branches) {
-        dropNullOptionalArguments(args, branch);
-      }
-    }
   }
   const properties = schema.properties;
   if (!isObjectBackedRecord(properties)) {

@@ -94,8 +94,8 @@ describe("OpenAI strict tool schema normalization", () => {
         ["additionalProperties", "required"].map((key) => `parameters.${path}.${key}`),
       ),
     );
-    // The strict projection closes these keyed objects, so the tool can still be strict.
-    expect(isStrictOpenAIJsonSchemaCompatible(schema)).toBe(true);
+    // Nested objects that only list properties stay open, so this tool goes non-strict.
+    expect(isStrictOpenAIJsonSchemaCompatible(schema)).toBe(false);
   });
 
   it.each(["^[a-z]+$", "\\(?=a"])("accepts non-lookaround pattern %s", (pattern) => {
@@ -113,5 +113,46 @@ describe("OpenAI strict tool schema normalization", () => {
     expect(findOpenAIStrictSchemaViolations(schema, "parameters")).toContain(
       "parameters.properties.args.additionalProperties",
     );
+  });
+
+  // The strict projection never narrows: a tool it cannot project exactly goes non-strict.
+  it.each([
+    [
+      "an open nested object",
+      objectSchema({ options: { type: "object", properties: { known: { type: "string" } } } }),
+    ],
+    [
+      "optional keys inside a union of arrays",
+      objectSchema({
+        tags: {
+          anyOf: [
+            {
+              type: "array",
+              items: {
+                type: "object",
+                properties: { name: { type: "string" }, note: { type: "string" } },
+                required: ["name"],
+                additionalProperties: false,
+              },
+            },
+            { type: "null" },
+          ],
+        },
+      }),
+    ],
+  ])("sends a tool with %s non-strict", (_name, schema) => {
+    expect(resolveOpenAIToolStrictFlag(schema, true)).toBe(false);
+  });
+
+  it("keeps an optional untyped enum omittable under strict", () => {
+    const schema = {
+      type: "object",
+      properties: { mode: { enum: ["image", "file"] } },
+      required: [],
+    };
+    expect(normalizeStrictOpenAIJsonSchema(schema)).toMatchObject({
+      required: ["mode"],
+      properties: { mode: { enum: ["image", "file", null] } },
+    });
   });
 });

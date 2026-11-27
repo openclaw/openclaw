@@ -83,6 +83,7 @@ function normalizeToolSchemaRecursive(
   profile: SchemaProfile | `${SchemaProfile}-map`,
   depth = 0,
   inferBranchType = false,
+  unionBranch = false,
 ): unknown {
   const mapProfile =
     profile === "strict-map"
@@ -105,6 +106,7 @@ function normalizeToolSchemaRecursive(
         profile,
         profile === "strict" ? depth : 1,
         inferBranchType,
+        unionBranch,
       );
       changed ||= next !== entry;
       return next;
@@ -160,15 +162,23 @@ function normalizeToolSchemaRecursive(
     let next = value;
     if (profile === "strict") {
       if (SCHEMA_MAP_KEYS.has(key)) {
-        next = normalizeToolSchemaRecursive(value, "strict-map", depth);
+        next = normalizeToolSchemaRecursive(value, "strict-map", depth, false, unionBranch);
       } else if (SCHEMA_NESTED_KEYS.has(key)) {
-        next = normalizeToolSchemaRecursive(value, profile, depth + 1);
+        next = normalizeToolSchemaRecursive(
+          value,
+          profile,
+          depth + 1,
+          false,
+          unionBranch || key === "anyOf" || key === "oneOf" || key === "allOf",
+        );
       }
     } else if (mapProfile) {
       next = normalizeToolSchemaRecursive(
         value,
         mapProfile,
         profile === "strict-map" ? depth + 1 : 1,
+        false,
+        unionBranch,
       );
     } else if (SCHEMA_MAP_KEYS.has(key)) {
       next = normalizeToolSchemaRecursive(
@@ -266,9 +276,16 @@ function normalizeToolSchemaRecursive(
     normalized.required = [];
     changed = true;
   }
-  if (profile === "strict" && normalized.type === "object" && isRecord(normalized.properties)) {
+  if (
+    profile === "strict" &&
+    !unionBranch &&
+    normalized.type === "object" &&
+    isRecord(normalized.properties)
+  ) {
     // Strict mode requires every key: an optional key becomes required and nullable, and the
-    // argument boundary drops those nulls again, so tool semantics do not change.
+    // argument boundary drops those nulls again, so tool semantics do not change. Inside a
+    // union branch that drop could not tell branches apart, so those keys stay optional and
+    // the tool is sent non-strict.
     const properties = normalized.properties;
     const required = new Set(
       Array.isArray(normalized.required)
@@ -287,11 +304,11 @@ function normalizeToolSchemaRecursive(
       changed = true;
     }
   }
+  // Only the root is closed: a nested object listing only properties still allows other keys,
+  // so it stays open and its tool is sent non-strict rather than narrowed.
   if (
     normalized.type === "object" &&
-    (profile === "strict"
-      ? depth === 0 || (isRecord(normalized.properties) && !("patternProperties" in normalized))
-      : hasEmptyProperties) &&
+    (profile === "strict" ? depth === 0 : hasEmptyProperties) &&
     !("additionalProperties" in normalized)
   ) {
     normalized.additionalProperties = false;
@@ -316,8 +333,8 @@ function nullableStrictSchema(schema: unknown): unknown {
     next.type = [next.type, "null"];
   } else if (Array.isArray(next.type)) {
     next.type = [...next.type, "null"];
-  } else {
-    // An untyped schema already accepts null.
+  } else if (!Array.isArray(next.enum)) {
+    // An untyped schema without enum or const already accepts null.
     return schema;
   }
   if (Array.isArray(next.enum)) {
