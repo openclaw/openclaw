@@ -151,6 +151,7 @@ vi.mock("./pw-session-connection.js", async (importOriginal) => ({
 }));
 
 const { executeActViaPlaywright } = await import("./pw-tools-core.interactions.execution.js");
+const { sendOperatorInputViaPlaywright } = await import("./pw-tools-core.interactions.operator.js");
 
 const target = { cdpUrl: "http://127.0.0.1:9222", targetId: "tab-1" };
 const click = { kind: "click", ref: "1" } as const;
@@ -322,6 +323,24 @@ describe("executeActViaPlaywright batches", () => {
       BrowserTabCrashedError,
     );
   });
+
+  it("runs a healthy actionless operator burst with default crash refusal", async () => {
+    const result = await sendOperatorInputViaPlaywright({
+      ...target,
+      inputs: [
+        { kind: "clickCoords", x: 10, y: 20 },
+        { kind: "insertText", text: "hello" },
+        { kind: "press", key: "Enter" },
+        ],
+      });
+    expect(result).toEqual({ sent: 3, targetId: "tab-1" });
+    expect(session.getPageForTargetId).toHaveBeenCalledWith(
+      expect.objectContaining({ ...target, allowCrashed: false }),
+      );
+    expect(page.mouse.click).toHaveBeenCalledWith(10, 20);
+    expect(page.keyboard.insertText).toHaveBeenCalledWith("hello");
+    expect(page.keyboard.press).toHaveBeenCalledWith("Enter");
+    });
 
   it.each([
     { kind: "scrollIntoView", ref: "1" },
