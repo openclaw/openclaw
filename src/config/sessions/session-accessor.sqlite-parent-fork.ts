@@ -481,10 +481,8 @@ export function buildForkedChildTranscriptEvents(params: {
         parentId,
         timestamp: new Date().toISOString(),
         targetId: forkLeafId,
-        appendParentId: pendingResults.length ? forkLeafId : params.source.appendParentId,
-        ...(!pendingResults.length && params.source.appendMode
-          ? { appendMode: params.source.appendMode }
-          : {}),
+        appendParentId: params.source.appendParentId,
+        ...(params.source.appendMode ? { appendMode: params.source.appendMode } : {}),
       }
     : null;
   return [

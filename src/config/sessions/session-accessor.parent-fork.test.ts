@@ -500,9 +500,9 @@ it.each(["executor", "discovery"] as const)(
   },
 );
 
-it.each([false, true])(
-  "keeps an in-flight fork's missing tool results neutral (leaf=%s)",
-  async (leaf) => {
+it.each(["linear", "side", "root"] as const)(
+  "keeps an in-flight fork's missing tool results neutral (cursor=%s)",
+  async (cursor) => {
     const { root, storePath } = await createStore();
     const parentSessionId = "parent-in-flight";
     const calls = ["completed", "spawn", "parallel"].map((id) => ({
@@ -532,15 +532,15 @@ it.each([false, true])(
         timestamp: "2026-06-15T00:00:02.000Z",
         message: completed,
       }),
-      ...(leaf
-        ? [
+      ...(cursor === "linear"
+        ? []
+        : [
             metadata("opaque", "done"),
             leafEvent("selected", "opaque", "done", {
-              appendParentId: "opaque",
-              appendMode: "side",
+              appendParentId: cursor === "root" ? null : "opaque",
+              ...(cursor === "side" ? { appendMode: "side" as const } : {}),
             }),
-          ]
-        : []),
+          ]),
     ]);
     const parentTarget = {
       agentId: "main",
@@ -551,7 +551,17 @@ it.each([false, true])(
     const before = await loadTranscriptEvents(parentTarget);
     const fork = await forkChildTranscript(storePath, parentSessionId);
     const child = await openForkedChildSession(storePath, fork);
+    if (cursor !== "linear") {
+      expect(child.getAppendParentId()).toBe(cursor === "root" ? null : "opaque");
+      expect(child.getAppendMode()).toBe(cursor === "side" ? "side" : undefined);
+    }
     await appendUser(child, "Read the file and return its contents and CONTEXT_MARKER.");
+    if (cursor !== "linear") {
+      expect((await childEvents(storePath, fork.sessionId)).at(-1)).toMatchObject({
+        type: "message",
+        parentId: cursor === "root" ? null : "opaque",
+      });
+    }
     const messages = sanitizeToolUseResultPairingForModel(
       child.buildSessionContext().messages,
       true,
