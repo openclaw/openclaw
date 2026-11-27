@@ -26,7 +26,6 @@ import {
   UpdateDoctorConfigWriteRefusalSchema,
 } from "./update-doctor-config-schema.js";
 import type { DoctorConfigCapture, DoctorConfigWriteAuthority } from "./update-doctor-config.js";
-export type { DoctorConfigCapture } from "./update-doctor-config.js";
 import { UpdateDoctorLintFindingSchema } from "./update-doctor-lint-schema.js";
 import { runWithUpdateDoctorMigrationCapture } from "./update-doctor-migration-attribution.js";
 import {
@@ -35,6 +34,8 @@ import {
 } from "./update-doctor-scan-receipts.js";
 import { normalizeUpdateFailureFacts, type UpdateFailureFact } from "./update-failure-facts.js";
 import { UpdateFailureFactSchema } from "./update-run-schema.js";
+
+export type { DoctorConfigCapture } from "./update-doctor-config.js";
 
 export {
   getUpdateDoctorConfigCapture,
