@@ -137,10 +137,7 @@
   padding: 16px;
 
   /* Embedded viewers own their content insets; the panel must not inset the frame. */
-  &:has(> .sidebar-attachment-preview),
-  &:has(> .chat-tool-card__preview[data-kind="canvas"]),
-  &:has(> .mcp-app-sidebar-target),
-  &:has(> openclaw-mcp-app-panel) {
+  &[data-flush] {
     padding: 0;
   }
 
@@ -150,7 +147,7 @@
   }
 }
 
-.sidebar-content > .chat-tool-card__preview[data-kind="canvas"] {
+.sidebar-content[data-flush] > .chat-tool-card__preview {
   margin-top: 0;
   border-radius: 0;
 }

@@ -265,7 +265,18 @@ export function SidebarPanel(props: SidebarPanelProps) {
             attachment={props.fileView?.fileAttachment}
           />
         </Show>
-        <div class={["sidebar-content", { "sidebar-file-mobile__body": mobileMedia() }]}>
+        <div
+          class={["sidebar-content", { "sidebar-file-mobile__body": mobileMedia() }]}
+          data-flush={
+            !props.error &&
+            (props.content?.kind === "attachment" ||
+              props.content?.kind === "canvas" ||
+              props.content?.kind === "mcp-app" ||
+              (props.content?.kind === "mcp-app-preview" && Boolean(props.content.view)))
+              ? ""
+              : undefined
+          }
+        >
           <Show
             when={!props.error}
             fallback={
