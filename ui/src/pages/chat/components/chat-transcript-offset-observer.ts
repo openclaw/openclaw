@@ -1,6 +1,10 @@
 import { elementScroll, observeElementOffset, type Virtualizer } from "@tanstack/virtual-core";
 import { listen } from "../../../lib/reactive/listener.ts";
-import { isTranscriptScrollKey, isTranscriptScrollWheel } from "../chat-scroll-input.ts";
+import {
+  forecastTranscriptWheelDelta,
+  isTranscriptScrollKey,
+  isTranscriptScrollWheel,
+} from "../chat-scroll-input.ts";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX, type ChatScrollToEndOptions } from "../scroll.ts";
 import type { TranscriptEndAnchor } from "./chat-transcript-end-anchor.ts";
 import { maxTranscriptScrollOffset } from "./chat-transcript-geometry.ts";
@@ -576,40 +580,6 @@ export function observeTranscriptOffset(
       owner.invalidate();
     }
   };
-  const wheelForecastDelta = (event: WheelEvent): number => {
-    if (
-      !owner.onWheel ||
-      event.deltaMode !== WheelEvent.DOM_DELTA_PIXEL ||
-      event.ctrlKey ||
-      event.metaKey ||
-      event.altKey ||
-      event.shiftKey ||
-      !event.deltaY ||
-      Math.abs(event.deltaX) > Math.abs(event.deltaY)
-    ) {
-      return 0;
-    }
-    for (const target of event.composedPath()) {
-      if (target === element) {
-        break;
-      }
-      if (!(target instanceof HTMLElement)) {
-        continue;
-      }
-      const style = getComputedStyle(target);
-      if (
-        /^(auto|scroll)$/.test(style.overflowY) &&
-        ((event.deltaY < 0
-          ? target.scrollTop > 0
-          : target.scrollTop + target.clientHeight < target.scrollHeight - 1) ||
-          style.overscrollBehaviorY === "contain" ||
-          style.overscrollBehaviorY === "none")
-      ) {
-        return 0;
-      }
-    }
-    return event.deltaY;
-  };
   const interrupt = (event: Event) => {
     if (
       event.defaultPrevented ||
@@ -636,7 +606,10 @@ export function observeTranscriptOffset(
       owner.state.touching = contactIds.size > 0;
       touchY = localTouchY(event);
     }
-    const wheelDelta = event instanceof WheelEvent ? wheelForecastDelta(event) : 0;
+    const wheelDelta =
+      event instanceof WheelEvent && owner.onWheel
+        ? forecastTranscriptWheelDelta(event, element)
+        : 0;
     owner.endAnchor.cancelComposerResize();
     owner.state.pendingInteractionAnchor = null;
     maintenanceTarget = owner.state.maintenanceScrollOffset = null;

@@ -9,6 +9,7 @@ import {
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { sanitizeTranscriptMessage } from "../agents/transcript-sanitize.js";
 import { MemoryCliSessionHistoryIndex } from "./cli-session-history-index-memory.js";
+import type { CliHistoryIndex } from "./cli-session-history-index-policy.js";
 import { CliSessionHistoryIndex } from "./cli-session-history-index.worker.js";
 import { mergeCliHistoryWithLookupStats } from "./cli-session-history-lookup.test-support.js";
 import {
@@ -35,11 +36,16 @@ function readBoundHistory(
   entries: readonly Record<string, unknown>[],
   localMessages: unknown[],
   reseedReceipt?: ReturnType<typeof receipt>,
+  Index: new () => CliHistoryIndex = CliSessionHistoryIndex,
 ) {
   return withClaudeProjectsDir(async ({ filePath, readMessages, sessionId }) => {
     await writeClaudeEntries(filePath, entries);
     const imported = await readMessages({ localSessionId: "openclaw-session", reseedReceipt });
-    return { messages: merge(localMessages, imported), sessionId };
+    const messages = mergeImportedChatHistoryMessages(
+      { localMessages, importedMessages: imported },
+      new Index(),
+    );
+    return { messages, sessionId };
   });
 }
 
@@ -630,47 +636,55 @@ describe("cli session history", () => {
     },
   );
 
-  it("gives native rows the run of the local turn whose prompt they answer", async () => {
-    const toolTurn = (id: string) => [
-      {
-        type: "assistant",
-        uuid: `${id}-call`,
-        message: {
-          role: "assistant",
-          content: [{ type: "tool_use", id, name: "mcp__openclaw__sessions_yield", input: {} }],
+  it.each([
+    { name: "SQLite", Index: CliSessionHistoryIndex },
+    { name: "memory", Index: MemoryCliSessionHistoryIndex },
+  ])(
+    "gives native rows the run of the local turn whose prompt they answer ($name)",
+    async ({ Index }) => {
+      const toolTurn = (id: string) => [
+        {
+          type: "assistant",
+          uuid: `${id}-call`,
+          message: {
+            role: "assistant",
+            content: [{ type: "tool_use", id, name: "mcp__openclaw__sessions_yield", input: {} }],
+          },
         },
-      },
-      {
-        type: "user",
-        uuid: `${id}-result`,
-        message: {
-          role: "user",
-          content: [{ type: "tool_result", tool_use_id: id, content: "{}" }],
+        {
+          type: "user",
+          uuid: `${id}-result`,
+          message: {
+            role: "user",
+            content: [{ type: "tool_result", tool_use_id: id, content: "{}" }],
+          },
         },
-      },
-    ];
-    const { messages } = await readBoundHistory(
-      [
-        { type: "user", uuid: "prompt", message: { role: "user", content: "Spawn and yield" } },
-        // Skill context arrives as a meta row inside the same turn.
-        claudeUser("Base directory for this skill", {
-          isMeta: true,
-          sourceToolUseID: "toolu_skill",
-        }),
-        ...toolTurn("asked"),
-        // A synthetic wake opens a turn no local row owns.
-        { type: "user", uuid: "wake", isMeta: true, message: { role: "user", content: "Woke" } },
-        ...toolTurn("woken"),
-      ],
-      [user("Spawn and yield", undefined, { idempotencyKey: "run-1:user" })],
-    );
-    expect(messages.map((message) => readRecord(message)["__openclaw"])).toEqual([
-      expect.objectContaining({ idempotencyKey: "run-1:user", externalId: "prompt" }),
-      expect.objectContaining({ externalId: "asked-call", runId: "run-1" }),
-      expect.not.objectContaining({ runId: expect.anything() }),
-    ]);
-    expect(JSON.stringify(messages)).not.toContain("turnExternalId");
-  });
+      ];
+      const { messages } = await readBoundHistory(
+        [
+          { type: "user", uuid: "prompt", message: { role: "user", content: "Spawn and yield" } },
+          // Skill context arrives as a meta row inside the same turn.
+          claudeUser("Base directory for this skill", {
+            isMeta: true,
+            sourceToolUseID: "toolu_skill",
+          }),
+          ...toolTurn("asked"),
+          // A synthetic wake opens a turn no local row owns.
+          { type: "user", uuid: "wake", isMeta: true, message: { role: "user", content: "Woke" } },
+          ...toolTurn("woken"),
+        ],
+        [user("Spawn and yield", undefined, { idempotencyKey: "run-1:user" })],
+        undefined,
+        Index,
+      );
+      expect(messages.map((message) => readRecord(message)["__openclaw"])).toEqual([
+        expect.objectContaining({ idempotencyKey: "run-1:user", externalId: "prompt" }),
+        expect.objectContaining({ externalId: "asked-call", runId: "run-1" }),
+        expect.not.objectContaining({ runId: expect.anything() }),
+      ]);
+      expect(JSON.stringify(messages)).not.toContain("turnExternalId");
+    },
+  );
 });
 
 it("keeps lone surrogates distinct from replacement characters in SQLite match keys", () => {

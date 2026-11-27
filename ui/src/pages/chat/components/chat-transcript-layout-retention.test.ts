@@ -333,8 +333,8 @@ describe("transcript layout lifetime", () => {
         await waitForSolid(() =>
           expect(container.querySelector(".chat-bubble--reply-target")).not.toBeNull(),
         );
-        // The legitimate survivor reveal can remain active or yield to reader
-        // input; neither lifetime may retain the retired source window.
+        // The survivor stays live through completed reveal or reader takeover;
+        // neither lifetime may retain the retired source window.
         if (readerTakeover) {
           host.scrollElement!.dispatchEvent(new WheelEvent("wheel", { deltaY: -1 }));
         }
@@ -349,11 +349,10 @@ describe("transcript layout lifetime", () => {
           flush();
           await flushDeferredRowPrune();
         }
-        if (readerTakeover) {
-          expect(host.offsetState.scrollCommand).toBeNull();
-        } else {
-          expect(host.offsetState.scrollCommand?.target).toBe("index");
-        }
+        // The one-row destination clamps to native zero; arrival retires the reveal.
+        expect(host.scrollElement!.scrollTop).toBe(0);
+        expect(host.offsetState.scrollCommand).toBeNull();
+        expect(host.offsetState.nativeInputActive).toBe(readerTakeover);
         expect(host.isPositionSettled).toBe(true);
         // Geometry spies record their receivers, including retired DOM. Discard
         // only fixture call histories before checking live product ownership.

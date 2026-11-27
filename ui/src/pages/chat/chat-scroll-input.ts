@@ -67,6 +67,41 @@ export function forwardChatWheelToTranscript(
   transcript.scrollBy({ top: event.deltaY * unit, behavior: "instant" });
 }
 
+/** Forecast pixel travel without claiming actual native wheel ownership. */
+export function forecastTranscriptWheelDelta(event: WheelEvent, element: HTMLElement): number {
+  if (
+    event.deltaMode !== WheelEvent.DOM_DELTA_PIXEL ||
+    event.ctrlKey ||
+    event.metaKey ||
+    event.altKey ||
+    event.shiftKey ||
+    !event.deltaY ||
+    Math.abs(event.deltaX) > Math.abs(event.deltaY)
+  ) {
+    return 0;
+  }
+  for (const target of event.composedPath()) {
+    if (target === element) {
+      break;
+    }
+    if (!(target instanceof HTMLElement)) {
+      continue;
+    }
+    const style = getComputedStyle(target);
+    if (
+      /^(auto|scroll)$/.test(style.overflowY) &&
+      ((event.deltaY < 0
+        ? target.scrollTop > 0
+        : target.scrollTop + target.clientHeight < target.scrollHeight - 1) ||
+        style.overscrollBehaviorY === "contain" ||
+        style.overscrollBehaviorY === "none")
+    ) {
+      return 0;
+    }
+  }
+  return event.deltaY;
+}
+
 /** Native wheel intent belongs to the transcript only after nested scrollports yield. */
 export function isTranscriptScrollWheel(event: WheelEvent, transcript: HTMLElement): boolean {
   if (

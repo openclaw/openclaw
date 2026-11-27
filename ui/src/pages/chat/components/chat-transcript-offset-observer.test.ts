@@ -606,3 +606,74 @@ it("forecasts a clamped wheel before one history intent without writing its posi
   expect(virtualizer.scrollOffset).toBe(0);
   expect(write).not.toHaveBeenCalled();
 });
+
+it.each(["native publication", "reader policy"] as const)(
+  "keeps a successor reveal owned after %s reconnects the same viewport",
+  (boundary) => {
+    const element = document.createElement("div");
+    Object.defineProperties(element, {
+      clientHeight: { value: 200 },
+      scrollHeight: { value: 1000 },
+    });
+    element.scrollTop = 800;
+    const state = new TranscriptOffsetState();
+    const successorCommand = {
+      behavior: "instant",
+      target: "message-offset",
+      offset: 800,
+    } as const;
+    state.scrollCommand = { ...successorCommand };
+    const virtualizer = createOffsetVirtualizer(element);
+    virtualizer.scrollElement = element;
+    virtualizer.targetWindow = window;
+    const successorReader = vi.fn();
+    const successorNative = vi.fn();
+    const successor = offsetOwner(state, element, {
+      canFollowEnd: () => true,
+      onReaderScroll: successorReader,
+      onNativeScroll: successorNative,
+    });
+    const successorCapture = vi.spyOn(successor.endAnchor, "capture");
+    const reconnect = () => {
+      disconnect();
+      disconnect = observeTranscriptOffset(successor, virtualizer, vi.fn());
+      state.scrollCommand = successorCommand;
+    };
+    const oldReader = vi.fn(() => {
+      if (boundary === "reader policy") {
+        reconnect();
+      }
+    });
+    const oldNative = vi.fn(() => {
+      if (boundary === "native publication") {
+        reconnect();
+      }
+    });
+    const previous = offsetOwner(state, element, {
+      canFollowEnd: () => true,
+      onReaderScroll: oldReader,
+      onNativeScroll: oldNative,
+    });
+    const previousCapture = vi.spyOn(previous.endAnchor, "capture");
+    let disconnect = observeTranscriptOffset(previous, virtualizer, vi.fn());
+    onTestFinished(() => disconnect());
+
+    element.dispatchEvent(new Event("scroll"));
+    expect(virtualizer.scrollElement).toBe(element);
+    expect(state.scrollCommand).toBe(successorCommand);
+    expect(successorNative).not.toHaveBeenCalled();
+    expect(successorReader).not.toHaveBeenCalled();
+    expect(previousCapture).not.toHaveBeenCalled();
+    expect(oldReader.mock.calls).toEqual(boundary === "reader policy" ? [[true]] : []);
+
+    // Only the successor's own native arrival may settle its command and capture the tail.
+    element.dispatchEvent(new Event("scroll"));
+    expect(state.scrollCommand).toBeNull();
+    expect(successorNative).toHaveBeenCalledExactlyOnceWith(readerScroll(800, 0));
+    expect(successorReader).toHaveBeenCalledExactlyOnceWith(true);
+    expect(successorCapture).toHaveBeenCalledExactlyOnceWith(element);
+    expect(oldNative).toHaveBeenCalledExactlyOnceWith(readerScroll(800, 0));
+    expect(previousCapture).not.toHaveBeenCalled();
+    expect(oldReader.mock.calls).toEqual(boundary === "reader policy" ? [[true]] : []);
+  },
+);

@@ -1,0 +1,5 @@
+# Joined message-reveal arrival and imported-turn attribution coverage.
+# Covers native-publication and reader-policy reconnect fences, successor arrival,
+# completed-reveal retirement/GC, and SQLite/memory prompt-owned run attribution.
+# 71 reconnect + 14 backend parity - 1 completed-reveal fixture LF = 84.
+84
