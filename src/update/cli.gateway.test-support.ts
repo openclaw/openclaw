@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
@@ -20,7 +21,7 @@ import * as resolveStore from "../secrets/resolve-store.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import type { TempHomeEnv } from "../test-utils/temp-home.js";
 import { VERSION } from "../version.js";
-import { runReleaseUpdateCli } from "./cli.js";
+import { runReleaseUpdateCli, type ReleaseUpdateOptions } from "./cli.js";
 import * as installationIdentity from "./installation-identity.js";
 
 type GatewayTestContext = {
@@ -47,8 +48,7 @@ export function registerReleaseUpdateGatewayTests(context: () => GatewayTestCont
       supportsConsent?: () => boolean;
     },
     run: (peer: {
-      root: string;
-      tag: string | undefined;
+      update: (options?: Partial<ReleaseUpdateOptions>) => Promise<void>;
       runId: string;
       output: UpdateRunRecord;
       requests: string[];
@@ -64,6 +64,7 @@ export function registerReleaseUpdateGatewayTests(context: () => GatewayTestCont
     useWireGateway.enabled = true;
     vi.spyOn(installationIdentity, "checkUpdateInstallationSlot").mockResolvedValue();
     const tag = restartMethod === "gateway.restart.request" ? VERSION : undefined;
+    const updateOptions = { json: true, restart: true, runningRoot: root, tag, yes: true };
     if (tag) {
       localRun.status = "running";
       localRun.phase = "activating";
@@ -115,15 +116,12 @@ export function registerReleaseUpdateGatewayTests(context: () => GatewayTestCont
           if (method === "connect") {
             tokens.push(params?.auth?.token);
             const hello = buildMinimalGatewayHelloOkPayload();
-            sendMinimalGatewayResponse(ws, id, {
-              ...hello,
-              features: {
-                ...hello.features,
-                capabilities: options.supportsConsent?.()
-                  ? [GATEWAY_SERVER_CAPS.UPDATE_RUN_CONSENT_IDENTITY]
-                  : [],
-              },
+            Object.assign(hello.features, {
+              capabilities: options.supportsConsent?.()
+                ? [GATEWAY_SERVER_CAPS.UPDATE_RUN_CONSENT_IDENTITY]
+                : [],
             });
+            sendMinimalGatewayResponse(ws, id, hello);
           } else {
             requests.push(method);
             receipts.push({ method, params });
@@ -144,8 +142,7 @@ export function registerReleaseUpdateGatewayTests(context: () => GatewayTestCont
       });
 
       await run({
-        root,
-        tag,
+        update: (options) => runReleaseUpdateCli({ ...updateOptions, ...options }),
         runId,
         output,
         requests,
@@ -158,6 +155,7 @@ export function registerReleaseUpdateGatewayTests(context: () => GatewayTestCont
         },
       });
     } finally {
+      vi.useRealTimers();
       vi.unstubAllEnvs();
       await closeMinimalGatewayServer(wss);
       await releaseListener();
@@ -169,13 +167,7 @@ export function registerReleaseUpdateGatewayTests(context: () => GatewayTestCont
     "follows %s without reading the Gateway token store after restart dispatch",
     async (restartMethod) => {
       await withWireGateway({ restartMethod }, async (peer) => {
-        await runReleaseUpdateCli({
-          json: true,
-          restart: true,
-          runningRoot: peer.root,
-          tag: peer.tag,
-          yes: true,
-        });
+        await peer.update();
         expect(peer.requests).toEqual([restartMethod, "update.runs.get"]);
         expect(peer.receipts[0]?.params).not.toHaveProperty("timeoutMs");
         expect(peer.tokens).toEqual(["wire-test-token", "wire-test-token"]);
@@ -218,17 +210,7 @@ export function registerReleaseUpdateGatewayTests(context: () => GatewayTestCont
           running = { ...peer.output, status: "running", phase: "staging", finishedAtMs: null };
           vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
           const deadline = Date.now() + 5_000;
-          const command = runReleaseUpdateCli({
-            json: true,
-            restart: true,
-            runningRoot: peer.root,
-            yes: true,
-            timeoutMs: 5_000,
-          });
-          const settled: Promise<{ error?: unknown }> = command.then(
-            () => ({}),
-            (error: unknown) => ({ error }),
-          );
+          const settled = Promise.allSettled([peer.update({ timeoutMs: 5_000 })]);
           try {
             // Only an actual wire receipt proves that the held request was dispatched.
             await waitForFast(
@@ -238,21 +220,35 @@ export function registerReleaseUpdateGatewayTests(context: () => GatewayTestCont
             const request = held!;
             if (scenario === "poll delay") {
               await vi.advanceTimersByTimeAsync(Math.max(0, deadline - Date.now() - 1_000));
+              // A bare promise would hide registration until the sleep itself finishes.
+              const registered = createDeferred<{ wait: Promise<unknown> }>();
+              // Named promise timers can stay real on Node/Bun; control this poll's wait only.
+              vi.mocked(sleep).mockImplementationOnce((delay, value) => {
+                const wait = new Promise((resolve) => globalThis.setTimeout(resolve, delay, value));
+                registered.resolve({ wait });
+                return wait;
+              });
               sendMinimalGatewayResponse(request.ws, request.id, { run: running });
               await withinTest(heldClosed.promise, signal);
               await nextEventLoopTurn();
               await vi.advanceTimersByTimeAsync(0);
+              const { wait } = await withinTest(registered.promise, signal);
+              await vi.advanceTimersByTimeAsync(Math.max(0, deadline - Date.now()));
+              expect(
+                await Promise.race([wait, Promise.resolve("pending")]),
+                "polling wait settled at the update deadline",
+              ).toBeUndefined();
             }
             await vi.advanceTimersByTimeAsync(Math.max(0, deadline - Date.now()));
-            // Keep the clock at expiry while the RPC owner joins real socket
-            // and auth cleanup. An unfixed longer wait cannot settle here.
-            const outcome = await withinTest(settled, signal);
+            // Freeze expiry while RPC cleanup joins; a longer timer must remain pending.
+            const [outcome] = await withinTest(settled, signal);
+            const error = outcome.status === "rejected" ? outcome.reason : undefined;
             await withinTest(heldClosed.promise, signal);
             if (scenario === "acknowledgement") {
-              expect(outcome.error).toBeInstanceOf(Error);
-              expect(String(outcome.error)).toMatch(/did not finish|timeout/i);
+              expect(error).toBeInstanceOf(Error);
+              expect(String(error)).toMatch(/did not finish|timeout/i);
             } else {
-              expect(outcome).toEqual({});
+              expect(outcome).toEqual({ status: "fulfilled", value: undefined });
               expect(peer.json).toEqual([running]);
               expect(process.exitCode).toBe(1);
             }
@@ -278,7 +274,7 @@ export function registerReleaseUpdateGatewayTests(context: () => GatewayTestCont
             }
             await vi.advanceTimersByTimeAsync(30_000);
             await settled;
-            vi.useRealTimers();
+            vi.mocked(sleep).mockReset();
           }
         },
       );
@@ -319,18 +315,9 @@ export function registerReleaseUpdateGatewayTests(context: () => GatewayTestCont
               vi.setSystemTime(deadline);
             }
           });
-          const command = runReleaseUpdateCli({
-            json: false,
-            restart: true,
-            runningRoot: peer.root,
-            yes: true,
-            acceptCapabilities: true,
-            timeoutMs: 5_000,
-          });
-          const settled: Promise<{ error?: unknown }> = command.then(
-            () => ({}),
-            (error: unknown) => ({ error }),
-          );
+          const settled = Promise.allSettled([
+            peer.update({ json: false, acceptCapabilities: true, timeoutMs: 5_000 }),
+          ]);
           try {
             await waitForFast(() => expect(status).toBeDefined());
             await vi.advanceTimersByTimeAsync(Math.max(0, deadline - Date.now() - 2_500));
@@ -351,9 +338,10 @@ export function registerReleaseUpdateGatewayTests(context: () => GatewayTestCont
               expect(retry?.params?.timeoutMs).toBeLessThanOrEqual(2_500);
               await vi.advanceTimersByTimeAsync(Math.max(0, deadline - Date.now()));
             }
-            const outcome = await withinTest(settled, signal);
-            expect(String(outcome.error)).toContain("Capability consent could not be confirmed");
-            expect(String(outcome.error)).toContain("openclaw update status` before retrying");
+            const [outcome] = await withinTest(settled, signal);
+            const error = outcome.status === "rejected" ? outcome.reason : undefined;
+            expect(String(error)).toContain("Capability consent could not be confirmed");
+            expect(String(error)).toContain("openclaw update status` before retrying");
             expect(peer.requests).toEqual([
               "update.run",
               "update.runs.get",
@@ -371,7 +359,6 @@ export function registerReleaseUpdateGatewayTests(context: () => GatewayTestCont
             }
             await vi.advanceTimersByTimeAsync(30_000);
             await settled;
-            vi.useRealTimers();
           }
         },
       );

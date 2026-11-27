@@ -55,6 +55,11 @@ const confirmDowngrade = vi.hoisted(() =>
 const gatewayRunId = vi.hoisted(() => "e901d247-3929-4f73-94ef-0e54efbcfb73");
 const createRun = vi.hoisted(() => vi.fn(async () => ({ runId: gatewayRunId })));
 const mutateConfig = vi.hoisted(() => vi.fn());
+// Keep ordinary promise timers real; the polling case installs its controlled wait.
+vi.mock("node:timers/promises", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:timers/promises")>();
+  return { ...original, setTimeout: vi.fn(original.setTimeout) };
+});
 vi.mock("../config/mutate.js", async (importOriginal) => ({
   ...(await importOriginal<typeof ConfigMutate>()),
   mutateConfigFileWithRetry: mutateConfig,
