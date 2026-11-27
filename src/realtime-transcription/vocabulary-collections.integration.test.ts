@@ -125,7 +125,7 @@ describe("vocabulary collections over the real worker store", () => {
     const current = await reopened.read(ref);
     expect(current).toEqual(winner.value);
     expect(current.revision).toBe(2);
-    expect(["SyntheticAlice", "SyntheticBob"]).toContain(current.terms[0].canonical);
+    expect(["SyntheticAlice", "SyntheticBob"]).toContain(current.terms[0]?.canonical);
     expect((await reopened.audit(ref)).map(({ operation }) => operation)).toEqual([
       "create",
       "replace",

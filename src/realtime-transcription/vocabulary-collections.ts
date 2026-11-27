@@ -116,7 +116,7 @@ export class VocabularyCollections {
     for (const granted of grants) {
       await this.refresh(granted);
     }
-    const actorId = grants[0].actorId;
+    const actorId = grants[0]?.actorId;
     if (
       typeof actorId !== "string" ||
       !actorId ||
@@ -235,11 +235,11 @@ export class VocabularyCollections {
       updatedAt: row.updatedAt,
       audit: Object.freeze(audit),
     };
-    if (row.deleted === true) {
-      return Object.freeze({ ...common, deleted: true });
-    }
-    if (row.deleted !== false) {
+    if (typeof row.deleted !== "boolean") {
       throw new VocabularyError("invalid-input");
+    }
+    if (row.deleted) {
+      return Object.freeze({ ...common, deleted: true });
     }
     // Decoded persistent values cross the versioned boundary here; future formats stay intact.
     const draft = validateVocabularyDraft({

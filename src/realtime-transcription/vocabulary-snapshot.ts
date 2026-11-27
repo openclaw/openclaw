@@ -83,7 +83,8 @@ export async function createVocabularySnapshot(params: {
         !Number.isSafeInteger(revision) ||
         revision < 1 ||
         !Number.isFinite(updatedAt) ||
-        deleted !== false
+        typeof deleted !== "boolean" ||
+        deleted
       ) {
         throw new VocabularyError("invalid-input");
       }

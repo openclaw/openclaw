@@ -148,7 +148,7 @@ describe("shared vocabulary collection management", () => {
     ]);
     const current = await f.service.read(original);
     expect(current.revision).toBe(2);
-    expect(["First edit", "Second edit"]).toContain(current.terms[0].canonical);
+    expect(["First edit", "Second edit"]).toContain(current.terms[0]?.canonical);
     await expect(secondEditor.replace(original, 1, draft("Stale overwrite"))).rejects.toMatchObject(
       { code: "revision-conflict" },
     );
@@ -216,9 +216,9 @@ describe("shared vocabulary collection management", () => {
     const f = fixture();
     const input = draft();
     const pending = f.service.create("scope-a", input);
-    input.terms[0].canonical = "Changed while authorization waits";
+    input.terms[0]!.canonical = "Changed while authorization waits";
     const row = await pending;
-    expect(row.terms[0].canonical).toBe("SyntheticQuokka");
+    expect(row.terms[0]?.canonical).toBe("SyntheticQuokka");
     expect(Object.isFrozen(row)).toBe(true);
     expect(Object.isFrozen(row.terms)).toBe(true);
     expect(Object.isFrozen(row.terms[0])).toBe(true);
