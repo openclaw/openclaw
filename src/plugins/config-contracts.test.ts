@@ -30,6 +30,7 @@ vi.mock("./manifest-registry-installed.js", () => ({
   loadPluginManifestRegistryForInstalledIndex: mocks.loadPluginManifestRegistryForInstalledIndex,
 }));
 
+// mock-isolation: Resolve fixture manifest contracts without loading the runtime plugin registry.
 vi.mock("./plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry: mocks.loadPluginManifestRegistryForPluginRegistry,
 }));
