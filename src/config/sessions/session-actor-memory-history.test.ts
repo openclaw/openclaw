@@ -305,6 +305,14 @@ describe("memory actor history", () => {
       omittedOversized: true,
       hasOverreadContext: false,
     });
+    for (const mcpAppDisplays of [false, true]) {
+      expect(() =>
+        storage.readCurrent(
+          { type: "session.history.visitor-source", input: { mcpAppDisplays } },
+          authority,
+        ),
+      ).toThrow("Transcript source message exceeds the 8388608-byte page limit");
+    }
     const exact = await read("by-id", { messageId: "large" });
     expect(
       exact.found && !exact.oversized && isRecord(exact.message) && exact.message.content,
