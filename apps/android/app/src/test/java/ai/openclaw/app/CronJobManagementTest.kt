@@ -13,6 +13,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -77,6 +78,18 @@ class CronJobManagementTest {
     assertEquals(JsonNull, payloadPatch["model"])
     assertEquals(JsonNull, payloadPatch["thinking"])
     assertFalse(payloadPatch.containsKey("message"))
+  }
+
+  @Test
+  fun updateRequiresAnExplicitSessionKeyForTheMainConversation() {
+    val original = requireNotNull(parseGatewayCronJobDetail(jobJson()))
+    val edit = original.toCronJobEdit()
+    assertThrows(IllegalArgumentException::class.java) {
+      buildCronUpdateParams(original, edit.copy(sessionTarget = "main"))
+    }
+    val target = "session:agent:main:main"
+    val update = objectJson(buildCronUpdateParams(original, edit.copy(sessionTarget = target)))
+    assertEquals(target, update.getValue("patch").jsonObject.getValue("sessionTarget").jsonPrimitive.content)
   }
 
   @Test

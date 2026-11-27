@@ -264,7 +264,7 @@ private fun CronEditorPanel(
     ClawTextField(
       value = edit.sessionTarget,
       onValueChange = { onDraftChange(draft.withEdit(edit.copy(sessionTarget = it))) },
-      placeholder = nativeString("main, isolated, current, or session:<id>"),
+      placeholder = nativeString("isolated, current, or session:<key>"),
       label = nativeString("Session target"),
       enabled = enabled,
     )

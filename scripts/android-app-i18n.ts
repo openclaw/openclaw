@@ -478,7 +478,6 @@ const ALLOWED_UI_LITERALS = new Map<string, ReadonlySet<string>>([
       "current-step-alpha",
       "gateway-progress",
       "iMessage",
-      "main, isolated, current, or session:<id>",
       "n/a",
       "openclaw gateway",
       "openclaw qr",
