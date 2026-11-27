@@ -1,8 +1,8 @@
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
+import type { AgentLeaseRowIdentity } from "./openclaw-agent-db-contract.js";
 import { mayShareAgentDatabaseFile } from "./openclaw-agent-db-lease-provenance.js";
-import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "./openclaw-agent-db-lease.js";
 import { invalidateOpenClawAgentDatabaseValidation } from "./openclaw-agent-db-validation-cache.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 
@@ -40,7 +40,7 @@ export function clearAgentDatabaseLeaseVerifications(
 /** The caller owns the original shared transaction and has joined the exact native Worker exit. */
 export function releaseExitedOpenClawAgentDatabaseLeaseInDatabase(
   database: EngineConnection,
-  receipt: OpenClawAgentDatabaseWorkerLeaseReceipt,
+  receipt: AgentLeaseRowIdentity,
   outcome: "refused-before-open" | "unknown",
   onInvalidation?: () => void,
 ): void {

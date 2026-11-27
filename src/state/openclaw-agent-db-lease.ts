@@ -23,7 +23,7 @@ import {
   assertAgentDeletionPathFence,
   prepareAgentDeletionPathFence,
 } from "./agent-deletion-journal.js";
-import type { OpenClawAgentDatabase } from "./openclaw-agent-db-contract.js";
+import type { AgentLeaseRowIdentity, OpenClawAgentDatabase } from "./openclaw-agent-db-contract.js";
 import { withExistingAgentLeaseWrite } from "./openclaw-agent-db-existing-write.js";
 import {
   createAgentDatabaseLeaseStaleReasonReader,
@@ -168,10 +168,7 @@ export function claimOpenClawAgentDatabaseLease(
 
 function claimAgentDatabaseLeaseInDatabase(
   database: OpenClawStateDatabase,
-  owner: Pick<
-    OpenClawAgentDatabaseWorkerLeaseReceipt,
-    "leaseId" | "agentId" | "path" | "ownerPid" | "ownerStartTime"
-  > & { provenance: string | null },
+  owner: AgentLeaseRowIdentity & { provenance: string | null },
   deletionFence: ReturnType<typeof prepareAgentDeletionPathFence>,
   onVerification?: OpenClawAgentIntegrityVerificationReceiver,
 ): void {
