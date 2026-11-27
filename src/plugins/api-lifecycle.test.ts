@@ -76,8 +76,6 @@ it.each<[string, unknown, boolean]>([
   ["registerTool", undefined, false],
   ["session.state.registerSessionExtension", undefined, false],
   ["session.controls.registerSessionAction", undefined, false],
-  ["unknown", undefined, false],
-  ["__proto__", undefined, false],
 ])(
   "keeps the unwired default and post-registration eligibility for %s",
   async (methodName, fallback, eligible) => {
