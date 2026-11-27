@@ -343,7 +343,7 @@ function runUpdateJson(
     reason?: string;
     before: { version: string; buildId?: string };
     after?: { version: string; buildId?: string };
-    steps: Record<string, unknown>[];
+    steps: readonly Record<string, unknown>[];
     target?: Record<string, unknown>;
     run?: unknown;
   },
