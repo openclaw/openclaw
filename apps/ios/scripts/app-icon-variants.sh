@@ -4,7 +4,8 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/../../.." && pwd)"
 release_icon_set="$repo_root/apps/ios/Sources/Assets.xcassets/AppIcon.appiconset"
 debug_icon_set="$repo_root/apps/ios/Sources/Assets.xcassets/AppIconDebug.appiconset"
-source_svg="$repo_root/ui/public/favicon.svg"
+source_svg="$repo_root/apps/ios/AppIcon.svg"
+release_renderer="$repo_root/apps/ios/scripts/app-icon-release.swift"
 debug_renderer="$repo_root/apps/ios/scripts/app-icon-debug-dark.swift"
 
 require_command() {
@@ -29,9 +30,21 @@ preflight() {
   fi
 }
 
-render_release_dark_icon() {
-  local output="$1"
-  /usr/bin/sips -z 1024 1024 -s format png "$source_svg" --out "$output" >/dev/null
+render_release_icons() {
+  local output_dir="$1"
+  /usr/bin/sips -z 1024 1024 -s format png "$source_svg" --out "$output_dir/1024-dark.png" >/dev/null
+  local sizes
+  sizes="$(node - "$release_icon_set/Contents.json" <<'NODE'
+const fs = require("node:fs");
+const { images } = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+console.log([...new Set(images.flatMap((image) => {
+  const match = /^(\d+)\.png$/.exec(image.filename ?? "");
+  return match ? [match[1]] : [];
+}))].join(" "));
+NODE
+)"
+  # Manifest-derived numeric dimensions intentionally expand to separate arguments.
+  xcrun swift "$release_renderer" "$output_dir/1024-dark.png" "$output_dir" $sizes
 }
 
 render_debug_dark_icon() {
@@ -164,7 +177,7 @@ NODE
 case "${1:-check}" in
   generate)
     preflight
-    render_release_dark_icon "$release_icon_set/1024-dark.png"
+    render_release_icons "$release_icon_set"
     render_debug_dark_icon "$debug_icon_set/1024-dark.png"
     ;;
   check)
@@ -174,9 +187,12 @@ case "${1:-check}" in
 
     temp_dir="$(mktemp -d /tmp/openclaw-app-icon-variants.XXXXXX)"
     trap 'rm -rf "$temp_dir"' EXIT
-    render_release_dark_icon "$temp_dir/1024-dark.png"
+    render_release_icons "$temp_dir"
     render_debug_dark_icon "$temp_dir/1024-debug-dark.png"
-    cmp "$release_icon_set/1024-dark.png" "$temp_dir/1024-dark.png"
+    for image in "$temp_dir"/*.png; do
+      [[ "$(basename "$image")" == "1024-debug-dark.png" ]] && continue
+      cmp "$release_icon_set/$(basename "$image")" "$image"
+    done
     cmp "$debug_icon_set/1024-dark.png" "$temp_dir/1024-debug-dark.png"
     echo "AppIcon and AppIconDebug Default, Dark, and automatic Tinted variants are valid."
     ;;
