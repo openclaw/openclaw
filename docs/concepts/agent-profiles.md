@@ -16,10 +16,10 @@ context-window settings, or local serving configuration.
 
 ## Ownership
 
-OpenClaw uses types from the `agentprofiles` package for the portable resource
-envelope and checks its built-in profiles with the package's validator in tests.
-The portable validator treats domain-named sections as opaque JSON objects. It
-does not define or validate OpenClaw fields.
+OpenClaw keeps the portable Agent Profile spec types in its own source tree.
+They come from RFC openclaw/rfcs#18 (`agentprofiles` 0.1.0). Tests check the
+structure of the built-in profiles. Full portable validation can return when the
+RFC publishes the package as a contract.
 
 OpenClaw owns `spec["openclaw.ai"]`. OpenClaw strictly validates this section
 and resolves it with OpenClaw-owned defaults and inheritance rules. The resolved
