@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   claimAgentRunContext,
   clearAgentRunContext,
@@ -7,6 +7,7 @@ import {
   releaseAgentRunContext,
 } from "../../infra/agent-run-registry.js";
 import type { AgentRunContext } from "../../infra/agent-run-registry.types.js";
+import { createCatalogCodeModeHarness, resetCodeModeTestState } from "../code-mode.test-support.js";
 import {
   callGatewayMock,
   createTestCronTool,
@@ -86,6 +87,30 @@ describe("automation invocation tools", () => {
       }),
     ).rejects.toThrow("record_result already accepted");
     expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("reports a missing outcome through Code Mode and accepts a corrected call", async () => {
+    const { invocation, tool } = createInvocation();
+    const execute = vi.spyOn(tool, "execute");
+    onTestFinished(resetCodeModeTestState);
+    const { complete } = createCatalogCodeModeHarness([tool]);
+    for (const extra of [{ result: "no_change" }, { status: "no_change" }, {}]) {
+      const input = JSON.stringify({ action: "record_result", ...extra });
+      const failure = await complete(`return await automations(${input});`);
+      expect(failure).toMatchObject({
+        status: "failed",
+        failurePhase: "bridge",
+        code: "invalid_input",
+        error: expect.stringContaining("outcome"),
+      });
+      expect(invocation.result).toBeUndefined();
+    }
+    expect(execute).toHaveBeenCalledTimes(3);
+    const corrected = await complete(
+      'return await automations({action:"record_result",outcome:"no_change"});',
+    );
+    expect(corrected.status).toBe("completed");
+    expect(invocation.result).toEqual({ outcome: "no_change" });
   });
 
   it("accepts no_change without boilerplate and rejects invalid meaningful summaries", async () => {
