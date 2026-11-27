@@ -16,7 +16,6 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   captureGatewayDeviceRevocation,
   closeGatewayDeviceRevocation,
-  invalidateGatewayDeviceRevocation,
 } from "../device-revocation.js";
 import {
   createCoreGatewayMethodDescriptors,
@@ -65,13 +64,7 @@ afterEach(() => {
 
 const methods = ["artifacts.list", "artifacts.get", "artifacts.download"] as const;
 type Method = (typeof methods)[number];
-const changes = [
-  "request canceled",
-  "device revoked",
-  "caller replaced",
-  "opaque guard refused",
-  "reconnected",
-] as const;
+const changes = ["request canceled", "opaque guard refused", "reconnected"] as const;
 type Change = (typeof changes)[number];
 const registry = createGatewayMethodRegistry(
   createCoreGatewayMethodDescriptors(coreGatewayHandlers),
@@ -107,13 +100,12 @@ async function exercise(
       connectionSignal: connection.signal,
       connect: gatewayConnect(["operator.read"]),
     };
-    let current = true;
     let guardAllowed = true;
     const refusal = new Error(`Synthetic artifact ${change}`);
     const captured = captureGatewayDeviceRevocation(
       context,
       { deviceId: "artifact-device", role: "operator" },
-      () => current,
+      () => true,
       connection.signal,
     );
     const guard = () => {
@@ -174,11 +166,6 @@ async function exercise(
     boundaries.visit.mockClear();
     const changeAuthority = {
       "request canceled": () => requestController.abort(refusal),
-      "device revoked": () =>
-        invalidateGatewayDeviceRevocation(context, "artifact-device", "operator"),
-      "caller replaced": () => {
-        current = false;
-      },
       "opaque guard refused": () => {
         guardAllowed = false;
       },

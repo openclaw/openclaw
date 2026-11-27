@@ -466,6 +466,28 @@ afterEach(async () => {
 });
 
 describe("Claude session catalog", () => {
+  it("pins a selected local file and fences duplicate or relocated Claude project entries", async () => {
+    const home = await createHome();
+    const moved = await createHome();
+    const id = "9a9c88e8-982a-413a-827f-caa4a46d9920";
+    await writeUnindexedCliSessions(home, { [id]: "first" });
+    const source = (await listPage({}, home)).sessions[0]?.sourceHomeId;
+    expect(source).toMatch(/^[0-9a-f]{64}$/);
+    await expect(readPage({ threadId: id }, home, undefined, source)).resolves.toMatchObject({
+      threadId: id,
+    });
+    await writeUnindexedCliSessions(moved, { [id]: "second" });
+    await expect(readPage({ threadId: id }, moved, undefined, source)).rejects.toThrow(
+      "unavailable",
+    );
+    await writeUnindexedCliSessions(home, { [id]: "duplicate" }, "another-project");
+    const refreshed = await listClaudeSessions(home, { sessionId: id, forceRefresh: true });
+    expect(refreshed.records[0]?.sourceHomeId).toBeUndefined();
+    await expect(readPage({ threadId: id }, home, undefined, source)).rejects.toThrow(
+      "unavailable",
+    );
+  });
+
   it("reports the discovery frontier and finds and reads an exact ID beyond it", async () => {
     const home = await createHome();
     const watches = createClaudeCatalogWatchDriver(home);

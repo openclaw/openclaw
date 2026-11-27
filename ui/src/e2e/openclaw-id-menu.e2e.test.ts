@@ -256,7 +256,7 @@ suite.define(() => {
                   ),
                 );
               }
-              await page.goto(`${suite.server.baseUrl}/new`);
+              await page.goto(new URL("new", suite.server.baseUrl).href);
               await page.waitForFunction(() => window.openclawControlUi?.snapshot().ready);
               if (width === 390) {
                 await navigationDrawerToggle(page).click();
@@ -346,6 +346,14 @@ suite.define(() => {
                   await menu
                     .getByRole("menuitem", { name: "Connect a device", exact: true })
                     .focus();
+                  await page.keyboard.press("ArrowUp");
+                  const unlink = menu.getByRole("menuitem", {
+                    name: "Unlink from OpenClaw ID",
+                    exact: true,
+                  });
+                  expect(await unlink.evaluate((node) => node === document.activeElement)).toBe(
+                    true,
+                  );
                   await page.keyboard.press("ArrowUp");
                   expect
                     .soft(await button.evaluate((node) => node === document.activeElement))

@@ -92,7 +92,7 @@ There are four separate pieces:
 Open **Settings → Profile → Connected accounts**, select **Add account**, then choose a provider and sign-in method. Adding an account needs an identified connection with `operator.write`.
 
 - **Anthropic** accepts an API key for personal setup, not a Claude subscription token.
-- **OpenAI** offers API key, ChatGPT/Codex browser sign-in, and device-code sign-in.
+- **OpenAI** offers API key, Codex login (device code), and Sign in with ChatGPT.
 - **Grok (xAI)** offers API key and device sign-in.
 
 The chooser shows only provider methods enabled for personal accounts on that Gateway. Follow its instructions and use the protected input for credentials or authorization codes. A browser callback can finish while an input is open. Keep the Profile connection open until it reports the result. Saving credentials is separate from verifying a successful model request.
@@ -170,7 +170,9 @@ The card shows how long the person has been continuously connected, their report
 
 People presence is shared with operators who have read access (`operator.read`, also implied by `operator.write` or `operator.admin`). Those readers may see other people's online and activity timing and reported time zone whether or not the person is watching a session. Node and pairing-only connections receive neither the presence inventory nor its activity-driven events. This does not change cross-reader IP visibility or provide isolation for all Gateway metadata. See [Who can see presence](/concepts/presence#who-can-see-presence).
 
-**Viewing now** and **Recent sessions** use a bounded, access-scoped session list independent of the sidebar's owner, **Involving me**, and status filters. Opening a card refreshes that list across configured agents; it includes active sessions only. Recent sessions require the same recorded profile identity on both the viewer and the owner or creator. Matching raw IDs are not enough. They are not a complete history of the person's contributions. Session update times describe the session, not when that person last acted. Connection descriptions and time zones are client-reported hints, not verified physical locations.
+**Viewing now** and **Recent sessions** use a bounded, access-scoped session list independent of the sidebar's owner, **Involving me**, and status filters. Opening a card refreshes that list across configured agents. It includes only active sessions and omits system sessions, including helpers that publish pull requests to GitHub. Recent sessions require the same recorded profile identity on both the viewer and the owner or creator. Matching raw IDs are not enough. They are not a complete history of the person's contributions. Session update times describe the session, not when that person last acted. Connection descriptions and time zones are client-reported hints, not verified physical locations.
+
+The card shows **No recent visible sessions** only after the list loads successfully. If the first read fails, the card shows that recent sessions are unavailable; reopen it to try again.
 
 The Gateway also filters watched-session references for each recipient using `sessions.list` visibility rules, across connect snapshots, presence RPC responses, and events. Hidden or missing references are omitted without counts or placeholders. Opening someone's card never borrows that person's session access.
 
@@ -238,8 +240,15 @@ Plain text, assistant output, and mentions removed by approval do not grant acce
 Other participants cannot invite new members. Draft and incognito restrictions
 remain in force, and mentions never change the session's visibility.
 
-Remove a person from session members to revoke invitation access. An old message
-retry cannot restore it, even after a restart. A new selected mention from the
+Remove a person from session members to revoke invitation access. Work that person
+started in the session stops at once: a running reply keeps its partial text, and its
+child agents and commands end. Lowering their access (for example from send to read)
+stops it the same way, and lowering a person's role with `users.setRole` stops their
+work in every session. The session shows "Stopped 1 run started by Carol: their access
+to this session changed." Their
+next message is checked against the new access. Configuration reloads and role
+definition edits apply to the next message only. An old message retry cannot restore
+access, even after a restart. A new selected mention from the
 creator or an administrator can invite them again. Access is committed with the message. If the later Inbox notification fails,
 the sender receives a notice that the message was posted but notifications failed.
 Membership does not grant broader operator scopes. See
@@ -308,7 +317,7 @@ The normal admission limit is 32 identities per logical session. Existing identi
 
 The schema-18 migration, which first ships in v2026.8.1, preserves historical membership and recorded contribution aggregates. Earlier writers could merge profile and channel timestamps, so ambiguous first and last input times become unknown. A later accepted input establishes a new recorded last time, but cannot recover a first-ever input time. No transcript, display-name, or UUID-based backfill runs. See [Database schemas](/reference/database-schemas#participant-identity-migration).
 
-New transcript messages keep qualified sender identity separate from display names. Only qualified profile senders get profile portraits, person Activity links, or recognition as the signed-in person, and only their messages clear that profile's typing indicator. A matching channel sender ID is not enough. Write hooks can redact sender identity, but cannot replace it with another trusted identity. Suggestion attribution identifies the suggestion's author rather than the operator who accepts it.
+New transcript messages keep qualified sender identity separate from display names. Only qualified profile senders get profile portraits, person Activity links, or recognition as the signed-in person, and only their messages clear that profile's typing indicator. A matching channel sender ID is not enough. Write hooks can redact sender identity, but cannot replace it with another trusted identity. An accepted suggestion is the accepting operator's turn: it runs with their access, shows their name and portrait, and reaches the agent as their message. The suggestion's author is credited only by a "Suggested by" label under the message.
 
 Older or otherwise unqualified messages retain their saved text and sender labels, with initials instead of inferred profile portraits and no person Activity link. When neither a sender nor a source label was recorded, chat and reply previews use the label “Message,” with no avatar rather than the current viewer’s name or portrait. Markdown exports likewise never assume an unattributed input was written by the viewer. This applies to existing history without changing its stored messages. OpenClaw does not rewrite those messages or reconstruct their authors from UUIDs, profile lookups, or participant history. This can remove profile presentation from an older message that really was profile-authored, because it did not record enough evidence to establish that fact. Transcript attribution, participant aggregates, and creator-based access decisions remain separate contracts. Attribution and participation never grant session access.
 

@@ -29,7 +29,7 @@ import {
 } from "./openclaw-agent-db-lease.js";
 import { closeCachedOpenClawAgentDatabase } from "./openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
-import * as schema from "./openclaw-agent-db-schema.js";
+import * as schema from "./openclaw-agent-db-schema-admission.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesAsync,

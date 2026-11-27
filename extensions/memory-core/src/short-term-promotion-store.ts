@@ -1,5 +1,4 @@
 import { asNullableRecord, readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { RecallPruneOperations } from "../recall-operation-api.js";
 import {
   SHORT_TERM_META_NAMESPACE,
   SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
@@ -34,18 +33,13 @@ export async function pruneShortTermStore(workspaceDir: string, keys: string[]):
   if (keys.length === 0) {
     return;
   }
-  const stores = [SHORT_TERM_RECALL_NAMESPACE, SHORT_TERM_PHASE_SIGNAL_NAMESPACE].map(
-    openWorkspaceStore,
-  );
-  await stores[0]!.createOperation!<RecallPruneOperations>(stores, {
-    moduleName: "recall-operation-api.js",
-    exportName: "pruneRecallEntries",
-  }).execute(
+  const recall = openWorkspaceStore(SHORT_TERM_RECALL_NAMESPACE);
+  const phase = openWorkspaceStore(SHORT_TERM_PHASE_SIGNAL_NAMESPACE);
+  await recall.deleteKeys!(
+    keys.map((key) => memoryCoreWorkspaceEntryKey(workspaceDir, key)),
     {
-      type: "prune",
-      input: { keys: keys.map((key) => memoryCoreWorkspaceEntryKey(workspaceDir, key)) },
+      alsoFrom: phase,
     },
-    { writeStores: [0, 1] },
   );
 }
 

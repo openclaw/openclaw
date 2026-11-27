@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { expect, it, onTestFinished, vi } from "vitest";
 import { projectChatDisplayMessages } from "../../../../../src/gateway/chat-display-projection.js";
+import { createNestedToolActivity } from "../../../../../src/sessions/nested-tool-activity.js";
 import type {
   AutomationCreationPlan,
   AutomationCreationResult,
@@ -11,8 +12,8 @@ import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import * as schedulerProjection from "../chat-automation-projection-loader.ts";
 import { createState } from "../chat-gateway.test-support.ts";
-import { handleChatGatewayEvent } from "../chat-gateway.ts";
 import { buildItems, makeMessage } from "../chat-thread.test-support.ts";
+import { applySessionMessagePayload } from "../session-message-apply.ts";
 import { render } from "../test-helpers/chat-transcript-native.tsx";
 import { threadFixture } from "./chat-transcript-fixture.test-support.tsx";
 import { projectTranscriptChain } from "./chat-transcript-message-index.ts";
@@ -71,28 +72,18 @@ function injected(...events: Array<AutomationCreationPlan | AutomationCreationRe
     })),
   );
 }
-it("places one installer assistant card at the declaration, resolving out of order without changing its key or shape", () => {
-  const pending = cards(injected(plan));
-  expect(pending).toEqual([
+it("projects only saved installer automations and ignores failed or repeated results", () => {
+  expect(cards(injected(plan))).toEqual([]);
+  expect(cards(injected(plan, failed))).toEqual([]);
+  const saved = cards(injected(plan, created));
+  expect(saved).toEqual([
     {
       key: expect.any(String),
       role: "assistant",
-      rows: plan.slots.map((s) => ({ ...s, status: "pending" })),
+      rows: [{ ...plan.slots[1], jobId: "saved-weekly" }],
     },
   ]);
-  const partial = cards(injected(plan, created));
-  expect(partial).toEqual([
-    {
-      ...pending[0],
-      rows: [
-        { ...plan.slots[0], status: "pending" },
-        { ...plan.slots[1], status: "created", jobId: "saved-weekly" },
-      ],
-    },
-  ]);
-  expect(cards(injected(plan, created, failed, created))).toEqual([
-    { ...partial[0], rows: [{ ...plan.slots[0], status: "failed" }, partial[0]!.rows[1]] },
-  ]);
+  expect(cards(injected(plan, created, failed, created))).toEqual(saved);
   expect(cards(injected(created))).toEqual([]);
   expect(cards(injected({ ...plan, slots: [plan.slots[0]!, plan.slots[0]!] }))).toEqual([]);
   expect(
@@ -117,38 +108,36 @@ function liveTool(id: string, action: string, args: object, details: unknown, is
     ],
   };
 }
-it("seeds only a live, confirmed receipt; incremental history cannot revive stale controls", () => {
-  const definition = {
-    id: created.jobId,
-    name: "Saved label",
-    enabled: false,
-    configRevision: "v1",
+it("uses the saved ID, not the receipt definition, for both live and reloaded cards", () => {
+  const result = {
+    ...created,
+    definition: { id: created.jobId, name: "Old label", enabled: true, configRevision: "v1" },
   };
-  const result = { ...created, definition };
-  const persisted = injected(plan, result);
-  expect(cards(persisted)[0]?.rows[1]).not.toHaveProperty("definition");
-  const state = createState({ sessionKey, chatMessages: [] });
-  for (const [index, message] of persisted.entries()) {
-    handleChatGatewayEvent(state, {
-      state: "final",
-      sessionKey,
-      seq: 0,
-      runId: "inject-receipt-" + index,
-      message,
-    });
-  }
-  expect(cards(state.chatMessages)[0]?.rows[1]).toMatchObject({ definition });
+  const expected = [{ ...plan.slots[1], jobId: created.jobId }];
+  expect(cards(injected(plan, result))[0]?.rows).toEqual(expected);
   const declared = liveTool("plan", "plan", { names: plan.slots.map((s) => s.name) }, plan);
   const saved = liveTool("added", "add", { position: 2 }, { automationCreation: result });
-  expect(cards([], [declared, saved])[0]?.rows[1]).toMatchObject({ definition });
+  expect(cards([], [declared, saved])[0]?.rows).toEqual(expected);
 });
 
-it("keeps a standalone plan in each originating turn even when provider call IDs repeat", () => {
+it("keeps a standalone saved automation in each originating turn even when provider call IDs repeat", () => {
   const slots = plan.slots.slice(0, 1);
   const messages = ["turn-a", "turn-b"].flatMap((runId, i) => [
     makeMessage("prompt-" + i, 10 * i + 1, { role: "user", runId }),
     {
       ...liveTool("reused-call", "plan", { slots }, { ...plan, slots }),
+      runId,
+      timestamp: 10 * i + 2,
+    },
+    {
+      ...liveTool(
+        "reused-add",
+        "add",
+        { planId: plan.planId, slotId: "a" },
+        {
+          automationCreation: { ...created, slotId: "a" },
+        },
+      ),
       runId,
       timestamp: 10 * i + 2,
     },
@@ -186,28 +175,60 @@ const declared = (id: string) => liveTool(id, "plan", { slots: plan.slots }, pla
 const refused = () =>
   liveTool("add-a", "add", { planId: plan.planId, slotId: "a" }, undefined, true);
 
-it("keeps the actual assistant card mounted while a planned job fails", async () => {
-  const scheduled = declared("plan-call");
-  const { props, container, load, rerender } = mountHistory([prompt], {
+it("settles a Code Mode automation from its committed tool result while the turn is still running", async () => {
+  const state = createState({ sessionKey, chatMessages: [prompt], chatRunId: "setup" });
+  const { props, container, load, rerender } = mountHistory(state.chatMessages, {
     runId: "setup",
     runWorking: true,
     runActive: true,
+    toolMessages: [declared("plan-call")],
   });
-  await waitForSolid(() => expect(container.textContent).toContain("prompt"));
-  expect(load).not.toHaveBeenCalled();
-  props.toolMessages = [scheduled];
-  rerender();
-  const selector = ".chat-bubble .chat-created-automations";
-  const card = await waitForSolid(() => requireElement(container, selector));
-  expect(load).toHaveBeenCalledOnce();
-  const row = card.querySelector('[data-slot-id="a"]');
-  expect(card.querySelectorAll(".chat-created-automations__switch-placeholder")).toHaveLength(2);
-  props.toolMessages = [scheduled, refused()];
-  rerender();
-  await waitForSolid(() => expect(card.textContent).toContain("Not created"));
-  expect(container.querySelector(selector)).toBe(card);
-  expect(card.querySelector('[data-slot-id="a"]')).toBe(row);
-  expect(card.querySelectorAll(".chat-created-automations__switch-placeholder")).toHaveLength(1);
+  await waitForSolid(() => expect(load).toHaveBeenCalledOnce());
+  expect(container.querySelector(".chat-created-automations")).toBeNull();
+  const publish = (index: number, input: object, isError: boolean, details?: object) => {
+    const toolCallId = "add-" + index;
+    const [message] = projectChatDisplayMessages([
+      {
+        ...createNestedToolActivity({
+          runId: "setup",
+          scopeId: "code-mode",
+          afterEntryId: null,
+          startOrder: index,
+          parentToolCallId: "exec",
+          toolCallId,
+          toolName: "automations",
+          input,
+          result: { content: [], details },
+          isError,
+          startedAt: 100 + index,
+          timestamp: 100 + index,
+        }),
+        __openclaw: { id: toolCallId, seq: index, runId: "setup" },
+      },
+    ]);
+    expect(message).toBeDefined();
+    applySessionMessagePayload(
+      state,
+      { sessionKey, runId: "setup", messageId: toolCallId, messageSeq: index, message },
+      true,
+      { kind: "live", activeRunId: "setup" },
+    );
+    props.messages = state.chatMessages;
+    rerender();
+  };
+  const input = { action: "add", position: 1 };
+  publish(2, input, true);
+  expect(state.chatMessages).toHaveLength(2);
+  expect(container.querySelector(".chat-created-automations")).toBeNull();
+  publish(3, { ...input, action: "get" }, false);
+  expect(state.chatMessages).toHaveLength(2);
+  const saved = { ...created, slotId: "a" };
+  publish(4, input, false, { automationCreation: saved });
+  const card = await waitForSolid(() => requireElement(container, ".chat-created-automations"));
+  const row = requireElement(card, '[data-slot-id="a"]');
+  expect(row.getAttribute("data-job-id")).toBe(saved.jobId);
+  expect(card.querySelectorAll("[data-slot-id]")).toHaveLength(1);
+  expect(state.chatRunId).toBe("setup");
 });
 
 it.each(["resolve", "reject"])(
@@ -216,7 +237,7 @@ it.each(["resolve", "reject"])(
     const real = schedulerProjection.loadAutomationProjection;
     const pending = Promise.withResolvers<schedulerProjection.AutomationProjection>();
     const { container, load } = mountHistory(
-      [prompt, ...injected(plan, failed)],
+      [prompt, ...injected(plan, created)],
       { restoring: true },
       pending.promise,
     );
@@ -225,8 +246,8 @@ it.each(["resolve", "reject"])(
     expect(container.querySelector("[data-slot-id]")).toBeNull();
     if (outcome === "resolve") {
       pending.resolve(await real());
-      await waitForSolid(() => expect(container.textContent).toContain("Not created"));
-      expect(container.querySelectorAll("[data-slot-id]")).toHaveLength(2);
+      await waitForSolid(() => expect(container.textContent).toContain("Weekly digest"));
+      expect(container.querySelectorAll("[data-slot-id]")).toHaveLength(1);
     } else {
       pending.reject(new Error("optional chunk unavailable"));
       await Promise.allSettled([pending.promise]);
@@ -247,17 +268,17 @@ it.each([true, false])(
       { automationCreation: created },
     );
     const first = refused();
-    const initial = cards(history, [scheduled], tools);
-    expect(initial).toHaveLength(1);
-    expect(initial[0]?.rows.map((r) => r.status)).toEqual(["pending", "pending"]);
-    expect(cards(history, [scheduled, second], tools)[0]?.rows.map((r) => r.status)).toEqual([
-      "pending",
-      "created",
+    expect(cards(history, [scheduled], tools)).toEqual([]);
+    const initialSave = cards(history, [scheduled, second], tools);
+    expect(initialSave).toEqual([
+      {
+        key: expect.any(String),
+        role: "assistant",
+        rows: [{ ...plan.slots[1], jobId: created.jobId }],
+      },
     ]);
     const settled = cards(history, [scheduled, second, first], tools);
-    expect(settled).toHaveLength(1);
-    expect(settled[0]?.key).toBe(initial[0]?.key);
-    expect(settled[0]?.rows.map((r) => r.status)).toEqual(["failed", "created"]);
+    expect(settled).toEqual(initialSave);
     const durable = [scheduled, second, first].flatMap((m, i) => [
       makeMessage("call-" + i, 2 * i + 2, {
         role: "assistant",
@@ -282,9 +303,6 @@ it.each([true, false])(
     expect(cards([...history, ...projectChatDisplayMessages(durable), final], [], tools)).toEqual(
       settled,
     );
-    expect(cards([...history, final], [scheduled], tools)[0]?.rows.map((r) => r.status)).toEqual([
-      "failed",
-      "failed",
-    ]);
+    expect(cards([...history, final], [scheduled], tools)).toEqual([]);
   },
 );

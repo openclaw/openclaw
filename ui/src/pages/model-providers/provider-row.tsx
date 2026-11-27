@@ -1,6 +1,6 @@
 // Provider access keeps account credentials and plan limits together in each row.
 import type { JSX } from "@solidjs/web";
-import { createSignal, For, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
 import type { ModelsProbeResult } from "../../api/types.ts";
 import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
@@ -22,6 +22,7 @@ import {
 } from "./data.ts";
 import { apiKeySource, profileIdentity, ProviderProfiles } from "./profiles-view.tsx";
 import {
+  hasSeparateAccountLimits,
   isProviderUsable,
   needsAuthAttention,
   renderMutationMessage,
@@ -528,7 +529,32 @@ export function ProviderRow(props: ProviderRowProps) {
   let summary: HTMLButtonElement | undefined;
   const card = () => props.card;
   const message = () => props.messages[`key:${card().id}`] ?? props.messages[card().id];
-  const limits = () => (hasProviderUsageDetails(card().usage) ? card().usage : undefined);
+  // OpenAI also reports organization billing; account quota reads never replace that data.
+  const organizationUsage = () =>
+    card().usage?.costHistory || card().usage?.billing?.some((entry) => entry.type === "spend");
+  const accountScoped = () => hasSeparateAccountLimits(card()) && !organizationUsage();
+  const shownByAccount = createMemo(() => {
+    const { id, profiles, profileProviderIds, usage } = card();
+    return (
+      props.canViewProfiles &&
+      props.accountUsage &&
+      usage &&
+      canonicalModelAuthProviderId(usage.provider) === "openai" &&
+      id === "openai" &&
+      !organizationUsage() &&
+      profiles.some(
+        ({ profileId, type }) =>
+          type !== "api_key" &&
+          (profileProviderIds[profileId] ?? id) === "openai" &&
+          (usage.authProfileId === profileId || (!usage.authProfileId && !usage.error)),
+      )
+    );
+  });
+  const limits = () =>
+    !shownByAccount() &&
+    (hasProviderUsageDetails(card().usage) || (accountScoped() && card().usage?.plan))
+      ? card().usage
+      : undefined;
   const [expanded, setExpanded] = createSignal<boolean>();
   // Work in progress and broken credentials start open; a click always wins.
   const startsOpen = () =>
@@ -536,8 +562,14 @@ export function ProviderRow(props: ProviderRowProps) {
     Boolean(message()) ||
     Boolean(props.probeResults[card().id]) ||
     Boolean(props.busy[`probe:${card().id}`]) ||
-    needsCredentialFix(card());
+    needsCredentialFix(card()) ||
+    // Voice notices link here; open on the missing key they point to.
+    (props.providerQuery === card().id && Boolean(card().voiceApiKeyRequired));
   const open = () => expanded() ?? startsOpen();
+  // Once the account owns the reading, don't report the older sample as its status or plan.
+  const summaryCard = createMemo(() =>
+    open() && shownByAccount() ? { ...card(), usage: undefined } : card(),
+  );
   const detailId = () => `provider-detail-${card().id.replace(/[^a-z0-9-]/giu, "-")}`;
   // Open, the credential rows below name the account, so the summary doesn't.
   const credential = () => (open() ? undefined : credentialLine(card()));
@@ -563,20 +595,32 @@ export function ProviderRow(props: ProviderRowProps) {
           <span class="provider-row__name">{providerName(card())}</span>
           <span class="provider-row__meta settings-row__desc">
             <span class="provider-row__meta-part">{credential()}</span>
-            <Show when={card().usage?.plan}>
+            <Show when={!accountScoped() && summaryCard().usage?.plan}>
               {(plan) => <span class="provider-row__meta-part provider-row__plan">{plan()}</span>}
             </Show>
             <span class="provider-row__meta-part">{modelsText(card())}</span>
           </span>
         </span>
         <span class="provider-row__status">
-          {renderProviderStatus(card(), props.probeResults[card().id])}
+          {renderProviderStatus(summaryCard(), props.probeResults[card().id])}
         </span>
         <Icon name="chevronDown" class="provider-row__chevron" />
       </button>
       <Show when={open()}>
         <div class="provider-row__detail" id={detailId()}>
           <ProviderCredentials {...props} />
+          <Show when={card().voiceApiKeyRequired}>
+            <CredentialRow
+              title={t("modelProviders.voice.title")}
+              detail={t(
+                card().id === "openai"
+                  ? "modelProviders.voice.detail"
+                  : "modelProviders.voice.providerDetail",
+                { provider: providerName(card()) },
+              )}
+              action={<SettingsStatus kind="warn" label={t("modelProviders.voice.status")} />}
+            />
+          </Show>
           <KeyEditor {...props} onCancel={() => summary?.focus()} />
           <Show when={limits()}>
             {(usage) => (
@@ -584,7 +628,15 @@ export function ProviderRow(props: ProviderRowProps) {
                 class="provider-row__limits-pane"
                 aria-label={t("modelProviders.limits.title")}
               >
-                <ProviderUsagePanel compact usage={usage()} />
+                <Show when={accountScoped()}>
+                  <span class="settings-row__title">
+                    {t("modelProviders.limits.oneAccount")}
+                    {usage().plan ? ` · ${usage().plan}` : ""}
+                  </span>
+                </Show>
+                <Show when={hasProviderUsageDetails(usage())}>
+                  <ProviderUsagePanel compact usage={usage()} />
+                </Show>
               </section>
             )}
           </Show>

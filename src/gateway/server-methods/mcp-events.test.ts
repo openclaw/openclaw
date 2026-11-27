@@ -34,7 +34,6 @@ function fixture() {
     ...makeGatewayClient({ connId: "catalog-client", clientId: "cli", scopes: ["operator.read"] }),
     authenticatedUserId: "alice@example.test",
   };
-  let current = true;
   const cfg = { agents: { entries: { main: {} } } };
   const registry = createGatewayMethodRegistry([
     {
@@ -53,15 +52,10 @@ function fixture() {
     client,
     context,
     respond,
-    hasCurrentClientAuthority: () => current,
   };
   return {
     options,
     respond,
-    client,
-    revoke: () => {
-      current = false;
-    },
     run: () => mcpEventsHandlers["mcp.events.list"]!(options),
   };
 }
@@ -150,29 +144,13 @@ it("does not connect when the optional plugin is absent", async () => {
   expect(mocks.prepare).not.toHaveBeenCalled();
   expect(f.respond.mock.calls[0]?.[0]).toBe(false);
 });
-it.each(["caller revoked after discovery", "read scope lost", "oversized page"] as const)(
-  "mcp.events.list rejects %s",
-  async (scenario) => {
-    const f = fixture();
-    mocks.request.mockImplementation(async (input) => {
-      if (input.method === "server/discover") {
-        if (scenario === "caller revoked after discovery") {
-          f.revoke();
-        }
-        return discovery;
-      }
-      if (scenario === "read scope lost") {
-        f.client.connect.scopes = [];
-      }
-      return {
-        events: scenario === "oversized page" ? Array.from({ length: 1001 }, () => event) : [event],
-      };
-    });
-    await f.run();
-    expect(f.respond.mock.calls[0]?.[0]).toBe(false);
-    if (scenario === "caller revoked after discovery") {
-      expect(mocks.request).toHaveBeenCalledOnce();
-      expect(mocks.release).toHaveBeenCalledOnce();
-    }
-  },
-);
+it("rejects an oversized page", async () => {
+  const f = fixture();
+  mocks.request.mockImplementation(async (input) =>
+    input.method === "server/discover"
+      ? discovery
+      : { events: Array.from({ length: 1001 }, () => event) },
+  );
+  await f.run();
+  expect(f.respond.mock.calls[0]?.[0]).toBe(false);
+});

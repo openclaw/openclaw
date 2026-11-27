@@ -4,11 +4,6 @@ import manifest from "./openclaw.plugin.json" with { type: "json" };
 import discoveryProvider from "./provider-discovery.js";
 import { resolveModelRoutes } from "./provider-policy-api.js";
 
-// mock-isolation: Registry lookup behavior is covered by openai-codex-discovery.test.ts.
-vi.mock("./codex-client-version.js", () => ({
-  resolveOpenAICodexClientVersion: async () => "0.169.0",
-}));
-
 type CatalogOptions = { apiKey?: string; baseUrl?: string; profileId?: string };
 async function runCatalog(response: Response | undefined, options: CatalogOptions = {}) {
   const { apiKey = "sk-openai", baseUrl, profileId } = options;

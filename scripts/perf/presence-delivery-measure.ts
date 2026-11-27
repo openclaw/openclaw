@@ -16,6 +16,7 @@ import { parseArgs } from "node:util";
 import type { GatewayWsClient } from "../../src/gateway/server/ws-types.js";
 import { listSystemPresence, upsertPresence } from "../../src/infra/system-presence.js";
 import { startGatewayBenchDiagnostics } from "../lib/gateway-bench-diagnostics.ts";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -98,12 +99,7 @@ await run(300);
 wireBytes = 0;
 const inspector = new Session();
 if (values.allocations) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 32768,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 32768);
 }
 const stopDiagnostics = startGatewayBenchDiagnostics();
 const cpu = process.threadCpuUsage();

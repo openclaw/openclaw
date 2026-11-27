@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -456,6 +457,28 @@ export function usePreparedModelRuntimeHarness(
   });
   return {
     mocks: preparedModelRuntimeMocks,
+    holdCatalogWrite(this: void) {
+      const started = createDeferred();
+      const result = createDeferred<Record<string, never>>();
+      const pending: Promise<unknown>[] = [];
+      const release = () => result.resolve({});
+      preparedModelRuntimeMocks.ensureOpenClawModelsJson.mockImplementationOnce(async () => {
+        started.resolve();
+        return await result.promise;
+      });
+      return {
+        started: started.promise,
+        release,
+        track<T>(promise: Promise<T>) {
+          pending.push(promise);
+          return promise;
+        },
+        async [Symbol.asyncDispose]() {
+          release();
+          await Promise.allSettled(pending);
+        },
+      };
+    },
     agentInput<Config extends OpenClawConfig>(agentId: string, config: Config) {
       return {
         agentId,

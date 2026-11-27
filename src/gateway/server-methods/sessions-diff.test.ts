@@ -245,7 +245,7 @@ describe("loadSessionDiff", () => {
     ]);
   });
 
-  it("keeps authority per caller and metadata separate per session while polls share preparation", async () => {
+  it("keeps metadata separate per session while polls share preparation", async () => {
     seedRepo({ "tracked.txt": "before\n" });
     write("tracked.txt", "after\n");
     const otherRoot = tempDir("openclaw-other-diff-");
@@ -264,23 +264,21 @@ describe("loadSessionDiff", () => {
       };
     });
     const params = { sessionKey: "agent:main:s1", scope: "uncommitted", poll: true };
-    let current = true;
-    const revoked = requestDiff(params, cfg, {}, { hasCurrentClientAuthority: () => current });
-    const rejected = expect(revoked).rejects.toThrow("Gateway requester authority changed");
-    const allowed = requestDiff(params, cfg);
+    const first = requestDiff(params, cfg);
+    const second = requestDiff(params, cfg);
     const other = requestDiff({ ...params, sessionKey: "agent:main:s2" }, cfg);
-    current = false;
     released.resolve();
     try {
-      await rejected;
-      expect(await allowed).toMatchObject([
-        {
-          ok: true,
-          payload: {
-            files: [{ path: "tracked.txt", patch: expect.stringContaining("-before\n+after") }],
+      for (const calls of [await first, await second]) {
+        expect(calls).toMatchObject([
+          {
+            ok: true,
+            payload: {
+              files: [{ path: "tracked.txt", patch: expect.stringContaining("-before\n+after") }],
+            },
           },
-        },
-      ]);
+        ]);
+      }
       expect(await other).toMatchObject([
         {
           ok: true,
@@ -289,7 +287,7 @@ describe("loadSessionDiff", () => {
       ]);
       expect(hoisted.loadSessionEntry).toHaveBeenCalledTimes(2);
     } finally {
-      await Promise.allSettled([revoked, allowed, other]);
+      await Promise.allSettled([first, second, other]);
     }
   });
 

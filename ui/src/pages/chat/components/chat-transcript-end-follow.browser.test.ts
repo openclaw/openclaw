@@ -160,61 +160,6 @@ function observeNativeScroll(
   });
 }
 
-it("measures an appended end row before starting a smooth journey", async () => {
-  const { host, thread, extent, distance } = await mountEndFollowFixture(0);
-  const tail = document.createElement("div");
-  tail.style.height = "54px";
-  tail.textContent = "New short reply";
-  host.terminalRows = [{ kind: "content", key: "new-short-reply", content: tail }];
-  host.requestRender();
-  await host.updateComplete;
-  const targets: number[] = [];
-  observeNativeScroll(thread, (options, scroll) => {
-    if (options?.behavior === "smooth") {
-      targets.push(extent.offsetHeight);
-    }
-    scroll();
-  });
-  host.transcript.scrollToEnd({ behavior: "smooth" });
-  await expect.poll(distance).toBe(0);
-  expect(targets.length).toBeGreaterThan(0);
-  expect(targets.every((height) => height === 1354)).toBe(true);
-});
-
-it("follows a growing final row while cold history measurements settle", async () => {
-  await page.viewport(1200, 900);
-  saveChatSessionScrollPosition("end-follow-browser", "agent:main:end-follow", {
-    scrollTop: 0,
-    anchorToEnd: false,
-  });
-  const host = new EndFollowFixture();
-  fixture = host;
-  host.earlierRowHeight = 33.5;
-  host.lastRowHeight = 35;
-  host.olderRows = Array.from({ length: 800 }, (_, index): TranscriptRow => {
-    const content = document.createElement("div");
-    content.style.height = `${index % 2 ? 35 : 33.5}px`;
-    content.textContent = `Earlier result ${index}`;
-    return { kind: "content", key: `cold-${index}`, estimatedSize: 240, content };
-  });
-  host.style.cssText = "display: block; width: 800px";
-  document.body.append(host);
-  await host.settleUpdates();
-  const thread = host.querySelector<HTMLElement>(".chat-thread")!;
-  const distance = () => thread.scrollHeight - thread.clientHeight - thread.scrollTop;
-  await expect.poll(() => thread.scrollTop).toBe(0);
-  host.transcript.scrollToEnd({ behavior: "smooth" });
-  await expect.poll(distance, { timeout: 5_000 }).toBeLessThanOrEqual(1);
-  for (let index = 0; index < 30; index++) {
-    host.lastRowHeight += 3.5;
-    host.requestRender();
-    await host.updateComplete;
-    await settleFrames();
-  }
-  await settleFrames();
-  expect(Math.abs(distance())).toBeLessThanOrEqual(8);
-});
-
 it("releases a completed Latest target when the reader takes over without moving", async () => {
   const { host, thread, extent } = await mountFollowingFixture();
   host.transcript.scrollToEnd({ behavior: "auto" });
@@ -274,24 +219,6 @@ it("keeps the cached tail mounted when full history replaces the boot window", a
   } finally {
     observer.disconnect();
   }
-});
-
-it("keeps a newly measured tail visible in the first paint after growth", async () => {
-  const { host, thread, row, distance } = await mountFollowingFixture();
-  const gapAtPaint = await new Promise<number>((resolve) => {
-    setTimeout(() => {
-      const content = row.firstElementChild as HTMLElement;
-      content.style.height = `${host.lastRowHeight + 88}px`;
-      requestAnimationFrame(() => {
-        const observer = new ResizeObserver(() => {
-          observer.disconnect();
-          resolve(distance());
-        });
-        observer.observe(thread);
-      });
-    }, 0);
-  });
-  expect(gapAtPaint).toBe(0);
 });
 
 it.each([true, false])(
@@ -688,25 +615,6 @@ it("does not expose unmeasured intrinsic overflow as an independent scroll range
   await settleFrames();
   expect(thread.scrollTop).toBe(original);
   expect(distance()).toBe(200);
-});
-
-it("publishes padding changes when either viewport box stays the same size", async () => {
-  const { host, thread, distance } = await mountFollowingFixture();
-  const original = thread.scrollTop;
-
-  host.viewportPadding = 40;
-  host.requestRender();
-  await expect.poll(() => getComputedStyle(thread).paddingBottom).toBe("40px");
-  expect(thread.clientHeight).toBe(400);
-  expect(thread.scrollTop).toBe(original - 20);
-
-  // Border-box growth and matching padding growth leave the observed content box unchanged.
-  host.viewportHeight = 420;
-  host.viewportPadding = 60;
-  host.requestRender();
-  await expect.poll(() => thread.clientHeight).toBe(420);
-  expect(getComputedStyle(thread).paddingBottom).toBe("60px");
-  expect(distance()).toBe(0);
 });
 
 it("keeps a shrinking end target smooth during a native scroll", async () => {

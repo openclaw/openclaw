@@ -22,8 +22,9 @@ export function mountPlan(
   rows: AutomationCreationRow[],
   handler: GatewayRequestHandler,
   scopes = ["operator.admin"],
+  grouped = rows.length > 1,
 ) {
-  const [plan, setPlan] = createSignal<AutomationCreationCardPlan>({ planId: "plan", rows });
+  const [plan, setPlan] = createSignal<AutomationCreationCardPlan>({ grouped, rows });
   const request = vi.fn(handler);
   const client = createTestGatewayClient(request);
   const source = createApplicationGateway(

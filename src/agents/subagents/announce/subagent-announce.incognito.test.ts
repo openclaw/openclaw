@@ -278,7 +278,11 @@ describe("selected incognito announcement requester", () => {
                   sessionKey,
                   operationalRunInstance:
                     createTestAdmittedRunContext("incognito-parent").operationalRunInstance,
-                  receiptAuthority: () => callerCurrent,
+                  receiptAuthority: () => {
+                    if (!callerCurrent) {
+                      throw new Error("agent tool caller authority is no longer active");
+                    }
+                  },
                   gatewayContextResolver: resolver,
                 },
                 () => captureAgentHarnessCompletionCustody(scope),

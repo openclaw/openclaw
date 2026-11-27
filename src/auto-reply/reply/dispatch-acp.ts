@@ -47,7 +47,7 @@ import { prepareChannelParticipantObservation } from "../../sessions/session-par
 import { classifySessionStateActor } from "../../sessions/session-state-events.js";
 import { bindUserTurnInput } from "../../sessions/user-turn-transcript-runtime-context.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
-import { shouldDeferFinalTtsText } from "../../tts/captioned-final.js";
+import { shouldDeferFinalTtsText } from "../../tts/captioned-final-eligibility.js";
 import { prepareTtsPreferences } from "../../tts/tts-preferences.js";
 import type {
   ReplyDispatchRun,

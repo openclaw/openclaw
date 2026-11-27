@@ -111,7 +111,6 @@ it("settles child delivery and records its result during the requester turn", ({
           requesterAgentId: target.agentId,
           directIdempotencyKey: "announce:v1:child:run",
           deliveryTarget: { deliver: true, channel: "discord", to: "dm:mirror-fixture" },
-          contentKind: "completed_result",
           internalEvents: taskCompletionEvents({ result: "Synthetic child result" }),
           onDeliveryResult,
         });

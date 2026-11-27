@@ -23,7 +23,7 @@ export type SubagentLifecycleOptions = {
   countPendingDescendantRuns(
     rootSessionKey: string,
     assertCurrent: () => void,
-    options?: { excludeSuspendedDelivery?: boolean },
+    options?: { excludeSettledDelivery?: boolean },
   ): Promise<number>;
   getLatestRunForChildSession(
     childSessionKey: string,

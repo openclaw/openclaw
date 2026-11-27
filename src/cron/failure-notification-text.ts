@@ -1,4 +1,5 @@
 import type { FailoverReason } from "../agents/failover/signal.js";
+import { operatorRefusalText } from "../gateway/operator-refusal.js";
 import type { CronFailureNotificationDetail, CronTriggerFailureCode } from "./types.js";
 
 const GENERIC_FAILURE_DETAIL = "Check automation history for details.";
@@ -74,6 +75,10 @@ export function cronFailureDetailLines(
   }
   if (!failureNotificationDetail) {
     return [GENERIC_FAILURE_DETAIL];
+  }
+  if (failureNotificationDetail.kind === "inference-account-unrecorded") {
+    // The refusal names the stored account; keep it in automation history, not in chat.
+    return [operatorRefusalText("automation-account-unrecorded", "run this automation")];
   }
   if (failureNotificationDetail.kind === "invalid-target") {
     return [

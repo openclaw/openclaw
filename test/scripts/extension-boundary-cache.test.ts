@@ -121,6 +121,44 @@ it("reuses observed compiler lookups and rejects newly effective resolutions", a
   const originalReceipt = fs.readFileSync(path.join(root, receipt), "utf8");
   const receiptData: { inputs: string[]; lookups: DeclarationLookup[] } =
     JSON.parse(originalReceipt);
+  const withLookup = (lookup: DeclarationLookup) =>
+    [...receiptData.lookups, lookup].toSorted((left, right) => {
+      const a = `${left.kind}\0${left.path}`;
+      const b = `${right.kind}\0${right.path}`;
+      return a < b ? -1 : a > b ? 1 : 0;
+    });
+  const aliasTarget = path.join(root, "receipt-target");
+  const aliasOutside = path.join(parent, "receipt-outside");
+  const receiptAlias = path.join(root, "receipt-alias");
+  fs.mkdirSync(aliasTarget);
+  fs.mkdirSync(aliasOutside);
+  fs.symlinkSync(aliasTarget, receiptAlias, linkType);
+  const phase = new BoundaryInputSnapshot(root);
+  const firstReceipt = ".artifacts/first-lookup.inputs.json";
+  write(
+    firstReceipt,
+    JSON.stringify({
+      ...receiptData,
+      lookups: withLookup({ kind: "fileExists", path: "receipt-alias", result: false }),
+    }),
+  );
+  phase.record(config, args, firstReceipt, [firstReceipt]);
+  fs.unlinkSync(receiptAlias);
+  fs.symlinkSync(aliasOutside, receiptAlias, linkType);
+  const nextReceipt = ".artifacts/next-lookup.inputs.json";
+  write(
+    nextReceipt,
+    JSON.stringify({
+      ...receiptData,
+      lookups: withLookup({ kind: "realpath", path: "receipt-alias", result: "receipt-target" }),
+    }),
+  );
+  expect(() => phase.record(config, args, nextReceipt, [nextReceipt])).toThrow(
+    /Declaration input escapes checkout/,
+  );
+  fs.unlinkSync(receiptAlias);
+  fs.rmdirSync(aliasTarget);
+  fs.rmdirSync(aliasOutside);
   for (const contents of [
     JSON.stringify({ inputs: record.inputs }),
     JSON.stringify({ inputs: record.inputs, lookups: [] }),
@@ -154,11 +192,7 @@ it("reuses observed compiler lookups and rejects newly effective resolutions", a
     path: "external/missing.ts",
     result: false,
   };
-  const escapedLookups = [...receiptData.lookups, escaped].toSorted((left, right) => {
-    const a = `${left.kind}\0${left.path}`;
-    const b = `${right.kind}\0${right.path}`;
-    return a < b ? -1 : a > b ? 1 : 0;
-  });
+  const escapedLookups = withLookup(escaped);
   write(receipt, JSON.stringify({ ...receiptData, lookups: escapedLookups }));
   expect(() => new BoundaryInputSnapshot(root).record(config, args, receipt, [receipt])).toThrow(
     /Declaration input escapes checkout/,

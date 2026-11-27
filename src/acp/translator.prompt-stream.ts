@@ -201,6 +201,13 @@ export class AcpTranslatorPromptStream {
 
       const atTokenLimit = payload.stopReason === "length" || payload.stopReason === "max_tokens";
       if (state === "final") {
+        if (payload.message === undefined) {
+          // Queued follow-up finals leave the reply text to the transcript.
+          await this.emitCommittedReplyRemainder(pending);
+          if (this.getPendingPrompt(pending.sessionId, pending.idempotencyKey) !== pending) {
+            return;
+          }
+        }
         const stopReason: StopReason = atTokenLimit ? "max_tokens" : "end_turn";
         await this.finishPrompt(pending.sessionId, pending, stopReason);
         return;
@@ -617,15 +624,11 @@ export class AcpTranslatorPromptStream {
     });
   }
 
-  private async settleRecoveredPrompt(
-    sessionId: string,
-    pending: AcpPendingPrompt,
-    result: AcpAgentWaitResult,
-  ): Promise<void> {
+  private readCommittedReply(pending: AcpPendingPrompt, result?: AcpAgentWaitResult) {
     const signal =
-      this.sessionStore.getSession(sessionId)?.abortController?.signal ??
+      this.sessionStore.getSession(pending.sessionId)?.abortController?.signal ??
       new AbortController().signal;
-    const reply = await recoverTerminalReply({
+    return recoverTerminalReply({
       runId: pending.idempotencyKey,
       scope: { sessionKey: pending.sessionKey },
       result,
@@ -633,6 +636,29 @@ export class AcpTranslatorPromptStream {
         this.gateway.request(method, params, { signal: requestSignal }),
       signal,
     }).catch(() => ({ outputText: undefined, unavailable: "recovery-cancelled" }));
+  }
+
+  /** Streams committed reply text the live stream did not deliver; the prompt settles as before. */
+  private async emitCommittedReplyRemainder(pending: AcpPendingPrompt): Promise<void> {
+    const fullText = (await this.readCommittedReply(pending)).outputText?.trimEnd() ?? "";
+    const sent = pending.sentText ?? "";
+    if (
+      fullText.length <= sent.length ||
+      !fullText.startsWith(sent) ||
+      this.getPendingPrompt(pending.sessionId, pending.idempotencyKey) !== pending
+    ) {
+      return;
+    }
+    pending.sentText = fullText;
+    await this.emitPromptChunk(pending, "agent_message_chunk", fullText.slice(sent.length));
+  }
+
+  private async settleRecoveredPrompt(
+    sessionId: string,
+    pending: AcpPendingPrompt,
+    result: AcpAgentWaitResult,
+  ): Promise<void> {
+    const reply = await this.readCommittedReply(pending, result);
     // A live final or cancellation can win while history is being read.
     if (!this.claimPendingPrompt(pending)) {
       return;

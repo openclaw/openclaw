@@ -74,10 +74,19 @@ describe("buildConfiguredAgentSystemPrompt", () => {
       skillsPrompt:
         "<available_skills>\n  <skill>\n    <name>publish</name>\n    <location>/skills/publish/SKILL.md</location>\n  </skill>\n</available_skills>",
     });
-    expect(prompt).toContain("read exact <location>");
-    expect(prompt).toContain(
-      "## Execution Bias\n- Actionable request: act now. Explicit skill workflow gates override this bias; user instructions, prior authorization, safety, and tool policy remain authoritative.",
-    );
+    expect(prompt).toContain("read exact `<location>`");
+    const executionBias = prompt.split("## Execution Bias\n")[1]?.split("\n## ")[0];
+    expect(executionBias).toContain("Act on actionable requests");
+    for (const authority of [
+      "Explicit skill gates",
+      "user instructions",
+      "prior authorization",
+      "safety",
+      "tool policy",
+    ]) {
+      expect(executionBias).toContain(authority);
+    }
+    expect(executionBias).toContain("stay authoritative");
   });
 
   it.each(["available", "source-reply-only", "absent"] as const)(
@@ -113,7 +122,9 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Embedded Stable\n\nStable provider guidance.");
-    expect(prompt).toContain("Working directory: /tmp/task-repo (tools and deliverables).");
+    expect(prompt).toContain(
+      "Working directory: /tmp/task-repo (tools, deliverables, and relative reply file paths; write other files as absolute paths).",
+    );
     expect(prompt).toContain("Agent workspace: /tmp/openclaw");
   });
 
@@ -147,12 +158,8 @@ describe("buildConfiguredAgentSystemPrompt", () => {
         tools: surface === "absent" ? [] : [sessions],
       });
 
-      expect(prompt.includes('"spin up a new task"')).toBe(surface === "create");
+      // The trigger stays in the prompt; sessions_create's description carries the details.
       expect(prompt.includes("`sessions_create`")).toBe(surface === "create");
-      if (surface === "create") {
-        expect(prompt).toContain("omit it to create an idle session");
-        expect(prompt).toContain("no completion event or yield expectation");
-      }
       expect(prompt).not.toContain("## Delegation");
     },
   );
@@ -211,7 +218,7 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     expect(prompt).not.toContain("Do not poll `subagents list` / `sessions_list` in a loop");
     expect(prompt).toContain("Subagent-only command guidance.");
     expect(prompt).toContain("## Promised Work");
-    expect(prompt).toContain("Progress such as `running` is not completion.");
+    expect(prompt).toContain("`running` is not completion.");
     expect(prompt.match(/## Promised Work/g)).toHaveLength(1);
   });
 

@@ -225,7 +225,7 @@ export function serviceFor(
 /** An InviteCap signed by D1 for `email`, with its proof key and link secret. */
 export async function ownerInvite(
   claw: LinkedClaw,
-  params: { email: string; role?: "operator" | "viewer"; expiresIn?: number },
+  params: { email: string; role?: string; expiresIn?: number },
 ) {
   const { invite_id, secret } = generateInviteSecret();
   const proofKey = await deriveInviteProofKey(secret);

@@ -2,11 +2,6 @@ import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-cata
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { buildOpenAIProvider } from "./openai-provider.js";
 
-// mock-isolation: Registry lookup behavior is covered by openai-codex-discovery.test.ts.
-vi.mock("./codex-client-version.js", () => ({
-  resolveOpenAICodexClientVersion: async () => "0.169.0",
-}));
-
 const fetchMock = vi.fn<typeof fetch>();
 const grants = new Map<string, unknown>();
 let now = 1_000_000;
@@ -59,9 +54,14 @@ beforeEach(() => {
       models: [
         {
           slug: "gpt-6.1-sol",
+          service_tiers: [{ id: "priority", name: "Fast" }],
           ...(cyber === undefined ? {} : { available_access_programs: { cyber } }),
         },
-        { slug: "gpt-unlisted-fixture", available_access_programs: { cyber: ["daybreak_red"] } },
+        {
+          slug: "gpt-unlisted-fixture",
+          service_tiers: [],
+          available_access_programs: { cyber: ["daybreak_red"] },
+        },
       ],
     });
   });
@@ -89,6 +89,16 @@ it("discovers explicit per-key programs independently of identical model availab
         cyber,
       })),
     );
+    // The same response states which speed tiers each listed model accepts with this key.
+    expect(results[index]?.outcomes?.[0]?.modelServiceTiers).toEqual([
+      {
+        modelId: "gpt-6.1-sol",
+        runtimeId: "openclaw",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        serviceTiers: ["priority"],
+      },
+    ]);
   }
   await discover("blue");
   expect(fetchMock).toHaveBeenCalledTimes(6);

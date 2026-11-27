@@ -5,6 +5,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createAgentHarnessCompletionScopeForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -165,10 +166,10 @@ describeLive("codex native subagent monitor live", () => {
           monitor.registerParent({
             parentThreadId,
             requesterSessionKey: "live:followup",
-            completionScope: {
+            completionScope: createAgentHarnessCompletionScopeForTest({
               requesterSessionKey: "live:followup",
               requesterAgentId: "live",
-            },
+            }),
             agentId: "live",
             claimDirectChild: () => {
               claims[owner] += 1;
@@ -343,7 +344,10 @@ describeLive("codex native subagent monitor live", () => {
             requesterSessionKey: sessionKey,
             requesterTurnRunId,
             requestCustody,
-            completionScope: { requesterSessionKey: sessionKey, requesterAgentId: "live" },
+            completionScope: createAgentHarnessCompletionScopeForTest({
+              requesterSessionKey: sessionKey,
+              requesterAgentId: "live",
+            }),
             historyOwner: {
               parentThreadId,
               sessionId,
@@ -606,7 +610,10 @@ describeLive("codex native subagent monitor live", () => {
         const registration = {
           parentThreadId,
           requesterSessionKey,
-          completionScope: { requesterSessionKey, requesterAgentId: "live" },
+          completionScope: createAgentHarnessCompletionScopeForTest({
+            requesterSessionKey,
+            requesterAgentId: "live",
+          }),
           agentId: "live",
         };
         const streamed = createDeliveryRecorder();

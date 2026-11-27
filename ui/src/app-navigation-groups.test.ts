@@ -46,7 +46,9 @@ it.each([true, false])("shows device settings only with the capability, admin=%s
       routeId ? expect.arrayContaining([expect.objectContaining({ routeId })]) : [],
     );
   const deviceGroup = (snapshot: Device["snapshot"]) =>
-    visibleSettingsNavigationGroups(canAdmin, { ...capability, snapshot })[1];
+    visibleSettingsNavigationGroups(canAdmin, { ...capability, snapshot }).find((group) =>
+      group.routes.includes("device"),
+    );
   const catalog = (device: Device | null = null) =>
     getStaticCommandPaletteCatalogItems(canAdmin, device).map((item) => item.action);
   const browserGroups = visibleSettingsNavigationGroups(canAdmin);
@@ -58,6 +60,7 @@ it.each([true, false])("shows device settings only with the capability, admin=%s
   expect(catalog(capability)).toContain("nav:updates");
   expect(browserGroups.some((group) => group.labelKey === "nav.settingsGroupDevice")).toBe(false);
   expect(deviceGroup(capability.snapshot)).toEqual({
+    key: "device",
     labelKey: "nav.settingsGroupDevice",
     routes: ["device", "device-permissions"],
   });
@@ -67,6 +70,7 @@ it.each([true, false])("shows device settings only with the capability, admin=%s
       snapshot: createTauriDeviceSettingsSnapshot(platform),
     };
     expect(deviceGroup(desktopCapability.snapshot)).toEqual({
+      key: "device",
       labelKey: "nav.settingsGroupThisComputer",
       routes: ["device"],
     });

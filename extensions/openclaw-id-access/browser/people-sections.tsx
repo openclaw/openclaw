@@ -1,11 +1,9 @@
 /** @jsxImportSource @solidjs/web */
 // The People sections of the Access page. Each takes plain data and callbacks, so the
 // page owns all Gateway access and the sections can be restyled independently.
-import type { MemberRole } from "@openclaw/openclaw-id-protocol";
 import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
 import { createSignal, For, latest, Show } from "solid-js";
 import { roleText } from "./i18n.js";
-import { RoleClassificationChangedError } from "./invites.js";
 import { MemberDevices } from "./member-devices.js";
 import { Avatar } from "./people-avatar.js";
 import type { PeopleOperationError } from "./people-error.js";
@@ -19,9 +17,7 @@ import {
 } from "./people-format.js";
 import type { PeopleMotion } from "./people-motion.js";
 import { OperationError } from "./people-operation-error.js";
-import { administratorWarning, definedRoles } from "./people-roles.js";
-import { RolePicker } from "./role-picker.js";
-import type { Invite, Member, MemberDevice, OwnerDevice, Role } from "./types.js";
+import type { Invite, Member, MemberDevice, OwnerDevice } from "./types.js";
 
 export type RemovedMemberNotice = { index: number; message: string };
 
@@ -185,10 +181,7 @@ function MemberRow(props: {
   member: Member;
   ownerDevices: OwnerDevice[];
   onRemoveDevice: (member: Member, device: MemberDevice) => void;
-  components: ControlUiHost["components"];
-  roles: Role[];
   locale: string;
-  onChangeRole: (member: Member, role: MemberRole, confirmedAdmin: boolean) => Promise<boolean>;
   disabled: boolean;
   nowMs: number;
   sessionTitle: (sessionKey: string) => string | undefined;
@@ -198,30 +191,6 @@ function MemberRow(props: {
   selectedDevice?: string;
 }) {
   const [confirming, setConfirming] = createSignal(false);
-  const [editing, setEditing] = createSignal(false);
-  const [selected, setSelected] = createSignal<MemberRole>();
-  const [saved, setSaved] = createSignal(false);
-  const roles = () => definedRoles(props.roles);
-  const selectedRole = () =>
-    roles().find((role) => role.name === selected()) ??
-    roles().find((role) => role.name === props.member.role) ??
-    roles()[0];
-  const save = async () => {
-    const role = selectedRole();
-    if (!role || role.name === props.member.role || props.disabled) {
-      return;
-    }
-    try {
-      if (await props.onChangeRole(props.member, role.name, role.admin)) {
-        setEditing(false);
-        setSaved(true);
-      }
-    } catch (error) {
-      if (!(error instanceof RoleClassificationChangedError)) {
-        throw error;
-      }
-    }
-  };
   const devices = () => props.member.devices ?? [];
   const running = () => memberRunning(devices(), props.sessionTitle);
   const details = () =>
@@ -251,19 +220,7 @@ function MemberRow(props: {
         </div>
       </div>
       <div class="ocid-access__actions ocid-access__member-actions">
-        <Show when={!props.readOnly && !latest(confirming) && !editing()}>
-          <button
-            type="button"
-            class="btn btn--sm"
-            disabled={props.disabled || roles().length === 0}
-            onClick={() => {
-              setSelected(undefined);
-              setEditing(true);
-              setSaved(false);
-            }}
-          >
-            {roleText(props.locale, "changeRole")}
-          </button>
+        <Show when={!props.readOnly && !latest(confirming)}>
           <button
             type="button"
             class="btn btn--sm ocid-access__remove"
@@ -282,47 +239,6 @@ function MemberRow(props: {
         <p class="ocid-access__role-notice" role="status">
           <strong>{roleText(props.locale, "blocked")}: </strong>
           {roleText(props.locale, "undefinedRole", { role: props.member.role })}
-        </p>
-      </Show>
-      <Show when={editing() && !props.readOnly}>
-        <div class="ocid-access__confirmation">
-          <RolePicker
-            components={props.components}
-            roles={props.roles}
-            locale={props.locale}
-            role={selectedRole()?.name ?? ""}
-            disabled={props.disabled || roles().length === 0}
-            onSelect={setSelected}
-          />
-          <Show when={selectedRole()?.admin}>
-            <p role="note">{administratorWarning(selectedRole()?.name, props.locale)}</p>
-          </Show>
-          <div class="ocid-access__actions">
-            <button
-              type="button"
-              class="btn btn--sm"
-              disabled={props.disabled}
-              onClick={() => setEditing(false)}
-            >
-              {roleText(props.locale, "cancel")}
-            </button>
-            <button
-              type="button"
-              class="btn primary btn--sm"
-              disabled={
-                props.disabled || !selectedRole() || selectedRole()?.name === props.member.role
-              }
-              aria-busy={props.disabled ? "true" : undefined}
-              onClick={() => void save()}
-            >
-              {roleText(props.locale, selectedRole()?.admin ? "saveAdminRole" : "saveRole")}
-            </button>
-          </div>
-        </div>
-      </Show>
-      <Show when={saved()}>
-        <p class="ocid-access__role-notice" role="status">
-          {roleText(props.locale, "roleChanged")}
         </p>
       </Show>
       <Show when={latest(confirming) && !props.readOnly}>
@@ -379,9 +295,6 @@ export function Members(props: {
   navigation: ControlUiHost["navigation"];
   motion: PeopleMotion;
   members: Member[];
-  components: ControlUiHost["components"];
-  roles: Role[];
-  onChangeRole: (member: Member, role: MemberRole, confirmedAdmin: boolean) => Promise<boolean>;
   invites: Invite[];
   ownerDevices: OwnerDevice[];
   onRemoveDevice: (member: Member, device: MemberDevice) => void;
@@ -487,10 +400,7 @@ export function Members(props: {
                   selectedDevice={props.selectedMember ? props.selectedDevice : undefined}
                   ownerDevices={props.ownerDevices}
                   onRemoveDevice={props.onRemoveDevice}
-                  components={props.components}
-                  roles={props.roles}
                   locale={props.locale}
-                  onChangeRole={props.onChangeRole}
                   error={props.error}
                   readOnly={props.readOnly}
                   disabled={props.disabled}

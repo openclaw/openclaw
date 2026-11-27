@@ -3,17 +3,13 @@ import {
   readAutomationCreationEvent,
   type AutomationCreationEvent,
   type AutomationCreationPlan,
-  type AutomationCreationResult,
 } from "../../../../src/shared/automation-creation.js";
 import {
   AutomationCreationCardBlock,
-  isLiveAutomationInjection,
   type AutomationCreationRow,
 } from "../../lib/chat/automation-creation-card.ts";
 import type { ChatItem } from "../../lib/chat/chat-types.ts";
-import { hasTerminalRunOutcome } from "./chat-assistant-reply.ts";
 import { automationCreationToolEvents } from "./chat-created-automation-receipts.ts";
-import { transcriptRunId } from "./chat-thread-run-identity.ts";
 
 type MessageItem = Extract<ChatItem, { kind: "message" }>;
 type Declared = { plan: AutomationCreationPlan; source: unknown; runId?: string };
@@ -30,23 +26,16 @@ function installerEvent(message: unknown) {
     : undefined;
 }
 
-/** One card per declaration, anchored to its original assistant work even as later receipts arrive. */
+/** Show saved jobs at their declaration's original position in the assistant's work. */
 export function projectAutomationCreationCards(
   history: readonly unknown[],
   live: readonly unknown[],
   firstSources?: Map<string, unknown>,
 ) {
   const declarations = new Map<string, Declared>();
-  const outcomes = new Map<string, Map<string, AutomationCreationResult>>();
+  const savedSlots = new Map<string, Map<string, string>>();
   const consumed = new Set<unknown>();
-  const terminal = new Set<string>();
-  const add = (
-    scope: string,
-    source: unknown,
-    event: AutomationCreationEvent,
-    fresh: boolean,
-    runId?: string,
-  ) => {
+  const add = (scope: string, source: unknown, event: AutomationCreationEvent, runId?: string) => {
     const key = "automation-creation:" + JSON.stringify([scope, event.planId]);
     // A newly loaded page can contain the missing declaration for a retained result.
     // Register both ends with the transcript's existing prepend collision guard.
@@ -59,29 +48,23 @@ export function projectAutomationCreationCards(
       }
       return;
     }
-    let slots = outcomes.get(key);
+    if (event.status !== "created") {
+      return;
+    }
+    let slots = savedSlots.get(key);
     if (!slots) {
       slots = new Map();
-      outcomes.set(key, slots);
+      savedSlots.set(key, slots);
     }
-    // A retried add may succeed after a failure; a later duplicate/error cannot undo a persisted ID.
-    const previous = slots.get(event.slotId);
-    const outcome =
-      !fresh && event.status === "created" ? { ...event, definition: undefined } : event;
-    if (
-      previous?.status !== "created" ||
-      (outcome.status === "created" &&
-        previous.jobId === outcome.jobId &&
-        !previous.definition &&
-        outcome.definition)
-    ) {
-      slots.set(event.slotId, outcome);
+    // A retry can fill a failed slot; a duplicate cannot replace a saved ID.
+    if (!slots.has(event.slotId)) {
+      slots.set(event.slotId, event.jobId);
     }
   };
   for (const m of history) {
     const event = installerEvent(m);
     if (event) {
-      add("installer", m, event, isLiveAutomationInjection(m));
+      add("installer", m, event);
       consumed.add(m);
     }
   }
@@ -89,40 +72,28 @@ export function projectAutomationCreationCards(
     live.length ? [...history, ...live] : history,
     (event, source, runId) => {
       if (runId) {
-        add(
-          "run:" + runId,
-          source,
-          event,
-          asOptionalRecord(source)?.["__openclawToolStreamLive"] === true,
-          runId,
-        );
+        add("run:" + runId, source, event, runId);
       }
     },
   );
-  if (declarations.size) {
-    for (const m of history) {
-      const id = transcriptRunId(m);
-      if (id && asOptionalRecord(m)?.role === "assistant" && hasTerminalRunOutcome(m, id)) {
-        terminal.add(id);
-      }
-    }
-  }
   const cards = new Map<unknown, MessageItem[]>();
   for (const [key, { plan, source, runId }] of declarations) {
+    const slots = savedSlots.get(key);
+    if (!slots) {
+      continue;
+    }
     const saved = new Set<string>();
-    const rows = plan.slots.map<AutomationCreationRow>((slot) => {
-      const result = outcomes.get(key)?.get(slot.slotId);
-      if (result?.status === "created" && !saved.has(result.jobId)) {
-        saved.add(result.jobId);
-        return {
-          ...slot,
-          status: "created",
-          jobId: result.jobId,
-          ...(result.definition ? { definition: result.definition } : {}),
-        };
+    const rows: AutomationCreationRow[] = [];
+    for (const slot of plan.slots) {
+      const jobId = slots.get(slot.slotId);
+      if (jobId && !saved.has(jobId)) {
+        saved.add(jobId);
+        rows.push({ ...slot, jobId });
       }
-      return { ...slot, status: result || (runId && terminal.has(runId)) ? "failed" : "pending" };
-    });
+    }
+    if (!rows.length) {
+      continue;
+    }
     const item: MessageItem = {
       kind: "message",
       key,
@@ -131,7 +102,7 @@ export function projectAutomationCreationCards(
         id: key,
         runId,
         timestamp: asOptionalRecord(source)?.timestamp,
-        content: [new AutomationCreationCardBlock({ planId: plan.planId, rows })],
+        content: [new AutomationCreationCardBlock({ grouped: plan.slots.length > 1, rows })],
       },
     };
     const existing = cards.get(source);

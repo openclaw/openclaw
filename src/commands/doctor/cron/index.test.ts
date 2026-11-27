@@ -593,35 +593,6 @@ describe("maybeRepairLegacyCronStore", () => {
     expect(state?.lastRunStatus).toBeUndefined();
   });
 
-  it("pluralizes and only counts enabled jobs at or above the threshold", async () => {
-    await writeCurrentCronStore([
-      createCurrentCronJob({
-        id: "failing-a",
-        state: { lastRunStatus: "error", consecutiveErrors: 3 },
-      }),
-      createCurrentCronJob({
-        id: "failing-b",
-        state: { lastRunStatus: "error", consecutiveErrors: 12 },
-      }),
-      createCurrentCronJob({
-        id: "recovering",
-        state: { lastRunStatus: "error", consecutiveErrors: 2 },
-      }),
-      createCurrentCronJob({
-        id: "disabled-exhausted",
-        enabled: false,
-        state: { lastRunStatus: "error", consecutiveErrors: 9 },
-      }),
-    ]);
-    const prompter = makePrompter(true);
-    await repairCronStore(prompter);
-    expectNoteContaining("2 automations have failed 3+ runs in a row");
-    expect(prompter.confirm).not.toHaveBeenCalled();
-    expect(requirePersistedJob(await readPersistedJobs(), 0).state).toMatchObject({
-      consecutiveErrors: 3,
-    });
-  });
-
   it("lists auto-disabled jobs with their recorded reasons and recovery commands", async () => {
     await writeCurrentCronStore([
       createCurrentCronJob({

@@ -7,8 +7,10 @@ import path from "node:path";
  * npm: `<prefix>/lib/node_modules/<name> -> <prefix>/releases/<id>/lib/node_modules/<name>`;
  * Git: `<prefix>/<name> -> <prefix>/releases/<id>/<name>`, outside any `node_modules`, where
  * Node refuses to strip the types of the release's plugin sources (#201874).
- * The link is the only record of which release is selected. POSIX only: Windows
- * launchers are files, so Windows keeps a plain package directory.
+ * The link is the only record of which release is selected. On Windows the link is an
+ * NTFS directory junction, which needs no administrator rights. Only the Git install
+ * layout uses it there: Windows npm launchers are files, so npm keeps a plain package
+ * directory (`resolvePackageReleaseTarget`).
  */
 export const PACKAGE_RELEASES_DIR = "releases";
 
@@ -53,9 +55,6 @@ export function packageReleasePrefixOfRoot(root: string): string | null {
  * An operator's `npm link` to a checkout, or a plain directory, is not a release slot.
  */
 export function readPackageReleaseSlotSync(packagePath: string): PackageReleaseSlot | null {
-  if (process.platform === "win32") {
-    return null;
-  }
   try {
     const absolute = path.resolve(packagePath);
     const link = fs.lstatSync(absolute);
@@ -93,9 +92,6 @@ export function readPackageReleaseSlotSync(packagePath: string): PackageReleaseS
 
 /** The stable package path of a root running from a release, while the link still names it. */
 export function resolvePackageReleaseSlotForRootSync(root: string): string | null {
-  if (process.platform === "win32") {
-    return null;
-  }
   const resolved = path.resolve(root);
   const releasePrefix = packageReleasePrefixOfRoot(resolved);
   if (!releasePrefix) {

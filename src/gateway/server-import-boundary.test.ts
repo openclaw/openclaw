@@ -143,8 +143,8 @@ registerHooks({ resolve(specifier, context, nextResolve) {
   }
   return resolved;
 }});
-const { listManualSetupInferenceOptions } = await import(${JSON.stringify(entry)});
-const result = await listManualSetupInferenceOptions("main");
+const { listManualSetupInferenceDetection } = await import(${JSON.stringify(entry)});
+const result = await listManualSetupInferenceDetection("main");
 console.log(JSON.stringify({ utilityModel: result.utilityModel, setupComplete: result.setupComplete }));
 `,
           ],
@@ -256,10 +256,10 @@ console.log("prewarm-cold-selection-ok");`,
     );
   });
 
-  it("starts the command broker without loading the execa runtime", () => {
-    expect(collectStaticValueImports("src/process/spawn-broker/worker.ts")).not.toContain(
-      path.normalize("src/process/spawn-broker/execa-worker.ts"),
-    );
+  it("waits for the broker bootstrap before loading command handlers", () => {
+    const modules = collectStaticValueImports("src/process/spawn-broker/worker.ts");
+    expect(modules).not.toContain(path.normalize("src/process/spawn-broker/execa-worker.ts"));
+    expect(modules).not.toContain(path.normalize("src/agents/sessions/tools/read-file-page.ts"));
   });
 
   it.each([
@@ -287,10 +287,14 @@ console.log("prewarm-cold-selection-ok");`,
     }
   });
 
-  it("prepares chat.send without loading the media execution runtime", () => {
-    expect(
-      collectStaticValueImports("src/gateway/server-methods/chat-send-external-entry.ts"),
-    ).not.toContain("src/media-understanding/runtime.ts");
+  it("prepares chat.send without loading media execution or session cancellation", () => {
+    const modules = collectStaticValueImports(
+      "src/gateway/server-methods/chat-send-external-entry.ts",
+    );
+    expect(modules).not.toContain(path.normalize("src/media-understanding/runtime.ts"));
+    expect(modules).not.toContain(
+      path.normalize("src/gateway/server-methods/chat-abort-runtime.ts"),
+    );
   });
 
   it("keeps static method policy independent of session storage", () => {

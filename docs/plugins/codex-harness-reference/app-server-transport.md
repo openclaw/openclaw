@@ -14,7 +14,7 @@ How OpenClaw starts and reaches the Codex app-server, and every `appServer` fiel
 
 For ordinary harness turns, OpenClaw starts a managed Codex binary: a newer
 Codex you installed yourself, or the one shipped with the official plugin
-(currently `@openai/codex` `0.169.0`):
+(currently `@openai/codex` `0.172.0`):
 
 ```bash
 codex app-server --listen stdio://
@@ -31,7 +31,7 @@ when you intentionally want a different executable.
 New OpenAI models can require a newer Codex version than your OpenClaw release
 bundles. For GPT-6.2, [the issue report](https://github.com/openclaw/openclaw/issues/200972)
 cites Codex `0.166.0` as the minimum. Its successful test used `0.169.1`,
-so it does not establish the exact minimum. The current `0.169.0` bundle
+so it does not establish the exact minimum. The current `0.172.0` bundle
 exceeds the reported minimum.
 
 To get a newer compatible Codex between OpenClaw releases, install it on the
@@ -82,8 +82,8 @@ on `PATH` and uses it only when all of these hold:
 
 Otherwise OpenClaw uses the shipped binary. The Gateway logs one line with the
 chosen binary, its version, and the reason, for example
-`Codex app-server: using installed /usr/local/bin/codex 0.169.1 (newer than bundled 0.169.0)`
-or `Codex app-server: using bundled 0.169.0 (installed /usr/local/bin/codex 0.159.0 is not newer)`.
+`Codex app-server: using installed /usr/local/bin/codex 0.173.0 (newer than bundled 0.172.0)`
+or `Codex app-server: using bundled 0.172.0 (installed /usr/local/bin/codex 0.159.0 is not newer)`.
 
 If the selected Codex later fails to start, fails `initialize`, or reports
 another version (for example after an in-place upgrade), OpenClaw starts the
@@ -93,9 +93,9 @@ Gateway restart repeats the selection, which picks up Codex installs, upgrades,
 and removals.
 
 The binary selection does not decide which OpenAI models the picker shows. The
-ChatGPT subscription model list reports the latest published stable Codex version,
-cached for six hours, with the bundled Codex version as its floor and registry
-failure fallback (see
+ChatGPT subscription model list reports the OpenClaw version, with a `99.0.0`
+fallback when it is unavailable or not a calendar version with a four-digit
+year of 2026 or later (see
 [Model discovery](/plugins/codex-harness-reference/model-discovery)), so it can
 list a model that the selected Codex binary is too old to run. A Codex-harness
 turn on such a model fails with a message that names the running Codex version
@@ -157,7 +157,7 @@ processes retain separate live status and approval state.
 For managed local app-servers with an agent home, OpenClaw sets
 `thread_unload_delay_secs=0`, overriding native post-unsubscribe retention.
 OpenClaw keeps warm subscriptions and protects active child work itself. When a
-conversation needs new configuration, it waits up to two seconds for that
+conversation needs new configuration, it waits up to ten seconds for that
 thread's unload notification before resuming its history, so a failed thread can
 recover while a sibling continues. If unloading is not confirmed, the binding is
 preserved; failed-thread recovery can replace the client only when no sibling
@@ -189,6 +189,16 @@ transport is available:
 
 Codex classifies WebSocket transport as experimental and unsupported. Prefer
 managed stdio or the local Unix control socket for production workloads.
+
+During configuration handoff for a saved WebSocket thread in a system-error
+state, OpenClaw releases its subscription and waits for the app-server to unload
+the failed runtime. Retry your message after OpenClaw confirms the unload to
+continue the saved conversation.
+After the last subscriber leaves an idle thread, the server waits for
+`thread_unload_delay_secs`. Codex 0.172.0 defaults to 60 seconds and 0.164.0 to
+30 minutes. The server can outlast OpenClaw’s check even with no other clients.
+If the thread stays loaded, check for other subscribers and confirm the previous
+turn’s outcome before retrying.
 
 `appServer` fields:
 
@@ -312,7 +322,7 @@ If the normal app-server runtime would be `danger-full-access`, enabling
 permission profile instead. Codex-managed network enforcement is sandboxed
 networking, so a full-access profile would not protect outbound traffic.
 
-The plugin ships stable Codex app-server `0.169.0` and prefers a newer
+The plugin ships stable Codex app-server `0.172.0` and prefers a newer
 installed Codex only under the rules in
 [Newer installed Codex](#newer-installed-codex). Explicit custom
 executables, remote app-servers, and macOS desktop binaries must report a

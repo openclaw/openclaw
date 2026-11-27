@@ -392,3 +392,36 @@ it("releases remote catalog predecessors while the current publication and its c
     }
   });
 });
+
+it("relists an unchanged provider when a running Gateway adopts a hosted catalog", async () => {
+  const fixture = await createCatalogFixture(makeTempDir, 0);
+  await withEnvAsync(fixture.env, async () => {
+    const config: OpenClawConfig = {
+      ...fixture.config,
+      models: { catalogRefresh: { url: sourceUrl } },
+    };
+    const input = catalogInput({ ...fixture, config });
+    const hosted: { stored?: ReturnType<typeof storedCatalog> } = {};
+    setRemoteModelCatalogOverlaySourcesForTest({
+      bundledGeneratedAt: () => 1,
+      readStoredCatalog: () => hosted.stored,
+    });
+    expect(await prepareRemoteModelCatalogStartupSnapshot({ env: fixture.env })).toBeNull();
+    const listings = () => fs.readFileSync(fixture.marker, "utf8").split("start\n").length - 1;
+    const published = await publishPreparedModelRuntimeSnapshot(input, {
+      provenance: "configured",
+      catalogMode: "static",
+    });
+    await published.loadFullModelCatalog!({ refresh: true, wait: true });
+    const before = listings();
+
+    hosted.stored = storedCatalog(100);
+    expect(await applyRemoteModelCatalogUpdate(() => config)).toBe("published");
+    // Neither the provider's config nor its credentials changed; adoption still relists it.
+    expect(listings()).toBe(before + 1);
+    // The adopted generation publishes that listing; reading it starts no other listing.
+    const { entries: rows } = await getPreparedModelRuntimeSnapshot(input)!.loadFullModelCatalog!();
+    expect(rows.some((row) => row.id.startsWith(`proof-refresh-${before + 1}-`))).toBe(true);
+    expect(listings()).toBe(before + 1);
+  });
+});

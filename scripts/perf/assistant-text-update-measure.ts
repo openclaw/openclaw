@@ -30,6 +30,7 @@ import {
   extractAssistantVisibleText as defaultExtractVisible,
 } from "../../src/agents/embedded-agent-utils.js";
 import { makeAgentAssistantMessage } from "../../src/agents/test-helpers/agent-message-fixtures.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 // This owner replay excludes diagnostic disk I/O, including operator-enabled raw logging.
 process.env.OPENCLAW_RAW_STREAM = "0";
@@ -237,12 +238,7 @@ try {
       globalThis.gc?.();
       const inspector = new Session();
       if (values.mode === "allocation") {
-        inspector.connect();
-        await inspector.post("HeapProfiler.startSampling", {
-          samplingInterval: 4096,
-          includeObjectsCollectedByMajorGC: true,
-          includeObjectsCollectedByMinorGC: true,
-        });
+        await startCollectedHeapSampling(inspector, 4096);
       }
       const cpu = process.threadCpuUsage();
       const start = performance.now();

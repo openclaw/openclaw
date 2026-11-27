@@ -566,10 +566,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
         DiscordVoiceResumedListener,
         DiscordVoiceStateUpdateListener,
       } = await import("../voice/listeners.js");
-      voiceManager = new DiscordVoiceManager({
-        ...monitorOptions,
-        scheduler,
-      });
+      // Voice reads config per use, so hot-reloaded media and model settings apply.
+      const { cfg: _startupConfig, ...voiceOptions } = monitorOptions;
+      voiceManager = new DiscordVoiceManager({ ...voiceOptions, readConfig, scheduler });
       setDiscordTranscriptsVoiceManager({
         accountId: account.accountId,
         manager: voiceManager,

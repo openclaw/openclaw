@@ -184,6 +184,7 @@ export function installContextEngineLoopHook(params: {
   modelId: string;
   repairAssembledMessages?: (messages: AgentMessage[]) => AgentMessage[];
   getPrePromptMessageCount?: () => number;
+  getCurrentUserIdempotencyKey?: () => string | undefined;
   onAfterTurnCheckpoint?: (messageCount: number) => void;
   deferredTurn?: { prompt: string; readonly availableTools: Set<string> };
   getRuntimeContext?: (params: {
@@ -277,9 +278,24 @@ export function installContextEngineLoopHook(params: {
       lastSourceMessages = transcriptMessages;
       // An admitted turn is not in the engine's store yet. Assemble accepted
       // history separately, then retain the host-owned user/tool exchange.
-      const historyLength = params.deferredTurn
-        ? (params.getPrePromptMessageCount?.() ?? 0)
-        : providerMessages.length;
+      let historyLength = providerMessages.length;
+      if (params.deferredTurn) {
+        historyLength = params.getPrePromptMessageCount?.() ?? 0;
+        const currentUserKey = params.getCurrentUserIdempotencyKey?.();
+        const currentUserIndex = currentUserKey
+          ? providerMessages.findLastIndex(
+              (message) =>
+                message.role === "user" &&
+                "idempotencyKey" in message &&
+                message.idempotencyKey === currentUserKey,
+            )
+          : -1;
+        // The engine replaces everything before the fence with its stored history, which
+        // cannot contain the admitted user message; a stale count must not put it there.
+        if (currentUserIndex >= 0) {
+          historyLength = Math.min(historyLength, currentUserIndex);
+        }
+      }
       const pendingMessages = providerMessages.slice(historyLength);
       const assembled = await contextEngine.assemble({
         ...sessionIdentity,

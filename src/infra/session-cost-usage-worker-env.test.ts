@@ -222,7 +222,16 @@ it("inventories retained usage by transcript recency and logical agent after wri
     kind: "summary",
     summary: { cacheStatus: { status: "fresh", cachedFiles: 3 } },
   });
+  // Restart discovery must not enqueue continuations for windows it can certify as fresh.
+  await expect(run(prepared, { kind: "refresh", maxFiles: 1 })).resolves.toEqual({
+    kind: "refresh",
+    changed: false,
+  });
   appendUsage("old", 4000);
+  await expect(run(prepared, { kind: "refresh", maxFiles: 1 })).resolves.toEqual({
+    kind: "refresh",
+    changed: true,
+  });
   await expect(run(prepared, { kind: "inventory", minMtimeMs: 2000 })).resolves.toMatchObject(
     inventory(["old", 4000], ["first", 2000], ["second", 2000]),
   );

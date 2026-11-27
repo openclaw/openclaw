@@ -74,12 +74,18 @@ export function describeSessionLinkRule(base: string): string {
 }
 
 /** Describes the sessions_list tool for model-facing instructions. */
-export function describeSessionsListTool(options?: SessionLinkDescriptionOptions): string {
+export function describeSessionsListTool(
+  options?: SessionLinkDescriptionOptions & { gatewayBacked?: boolean },
+): string {
   return [
-    "List visible session metadata and groups; filter ownerId/creatorId, projectId/workspaceDir, group/pinned, hasBoard, kind/agent/activity/archive. relationship=owned|created|involving selects the authenticated requesting user's sessions, not the agent's owner.",
+    "List visible session metadata and groups; filter ownerId/creatorId, projectId/workspaceDir, group, hasBoard, kind/agent/activity/archive. relationship=owned|created|involving selects the authenticated requesting user's sessions, not the agent's owner.",
+    options?.gatewayBacked === false
+      ? "Embedded inventory has no personal pin state. To list your pins, use a signed-in Gateway chat."
+      : "pinned selects the signed-in requester's sidebar; omitted pin state is unknown.",
     "Metadata-only by default. limit defaults to 100; larger requests stay valid but limitApplied never exceeds 200. count is this page, not an inventory total. Continue with nextOffset and identical filters while hasMore; truncationReason names a scan/byte budget. Pages are live: deduplicate by agentId/key/sessionId or restart for a fresh inventory. archived=all includes active and archived rows.",
     "Preview recent messages inline via includeLastMessage/messageLimit; includeDerivedTitles adds derived titles. enrichmentOmitted means previews exceeded the byte budget; read history separately.",
     "hasBoard reports saved dashboard presence without content; omitted means unknown, not empty. Use before history/send target selection.",
+    "Never loop-poll sessions_list for children; check status only on demand, debug, or intervention.",
     ...(options?.sessionLinkBase ? [describeSessionLinkRule(options.sessionLinkBase)] : []),
   ].join(" ");
 }
@@ -89,6 +95,7 @@ export function describeSessionsHistoryTool(options?: SessionLinkDescriptionOpti
   return [
     "Read sanitized visible-session history.",
     "Before reply/debug/resume. Use messageId for anchored history; sessionId selects its transcript and requires messageId. Omit both for the latest tail. offset pages unanchored history and is ignored with messageId. limit bounds either mode. Include tool messages with includeTools.",
+    "For memory session hits, use the sessionKey, messageId and sessionId returned by sessions_search. Without search, use a known session key or transcript ID, a small limit, and paginate. Search line numbers are not history offsets; never read raw transcript files.",
     "pendingInputs are accepted inputs outside model history; page with pendingBefore=nextBefore. Cancelled inputs never replay; interrupted means saved without an active retry. Eligible durable peer sends can regain queued custody on startup. Lower limit for richer pending previews.",
     ...(options?.sessionLinkBase ? [describeSessionLinkRule(options.sessionLinkBase)] : []),
   ].join(" ");
@@ -98,6 +105,7 @@ export function describeSessionsHistoryTool(options?: SessionLinkDescriptionOpti
 export function describeSessionsSearchTool(options?: SessionLinkDescriptionOptions): string {
   return [
     "Search visible past sessions for matching user and assistant text.",
+    "For memory session hits, search distinctive snippet text (sessionKey = transcript ID when known), then use sessions_history if available with the returned sessionKey, messageId and sessionId. Without history, hits are snippets only. Search line numbers are not history offsets; never read raw transcript files.",
     ...(options?.sessionLinkBase ? [describeSessionLinkRule(options.sessionLinkBase)] : []),
   ].join(" ");
 }
@@ -108,7 +116,7 @@ export function describeSessionsSendTool(options?: { allowThreadTargets?: boolea
     "Send a message to a permitted session on this Gateway by sessionKey/label, or a configured local agent by agentId; sessionKey wins redundant label. Explicit per-agent send destinations can permit messaging without transcript access.",
     "A session identifies model context, not an external address. When a new turn starts, its reply reaches you once: inline when available, otherwise as a later inter-session input. Continue with another sessions_send; post to channels with message.",
     SESSIONS_SEND_RESULT_GUIDANCE,
-    "Omit mode to automatically continue your paused native child task; returns runId/taskRunId with task-owned completion instead of an inline wait or watch. Ordinary peer sends start a separate turn. A send to your own busy child steers its active run instead of queueing a turn for after it ends; a zero-wait send to an eligible run-scoped target may use its active input queue. An idle recipient or a default self-send starts a new turn; timeoutSeconds bounds waiting for the separately admitted turn’s reply. mode:notify queues ephemeral context for the next turn without waking or starting work (bounded process memory, not a durable inbox). mode:steer injects guidance into an active supported run and never starts idle work. mode:followup always starts a separate turn and preserves its independent reply; it does not resume a paused task. mode:resume requires a paused native child task and rejects watch:true and positive timeoutSeconds.",
+    "Omit mode to automatically continue your paused native child task; returns runId/taskRunId with task-owned completion instead of an inline wait or watch. Ordinary peer sends start a separate turn. As a supervised child, a send to the parent that receives your final result starts no parent turn and gets no reply: it joins the parent's active run or is recorded in its history for the parent's next turn. A send to your own busy child steers its active run instead of queueing a turn for after it ends; a zero-wait send to an eligible run-scoped target may use its active input queue. An idle recipient or a default self-send starts a new turn; timeoutSeconds bounds waiting for the separately admitted turn’s reply. mode:notify queues ephemeral context for the next turn without waking or starting work (bounded process memory, not a durable inbox). mode:steer injects guidance into an active supported run and never starts idle work. mode:followup always starts a separate turn and preserves its independent reply; it does not resume a paused task. mode:resume requires a paused native child task and rejects watch:true and positive timeoutSeconds.",
     `${options?.allowThreadTargets ? "" : "Thread chats rejected: target parent channel. "}Missing configured-agent main created. status "no_reply" is terminal, so do not wait for another reply.`,
     "A timeoutSeconds:0 send that starts a new turn for your existing native child gives this turn a completion to await with sessions_yield, even while queued. watch:true requires status visibility and additionally reports later target-session changes; on a steer it can claim the child's existing pending completion.",
   ].join(" ");
@@ -168,6 +176,7 @@ export function describeSessionsSpawnTool(options?: {
       : ['`runtime="acp"` ids: codex, claude, gemini, opencode, or configured ACP.']),
     describeSubagentSpawnContext(options?.subagentThreadAvailable === true),
     "A PR/report, long runtime, or isolated worktree alone does not justify a sidebar session. A request for a subagent does not request a separate session. No spawn for quick lookup/single read.",
+    "Brief each child with objective, output, write scope, and verification. taskName is a stable handle; label is for UI. Synthesize child outputs. Follow the receipt's accepted completion mode: collectors require explicit collection, not completion events; announcing children use sessions_yield when available, otherwise runtime completion events. Never loop-poll subagents list or sessions_list; check status only on demand, debug, or intervention.",
     "After spawn, do non-overlap work; follow the receipt's completion mode.",
   ].join(" ");
 }

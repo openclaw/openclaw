@@ -1,8 +1,10 @@
-import { ChildProcess, spawn, spawnSync } from "node:child_process";
+import { type ChildProcessByStdio, spawn, spawnSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as Installer from "../../scripts/lib/cross-os-release-checks/install.ts";
 import type * as Process from "../../scripts/lib/cross-os-release-checks/process.ts";
@@ -554,10 +556,30 @@ describe("cross-OS manual gateway lane evidence", () => {
       );
       windows();
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
-      const child = new ChildProcess();
-      Object.defineProperty(child, "pid", { value: 4242 });
-      vi.spyOn(child, "kill").mockReturnValue(true);
-      vi.mocked(spawn).mockReturnValue(child);
+      type ProbeChild = ChildProcessByStdio<null, PassThrough, PassThrough>;
+      const stdout = new PassThrough();
+      const stderr = new PassThrough();
+      const stdio: ProbeChild["stdio"] = [null, stdout, stderr, null, null];
+      const kill: ProbeChild["kill"] = vi.fn(() => true);
+      const child = Object.assign(new EventEmitter(), {
+        pid: 4242 as ProbeChild["pid"],
+        stdin: null,
+        stdout,
+        stderr,
+        stdio,
+        exitCode: null as number | null,
+        signalCode: null as ProbeChild["signalCode"],
+        connected: false,
+        killed: false,
+        kill,
+      });
+      const closeChild = () => {
+        child.exitCode = 1;
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+        child.emit("close", 1);
+      };
+      vi.mocked(spawn).mockReturnValue(child as ProbeChild);
       vi.mocked(spawnSync).mockReturnValue({
         pid: 4243,
         output: [],
@@ -581,11 +603,11 @@ describe("cross-OS manual gateway lane evidence", () => {
       if (outcome === "unclosed") {
         await vi.advanceTimersByTimeAsync(15_000);
       } else {
-        child.emit("close", 1);
+        closeChild();
       }
       const result = await running;
       if (outcome === "unclosed") {
-        child.emit("close", 1);
+        closeChild();
       }
       expect(result.status).toBe(outcome === "terminated" ? "pass" : "fail");
       expect(mocks.installPackageSpec).toHaveBeenCalledTimes(outcome === "terminated" ? 2 : 1);

@@ -1,6 +1,7 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
+import type { SessionCatalogProfileRelation } from "../../../packages/gateway-protocol/src/index.ts";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
-import type { GatewaySessionRow } from "../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import type { NavigationRouteId, SidebarZoneEntry } from "../app-navigation.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
 import type { CatalogOpenTarget } from "../app/settings.ts";
@@ -12,7 +13,6 @@ import type {
 import type { SessionOwnerOption } from "../lib/session-owner.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
-import type { PersonalSessionGroup } from "../lib/sessions/personal-groups.ts";
 import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import type { ContributionsElement } from "../plugins/control-ui-contributions.solid.tsx";
@@ -24,6 +24,7 @@ import type {
 } from "./app-sidebar-session-projection.ts";
 import "./menu-surface.ts";
 import type {
+  SidebarSavedPinTime,
   SidebarRecentSession,
   SidebarToolActivity,
   SidebarSessionSortMode,
@@ -37,6 +38,11 @@ import type { ChannelAvatarProps } from "./solid/channel-avatar.tsx";
 import "./tooltip.ts";
 
 export interface SessionListHost {
+  prepareSessionNavigation(
+    sessionKey: string,
+    pathname: string,
+    profileRelation?: SessionCatalogProfileRelation,
+  ): void;
   loadMoreSidebarSessions(): Promise<void>;
   readonly presencePeople?: Map<string, HTMLElement>;
   readonly sidebarSnapshot?: import("./sidebar-snapshot-model.ts").SidebarSnapshotModel | null;
@@ -45,6 +51,9 @@ export interface SessionListHost {
   readonly sessionDataContext:
     | Pick<ApplicationContext, "gateway" | "agentSelection" | "agents" | "sessions">
     | undefined;
+  readonly gatewayPinTime?: number;
+  readonly gatewayPinWindow?: SessionsListResult | null;
+  readonly gatewayTimeForSavedPin: SidebarSavedPinTime;
   readonly sidebarLiveActivity: boolean;
   readonly sessionsShowCron: boolean;
   readonly sessionsShowPreview: boolean;
@@ -67,7 +76,9 @@ export interface SessionListHost {
     | "presenceInstanceId"
     | "presencePayload"
     | "refreshSessionCatalogs"
+    | "refreshSidebarSessions"
     | "retryChildSessions"
+    | "wakeSidebarSessions"
     | "sessionCatalogRefreshStatus"
     | "sessionListError"
     | "visibleSessionLimits"
@@ -184,10 +195,6 @@ export type SidebarSessionListHost = SessionListHost & {
       | "loadingMoreSessionCatalogIds"
     >;
   projectHomeSession(row: GatewaySessionRow, agentId: string): SidebarRecentSession;
-  resolvePersonalGroupSession?(key: string): SidebarRecentSession | undefined;
-  readonly collapsedPersonalSessionGroups: ReadonlySet<string>;
-  togglePersonalSessionGroup(id: string): void;
-  personalGroupSessionRows(group: PersonalSessionGroup): SidebarRecentSession[];
   reconciledSidebarZone(): {
     entries: readonly SidebarZoneEntry[];
     sessionRows: ReadonlyMap<string, SidebarRecentSession>;
@@ -225,6 +232,7 @@ declare module "@solidjs/web" {
           "prop:agentId"?: ContributionsElement["agentId"];
           "prop:navigationMenus"?: ContributionsElement["navigationMenus"];
           "prop:composer"?: ContributionsElement["composer"];
+          "prop:bindActionMenu"?: ContributionsElement["bindActionMenu"];
         };
     }
   }

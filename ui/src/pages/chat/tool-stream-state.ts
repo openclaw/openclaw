@@ -10,28 +10,27 @@ export function refreshToolStreamMessage(entry: ToolStreamEntry) {
       item.phase === "end" &&
       !item.suppressChannelProgress,
   );
-  const content: Array<Record<string, unknown>> = [];
-  content.push({
-    type: "toolcall",
+  const common = {
     name: entry.name,
-    arguments: entry.args ?? {},
     ...(entry.parentToolCallId ? { parentToolCallId: entry.parentToolCallId } : {}),
     ...(entry.details !== undefined ? { details: entry.details } : {}),
-  });
+  };
+  const content: Array<Record<string, unknown>> = [
+    { type: "toolcall", ...common, arguments: entry.args ?? {} },
+  ];
   // Emit the result block whenever a result landed, even with empty output;
   // otherwise a completed no-stdout command keeps its running state in the UI.
   if (entry.output || entry.resultReceived) {
     content.push({
       type: "toolresult",
       timestamp: entry.resultTimestamp,
-      name: entry.name,
+      ...common,
       text: entry.output ?? "",
-      ...(entry.parentToolCallId ? { parentToolCallId: entry.parentToolCallId } : {}),
-      ...(entry.details !== undefined ? { details: entry.details } : {}),
       ...(entry.isError !== undefined ? { isError: entry.isError } : {}),
       ...(entry.exitCode !== undefined ? { exitCode: entry.exitCode } : {}),
     });
   }
+  const running = !entry.resultReceived && !itemEnded;
   entry.message = {
     role: "assistant",
     toolCallId: entry.toolCallId,
@@ -46,12 +45,8 @@ export function refreshToolStreamMessage(entry: ToolStreamEntry) {
     __openclawToolStreamLive: true,
     __openclawToolStreamResultReceived: entry.resultReceived === true,
     __openclawToolStreamItemEnded: itemEnded === true,
-    ...(entry.resultReceived !== true && !itemEnded && entry.liveOutput
-      ? { __openclawToolStreamLiveOutput: entry.liveOutput }
-      : {}),
-    ...(entry.resultReceived !== true && !itemEnded && entry.liveDiffStat
-      ? { __openclawToolStreamDiffStat: entry.liveDiffStat }
-      : {}),
+    ...(running && entry.liveOutput ? { __openclawToolStreamLiveOutput: entry.liveOutput } : {}),
+    ...(running && entry.liveDiffStat ? { __openclawToolStreamDiffStat: entry.liveDiffStat } : {}),
     __openclawToolStreamReceivedAt: entry.receivedAt,
     ...(entry.afterUserSendId ? { openclawToolStreamAfterSendId: entry.afterUserSendId } : {}),
   };

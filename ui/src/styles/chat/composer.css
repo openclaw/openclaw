@@ -119,10 +119,9 @@
 }
 
 .agent-chat__composer-status-icon {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  color: inherit;
+  display: grid;
+  flex: 0 0 var(--chat-composer-footer-icon-size, 16px);
+  place-items: center;
 }
 
 .agent-chat__composer-status-icon svg {
@@ -250,8 +249,12 @@
 
 .agent-chat__capability-menu-scroll {
   flex: 1 1 auto;
-  min-height: 0;
   overflow-y: auto;
+}
+
+/* Plugin lists shrink to their rows when drilling in, but still scroll at the panel limit. */
+.chat-plugin-menu-scroll {
+  overflow: auto;
 }
 
 .agent-chat__attachment-sources {
@@ -342,9 +345,10 @@
   font-weight: 400;
 }
 
-.agent-chat__capability-menu-item svg {
+.agent-chat__capability-menu-item :is(svg, img) {
   width: 18px;
   height: 18px;
+  object-fit: contain;
   stroke-width: 1.75px;
 }
 
@@ -1488,7 +1492,8 @@
     rgb(0 0 0 / 12%) calc(100% - 12px), transparent calc(100% - 4px);
 
   display: flex;
-  gap: calc(var(--chat-attachment-inset-block) * 3);
+  /* As wide as the remove target's overhang, so neighbors never share a hit area. */
+  gap: var(--chat-attachment-hit-slop);
   flex-wrap: nowrap;
   flex-shrink: 0;
   /* Keep horizontal clipping inside the composer. Reserve remove-target and
@@ -1769,10 +1774,14 @@
   color: var(--muted);
 }
 
-.chat-attachment-file__icon svg {
-  width: 16px;
-  height: 16px;
-  stroke-width: 1.75px;
+.chat-attachment-file__icon {
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+
+  svg {
+    width: 16px;
+    height: 16px;
+    stroke-width: 1.75px;
+  }
 }
 
 .chat-attachments-preview :is(.chat-attachment-file__name, .chat-selection-annotations__label) {
@@ -2000,6 +2009,9 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 .agent-chat__media-input {
   display: none;
   position: fixed;
+  position-area: center;
+  width: 100%;
+  height: 100%;
   margin: 0;
   padding: 0;
   border: 0;
@@ -3762,80 +3774,12 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   gap: 12px;
 }
 
-.chat-controls__access-choices {
-  display: grid;
-  grid-template-rows: 0fr;
-  opacity: 0;
-  transition:
-    grid-template-rows var(--access-motion-duration) var(--access-motion-easing),
-    opacity var(--access-motion-duration) var(--access-motion-easing);
-}
-
-.chat-controls__access-choices[data-expanded="true"] {
-  grid-template-rows: 1fr;
-  opacity: 1;
-}
-
-.chat-controls__access-clip {
-  min-height: 0;
-  overflow: hidden;
-}
-
-.chat-controls__access-options {
-  display: grid;
-  gap: 2px;
-  padding-top: 8px;
-}
-
-.chat-controls__access-option {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  min-height: 34px;
-  padding: 7px 10px;
-  border: 0;
-  border-radius: var(--menu-item-radius);
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-  font-size: 12px;
+.chat-controls__access-caption,
+.chat-controls__access-hint {
+  margin-inline-start: 8px;
+  color: var(--muted);
   font-weight: 400;
-  text-align: start;
-}
-
-.chat-controls__access-option:hover {
-  background: var(--chat-composer-hover);
-}
-
-.chat-controls__access-option[aria-pressed="true"] {
-  background: var(--chat-composer-menu-selected);
-  color: var(--text-strong);
-}
-
-.chat-controls__access-check {
-  display: flex;
-  color: var(--accent);
-  visibility: hidden;
-}
-
-.chat-controls__access-option[aria-pressed="true"] .chat-controls__access-check {
-  visibility: visible;
-}
-
-.chat-controls__access-check svg {
-  width: 16px;
-  height: 16px;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .chat-controls__access-choices {
-    transition: none;
-  }
-}
-
-.chat-controls__effort-menu--access {
-  max-height: min(400px, var(--auto-size-available-height, calc(100vh - 120px)));
+  text-transform: none;
 }
 
 .chat-controls__model-browser {
@@ -4428,16 +4372,19 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   --oc-overlay-distance: 4px;
   --oc-overlay-show-duration: 150ms;
   --overlay-ease-enter: cubic-bezier(0.22, 0.8, 0.24, 1);
+  --oc-overlay-enter-scale: 0.96;
+  --oc-overlay-enter-translate: 0 -4px;
   padding: 4px;
   border: 0;
   border-radius: min(18px, var(--menu-radius));
   background: var(--popover);
   box-shadow: var(--menu-shadow);
-  scale: 1;
   transform-origin: top left;
 }
 
 .chat-controls__settings-popover.chat-controls__runtime-details {
+  --oc-overlay-enter-translate: 0 4px;
+
   position-area: none;
   position-try-fallbacks: none;
   inset: auto;
@@ -4715,28 +4662,6 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 
 .chat-controls__account-manage .chat-controls__model-option-action {
   display: none;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .chat-controls__settings-popover {
-    transition:
-      opacity 150ms cubic-bezier(0.22, 0.8, 0.24, 1),
-      transform 150ms cubic-bezier(0.22, 0.8, 0.24, 1),
-      display 150ms allow-discrete,
-      overlay 150ms allow-discrete;
-  }
-
-  @starting-style {
-    .chat-controls__settings-popover:popover-open {
-      opacity: 0;
-      scale: 1;
-      transform: translateY(-4px) scale(0.96);
-    }
-
-    .chat-controls__runtime-details:popover-open {
-      transform: translateY(4px) scale(0.96);
-    }
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {

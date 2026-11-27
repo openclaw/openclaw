@@ -329,7 +329,9 @@ export function createMarkdownParser(): MarkdownItParser {
             }
           }
           // Local file decoration removes hrefs such as C:/notes.md before scheme rejection.
-          token.hidden = DISALLOWED_LINK_SCHEME_RE.test(String(token.attrGet("href") ?? ""));
+          token.hidden =
+            DISALLOWED_LINK_SCHEME_RE.test(String(token.attrGet("href") ?? "")) ||
+            (env.relativeLinks === false && !href.startsWith("//") && !URL.canParse(href));
           openLink = token;
           continue;
         }

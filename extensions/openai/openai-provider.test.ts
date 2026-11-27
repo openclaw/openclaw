@@ -19,11 +19,6 @@ import {
   runWrappedPayloadCase,
 } from "./test-support/responses-model.test-support.js";
 
-// mock-isolation: Registry lookup behavior is covered by openai-codex-discovery.test.ts.
-vi.mock("./codex-client-version.js", () => ({
-  resolveOpenAICodexClientVersion: async () => "0.169.0",
-}));
-
 function openaiConfig(
   openai: Omit<Partial<ModelProviderConfig>, "models"> & {
     models?: Partial<ModelProviderConfig["models"][number]>[];
@@ -875,7 +870,7 @@ describe("buildOpenAIProvider", () => {
     });
     expect(result.payload.store).toBe(true);
     expect(result.payload.context_management).toEqual([
-      { type: "compaction", compact_threshold: 140_000 },
+      { type: "compaction", compact_threshold: 170_000 },
     ]);
     expect(result.payload.service_tier).toBe("priority");
     expect(result.payload.text).toEqual({ verbosity: "low" });

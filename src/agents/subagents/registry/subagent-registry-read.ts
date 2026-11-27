@@ -1,8 +1,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { getRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
-import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
+import { preparePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { listLiveAgentRunIds } from "../../../infra/agent-run-registry.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
@@ -19,12 +19,10 @@ import {
   getSubagentRunsForChildSession,
   getSubagentRunsForRequesterSession,
   getSubagentSessionReadLookup,
-  immutableSubagentRunSessionList,
   subagentRuns,
 } from "./subagent-registry-memory.js";
 import {
   buildLatestSubagentRunReadIndexFromRuns,
-  buildSubagentRunReadIndexFromRuns,
   getLatestSubagentRunForChild,
   getSubagentRunByChildSessionKeyFromRuns,
   listRunsForControllerFromRuns,
@@ -33,6 +31,7 @@ import {
   type LatestSubagentRunReadIndex,
   type SubagentRunReadIndex,
 } from "./subagent-registry-queries.js";
+import { captureSubagentSessionListReadIndex } from "./subagent-registry-read-index.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import {
   getSubagentSessionListRunsSnapshotForChildSessions,
@@ -43,11 +42,7 @@ import {
 } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { owesRequesterCompletion } from "./subagent-requester-settle-identity.js";
-import {
-  compareSubagentRunGeneration,
-  copySubagentRunRuntimeOwner,
-  latestSubagentRun,
-} from "./subagent-run-generation.js";
+import { compareSubagentRunGeneration, latestSubagentRun } from "./subagent-run-generation.js";
 import {
   isSubagentRunLive,
   isSubagentRunQueued,
@@ -58,29 +53,28 @@ export { isSubagentRunLive, isSubagentRunQueued } from "./subagent-run-liveness.
 export type { SubagentRunReadIndex } from "./subagent-registry-queries.js";
 export type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-export {
-  getSubagentSessionRuntimeMs,
-  getSubagentSessionStartedAt,
-  isSubagentRunPausedForContinuation,
-  resolveSubagentSessionStatus,
-} from "./subagent-session-metrics.js";
-
 export type SubagentRootRequester = {
   sessionKey: string;
   agentId?: string;
   storePath?: string;
 };
 
-/** Shutdown follows subagent ancestry; ordinary conversations own their own resume. */
+/** A logical session key may exist in more than one physical store. */
+export function restartSessionOwnerKey(owner: Required<SubagentRootRequester>): string {
+  return JSON.stringify([owner.agentId, owner.storePath, owner.sessionKey]);
+}
+
+/** Follow delegated ancestry until the exact owner of an independent turn. */
 export async function resolveRootSubagentRequester(
-  sessionKey: string,
-  agentId?: string,
-): Promise<SubagentRootRequester> {
-  let root: SubagentRootRequester = { sessionKey, agentId };
+  start: Required<SubagentRootRequester>,
+  cfg: OpenClawConfig,
+  chatRoots: ReadonlySet<string>,
+): Promise<Required<SubagentRootRequester>> {
+  let root = start;
   const visited = new Set<string>();
   for (;;) {
-    const identity = JSON.stringify([root.agentId, root.sessionKey]);
-    if (visited.has(identity)) {
+    const identity = restartSessionOwnerKey(root);
+    if (visited.has(identity) || chatRoots.has(identity)) {
       return root;
     }
     visited.add(identity);
@@ -94,11 +88,6 @@ export async function resolveRootSubagentRequester(
     }
     const session = await readSessionEntryReadOnlyInWorker({
       ...root,
-      storePath:
-        root.storePath ??
-        resolveSessionStorePathCore(getRuntimeConfigSnapshot()?.session?.store, {
-          agentId: authority.childAgentId,
-        }),
       projection: "list",
     });
     if (!matchesSubagentChildSessionIdentity(entry, session ?? null)) {
@@ -121,7 +110,7 @@ export async function resolveRootSubagentRequester(
     if (!parentAgentId) {
       return root;
     }
-    root = {
+    const requester = {
       sessionKey: parent,
       agentId: parentAgentId,
       storePath:
@@ -131,23 +120,24 @@ export async function resolveRootSubagentRequester(
             ? entry.controllerStorePath
             : undefined,
     };
+    root = { ...requester, storePath: await preparePhysicalSessionStorePath(requester, cfg) };
   }
 }
 
-export async function listLiveSubagentRootSessions(): Promise<SubagentRootRequester[]> {
-  const requests: Promise<SubagentRootRequester>[] = [];
+/** Snapshot live delegated inputs; restart selection resolves their ancestry. */
+export function* listLiveSubagentSessions(): Generator<
+  SubagentRootRequester & { sessionId?: string }
+> {
   for (const runId of listLiveAgentRunIds()) {
     const entry = subagentRuns.get(runId);
-    if (!entry || !isSubagentRunLive(entry)) {
-      continue;
+    if (entry && isSubagentRunLive(entry)) {
+      yield {
+        sessionKey: entry.childSessionKey,
+        agentId: entry.childAgentId,
+        sessionId: entry.childSessionIdentity?.sessionId,
+      };
     }
-    requests.push(resolveRootSubagentRequester(entry.childSessionKey, entry.childAgentId));
   }
-  const roots = new Map<string, SubagentRootRequester>();
-  for (const root of await Promise.all(requests)) {
-    roots.set(JSON.stringify([root.agentId, root.storePath, root.sessionKey]), root);
-  }
-  return [...roots.values()];
 }
 
 function isWaitingSubagentRun(entry: SubagentRunRecord): boolean {
@@ -335,29 +325,11 @@ export function buildSubagentSessionListReadIndex(
     (sessionKeys
       ? getSubagentSessionListRunsSnapshotForSessions(subagentRuns, sessionKeys)
       : getSubagentSessionListRunsSnapshotForRead(subagentRuns));
-  // Liveness copies carry runtime ownership; shared display facts must never acquire it.
-  return buildSubagentRunReadIndexFromRuns({
+  return captureSubagentSessionListReadIndex(
     runs,
-    inMemoryRuns: sessionKeys
-      ? [...runs.keys()].flatMap((runId) => {
-          const entry = subagentRuns.get(runId);
-          return entry
-            ? [
-                copySubagentRunRuntimeOwner(
-                  entry,
-                  Object.freeze({ ...immutableSubagentRunSessionList(entry) }),
-                ),
-              ]
-            : [];
-        })
-      : Array.from(subagentRuns.values(), (entry) =>
-          copySubagentRunRuntimeOwner(
-            entry,
-            Object.freeze({ ...immutableSubagentRunSessionList(entry) }),
-          ),
-        ),
     now,
-  });
+    sessionKeys ? undefined : subagentRuns.values(),
+  );
 }
 
 /** Direct-child discovery needs only its controllers, without building global topology. */
@@ -391,7 +363,7 @@ export function getSubagentSessionListRunByChildSessionKey(
 export async function countPendingDescendantRuns(
   rootSessionKey: string,
   assertCurrent: () => void,
-  options?: { excludeSuspendedDelivery?: boolean },
+  options?: { excludeSettledDelivery?: boolean },
 ): Promise<number> {
   assertCurrent();
   await prepareSubagentSessionListReadCache();

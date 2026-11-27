@@ -6,14 +6,12 @@ import {
 } from "../agents/run-termination.js";
 import type { SessionPendingInputEndCause } from "../config/sessions/session-pending-input-end-cause.types.js";
 import type { SessionPendingInputReceipt } from "../config/sessions/session-pending-input-receipt.types.js";
+import { OperatorRefusalError } from "../gateway/operator-refusal.js";
 import {
   isOperatorAuthorityUnavailable,
   readOperatorAuthorityFailure,
 } from "../infra/operator-authority-error.js";
-import {
-  GatewayDispatchUnavailableError,
-  GatewayOperatorRecoveryAuthorizationError,
-} from "../infra/restart-recovery-errors.js";
+import { GatewayDispatchUnavailableError } from "../infra/restart-recovery-errors.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import type { UserTurnTranscriptRecorder } from "./user-turn-transcript.types.js";
 
@@ -50,7 +48,7 @@ export function resolvePendingInputEndCause(
   }
   if (
     reason === "auth-revoked" ||
-    failure instanceof GatewayOperatorRecoveryAuthorizationError ||
+    failure instanceof OperatorRefusalError ||
     readOperatorAuthorityFailure(failure)
   ) {
     return "revoked";
@@ -67,7 +65,11 @@ export function resolvePendingInputEndCause(
   return reason === "restart" ? "restart-unrecoverable" : defaultEndCause;
 }
 
-/** Accepted outages relinquish custody; pre-acceptance failures settle terminally. */
+/**
+ * Accepted outages and restarts relinquish custody; pre-acceptance failures settle terminally.
+ * Only the transcript commit consumes an accepted input, so an unconsumed one has not started:
+ * its queued row replays after restart. A consumed one resumes from the transcript instead.
+ */
 export async function settleUserTurnPendingInput(
   recorder: UserTurnTranscriptRecorder | undefined,
   signal?: AbortSignal,
@@ -82,7 +84,7 @@ export async function settleUserTurnPendingInput(
     ? undefined
     : resolvePendingInputEndCause(signal, failure, deleted ? "delete" : explicitStop);
   try {
-    if (!consumed && endCause === undefined && accepted) {
+    if (!consumed && accepted && (endCause === undefined || endCause === "restart-unrecoverable")) {
       recorder?.relinquishPendingInput?.();
     } else if (consumed) {
       recorder?.releasePendingInput?.();

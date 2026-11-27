@@ -53,6 +53,7 @@ import {
   selectUsageRankedToolRows,
   type ToolUsageRankingSnapshot,
 } from "./tool-usage-ranking.js";
+import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 export { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME };
@@ -119,18 +120,20 @@ function formatCodeModeCatalogIndex(
   usageRanking?: ToolUsageRankingSnapshot,
 ): string {
   const priority = (entry: CodeModeCatalogBinding) =>
-    entry.id === `openclaw:core:${entry.name}` && isCoreCodingSurfaceToolName(entry.name)
+    entry.id === `openclaw:core:${entry.name}` &&
+    (isCoreCodingSurfaceToolName(entry.name) || entry.name === AUTOMATIONS_TOOL_NAME)
       ? 0
       : entry.output
         ? 1
         : 2;
   const rows = bindings
-    // Keep the same core file/shell contracts visible as Tool Search, even without
-    // declared outputs. Otherwise catalog growth hides their input argument names.
+    // Keep native file, shell, and scheduling signatures visible when the index fills.
+    // A hidden scheduler can send the agent through a separate CLI process.
     .toSorted((a, b) => priority(a) - priority(b) || a.callableName.localeCompare(b.callableName))
     .map((entry) => ({
       id: entry.id,
-      line: `- ${entry.callableName} ${entry.input ?? "unknown"} -> ${entry.output ?? "?"}`,
+      // On-demand tools run only as their own top-level call; guest calls refuse them.
+      line: `- ${entry.callableName} ${entry.input ?? "unknown"} -> ${entry.output ?? "?"}${entry.call ? " [top-level call only; not from exec]" : ""}`,
       pinned: priority(entry) === 0,
     }));
   const lines = rows.map((row) => row.line);

@@ -83,7 +83,7 @@ export async function resolveSkillDispatchTools(params: {
     providerProfile,
     profileAlsoAllow,
     providerProfileAlsoAllow,
-    gatewayConfigReadAllowed,
+    gatewayManagementActionsAllowed,
   } = resolveEffectiveToolPolicy({
     config: params.cfg,
     sessionKey: params.sessionKey,
@@ -167,7 +167,7 @@ export async function resolveSkillDispatchTools(params: {
     onMessageToolAvailability: (available) => {
       messageToolAvailable = available;
     },
-    gatewayConfigReadAllowed,
+    gatewayManagementActionsAllowed,
     agentSessionKey: params.sessionKey,
     agentChannel: channel,
     questionInputMode: resolveConversationQuestionInputMode({

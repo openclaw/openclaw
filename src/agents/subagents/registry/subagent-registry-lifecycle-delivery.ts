@@ -1,5 +1,4 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { isSilentReplyText } from "../../../auto-reply/tokens.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
 import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
@@ -10,7 +9,6 @@ import {
   withPluginRuntimeGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { extractTextFromChatContent } from "../../../shared/chat-content.js";
-import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import {
   buildAnnounceIdFromChildRun,
   buildAnnounceIdempotencyKey,
@@ -18,22 +16,17 @@ import {
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
-import {
-  ensureCompletionState,
-  ensureDeliveryState,
-  recordRequesterHandoff,
-} from "./subagent-delivery-state.js";
+import { ensureDeliveryState, recordRequesterHandoff } from "./subagent-delivery-state.js";
 import { capFrozenResultText } from "./subagent-registry-helpers.js";
 import type {
   SubagentLifecycleCommonContext,
   SubagentLifecycleOptions,
 } from "./subagent-registry-lifecycle-context.js";
-import { commitSubagentLifecycleMutation } from "./subagent-registry-lifecycle-persistence.js";
 import { getCurrentSubagentRunOwner } from "./subagent-registry-memory.js";
-import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
 import { resolveYieldedRunContinuation } from "./subagent-registry-run-pause.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { compareSubagentRunGeneration, isSameSubagentRunOwner } from "./subagent-run-generation.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
+import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
 
 const DELIVERY_MIRROR_HISTORY_MAX_CHARS = 128 * 1024;
@@ -62,17 +55,8 @@ export const recordAnnounceDeliveryResult = (
   if (typeof delivery.enqueuedAt === "number") {
     deliveryState.enqueuedAt ??= delivery.enqueuedAt;
   }
-  if (!delivery.delivered && delivery.disposition !== "intentional_non_delivery") {
-    if (delivery.reason === "message_tool_delivery_missing") {
-      deliveryState.lastDropReason = "message_tool_delivery_missing";
-    } else if (
-      delivery.reason === "steer_dropped" ||
-      delivery.phases?.some((phase) => phase.reason === "steer_dropped")
-    ) {
-      deliveryState.lastDropReason = "steer_dropped";
-    } else if (delivery.path === "none") {
-      deliveryState.lastDropReason = "sink_unavailable";
-    }
+  if (!delivery.delivered && delivery.path === "none") {
+    deliveryState.lastDropReason = "sink_unavailable";
   }
   if (delivery.delivered) {
     deliveryState.deliveredAt =
@@ -107,8 +91,11 @@ export const recordAnnounceDeliveryResult = (
       }
     }
   }
-  deliveryState.disposition =
-    delivery.disposition ?? (delivery.delivered ? "delivered" : "retryable");
+  deliveryState.disposition = delivery.delivered
+    ? "delivered"
+    : delivery.path === "queued"
+      ? "session_queued"
+      : undefined;
   if (delivery.reason === "completion_handoff_pending") {
     recordRequesterHandoff(entry);
   }
@@ -213,7 +200,7 @@ export const captureSubagentRunResult = async (
     // A yield pauses capture only while a continuation could still extend the transcript.
     return (
       current !== undefined &&
-      (current.pauseReason !== "sessions_yield" ||
+      (!isSubagentPausedByYield(current) ||
         resolveYieldedRunContinuation(current).state === "unreachable") &&
       !context.newerGenerationOwnsSession(current)
     );
@@ -256,7 +243,7 @@ export const captureSubagentRunResult = async (
             outcome,
             ...(sessionTarget ? { sessionTarget } : {}),
             // Only unreachable yielded collectors need a historical execution window.
-            ...(entry.collect === true && entry.pauseReason === "sessions_yield"
+            ...(entry.collect === true && isSubagentPausedByYield(entry)
               ? {
                   completedCollectorTurn: {
                     startedAt: outcome.startedAt ?? entry.execution.startedAt ?? entry.createdAt,
@@ -299,82 +286,4 @@ export const captureSubagentRunResult = async (
   }
   assertCurrent();
   return result(resultText);
-};
-
-export const refreshFrozenResultFromSession = async (
-  context: SubagentLifecycleCommonContext,
-  sessionKey: string,
-): Promise<boolean> => {
-  const params = context.options;
-  const key = sessionKey.trim();
-  if (!key) {
-    return false;
-  }
-  // A paused row's result was cleared on yield; later session text belongs to the next turn.
-  const candidates = [...params.runs.values()].filter(
-    (entry) =>
-      entry.childSessionKey === key &&
-      entry.expectsCompletionMessage === true &&
-      typeof entry.execution.endedAt === "number" &&
-      typeof entry.cleanupCompletedAt !== "number" &&
-      entry.pauseReason !== "sessions_yield" &&
-      entry.execution.outcome?.status !== "error",
-  );
-  const entry = candidates.toSorted(compareSubagentRunGeneration).at(-1);
-  if (!entry || context.newerGenerationOwnsSession(entry)) {
-    return false;
-  }
-  const stateContext = captureOpenClawStateWorkerContext();
-  const previousResultText = entry.completion?.resultText;
-  const previousCapturedAt = entry.completion?.capturedAt;
-  const isCurrent = (current = getCurrentSubagentRunOwner(params.runs, entry)) =>
-    current !== undefined &&
-    current.pauseReason !== "sessions_yield" &&
-    current.cleanupCompletedAt === undefined &&
-    current.completion?.resultText === previousResultText &&
-    current.completion?.capturedAt === previousCapturedAt &&
-    !context.newerGenerationOwnsSession(current);
-
-  let captured: string | undefined;
-  try {
-    captured = await withPluginRuntimeGatewayContextResolver(getGatewayContextResolver(entry), () =>
-      params.captureSubagentCompletionReply(sessionKey),
-    );
-  } catch {
-    return false;
-  }
-  const trimmed = captured?.trim();
-  if (!trimmed || isSilentReplyText(trimmed)) {
-    return false;
-  }
-  // Reply capture yields while registration can transfer session ownership.
-  // Only the exact row and generation that started capture may commit its text.
-  assertSubagentRegistryWriteSourceCurrent(stateContext);
-  if (
-    !isCurrent() ||
-    entry.completion?.resultText !== previousResultText ||
-    entry.completion?.capturedAt !== previousCapturedAt
-  ) {
-    return false;
-  }
-
-  const nextFrozen = capFrozenResultText(trimmed);
-  if (entry.completion?.resultText === nextFrozen) {
-    return false;
-  }
-  await commitSubagentLifecycleMutation(context, {
-    entry,
-    stateContext,
-    assertCurrent(current) {
-      if (!isCurrent(current)) {
-        throw new Error("Subagent frozen-result owner changed before persistence.");
-      }
-    },
-    mutate(draft) {
-      const completion = ensureCompletionState(draft);
-      completion.resultText = nextFrozen;
-      completion.capturedAt = Date.now();
-    },
-  });
-  return true;
 };

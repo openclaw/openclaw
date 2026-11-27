@@ -280,7 +280,7 @@ it("keeps the draft's frozen revision when exact conflict recovery fails", async
     cronForm: { name: "Unsaved" },
     cronEditingJob: { configRevision: "stale" },
   });
-  expect(state.cronError).toContain("could not be loaded");
+  expect(state.cronError).toContain("Copy your edits before reloading the page");
   firstList.resolve(jobsPage([current]));
   await pending;
   expect(state).toMatchObject({
@@ -310,7 +310,11 @@ it("commits authoritative toggle state and advances an open editor revision", as
 
   const toggle = toggleCronJob(state, loadedJob, false);
   try {
-    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("cron.list", expect.anything()));
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("cron.list", expect.anything(), {
+        signal: expect.any(AbortSignal),
+      }),
+    );
     expect(request).toHaveBeenCalledWith("cron.status", {});
     expect(sent(request, "cron.update")).toMatchObject({
       id: loadedJob.id,

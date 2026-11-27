@@ -12,7 +12,7 @@ import "./chat-panel-launcher-mobile.css";
 
 type LauncherDefinition = Pick<
   SidebarPanelDefinition,
-  "slot" | "label" | "icon" | "iconSvg" | "available"
+  "slot" | "label" | "icon" | "iconSvg" | "available" | "prepare"
 >;
 
 export type MobilePanelLauncherProps = {
@@ -42,7 +42,12 @@ function LauncherOption(props: {
       type="button"
       class="chat-panel-launcher-mobile__option"
       disabled={!props.definition.available}
-      onClick={() => props.onOpen(props.definition.slot)}
+      onPointerEnter={() => props.definition.prepare?.()}
+      onFocus={() => props.definition.prepare?.()}
+      onClick={() => {
+        props.definition.prepare?.();
+        props.onOpen(props.definition.slot);
+      }}
     >
       <span class="chat-panel-launcher-mobile__icon" aria-hidden="true">
         <PanelIcon icon={props.definition.icon} iconSvg={props.definition.iconSvg} size={20} />

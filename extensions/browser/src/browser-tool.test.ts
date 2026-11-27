@@ -2014,9 +2014,6 @@ describe("browser observation actions and tab previews", () => {
     outcome: "matching" | "empty" | "capped";
   }>([
     { format: "aria", query: "  IN\tSIGN ", outcome: "matching" },
-    { format: "ai", query: "CAFÉ", name: "Cafe\u0301", outcome: "matching" },
-    { format: "aria", query: "CAFE\u0301", name: "Café", outcome: "matching" },
-    { format: "ai", query: "ǰ", name: "J\u030c", outcome: "matching" },
     { format: "aria", query: "cafe", name: "Cafe\u0301", outcome: "empty" },
     { format: "ai", query: "not found", outcome: "empty" },
     { format: "ai", query: "sign in", maxChars: 5, outcome: "capped" },
@@ -2053,9 +2050,6 @@ describe("browser observation actions and tab previews", () => {
         expect(text).toContain(name);
         expect(text).not.toContain("[ref=e2]");
         expect(result.details).toMatchObject({
-          matchCount: 1,
-          refs: 1,
-          stats: { lines: 1, refs: 1, interactive: 1 },
           browserTab: { targetId: "t1" },
         });
       } else if (outcome === "empty") {

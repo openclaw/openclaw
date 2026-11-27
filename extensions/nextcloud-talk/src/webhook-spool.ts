@@ -3,11 +3,9 @@ import {
   type ChannelIngressQueue,
   type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
-import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolvePersistentDedupePluginStateNamespace } from "openclaw/plugin-sdk/persistent-dedupe";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { z } from "zod";
 import {
   NEXTCLOUD_TALK_REPLAY_DEDUPE_MAX_ENTRIES,
   NEXTCLOUD_TALK_REPLAY_DEDUPE_NAMESPACE_PREFIX,
@@ -16,14 +14,11 @@ import {
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import type { NextcloudTalkInboundMessage } from "./types.js";
 import {
+  describeIgnoredWebhookEvent,
   inspectNextcloudTalkWebhookEnvelope,
-  migrateNextcloudTalkLegacyReplayState,
   NEXTCLOUD_TALK_INGRESS_PAYLOAD_VERSION,
   NextcloudTalkWebhookPayloadError,
-  parseNextcloudTalkFileSharedActivity,
-  parseNextcloudTalkQuotedReply,
-  parseRawObject,
-  requiredString,
+  parseClaimedMessage,
   type NextcloudTalkIngressPayload,
   type NextcloudTalkLegacyReplayEntry,
   type NextcloudTalkLegacyReplayStore,
@@ -31,76 +26,7 @@ import {
 
 const NEXTCLOUD_TALK_INGRESS_POLL_INTERVAL_MS = 500;
 
-function describeIgnoredWebhookEvent(rawEvent: string): string {
-  // Admission already parsed ignored envelopes; this read selects bounded log fields only.
-  const envelope = parseRawObject(rawEvent);
-  const type = typeof envelope.type === "string" ? envelope.type : "unknown";
-  const object = isRecord(envelope.object) ? envelope.object : null;
-  const objectType = typeof object?.type === "string" ? object.type : "unknown";
-  return `type=${type} objectType=${objectType}`;
-}
-
-// Activity Streams payload: https://nextcloud-talk.readthedocs.io/en/latest/bots/
-const NextcloudTalkWebhookPayloadSchema = z.object({
-  type: z.enum(["Create", "Update", "Delete", "Activity"]),
-  actor: z.object({
-    type: z.literal("Person"),
-    id: z.string().min(1),
-    name: z.string(),
-  }),
-  object: z.object({
-    type: z.literal("Note"),
-    id: z.string().min(1),
-    name: z.string(),
-    content: z.string(),
-    mediaType: z.string(),
-  }),
-  target: z.object({
-    type: z.literal("Collection"),
-    id: z.string().min(1),
-    name: z.string(),
-  }),
-});
-
 export type NextcloudTalkIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
-
-function parseClaimedMessage(payload: NextcloudTalkIngressPayload, claimedId: string) {
-  const rawEnvelope = parseRawObject(payload.rawEvent);
-  const result = NextcloudTalkWebhookPayloadSchema.safeParse(rawEnvelope);
-  const fileShare = parseNextcloudTalkFileSharedActivity(rawEnvelope);
-  if (!result.success) {
-    throw new NextcloudTalkWebhookPayloadError(
-      `Nextcloud Talk ingress row ${claimedId} has invalid message identity.`,
-    );
-  }
-  const webhook = result.data;
-  const isSupportedEvent =
-    webhook.type === "Create" || (webhook.type === "Activity" && fileShare !== null);
-  if (!isSupportedEvent || webhook.object.id !== claimedId) {
-    throw new NextcloudTalkWebhookPayloadError(
-      `Nextcloud Talk ingress row ${claimedId} has invalid message identity.`,
-    );
-  }
-  const roomId = requiredString(webhook.target.id, "target.id");
-  const quote = parseNextcloudTalkQuotedReply(rawEnvelope);
-  const message: NextcloudTalkInboundMessage = {
-    messageId: webhook.object.id,
-    roomToken: roomId,
-    roomName: webhook.target.name,
-    senderId: webhook.actor.id,
-    senderName: webhook.actor.name,
-    text: fileShare ? fileShare.text : webhook.object.content || webhook.object.name,
-    ...(fileShare ? { mentionText: fileShare.mentionText } : {}),
-    mediaType: webhook.object.mediaType || "text/plain",
-    timestamp: payload.receivedAt,
-    // Activity Streams does not distinguish Talk room kinds. Runtime lookup refines this.
-    isGroupChat: true,
-    ...(fileShare?.attachment ? { attachment: fileShare.attachment } : {}),
-    ...(fileShare?.attachmentIssue ? { attachmentIssue: fileShare.attachmentIssue } : {}),
-    ...(quote ? { quote } : {}),
-  };
-  return message;
-}
 
 function resolveNonRetryableFailure(error: unknown) {
   if (error instanceof NextcloudTalkWebhookPayloadError) {
@@ -114,6 +40,48 @@ function resolveNonRetryableFailure(error: unknown) {
     return { reason: "nextcloud-talk-auth", message };
   }
   return null;
+}
+
+function parseLegacyReplayKey(key: string): { messageId: string; roomId: string } | null {
+  const separator = key.lastIndexOf(":");
+  const roomId = key.slice(0, separator).trim();
+  const messageId = key.slice(separator + 1).trim();
+  return separator > 0 && roomId && messageId ? { messageId, roomId } : null;
+}
+
+/** Convert the shipped replay guard's live window into durable completion tombstones. */
+async function migrateNextcloudTalkLegacyReplayState(params: {
+  queue: ChannelIngressQueue<NextcloudTalkIngressPayload>;
+  store: NextcloudTalkLegacyReplayStore;
+}): Promise<void> {
+  const entries = await params.store.entries();
+  for (const entry of entries) {
+    const identity = parseLegacyReplayKey(entry.value.key);
+    if (!identity || !Number.isFinite(entry.value.seenAt)) {
+      continue;
+    }
+    const marker: NextcloudTalkIngressPayload = {
+      version: NEXTCLOUD_TALK_INGRESS_PAYLOAD_VERSION,
+      receivedAt: entry.value.seenAt,
+      rawEvent: "",
+    };
+    const result = await params.queue.enqueue(identity.messageId, marker, {
+      receivedAt: entry.value.seenAt,
+      laneKey: `room:${identity.roomId}`,
+    });
+    const ownsMarker =
+      result.kind === "accepted" ||
+      (result.kind === "pending" && result.record.payload.rawEvent === "");
+    if (ownsMarker) {
+      const completed = await params.queue.complete(identity.messageId, {
+        completedAt: entry.value.seenAt,
+      });
+      if (!completed) {
+        throw new Error(`Failed to migrate Nextcloud Talk replay key ${entry.value.key}.`);
+      }
+    }
+  }
+  await params.store.clear();
 }
 
 export function createNextcloudTalkWebhookSpool(options: {

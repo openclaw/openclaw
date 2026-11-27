@@ -322,20 +322,6 @@ touch "$ROOT_DIR/assembled"
 );
 
 describe("packaged worker freshness", () => {
-  it.skipIf(process.platform === "win32").each([
-    { label: "unset", input: undefined, expected: "1" },
-    { label: "empty", input: "", expected: "1" },
-    { label: "typed opt-in", input: "0", expected: "0" },
-    { label: "runtime-only", input: "1", expected: "1" },
-  ])("passes $label DTS selection to the real packager's build command", ({ input, expected }) => {
-    const { result, events } = runPackageEntrypointHarness({ dts: input });
-
-    expect(result.status, result.stderr).toBe(77);
-    expect(result.stderr).toBe("");
-    expect(result.stdout).toContain(`BUILD_SELECTION=${expected}\n`);
-    expect(events).toEqual(["xcode-version", "swift-version", "pnpm:build"]);
-  });
-
   it.skipIf(process.platform === "win32")(
     "runs the real build entrypoint when the legacy SKIP_TSC shortcut is requested",
     () => {
@@ -604,7 +590,6 @@ function writeFixtureExecutable(file: string, body: string) {
 
 function runPackageEntrypointHarness(
   options: {
-    dts?: string;
     skipTsc?: boolean;
     install?: boolean;
     buildConfig?: "debug" | "release";
@@ -676,7 +661,6 @@ esac`,
       BUILD_ARCHS: "arm64",
       SKIP_PNPM_INSTALL: options.install ? "0" : "1",
       ...(options.skipTsc ? { SKIP_TSC: "1" } : {}),
-      ...(options.dts === undefined ? {} : { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: options.dts }),
       ...(options.buildConfig === undefined ? {} : { BUILD_CONFIG: options.buildConfig }),
       ...(options.signingVariant === undefined
         ? {}

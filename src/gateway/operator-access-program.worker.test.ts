@@ -12,7 +12,7 @@ import { prepareOperatorModelPresentation } from "./operator-model-presentation.
 import { publishOperatorRoleConfigChange } from "./operator-role-policy.js";
 import {
   captureChannelOperatorRunAuthority,
-  captureGatewayOperatorRunAuthority,
+  prepareGatewayOperatorRunAuthority,
 } from "./operator-run-authority.js";
 import { recoveryFixture } from "./operator-run-recovery.test-support.js";
 import {
@@ -69,17 +69,17 @@ it.each<{
       let cfg = config(grants, scopes);
       context.getRuntimeConfig = () => cfg;
       const captured = expectDefined(
-        await captureGatewayOperatorRunAuthority({ client, context }),
+        await prepareGatewayOperatorRunAuthority({ client, context }),
         "captured source",
       );
       using _ = { [Symbol.dispose]: captured.release };
       const channel = captureChannelOperatorRunAuthority({
+        canonicalIdentity: null,
         profileId: profile.id,
         assignedRole: null,
         scopes,
         gatewayAccessGrant: null,
         getRuntimeConfig: context.getRuntimeConfig,
-        assertCurrent: captured.authority.assertCurrent,
       });
       const programs = ["standard", "daybreak_blue", "daybreak_red"] as const;
       for (const authority of [captured.authority, channel]) {
@@ -123,8 +123,17 @@ it.each<{
           publishOperatorRoleConfigChange(context);
           expect(execution.signal.aborted).toBe(false);
           expect(execution.assertCurrent).not.toThrow();
-          expect(channel.assertCurrent).not.toThrow();
-          expect(captured.authority.reauthorize).toThrow();
+          const next = expectDefined(
+            await prepareGatewayOperatorRunAuthority({ client, context }),
+            "next request",
+          );
+          try {
+            expect(() =>
+              assertOperatorAccessProgramAllowed(next.authority, "daybreak_blue"),
+            ).toThrow("operator role cannot use this Access level");
+          } finally {
+            next.release();
+          }
           cfg = config(grants, scopes);
           expect(execution.assertCurrent).not.toThrow();
         } finally {
@@ -142,7 +151,7 @@ it("does not acquire admin execution authority from a privileged internal adapte
     const context = createContext();
     context.getRuntimeConfig = () => cfg;
     const captured = expectDefined(
-      await captureGatewayOperatorRunAuthority({ client, context }),
+      await prepareGatewayOperatorRunAuthority({ client, context }),
       "original requester",
     );
     using _ = { [Symbol.dispose]: captured.release };
@@ -152,7 +161,7 @@ it("does not acquire admin execution authority from a privileged internal adapte
       operatorRunAuthority: captured.authority,
     });
     const child = expectDefined(
-      await captureGatewayOperatorRunAuthority({ client: adapter, context }),
+      await prepareGatewayOperatorRunAuthority({ client: adapter, context }),
       "child requester",
     );
     using childHold = { [Symbol.dispose]: child.release };
@@ -179,16 +188,13 @@ it("does not acquire admin execution authority from a privileged internal adapte
   }));
 
 it.each<{ grants: Grants | undefined }>([{ grants: undefined }, { grants: ["daybreak_blue"] }])(
-  "retains admitted scheduled Access authority with ceiling $grants but refuses fresh work after a policy change",
+  "retains admitted scheduled Access authority with ceiling $grants and applies current policy to fresh work",
   ({ grants }) =>
     withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
       const profile = ensureProfileForEmail("access-recovery@example.test");
       const fixture = await recoveryFixture(stateDir, profile.id, {
         config: config(grants),
       });
-      expect(fixture.snapshot.rolePolicy?.accessPrograms).toEqual(
-        grants ? { cyber: grants } : undefined,
-      );
       const restored = expectDefined(await fixture.restore(), "restored source");
       using _ = { [Symbol.dispose]: restored.release };
       const assertAccessCeiling = () => {
@@ -204,10 +210,15 @@ it.each<{ grants: Grants | undefined }>([{ grants: undefined }, { grants: ["dayb
       };
       assertAccessCeiling();
       fixture.setConfig(config([]));
-      expect(restored.authority.assertCurrent).not.toThrow();
-      expect(restored.authority.signal?.aborted).toBe(false);
-      expect(restored.authority.reauthorize).toThrow();
-      await expect(fixture.restore()).rejects.toThrow();
+      expect(restored.authority.signal?.aborted).not.toBe(true);
+      const next = expectDefined(await fixture.restore(), "next scheduled request");
+      try {
+        expect(() => assertOperatorAccessProgramAllowed(next.authority, "daybreak_blue")).toThrow(
+          "operator role cannot use this Access level",
+        );
+      } finally {
+        next.release();
+      }
       assertAccessCeiling();
     }),
 );
