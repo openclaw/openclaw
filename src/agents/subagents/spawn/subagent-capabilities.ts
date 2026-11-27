@@ -10,7 +10,7 @@ import {
   DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
   isSubagentSpawnDepthAllowed,
 } from "../../../config/agent-limits.js";
-import { resolveSessionStorePathCore } from "../../../config/sessions.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   isAcpSessionKey,
