@@ -270,6 +270,7 @@ export function connectShellIdle(
       anchor !== null &&
       anchor.origin === location.origin &&
       routeId === "chat" &&
+      anchor.dataset.sessionDestination !== "terminal" &&
       context.theme.settings.preloadSessionRenderer === true &&
       event.type !== "touchstart" &&
       (!("pointerType" in event) || event.pointerType !== "touch") &&

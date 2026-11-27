@@ -653,3 +653,21 @@ it.each([
   expect(chatHint()).toMatchObject({ rel: "modulepreload", fetchPriority: "low" });
   expect(fixture.preloadRoute).not.toHaveBeenCalled();
 });
+
+it("leaves chat cold for a sidebar catalog link that opens Terminal", async () => {
+  const fixture = setup("advanced");
+  fixture.outlet.presentationSettled = true;
+  fixture.transcript.ready = true;
+  const link = fixture.shell.appendChild(document.createElement("a"));
+  link.className = "sidebar-recent-session__link";
+  link.href = "/control/chat/main/example";
+  link.dataset.sessionDestination = "terminal";
+  vi.spyOn(fixture.theme, "settings", "get").mockReturnValue({
+    ...fixture.theme.settings,
+    preloadSessionRenderer: true,
+  });
+
+  link.focus();
+  await vi.advanceTimersByTimeAsync(75);
+  expect(hints()).toHaveLength(0);
+});

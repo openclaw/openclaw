@@ -143,8 +143,10 @@ function renderCatalogHostGroup(
         ? row.isRunVisuallyActive === true
         : readSession().status === "active" || readSession().status === "running";
     };
-    const canOpenTerminal = () =>
-      readSession().canOpenTerminal === true && params.snapshot.terminalAvailable;
+    const opensTerminal = () =>
+      params.snapshot.catalogOpenTarget === "terminal" &&
+      readSession().canOpenTerminal === true &&
+      params.snapshot.terminalAvailable;
     const openMenu = (x: number, y: number, trigger?: HTMLElement) =>
       params.host.sidebarMenus.catalogMenu.open(catalogMenu(), x, y, trigger);
     const CatalogRow = () => {
@@ -196,10 +198,11 @@ function renderCatalogHostGroup(
             ref={(node) => (controls.link = node)}
             href={target().href}
             class="sidebar-recent-session__link"
+            data-session-destination={opensTerminal() ? "terminal" : undefined}
             aria-current={active() ? "page" : undefined}
             onClick={(event: MouseEvent) =>
               handleNavigationClick(event, () => {
-                if (params.snapshot.catalogOpenTarget === "terminal" && canOpenTerminal()) {
+                if (opensTerminal()) {
                   openCatalogSessionInTerminal(
                     params.host,
                     catalogKey(),
