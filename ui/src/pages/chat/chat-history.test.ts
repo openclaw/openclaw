@@ -10,6 +10,7 @@ import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import { rewindChatHistory, switchChatHistoryBranch } from "./chat-history-actions.ts";
 import { loadOlderChatHistoryPage, requestChatSessionSnapshot } from "./chat-history-request.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
+import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import {
   activeHistory as emptyActiveHistory,
   createState,
@@ -29,6 +30,7 @@ import {
 import {
   cacheChatSessionSnapshot,
   readChatMessagesFromCache,
+  setChatHistoryCursor,
   type ChatMessageCache,
 } from "./session-message-cache.ts";
 
@@ -111,6 +113,41 @@ it("preserves prepared quiet activity through older pages and prefetched snapsho
   ).toMatchObject({ kind: "snapshot", snapshot: { messages: expected } });
   expect(result).not.toHaveProperty("activity");
 });
+
+it.each([false, true])(
+  "reuses the startup receipt during browser history restore (compact %s)",
+  async (compactSessionOpening) => {
+    const initialHistory = {
+      messages: [message("assistant", "Already in the startup receipt")],
+      sessionId: "warm-session",
+    };
+    const state = Object.assign(createState(initialHistory), { sessionKey: "agent:main:warm" });
+    Object.assign(state.settings, { compactSessionOpening });
+    const response = createDeferred<Awaited<ReturnType<typeof state.sessions.subscribeMessages>>>();
+    const subscription = vi
+      .spyOn(state.sessions, "subscribeMessages")
+      .mockReturnValue(response.promise);
+    const request = vi.spyOn(state.client!, "request").mockResolvedValue(initialHistory);
+    const ready = syncSelectedSessionMessageSubscription(state, { initialHistory: true });
+
+    state.currentSessionId = initialHistory.sessionId;
+    state.chatMessages = [message("assistant", "From the restored snapshot")];
+    setChatHistoryCursor(state, "restored-history-cursor");
+    const opening = loadChatHistory(state, { startup: true, deferBranches: true });
+    response.resolve({
+      key: state.sessionKey,
+      agentId: null,
+      initialHistory: { ok: true, payload: initialHistory },
+    });
+
+    await ready;
+    await expect(opening).resolves.toMatchObject({ messages: initialHistory.messages });
+    expect(subscription.mock.calls[0]?.[1]?.initialHistory?.limit).toBe(
+      compactSessionOpening ? 24 : 80,
+    );
+    expect(request.mock.calls.filter(([method]) => method === "chat.startup")).toEqual([]);
+  },
+);
 
 it("requests the configured default agent for the global workspace alias", async () => {
   const state = createState({ messages: [] });
