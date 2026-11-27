@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { GOOGLE_GEMINI_TEXT_MODEL_BY_ID } from "./provider-catalog.js";
 import {
   normalizeConfig,
   resolveFastModeSupport,
@@ -144,14 +143,14 @@ describe("google provider policy public artifact", () => {
   );
 
   it.each([
-    ["gemini-4-hydrogen", true],
-    ["gemini-4-argon", false],
-  ] as const)("offers xhigh for the bundled %s row: %s", (modelId, expected) => {
+    [{ minimal: null, xhigh: "xhigh" }, true],
+    [{ minimal: null }, false],
+  ] as const)("offers xhigh for a Gemini 4 row with thinkingLevelMap %o: %s", (map, expected) => {
     const levels = resolveThinkingProfile({
       provider: "google-vertex",
-      modelId,
+      modelId: "gemini-4-hydrogen",
       reasoning: true,
-      thinkingLevelMap: GOOGLE_GEMINI_TEXT_MODEL_BY_ID.get(modelId)?.thinkingLevelMap,
+      thinkingLevelMap: map,
     })?.levels.map(({ id }) => id);
     expect(levels?.includes("xhigh")).toBe(expected);
   });

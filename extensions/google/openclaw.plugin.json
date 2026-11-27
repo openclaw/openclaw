@@ -119,8 +119,7 @@
             "contextWindow": 1048576,
             "maxTokens": 65536,
             "thinkingLevelMap": {
-              "minimal": null,
-              "xhigh": "xhigh"
+              "minimal": null
             },
             "compat": {
               "codeMode": "preferred"

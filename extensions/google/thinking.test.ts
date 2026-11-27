@@ -1,6 +1,5 @@
 // Google tests cover thinking plugin behavior.
 import { describe, expect, it } from "vitest";
-import { GOOGLE_GEMINI_TEXT_MODEL_BY_ID } from "./provider-catalog.js";
 import {
   isGoogleGemini3ThinkingLevelModel,
   resolveGoogleGemini3ThinkingLevel,
@@ -8,8 +7,7 @@ import {
 } from "./thinking-api.js";
 import { buildGoogleGenerativeAiParams } from "./transport-stream.js";
 
-const GEMINI_4_HYDROGEN_THINKING_LEVEL_MAP =
-  GOOGLE_GEMINI_TEXT_MODEL_BY_ID.get("gemini-4-hydrogen")?.thinkingLevelMap;
+const GEMINI_4_XHIGH_THINKING_LEVEL_MAP = { minimal: null, xhigh: "xhigh" } as const;
 
 function buildGeminiUserParams(
   model: Partial<Parameters<typeof buildGoogleGenerativeAiParams>[0]> = {},
@@ -113,8 +111,8 @@ describe("Google transport thinking config", () => {
       ["xhigh", "XHIGH"],
       ["max", "XHIGH"],
     ].map(([reasoning, thinkingLevel]) => ({
-      name: `bundled Gemini 4 Hydrogen row sends ${reasoning} as ${thinkingLevel}`,
-      model: { id: "gemini-4-hydrogen", thinkingLevelMap: GEMINI_4_HYDROGEN_THINKING_LEVEL_MAP },
+      name: `Gemini 4 Hydrogen row with an xhigh entry sends ${reasoning} as ${thinkingLevel}`,
+      model: { id: "gemini-4-hydrogen", thinkingLevelMap: GEMINI_4_XHIGH_THINKING_LEVEL_MAP },
       options: { reasoning },
       expected: { includeThoughts: true, thinkingLevel },
     })),
