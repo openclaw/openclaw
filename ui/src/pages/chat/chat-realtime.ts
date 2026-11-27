@@ -311,7 +311,7 @@ export function attachChatRealtimeActions(
       state.realtimeTalk.snapshot.realtimeTalkSession ||
       state.realtimeTalk.snapshot.realtimeTalkActive
     ) {
-      stopChatRealtimeTalk(state, { disposition: "abort" });
+      stopChatRealtimeTalk(state);
       return;
     }
     await startRealtimeTalk();

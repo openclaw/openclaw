@@ -1,3 +1,4 @@
+import type { RealtimeVoiceCloseOptions } from "../../../../../src/talk/provider-types.js";
 import { bytesToBase64 } from "../../../lib/bytes-base64.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
@@ -227,8 +228,9 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     return this.camera.switchDevice(videoDeviceId);
   }
 
-  stop(options?: { emitClosed?: boolean }): void {
+  stop(options?: RealtimeVoiceCloseOptions & { emitClosed?: boolean }): void {
     const emitClosed = !this.closed && this.active && options?.emitClosed !== false;
+    const disposition = options?.disposition ?? "detach";
     this.closed = true;
     this.active = false;
     this.startup.resolve("cancelled");
@@ -242,7 +244,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
       this.pendingTranscripts.user = { text: "", byteCount: 0 };
       this.pendingTranscripts.assistant = { text: "", byteCount: 0 };
       this.input.stop();
-      this.toolOwner.release();
+      this.toolOwner.release(disposition);
       this.inputPump.stop();
       this.outputQueue.close();
       void this.inputContext?.close();

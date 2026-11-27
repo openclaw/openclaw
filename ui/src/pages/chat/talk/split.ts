@@ -40,7 +40,7 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
     return this.closed ? "cancelled" : "ready";
   }
 
-  stop({ disposition = "abort" }: RealtimeVoiceCloseOptions = {}): void {
+  stop({ disposition = "detach" }: RealtimeVoiceCloseOptions = {}): void {
     if (this.closed) {
       return;
     }

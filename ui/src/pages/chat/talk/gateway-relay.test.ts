@@ -1003,13 +1003,13 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     void transport.stop();
   });
 
-  it("stops local consult waiting without accepting a late result or duplicating cancellation", async () => {
+  it("stops local consult waiting without accepting a late result or aborting accepted work", async () => {
     const client = createConsultClient();
     const { transport } = await startRelay(client);
     await emitConsultAndWait(client);
     await transport.stop();
     expect(requestCallsFor(client, "chat.abort")).toHaveLength(0);
-    expectClose(client, "abort");
+    expectClose(client, "detach");
     emitFinal("late answer");
     await Promise.resolve();
     expect(requestCallsFor(client, "talk.session.submitToolResult")).toHaveLength(0);
