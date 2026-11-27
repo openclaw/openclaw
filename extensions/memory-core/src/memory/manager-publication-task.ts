@@ -165,7 +165,10 @@ export type MemoryPublicationOperations = {
   };
   "stage.discard": { input: undefined; output: void };
   "source.replace": {
-    input: { state: MemoryPublicationState };
+    input: {
+      state: MemoryPublicationState;
+      verifiedFile?: MemorySourceIndexHeader["verifiedFile"];
+    };
     output: MemoryPublicationResult<boolean>;
   };
   "source.replace.group": {
