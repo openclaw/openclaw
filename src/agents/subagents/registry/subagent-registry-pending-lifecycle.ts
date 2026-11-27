@@ -7,6 +7,7 @@ import {
 } from "./subagent-lifecycle-events.js";
 import { getCurrentSubagentRunOwner } from "./subagent-registry-memory.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 
 const PENDING_LIFECYCLE_TERMINAL_TTL_MS = 5 * 60_000;
 
@@ -48,7 +49,7 @@ export function createPendingLifecycleScheduler(params: {
     expected: SubagentRunRecord,
   ) =>
     entry.execution.startedAt === expected.execution.startedAt &&
-    entry.pauseReason !== "sessions_yield" &&
+    !isSubagentPausedByYield(entry) &&
     entry.execution.outcome?.status !== "ok" &&
     (kind !== "error" || entry.endedReason !== SUBAGENT_ENDED_REASON_COMPLETE);
 
@@ -74,7 +75,7 @@ export function createPendingLifecycleScheduler(params: {
         const current = getCurrentSubagentRunOwner(params.runs, pending.expectedEntry);
         return (
           current !== undefined &&
-          current.pauseReason !== "sessions_yield" &&
+          !isSubagentPausedByYield(current) &&
           (publication
             ? current.endedReason === publication.endedReason &&
               isDeepStrictEqual(current.execution, publication.execution)

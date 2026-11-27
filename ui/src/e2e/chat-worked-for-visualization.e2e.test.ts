@@ -64,7 +64,8 @@ suite.define(() => {
             width: 640,
             height: 120,
           };
-          const inspect = (id: string) => [
+          const imageError = "Could not open the preview.";
+          const inspect = (id: string, error?: string) => [
             {
               role: "assistant",
               ...openAiAuthor,
@@ -77,8 +78,10 @@ suite.define(() => {
               role: "toolResult",
               toolCallId: id,
               toolName: "view_image",
-              isError: false,
-              content: [{ type: "text", text: "Inspected screenshot" }, image],
+              isError: error !== undefined,
+              content: error
+                ? [{ type: "text", text: error }]
+                : [{ type: "text", text: "Inspected screenshot" }, image],
             },
           ];
           const runCommand = (id: string, command: string) => [
@@ -108,6 +111,7 @@ suite.define(() => {
             ...runCommand("lint", "pnpm lint"),
             ...inspect("before"),
             ...runCommand("build", "pnpm ui:build"),
+            ...inspect("missing", imageError),
             ...inspect("after"),
             ...runCommand("check", "pnpm tsgo:ui"),
             {
@@ -143,10 +147,12 @@ suite.define(() => {
           });
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
           const inspectedImages = page.getByRole("button", { name: "Viewed image", exact: true });
+          const failedInspection = page.getByText("View image", { exact: true });
           if (source === "live") {
             await page.getByRole("button", { name: "Stop", exact: true }).waitFor();
             await page.getByText("Published the preview update.", { exact: true }).waitFor();
             expect(await page.locator(".chat-work-group").count()).toBe(0);
+            expect(await failedInspection.count()).toBe(0);
             const finalMessage = messages.at(-1)!;
             await gateway.setHistoryMessages(messages);
             await gateway.emitGatewayEvent("session.message", {
@@ -202,10 +208,16 @@ suite.define(() => {
               await captureProof(page, `tool-media-activity-${source}`);
             }
             expect(await inspectedImages.count()).toBe(0);
-            const commands = page.getByRole("button", { name: "Ran commands", exact: true });
+            expect(await failedInspection.count()).toBe(0);
+            const commands = page
+              .locator(".chat-activity-group__summary")
+              .filter({ hasText: /^Ran commands/ });
+            expect(await commands.count()).toBe(1);
             await commands.click();
             await inspectedImages.nth(1).waitFor();
             expect(await inspectedImages.count()).toBe(2);
+            await failedInspection.click();
+            await page.getByText(imageError, { exact: true }).waitFor();
             await inspectedImages.nth(1).click();
             await page.locator(".chat-activity-group__body img.chat-message-image").waitFor();
             expect(await page.locator(".chat-thread img.chat-message-image").count()).toBe(2);

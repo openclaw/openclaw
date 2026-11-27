@@ -449,6 +449,18 @@ repaired by `openclaw doctor --fix`.
 
 ### Parent-local inference connection recovery
 
+When a managed turn exceeds the local inference relay's 32 MiB request limit,
+OpenClaw preserves the failed turn and retires only its native thread binding.
+Your next message starts a new native thread using bounded history from the
+same OpenClaw conversation; the original transcript and native thread remain
+available. OpenClaw does not automatically replay the failed turn or its tools.
+Native-owned and supervised sessions retain their original binding instead.
+A current message or attachment that exceeds the limit on its own still needs
+to be made smaller.
+Restored historical images also consume their encoded byte size when selecting
+the bounded seed. A context engine's selected attachments must fit its rendered
+allowance before they can be injected into a native thread.
+
 When an ordinary managed turn ends with the exact `Codex parent-local inference
 transport failed` error, OpenClaw settles its recorded output before retiring
 that connection from future acquisitions. Retirement is skipped while sibling
@@ -730,6 +742,15 @@ only under fresh completion authority for the same requester session, lifecycle,
 and connection. Native-parent thread rotation can preserve those assignments;
 resetting the requester or changing the connection does not adopt them. Missing
 assignment metadata is not reconstructed from retired Tasks history.
+
+In Codex V1, `resume_agent` can find a worker even when `send_input` reports
+“Cannot verify this worker belongs to the current parent.” Changing the
+app-server address or credentials can give the same chat a new native parent
+thread. Check the parent's history and confirm what the worker finished,
+including any file changes or remote writes. If the outcome is unclear, don't
+resend the task. If the earlier work is settled and a different worker is
+acceptable, use `spawn_agent` with `fork_context: false` for the next task.
+Pass only the confirmed results it needs.
 
 For Codex V1 follow-ups, the parent binding keeps a successful submission receipt until OpenClaw
 records the matching turn as an assignment. This allows recovery after a yield or restart.

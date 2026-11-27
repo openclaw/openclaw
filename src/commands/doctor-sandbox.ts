@@ -28,6 +28,7 @@ import { createRetiredStateInspectionError } from "../infra/state-migrations.ret
 import { runCommandWithTimeout, runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
+import type { DoctorMaintenancePending } from "./doctor-maintenance-pending.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
 const SANDBOX_REGISTRY_FILES_CHECK_ID = "core/doctor/sandbox/registry-files";
@@ -299,6 +300,73 @@ async function handleMissingSandboxImage(
   return warning;
 }
 
+type EnabledSandboxBackend = NonNullable<ReturnType<typeof resolveEnabledSandboxBackend>>;
+
+/** The images {@link maybeRepairSandboxImages} inspects, with the bundled script that builds each. */
+function resolveSandboxImageTargets(enabled: EnabledSandboxBackend) {
+  const { sandbox, containerEngine } = enabled;
+  if (!containerEngine) {
+    return [];
+  }
+  const dockerImage = sandbox.docker?.image?.trim() || DEFAULT_SANDBOX_IMAGE;
+  const targets: Array<{
+    engineCommand: "docker" | "podman";
+    kind: string;
+    image: string;
+    buildScript?: string;
+  }> = [
+    {
+      engineCommand: containerEngine.command,
+      kind: "base",
+      image: dockerImage,
+      buildScript:
+        containerEngine.id !== "docker"
+          ? undefined
+          : dockerImage === DEFAULT_SANDBOX_COMMON_IMAGE
+            ? "scripts/sandbox-common-setup.sh"
+            : dockerImage === DEFAULT_SANDBOX_IMAGE
+              ? "scripts/sandbox-image-build.sh"
+              : undefined,
+    },
+  ];
+  if (sandbox.browser?.enabled && containerEngine.id === "docker") {
+    targets.push({
+      engineCommand: containerEngine.command,
+      kind: "browser",
+      image: sandbox.browser.image?.trim() || DEFAULT_SANDBOX_BROWSER_IMAGE,
+      buildScript: "scripts/sandbox-browser-setup.sh",
+    });
+  }
+  return targets;
+}
+
+/**
+ * Read-only: whether {@link maybeRepairSandboxImages} would build an image, i.e. a configured
+ * image with a bundled build script is missing from an available container engine. It
+ * inspects images through the engine CLI, as the repair does, and never builds.
+ */
+export async function checkSandboxImageRepairPending(
+  cfg: OpenClawConfig,
+): Promise<DoctorMaintenancePending> {
+  const enabled = resolveEnabledSandboxBackend(cfg);
+  const buildable = enabled
+    ? resolveSandboxImageTargets(enabled).filter((target) => target.buildScript)
+    : [];
+  if (!enabled?.containerEngine || buildable.length === 0) {
+    return "none";
+  }
+  if (!(await isContainerEngineAvailable(enabled.containerEngine.command))) {
+    return "none";
+  }
+  await validateSandboxContainerEngineTarget(enabled.containerEngine);
+  for (const target of buildable) {
+    if (!(await containerImageExists(target.engineCommand, target.image))) {
+      return "work";
+    }
+  }
+  return "none";
+}
+
 /**
  * Checks configured sandbox images and optionally runs bundled build scripts for missing defaults.
  *
@@ -347,41 +415,14 @@ export async function maybeRepairSandboxImages(
   }
   await validateSandboxContainerEngineTarget(containerEngine);
 
-  const dockerImage = sandbox.docker?.image?.trim() || DEFAULT_SANDBOX_IMAGE;
-  const baseWarning = await handleMissingSandboxImage(
-    {
-      engineCommand: containerEngine.command,
-      kind: "base",
-      image: dockerImage,
-      buildScript:
-        containerEngine.id !== "docker"
-          ? undefined
-          : dockerImage === DEFAULT_SANDBOX_COMMON_IMAGE
-            ? "scripts/sandbox-common-setup.sh"
-            : dockerImage === DEFAULT_SANDBOX_IMAGE
-              ? "scripts/sandbox-image-build.sh"
-              : undefined,
-    },
-    runtime,
-    prompter,
-  );
-  const warnings = baseWarning ? [baseWarning] : [];
-
-  if (sandbox.browser?.enabled && containerEngine.id === "docker") {
-    const browserWarning = await handleMissingSandboxImage(
-      {
-        engineCommand: containerEngine.command,
-        kind: "browser",
-        image: sandbox.browser.image?.trim() || DEFAULT_SANDBOX_BROWSER_IMAGE,
-        buildScript: "scripts/sandbox-browser-setup.sh",
-      },
-      runtime,
-      prompter,
-    );
-    if (browserWarning) {
-      warnings.push(browserWarning);
+  const warnings: string[] = [];
+  for (const target of resolveSandboxImageTargets(enabled)) {
+    const warning = await handleMissingSandboxImage(target, runtime, prompter);
+    if (warning) {
+      warnings.push(warning);
     }
-  } else if (sandbox.browser?.enabled) {
+  }
+  if (sandbox.browser?.enabled && containerEngine.id !== "docker") {
     note(
       "Podman sandbox selected. Browser sandbox health checks are skipped because browser sandboxing requires the Docker engine.",
       "Sandbox",
@@ -449,6 +490,15 @@ export function legacySandboxRegistryInspectionToRepairEffect(
     target: file.path,
     dryRunSafe: false,
   };
+}
+
+/** Read-only: whether {@link maybeRepairSandboxRegistryFiles} would archive a retired file. */
+export async function checkSandboxRegistryFilesPending(
+  prompter: Pick<DoctorPrompter, "shouldRepair">,
+): Promise<DoctorMaintenancePending> {
+  return prompter.shouldRepair && (await detectLegacySandboxRegistryFileIssues()).length > 0
+    ? "work"
+    : "none";
 }
 
 export async function maybeRepairSandboxRegistryFiles(

@@ -82,23 +82,14 @@ const unexpected = () => {
 let lifecycleSweeps = 0;
 const sweeper = createSubagentRegistrySweeper({
   runs: subagentRuns,
-  resumedRuns: new Set(),
   clearPendingLifecycleError: unexpected,
-  clearPendingLifecycleTimeout: unexpected,
   sweepPendingLifecycle: () => {
     lifecycleSweeps++;
   },
   completeSubagentRunWithRecovery: unexpected,
   startSubagentAnnounceCleanupFlow: unexpected,
-  completeCleanupBookkeeping: unexpected,
   resumeRequesterSettleWake: unexpected,
   resumePendingRequesterSettlements: () => false,
-  isCleanupOwnerCurrent: unexpected,
-  isTerminalTailActive: () => false,
-  sessionEffectsHostCurrent: unexpected,
-  shouldSuppressSessionEffects: unexpected,
-  shouldEmitEndedHookForRun: unexpected,
-  emitSubagentEndedHookForRun: unexpected,
   callGateway: unexpected,
   cleanupCollectorLaunchResources: unexpected,
   runContextEngineSubagentEnded: unexpected,

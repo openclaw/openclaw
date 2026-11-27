@@ -459,6 +459,39 @@ describe("CI timing sampler provenance", () => {
     expect(new URL(url, "https://api.github.com").searchParams.get("created")).toBe(
       `2026-08-21T12:00:00.000Z..${sampleNow}`,
     );
+  it("reports complete and incomplete parent generations without changing their contribution", () => {
+    const parentShardName = "agentic-control-plane-agent-chat";
+    const complete = splitTimingGeneration({
+      parentShardName,
+      configs: ["test/vitest/vitest.gateway-server.config.ts"],
+      stripes: [["a.test.ts"], ["b.test.ts"]],
+    });
+    const incomplete = splitTimingGeneration({
+      parentShardName,
+      configs: ["test/vitest/vitest.gateway-server.config.ts"],
+      stripes: [["a.test.ts"], ["b.test.ts"], ["c.test.ts"]],
+    });
+    const fixture = makeFixture({
+      jobs: [1, 2].map((id) =>
+        samplerJob(id * 10, id, {
+          completed_at: "2026-08-27T23:30:00Z",
+          log: [
+            compactLog(100 + (id - 1) * 10, complete.timingKeys[0]!),
+            compactLog(100 + (id - 1) * 10, complete.timingKeys[0]!),
+            compactLog(200 + (id - 1) * 10, complete.timingKeys[1]!),
+            compactLog(999, incomplete.timingKeys[0]!),
+            compactLog(400 + (id - 1) * 20, parentShardName),
+          ].join("\n"),
+        }),
+      ),
+    });
+    const result = invoke(fixture);
+    expect(readTimings(fixture).compactGroupSeconds.blacksmith[parentShardName]).toBe(410);
+    expect(result.stdout).toContain(`| 1 | blacksmith | ${complete.selectorKey}#generation-`);
+    expect(result.stdout).toContain("| 2/2 | 300 | 400 |");
+    expect(result.stdout).toContain("| 2/2 | 320 | 420 |");
+    expect(result.stdout.match(/\| 1\/3 \| 999 \| — \|/gu)).toHaveLength(2);
+  });
   it("counts qualified Boat main contributors through the sampler and preserves old prices", () => {
     const fixture = makeFixture({
       jobs: [1, 2].map((id) =>

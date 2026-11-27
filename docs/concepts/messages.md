@@ -224,7 +224,7 @@ still apply, and the current-prompt capability expires with its admitted turn.
 
 Silent maintenance turns suppress streamed text, attachments, locations, and interactive controls. Errors, actual voice messages, and system notices explicitly marked for delivery keep their normal delivery rules.
 
-The silent token `NO_REPLY` is reserved for sessions connected to external message channels. Only a completed final whose entire text is `NO_REPLY`, ignoring casing and surrounding whitespace, requests silence. It intentionally ends a turn without another reply, including after a cross-chat send, a reaction, group chatter, or a deliberate yield, even when the admitted turn normally requires a reply. Subagents, private completions, the Control UI, and other internal sessions still must return a result or continue unfinished work.
+The silent token `NO_REPLY` is reserved for sessions connected to external message channels. Only a completed final whose entire text is `NO_REPLY`, ignoring casing and surrounding whitespace, requests silence. It intentionally ends a turn without another reply, including after a cross-chat send, a reaction, group chatter, or a deliberate yield, even when the admitted turn normally requires a reply. Subagents, private completions, the Control UI, and other internal sessions still must return a result or continue unfinished work. A turn started by another session's `sessions_send` can also end with `NO_REPLY`, unless the target is a spawned child; a waiting sender then gets `status: "no_reply"`.
 
 Direct-message prompts omit silent-reply guidance. An exact `NO_REPLY` emitted by the model still follows this protocol; omitting the prompt guidance does not force an additional answer.
 

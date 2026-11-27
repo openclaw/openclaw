@@ -1,10 +1,19 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { canonicalizePath } from "openclaw/plugin-sdk/skill-workshop-host-runtime";
+import {
+  createMockPluginRegistry,
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  canonicalizePath,
+  recordWorkshopChange,
+} from "openclaw/plugin-sdk/skill-workshop-host-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as libraryModule from "./library.js";
+import { undoWorkshopReview, workshopReviewRunId } from "./review-undo.js";
 import { getWorkshopRuntime, setWorkshopRuntime } from "./runtime.js";
 import * as skillsRootModule from "./skills-root.js";
 import { useWorkshopPluginScope, workshopPluginConfig } from "./test-support.js";
@@ -81,6 +90,56 @@ async function createPatched() {
   await create("step 0");
   return patch("step 0", "step 1");
 }
+
+it.each(["later edit", "restore original", "recreate"] as const)(
+  "undoes a review patch only on the same skill after %s",
+  async (next) => {
+    const name = liveSkillName;
+    const file = "templates/checklist.txt";
+    const user = { config: {}, agentId: "main", actor: "user" as const };
+    const reviewRun = workshopReviewRunId("11111111-1111-4111-8111-111111111111");
+    const review = { ...user, actor: "review" as const, runId: reviewRun };
+    await lib.createWorkshopSkill(user, { name, content: skill(name, "Original instructions.") });
+    await lib.writeWorkshopSkillFile(user, {
+      name,
+      filePath: file,
+      content: "Original checklist.\n",
+    });
+    await lib.patchWorkshopSkill(review, {
+      name,
+      oldText: "Original instructions.",
+      newText: "Reviewed instructions.",
+    });
+    if (next !== "later edit") {
+      await lib.archiveWorkshopSkill(user, { name });
+      if (next === "recreate") {
+        await lib.createWorkshopSkill(user, { name, content: skill(name, "Later instructions.") });
+      } else {
+        await lib.restoreWorkshopSkill(user, { name });
+      }
+    } else {
+      await lib.patchWorkshopSkill(user, {
+        name,
+        oldText: "Reviewed instructions.",
+        newText: "Later instructions.",
+      });
+    }
+    await lib.writeWorkshopSkillFile(user, { name, filePath: file, content: "Later checklist.\n" });
+    const before = await lib.listWorkshopChanges("main", {});
+    const result = await run(() => undoWorkshopReview(user, { runId: reviewRun }));
+
+    if (next === "recreate") {
+      expect(await readLive()).toBe(skill(name, "Later instructions."));
+      expect((await view(file)).content).toBe("Later checklist.\n");
+      expect(result).toEqual({ status: "already-undone", changes: [] });
+      expect(await lib.listWorkshopChanges("main", {})).toEqual(before);
+    } else {
+      expect(await readLive()).toBe(skill(name, "Original instructions."));
+      expect((await view(file)).content).toBe("Original checklist.\n");
+      expect(result).toMatchObject({ status: "undone", changes: [{ action: "restore" }] });
+    }
+  },
+);
 
 it("reports unreadable skill files instead of returning an incomplete inventory", async () => {
   await seed("oversized", Buffer.alloc(1024 * 1024 + 1, "x"));
@@ -175,6 +234,38 @@ it("versions and restores legacy names, including undoing an undo and an archive
   });
   expect(await liveNames()).toEqual([name]);
 });
+
+it.each(["user", "review"] as const)(
+  "rechecks review membership after a queued same-name create by %s",
+  async (actor) => {
+    const name = liveSkillName;
+    const content = skill(name, "Deploy the service.");
+    const original = await lib.createWorkshopSkill({ ...ctx, actor: "review" }, { name, content });
+    await archive();
+    const user = { ...ctx, actor: "user" as const };
+    const [replacement, undo] = await Promise.allSettled([
+      lib.createWorkshopSkill({ ...ctx, actor }, { name, content }),
+      lib.archiveWorkshopSkill(
+        { ...user, undoReviewChange: { id: original.id, runId } },
+        { name, reason: "undo" },
+      ),
+    ]);
+    expect(replacement.status).toBe("fulfilled");
+    if (actor === "review") {
+      expect(undo).toMatchObject({ status: "fulfilled", value: { action: "archive" } });
+      expect(await liveNames()).not.toContain(name);
+    } else {
+      expect(undo).toMatchObject({
+        status: "rejected",
+        reason: expect.any(lib.WorkshopWriteError),
+      });
+      expect(await readLive()).toBe(content);
+      expect(await lib.listWorkshopChanges("main", { limit: 1 })).toMatchObject([
+        { action: "create", actor: "user" },
+      ]);
+    }
+  },
+);
 
 it("undoes an archived version restore without changing the default or losing its redo", async () => {
   const name = liveSkillName;
@@ -392,6 +483,32 @@ it("retains the original live copy when restore publication and rollback both fa
   );
 });
 
+it("keeps the archive receipt and its Undo when plugin keyed storage is unavailable", async () => {
+  await create("before");
+  await patch("before", "after");
+  const runtime = run(() => getWorkshopRuntime());
+  run(() =>
+    setWorkshopRuntime({
+      ...runtime,
+      state: {
+        ...runtime.state,
+        openKeyedStoreV2: () => {
+          throw new Error("Plugin keyed storage is unavailable.");
+        },
+      },
+    }),
+  );
+  try {
+    const archived = await archive();
+    expect(archived.versionId).toEqual(expect.any(String));
+    expect((await lib.listWorkshopChanges("main"))[0]?.id).toBe(archived.id);
+    await lib.restoreWorkshopSkill(ctx, { name: liveSkillName, versionId: archived.versionId });
+    expect(await readLive()).toContain("after");
+  } finally {
+    run(() => setWorkshopRuntime(runtime));
+  }
+});
+
 describe("archiveUnusedWorkshopSkills", () => {
   const DAY_MS = 24 * 60 * 60_000;
   function agentConfig(runtime = "openclaw", sandbox?: "non-main"): OpenClawConfig {
@@ -455,6 +572,133 @@ describe("archiveUnusedWorkshopSkills", () => {
     expect(await liveNames()).toEqual(["scheduled", "used"]);
     await lib.restoreWorkshopSkill({ config, agentId: "main", actor: "user" }, { name: "stale" });
     expect(await liveNames()).toEqual(["scheduled", "stale", "used"]);
+  });
+
+  it.each(["before", "during"] as const)(
+    "keeps a foreground support edit made %s the archive pass",
+    async (when) => {
+      const first = "apricot-a";
+      const second = "apricot-b";
+      const filePath = "references/note.md";
+      await createNamed(first);
+      await createNamed(second);
+      const edit = (content: string) =>
+        lib.writeWorkshopSkillFile(ctx, { name: second, filePath, content });
+      await edit("original\n");
+      const cutoff = Date.now() + 1;
+      await vi.waitFor(() => expect(Date.now()).toBeGreaterThan(cutoff + 20));
+
+      if (when === "before") {
+        await edit("updated\n");
+      }
+      let firstEvent = true;
+      const handler = vi.fn(async (_event: unknown) => {
+        if (firstEvent && when === "during") {
+          firstEvent = false;
+          await edit("updated\n");
+        }
+      });
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([{ hookName: "skill_changed", handler }]),
+      );
+      try {
+        const changes = await archiveUnused(config, cutoff + 30 * DAY_MS);
+        expect(handler.mock.calls[0]?.[0]).toMatchObject({
+          action: "removed",
+          before: { skillKey: first },
+        });
+        expect(changes.map(({ skillName }) => skillName)).toEqual([first]);
+        expect(await liveNames()).toEqual([second]);
+        expect((await lib.viewWorkshopSkill(config, "main", second, filePath)).content).toBe(
+          "updated\n",
+        );
+      } finally {
+        resetGlobalHookRunner();
+      }
+    },
+  );
+
+  it("keeps a recent nested removal after its change leaves the agent feed", async () => {
+    const removedPath = "references/nested/removed.md";
+    await createNamed(liveSkillName);
+    await write("references/kept.md", "keep this\n");
+    await write(removedPath, "removed\n");
+    const cutoff = Date.now() + 1;
+    // The real filesystem clock must cross the cutoff before the unlink.
+    await vi.waitFor(() => expect(Date.now()).toBeGreaterThan(cutoff + 20));
+    const removed = await lib.removeWorkshopSkillFile(ctx, {
+      name: liveSkillName,
+      filePath: removedPath,
+    });
+    const now = cutoff + 30 * DAY_MS;
+    const recordPeerChange = (index: number) =>
+      recordWorkshopChange({
+        id: `peer-${index}`,
+        agentId: "main",
+        skillName: "peer",
+        action: "patch",
+        actor: "agent",
+        summary: "updated peer",
+        createdAtMs: removed.createdAtMs + index,
+      });
+    for (let i = 1; i <= 499; i++) {
+      await recordPeerChange(i);
+    }
+    const feed = () => lib.listWorkshopChanges("main", { limit: 500 });
+    expect((await feed()).at(-1)?.id).toBe(removed.id);
+    expect(await archiveUnused(config, now)).toEqual([]);
+
+    await recordPeerChange(500);
+    expect((await feed()).map(({ id }) => id)).not.toContain(removed.id);
+    expect(await archiveUnused(config, now)).toEqual([]);
+    expect(await liveNames()).toEqual([liveSkillName]);
+    expect(await view("references/kept.md")).toMatchObject({
+      files: ["SKILL.md", "references/kept.md"],
+      content: "keep this\n",
+    });
+  });
+
+  it("distinguishes committed and refused removals in a legacy store with an evicted change", async () => {
+    const filePath = "references/nested/guide.md";
+    const names = ["committed", "refused"];
+    for (const name of names) {
+      await seed(name, skill(name, "do it"));
+      await fs.mkdir(skillPath(name, "references", "nested"), { recursive: true });
+      await fs.writeFile(skillPath(name, filePath), "guide\n");
+    }
+    const cutoff = Date.now() + 1;
+    await vi.waitFor(() => expect(Date.now()).toBeGreaterThan(cutoff + 20));
+    for (const name of names) {
+      // Save the real pre-mutation version without creating an activity row.
+      await refuses(
+        lib.removeWorkshopSkillFile(revokedAfter(2), { name, filePath }),
+        "Learning is off.",
+      );
+    }
+    // These are the two on-disk outcomes an older writer can leave after feed eviction.
+    await fs.unlink(skillPath("committed", filePath));
+    expect(await lib.listWorkshopChanges("main")).toEqual([]);
+    const changes = await archiveUnused(config, cutoff + 30 * DAY_MS);
+    expect(changes.map(({ skillName }) => skillName)).toEqual(["refused"]);
+    expect(await liveNames()).toEqual(["committed"]);
+  });
+
+  it("archives a stale skill after a removal was revoked with its snapshot already saved", async () => {
+    const filePath = "references/nested/kept.md";
+    await createNamed(liveSkillName);
+    await write(filePath, "keep this\n");
+    const cutoff = Date.now() + 1;
+    await vi.waitFor(() => expect(Date.now()).toBeGreaterThan(cutoff + 20));
+    await refuses(
+      lib.removeWorkshopSkillFile(revokedAfter(2), { name: liveSkillName, filePath }),
+      "Learning is off.",
+    );
+    const [archived] = await versions();
+    expect(archived?.versions[0]?.action).toBe("remove_file");
+    expect(archived?.versions[0]?.createdAtMs).toBeGreaterThan(cutoff);
+    expect((await view(filePath)).content).toBe("keep this\n");
+    const changes = await archiveUnused(config, cutoff + 30 * DAY_MS);
+    expect(changes.map(({ skillName }) => skillName)).toEqual([liveSkillName]);
   });
 
   it.each(["runtime", "sandbox", "tracking", "learning"] as const)(

@@ -110,21 +110,41 @@ export function installMessageToolTerminalHook(
   const finalReplyInputs = new Set<object>();
   // Per input: a steered or queued input must deliver its own reply before its yield ends it.
   const deliveredReplyInputs = new WeakSet<object>();
+  // Inputs that ran a tool and have no final reply yet. A final reply completes its own
+  // input first, else the oldest open one; the run ends on it only when none stay open.
+  const openInputs = new Set<object>();
+  const answeredInputs = new WeakSet<object>();
+  const completeInput = (input: object): boolean => {
+    const answered = openInputs.has(input) ? input : openInputs.values().next().value;
+    if (answered) {
+      openInputs.delete(answered);
+      answeredInputs.add(answered);
+    }
+    return openInputs.size === 0;
+  };
   const nestedCompletion = createSourceReplyBatchCompletion();
   const previousCompletion = getInternalToolTurnCompletion(params.agent);
   // Let sibling tools settle, then finish without another model request.
   setInternalToolTurnCompletion(params.agent, (context) => {
+    const directFinal = finalReplyInputs.has(context.inputScope);
     const completed = nestedCompletion.complete(
       context.toolResults,
-      finalReplyInputs.has(context.inputScope),
+      directFinal,
       context.inputScope,
     );
     finalReplyInputs.clear();
-    return previousCompletion?.(context) === true || completed;
+    // A nested final send ends the run under the same open-input rule as a direct one.
+    return (
+      previousCompletion?.(context) === true ||
+      (completed && (directFinal || completeInput(context.inputScope)))
+    );
   });
   const previousAfterToolCall = params.agent.afterToolCall?.bind(params.agent);
   params.agent.afterToolCall = async (context, signal) => {
     const inputScope = getAgentToolInputScope(context);
+    if (inputScope && !answeredInputs.has(inputScope)) {
+      openInputs.add(inputScope);
+    }
     // Capture private cell identity before presentation can replace or reject its result.
     nestedCompletion.observe(context.result);
     const toolName = context.toolCall.name;
@@ -158,6 +178,7 @@ export function installMessageToolTerminalHook(
     // Presentation hooks cannot revoke delivery or finality already committed by the tool.
     let delivered = isDelivered();
     let hookResult: AfterToolCallResult | undefined;
+    let endsRun = false;
     try {
       hookResult = await previousAfterToolCall?.(context, signal);
     } finally {
@@ -166,7 +187,8 @@ export function installMessageToolTerminalHook(
         if (inputScope) {
           deliveredReplyInputs.add(inputScope);
         }
-        if (final && inputScope) {
+        endsRun = final && (!inputScope || completeInput(inputScope));
+        if (endsRun && inputScope) {
           finalReplyInputs.add(inputScope);
         }
         params.onDeliveredSourceReply?.();
@@ -181,8 +203,6 @@ export function installMessageToolTerminalHook(
     if (endsAfterPendingYield) {
       finalReplyInputs.add(inputScope);
     }
-    return (delivered && final) || endsAfterPendingYield
-      ? { ...hookResult, terminate: true }
-      : hookResult;
+    return endsRun || endsAfterPendingYield ? { ...hookResult, terminate: true } : hookResult;
   };
 }

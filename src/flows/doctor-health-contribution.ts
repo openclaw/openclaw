@@ -1,3 +1,4 @@
+import type { DoctorMaintenancePending } from "../commands/doctor-maintenance-pending.js";
 import { normalizeUpdatePostInstallDoctorWarnings } from "../infra/update-doctor-result.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type {
@@ -15,16 +16,49 @@ import type {
   HealthRepairEffect,
 } from "./health-checks.js";
 
+/** Repairs that only describe effects; the contribution's own run performs them. */
+const legacyOwnedRepairs = new WeakSet<object>();
+
 export function legacyOwnedRepair(
   collectEffects: (ctx: HealthRepairContext) => Promise<readonly HealthRepairEffect[]>,
   reason: string,
 ): NonNullable<HealthCheck["repair"]> {
-  return async (ctx) => {
+  const repair: NonNullable<HealthCheck["repair"]> = async (ctx) => {
     const effects = await collectEffects(ctx);
     return ctx.dryRun === true
       ? { status: "repaired", changes: [], effects }
       : { status: "skipped", reason, changes: [], effects };
   };
+  legacyOwnedRepairs.add(repair);
+  return repair;
+}
+
+/**
+ * Read-only: `runDoctorHealthRepairs` repairs a check only after its detect reports a
+ * finding, so a run over these checks has work exactly when a check it can repair has one.
+ * Checks without a repair, or whose repair only describes another owner's work, cannot write,
+ * and a dry run writes nothing.
+ */
+export async function checkDoctorHealthRepairsPending(
+  context: HealthRepairContext,
+  checks: readonly DoctorHealthCheck[],
+): Promise<DoctorMaintenancePending> {
+  if (context.dryRun === true) {
+    return "none";
+  }
+  for (const check of checks) {
+    const ownRepair: unknown = Object.getOwnPropertyDescriptor(check, "repair")?.value;
+    if (
+      check.repair === undefined ||
+      (typeof ownRepair === "function" && legacyOwnedRepairs.has(ownRepair))
+    ) {
+      continue;
+    }
+    if ((await check.detect(context)).length > 0) {
+      return "work";
+    }
+  }
+  return "none";
 }
 
 type DoctorContributionOptions = {
@@ -32,8 +66,26 @@ type DoctorContributionOptions = {
   healthChecks?: DoctorContributionHealthCheck | readonly DoctorContributionHealthCheck[];
   required?: true;
   updateWork?: DoctorHealthContribution["updateWork"];
+  pending?: DoctorHealthContribution["pending"];
   run?: DoctorHealthContribution["run"];
 };
+
+/** Runs one core check's detect and repair; it has work exactly when that repair would run. */
+export function coreHealthContribution(
+  checkId: string,
+): Pick<DoctorHealthContribution, "run" | "pending"> {
+  return {
+    async run(ctx) {
+      const { runCoreContributionHealth } = await import("./doctor-health-contribution-core.js");
+      await runCoreContributionHealth(ctx, [checkId]);
+    },
+    async pending(ctx) {
+      const { checkCoreContributionRepairsPending } =
+        await import("./doctor-health-contribution-core.js");
+      return checkCoreContributionRepairsPending(ctx, [checkId]);
+    },
+  };
+}
 
 export function createDoctorHealthContribution(
   id: string,
@@ -63,6 +115,12 @@ export function createDoctorHealthContribution(
   if (params.run === undefined && healthChecks.length === 0) {
     throw new Error(`doctor contribution ${id} must define run or healthChecks`);
   }
+  const pending =
+    params.pending ??
+    (params.run === undefined
+      ? (ctx: DoctorHealthFlowContext) =>
+          checkDoctorHealthRepairsPending(createDefaultRunContext(ctx), healthChecks)
+      : undefined);
   return {
     id,
     label,
@@ -70,24 +128,14 @@ export function createDoctorHealthContribution(
     healthCheckIds,
     ...(params.required ? { required: true as const } : {}),
     ...(params.updateWork ? { updateWork: params.updateWork } : {}),
+    ...(pending ? { pending } : {}),
     run:
       params.run ??
       (async (ctx) => {
         const { runDoctorHealthRepairs } = await import("./doctor-repair-flow.js");
-        const workspaceDir = resolveDoctorWorkspaceDir(ctx.cfg, ctx.env);
         const dryRun = !ctx.prompter.shouldRepair;
         const configBeforeRepair = JSON.stringify(ctx.cfg);
-        const context: HealthRepairContext & DoctorHealthCheckContext = {
-          mode: "fix",
-          runtime: ctx.runtime,
-          cfg: ctx.cfg,
-          env: ctx.env,
-          cwd: workspaceDir,
-          configPath: ctx.configPath,
-          dryRun,
-          allowExecSecretRefs: ctx.options.allowExec === true,
-          agentDatabaseRefusals: ctx.agentDatabaseRefusals,
-        };
+        const context = createDefaultRunContext(ctx);
         const result = await runDoctorHealthRepairs(context, {
           checks: healthChecks,
           dryRun,
@@ -115,6 +163,22 @@ export function createDoctorHealthContribution(
           }
         }
       }),
+  };
+}
+
+function createDefaultRunContext(
+  ctx: DoctorHealthFlowContext,
+): HealthRepairContext & DoctorHealthCheckContext {
+  return {
+    mode: "fix",
+    runtime: ctx.runtime,
+    cfg: ctx.cfg,
+    env: ctx.env,
+    cwd: resolveDoctorWorkspaceDir(ctx.cfg, ctx.env),
+    configPath: ctx.configPath,
+    dryRun: !ctx.prompter.shouldRepair,
+    allowExecSecretRefs: ctx.options.allowExec === true,
+    agentDatabaseRefusals: ctx.agentDatabaseRefusals,
   };
 }
 

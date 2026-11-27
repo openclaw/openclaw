@@ -197,6 +197,21 @@ it.each(["unchanged", "replaced", "deleted"])(
 );
 
 describe("config read producer receipts", () => {
+  it("runs untracked producers without enumerating the environment", () => {
+    const ownKeys = vi.fn(Reflect.ownKeys);
+    const env = new Proxy<NodeJS.ProcessEnv>({}, { ownKeys });
+    expect(captureConfigReadEnvMutation(env, () => (env.KEY = "applied"))).toBe("applied");
+    const error = new Error("producer failed");
+    expect(() =>
+      captureConfigReadEnvMutation(env, () => {
+        env.KEY = "partial";
+        throw error;
+      }),
+    ).toThrow(error);
+    expect(env.KEY).toBe("partial");
+    expect(ownKeys).not.toHaveBeenCalled();
+  });
+
   it.skipIf(process.platform !== "win32").each(["unchanged", "replaced", "deleted"])(
     "restores native Windows env ownership without taking foreign changes (owned=%s)",
     async (change) => {

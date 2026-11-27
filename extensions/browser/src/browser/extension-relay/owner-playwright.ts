@@ -40,6 +40,7 @@ export async function connectRelayBrowser(
       timeout: 5_000,
       headers: {},
       preparedTransport: transport,
+      noDefaults: true,
     });
     try {
       if (

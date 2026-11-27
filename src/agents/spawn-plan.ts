@@ -257,7 +257,7 @@ export async function prepareSpawnThreadBinding(params: {
   };
 }
 
-export function resolveSpawnAdmission(params: {
+type SpawnAdmissionParams = {
   cfg: OpenClawConfig;
   inheritedToolPolicySource?: "sender";
   enabled?: boolean;
@@ -275,7 +275,9 @@ export function resolveSpawnAdmission(params: {
   additionalActiveChildren?: number;
   callerDepth?: number;
   countActiveRuns?: typeof countActiveRunsForSession;
-}):
+};
+
+type SpawnAdmissionResult =
   | {
       ok: true;
       maxSpawnDepth?: number;
@@ -285,7 +287,9 @@ export function resolveSpawnAdmission(params: {
         subagentControlScope: "children" | "none";
       };
     }
-  | { ok: false; governingCap?: ChildAdmissionCap; error: string } {
+  | { ok: false; governingCap?: ChildAdmissionCap; error: string };
+
+export function resolveSpawnAdmission(params: SpawnAdmissionParams): SpawnAdmissionResult {
   const requesterPolicyError = resolveSenderRestrictedSpawnError(params);
   if (requesterPolicyError) {
     return { ok: false, error: requesterPolicyError };
@@ -301,10 +305,38 @@ export function resolveSpawnAdmission(params: {
     });
   const maxSpawnDepth =
     params.cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
+  const childAdmission = resolveSpawnCapacity(params, callerDepth, maxSpawnDepth);
+  if (!childAdmission.ok) {
+    return childAdmission;
+  }
+  const targetPolicy = resolveRequesterSpawnTargetPolicy(params);
+  if (!targetPolicy.ok) {
+    return targetPolicy;
+  }
+  const capabilities = resolveSubagentCapabilities({
+    depth: callerDepth + 1,
+    maxSpawnDepth,
+  });
+  return {
+    ok: true,
+    maxSpawnDepth,
+    childSessionPatch: {
+      spawnDepth: capabilities.depth,
+      subagentRole: capabilities.role === "main" ? null : capabilities.role,
+      subagentControlScope: capabilities.controlScope,
+    },
+  };
+}
+
+function resolveSpawnCapacity(
+  params: SpawnAdmissionParams,
+  callerDepth: number,
+  maxSpawnDepth: number,
+) {
   const collector = params.collector;
   // Build each mode's params in its own branch so collector counts can never
   // pair with the announce cap (or vice versa) through fallback chaining.
-  const childAdmission = collector
+  return collector
     ? resolveChildAdmission({
         callerDepth,
         maxSpawnDepth,
@@ -327,25 +359,42 @@ export function resolveSpawnAdmission(params: {
           params.cfg.agents?.defaults?.subagents?.maxChildrenPerAgent ??
           DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT,
       });
-  if (!childAdmission.ok) {
-    return childAdmission;
-  }
-  const targetPolicy = resolveRequesterSpawnTargetPolicy(params);
-  if (!targetPolicy.ok) {
-    return targetPolicy;
-  }
-  const capabilities = resolveSubagentCapabilities({
-    depth: callerDepth + 1,
-    maxSpawnDepth,
-  });
-  return {
-    ok: true,
-    maxSpawnDepth,
-    childSessionPatch: {
-      spawnDepth: capabilities.depth,
-      subagentRole: capabilities.role === "main" ? null : capabilities.role,
-      subagentControlScope: capabilities.controlScope,
-    },
+}
+
+/** Retain admitted policy while pending launches refresh only live capacity. */
+export function createSpawnAdmission(
+  params: Omit<SpawnAdmissionParams, "collector" | "additionalActiveChildren"> & {
+    readCollector?: () => SpawnAdmissionParams["collector"];
+    countAdditionalActiveChildren?: (pendingChildSessionKeys?: ReadonlySet<string>) => number;
+  },
+) {
+  let admitted: Extract<SpawnAdmissionResult, { ok: true }> | undefined;
+  return (
+    pendingChildren = 0,
+    pendingChildSessionKeys?: ReadonlySet<string>,
+  ): SpawnAdmissionResult => {
+    const current = {
+      ...params,
+      collector: params.readCollector?.(),
+      additionalActiveChildren:
+        pendingChildren + (params.countAdditionalActiveChildren?.(pendingChildSessionKeys) ?? 0),
+    };
+    if (!admitted) {
+      const result = resolveSpawnAdmission(current);
+      if (result.ok) {
+        admitted = result;
+      }
+      return result;
+    }
+    if (!admitted.childSessionPatch || admitted.maxSpawnDepth === undefined) {
+      return admitted;
+    }
+    const capacity = resolveSpawnCapacity(
+      current,
+      admitted.childSessionPatch.spawnDepth - 1,
+      admitted.maxSpawnDepth,
+    );
+    return capacity.ok ? admitted : capacity;
   };
 }
 

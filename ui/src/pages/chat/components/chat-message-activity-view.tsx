@@ -18,7 +18,10 @@ import {
   describeToolGroup,
 } from "../../../lib/chat/tool-call-grouping.ts";
 import { resolveToolCallInput } from "../../../lib/chat/tool-call-input.ts";
-import { resolveToolCardOutcome } from "../../../lib/chat/tool-cards.ts";
+import {
+  projectToolCardActivityOutcome,
+  resolveToolCardOutcome,
+} from "../../../lib/chat/tool-cards.ts";
 import { resolveToolDisplayIdentity } from "../../../lib/chat/tool-display-identity.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { ownSessionLaunchCalls, readSubagentCancellation } from "../chat-spawned-subagent.ts";
@@ -114,12 +117,7 @@ function prepareActivityGroup(
           title: resolveToolDisplayIdentity(call.name).label,
           kind: "tool",
           phase: card.completed ? "end" : "start",
-          status:
-            outcome === "succeeded"
-              ? "completed"
-              : outcome === "unrecorded" || outcome === "unknown"
-                ? undefined
-                : outcome,
+          ...projectToolCardActivityOutcome(outcome),
         };
         activityKeys.set(
           item,
@@ -239,7 +237,7 @@ function prepareActivityGroup(
   ) {
     return undefined;
   }
-  // A step whose only visible activity is its own outcome keeps its direct row.
+  // An isolated step keeps its direct row, except for image inspections.
   const [step] = cardGroups;
   const stepActivity = step ? preparedByCard.get(step.card) : undefined;
   const stepCall = step && unwrapToolCallForDisplay(step.card);
@@ -254,6 +252,7 @@ function prepareActivityGroup(
       approvalReviews.length === 0 &&
       cardGroups.length === 1 &&
       step !== undefined &&
+      stepCall?.name.trim().toLowerCase() !== "view_image" &&
       (visibleActivity.length === 0 ||
         ((step.children.length > 0 || stepInput?.kind !== "edit" || Boolean(stepInput.path)) &&
           visibleCalls.size === 1 &&

@@ -24,9 +24,9 @@ import {
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { button as actionButton } from "./cloud-worker-snapshots-dom.test-support.ts";
 import { CloudWorkersPage } from "./cloud-workers-page.tsx";
 import {
+  button as actionButton,
   change,
   click,
   configSnapshot,
