@@ -131,7 +131,12 @@ it.each([
       expect(
         hasModule(
           startup.modules,
-          ...postgresAssets.map((file) => path.basename(file).replace(/\.mjs$/u, ".ts")),
+          ...postgresAssets.map((file) =>
+            path
+              .basename(file)
+              .replace(/^worker-chunk-/u, "")
+              .replace(/\.mjs$/u, ".ts"),
+          ),
         ),
       ).toBe(false);
       // Real SQLite operations below must remain usable with PostgreSQL payloads absent.
