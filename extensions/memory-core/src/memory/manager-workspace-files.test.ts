@@ -178,6 +178,27 @@ describe("Gateway index over Harness workspace files", () => {
     },
   );
 
+  it("keeps duplicate inspected paths clean and retires only absent entries after indexing", async () => {
+    const { files, harness } = await registerHarness();
+    await write(harness, "memory/keep.md", "alpha unchanged.");
+    await write(harness, "memory/gone.md", "obsolete quasar.");
+    const { cfg, manager: initial } = await createIndexedManager();
+    await initial.close();
+    await fs.unlink(path.join(harness, "memory/gone.md"));
+    await write(harness, "memory/new.md", "new pulsar.");
+    const keep = path.join(fixture.paths.memory, "keep.md");
+    const fresh = path.join(fixture.paths.memory, "new.md");
+    vi.spyOn(files, "listFiles").mockResolvedValue([keep, fresh, keep]);
+    const reads = vi.spyOn(files, "readForIndexing");
+
+    const manager = await fixture.getFreshManager(cfg, "cli", true);
+    await manager.sync({ reason: "cli" });
+
+    expect(reads.mock.calls.map(([file]) => file)).toEqual([fresh]);
+    expect(await search(manager, "quasar")).toEqual([]);
+    expect((await search(manager, "pulsar"))[0]?.path).toBe("memory/new.md");
+  });
+
   it("finds a new Harness note on the next CLI search of a populated index", async () => {
     const { harness } = await registerHarness();
     const cfg = createConfig();

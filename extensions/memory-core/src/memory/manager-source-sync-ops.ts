@@ -100,7 +100,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
   private async deleteStaleSourceFiles(
     source: MemorySource,
     rows: MemorySourceFileStateRow[],
-    activePaths: Set<string> | null,
+    activePaths?: Set<string> | null,
   ): Promise<void> {
     if (activePaths === null) {
       return;
@@ -108,7 +108,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
     const yieldAfterRow = createSourceSyncYield(rows.length);
     for (const row of rows) {
       try {
-        if (!activePaths.has(row.path)) {
+        if (!activePaths?.has(row.path)) {
           await this.deleteIndexedFile(row.path, source, row.hash);
         }
       } finally {
@@ -137,11 +137,10 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
       batch: this.batch.enabled,
       concurrency: this.getIndexConcurrency(),
     });
-    const existingRows = await this.database.readSourceState({
-      source: "memory",
-    });
-    const existingByPath = new Map(existingRows.map((row) => [row.path, row]));
-    const activePaths = new Set(fileEntries.map((entry) => entry.path));
+    const existingByPath = new Map<string, MemorySourceFileStateRow>();
+    for (const row of await this.database.readSourceState({ source: "memory" })) {
+      existingByPath.set(row.path, row);
+    }
     if (params.progress) {
       params.progress.total += fileEntries.length;
       params.progress.report({
@@ -150,8 +149,6 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
         label: this.batch.enabled ? "Indexing memory files (batch)..." : "Indexing memory files…",
       });
     }
-
-    const deleteStaleRows = () => this.deleteStaleSourceFiles("memory", existingRows, activePaths);
 
     const indexItems: MemoryIndexWorkItem[] = [];
     for (const entry of fileEntries) {
@@ -167,6 +164,13 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
       }
       indexItems.push({ entry, source: "memory" });
     }
+    // Different host entries can report the same path. Classify all of them against
+    // the original snapshot before retaining only the stale rows for finalization.
+    for (const entry of fileEntries) {
+      existingByPath.delete(entry.path);
+    }
+    const staleRows = [...existingByPath.values()];
+    const deleteStaleRows = () => this.deleteStaleSourceFiles("memory", staleRows);
     if (this.batch.enabled) {
       if (params.deferIndex) {
         return { indexItems, finalize: deleteStaleRows };
