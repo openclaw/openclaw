@@ -12,6 +12,7 @@ import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { stop as stopEsbuild } from "esbuild";
 import { initializeGatewayResourceProfile } from "../../src/infra/gateway-resource-profile.js";
+import { clearNodeSqliteKyselyCacheForDatabase } from "../../src/infra/kysely-sync.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../../src/infra/runtime-process-url.js";
 import { claimsSharedHostSlot, createHostedWorker } from "../../src/infra/shared-worker-host.js";
 import { getTrackedWorkerPoolSnapshot } from "../../src/infra/worker-cpu.js";
@@ -21,6 +22,7 @@ import {
   closeDefaultRetainedNativeWorkerSource,
 } from "../../src/infra/worker-native-lifecycle.js";
 import { drainGlobalSingletonLifecycleState } from "../../src/shared/global-singleton.js";
+import { writeConfigMachineStateInDatabase } from "../../src/state/config-machine-state-write.js";
 import { createStateReadPool } from "../../src/state/openclaw-state-read-pool.js";
 import type { OpenClawStateReadReply } from "../../src/state/openclaw-state-read.types.js";
 
@@ -32,10 +34,16 @@ assert(
 const root = mkdtempSync(path.join(tmpdir(), "openclaw-reader-"));
 const databasePath = path.join(root, "state.sqlite");
 const db = new DatabaseSync(databasePath);
-db.exec(
-  "CREATE TABLE config_machine_state(state_key TEXT PRIMARY KEY, value_json TEXT, updated_at_ms INTEGER); INSERT INTO config_machine_state VALUES ('nodeHost.config', '1', 1)",
-);
-db.close();
+let updatedAtMs: number;
+try {
+  db.exec(
+    "CREATE TABLE config_machine_state(state_key TEXT PRIMARY KEY, value_json TEXT, updated_at_ms INTEGER)",
+  );
+  updatedAtMs = writeConfigMachineStateInDatabase(db, "nodeHost.config", 1);
+} finally {
+  clearNodeSqliteKyselyCacheForDatabase(db);
+  db.close();
+}
 const request = {
   databasePath,
   location: databasePath,
@@ -44,7 +52,12 @@ const request = {
   checkFreshAdmission: false,
 };
 function check(reply: OpenClawStateReadReply) {
-  assert(reply.ok && reply.type === "nodeHost.config" && reply.row?.updated_at_ms === 1);
+  assert(
+    reply.ok &&
+      reply.type === "nodeHost.config" &&
+      reply.row?.updated_at_ms === updatedAtMs &&
+      reply.row.value_json === "1",
+  );
 }
 function meter() {
   const cpu = process.cpuUsage();
