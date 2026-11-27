@@ -302,6 +302,44 @@ it("counts canonical auth sinks and transitional generic sinks without file exem
   );
 });
 
+it("keeps relocated auth cleanup behind its exclusive migration entry and bounded sinks", () => {
+  const cleanup = "src/infra/state-migrations.shared-auth-authorization.ts";
+  const migration = "src/infra/state-migrations.shared-auth-store.ts";
+  const reject = allowedGraph({
+    [cleanup]: `
+      export function cleanupSharedAuthSource() {
+        db.updateTable('auth_profile_store');
+        db.deleteFrom('auth_profile_store');
+      }
+    `,
+    [migration]: `
+      import { cleanupSharedAuthSource } from './state-migrations.shared-auth-authorization.js';
+      export function migrateSharedAuthStore() {
+        return withLegacyMigrationStateLock({ run: () => cleanupSharedAuthSource() });
+      }
+    `,
+  });
+  reject(
+    migration,
+    (original) => original.replace("migrateSharedAuthStore", "unownedRepair"),
+    `from ${migration}:unownedRepair`,
+  );
+  reject(
+    "src/new-writer.worker.ts",
+    `import { cleanupSharedAuthSource } from './infra/state-migrations.shared-auth-authorization.js';
+      cleanupSharedAuthSource();`,
+  );
+  reject(
+    cleanup,
+    (original) =>
+      original.replace(
+        "db.deleteFrom('auth_profile_store');",
+        "db.deleteFrom('auth_profile_store'); db.deleteFrom('auth_profile_store');",
+      ),
+    "unreviewed auth_profile_store writer",
+  );
+});
+
 it("limits offline raw machine-state migration exceptions to their reviewed statements", () => {
   const file = "src/state/openclaw-state-db-schema-v12-foldin.ts";
   const statement = "INSERT INTO config_machine_state (state_key) VALUES (?)";

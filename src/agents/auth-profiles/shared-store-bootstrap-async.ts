@@ -131,11 +131,16 @@ export async function prepareFreshSharedAuthStoreWriteAsync(params: {
             },
           );
           observeSqliteWorkerCommittedFacts(admission, ({ facts }) => {
-            if (!isRecord(facts) || typeof facts.relocated !== "boolean") {
+            if (
+              !isRecord(facts) ||
+              !isRecord(facts.ownership) ||
+              typeof facts.relocated !== "boolean"
+            ) {
               throw new Error("Shared auth bootstrap returned an invalid commit receipt");
             }
+            const { authorizationOrigin, ...location } = facts.ownership;
             acknowledged = {
-              ownership: parseSharedAuthStoreOwnership(facts.ownership),
+              ownership: parseSharedAuthStoreOwnership(location, authorizationOrigin),
               relocated: facts.relocated,
             };
           });

@@ -30,6 +30,7 @@ const sessionArtifacts = "src/config/sessions/session-accessor.sqlite-node-artif
 const sessionEntries = "src/config/sessions/session-accessor.sqlite-entry-store.ts";
 const authCells = "src/agents/auth-profiles/sqlite-json-write.ts";
 const authRelocation = "src/infra/state-migrations.shared-auth-store.ts";
+const authRelocationCleanup = "src/infra/state-migrations.shared-auth-authorization.ts";
 const machineState = "src/state/config-machine-state-write.ts";
 const credentialAuthority = "src/state/user-model-account-authority.ts";
 const credentialCustody = "src/agents/auth-profiles/credential-write-custody.ts";
@@ -723,6 +724,11 @@ const callers = new Map<string, readonly string[]>([
 
 // Doctor's caller owns exclusive offline maintenance; no blanket commands/ exemption.
 const exclusiveMaintenanceCallers = new Map([
+  // The extracted cleanup still runs only inside withLegacyMigrationStateLock.
+  [
+    key(authRelocationCleanup, "cleanupSharedAuthSource"),
+    [key(authRelocation, "migrateSharedAuthStore")],
+  ],
   [
     key(accounts, "renameUserProfileAuthLinks"),
     [
@@ -756,9 +762,10 @@ const sinks = new Map<string, number>([
   // Canonical auth sinks publish before releasing authority; state-only writes do not revoke.
   [key(authCells, "writeAuthProfileJsonCell"), 2],
   [key(authCells, "deleteAuthProfileJsonCell"), 2],
-  // Exclusive stopped-owner relocation copies the shared row and then removes its source.
+  // Exclusive stopped-owner relocation copies the shared row before retiring source credentials.
   [key(authRelocation, "copyRowsToState"), 1],
-  [key(authRelocation, "cleanupSourceRows"), 1],
+  // Cleanup either keeps credential-free lifetime tombstones or deletes an unenrolled row.
+  [key(authRelocationCleanup, "cleanupSharedAuthSource"), 2],
   // Generic entry points publish the protected key through the credential owner.
   ...[
     "upsertConfigMachineState",

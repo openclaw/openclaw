@@ -21,7 +21,10 @@ import {
   readSharedAuthLegacyRowsFromDatabase,
   SHARED_AUTH_STORE_MIGRATION_KIND,
 } from "./shared-store-bootstrap.js";
-import { SHARED_AUTH_STORE_STATE_KEY } from "./sqlite-json.js";
+import {
+  SHARED_AUTH_AUTHORIZATION_ORIGIN_KEY,
+  SHARED_AUTH_STORE_STATE_KEY,
+} from "./sqlite-json.js";
 import type {
   AuthProfileBootstrapInput,
   AuthProfileBootstrapResult,
@@ -47,6 +50,11 @@ export function bootstrapSharedAuthStoreInWorker(
           .where("state_key", "=", SHARED_AUTH_STORE_STATE_KEY)
           .as("ownership"),
         expression
+          .selectFrom("config_machine_state")
+          .select("value_json")
+          .where("state_key", "=", SHARED_AUTH_AUTHORIZATION_ORIGIN_KEY)
+          .as("authorizationOrigin"),
+        expression
           .exists(
             expression
               .selectFrom("migration_sources")
@@ -61,6 +69,7 @@ export function bootstrapSharedAuthStoreInWorker(
   }, options);
   const initialOwnership = parseSharedAuthStoreOwnership(
     initial?.ownership == null ? undefined : JSON.parse(initial.ownership),
+    initial?.authorizationOrigin == null ? undefined : JSON.parse(initial.authorizationOrigin),
   );
   if (initialOwnership.location === "state-db" || initial?.pendingCleanup) {
     return { ownership: initialOwnership, relocated: false };
@@ -73,8 +82,13 @@ export function bootstrapSharedAuthStoreInWorker(
       ({ db }) => {
         requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
         const row = readConfigMachineStateRowInDatabase(db, SHARED_AUTH_STORE_STATE_KEY);
+        const origin = readConfigMachineStateRowInDatabase(
+          db,
+          SHARED_AUTH_AUTHORIZATION_ORIGIN_KEY,
+        );
         const ownership = parseSharedAuthStoreOwnership(
           row ? JSON.parse(row.value_json) : undefined,
+          origin ? JSON.parse(origin.value_json) : undefined,
         );
         const relocated =
           ownership.location === "legacy-main" &&

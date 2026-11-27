@@ -17,7 +17,9 @@ import type { LegacyOAuthRef } from "./legacy-oauth-ref.js";
 
 type InlineAuthProfileCredential = z.infer<typeof inlineAuthProfileCredentialSchema>;
 
-export type SharedAuthStoreOwnership = { location: "legacy-main" } | { location: "state-db" };
+export type SharedAuthStoreOwnership =
+  | { location: "legacy-main" }
+  | { location: "state-db"; authorizationOrigin?: string };
 
 /** Internal prepared ownership, carried through commit publication and compensation. */
 export type AuthProfileStoreOwner = {

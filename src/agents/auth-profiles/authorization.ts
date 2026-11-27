@@ -292,6 +292,28 @@ export async function captureAuthProfileAuthorization(params: {
           }
         }
         assertFacts();
+        const sharedIdentityPath =
+          ownership.location === "state-db" && ownership.authorizationOrigin
+            ? resolvePathViaExistingAncestorSync(
+                path.resolve(resolveStateDir(env), ownership.authorizationOrigin),
+              )
+            : sharedPath;
+        const sharedTarget = targets.find((target) => target.databasePath === sharedPath);
+        // Relocation splits main’s formerly single owner into two physical stores. Only
+        // the credential-free source retaining the same lifetime is the old single identity.
+        // A local replacement/removal rotates its lifetime and must remain in the digest.
+        const identityLineage = lineage.filter(
+          (target) =>
+            !(
+              selectedPath === sharedPath &&
+              target.databasePath !== sharedPath &&
+              target.databasePath === sharedIdentityPath &&
+              target.incarnation === sharedTarget?.incarnation &&
+              target.observation.readFact()?.status === "absent"
+            ),
+        );
+        const identityPath = (databasePath: string) =>
+          databasePath === sharedPath ? sharedIdentityPath : databasePath;
         // State-upgrade Doctor runs on a private copy that is then published at the live state
         // directory. Identify its databases by where they will be published, or every binding
         // recorded during the upgrade names paths that no longer exist after it.
@@ -313,8 +335,11 @@ export async function captureAuthProfileAuthorization(params: {
               JSON.stringify([
                 "mcp-auth-profile-v1",
                 profileId,
-                published(selectedPath),
-                ...lineage.map((target) => [published(target.databasePath), target.incarnation]),
+                published(identityPath(selectedPath)),
+                ...identityLineage.map((target) => [
+                  published(identityPath(target.databasePath)),
+                  target.incarnation,
+                ]),
               ]),
             )
             .digest("hex");

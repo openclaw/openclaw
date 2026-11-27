@@ -5,7 +5,10 @@ import {
   parseSharedAuthStoreOwnership,
   resolveSharedAuthStorePath,
 } from "./path-resolve.js";
-import { SHARED_AUTH_STORE_STATE_KEY } from "./sqlite-json.js";
+import {
+  SHARED_AUTH_AUTHORIZATION_ORIGIN_KEY,
+  SHARED_AUTH_STORE_STATE_KEY,
+} from "./sqlite-json.js";
 import type { SharedAuthStoreOwnership } from "./types.js";
 
 /** Doctor, offline CLI and the deprecated synchronous auth SDK prepare their native owner. */
@@ -18,6 +21,7 @@ export function prepareSharedAuthStoreOwnershipForNative(
   }
   const ownership = parseSharedAuthStoreOwnership(
     readConfigMachineState<unknown>(SHARED_AUTH_STORE_STATE_KEY, { env }),
+    readConfigMachineState<unknown>(SHARED_AUTH_AUTHORIZATION_ORIGIN_KEY, { env }),
   );
   noteCommittedSharedAuthStoreOwnership(ownership, env);
   return ownership;
