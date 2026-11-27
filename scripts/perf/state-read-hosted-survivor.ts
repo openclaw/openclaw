@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
+import { stop as stopEsbuild } from "esbuild";
 import { initializeGatewayResourceProfile } from "../../src/infra/gateway-resource-profile.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../../src/infra/runtime-process-url.js";
 import { claimsSharedHostSlot, createHostedWorker } from "../../src/infra/shared-worker-host.js";
@@ -19,6 +20,7 @@ import {
   captureRetainedNativeWorkerSource,
   closeDefaultRetainedNativeWorkerSource,
 } from "../../src/infra/worker-native-lifecycle.js";
+import { drainGlobalSingletonLifecycleState } from "../../src/shared/global-singleton.js";
 import { createStateReadPool } from "../../src/state/openclaw-state-read-pool.js";
 import type { OpenClawStateReadReply } from "../../src/state/openclaw-state-read.types.js";
 
@@ -159,6 +161,14 @@ try {
     }
   }
   const cost = cleanup();
+  // The profile logged through the file worker; tsx also started esbuild's sync service.
+  // Join these process-wide owners outside the measured reader teardown.
+  await drainGlobalSingletonLifecycleState();
+  await stopEsbuild();
+  const deadline = performance.now() + 10_000;
+  while (getTrackedWorkerPoolSnapshot().workerCount > 0 && performance.now() < deadline) {
+    await delay(10);
+  }
   const closed = census();
   rmSync(root, { recursive: true, force: true });
   assert.equal(closed.physical, 0);
