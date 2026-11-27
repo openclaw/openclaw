@@ -47,6 +47,26 @@ struct ChatRunStatusContent<Content: View>: View {
     }
 }
 
+#if os(iOS)
+/// The working line leaves with a fade, as it came in. Only when the claw alone goes: a reply that
+/// replaces live text in the same pass keeps its unanimated swap.
+struct ChatWorkingLineExit: ViewModifier {
+    let working: Bool
+    let answer: Bool
+
+    init(_ working: Bool, answer: Bool) {
+        self.working = working
+        self.answer = answer
+    }
+
+    func body(content: Content) -> some View {
+        content.transaction(value: self.working && !self.answer) { transaction in
+            if !self.working, transaction.animation == nil { transaction.animation = .easeOut(duration: 0.2) }
+        }
+    }
+}
+#endif
+
 /// Owns the observation of the paced words; its parent only observes live-content shape.
 struct ChatLiveAssistantText<Content: View>: View {
     let viewModel: OpenClawChatViewModel

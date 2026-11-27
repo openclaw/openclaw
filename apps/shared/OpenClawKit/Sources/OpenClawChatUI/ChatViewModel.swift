@@ -134,6 +134,7 @@ public final class OpenClawChatViewModel {
     var activeSessionRunIDs: [String] = []
     @ObservationIgnored var liveRunStateStorage: [String: ChatLiveRunState] = [:]
     var narration = ChatNarration()
+    @ObservationIgnored var cliAssistantStream: (runID: String, text: String, sealedPrefix: String)?
     public internal(set) var progressCard: ProgressCard?
     var activityChildren = ChatActivityChildren()
     var progressCardStoreAvailable: Bool?
@@ -177,6 +178,17 @@ public final class OpenClawChatViewModel {
     var runStartup: ChatRunStartup?
     var runStartupStatus: String? {
         self.runStartup?.runID == self.liveUsageRunID ? self.runStartup?.status : nil
+    }
+
+    /// The working line's words before a tool names the step. Nothing until the Gateway reports a phase,
+    /// so the line never says “Thinking” ahead of “Preparing workspace”, and nothing under answer text.
+    var runWorkingLabel: String? {
+        guard let startup = self.runStartup, startup.runID == self.liveUsageRunID else { return nil }
+        return switch startup.state {
+        case let .status(text, _): text
+        case .activity: String(localized: "Thinking")
+        case .answering: nil
+        }
     }
 
     /// Presentation is paced independently; event consumers always see the newest stream text.
@@ -820,12 +832,6 @@ public final class OpenClawChatViewModel {
 
 extension OpenClawChatViewModel {
     // MARK: - Internals
-
-    func clearStreamingActivity() {
-        self.runStartup = nil
-        self.turnToolCallsById = [:]
-        self.updateStreamingAssistantText(nil)
-    }
 
     func updateStreamingAssistantText(_ text: String?, runID: String? = nil) {
         let owner = text == nil ? nil : runID

@@ -187,6 +187,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
     func testStreamedReplyIsNotDuplicatedWithSavedRow() throws {
         self.launchApp(
             for: Self.chatScreenshotTarget,
+            appearance: "light",
             additionalArguments: ["--openclaw-empty-chat-fixture", "--openclaw-dup-filter-fixture"])
         let app = try XCTUnwrap(self.app)
         let input = self.chatMessageInput(in: app)
@@ -202,13 +203,15 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let userRow = app.staticTexts[prompt]
         XCTAssertTrue(userRow.waitForExistence(timeout: 5), "The explicit fixture send was not accepted")
         // Only dismiss after sending: the empty-chat starter buttons also send on tap.
-        app.scrollViews["chat-transcript"].coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.05)).tap()
+        if app.keyboards.firstMatch.exists { userRow.tap() }
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3), "Fixture keyboard stayed open")
 
-        // This tool row is emitted after both sources, not after deduplication succeeds.
-        let receipt = app.descendants(matching: .any).matching(NSPredicate(
-            format: "value CONTAINS %@", "dup-filter-inputs-received")).firstMatch
-        XCTAssertTrue(receipt.waitForExistence(timeout: 8), "FIFO receipt did not arrive after both reply sources")
+        // This completed call follows both sources; inspect it in the run list, not a separate live row.
+        let tools = app.buttons["chat-working-status"]
+        XCTAssertTrue(tools.waitForExistence(timeout: 8))
+        tools.tap()
+        XCTAssertTrue(app.buttons["chat-tool-step-dup-filter-receipt"].waitForExistence(timeout: 5))
+        app.buttons["chat-tool-sheet-close"].tap()
         let copies = app.staticTexts.matching(NSPredicate(
             format: "label CONTAINS %@", "The cobalt lighthouse is ready."))
         XCTAssertTrue(copies.firstMatch.waitForExistence(timeout: 5), "Fixture reply marker is missing")
@@ -217,16 +220,20 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(retry.waitForExistence(timeout: 5), "Fixture retry status is missing")
         self.attachScreenshot(named: "dup-filter-streaming")
         // The indicator groups accessibility under its phase; inspect its actual pixels for telemetry.
-        let image = try XCTUnwrap(retry.screenshot().image.cgImage)
+        let screenshot = retry.screenshot()
+        let capture = XCTAttachment(screenshot: screenshot)
+        capture.name = "working-row-retry"
+        capture.lifetime = .keepAlways
+        add(capture)
+        let image = try XCTUnwrap(screenshot.image.cgImage)
         let recognition = VNRecognizeTextRequest()
         recognition.recognitionLevel = .accurate
         recognition.recognitionLanguages = ["en-US"]
         try VNImageRequestHandler(cgImage: image, options: [:]).perform([recognition])
         let text = (recognition.results ?? []).compactMap { $0.topCandidates(1).first?.string }
             .joined(separator: " ").lowercased()
-        XCTAssertTrue(
-            text.contains("485 tokens"),
-            "RETRY_TOKENS_MISSING: retry hides cumulative output tokens: \(text)")
+        XCTAssertTrue(text.contains("retrying"), "Retry phase is not visible: \(text)")
+        XCTAssertFalse(text.contains("token"), "Retry phase still shows output tokens: \(text)")
         XCTAssertEqual(copies.count, 1, "Saved and streaming reply render duplicate copies")
 
         let stop = app.buttons["Stop response"]
@@ -249,6 +256,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
     func testExternalRunShowsStatusAndToolsBeforeReplyText() throws {
         self.launchApp(
             for: Self.chatScreenshotTarget,
+            appearance: "light",
             additionalArguments: ["--openclaw-external-run-fixture"])
         let app = try XCTUnwrap(self.app)
         let waiting = app.descendants(matching: .any)
@@ -257,10 +265,24 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.attachScreenshot(named: "external-run-before-reply-status")
         XCTAssertTrue(showsWaiting, "EXTERNAL_RUN_STATUS_MISSING: another client's run shows no startup status")
         XCTAssertTrue(app.buttons["Stop response"].exists)
-        let tool = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "value CONTAINS %@", "external-fixture.txt")).firstMatch
-        XCTAssertTrue(tool.waitForExistence(timeout: 15), "EXTERNAL_RUN_TOOL_MISSING")
+        let tool = app.buttons["chat-working-status"]
+        expectation(for: NSPredicate(format: "label == %@", "Reading external-fixture.txt"), evaluatedWith: tool)
+        waitForExpectations(timeout: 15)
+        let toolFrame = tool.frame
+        let active = XCTAttachment(screenshot: tool.screenshot())
+        active.name = "working-row-tool"
+        active.lifetime = .keepAlways
+        add(active)
         self.attachScreenshot(named: "external-run-before-reply-tool")
+
+        // The fixture emits no reasoning events. After the tool completes, the fallback is still visible.
+        expectation(for: NSPredicate(format: "label == %@", "Thinking"), evaluatedWith: tool)
+        waitForExpectations(timeout: 15)
+        let idle = XCTAttachment(screenshot: tool.screenshot())
+        idle.name = "working-row-no-tool"
+        idle.lifetime = .keepAlways
+        add(idle)
+        XCTAssertEqual(tool.frame, toolFrame, "The row should not move between its tool title and Thinking")
     }
 
     func testStartupStatusShowsWaitingForResponse() throws {

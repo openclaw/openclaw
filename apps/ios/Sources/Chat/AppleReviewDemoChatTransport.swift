@@ -620,6 +620,9 @@ actor LocalFixtureChatStore {
         {
             startupSnapshot = OpenClawChatInFlightRun(runId: runID, text: "", events: self.externalRunEvents)
         }
+        if Self.playsWorkingLineFixture, let runID = self.activeRunID {
+            startupSnapshot = OpenClawChatInFlightRun(runId: runID, text: "", events: self.fixtureToolEvents)
+        }
         let historyMessages: [OpenClawChatMessage] = if self.fixture.sessionIDPrefix == "screenshot-fixture",
                                                         ProcessInfo.processInfo.arguments
                                                             .contains("--openclaw-subagent-wait-fixture"),
@@ -719,6 +722,11 @@ actor LocalFixtureChatStore {
             self.duplicateReplaySessionKey = sessionKey
             self.duplicateReplayStarted = false
             return OpenClawChatSendResponse(runId: runId, status: "pending")
+        }
+        if Self.playsWorkingLineFixture, self.fixture.sessionIDPrefix == "screenshot-fixture" {
+            self.activeRunID = runId
+            Task { await self.playWorkingLine(sessionKey: sessionKey, runId: runId) }
+            return OpenClawChatSendResponse(runId: runId, status: "started")
         }
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
         let subject = trimmed.isEmpty ? "that request" : "\"\(trimmed)\""

@@ -3,6 +3,75 @@ import OpenClawKit
 import Testing
 @testable import OpenClawChatUI
 
+extension ChatSessionsCodingTests {
+    @Test @MainActor func `CLI assistant text keeps its place before each live tool`() {
+        let model = OpenClawChatViewModel(
+            sessionKey: "main", transport: ToolResultIngestionTransport())
+        defer { model.detachTransport() }
+        model.pendingRuns.insert("run")
+        func words(_ text: String, _ seq: Int) {
+            model.handleTransportEvent(.agent(.init(runId: "run", seq: seq, stream: "assistant", ts: seq, data: [
+                "itemId": .init("cli-assistant:run"), "text": .init(text),
+            ])))
+        }
+        func tool(_ id: String, _ seq: Int) {
+            model.handleTransportEvent(.agent(.init(runId: "run", seq: seq, stream: "item", ts: seq, data: [
+                "kind": .init("tool"), "phase": .init("start"), "itemId": .init("tool:" + id),
+                "toolCallId": .init(id), "title": .init("Read sample"),
+            ])))
+        }
+        words("Opening alpha", 1)
+        tool("alpha", 2)
+        words("Opening alpha\n\nOpening beta", 3)
+        tool("beta", 4)
+        words("Opening alpha\n\nOpening beta\n\nDone", 5)
+        // Commentary is sealed by the call event, even without a live tool row.
+        #expect(model.transcriptMessages.map(\.rawText) == ["Opening alpha", "Opening beta"])
+        let projection = ChatTranscriptPresentation.project(
+            model.transcriptMessages,
+            model: model,
+            includesTools: true,
+            searchActive: false,
+            collapsesWork: true,
+            streamingTextRunID: model.streamingAssistantRunID,
+            isMessageVisible: { _, _ in true })
+        let labels = projection.inspectionRows.compactMap { row -> String? in
+            guard case let .message(message) = row else { return nil }
+            return message.content.first(where: \.isToolCall)?.id ?? message.rawText
+        }
+        #expect(labels == ["Opening alpha", "alpha", "Opening beta", "beta"])
+        #expect(model.streamingAssistantText == "Done")
+        words("Done", 6) // CLI dispatch replaces its cumulative snapshot with the final answer.
+        #expect(model.streamingAssistantText == "Done")
+        let liveIDs = model.transcriptMessages.map(\.id)
+        model.handleTransportEvent(.chat(.init(
+            runId: "run",
+            sessionKey: "main",
+            state: "final",
+            message: AnyCodable(["role": "assistant", "content": "Done"]),
+            errorMessage: nil)))
+        #expect(model.toolActivities.map(\.id) == ["alpha", "beta"])
+        let history = ["alpha", "beta"].flatMap { name in
+            [
+                OpenClawChatMessage(
+                    role: "assistant",
+                    content: [.init(type: "text", text: "Opening " + name)],
+                    timestamp: nil),
+                OpenClawChatMessage(
+                    role: "assistant",
+                    content: [.init(type: "toolcall", id: name, name: "read")],
+                    timestamp: nil),
+            ]
+        }
+        // CLI replay rows carry the following call identity, not segment/run metadata.
+        model.replaceMessages(history)
+        #expect(model.transcriptMessages.map(\.rawText) == ["Opening alpha", "", "Opening beta", ""])
+        #expect(model.transcriptMessages.filter { !$0.rawText.isEmpty }.map(\.id) == liveIDs)
+        model.replaceMessages([], narrationSettled: true)
+        #expect(model.transcriptMessages.isEmpty)
+    }
+}
+
 struct ChatSessionsCodingTests {
     private struct ExecutorProbe: Decodable, Sendable {
         let decodedOnMainThread: Bool
