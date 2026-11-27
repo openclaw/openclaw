@@ -6,6 +6,8 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { ShellLayoutOwner } from "../../app/shell-layout-owner.ts";
+import { ShellLayoutProvider } from "../../app/shell-layout-traits-solid.tsx";
 import { downloadTextFile } from "../../lib/download.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
@@ -32,18 +34,23 @@ function contextWithClient(client: GatewayBrowserClient, connected = false, boot
   return { gateway: Object.assign(gateway, { publish }) };
 }
 
-function mountPage(initial: TestContext) {
+function mountPage(initial: TestContext, layout?: { owner: ShellLayoutOwner; host: HTMLElement }) {
   const [context, setContext] = createSignal(initial);
   const liveContext = {
     get gateway() {
       return context().gateway;
     },
   };
-  const { container, unmount: dispose } = mountSolid(() => (
-    <ApplicationProvider value={liveContext as unknown as ApplicationContext}>
-      <LogsRoute />
-    </ApplicationProvider>
-  ));
+  const { container, unmount: dispose } = mountSolid(
+    () => (
+      <ApplicationProvider value={liveContext as unknown as ApplicationContext}>
+        <ShellLayoutProvider value={layout ?? null}>
+          <LogsRoute />
+        </ShellLayoutProvider>
+      </ApplicationProvider>
+    ),
+    { container: layout?.host },
+  );
   const query = (selector: string) => container.querySelector<HTMLElement>(selector);
   const lines = () =>
     Array.from(container.querySelectorAll(".log-message"), (row) => row.textContent);
@@ -124,6 +131,35 @@ afterEach(() => {
   cleanupSolid();
   vi.restoreAllMocks();
   vi.useRealTimers();
+});
+
+it("keeps one Logs layout reporter from pending read through route retirement", async () => {
+  const host = document.body.appendChild(document.createElement("main"));
+  host.className = "content";
+  const owner = new ShellLayoutOwner();
+  owner.contentRef(host);
+  const record = vi.spyOn(owner, "record");
+  const pending = deferred<ReturnType<typeof tail>>();
+  // SAFETY: The Logs route uses only request on this deferred-response client.
+  const client = { request: vi.fn(() => pending.promise) } as unknown as GatewayBrowserClient;
+  const page = mountPage(contextWithClient(client, true), { owner, host });
+  await settle();
+  const traits = {
+    logsPage: true,
+    toolbarHeader: true,
+    settingsWorkspace: true,
+    settingsPage: true,
+    settingsWide: true,
+  };
+  expect(owner.current).toEqual(traits);
+  await deliver(pending, tail(1, ["ready"]));
+  page.expectRows(["ready"]);
+  expect(record.mock.calls.filter((call) => call[2].logsPage)).toHaveLength(1);
+  expect(owner.current).toEqual(traits);
+  page.dispose();
+  expect(owner.current).toEqual({});
+  expect(host.className).toBe("content");
+  host.remove();
 });
 
 it("names the page with a level-one heading", async () => {
