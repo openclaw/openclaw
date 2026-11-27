@@ -302,7 +302,6 @@ function resolveProvidersForMode(params: {
   existingParsed: unknown;
   providers: Record<string, ProviderConfig>;
   secretRefManagedProviders: ReadonlySet<string>;
-  skippedProviders: Set<string>;
 }): Record<string, ProviderConfig> {
   if (params.mode !== "merge") {
     return params.providers;
@@ -315,24 +314,7 @@ function resolveProvidersForMode(params: {
     nextProviders: params.providers,
     existingProviders: existing.providers as Record<string, ExistingProviderConfig>,
     secretRefManagedProviders: params.secretRefManagedProviders,
-    skippedProviders: params.skippedProviders,
   });
-}
-
-function filterWritableProviders(
-  providers: Record<string, ProviderConfig>,
-  skippedProviders: Set<string>,
-): Record<string, ProviderConfig> {
-  const next = Object.fromEntries(
-    Object.entries(providers).filter(([key, provider]) => {
-      const reason = findUnwritableProviderReason(key, provider);
-      if (reason) {
-        skippedProviders.add(reason);
-      }
-      return !reason;
-    }),
-  );
-  return Object.keys(next).length === Object.keys(providers).length ? providers : next;
 }
 
 /** Plans root and plugin-owned model catalog writes for the current runtime. */
@@ -406,31 +388,30 @@ export async function planOpenClawModelsJson(params: {
       }),
     );
   }
-  // The model registry rejects a whole models.json for one invalid provider, so omit those.
-  const skippedProviders = new Set<string>();
   const mergedProviders = resolveProvidersForMode({
     mode,
     existingParsed: { providers: generatedCatalogProviders },
     providers: normalizedProviders,
     secretRefManagedProviders,
-    skippedProviders,
   });
   const finalizeProviders = (candidateProviders: Record<string, ProviderConfig>) => {
     const normalized =
       normalizeProviderCatalogModelsForConfig(candidateProviders) ?? candidateProviders;
-    return filterWritableProviders(
+    return (
       enforceSourceManagedProviderSecrets({
         providers: normalized,
         sourceConfigForSecrets: context.sourceConfigForSecrets,
         secretRefManagedProviders,
-      }) ?? normalized,
-      skippedProviders,
+      }) ?? normalized
     );
   };
   const explicitProviderIds = new Set(
     Object.keys(cfg.models?.providers ?? {}).map((providerId) => normalizeProviderId(providerId)),
   );
   const providersByOwner = finalizeProviders(mergedProviders);
+  // The model registry rejects a whole models.json for one invalid provider, so omit those.
+  const skippedProviders = new Set<string>();
+  const skippedRootProviderIds: string[] = [];
   const partitionMetadataSnapshot = context.pluginMetadataSnapshot;
   const splitRootProviders: Record<string, ProviderConfig> = {};
   const pluginProviders: Record<string, Record<string, ProviderConfig>> = {};
@@ -452,6 +433,14 @@ export async function planOpenClawModelsJson(params: {
             pluginMetadataSnapshot: partitionMetadataSnapshot,
             includeCliBackends: true,
           })));
+    const skipReason = findUnwritableProviderReason(providerId, provider);
+    if (skipReason) {
+      skippedProviders.add(skipReason);
+      if (!pluginId) {
+        skippedRootProviderIds.push(normalizedId);
+      }
+      continue;
+    }
     if (!pluginId) {
       splitRootProviders[providerId] = provider;
       continue;
@@ -471,8 +460,12 @@ export async function planOpenClawModelsJson(params: {
     existingParsed: params.existingParsed,
     providers: splitRootProviders,
     secretRefManagedProviders,
-    skippedProviders,
   });
+  // A skipped root entry replaces its stale file row, as a valid entry would. Entries only in
+  // the existing file are the user's data: a rewrite keeps them.
+  for (const providerId of skippedRootProviderIds) {
+    delete rootProviders[providerId];
+  }
   const nextContents = `${JSON.stringify(
     {
       providers: finalizeProviders(rootProviders),

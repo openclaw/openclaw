@@ -377,13 +377,23 @@ export function findUnwritableProviderReason(
   return findProviderModelsError(providerName, entry, "catalog");
 }
 
+/**
+ * Retention rule for entries already in models.json. It skips the registry's model rule:
+ * an entry that exists only in the file is the user's data, so a rewrite never drops it for that.
+ */
+function isWritableProviderConfig(entry: ProviderConfig): boolean {
+  if (!Array.isArray(entry.models) || entry.models.length === 0) {
+    return true;
+  }
+  // AuthStorage can supply omitted keys; an explicitly empty key still violates the schema.
+  return Boolean(entry.baseUrl?.trim() && (entry.apiKey === undefined || entry.apiKey));
+}
+
 /** Merges generated provider config with existing secrets safe to preserve. */
 export function mergeWithExistingProviderSecrets(params: {
   nextProviders: Record<string, ProviderConfig>;
   existingProviders: Record<string, ExistingProviderConfig>;
   secretRefManagedProviders: ReadonlySet<string>;
-  /** Receives the reason for each existing entry left out because the registry would reject it. */
-  skippedProviders: Set<string>;
 }): Record<string, ProviderConfig> {
   const { nextProviders, existingProviders, secretRefManagedProviders } = params;
   const normalizedExistingProviders = normalizeProviderMapKeys(existingProviders);
@@ -391,15 +401,7 @@ export function mergeWithExistingProviderSecrets(params: {
 
   const mergedProviders: Record<string, ProviderConfig> = {};
   for (const [key, entry] of Object.entries(normalizedExistingProviders)) {
-    // A current entry replaces this one below (keeping its file position); only its
-    // preserved secrets are read, so its stale rows need no check.
-    if (normalizedNextProviders[key]) {
-      mergedProviders[key] = entry;
-      continue;
-    }
-    const reason = findUnwritableProviderReason(key, entry);
-    if (reason) {
-      params.skippedProviders.add(reason);
+    if (!isWritableProviderConfig(entry)) {
       continue;
     }
     mergedProviders[key] = entry;
