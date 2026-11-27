@@ -42,6 +42,8 @@ struct LicenseDocumentLoaderTests {
         let documents = LicenseDocumentLoader.bundledDocuments()
         let expected = [
             ("GitHub Octicons.txt", "GitHub Inc.", "MIT License"),
+            ("llama.cpp.txt", "The ggml authors", "MIT License"),
+            ("Lobe Icons.txt", "LobeHub", "MIT License"),
             ("Lucide.txt", "Lucide Icons and Contributors", "ISC License"),
             ("SwiftUI Siri Waveform.txt", "Copyright (c) 2019 Noah Chalifour", "MIT License"),
             ("Pele.txt", "Copyright (c) 2026 kepano", "MIT License"),
