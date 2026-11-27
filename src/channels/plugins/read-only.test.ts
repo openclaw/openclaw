@@ -17,13 +17,16 @@ import {
   restorePluginMetadataSnapshot,
 } from "../../plugins/plugin-metadata-snapshot.js";
 import * as setupModule from "../../plugins/plugin-setup-module.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { channelHasConfiguredState, resolveChannelAccount } from "../account-resolution.js";
 import { buildChannelUiCatalog } from "./catalog.js";
+import { resolveGatewayDelegatedChannelPlugin } from "./gateway-delegated-channel-plugin.js";
 import {
   listReadOnlyChannelPluginsForConfig,
   listReadOnlyChannelPluginsForConfigAsync,
@@ -850,6 +853,81 @@ Object.assign(module.exports.plugin.config, {
         message: expect.stringContaining("Cannot find module"),
       }),
     ]);
+    expectMarkers(setupMarker, fullMarker);
+  });
+});
+
+describe("resolveGatewayDelegatedChannelPlugin", () => {
+  it("sends only declared actions of enabled plugins to the Gateway without channel runtime", async () => {
+    // A root-token default beside a named account stays selectable; the Gateway owns accounts.
+    const { cfg, fullMarker, setupMarker } = setupFixture(
+      { setupEntry: false, manifestChannelConfig: true, manifestGatewayMessageActions: ["read"] },
+      { "external-chat": { token: "root", accounts: { work: { token: "work" } } } },
+    );
+    const resolve = (action: "read" | "send", config = cfg) =>
+      resolveGatewayDelegatedChannelPlugin({ channelId: "external-chat", action, config });
+    expect(resolve("send")).toBeUndefined();
+    expect(
+      resolve("read", { ...cfg, plugins: { ...cfg.plugins, enabled: false } }),
+    ).toBeUndefined();
+    const plugin = resolve("read");
+    if (!plugin) {
+      throw new Error("expected a delegated channel plugin");
+    }
+    const registry = createEmptyPluginRegistry();
+    registry.channels.push({ pluginId: plugin.id, source: "manifest", plugin });
+    // Vitest mocks erase the generic request signature, so leave this one untyped.
+    const request = vi.fn().mockResolvedValue({ ok: true, messages: [] });
+    const { runMessageAction } = await import("../../infra/outbound/message-action-runner.js");
+
+    const result = await withPluginRuntimeRegistryScope(registry, () =>
+      runMessageAction({
+        cfg,
+        action: "read",
+        params: { channel: "external-chat", accountId: "default", target: "channel:123", limit: 1 },
+        senderIsOwner: true,
+        conversationReadOrigin: "direct-operator",
+        gateway: { clientName: "cli", mode: "cli", request },
+      }),
+    );
+
+    expect(request).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        method: "message.action",
+        params: expect.objectContaining({
+          channel: "external-chat",
+          action: "read",
+          accountId: "default",
+        }),
+      }),
+      expect.anything(),
+    );
+    expect(result).toMatchObject({ channel: "external-chat", action: "read" });
+    // This adapter has no target grammar, so a mention reaches the Gateway's plugin unresolved.
+    await withPluginRuntimeRegistryScope(registry, () =>
+      runMessageAction({
+        cfg,
+        action: "read",
+        params: {
+          channel: "external-chat",
+          accountId: "default",
+          target: "<@123456789012345678>",
+          limit: 1,
+        },
+        senderIsOwner: true,
+        conversationReadOrigin: "direct-operator",
+        gateway: { clientName: "cli", mode: "cli", request },
+      }),
+    );
+    expect(request).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          params: expect.objectContaining({ to: "<@123456789012345678>" }),
+        }),
+      }),
+      expect.anything(),
+    );
     expectMarkers(setupMarker, fullMarker);
   });
 });
