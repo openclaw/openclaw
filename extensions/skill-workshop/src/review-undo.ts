@@ -1,5 +1,8 @@
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
-import type { WorkshopChange } from "openclaw/plugin-sdk/skill-workshop-host-runtime";
+import {
+  WORKSHOP_CHANGES_MAX_LIMIT,
+  type WorkshopChange,
+} from "openclaw/plugin-sdk/skill-workshop-host-runtime";
 import {
   archiveWorkshopSkill,
   listWorkshopArchive,
@@ -10,11 +13,10 @@ import {
   type WorkshopMutationContext,
 } from "./library.js";
 import { getWorkshopRuntime } from "./runtime.js";
+import { firstReviewChangeForCurrentSkill } from "./skill-mutation.js";
 
 const REVIEW_RUN_PREFIX = "skill-workshop-review:";
 const UNDO_RUN_PREFIX = "skill-workshop-undo:";
-// The change feed retains at most this many rows per agent, so one page holds a whole run.
-const MAX_RUN_CHANGES = 500;
 
 /** Run id of one background review; `reviewId` is the id `/learn undo` takes. */
 export function workshopReviewRunId(reviewId: string): string {
@@ -70,10 +72,12 @@ async function revertReview(
   runId: string,
   reviewId: string,
 ): Promise<WorkshopReviewUndoResult> {
-  // Newest first; reversed, the first entry per skill is the review's first change of it.
-  const reviewChanges = (
-    await listWorkshopChanges(ctx.agentId, { runId, limit: MAX_RUN_CHANGES })
-  ).toReversed();
+  const limit = WORKSHOP_CHANGES_MAX_LIMIT;
+  const [newestReviewChanges, feed] = await Promise.all([
+    listWorkshopChanges(ctx.agentId, { runId, limit }),
+    listWorkshopChanges(ctx.agentId, { limit }),
+  ]);
+  const reviewChanges = newestReviewChanges.toReversed();
   const reviewStart = reviewChanges[0];
   if (!reviewStart) {
     throw new WorkshopReviewNotFoundError(`No skill changes recorded for review ${runId}.`);
@@ -81,10 +85,9 @@ async function revertReview(
   // The feed drops its oldest rows past the cap. If it is full and nothing older than this
   // review's first retained row is left, the review's first changes may be gone, and their
   // revert anchors with them; refuse rather than restore the wrong version.
-  const feed = await listWorkshopChanges(ctx.agentId, { limit: MAX_RUN_CHANGES });
   const oldestRetained = feed.at(-1);
   if (
-    feed.length >= MAX_RUN_CHANGES &&
+    feed.length >= WORKSHOP_CHANGES_MAX_LIMIT &&
     oldestRetained &&
     oldestRetained.createdAtMs >= reviewStart.createdAtMs
   ) {
@@ -94,23 +97,22 @@ async function revertReview(
   }
   const undoRunId = `${UNDO_RUN_PREFIX}${reviewId}`;
   const undone = new Set(
-    (await listWorkshopChanges(ctx.agentId, { runId: undoRunId, limit: MAX_RUN_CHANGES })).map(
-      (change) => change.skillName,
-    ),
+    (
+      await listWorkshopChanges(ctx.agentId, {
+        runId: undoRunId,
+        limit: WORKSHOP_CHANGES_MAX_LIMIT,
+      })
+    ).map((change) => change.skillName),
   );
-  const firstBySkill = new Map<string, WorkshopChange>();
-  for (const change of reviewChanges) {
-    if (!firstBySkill.has(change.skillName)) {
-      firstBySkill.set(change.skillName, change);
-    }
-  }
-  // A created skill that is no longer live was already reverted, e.g. by the agent after a chat "undo".
+  const reviewChangeIds = new Set(reviewChanges.map((change) => change.id));
+  const names = new Set(reviewChanges.map((change) => change.skillName));
   const live = new Set(
     (await listWorkshopSkills(ctx.config, ctx.agentId)).map((skill) => skill.name),
   );
-  const targets = [...firstBySkill.values()].filter(
-    ({ skillName, versionId }) => !undone.has(skillName) && (versionId || live.has(skillName)),
-  );
+  const targets = [...names].flatMap((name) => {
+    const first = firstReviewChangeForCurrentSkill(feed, name, reviewChangeIds);
+    return first && !undone.has(name) && (first.versionId || live.has(name)) ? [first] : [];
+  });
   // Check every saved version before the first write, so a pruned one refuses the whole undo.
   const retained = new Map(
     (await listWorkshopArchive(ctx.config, ctx.agentId)).map((skill) => [
@@ -126,10 +128,10 @@ async function revertReview(
       `Cannot undo review ${reviewId}: the version of "${pruned.skillName}" saved before it is no longer kept. Restore that skill from the Skill Workshop.`,
     );
   }
-  const undoCtx = { ...ctx, runId: undoRunId };
   const changes: WorkshopChange[] = [];
   try {
-    for (const { skillName: name, versionId } of targets) {
+    for (const { skillName: name, versionId, id } of targets) {
+      const undoCtx = { ...ctx, runId: undoRunId, undoReviewChange: { id, runId } };
       // No saved version before the review's first change means the review created the skill.
       changes.push(
         versionId

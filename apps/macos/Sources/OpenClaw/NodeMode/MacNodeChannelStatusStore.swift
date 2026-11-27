@@ -36,28 +36,12 @@ enum MacNodeChannelState: Equatable, Sendable {
             (reason, diagnostic, isDegraded) = (value, detail, false)
         }
         let status = isDegraded ? "degraded" : "unavailable"
-        let compatibility = Self.workerSchemaMismatch(in: reason + "\n" + (diagnostic ?? ""))
+        let compatibility = NewerStateSchemaError(diagnostic: reason + "\n" + (diagnostic ?? ""))
         let label = compatibility.map {
             "Mac node \(status) — update the OpenClaw app: its worker supports schema \($0.supported), " +
                 "but shared state requires schema \($0.required)"
         } ?? "Mac node \(status) — \(Self.condense(reason))"
         return (label, Self.excerpt(diagnostic), isDegraded, compatibility == nil ? nil : .checkForUpdates)
-    }
-
-    private static func workerSchemaMismatch(in message: String) -> (required: Int, supported: Int)? {
-        let marker = "uses newer schema version "
-        guard let markerRange = message.range(of: marker),
-              let separatorRange = message[markerRange.upperBound...].range(of: "; this build supports ")
-        else { return nil }
-
-        let requiredText = message[markerRange.upperBound..<separatorRange.lowerBound]
-        let supportedSuffix = message[separatorRange.upperBound...]
-        let supportedText = supportedSuffix.prefix(while: \.isNumber)
-        guard let required = Int(requiredText),
-              let supported = Int(supportedText),
-              required > supported
-        else { return nil }
-        return (required, supported)
     }
 
     /// Menu status lines are single-line; keep the leading reason sentence and

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import { withAgentRosterFactsBatch } from "../agents/agent-roster.js";
 import {
   listAgentEntries,
   listAgentEntriesWithSource,
@@ -449,7 +450,10 @@ export function validateConfigObjectRaw(
   if (sandboxContainerEnvIssues.length > 0) {
     return { ok: false, issues: sandboxContainerEnvIssues };
   }
-  const duplicates = findDuplicateAgentDirs(validatedConfig, opts);
+  // The parsed roster is private to this validation, so directory lookups can share one index.
+  const duplicates = withAgentRosterFactsBatch(validatedConfig, () =>
+    findDuplicateAgentDirs(validatedConfig, opts),
+  );
   if (duplicates.length > 0) {
     return {
       ok: false,

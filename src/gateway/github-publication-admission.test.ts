@@ -17,6 +17,7 @@ import {
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import { removeProjectRegistry } from "../projects/project-registry.js";
 import {
   ensureProjectRegistrySchema,
@@ -25,6 +26,7 @@ import {
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { updateUserGitHubConnection } from "../state/user-github-connections.test-support.js";
+import { createTestApprovalFixture } from "./exec-approval-manager.test-support.js";
 import {
   callPersonalPublicationRpc,
   createPersonalPublicationFixture,
@@ -40,7 +42,7 @@ import { readGitHubPublicationRequest } from "./github-publication-store.worker.
 import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { createRequestGatewayMethodRegistry } from "./server-methods.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
-import { makeContextParams } from "./server-request-context.test-support.js";
+import { makeContextParams, type RequestRuntime } from "./server-request-context.test-support.js";
 import {
   REQUEST,
   seedActivePlacement,
@@ -372,7 +374,7 @@ describe("project issue creation through the guest tool and registered Gateway m
   };
   const url = "https://github.com/Example/Handbook/issues/7";
 
-  async function fixture(bindProject = true) {
+  async function fixture(bindProject = true, runtime: Partial<RequestRuntime> = {}) {
     const f = await createRequesterPolicyFixture({
       sessionId: SESSION_ID,
       sessionKey: SESSION_KEY,
@@ -396,7 +398,10 @@ describe("project issue creation through the guest tool and registered Gateway m
       .mockResolvedValue(commandResult(JSON.stringify({ number: 7, url, authorId: 42 })));
     const registry = createRequestGatewayMethodRegistry();
     const context = createGatewayRequestContext(
-      makeContextParams({ getAttachedGatewayMethodRegistry: () => registry }),
+      makeContextParams({
+        getAttachedGatewayMethodRegistry: () => registry,
+        ...runtime,
+      }),
     );
     const invoke = async (args: Record<string, unknown>, client = f.guestSource.client) => {
       const operator = await prepareGatewayOperatorRunAuthority({
@@ -487,5 +492,43 @@ describe("project issue creation through the guest tool and registered Gateway m
     mocks.runCommand.mockRejectedValue(new Error("connection closed"));
     await expect(invoke(input)).rejects.toThrow(/unconfirmed.*check.*issues before submitting/i);
     expect(mocks.runCommand).toHaveBeenCalledTimes(1);
+  });
+  it("posts the approved comment and sends nothing on denial", async (test) => {
+    const body =
+      "Fixed in **main**.\r\n\r\nRepository: other/repo\nIssue or PR: #99\nAccount: @other";
+    const comment = { action: "create_comment", issueNumber: 7, body };
+    const commentUrl = "https://github.com/Example/Handbook/pull/7#issuecomment-900";
+    const approval = createTestApprovalFixture<PluginApprovalRequestPayload>(test, {
+      approvalKind: "plugin",
+    });
+    let detail: PluginApprovalRequestPayload["detail"];
+    let decision: "allow-once" | "deny" = "allow-once";
+    const { invoke } = await fixture(true, {
+      pluginApprovalManager: approval.manager,
+      forwardPluginApprovalRequest: async (event) => {
+        detail = event.request.detail;
+        return await approval.manager.resolve(event.id, decision);
+      },
+    });
+    mocks.runCommand.mockResolvedValue(
+      commandResult(JSON.stringify({ id: 900, url: commentUrl, body, authorId: 42 })),
+    );
+    await approval.run(async () => {
+      await expect(approval.track(invoke(comment))).resolves.toMatchObject({
+        details: { status: "posted", url: commentUrl },
+      });
+      expect(detail).toBe(
+        "Repository: github.com/example/handbook\nIssue or PR: #7\nAccount: @roboclaw-bot\n\n" +
+          "Comment body:\n| Fixed in **main**.\n| \n| Repository: other/repo\n| Issue or PR: #99\n| Account: @other",
+      );
+      decision = "deny";
+      await expect(approval.track(invoke(comment))).rejects.toThrow(
+        /not approved.*Nothing was posted/,
+      );
+      expect(mocks.runCommand).toHaveBeenCalledExactlyOnceWith(
+        expect.arrayContaining(["POST", "repos/example/handbook/issues/7/comments"]),
+        expect.objectContaining({ input: JSON.stringify({ body }) }),
+      );
+    });
   });
 });

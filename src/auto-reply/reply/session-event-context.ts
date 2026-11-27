@@ -36,7 +36,6 @@ import {
   readSessionEventTargetCommandOwner,
   readSessionEventTargetEnvironment,
   readSessionEventTargetOperatorAuthority,
-  readSessionEventTargetOwnerContinuation,
   readSessionEventTargetScheduledRequester,
   resolveSessionEventKey,
 } from "./session-event-target.js";
@@ -299,6 +298,7 @@ export function buildSessionEventContext(params: {
   const operatorAuthority = automation
     ? automation.operatorAuthority
     : options.source === "plugin" ||
+        options.source === "exec" ||
         options.source === "tool_handoff" ||
         options.source === "restart" ||
         // A scheduler turn about a job (not its run) acts for the job's restored operator source.
@@ -315,13 +315,9 @@ export function buildSessionEventContext(params: {
           senderId: scheduled.requester.requester.senderId,
         }
       : undefined;
-  if (
-    operatorAuthority?.grant.owner &&
-    (automation || options.source === "restart" || readSessionEventTargetOwnerContinuation(target))
-  ) {
-    // A tool handoff resumes the yielded turn: it continues that turn's own owner decision
-    // under the same live operator source, retaining internal provenance and the event
-    // text's existing command authorization. Non-owner and system turns never gain it.
+  if (operatorAuthority?.grant.owner) {
+    // The admitted grant is the turn's owner decision for every entry kind (restart, exec
+    // wake, tool handoff, scheduler turn); the internal event text stays unauthorized as a command.
     bindCommandOwnerAuthority(ctx, {
       operatorAuthority,
       isCurrent: () => {

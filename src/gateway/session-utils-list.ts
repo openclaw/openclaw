@@ -36,6 +36,7 @@ import {
   type SessionListFilteredEntries,
 } from "./session-list-filters.js";
 import {
+  createPersonalSessionPinRank,
   mergeSessionEntryPages,
   sortAndLimitSessionEntries,
   type SessionEntryPair,
@@ -75,7 +76,9 @@ export function selectSessionEntries(
   const limit = resolveOptionalIntegerOption(params.opts.limit, { min: 1 }) ?? params.defaultLimit;
   const offset = resolveNonNegativeIntegerOption(params.opts.offset, 0);
   const ownerLimit =
-    params.ownerFirstActorId && offset === 0
+    !(params.opts.pinned === true && params.personalPinRank) &&
+    params.ownerFirstActorId &&
+    offset === 0
       ? Math.min(limit ?? SESSIONS_LIST_OWNER_LIMIT, SESSIONS_LIST_OWNER_LIMIT)
       : 0;
   const pageEnd =
@@ -87,6 +90,8 @@ export function selectSessionEntries(
     params.retained &&
     !params.opts.includePeople &&
     !params.opts.involvingProfileId;
+  const rank =
+    (params.opts.sortBy ?? "updatedAt") === "updatedAt" ? params.personalPinRank : undefined;
   let filteredResult: SessionListFilteredEntries;
   if (incremental) {
     retainCurrentSessionListPartitions(params.retained!, params.partitions!, params.invited);
@@ -114,11 +119,12 @@ export function selectSessionEntries(
           ...params,
           entries: () => partition.entries.values(),
         });
-        part.entries = sortAndLimitSessionEntries(part.entries, pageEnd, params.opts.sortBy);
+        part.entries = sortAndLimitSessionEntries(part.entries, pageEnd, params.opts.sortBy, rank);
         part.ownerEntries = sortAndLimitSessionEntries(
           part.ownerEntries,
           ownerLimit,
           params.opts.sortBy,
+          rank,
         );
         params.retained!.set(revision, part);
       } else {
@@ -135,8 +141,8 @@ export function selectSessionEntries(
     }
     recordSessionRowPartitionCache(hits, misses, getMainThreadTaskName());
     filteredResult = {
-      entries: mergeSessionEntryPages(pages, pageEnd, params.opts.sortBy),
-      ownerEntries: mergeSessionEntryPages(ownerPages, ownerLimit, params.opts.sortBy),
+      entries: mergeSessionEntryPages(pages, pageEnd, params.opts.sortBy, rank),
+      ownerEntries: mergeSessionEntryPages(ownerPages, ownerLimit, params.opts.sortBy, rank),
       totalCount,
       ownerFacet: sortSessionOwnerFacet(owners),
       ...(countParts ? mergeSessionListOwnerCounts(countParts) : {}),
@@ -155,14 +161,14 @@ export function selectSessionEntries(
       : filtered.slice(offset)
     : params.entriesSorted
       ? filtered
-      : sortAndLimitSessionEntries(filtered, pageEnd, params.opts.sortBy).slice(offset);
+      : sortAndLimitSessionEntries(filtered, pageEnd, params.opts.sortBy, rank).slice(offset);
   let entries = sharedEntries;
   let ownerCount = 0;
   if (ownerLimit > 0) {
     const owned =
       params.entriesSorted || incremental
         ? ownerEntries
-        : sortAndLimitSessionEntries(ownerEntries, ownerLimit, params.opts.sortBy);
+        : sortAndLimitSessionEntries(ownerEntries, ownerLimit, params.opts.sortBy, rank);
     ownerCount = owned.length;
     const ownedKeys = new Set(owned.map(([key]) => key));
     entries = [...owned, ...sharedEntries.filter(([key]) => !ownedKeys.has(key))];
@@ -411,12 +417,12 @@ export function prepareProjectedSessionList(params: {
   projection: SessionRowProjection;
   opts: SessionsListParams;
   key?: string;
-  candidateKeys?: ReadonlySet<string>;
   context?: GatewayRequestContext;
   client?: GatewayClient | null;
   now: number;
   metadataPrepared?: boolean;
   searchIdentities?: Awaited<ReturnType<typeof prepareSessionSearchIdentityNames>>;
+  personalPins?: ReadonlyMap<string, number> | null;
   /** Reused only within one admitted caller/configuration/profile authority epoch. */
   visibility?: WeakMap<object, boolean>;
 }) {
@@ -438,7 +444,6 @@ export function prepareProjectedSessionList(params: {
   ).getPresentation();
   const prepared = prepareSessionRowSelection(projection, opts, {
     key: exactKey,
-    candidateKeys: params.candidateKeys,
     now,
     rowContext: presentation.rowContext,
     metadataPrepared: params.metadataPrepared,
@@ -453,7 +458,11 @@ export function prepareProjectedSessionList(params: {
   const filters: SessionListFilterParams = {
     ...prepared,
     identityNames: params.searchIdentities?.names,
-    entriesSorted: true,
+    entriesSorted:
+      params.personalPins === undefined || (opts.sortBy ?? "updatedAt") !== "updatedAt",
+    // Undefined preserves historical ordering; null has neither a shared rank nor a personal fact.
+    personalPins: params.personalPins ?? undefined,
+    personalPinRank: createPersonalSessionPinRank(params.personalPins, now),
     involvingActorId: opts.involvingMe ? identity : undefined,
     ownerFirstActorId: opts.ownerFirst ? identity : undefined,
     restrictProfileReferences: client !== undefined,
@@ -512,6 +521,7 @@ export async function listProjectedSessions(params: {
   context?: GatewayRequestContext;
   client?: GatewayClient | null;
   acceptsSerializedJson?: boolean;
+  personalPins?: ReadonlyMap<string, number> | null;
   diagnostics?: SessionListDiagnostics;
   onResult?: (result: SessionsListResult) => void;
 }): Promise<SessionsListResult> {
@@ -556,6 +566,7 @@ export async function listProjectedSessions(params: {
             client,
             now,
             searchIdentities,
+            personalPins: params.personalPins,
             metadataPrepared: true,
           });
         diagnostics?.mark("filterSetup");
@@ -569,7 +580,10 @@ export async function listProjectedSessions(params: {
               invited,
             }),
           );
-        const selection = exactKey === undefined ? presentation.select(opts, select) : select();
+        const selection =
+          exactKey === undefined
+            ? presentation.select(opts, select, params.personalPins)
+            : select();
         return {
           now,
           presentation,
@@ -621,6 +635,7 @@ export async function listProjectedSessions(params: {
               includeLastMessage: opts.includeLastMessage && includeTranscriptFields,
               includeActivitySummary: opts.includeActivitySummary === true,
               rowMode: opts.rowMode,
+              personalPins: params.personalPins,
               omitSentinelChildren: opts.activeOnly && isSentinel,
               childArchiveFilter: opts.archived ?? false,
             })),
@@ -662,7 +677,9 @@ export async function listProjectedSessions(params: {
           const result = buildSessionsListResult(
             prepared,
             { ...selection, now, storePath: prepared.storePath },
-            params.acceptsSerializedJson ? presentation.list(sessions, opts) : { sessions },
+            params.acceptsSerializedJson
+              ? presentation.list(sessions, opts, params.personalPins)
+              : { sessions },
             context?.getCommittedRuntimeConfig?.() ?? cfg,
             client,
           );

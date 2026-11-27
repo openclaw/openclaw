@@ -36,7 +36,7 @@ import {
   type RealtimeVoiceAgentConsultTranscriptEntry,
 } from "./agent-consult-tool.js";
 
-export type RealtimeVoiceAgentConsultRuntime = PluginRuntimeCore["agent"];
+type RealtimeVoiceAgentConsultRuntime = PluginRuntimeCore["agent"];
 
 export type RealtimeVoiceAgentConsultResult = { text: string; yielded?: true };
 
@@ -97,6 +97,15 @@ export async function assertRealtimeVoiceAgentConsultModelSelectionUnlockedAsync
   }
 }
 
+// Session-runtime consults retain their locks in the typed-turn command owner.
+async function assertConsultModelSelectionUnlocked(
+  params: RealtimeVoiceAgentConsultModelLockParams & { skip?: boolean },
+): Promise<void> {
+  if (!params.skip) {
+    await assertRealtimeVoiceAgentConsultModelSelectionUnlockedAsync(params);
+  }
+}
+
 function assertModelSelectionUnlocked(entry: SessionEntry | undefined): void {
   // Realtime consults select a configured provider/model and may run fast-context first.
   // Until they preserve native bindings, a locked transcript must never cross runtimes.
@@ -135,6 +144,44 @@ function collectModelSelectionLockCandidates(params: RealtimeVoiceAgentConsultMo
   }
 
   return candidates.values();
+}
+
+/**
+ * A session-runtime consult hands the turn to the typed-turn owner, which prepares the agent
+ * workspace with its bootstrap policy. Preparing that same directory here under another policy
+ * would leave it unseeded but attested, and the typed turn would then refuse it as vanished.
+ */
+async function resolveSessionRuntimeWorkspacePreparation(params: {
+  dispatchesInSessionRuntime: boolean;
+  cfg: OpenClawConfig;
+  agentRuntime: RealtimeVoiceAgentConsultRuntime;
+  agentId: string;
+  sessionKey: string;
+  workspaceDir: string;
+  cwd?: string;
+  sessionEntry?: SessionEntry;
+}) {
+  if (
+    !params.dispatchesInSessionRuntime ||
+    params.workspaceDir !== params.agentRuntime.resolveAgentWorkspaceDir(params.cfg, params.agentId)
+  ) {
+    return {};
+  }
+  const { resolveAcpAgentWorkspaceProvisioningForTurn } =
+    await import("../agents/acp-workspace-provisioning.js");
+  const defaults = params.cfg.agents?.defaults;
+  return {
+    ensureBootstrapFiles: !defaults?.skipBootstrap,
+    skipOptionalBootstrapFiles: defaults?.skipOptionalBootstrapFiles,
+    provisioning: await resolveAcpAgentWorkspaceProvisioningForTurn({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      workspaceDir: params.workspaceDir,
+      cwd: params.cwd,
+      sessionKey: params.sessionKey,
+      sessionEntry: params.sessionEntry,
+    }),
+  };
 }
 
 function resolveRealtimeVoiceAgentSandboxSessionKey(agentId: string, sessionKey: string): string {
@@ -200,7 +247,7 @@ function assertRealtimeVoiceConsultNotInterrupted(
   }
 }
 
-export async function consultRealtimeVoiceAgent(params: {
+type ConsultRealtimeVoiceAgentParams = {
   cfg: OpenClawConfig;
   agentRuntime: RealtimeVoiceAgentConsultRuntime;
   logger: Pick<RuntimeLogger, "warn">;
@@ -261,7 +308,21 @@ export async function consultRealtimeVoiceAgent(params: {
     | RealtimeVoiceAgentConsultRunRegistration
     | void
     | Promise<RealtimeVoiceAgentConsultRunRegistration | void>;
-}): Promise<RealtimeVoiceAgentConsultResult> {
+};
+
+export function consultRealtimeVoiceAgent(params: ConsultRealtimeVoiceAgentParams) {
+  return consultRealtimeVoiceAgentInternal(params, false);
+}
+
+/** Gateway-only entry point; deliberately not re-exported by the plugin SDK. */
+export function consultRealtimeVoiceAgentInSessionRuntime(params: ConsultRealtimeVoiceAgentParams) {
+  return consultRealtimeVoiceAgentInternal(params, true);
+}
+
+async function consultRealtimeVoiceAgentInternal(
+  params: ConsultRealtimeVoiceAgentParams,
+  dispatchesInSessionRuntime: boolean,
+): Promise<RealtimeVoiceAgentConsultResult> {
   params.abortSignal?.throwIfAborted();
   const [{ beginSessionEffect }, { resolveSessionWorkStartError }, { readIngressSenderAdmission }] =
     await Promise.all([
@@ -345,7 +406,11 @@ export async function consultRealtimeVoiceAgent(params: {
   const cwd =
     normalizeOptionalString(initialSessionEntry?.spawnedCwd) ??
     resolveAgentRunCwd(params.cfg, agentId);
+  if (dispatchesInSessionRuntime && (params.provider || params.model)) {
+    throw new Error("Session-runtime consults use the session's own model selection");
+  }
   const modelLockParams = {
+    skip: dispatchesInSessionRuntime,
     cfg: params.cfg,
     agentRuntime: params.agentRuntime,
     agentId,
@@ -353,7 +418,7 @@ export async function consultRealtimeVoiceAgent(params: {
     spawnedBy: params.spawnedBy,
     storePath,
   };
-  await assertRealtimeVoiceAgentConsultModelSelectionUnlockedAsync(modelLockParams);
+  await assertConsultModelSelectionUnlocked(modelLockParams);
   const lifecycleAbortController = new AbortController();
   const lifecycleInterruption = new Error(
     "Realtime voice agent consult interrupted by a session lifecycle change.",
@@ -380,7 +445,7 @@ export async function consultRealtimeVoiceAgent(params: {
       if (archivedSessionError) {
         throw new Error(archivedSessionError);
       }
-      await assertRealtimeVoiceAgentConsultModelSelectionUnlockedAsync(modelLockParams);
+      await assertConsultModelSelectionUnlocked(modelLockParams);
     },
   });
   const abortFromCaller = () => lifecycleAbortController.abort(params.abortSignal?.reason);
@@ -394,6 +459,14 @@ export async function consultRealtimeVoiceAgent(params: {
     return await sessionWorkAdmission.run(async () => {
       await params.agentRuntime.ensureAgentWorkspace({
         dir: workspaceDir,
+        ...(await resolveSessionRuntimeWorkspacePreparation({
+          ...params,
+          dispatchesInSessionRuntime,
+          agentId,
+          workspaceDir,
+          cwd,
+          sessionEntry: initialSessionEntry,
+        })),
         guard: {
           assertHost: () => {
             lifecycleAbortController.signal.throwIfAborted();
@@ -521,7 +594,7 @@ export async function consultRealtimeVoiceAgent(params: {
         deliveryContext: consultDeliveryContext,
       });
       const sessionId = sessionEntry.sessionId;
-      await assertRealtimeVoiceAgentConsultModelSelectionUnlockedAsync(modelLockParams);
+      await assertConsultModelSelectionUnlocked(modelLockParams);
 
       const runId = `${params.runIdPrefix}-${randomUUID()}`;
       const timeoutMs =
@@ -533,7 +606,7 @@ export async function consultRealtimeVoiceAgent(params: {
       let runPromise: ReturnType<RealtimeVoiceAgentConsultRuntime["runEmbeddedAgent"]>;
       try {
         abortSignal.throwIfAborted();
-        await assertRealtimeVoiceAgentConsultModelSelectionUnlockedAsync(modelLockParams);
+        await assertConsultModelSelectionUnlocked(modelLockParams);
         abortSignal.throwIfAborted();
         // Voice consults suppress verbose/reasoning output because the bridge needs a short,
         // speakable answer, not agent-run diagnostics or hidden reasoning artifacts.
@@ -565,6 +638,8 @@ export async function consultRealtimeVoiceAgent(params: {
           prompt: buildRealtimeVoiceAgentConsultPrompt(params),
           provider: params.provider,
           model: params.model,
+          // Same voice thinking as main for every runtime: Talk config, else high. The command
+          // owner only normalizes it to what the selected runtime supports.
           thinkLevel: params.thinkLevel ?? "high",
           fastMode: params.fastMode,
           verboseLevel: "off",

@@ -4,7 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { loadDotEnv, loadDotEnvAsync } from "../infra/dotenv.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { recordUpdateDoctorConfigWrite } from "../infra/update-doctor-result.js";
+import { recordUpdateDoctorConfigWrite } from "../infra/update-doctor-config-capture.js";
 import { createConfigRuntimeEnvBase, prepareConfigRuntimeEnvLoad } from "./config-env-vars.js";
 import { GATEWAY_CONFIG_SELECTION_ENV_KEYS } from "./gateway-env-selection.js";
 import { createConfigIO } from "./io.factory.js";

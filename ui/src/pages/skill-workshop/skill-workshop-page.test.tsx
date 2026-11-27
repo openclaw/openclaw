@@ -224,7 +224,10 @@ it.each([
   if (action === "restore") {
     await click(timeline, "Undo");
     await waitForSolid(() =>
-      expect(request).toHaveBeenCalledWith("skills.workshop.archive", skillTarget),
+      expect(request).toHaveBeenCalledWith("skills.workshop.archive", {
+        ...skillTarget,
+        undoRestoreChangeId: change.id,
+      }),
     );
   } else if (versionId === VERSION && scopes.some((scope) => scope === "operator.admin")) {
     expect(button(timeline, "Undo")?.disabled).toBe(false);
@@ -470,13 +473,30 @@ it("opens an archived skill from a chat link", async () => {
     list: { ...list, archived: [...list.archived, archived("release-notes", versionId, false)] },
     read: ({ agentId, name, filePath, versionId: id }) => ({
       ...skillRead,
-      content: `${agentId}:${name}/${filePath}@${id}`,
+      content: `---\ndescription: >\n  Archived release\n  notes\n---\n${agentId}:${name}/${filePath}@${id}`,
     }),
     changes: { changes: [] },
   });
   const page = await mount(request, { search: "?skill=release-notes" });
   await waitText(page, `research:release-notes/SKILL.md@${versionId}`);
+  expect(summary(page)).toBe("Archived release notes");
   await waitForSolid(() => expect(page.querySelector(".sw-sort")).toBeNull());
+});
+
+it.each([
+  ["padded opening delimiter", "--- \n"],
+  ["leading BOM", "\uFEFF---\n"],
+  ["key starting with dashes", "---\nname: orchard\n---style: ripe\n"],
+])("shows only the Instructions body for a %s", async (_label, opening) => {
+  const content = `${opening}description: Saved summary\n---\n    example line\n\n# Procedure`;
+  const page = await mount(gateway({ read: { ...skillRead, content } }), {
+    search: `?skill=${SKILL}`,
+  });
+  await waitText(page, "Procedure");
+  const body = page.querySelector(".sw-detail__body .sw-markdown");
+  expect(body?.querySelector("pre code")?.textContent).toBe("example line\n");
+  expect(body?.querySelector("h1")?.textContent).toBe("Procedure");
+  expect(body?.textContent).not.toContain("Saved summary");
 });
 
 it("compares saved metadata against today's", async () => {
@@ -613,6 +633,40 @@ it("keeps unchanged draft instructions neutral while support files still need re
   expect(button(page, "Discard")?.disabled).toBe(false);
   expect(request).not.toHaveBeenCalledWith("skills.workshop.applyDraft", expect.anything());
   expect(request).not.toHaveBeenCalledWith("skills.workshop.discardDraft", expect.anything());
+});
+
+it("keeps standalone draft Markdown intact and strips metadata from its skill instructions", async () => {
+  const draft = draftFor("new-skill");
+  const notes = "references/notes.md";
+  const request = gateway({
+    list: { ...list, skills: [], archived: [], drafts: [draft] },
+    read: ({ filePath }: RequestParams) => ({
+      files: ["SKILL.md", notes],
+      content:
+        filePath === notes
+          ? "---\nx\n\n---"
+          : "--- \ndescription: Draft summary\n---\n    run check",
+    }),
+  });
+  const page = await mount(request, { search: `?draft=${draft.id}` });
+  const preview = ".sw-detail--draft .sw-markdown";
+  await waitForSolid(() => expect(text(page, `${preview} pre code`)).toBe("run check\n"));
+  expect(text(page, preview)).not.toContain("Draft summary");
+  await click(page, notes);
+  await waitForSolid(() => {
+    const blocks = page.querySelectorAll(`${preview} > *`);
+    expect(Array.from(blocks, (block) => [block.tagName, block.textContent])).toEqual([
+      ["HR", ""],
+      ["P", "x"],
+      ["HR", ""],
+    ]);
+  });
+  expect(request).toHaveBeenCalledWith("skills.workshop.read", {
+    agentId: "research",
+    name: draft.skillName,
+    draftId: draft.id,
+    filePath: notes,
+  });
 });
 
 it("shows only the drafts list on the Drafts tab of an agent with no learned skills", async () => {

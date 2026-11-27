@@ -3,6 +3,7 @@ import { listAgentIds } from "../agents/agent-roster.js";
 import { getSubagentRegistryPublicationRevision } from "../agents/subagents/registry/subagent-registry-publication.js";
 import { createSubagentSessionListReadIndex } from "../agents/subagents/registry/subagent-registry-read-index.js";
 import type { SubagentSessionListReadView } from "../agents/subagents/registry/subagent-registry-state.js";
+import { buildSessionSwarmSummary } from "../agents/subagents/registry/subagent-session-swarm-summary.js";
 import {
   buildProjectedAgentRunIndex,
   readAgentRunIndexVersion,
@@ -11,7 +12,6 @@ import { captureModelCostPricing } from "../model-catalog/usage-pricing.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
 import { createSessionIdentityProjection } from "./session-identity-projection.js";
 import * as records from "./session-row-projection-record.js";
-import { buildSessionSwarmSummary } from "./session-swarm-summary.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import type { SessionChildLink } from "./session-utils-core.js";
 import {
@@ -278,6 +278,7 @@ export function createSessionRowProjectionContext(
         row.profileRevision = profileRevision;
       }
       if (row.subagentRevision !== subagentRevision) {
+        const previous = row.materialized;
         const links = readChildLinks(row);
         const swarm = buildSessionSwarmSummary(
           current.subagentRuns.swarmRunsByRequesterSessionKey.get(row.key) ?? [],
@@ -285,13 +286,15 @@ export function createSessionRowProjectionContext(
           row.agentId,
           { includeChildren: true },
         );
-        const swarmChanged = !isDeepStrictEqual(row.materialized.row.swarm, swarm);
-        const childrenChanged = links !== row.materialized.source.childLinks;
+        const swarmChanged = !isDeepStrictEqual(previous.row.swarm, swarm);
+        const childrenChanged = links !== previous.source.childLinks;
         if (swarmChanged || childrenChanged) {
           row.materialized = replaceSessionRowFacts(
-            row.materialized,
+            previous,
             swarmChanged ? { swarm } : undefined,
-            childrenChanged ? { childLinks: projectSessionRowChildLinks(links) } : undefined,
+            childrenChanged
+              ? { childLinks: projectSessionRowChildLinks(links, previous.source.childLinks) }
+              : undefined,
           );
         }
         row.subagentRevision = subagentRevision;

@@ -16,7 +16,11 @@ import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { createCronMutationCompletion } from "../mutation-completion.js";
 import { cronOwnerHardeningEntrypoints } from "../owner-hardening-runtime.test-support.js";
 import { CronService } from "../service.js";
-import { createCronStoreHarness, createNoopLogger } from "../service.test-harness.js";
+import {
+  createCronStoreHarness,
+  createNoopLogger,
+  mockCronAvailableMemory,
+} from "../service.test-harness.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
@@ -44,7 +48,7 @@ async function admissionFixture(id: string, count: number, command = false) {
   }));
   await saveCronStore(storePath, { version: 1, jobs: [...blockers, job] });
   // No spare memory, so the blockers fill exactly the default run slots.
-  vi.spyOn(process, "availableMemory").mockReturnValue(0);
+  mockCronAvailableMemory(0);
   return { storePath, job, blockers };
 }
 
@@ -72,8 +76,6 @@ it("records the exact acknowledged manual request after SIGKILL before worker ac
           import { writeSync } from "node:fs";
           import { CronService } from ${JSON.stringify(serviceUrl.href)};
           import { createTestGatewayScheduler } from ${JSON.stringify(schedulerClockUrl.href)};
-          // No spare memory, so the blockers fill exactly the default run slots.
-          process.availableMemory = () => 0;
           let started = 0;
           const { promise: blockersStarted, resolve: reportStarted } = Promise.withResolvers();
           const cron = new CronService({
@@ -90,6 +92,8 @@ it("records the exact acknowledged manual request after SIGKILL before worker ac
               await new Promise(() => {});
             },
           });
+          // The subprocess owns this scheduler and its eight occupied slots.
+          cron.state.readAvailableMemoryBytes = () => 0;
           await cron.start();
           if (${killAfterAck}) {
             for (const id of ${JSON.stringify(blockers.map((entry) => entry.id))}) {

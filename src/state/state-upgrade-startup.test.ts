@@ -4,7 +4,10 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
+import { bindFreshClientCredentialStore } from "../infra/client-credential-migration.js";
+import { openClientCredentialCustody } from "../infra/client-credential-store.js";
 import * as processRole from "../infra/database-engine/admission-scope.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { createTrialPending, resolvePrefix, writeTrial } from "../update/store.js";
 import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
 import { withLiveStateReads } from "./artifact-preserving-state-reads.js";
@@ -13,21 +16,9 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "./openclaw-state-db-cache.js";
+import { getOpenClawStatePredecessorSchema } from "./openclaw-state-schema-runtime.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import { upgradeStateOnGatewayStart } from "./state-upgrade-startup.js";
-
-vi.mock("./state-upgrade-doctor.js", async (original) => ({
-  ...(await original<typeof import("./state-upgrade-doctor.js")>()),
-  // The fixture already has current tables; only the schema stamp needs upgrading.
-  // Keep config admission, native readers, publication, and cleanup real.
-  createDoctorChain:
-    () =>
-    async ({ stateDir }: { stateDir: string }) => {
-      using db = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"));
-      db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION}`);
-      return { warnings: [] };
-    },
-}));
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -78,8 +69,11 @@ it.each([
     {
       using db = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"));
       db.exec("PRAGMA journal_mode = WAL");
-      db.exec(OPENCLAW_STATE_SCHEMA_SQL);
-      db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1}`);
+      db.exec(getOpenClawStatePredecessorSchema(41));
+      db.exec(`PRAGMA user_version = 41;
+        INSERT INTO schema_meta (meta_key, role, schema_version, created_at, updated_at)
+          VALUES ('primary', 'global', 41, 1, 1);
+        INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '41', 1);`);
       db.prepare("INSERT INTO config_machine_state VALUES (?, ?, ?)").run(
         "auth.sharedStore",
         JSON.stringify({ location: "state-db" }),
@@ -112,7 +106,7 @@ it.each([
         });
         using original = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"));
         expect(original.prepare("PRAGMA user_version").get()).toEqual({
-          user_version: OPENCLAW_STATE_SCHEMA_VERSION - 1,
+          user_version: 41,
         });
         expect(fs.readFileSync(env.OPENCLAW_CONFIG_PATH, "utf8")).toBe(authored);
         return;
@@ -132,9 +126,7 @@ it.each([
             entry.live === path.join(stateDir, "state", "openclaw.sqlite"),
         ).preimage;
         using original = new DatabaseSync(previous, { readOnly: true });
-        expect(original.prepare("PRAGMA user_version").get()?.user_version).toBe(
-          OPENCLAW_STATE_SCHEMA_VERSION - 1,
-        );
+        expect(original.prepare("PRAGMA user_version").get()?.user_version).toBe(41);
         await upgradeStateOnGatewayStart(env, () => true);
         expect(fs.readFileSync(manifestFile, "utf8")).toBe(encoded);
       } else {
@@ -157,13 +149,20 @@ it.each([true, false])(
       OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
       OPENCLAW_LAUNCHER_IPC: "1",
     };
+    openClientCredentialCustody(env, { createIfMissing: true })?.close();
     fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, '{"gateway":{"mode":"local"}}');
     fs.mkdirSync(path.join(stateDir, "state"));
     const file = path.join(stateDir, "state", "openclaw.sqlite");
     {
       using db = new DatabaseSync(file);
       db.exec(OPENCLAW_STATE_SCHEMA_SQL);
-      db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION}`);
+      db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};
+        INSERT INTO schema_meta (meta_key, role, schema_version, created_at, updated_at)
+          VALUES ('primary', 'global', ${OPENCLAW_STATE_SCHEMA_VERSION}, 1, 1);
+        INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '${OPENCLAW_STATE_SCHEMA_VERSION}', 1);`);
+      runSqliteImmediateTransactionSync(db, () =>
+        bindFreshClientCredentialStore(db, { env, path: file }),
+      );
     }
     const original = fs.readFileSync(file);
     const target = path.join("releases", "empty-release", "openclaw");

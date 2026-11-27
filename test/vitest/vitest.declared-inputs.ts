@@ -17,7 +17,7 @@ const agentV24Tests = [
   "src/state/openclaw-agent-session-snapshots-migration.test.ts",
 ];
 
-const stateCorpusTests = ["src/state/sqlite-copy-swap.test.ts", "test/state-upgrade.e2e.test.ts"];
+const stateCorpusTests = ["test/state-upgrade.e2e.test.ts"];
 
 const historicalFixtureInputs = [
   [

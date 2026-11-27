@@ -1,6 +1,9 @@
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkerExecApprovalResponseFrame } from "../../../packages/gateway-protocol/src/schema/worker-exec-approval.js";
+import { WORKER_EXEC_DEFAULTS_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { resetProcessRegistryForTests } from "../../agents/bash-process-registry.test-support.js";
 import type { ExecApprovalTransport } from "../../agents/exec-approval-transport.js";
@@ -10,6 +13,7 @@ import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-messa
 import { makeProviderModelFixture } from "../../agents/test-helpers/provider-model-fixture.js";
 import { createToolSurfacePresentationForTest } from "../../agents/tool-surface-plan.test-support.js";
 import { callGatewayTool } from "../../agents/tools/gateway.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { saveExecApprovals } from "../../infra/exec-approvals-store.test-support.js";
 import { createProcessSupervisor } from "../../process/supervisor/supervisor.js";
 import type { ProcessSupervisor } from "../../process/supervisor/types.js";
@@ -23,6 +27,7 @@ import { createContext } from "../server-plugin-in-process-dispatch.test-support
 import * as support from "./service.test-support.js";
 import { createWorkerExecApprovalOwner } from "./worker-exec-approval.js";
 import { createWorkerGatewayToolRuntime } from "./worker-gateway-tool-runtime.js";
+import { resolveWorkerToolAuthority } from "./worker-tool-authority.js";
 
 const spawn = vi.hoisted(() => vi.fn<ProcessSupervisor["spawn"]>());
 // mock-isolation: Record the real process boundary without replacing execution.
@@ -99,6 +104,8 @@ describe.skipIf(process.platform === "win32")("worker exec approval boundary", (
       alterResponse?: (frame: WorkerExecApprovalResponseFrame) => void;
       alterExecution?: (transport: ExecApprovalTransport) => ExecApprovalTransport;
       mode?: "auto" | "ask";
+      config?: OpenClawConfig;
+      nodeExecution?: Parameters<typeof createWorkerPlacementTools>[0]["nodeExecution"];
       gatewayContext?: GatewayRequestContext;
       turnSource?: Parameters<typeof createWorkerExecApprovalOwner>[0]["turnSource"];
     } = {},
@@ -112,7 +119,26 @@ describe.skipIf(process.platform === "win32")("worker exec approval boundary", (
       security: "allowlist",
       ask: options.mode === "ask" ? "always" : "on-miss",
     } as const;
-    const policy = prepareCoreToolPolicy({});
+    const placement = { agentId: "main", sessionKey: `agent:main:${h.identity.sessionId}` };
+    const policy = options.config
+      ? (
+          await resolveWorkerToolAuthority({
+            modelRef: { provider: reviewerModel.provider, model: reviewerModel.id },
+            placement,
+            turn: {
+              ...placement,
+              sessionId: h.identity.sessionId!,
+              runId: h.identity.runId!,
+              sessionFile: path.join(support.testState.root, "session.jsonl"),
+              workspaceDir: support.testState.root,
+              prompt: "Print the worker marker.",
+              timeoutMs: 30_000,
+              config: options.config,
+            },
+            assertCurrent: h.source.receiptAuthority,
+          })
+        ).policy
+      : prepareCoreToolPolicy({});
     const runtime = createWorkerGatewayToolRuntime({
       assertCurrent: h.source.receiptAuthority,
       signal: new AbortController().signal,
@@ -153,8 +179,12 @@ describe.skipIf(process.platform === "win32")("worker exec approval boundary", (
         return frame;
       },
     };
+    const identity = options.config
+      ? { ...h.identity, protocolFeatures: [WORKER_EXEC_DEFAULTS_PROTOCOL_FEATURE] }
+      : h.identity;
     const tools = createWorkerPlacementTools({
-      policy,
+      policy: (await runtime.getSurface(identity)).policy,
+      nodeExecution: options.nodeExecution,
       cwd: support.testState.root,
       containmentRoot: support.testState.root,
       execAuthority: exec,
@@ -171,20 +201,54 @@ describe.skipIf(process.platform === "win32")("worker exec approval boundary", (
     if (!tool) {
       throw new Error("Worker exec tool was not constructed");
     }
-    return { ...h, tool };
+    return { ...h, identity, tool, runtime };
   }
 
-  it("reviews automatic worker exec on the Gateway and executes without a loopback call", async () => {
-    const { tool } = await fixture();
-    const result = await tool.execute("worker-print", { command: "/bin/echo worker-approved" });
+  it("reviews worker exec on the Gateway and runs the node-admitted tool with the Agent timeout", async () => {
+    await using toolDirs = await fs.mkdtempDisposable(path.join(os.tmpdir(), "worker-tools-"));
+    const admitted = path.join(toolDirs.path, "node-admitted");
+    const other = path.join(toolDirs.path, "gateway-only");
+    for (const [dir, marker] of [
+      [admitted, "worker-approved"],
+      [other, "wrong-tool"],
+    ] as const) {
+      await fs.mkdir(dir);
+      await fs.writeFile(path.join(dir, "worker-marker"), `#!/bin/sh\necho ${marker}\n`, {
+        mode: 0o755,
+      });
+    }
+    const { identity, runtime, tool } = await fixture({
+      config: {
+        tools: {
+          exec: {
+            host: "gateway",
+            timeoutSeconds: 30,
+            backgroundMs: 5_000,
+            cleanupMs: 60_000,
+            pathPrepend: [other, admitted],
+          },
+        },
+        agents: { entries: { main: { tools: { exec: { timeoutSeconds: 17 } } } } },
+      },
+      nodeExecution: { pathPrepend: [admitted] },
+    });
+    await expect(runtime.getSurface({ ...identity, protocolFeatures: [] })).rejects.toThrow(
+      "Configured exec defaults require an updated worker",
+    );
+    expect((await runtime.getSurface(identity)).policy.execDefaults).toMatchObject({
+      backgroundMs: 5_000,
+      cleanupMs: 60_000,
+    });
+    const result = await tool.execute("worker-path", { command: "worker-marker" });
     expect(result.details).toMatchObject({ status: "completed", exitCode: 0 });
     expect(result.content).toEqual([
       expect.objectContaining({ text: expect.stringContaining("worker-approved") }),
     ]);
+    expect(spawn.mock.calls[0]?.[0].timeoutMs).toBe(17_000);
     expect(completion.completeWithPreparedSimpleCompletionModel).toHaveBeenCalledOnce();
     const prompt = vi.mocked(completion.completeWithPreparedSimpleCompletionModel).mock
       .calls[0]?.[0].context.messages[0]?.content;
-    expect(prompt).toContain('"command": "/bin/echo worker-approved"');
+    expect(prompt).toContain('"command": "worker-marker"');
     expect(prompt).toContain(JSON.stringify(path.resolve(support.testState.root)));
     expect(spawn).toHaveBeenCalledOnce();
     expect(callGatewayTool).not.toHaveBeenCalled();

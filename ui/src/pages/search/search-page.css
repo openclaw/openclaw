@@ -5,6 +5,13 @@
   white-space: normal;
 }
 
+/* On phones, Agent and Model are stacked fields in the same group. */
+@media (max-width: 640px) {
+  openclaw-search-page .settings-row__control > .model-picker {
+    width: 100%;
+  }
+}
+
 /* A long status stays on the chevron's line; the provider name wraps instead. */
 .search-provider > .settings-row__control {
   flex-wrap: nowrap;

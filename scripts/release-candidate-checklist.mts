@@ -1740,20 +1740,19 @@ function candidateParallelsLoginPrefix() {
 function preflightCandidateParallels() {
   // P can check the host before FRV identifies Q. Q still selects the exact
   // guests and snapshots and performs the actual smoke against C's tarballs.
-  const check = `
-import { detectParallelsHostIp } from './scripts/e2e/parallels/host-server.ts';
-import { listVmNames } from './scripts/e2e/parallels/parallels-vm.ts';
-import { resolveProviderAuth } from './scripts/e2e/parallels/provider-auth.ts';
-if (listVmNames().length === 0) throw new Error('no Parallels guests are registered');
-if (!detectParallelsHostIp()) throw new Error('failed to detect Parallels host IP');
-resolveProviderAuth({ provider: '${CANDIDATE_PARALLELS_PROVIDER}' });
-`;
+  const preflightPath = fileURLToPath(
+    new URL("./e2e/parallels/candidate-preflight.ts", import.meta.url),
+  );
   const command = [
     ...candidateParallelsLoginPrefix(),
     "exec",
-    ...[process.execPath, "--import", "./scripts/tsx.mjs", "--input-type=module", "-e", check].map(
-      shellQuote,
-    ),
+    ...[
+      process.execPath,
+      "--import",
+      "./scripts/tsx.mjs",
+      preflightPath,
+      CANDIDATE_PARALLELS_PROVIDER,
+    ].map(shellQuote),
   ].join(" ");
   const result = spawnSync("bash", ["-lc", command], {
     cwd: TOOLING_ROOT,
@@ -2599,6 +2598,9 @@ async function main() {
         formatShippedBaselineExclusions(releaseNotesProvenance.shippedBaselines) ||
         "Shipped baseline exclusions: none"
       }`,
+      ...(releaseNotesProvenance.diagnostics ?? []).map(
+        (diagnostic) => "- Changelog warning: " + diagnostic,
+      ),
       `- local generated release checks: ${localGeneratedCheck.status}${
         localGeneratedCheck.reason ? ` (${localGeneratedCheck.reason})` : ""
       }`,

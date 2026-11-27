@@ -19,12 +19,7 @@ import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
-import {
-  MEMORY_CATEGORIES,
-  type MemoryConfig,
-  memoryConfigSchema,
-  vectorDimsForModel,
-} from "./config.js";
+import { type MemoryConfig, memoryConfigSchema, vectorDimsForModel } from "./config.js";
 import {
   buildMemoryRecallUnavailableResult,
   createEmbeddings,
@@ -35,6 +30,7 @@ import { MemoryDB, type MemoryEntry } from "./lancedb-store.js";
 import { resolveStoredMemoryDenial, storedMemoriesUnavailableResult } from "./memory-access.js";
 import { dropMediaNoteLines, sanitizeForMemoryCapture } from "./memory-capture-sanitization.js";
 import { registerMemoryCli } from "./memory-cli.js";
+import { MEMORY_CATEGORIES } from "./memory-policy-data.js";
 import {
   type AutoCaptureMessageProgress,
   captureFingerprint,

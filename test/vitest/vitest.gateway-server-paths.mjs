@@ -323,6 +323,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-restart-resume.admission.test.ts",
   "src/gateway/session-restart-resume.scope.test.ts",
   "src/gateway/session-restart-resume.test.ts",
+  "src/gateway/session-restart-shell-admission.test.ts",
   "src/gateway/session-row-event-ancestor-placement.test.ts",
   "src/gateway/session-row-event-trees.test.ts",
   "src/gateway/session-row-projection.accepted-facts.test.ts",
@@ -555,7 +556,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/store-revocation-notify.test.ts",
   "src/gateway/worker-environments/store-runtime-refresh.test.ts",
   "src/gateway/worker-environments/store-worker.test.ts",
-  "src/gateway/worker-environments/store.benchmark.test.ts",
   "src/gateway/worker-environments/store.test.ts",
   "src/gateway/worker-environments/transcript-commit-store.test.ts",
   "src/gateway/worker-environments/transcript-commit.delivery-mirror.test.ts",
@@ -631,6 +631,7 @@ export const gatewayClientTestInclude = [
   "src/gateway/**/*gateway-cli-backend*.test.ts",
 ];
 export const gatewayClientTestExclude = [
+  ...databaseWorkerCoreTestFiles,
   ...gatewayDatabaseWorkerTestFiles,
   "src/gateway/**/*server*.test.ts",
   "src/gateway/server-methods/**/*.test.ts",
@@ -661,7 +662,6 @@ export const gatewayMethodsIsolatedTestFiles = [
   // Heap scans should not traverse objects from unrelated test files.
   "src/gateway/server-methods/chat-metadata-runtime.cache.test.ts",
   "src/gateway/server-methods/agent.test.ts",
-  "src/gateway/server-methods/agent.followup-owner.test.ts",
   "src/gateway/server-methods/agent.visitor-access.test.ts",
   "src/gateway/server-methods/board.runtime-boundaries.test.ts",
   "src/gateway/server-methods/chat.reset-visible-yield.test.ts",

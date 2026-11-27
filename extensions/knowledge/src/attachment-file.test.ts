@@ -101,9 +101,22 @@ it("rejects workspace escapes, symbolic links, hardlinks and sandbox host-path c
   await writeFile(outside, f.bytes);
   await symlink(outside, path.join(f.workspace, "alias.bin"));
   await link(outside, path.join(f.workspace, "hard.bin"));
-  for (const filePath of [outside, "../outside.bin", "alias.bin", "hard.bin"]) {
-    await expect(f.invoke({ ...f.input, filePath })).rejects.toThrow(/workspace|alias|file/i);
+  const outsideError = `Source file is outside the authorized workspace: ${f.workspace}. Choose a file inside this workspace.`;
+  for (const filePath of [
+    outside,
+    "../outside.bin",
+    path.join(f.base, "missing.bin"),
+    "../missing.bin",
+    `${f.workspace}-other/missing.bin`,
+  ]) {
+    await expect(f.invoke({ ...f.input, filePath })).rejects.toEqual(new Error(outsideError));
   }
+  for (const filePath of ["alias.bin", "hard.bin"]) {
+    await expect(f.invoke({ ...f.input, filePath })).rejects.toThrow(/alias checks/);
+  }
+  await expect(f.invoke({ ...f.input, filePath: "missing.bin" })).rejects.toThrow(
+    `Source file not found: ${path.join(f.workspace, "missing.bin")}. Authorized workspace: ${f.workspace}`,
+  );
   await expect(f.invoke(f.input, { sandboxed: true })).rejects.toThrow(/sandbox/i);
   await expect(f.invoke(f.input, { workspaceDir: undefined })).rejects.toThrow(/workspace/i);
 });

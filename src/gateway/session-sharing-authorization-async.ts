@@ -1,7 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
-import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
@@ -282,20 +281,8 @@ export async function prepareSessionPrincipalRunAuthority(
       { synchronousCheck: true },
     );
     assertAccessCurrent();
-    const participationSignal = sharing.participationSignal;
-    const signal = participationSignal
-      ? AbortSignal.any(
-          [admitted.authority.signal, participationSignal].filter(
-            (entry): entry is AbortSignal => entry !== undefined,
-          ),
-        )
-      : admitted.authority.signal;
     return {
       ...admitted,
-      authority:
-        signal === admitted.authority.signal
-          ? admitted.authority
-          : createAdmittedRunOperatorAuthority({ ...admitted.authority, signal }),
       release,
       assertCurrent: assertAccessCurrent,
       participationCeiling: sharing.participationCeiling,
@@ -367,9 +354,11 @@ export async function resolveSessionMutationAuthorizationAsync(
     return resolveSessionMutationAuthorization(params);
   }
   const cfg = params.context.getRuntimeConfig();
+  const startsSessionRun = params.method === "chat.send" || params.method === "agent";
   // Goal Resume retains session access across transcript writer handoffs.
   const sessionAccessOnly =
     params.method === "chat.send" ||
+    params.method === "sessions.send" ||
     (params.method === "sessions.goal.update" && requestPreparation.authorizesAgentRun);
   const chatParams =
     params.method === "chat.send" ? asOptionalRecord(params.requestParams) : undefined;
@@ -464,7 +453,7 @@ export async function resolveSessionMutationAuthorizationAsync(
       });
       reads.push(retained);
       const initialFacts = retained.readCurrent(cfg);
-      if (!initialFacts.target && (params.method === "chat.send" || params.method === "agent")) {
+      if (!initialFacts.target && startsSessionRun) {
         const { getSubagentRunsForChildSession } =
           await import("../agents/subagents/registry/subagent-registry-memory.js");
         // An indexed custody requirement can refuse recreation, never reconstruct authority.
@@ -475,10 +464,7 @@ export async function resolveSessionMutationAuthorizationAsync(
         }
       }
       const inherited = params.client?.internal?.operatorRunAuthority;
-      if (
-        (params.method === "chat.send" || params.method === "agent") &&
-        initialFacts.target?.entry.delegatedOperatorSource
-      ) {
+      if (startsSessionRun && initialFacts.target?.entry.delegatedOperatorSource) {
         childParticipation = await prepareSessionDelegatedOperatorAuthority({
           context: params.context,
           agentId: input.agentId,
@@ -490,11 +476,10 @@ export async function resolveSessionMutationAuthorizationAsync(
           creationReleases.push(childParticipation.release);
         }
       }
-      const participantRunAuthority =
-        params.method === "chat.send" || params.method === "agent"
-          ? (childParticipation?.authority ??
-            (inherited?.participationCeiling ? inherited : undefined))
-          : undefined;
+      const participantRunAuthority = startsSessionRun
+        ? (childParticipation?.authority ??
+          (inherited?.participationCeiling ? inherited : undefined))
+        : undefined;
       if (participantRunAuthority) {
         params = {
           ...params,
@@ -582,7 +567,6 @@ export async function resolveSessionMutationAuthorizationAsync(
     const authorization = result.authorization;
     if (childParticipation) {
       authorization.participationCeiling = childParticipation.authority.participationCeiling;
-      authorization.participationSignal = childParticipation.authority.signal;
     }
     if (authorization.release) {
       creationReleases.push(authorization.release);
@@ -616,7 +600,6 @@ export async function resolveSessionMutationAuthorizationAsync(
         },
         retain,
         retainForRun: () => ({
-          signal: authorization.participationSignal,
           participationCeiling: bindSessionParticipationSource(
             authorization.participationCeiling,
             () => preparedTargets[0]?.read().target,
@@ -624,10 +607,7 @@ export async function resolveSessionMutationAuthorizationAsync(
             authorization.assertAdmittedInputCurrent ?? authorization.assertCurrent,
           ),
           participationAuthority: childParticipation?.authority,
-          assertCurrent: () => {
-            authorization.participationSignal?.throwIfAborted();
-            (authorization.assertAdmittedInputCurrent ?? authorization.assertCurrent)();
-          },
+          assertCurrent: authorization.assertAdmittedInputCurrent ?? authorization.assertCurrent,
           release: retain(),
         }),
         release: () => {
@@ -644,8 +624,9 @@ export async function resolveSessionMutationAuthorizationAsync(
           if (!created.entry) {
             return;
           }
-          const path = created.readSource?.path ?? created.storePath;
-          const identity = readDatabasePathIdentitySync(path);
+          const identity = readDatabasePathIdentitySync(
+            created.readSource?.path ?? created.storePath,
+          );
           const retained = retainPreparedSessionSharingFacts({
             databaseIdentity: identity.key,
             sessionKey: created.sessionKey,
@@ -655,6 +636,11 @@ export async function resolveSessionMutationAuthorizationAsync(
             membership: new Set(),
           });
           creationReleases.push(retained.release);
+          const storageTarget = {
+            agentId: created.agentId,
+            canonicalKey: created.sessionKey,
+            storePath: created.storePath,
+          };
           const readScope = sessionAccessOnly ? "session-access" : "sharing";
           const read = () => {
             const current = retained.readCurrent(readScope);
@@ -671,11 +657,7 @@ export async function resolveSessionMutationAuthorizationAsync(
                 readSource: created.readSource,
                 entry: current.entry,
               },
-              storageTarget: {
-                agentId: created.agentId,
-                canonicalKey: created.sessionKey,
-                storePath: created.storePath,
-              },
+              storageTarget,
               members: [],
               isMember: (identityId: string) => current.membership.has(identityId),
               memberAccess: (identityId: string) => current.memberAccess?.[identityId],
@@ -699,11 +681,7 @@ export async function resolveSessionMutationAuthorizationAsync(
             preparedTargets.push({
               sessionKey: created.sessionKey,
               agentId: created.agentId,
-              storageTarget: {
-                agentId: created.agentId,
-                canonicalKey: created.sessionKey,
-                storePath: created.storePath,
-              },
+              storageTarget,
               readSource: created.readSource,
               prepareRead: retained.prepareRead,
               read,

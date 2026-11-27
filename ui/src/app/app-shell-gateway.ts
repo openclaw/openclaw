@@ -469,7 +469,7 @@ export class ShellGatewayOwner {
       void connectionBootstrap.run("runtime-config", () =>
         this.ensureRuntimeConfig(snapshot, context.runtimeConfig),
       );
-      if (this.host.routeState.routeId && !context.agents.state.agentsList) {
+      if (context.agents && !context.agents.state.agentsList) {
         void connectionBootstrap.run("agents", () =>
           this.ensureAgentsList(snapshot, context.agents),
         );
@@ -553,8 +553,7 @@ export class ShellGatewayOwner {
       this.agentsListClient = null;
       return Promise.resolve();
     }
-    const routeId = this.host.routeState.routeId;
-    if (!agents || !routeId || agents.state.agentsList) {
+    if (!agents || agents.state.agentsList) {
       return Promise.resolve();
     }
     if (this.agentsListClient === snapshot.client && this.agentsListSource === agents) {

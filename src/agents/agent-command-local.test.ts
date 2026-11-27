@@ -19,7 +19,7 @@ import {
 import { resetPluginLoaderTestStateForTest, writePlugin } from "../plugins/loader.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { clearActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
-import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-state.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import {
   createGatewaySchedulerClock,

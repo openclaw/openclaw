@@ -52,6 +52,7 @@ export type CopilotModelProviderInput = {
   api?: string;
   id: string;
   provider: string;
+  params?: Record<string, unknown>;
   baseUrl?: string;
   azureApiVersion?: string;
   headers?: Record<string, string | null | undefined>;

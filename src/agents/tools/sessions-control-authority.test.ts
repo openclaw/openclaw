@@ -187,6 +187,17 @@ describe("prepared session control target", () => {
     },
   );
 
+  it("uses shared-session write access for snooze without granting archive", async () => {
+    const { request } = seedTarget("snooze");
+    const { authority } = issueAuthority(callerId);
+    await withCapture({ ...request, operation: "snooze", authority }, (current) =>
+      expect(current.assertCurrent).not.toThrow(),
+    );
+    await expect(
+      prepareSessionControlTarget({ ...request, operation: "archive", authority }),
+    ).rejects.toThrow(/session creator/i);
+  });
+
   it("rejects insufficient and unissued sources even for the real creator", async () => {
     const { request } = seedTarget("invalid-source", {
       createdActor: { type: "human", source: "profile", id: callerId },

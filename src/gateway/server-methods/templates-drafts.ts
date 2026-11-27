@@ -538,8 +538,14 @@ export const templatesDraftsHandlers: GatewayRequestHandlers = {
           sourceSessionKey: params.sourceSessionKey,
           draftId: params.draftId,
           assertCurrent: () => {
-            authority.assertCurrent();
-            source.authorization?.assertCurrent();
+            // Request lifetime only; administrator policy was admitted when sign-in started.
+            if (!hasCurrentPersonalGatewaySource(options.client, context)) {
+              throw new TemplateProjectError(
+                "human_required",
+                "Create, review, and publish Templates from the OpenClaw app while connected as an administrator.",
+              );
+            }
+            options.sessionMutationCommitGuard?.();
             if (resolveClawHubBaseUrl() !== identity.baseUrl) {
               throw new TemplateProjectError(
                 "clawhub_registry_changed",

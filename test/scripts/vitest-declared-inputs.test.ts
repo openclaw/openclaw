@@ -19,7 +19,7 @@ it.each([
     "src/commands/doctor-historical-imports.process.test.ts",
     "test/fixtures/sqlite/openclaw-agent-schema-v26.sql",
   ],
-  ...["src/state/sqlite-copy-swap.test.ts", "test/state-upgrade.e2e.test.ts"].flatMap((owner) =>
+  ...["test/state-upgrade.e2e.test.ts"].flatMap((owner) =>
     ["2026.7.1", "2026.9.37"].map((release) => [
       owner,
       `test/fixtures/state-corpus-populated/${release}/manifest.json`,

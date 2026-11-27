@@ -3,20 +3,25 @@ import path from "node:path";
 import type { UpdateRunParams } from "../../packages/gateway-protocol/src/index.js";
 import { resolveNodeService } from "../daemon/node-service.js";
 import { summarizeGatewayServiceLayout } from "../daemon/service-layout.js";
+import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { readGatewayLockProcessCmdline } from "../infra/gateway-lock-process.js";
 import { readActiveGatewayLockIdentity } from "../infra/gateway-lock.js";
 import { classifyOpenClawArgv } from "../infra/gateway-process-argv.js";
-import { servingGitReleaseSlot } from "../infra/git-release-paths.js";
 import { readPackageVersion } from "../infra/package-json.js";
-import { readPackageReleaseSlotSync } from "../infra/package-release-slot-path.js";
 import { resolveUpdateInstallKind } from "../infra/update-check.js";
 import { readBuiltGatewayBuildId } from "../infra/update-git-runtime.js";
 import { detectGlobalInstallManagerForRoot } from "../infra/update-global.js";
+import { resolveUpdateInstallRoot } from "../infra/update-install-root.js";
+import {
+  prepareManagedHandoffLeaseStore,
+  resolveManagedUpdateLeaseDatabasePath,
+} from "../infra/update-managed-service-handoff-lease.js";
+import { resolveLegacyGatewayManagedUpdateLeaseDatabasePath } from "../infra/update-managed-service-handoff-legacy-store.js";
 import { ignoreNonCleanupCommandError } from "../process/exec-result.js";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { readTrial, resolvePrefix } from "./store.js";
+import { resolvePrefix } from "./store.js";
 
 type CheckoutIdentity = NonNullable<UpdateRunParams["checkout"]>;
 
@@ -96,16 +101,6 @@ export async function updateInstallationMismatch(
   return `This state directory uses the OpenClaw installation at ${installedRoot}, not the invoking installation. Nothing changed. To update that installation, run: ${command}`;
 }
 
-/** A published release or trial keeps the resident owner, including before first activation. */
-export async function hasReleaseUpdateOwner(
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<boolean> {
-  const prefix = resolvePrefix(env);
-  return Boolean(
-    readPackageReleaseSlotSync(servingGitReleaseSlot(prefix)) || (await readTrial(prefix))?.v === 2,
-  );
-}
-
 /** A node-only package stays with its installer; no Gateway can activate a release trial. */
 export async function isNodeOnlyUpdateInstallation(
   env: NodeJS.ProcessEnv = process.env,
@@ -134,6 +129,41 @@ export async function checkUpdateInstallationSlot(
   root: string,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<void> {
+  const currentDatabasePath = resolveManagedUpdateLeaseDatabasePath();
+  const key = resolveUpdateInstallRoot(root);
+  for (const databasePath of [
+    currentDatabasePath,
+    resolveLegacyGatewayManagedUpdateLeaseDatabasePath(currentDatabasePath),
+  ]) {
+    if (!databasePath) {
+      continue;
+    }
+    const store = await prepareManagedHandoffLeaseStore({
+      databasePath,
+      serviceManagerEnv: resolveServiceManagerEnv(env),
+    });
+    let observed;
+    try {
+      observed = store.read(key);
+    } catch (error) {
+      if (hasErrnoCode(error, "ENOENT")) {
+        continue;
+      }
+      throw error;
+    }
+    if (observed.kind === "absent") {
+      continue;
+    }
+    const lease = observed.kind === "current" ? observed.lease : store.readLegacyParent(key);
+    if (
+      lease &&
+      (store.processState(lease.helper) === "live" || store.processState(lease.executor) === "live")
+    ) {
+      throw new Error(
+        "An in-place updater is still using this installation. Let that update finish, then retry.",
+      );
+    }
+  }
   const target = await fs
     .realpath(path.join(resolvePrefix(env), "openclaw"))
     .catch((error: unknown) => {

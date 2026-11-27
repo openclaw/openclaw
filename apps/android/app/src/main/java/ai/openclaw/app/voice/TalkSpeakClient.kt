@@ -1,6 +1,7 @@
 package ai.openclaw.app.voice
 
-import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.ErrorShape
+import ai.openclaw.app.gateway.RpcResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
@@ -43,7 +44,7 @@ internal interface TalkSpeechSynthesizing {
 
 /** Gateway RPC client for talk.speak with local-TTS fallback classification. */
 internal class TalkSpeakClient(
-  private val requestDetailed: suspend (String, String, Long) -> GatewaySession.RpcResult,
+  private val requestDetailed: suspend (String, String, Long) -> RpcResult,
 ) : TalkSpeechSynthesizing {
   private val json = Json { ignoreUnknownKeys = true }
 
@@ -102,7 +103,7 @@ internal class TalkSpeakClient(
     )
   }
 
-  private fun isFallbackEligible(error: GatewaySession.ErrorShape?): Boolean {
+  private fun isFallbackEligible(error: ErrorShape?): Boolean {
     val reason = error?.details?.reason
     if (reason == null) return true
     // Only provider/config absence should fall back to Android TTS; payload and

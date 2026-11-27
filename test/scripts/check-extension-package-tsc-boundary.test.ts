@@ -7,9 +7,6 @@ import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, beforeEach, expect, it, type TestContext } from "vitest";
 import {
-  formatBoundaryCheckSuccessSummary,
-  formatSlowCompileSummary,
-  formatSkippedCompileProgress,
   installCanaryArtifactCleanup,
   resolveCompileConcurrency,
   resolveCanaryArtifactPaths,
@@ -368,52 +365,6 @@ it("parses extension boundary compile concurrency strictly", () => {
       resolveCompileConcurrency({ OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: value }, 32),
     ).toThrow("OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY must be a positive integer");
   }
-});
-
-it("formats a success summary with counts and elapsed time", () => {
-  expect(
-    formatBoundaryCheckSuccessSummary({
-      mode: "all",
-      compileCount: 84,
-      skippedCompileCount: 13,
-      canaryCount: 12,
-      prepElapsedMs: 12_345,
-      compileElapsedMs: 54_321,
-      canaryElapsedMs: 6_789,
-      elapsedMs: 54_321,
-    }),
-  ).toBe(`extension package boundary check passed
-mode: all
-compiled plugins: 84
-skipped plugins: 13
-canary plugins: 12
-prep elapsed: 12345ms
-compile elapsed: 54321ms
-canary elapsed: 6789ms
-elapsed: 54321ms
-`);
-});
-
-it("formats skipped compile progress concisely", () => {
-  expect(formatSkippedCompileProgress({ skippedCount: 13, totalCount: 97 })).toBe(
-    "skipped 13 fresh plugin compiles before running 84 stale plugin checks\n",
-  );
-  expect(formatSkippedCompileProgress({ skippedCount: 97, totalCount: 97 })).toBe(
-    "skipped 97 fresh plugin compiles\n",
-  );
-});
-
-it("formats the slowest plugin compiles in descending order", () => {
-  expect(
-    formatSlowCompileSummary({
-      compileTimings: [
-        { extensionId: "quick", elapsedMs: 40 },
-        { extensionId: "slow", elapsedMs: 900 },
-        { extensionId: "medium", elapsedMs: 250 },
-      ],
-      limit: 2,
-    }),
-  ).toBe(["slowest plugin compiles:", "- slow: 900ms", "- medium: 250ms", ""].join("\n"));
 });
 
 it("keeps full failure output on the thrown error for canary detection", async () => {

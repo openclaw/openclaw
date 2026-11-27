@@ -241,16 +241,30 @@ describe("buildButtonProps attachments", () => {
     setInteractionSecret("default", "test-bot-token");
   });
 
-  it("sets type to 'button' on every action", () => {
-    const result = buildButtonAttachmentsForTest({
-      callbackUrl: "http://localhost:18789/cb",
-      buttons: [{ id: "my_action", name: "A" }],
-    });
+  it("keeps alphanumeric ids, gives other values a unique routable id and signs the original value", () => {
+    const values = [
+      "approve",
+      "::删掉说明和备注两条帖子，只留表",
+      "::Yes, do it!",
+      "::yes?",
+      "::yes!",
+    ];
+    const actions = requireActions(
+      buildButtonAttachmentsForTest({
+        callbackUrl: "http://localhost:18789/cb",
+        buttons: values.map((id) => ({ id, name: id, context: { callback_data: id } })),
+      }),
+    );
 
-    const action = requireAction(result);
-    expect(action.type).toBe("button");
-    expect(action.id).toBe("myaction");
-    expect(action.integration.context.action_id).toBe("myaction");
+    const ids = actions.map((action) => action.id);
+    expect(ids[0]).toBe("approve");
+    for (const action of actions) {
+      expect(action.type).toBe("button");
+      expect(action.id).toMatch(/^[A-Za-z0-9]+$/);
+    }
+    expect(new Set(ids).size).toBe(values.length);
+    expect(actions.map((action) => action.integration.context.action_id)).toEqual(ids);
+    expect(actions.map((action) => action.integration.context.callback_data)).toEqual(values);
   });
 });
 
