@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { performance } from "node:perf_hooks";
+import { storeReadsNeedCopies } from "../commands/doctor-live-store-pending.js";
 import { backupDoctorPostgresMigration } from "../commands/doctor-postgres-migration.js";
 import { backfillSessionColdNavigationInTransaction } from "../config/sessions/session-cold-storage-navigation.js";
 import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
@@ -98,7 +99,7 @@ export async function migrateSessionColdNavigation(
   signal?.throwIfAborted();
   // Admitted targets whose read-only check finds no pending archive need no lease.
   const preparedTargets =
-    params.preparedTargets && !agentEngineInput()
+    params.preparedTargets && !agentEngineInput() && !storeReadsNeedCopies()
       ? params.preparedTargets.filter((target) => !hasNoPendingColdNavigation(target, env))
       : params.preparedTargets;
   // Empty admitted discovery has no work; acquiring a lease would dirty shared state.

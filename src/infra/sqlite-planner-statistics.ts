@@ -132,7 +132,8 @@ export function sqlitePlannerStatisticsNeedRefresh(database: DatabaseSync): bool
     const rows = statRows.filter((row) => row.tbl === name);
     const size = readTableRowLogEst(database, name);
     // ANALYZE rewrites a table with rows; on an empty table it only deletes earlier rows.
-    const analysisChanges = size >= 0 || rows.length > 0;
+    // The first ANALYZE also creates sqlite_stat1 itself.
+    const analysisChanges = size >= 0 || rows.length > 0 || !hasStatTable;
     const analyzed = new Set(rows.map((row) => row.idx));
     if (indexes.some((index) => !analyzed.has(index.name))) {
       // An index without statistics analyzes a table with rows; an empty one is skipped.

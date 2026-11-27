@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { makeTempDir } from "../../test/helpers/temp-dir.js";
+import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { MEDIA_ROWS_MIGRATION_META_KEY } from "../state/openclaw-agent-db-contract.js";
 import * as maintenanceLease from "../state/openclaw-agent-db-maintenance-lease.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -249,6 +250,21 @@ it.each(guards.filter((guard) => !unread.has(guard.condition)))(
     expect((await conditionsOf(fixture.env)).conditions[guard.condition]).toBe("none");
   },
 );
+
+it("plans nothing where store reads would be served from copies", async () => {
+  const { env } = await healthyInstall();
+  const opens = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
+  const plan = await withArtifactPreservingStateReads(
+    () => planAgentDatabaseMigration({ env, configuredAgentDatabaseTargets: [] }),
+    { agentDatabases: true },
+  );
+  expect(plan).toEqual({
+    discovery: { discovery: "undecidable" },
+    databases: [],
+    pending: "undecidable",
+  });
+  expect(opens).not.toHaveBeenCalled();
+});
 
 it("reports an older schema version as work", async () => {
   const env = { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "agent-db-plan-old-") };

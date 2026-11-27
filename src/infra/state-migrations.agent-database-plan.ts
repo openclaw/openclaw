@@ -11,6 +11,7 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
+import { storeReadsNeedCopies } from "../commands/doctor-live-store-pending.js";
 import type { DoctorMaintenancePending } from "../commands/doctor-maintenance-pending.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
@@ -407,6 +408,10 @@ export async function planAgentDatabaseMigration(params: {
   integrityCheck?: "quick" | "full";
   isSessionEntryStatePrepared?: (target: AgentDatabaseMigrationTarget) => boolean;
 }): Promise<AgentDatabaseMigrationPlan> {
+  // A migration capture or artifact-preserving read serves stores through copies.
+  if (storeReadsNeedCopies()) {
+    return { discovery: { discovery: "undecidable" }, databases: [], pending: "undecidable" };
+  }
   const prepared = prepareAgentDatabaseMigrationDiscovery({
     env: params.env,
     configuredAgentDatabaseTargets: params.configuredAgentDatabaseTargets,

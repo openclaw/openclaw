@@ -36,10 +36,12 @@ function sqliteWouldRefresh(pathname: string): boolean {
   const copy = `${pathname}.${Math.random().toString(36).slice(2)}.oracle`;
   fs.copyFileSync(pathname, copy);
   using database = openNodeSqliteDatabase(copy);
-  const readStat = () => JSON.stringify(database.prepare("SELECT * FROM sqlite_stat1").all());
-  const before = database.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'sqlite_stat1'").get()
-    ? readStat()
-    : "[]";
+  // The first ANALYZE creates sqlite_stat1 even when it records no rows.
+  const readStat = () =>
+    database.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'sqlite_stat1'").get()
+      ? JSON.stringify(database.prepare("SELECT * FROM sqlite_stat1").all())
+      : "absent";
+  const before = readStat();
   // Debug mode lists each ANALYZE without running it; a writable connection may hold a write.
   const planned = (
     database.prepare("PRAGMA optimize=0x10003").all() as Array<{ optimize: string }>
@@ -128,6 +130,10 @@ describe("SQLite planner maintenance", () => {
           sqlite: sqliteWouldRefresh(pathname),
         });
       };
+      observe(
+        "fresh empty unindexed table",
+        "CREATE TABLE blank (id INTEGER PRIMARY KEY, v TEXT);",
+      );
       observe(
         "never analyzed",
         `CREATE TABLE samples (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
