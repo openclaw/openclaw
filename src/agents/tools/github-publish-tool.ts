@@ -68,6 +68,7 @@ const publicationWorkspaceActions = [
 const commentIssueNumber = Type.Optional(
   SessionGitHubPullRequestInspectResultSchema.properties.number,
 );
+const GITHUB_PUBLISH_TOOL_TIMEOUT_MS = 600_000;
 
 export const githubPublishToolDefinition = {
   name: "github_publish",
@@ -216,6 +217,10 @@ export function createGitHubPublishTool(
   const tool: AnyAgentTool = {
     label: options.observationOnly ? "GitHub Publication Readiness" : "GitHub Publish",
     name: githubPublishToolDefinition.name,
+    getExecutionTimeoutMs: (args) =>
+      isRecord(args) && args.action === "create_comment"
+        ? GITHUB_PUBLISH_TOOL_TIMEOUT_MS
+        : undefined,
     // An unbound sandboxed preparation yields this turn. Like sessions_yield, it runs only as a
     // direct call: a Code Mode exec cannot carry a turn handoff. On-demand keeps every call
     // direct without sending this definition before the session first uses it.
@@ -297,7 +302,7 @@ export function createGitHubPublishTool(
         waitForGatewayDispatch(
           args[0],
           callInProcessGatewayTool(...args),
-          args[2]?.timeoutMs ?? 600_000,
+          args[2]?.timeoutMs ?? GITHUB_PUBLISH_TOOL_TIMEOUT_MS,
           signal,
         );
       if (action === "readiness") {

@@ -240,22 +240,23 @@ can contribute the same docked reader surface through the
 
 Click a GitHub issue, pull request, or commit link to read it in a browser-style
 tab beside the conversation. Each tab has a GitHub icon, a title, and a close
-control; the address bar and **Open on GitHub** link stay visible. Opening the
-same item from chat selects its existing tab. Links inside the reader and URLs
-entered in the address bar navigate the current tab, with independent Back and
-Forward history. The **+** button opens a new tab. Up to ten tabs stay in memory,
-including their loaded documents while you switch between them.
+control. Once an item loads, **Refresh** and **Open on GitHub** appear in the
+document header. A link to an item that already has a tab selects that tab, and
+links to other supported items inside the reader open in their own tab. Use
+**+** (or choose **Link reader** from the Chat side panel's **+** menu) to open
+an empty tab where you can enter a URL. Up to ten tabs stay in memory, keeping
+their loaded documents while you switch between them.
 
 Hold Ctrl or Cmd to suppress link hover previews while opening several links.
 Pressing either key also dismisses an open preview and cancels a pending one.
 Normal hover and keyboard-focus previews resume on the next interaction after release.
 
 Loaded reader documents and link previews stay visible while the same Gateway
-reconnects. The reader refreshes after reconnect without clearing its address
-draft. Changing Gateway or losing reader access clears the protected content.
+reconnects. The reader refreshes after reconnect. Changing Gateway or losing
+reader access clears the protected content.
 
 Opening or loading an item keeps keyboard focus where you are typing. The
-**+** button focuses the address bar so you can enter a new URL.
+Adding an empty tab to a reader that is already open focuses its URL field.
 
 The reader shows descriptions, issue and pull-request discussion comments,
 commit comments, published inline PR review comments with file/line and diff

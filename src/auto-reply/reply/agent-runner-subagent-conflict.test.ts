@@ -20,7 +20,6 @@ import {
 } from "./agent-runner-execution.test-support.js";
 import { createReplyActorFixture } from "./reply-actor.test-support.js";
 import { createReplyInputAdmission } from "./reply-input-admission.js";
-import { createMockTypingController } from "./test-helpers.js";
 
 const fixture = useSubagentControlFixture();
 const state = await setupAgentRunnerExecutionTestState();
@@ -131,7 +130,6 @@ it("settles a reply visibly when the reactivation cohort changes before replacem
     replyRouteThreadId: undefined,
     replyToChannel: "webchat",
     replyToMode: "off",
-    typing: createMockTypingController(),
     typingMode: "never",
     getActiveSessionEntry: () => entry,
     onCompactionNoticePayload: () => {},

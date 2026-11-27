@@ -1168,7 +1168,7 @@ var External = [
     /(^script$|^once$)/u,
     /^session:.+/u,
     /(^kind$|^text$|^toolsAllow$|^toolsAllowIsDefault$)/u,
-    /(^kind$|^message$|^model$|^fallbacks$|^thinking$|^timeoutSeconds$|^allowUnsafeExternalContent$|^lightContext$|^skipIfScratchEmpty$|^includeReasoning$|^toolsAllow$|^toolsAllowIsDefault$)/u,
+    /(^kind$|^message$|^model$|^modelRuntime$|^fallbacks$|^thinking$|^timeoutSeconds$|^allowUnsafeExternalContent$|^lightContext$|^skipIfScratchEmpty$|^includeReasoning$|^toolsAllow$|^toolsAllowIsDefault$)/u,
     /(^kind$|^argv$|^cwd$|^env$|^input$|^timeoutSeconds$|^noOutputTimeoutSeconds$|^outputMaxBytes$|^toolsAllow$|^toolsAllowIsDefault$)/u,
     /(^kind$|^script$|^timeoutSeconds$|^toolBudget$|^toolsAllow$|^toolsAllowIsDefault$)/u,
     /(^mode$|^channel$|^threadId$|^accountId$|^bestEffort$|^failureDestination$|^target$|^directPolicy$|^to$)/u,
@@ -1184,7 +1184,7 @@ var External = [
     /(^start$|^end$|^timezone$)/u,
     /(^script$|^once$)/u,
     /(^kind$|^text$|^toolsAllow$|^toolsAllowIsDefault$)/u,
-    /(^kind$|^message$|^model$|^fallbacks$|^thinking$|^timeoutSeconds$|^allowUnsafeExternalContent$|^lightContext$|^skipIfScratchEmpty$|^includeReasoning$|^toolsAllow$|^toolsAllowIsDefault$)/u,
+    /(^kind$|^message$|^model$|^modelRuntime$|^fallbacks$|^thinking$|^timeoutSeconds$|^allowUnsafeExternalContent$|^lightContext$|^skipIfScratchEmpty$|^includeReasoning$|^toolsAllow$|^toolsAllowIsDefault$)/u,
     /(^kind$|^argv$|^cwd$|^env$|^input$|^timeoutSeconds$|^noOutputTimeoutSeconds$|^outputMaxBytes$|^toolsAllow$|^toolsAllowIsDefault$)/u,
     /(^kind$|^script$|^timeoutSeconds$|^toolBudget$|^toolsAllow$|^toolsAllowIsDefault$)/u,
     /(^mode$|^target$|^directPolicy$|^channel$|^threadId$|^accountId$|^bestEffort$|^failureDestination$|^completionDestination$|^to$)/u,
@@ -11065,6 +11065,7 @@ var External = [
     check_1661(value.kind) &&
     check_6(value.message) &&
     (value.model === void 0 || !("model" in value) || check_277(value.model)) &&
+    (value.modelRuntime === void 0 || !("modelRuntime" in value) || check_19(value.modelRuntime)) &&
     (value.fallbacks === void 0 || !("fallbacks" in value) || check_279(value.fallbacks)) &&
     (value.thinking === void 0 || !("thinking" in value) || check_277(value.thinking)) &&
     (value.timeoutSeconds === void 0 ||
@@ -11380,6 +11381,7 @@ var External = [
     check_1661(value.kind) &&
     (value.message === void 0 || !("message" in value) || check_65(value.message)) &&
     (value.model === void 0 || !("model" in value) || check_12(value.model)) &&
+    (value.modelRuntime === void 0 || !("modelRuntime" in value) || check_19(value.modelRuntime)) &&
     (value.fallbacks === void 0 || !("fallbacks" in value) || check_1702(value.fallbacks)) &&
     (value.thinking === void 0 || !("thinking" in value) || check_12(value.thinking)) &&
     (value.timeoutSeconds === void 0 ||

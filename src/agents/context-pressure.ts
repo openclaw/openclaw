@@ -80,6 +80,21 @@ export function isToolBatchBoundarySafe(evidence: {
 
 const DECLINED_KEY = Symbol.for("openclaw.boundaryMaintenanceDeclined");
 const declinedRuns = resolveGlobalSingleton(DECLINED_KEY, () => new Set<string>());
+const DEFERRED_KEY = Symbol.for("openclaw.boundaryMaintenanceDeferred");
+const deferredRuns = resolveGlobalSingleton(DEFERRED_KEY, () => new Set<string>());
+
+/** One answer opportunity belongs to the logical turn, not an individual attempt. */
+export function deferBoundaryMaintenanceOnce(runId: string | undefined): boolean {
+  if (!runId || deferredRuns.has(runId)) {
+    return false;
+  }
+  deferredRuns.add(runId);
+  return true;
+}
+
+export function clearBoundaryMaintenanceDeferral(runId: string): void {
+  deferredRuns.delete(runId);
+}
 
 /** Maintenance that could not reduce context is not retried for the rest of the run. */
 export function declineBoundaryMaintenance(runId: string): void {

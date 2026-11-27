@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { tryResolveCronJobEffectiveAgentId } from "../../../cron/agent-id.js";
+import type { LegacyCronInferenceBinding } from "../../../cron/legacy-inference-account.js";
 import { resolveCronOperatorExecutionRevision } from "../../../cron/service/jobs-tool-policy.js";
 import { noteCronJobsStoreCommit } from "../../../cron/store.js";
 import { resolveCronJobGrantDefinitionRevision } from "../../../cron/store/job-config-codec.js";
@@ -196,16 +197,18 @@ function definitionEvidence(jobs: readonly PluginDoctorCronJob[]) {
   }));
 }
 
+export type CronInferenceBindingRepair = {
+  job: PluginDoctorCronJob;
+  definition: Record<string, unknown>;
+} & ({ paused: true } | { paused: false; binding: LegacyCronInferenceBinding });
+
 /** Translate stored inference settings without rewriting runtime state. */
 export async function repairCronInferenceBindingsForDoctor(
   scope: DoctorCronScope,
   authority: PluginDoctorRepairAuthority,
   inventory: PluginDoctorCronInventory,
-  changes: readonly {
-    job: PluginDoctorCronJob;
-    definition: Record<string, unknown>;
-    paused: boolean;
-  }[],
+  changes: readonly CronInferenceBindingRepair[],
+  trialBackupPath?: string,
 ): Promise<{ changed: number; backupPath?: string; warnings?: string[] }> {
   authority.assertCurrent();
   if (changes.length === 0) {
@@ -228,6 +231,7 @@ export async function repairCronInferenceBindingsForDoctor(
   }
   const backup = await commitCronDoctorRepair(scope, authority, {
     plan: ["inference-binding", expected, changes],
+    trialBackupPath,
     assertRowsUnchanged(db) {
       if (!isDeepStrictEqual(definitionEvidence(inspectCronRowsForDoctor(db)), expected)) {
         throw new Error(
@@ -236,7 +240,8 @@ export async function repairCronInferenceBindingsForDoctor(
       }
     },
     write(db) {
-      for (const { job, definition, paused } of changes) {
+      for (const change of changes) {
+        const { job, definition, paused } = change;
         const row = loadCronRows(db, job.storeKey, new Set([job.id]), {
           includeGrantDefinitionProjection: true,
         })[0];
@@ -273,17 +278,19 @@ export async function repairCronInferenceBindingsForDoctor(
             resolveCronJobGrantDefinitionRevision(previousDefinition) &&
           row.grant_definition_updated_at === row.updated_at;
         if (
-          previousDefinition &&
+          previous &&
           next &&
           validProjection &&
+          !change.paused &&
           typeof row.grant_definition_generation === "number" &&
           inventory.jobs.filter((entry) => entry.id === job.id).length === 1
         ) {
           migrateCronInferenceStandingGrantReferences(
             db,
-            previousDefinition,
+            previous,
             next,
             row.grant_definition_generation,
+            change.binding,
           );
         }
         executeSqliteQuerySync(
@@ -445,13 +452,16 @@ async function commitCronDoctorRepair(
     plan: readonly unknown[];
     assertRowsUnchanged: (db: EngineConnection) => void;
     write: (db: EngineConnection) => void;
+    trialBackupPath?: string;
   },
 ): Promise<{ backupPath?: string; warnings: string[] }> {
-  const backup = await backupCronStoreForDoctor(scope, {
-    plan: repair.plan,
-    assertCurrent: () => authority.assertCurrent(),
-    assertRowsUnchanged: repair.assertRowsUnchanged,
-  });
+  const backup = repair.trialBackupPath
+    ? { backupPath: repair.trialBackupPath, warnings: [] }
+    : await backupCronStoreForDoctor(scope, {
+        plan: repair.plan,
+        assertCurrent: () => authority.assertCurrent(),
+        assertRowsUnchanged: repair.assertRowsUnchanged,
+      });
   try {
     authority.assertCurrent();
     runOpenClawStateWriteTransaction(

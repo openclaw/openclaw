@@ -9,6 +9,7 @@ import { AutomationLastMeaningfulResultSchema } from "../../packages/gateway-pro
 import { CyberAccessProgramSchema } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { compileSafeRegex } from "../security/safe-regex.js";
 import { assertCronActiveHours } from "./active-hours.js";
+import { hasLegacyCronInferenceAccount } from "./legacy-inference-account.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
 import { decodePluginCommandSchedule } from "./plugin-command-schedule.js";
 import { PLUGIN_COMMAND_SCHEDULE_MESSAGE } from "./plugin-command-schedule.types.js";
@@ -87,11 +88,8 @@ type InvalidPersistedCronJobReason =
 export function getInvalidPersistedCronJobReason(
   candidate: Record<string, unknown>,
 ): InvalidPersistedCronJobReason | null {
-  // Fail closed if a manually upgraded Gateway starts before Doctor has moved the pin.
-  if (
-    Object.hasOwn(candidate, "inferenceBinding") ||
-    Object.hasOwn(candidate, "ownerTransferPending")
-  ) {
+  // Leave pending accounts to the offline repair.
+  if (hasLegacyCronInferenceAccount(candidate)) {
     return "inference-account-needs-doctor";
   }
   const id = candidate.id;

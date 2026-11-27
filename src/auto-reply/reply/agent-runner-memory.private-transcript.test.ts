@@ -347,7 +347,8 @@ it.each(["completed", "interrupted"] as const)(
           const watchdog = replyOperation!.watchdog;
           const { current, semanticDeadlineAtMs: originalDeadline } = watchdog.snapshot();
           expect(current).toBe(true);
-          clockOffset = 100_000;
+          // Prove renewal without expiring the detached inference's execution deadline.
+          clockOffset = 1;
           firstPrivateResponse!.write(
             `data: ${JSON.stringify({
               id: "private-memory-fixture",

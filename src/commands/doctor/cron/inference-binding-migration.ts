@@ -18,6 +18,10 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { tryResolveCronJobEffectiveAgentId } from "../../../cron/agent-id.js";
 import { resolveCronModelSelection } from "../../../cron/isolated-agent/model-selection.js";
 import { resolveCronPreflightCandidates } from "../../../cron/isolated-agent/run-fallback-policy.js";
+import {
+  hasLegacyCronInferenceAccount,
+  isLegacyCronInferenceBinding,
+} from "../../../cron/legacy-inference-account.js";
 import { normalizeCronJobCreate } from "../../../cron/normalize.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { PluginDoctorCronJob } from "../../../plugins/doctor-contract-module.js";
@@ -26,28 +30,26 @@ import { getOpenClawDatabaseMaintenanceScope } from "../../../state/openclaw-sta
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { readAppliedUpgradeShadowRoots } from "../../../state/state-upgrade-receipts.js";
 import { prepareCronInferenceDiagnosticSession } from "./inference-session.js";
-import { inspectCronJobsForDoctor, repairCronInferenceBindingsForDoctor } from "./store-repair.js";
+import {
+  inspectCronJobsForDoctor,
+  repairCronInferenceBindingsForDoctor,
+  type CronInferenceBindingRepair,
+} from "./store-repair.js";
 
 export async function maybeRepairCronInferenceBindings(params: {
   cfg: OpenClawConfig;
   shouldRepair: boolean;
   env?: NodeJS.ProcessEnv;
+  trialBackupPath?: string;
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const env = params.env ?? process.env;
-  const changes: Array<{
-    job: PluginDoctorCronJob;
-    definition: Record<string, unknown>;
-    paused: boolean;
-  }> = [];
+  const changes: CronInferenceBindingRepair[] = [];
   const descriptions: string[] = [];
   const retained: AuthProfileAuthorization[] = [];
   try {
     const inventory = await inspectCronJobsForDoctor({ env });
     const pending = inventory.jobs.filter(
-      ({ definition }) =>
-        definition &&
-        (Object.hasOwn(definition, "inferenceBinding") ||
-          Object.hasOwn(definition, "ownerTransferPending")),
+      ({ definition }) => definition && hasLegacyCronInferenceAccount(definition),
     );
     if (pending.length === 0) {
       return { changes: [], warnings: [] };
@@ -78,16 +80,7 @@ export async function maybeRepairCronInferenceBindings(params: {
         if (ownerTransferPending !== undefined) {
           throw new Error("its owner changed and the new owner needs to choose the account");
         }
-        if (
-          !isRecord(binding) ||
-          binding.version !== 1 ||
-          typeof binding.provider !== "string" ||
-          typeof binding.profileId !== "string" ||
-          typeof binding.authorizationId !== "string" ||
-          (binding.runtime !== undefined &&
-            (typeof binding.runtime !== "string" || !binding.runtime.trim())) ||
-          (binding.authRequirement !== "api-key" && binding.authRequirement !== "subscription")
-        ) {
+        if (!isLegacyCronInferenceBinding(binding)) {
           throw new Error("its saved account is incomplete");
         }
         const input = normalizeCronJobCreate(definition);
@@ -95,7 +88,8 @@ export async function maybeRepairCronInferenceBindings(params: {
         if (
           job?.payload.kind !== "agentTurn" ||
           job.sessionTarget === "main" ||
-          definition.pluginCommand !== undefined
+          definition.pluginCommand !== undefined ||
+          !isRecord(definition.payload)
         ) {
           throw new Error("this job does not support an explicit model selection");
         }
@@ -199,7 +193,7 @@ export async function maybeRepairCronInferenceBindings(params: {
           definition: {
             ...definition,
             payload: {
-              ...(definition.payload as Record<string, unknown>),
+              ...definition.payload,
               model,
               ...(payload.modelRuntime ? { modelRuntime: payload.modelRuntime } : {}),
               ...(payload.fallbacks !== job.payload.fallbacks
@@ -208,6 +202,7 @@ export async function maybeRepairCronInferenceBindings(params: {
             },
           },
           paused: false,
+          binding,
         });
         descriptions.push(
           `Automation ${label}: pinned ${model}${binding.runtime ? ` on ${binding.runtime}` : ""}.`,
@@ -235,11 +230,18 @@ export async function maybeRepairCronInferenceBindings(params: {
       },
       inventory,
       changes,
+      params.trialBackupPath,
     );
     return {
       changes: [
         ...descriptions,
-        ...(result.backupPath ? [`Saved pre-repair cron backup: ${result.backupPath}`] : []),
+        ...(result.backupPath
+          ? [
+              params.trialBackupPath
+                ? `Using managed trial rollback image: ${result.backupPath}`
+                : `Saved pre-repair cron backup: ${result.backupPath}`,
+            ]
+          : []),
       ],
       warnings: result.warnings ?? [],
     };

@@ -4696,7 +4696,6 @@
       "ui/src/e2e/sidebar-account-footer.e2e.test.ts": 26,
       "ui/src/e2e/sidebar-agent-first.e2e.test.ts": 8,
       "ui/src/e2e/sidebar-attention-scope.e2e.test.ts": 13,
-      "ui/src/e2e/sidebar-background-work.e2e.test.ts": 6,
       "ui/src/e2e/sidebar-boot-imports.e2e.test.ts": 80,
       "ui/src/e2e/sidebar-catalog-scope.e2e.test.ts": 4,
       "ui/src/e2e/sidebar-choice-pages.e2e.test.ts": 21,

@@ -59,10 +59,11 @@ import {
 import {
   discoverDatabases,
   expectedVersion,
-  floorRaisingDatabases,
   hasLegacyStateSources,
   isUpgradeRestorePath,
   outdatedDatabases,
+  raisesReaderFloor,
+  restoreRequiredDatabases,
   stateUpgradeRefusal,
   type DatabaseTarget,
 } from "./state-upgrade-databases.js";
@@ -135,14 +136,20 @@ export async function upgradeStateDirectory(params: {
   return withDatabaseEngineSelection(selection, async (): Promise<StateUpgradeResult> => {
     const inventory = await discoverDatabases(stateDir, config, env);
     const outdated = outdatedDatabases(inventory.targets);
-    const protectedTargets = floorRaisingDatabases(inventory.targets);
+    const protectedTargets = restoreRequiredDatabases(inventory.targets);
+    const cronAccountTarget = inventory.targets.find(
+      (target) => target.pendingCronAccountMigration,
+    );
+    const hasReaderFloorUpgrade = protectedTargets.some(raisesReaderFloor);
     let restore: StateUpgradeRestore | undefined;
     try {
       restore = await beginStateUpgradeRestore(env);
       const legacySources = await hasLegacyStateSources(stateDir, config, env, inventory.targets);
+      const hasOtherMigrations =
+        outdated.length > 0 || Boolean(configRepair || includeRepair || legacySources);
       // Additive-only schema work has no historical content repair to run.
       // Reader-floor upgrades retain the full Doctor detector after convergence.
-      if (outdated.length === 0 && !configRepair && !includeRepair && !legacySources) {
+      if (!hasOtherMigrations && !cronAccountTarget) {
         (await publishStateUpgradeRestore(restore, { targets: [], config }))?.();
         return { status: "current" };
       }
@@ -286,7 +293,7 @@ export async function upgradeStateDirectory(params: {
                 },
               );
             }
-            if (protectedTargets.length > 0 || configRepair || includeRepair || legacySources) {
+            if (hasReaderFloorUpgrade || configRepair || includeRepair || legacySources) {
               const legacySessionSurfaces = await prepareLegacySessionSurfaces({ config, env });
               const legacyState = await detectLegacyStateMigrations({
                 cfg: config,
@@ -295,7 +302,13 @@ export async function upgradeStateDirectory(params: {
                 legacySessionSurfaces,
               });
               const legacyWork = hasRealLegacyWork(legacyState, env, inventory.targets);
-              if (outdated.length === 0 && !configRepair && !includeRepair && !legacyWork) {
+              if (
+                outdated.length === 0 &&
+                !configRepair &&
+                !includeRepair &&
+                !legacyWork &&
+                !cronAccountTarget
+              ) {
                 return { status: "current" };
               }
               // File imports retain their existing Doctor owner, not a subprocess or copy.
@@ -358,6 +371,34 @@ export async function upgradeStateDirectory(params: {
               if (repaired.warnings?.length) {
                 log.warn(repaired.warnings.join("\n"));
               }
+            }
+            if (cronAccountTarget) {
+              const trialBackupPath =
+                !hasOtherMigrations && restore?.existing && restore.existing.runId === restore.runId
+                  ? (restore.existing.files.find((file) => file.live === cronAccountTarget.path)
+                      ?.preimage ?? undefined)
+                  : undefined;
+              const { maybeRepairCronInferenceBindings } =
+                await import("../commands/doctor/cron/inference-binding-migration.js");
+              const { createDoctorPluginMetadataSnapshotScope } =
+                await import("../commands/doctor/shared/plugin-metadata-snapshot-scope.js");
+              const { withPluginGenerationSourceCustody } =
+                await import("../plugins/plugin-generation-source-lookup.js");
+              const result = await withPluginGenerationSourceCustody(async () => {
+                await using metadata = createDoctorPluginMetadataSnapshotScope({ env });
+                return await metadata.run({ config }, () =>
+                  maybeRepairCronInferenceBindings({
+                    cfg: config,
+                    env,
+                    shouldRepair: true,
+                    trialBackupPath,
+                  }),
+                );
+              });
+              if (restore && result.changes.length === 0 && result.warnings.length > 0) {
+                throw new Error(result.warnings.join("\n"));
+              }
+              logStateMigrationResult(result, log);
             }
           } finally {
             await closeOpenClawStateDatabaseAsync();

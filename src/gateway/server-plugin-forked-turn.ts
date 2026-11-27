@@ -56,8 +56,8 @@ export async function runPluginForkedTurn<T>(
   const { resolveGatewayContext } = deps;
   // Trust rule: a plugin may let a fork run tools it uniquely registered, plus read, ls and exec.
   // Those three never join the plugin grant, which widens the session's tool profile: the
-  // source session's own policy must already allow them (checked below), and exec runs only on
-  // the owner's turns. Other core tools and other plugins' tools are refused.
+  // source session's own policy must already allow them (checked below), and exec runs only for
+  // a caller with owner authority. Other core tools and other plugins' tools are refused.
   // Host-captured registration of the calling plugin; a reload or disable revokes it.
   const assertOwnerCurrent = scope?.assertSystemOwnerCurrent;
   if (!assertOwnerCurrent) {
@@ -161,7 +161,6 @@ export async function runPluginForkedTurn<T>(
             : {}),
           authorizeModelOverride: deps.authorizeModelOverride,
           operatorAuthority: execution.operatorAuthority,
-          caller: source && scope?.client?.authenticatedUserProfile?.profileId,
           runId,
           timeoutMs: resolveTimerTimeoutMs(params.timeoutMs, 120_000),
           ...(params.maxTokens !== undefined ? { maxTokens: params.maxTokens } : {}),
@@ -183,8 +182,9 @@ export async function runPluginForkedTurn<T>(
 
 /**
  * One plugin-owned session fork through an active entry of a loaded session: the anchored
- * turn supplies the requester and model, the session's policy admits the tools, then
- * `runSessionFork` runs it. `forkSession` and `runForkedTurn` both fork through here.
+ * turn supplies the conversation facts and model, the caller's admitted authority the owner
+ * flag, the session's policy admits the tools, then `runSessionFork` runs it. `forkSession`
+ * and `runForkedTurn` both fork through here.
  */
 export async function forkPluginSession<T>(input: {
   cfg: OpenClawConfig;
@@ -199,8 +199,6 @@ export async function forkPluginSession<T>(input: {
   override?: { provider: string; model: string };
   authorizeModelOverride?: (model: ModelRef, authProfileId?: string) => void;
   operatorAuthority: AdmittedRunOperatorAuthority | undefined;
-  /** The authenticated person whose session-scoped request started the fork. */
-  caller?: string;
   runId: string;
   timeoutMs: number;
   maxTokens?: number;
@@ -241,7 +239,7 @@ export async function forkPluginSession<T>(input: {
   if (!source) {
     throw new Error(`Session "${session.key}" has no active entry "${entryId}".`);
   }
-  // The anchored turn supplies its own requester and model, never the plugin.
+  // The anchored turn supplies its own conversation facts and model, never the plugin.
   const turn = await readSessionForkTurn(source, input.abortSignal);
   assertCurrent();
   if (!turn && input.tools.length > 0) {
@@ -283,14 +281,20 @@ export async function forkPluginSession<T>(input: {
     );
   }
   assertOperatorModelAllowed(input.operatorAuthority, model);
+  // Owner authority is the caller's, decided once here: stored rows record who typed an
+  // input, and internal wakes are never owner-attributed. Explicit, since consumers restrict
+  // on `false` and treat a missing flag as unknown.
+  const requester = {
+    ...turn?.requester,
+    senderIsOwner: input.operatorAuthority?.grant.owner === true,
+  };
   const prepared = await prepareSessionFork({
     config: cfg,
     source,
     tools: input.tools,
     model,
     workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
-    ...(turn?.requester ? { requester: turn.requester } : {}),
-    caller: input.caller,
+    requester,
     ...(input.runtimePluginToolGrant
       ? { runtimePluginToolGrant: input.runtimePluginToolGrant }
       : {}),
@@ -312,7 +316,7 @@ export async function forkPluginSession<T>(input: {
         owner: `plugin:${input.pluginId}`,
         model,
         workspaceDir: prepared.workspaceDir,
-        ...(turn?.requester ? { requester: turn.requester } : {}),
+        requester,
         ...(input.runtimePluginToolGrant
           ? { runtimePluginToolGrant: input.runtimePluginToolGrant }
           : {}),

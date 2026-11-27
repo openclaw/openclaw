@@ -25,7 +25,6 @@ import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js"
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { getOpenClawStateFeatureSchemaSql } from "../state/openclaw-state-feature-schema.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
 import {
   capturePluginCohortMigrationRowsBeforeWrite,
   captureCohortMigrationContext,
@@ -39,6 +38,11 @@ import {
   sameDeferredPluginMigrationInputs,
   type DeferredPluginMigration,
 } from "./deferred-plugin-migrations.contract.js";
+import {
+  pendingMigrationRecords,
+  readPendingMigrationRecords,
+  readPendingMigrationRows,
+} from "./deferred-plugin-migrations.read.kernel.js";
 import { isTruthyEnvValue } from "./env.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync-cache-state.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
@@ -256,35 +260,6 @@ export function mergeDeferredPluginMigration(
     ...(validationExcludedPaths.length > 0 ? { validationExcludedPaths } : {}),
   };
 }
-
-function readPendingMigrationRows(database: EngineConnection, includeDeferred = false) {
-  return executeSqliteQuerySync(
-    database,
-    getNodeSqliteKysely<Pick<DB, "migration_runs">>(database)
-      .selectFrom("migration_runs")
-      .select(["id", "report_json", "status"])
-      .where("id", "like", `${RUN_PREFIX}%`)
-      .where("status", "in", includeDeferred ? ["pending", "deferred"] : ["pending"])
-      .orderBy("id"),
-  ).rows;
-}
-
-function pendingMigrationRecords(rows: ReturnType<typeof readPendingMigrationRows>) {
-  return rows.map((row) => deferredPluginMigrationSchema.parse(JSON.parse(row.report_json)));
-}
-
-function readPendingMigrationRecords(database: EngineConnection, includeDeferred = false) {
-  return tableExists(database, "migration_runs")
-    ? pendingMigrationRecords(readPendingMigrationRows(database, includeDeferred))
-    : [];
-}
-
-export const deferredPluginMigrationReadOperations = {
-  "plugins.deferredMigrations.read": (input: { includeDeferred?: boolean } | undefined, db) => ({
-    type: "plugins.deferredMigrations.read" as const,
-    pending: readPendingMigrationRecords(db, input?.includeDeferred),
-  }),
-} satisfies WorkerOperationHandlers<EngineConnection>;
 
 function assertPendingGeneration(
   current: readonly DeferredPluginMigration[],

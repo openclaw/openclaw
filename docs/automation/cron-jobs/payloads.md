@@ -271,12 +271,12 @@ For Claude CLI's native sign-in, use `anthropic/<model>@anthropic:claude-cli`
 with the Claude CLI runtime. OpenClaw does not forward a stored credential for
 that native sign-in.
 
-Upgrading from a version that saved accounts privately? Run
-`openclaw doctor --fix` before starting the Gateway after a manual upgrade.
-Doctor backs up cron state and reports each conversion to an explicit model and
-account, including the recorded runtime when present. It pauses jobs it cannot
-convert safely; review the reported model or account before re-enabling them.
-Jobs without a saved account aren't changed.
+When upgrading from a version that saved accounts privately, Gateway startup
+backs up cron state and converts each compatible saved account to an explicit
+model pin before loading schedules. It keeps the recorded runtime when present
+and pauses jobs that need a new account choice. Review the reported model or
+account before re-enabling a paused job. `openclaw doctor --fix` can run the
+same repair offline.
 
 `--model` selects the job's primary model ahead of any carried session preference. It does not erase the session's saved `/model` preference; that preference can apply again after the job's model is cleared. Configured fallback chains still apply. An unresolved or disallowed model fails the run with an explicit validation error rather than silently falling back to the default. If a job has `--model` but no explicit or configured fallback list, OpenClaw passes an empty fallback override instead of silently appending the agent primary as a hidden retry target.
 

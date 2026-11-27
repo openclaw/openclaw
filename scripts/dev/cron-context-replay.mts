@@ -351,6 +351,7 @@ function anonymizePayload(payload: CronStoredJob["payload"]): CronStoredJob["pay
       : {}),
   };
   if (payload.kind === "agentTurn") {
+    const model = payload.model ? splitTrailingAuthProfile(payload.model) : undefined;
     return {
       kind: "agentTurn",
       message: "fixture",
@@ -358,6 +359,12 @@ function anonymizePayload(payload: CronStoredJob["payload"]): CronStoredJob["pay
       ...(tools.toolsAllow ? { toolsAllow: anonymizeAgentToolsAllow(tools.toolsAllow) } : {}),
       ...(payload.externalContentSource
         ? { externalContentSource: payload.externalContentSource }
+        : {}),
+      ...(model?.profile
+        ? {
+            model: "provider/model@provider:profile",
+            ...(payload.modelRuntime ? { modelRuntime: "runtime-1" } : {}),
+          }
         : {}),
     };
   }
@@ -368,6 +375,27 @@ function anonymizePayload(payload: CronStoredJob["payload"]): CronStoredJob["pay
     return { kind: "systemEvent", text: "fixture", ...tools };
   }
   return { kind: "command", argv: ["true"] };
+}
+
+function anonymizeInferenceRuntimes(
+  job: CronStoredJob,
+  runtimes: ScheduledInferenceRuntimeFacts,
+): ScheduledInferenceRuntimeFacts {
+  const { models } = runtimes;
+  return {
+    legacy:
+      job.payload.kind === "agentTurn" && job.payload.modelRuntime === runtimes.legacy
+        ? "runtime-1"
+        : "runtime-2",
+    ...(models
+      ? {
+          models: {
+            legacy: "model-1",
+            context: models.legacy === models.context ? "model-1" : "model-2",
+          },
+        }
+      : {}),
+  };
 }
 
 /**
@@ -473,16 +501,6 @@ export function anonymize(job: CronStoredJob, agentId: string, index: number): C
                   },
                 }
               : {}),
-          },
-        }
-      : {}),
-    ...(job.payload.kind === "agentTurn" &&
-    job.payload.model &&
-    splitTrailingAuthProfile(job.payload.model).profile
-      ? {
-          payload: {
-            ...job.payload,
-            model: splitTrailingAuthProfile(job.payload.model).model + "@provider:profile",
           },
         }
       : {}),
@@ -625,20 +643,23 @@ async function main() {
       if (args.emitFixtures) {
         const fixtureJob = anonymize(job, agentId, fixtures.size + 1);
         const fixtureParentRow = anonymizeParentRow(parentRow, job);
+        const fixtureRuntimes = inferenceRuntimes
+          ? anonymizeInferenceRuntimes(job, inferenceRuntimes)
+          : undefined;
         const shapeKey = JSON.stringify({
           ...fixtureJob,
           id: "",
           name: "",
           parentRow: fixtureParentRow,
           owner,
-          inferenceRuntimes,
+          inferenceRuntimes: fixtureRuntimes,
         });
         if (![...fixtures.keys()].includes(shapeKey)) {
           fixtures.set(shapeKey, {
             job: fixtureJob,
             ...(fixtureParentRow ? { parentRow: fixtureParentRow } : {}),
             ...(owner !== undefined ? { owner } : {}),
-            ...(inferenceRuntimes ? { inferenceRuntimes } : {}),
+            ...(fixtureRuntimes ? { inferenceRuntimes: fixtureRuntimes } : {}),
           });
         }
       }

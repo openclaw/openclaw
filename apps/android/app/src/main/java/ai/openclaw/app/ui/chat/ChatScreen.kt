@@ -18,6 +18,7 @@ import ai.openclaw.app.chat.ChatComposerOwner
 import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.chat.ChatDiffStat
 import ai.openclaw.app.chat.ChatFastMode
+import ai.openclaw.app.chat.ChatHistoryPaging
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatMessageCost
@@ -202,6 +203,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.autoSaver
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.AbsoluteAlignment
@@ -399,6 +401,7 @@ internal fun ChatScreen(
   val sourcePreviewConfig by viewModel.gatewaySourcePreviewConfig.collectAsState()
   val transcriptAnchor by viewModel.chatTranscriptAnchor.collectAsState()
   val historyLoading by viewModel.chatHistoryLoading.collectAsState()
+  val historyPaging by viewModel.chatHistoryPaging.collectAsState()
   val sessionCreating by viewModel.chatSessionCreating.collectAsState()
   val errorText by viewModel.chatError.collectAsState()
   val talkStatusText by viewModel.talkModeStatusText.collectAsState()
@@ -600,7 +603,7 @@ internal fun ChatScreen(
       loading = viewModel.chatHistoryLoading.value || viewModel.chatSessionCreating.value,
       sending = expected in composerState.sendStates.value,
       activeRun = viewModel.pendingRunCount.value > 0,
-      streaming = viewModel.chatStreamingAssistantText.value != null,
+      streaming = viewModel.chatStreamingAssistant.value?.text != null,
       settingsMutationPending = viewModel.chatSessionKey.value in viewModel.chatPendingSessionSettingsKeys.value,
     )
 
@@ -1017,6 +1020,11 @@ internal fun ChatScreen(
       },
     transcriptAnchor = transcriptAnchor,
     historyLoading = historyLoading,
+    historyPaging = historyPaging,
+    onLoadHistoryPage = { older ->
+      if (viewModel.isCurrentChatSelection(composerOwner, selectionGeneration)) viewModel.loadChatHistoryPage(older)
+    },
+    localSendAdmission = pendingSendAdmissionIds.lastOrNull(),
     activeRunCount = selectedActiveRun.count,
     activeRunId = selectedActiveRun.runId,
     activeRunClockKey = selectedActiveRun.clockKey,
@@ -1757,6 +1765,9 @@ private fun ChatMessageList(
   onReact: ((String, String, Boolean) -> Unit)?,
   transcriptAnchor: ChatTranscriptAnchorState?,
   historyLoading: Boolean,
+  historyPaging: ChatHistoryPaging,
+  onLoadHistoryPage: (Boolean) -> Unit,
+  localSendAdmission: String?,
   activeRunCount: Int,
   activeRunId: String?,
   activeRunClockKey: String?,
@@ -1816,7 +1827,10 @@ private fun ChatMessageList(
     )
   val toolBridge = remember(sessionKey) { LiveToolActivityBridge() }
   val presentedTools = remember(toolBridge, history.toolScope, pendingToolCalls) { toolBridge.update(history.toolScope, pendingToolCalls) }
-  var expandedWorkKeys by remember(sessionKey) { mutableStateOf(emptySet<String>()) }
+  var expandedWorkKeys by rememberSaveable(
+    fullMessageOwner,
+    stateSaver = listSaver<Set<String>, String>(save = { it.toList() }, restore = { it.toSet() }),
+  ) { mutableStateOf(emptySet()) }
   val timeline =
     remember(history, turnRecap, expandedWorkKeys, activeRunCount, activeRunId, presentedTools, questions, streamingAssistantText, outboxItems, recoveryOutboxItems) {
       history
@@ -1833,9 +1847,11 @@ private fun ChatMessageList(
     }
   val readerScroll =
     rememberChatReaderScrollController(
-      sessionKey = sessionKey,
+      sessionKey = listOf(fullMessageOwner.gatewayStableId, fullMessageOwner.agentId, sessionKey).joinToString("|"),
       timeline = timeline,
       historyLoading = historyLoading,
+      localSendAdmission = localSendAdmission,
+      itemIndexOffset = if (historyPaging.hasNewer) 1 else 0,
     )
   DisposableEffect(sessionKey, turnRecapResolver) {
     onDispose { turnRecapResolver.abandonActiveWatch(sessionKey) }
@@ -1885,6 +1901,14 @@ private fun ChatMessageList(
               verticalArrangement = Arrangement.spacedBy(12.dp),
               contentPadding = PaddingValues(top = 6.dp, bottom = 3.dp),
             ) {
+              if (historyPaging.hasNewer) {
+                item(key = "history-newer") {
+                  HistoryPageControl(historyPaging, older = false, enabled = !gatewayOffline) {
+                    readerScroll.navigation.pause()
+                    onLoadHistoryPage(false)
+                  }
+                }
+              }
               itemsIndexed(items = timeline.items, key = { _, item -> chatTimelineItemKey(item) }) { _, item ->
                 ChatReaderItem(chatTimelineItemKey(item)) {
                   when (item) {
@@ -2025,9 +2049,15 @@ private fun ChatMessageList(
                   }
                 }
               }
+              item(key = "history-older") {
+                ChatHistoryOlderBoundary(historyPaging, enabled = !gatewayOffline, showBoundary = timeline.items.isNotEmpty() && !historyLoading) {
+                  readerScroll.navigation.pause()
+                  onLoadHistoryPage(true)
+                }
+              }
             }
 
-            if (timeline.items.isEmpty()) {
+            if (timeline.items.isEmpty() && !historyPaging.hasOlder && !historyPaging.hasNewer) {
               if (showChatLoadingPlaceholder(historyLoading = historyLoading, healthOk = healthOk, gatewayOffline = gatewayOffline)) {
                 ClawLoadingState(title = nativeString("Loading thread"), modifier = Modifier.align(Alignment.Center))
               } else {
@@ -2044,6 +2074,41 @@ private fun ChatMessageList(
       }
     },
   )
+}
+
+@Composable
+internal fun ChatHistoryOlderBoundary(
+  paging: ChatHistoryPaging,
+  enabled: Boolean,
+  showBoundary: Boolean,
+  onLoad: () -> Unit,
+) {
+  if (paging.hasOlder) {
+    HistoryPageControl(paging, older = true, enabled = enabled, onClick = onLoad)
+  } else if (showBoundary && paging.olderComplete) {
+    Text(nativeString("Beginning of conversation"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+  }
+}
+
+@Composable
+private fun HistoryPageControl(
+  paging: ChatHistoryPaging,
+  older: Boolean,
+  enabled: Boolean,
+  onClick: () -> Unit,
+) {
+  Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+    if (paging.failed) Text(nativeString("Could not load messages. Try again."), style = ClawTheme.type.caption, color = ClawTheme.colors.warning)
+    TextButton(onClick = onClick, enabled = enabled && !paging.loading) {
+      Text(
+        when {
+          paging.loading -> nativeString("Loading messages…")
+          older -> nativeString("Load older messages")
+          else -> nativeString("Load newer messages")
+        },
+      )
+    }
+  }
 }
 
 internal data class ChatWorkingRun(

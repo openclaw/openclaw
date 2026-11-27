@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { Selectable } from "kysely";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
+import type { LegacyCronInferenceBinding } from "../cron/legacy-inference-account.js";
 import { resolveCronOperatorExecutionRevision } from "../cron/service/jobs-tool-policy.js";
 import { resolveCronJobGrantDefinitionRevision } from "../cron/store/job-config-codec.js";
 import { importLegacyCronMemberSources } from "../cron/store/member-source-role-import.js";
@@ -102,6 +103,7 @@ export function migrateCronInferenceStandingGrantReferences(
   previous: CronStoredJob,
   next: CronStoredJob,
   generation: number,
+  inferenceBinding: LegacyCronInferenceBinding,
 ): void {
   const maintenance = getOpenClawDatabaseMaintenanceScope();
   if (!maintenance?.ownsSchemaMaintenance) {
@@ -110,14 +112,11 @@ export function migrateCronInferenceStandingGrantReferences(
     );
   }
   maintenance.assertAdmission();
-  const { inferenceBinding, ...original } = previous as CronStoredJob & {
-    inferenceBinding?: { provider: string; profileId: string; runtime?: string };
-  };
   const unchanged = { ...next, payload: previous.payload };
   const source = previous.operatorSource;
   if (
     source?.executionRevision ===
-      resolveCronOperatorExecutionRevision(original, { inferenceBinding }) &&
+      resolveCronOperatorExecutionRevision(previous, { inferenceBinding }) &&
     isDeepStrictEqual(next.operatorSource, {
       ...source,
       executionRevision: resolveCronOperatorExecutionRevision(next),
@@ -127,16 +126,15 @@ export function migrateCronInferenceStandingGrantReferences(
     unchanged.operatorSource = source;
   }
   if (
-    !inferenceBinding ||
     next.payload.kind !== "agentTurn" ||
     !next.payload.model?.startsWith(inferenceBinding.provider + "/") ||
     !next.payload.model.endsWith("@" + inferenceBinding.profileId) ||
     next.payload.modelRuntime !== inferenceBinding.runtime ||
-    !isDeepStrictEqual(original, unchanged)
+    !isDeepStrictEqual(previous, unchanged)
   ) {
     throw new Error("Cron inference migration must preserve the entire approved job definition.");
   }
-  migrateCronStandingGrantReferences(db, original, next, generation, { inferenceBinding });
+  migrateCronStandingGrantReferences(db, previous, next, generation, { inferenceBinding });
 }
 
 /** A live import may change only the already captured member's explicit role representation. */

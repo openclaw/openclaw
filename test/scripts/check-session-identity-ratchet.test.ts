@@ -66,3 +66,10 @@ it("accepts a presence guard without allowing additional identity comparisons", 
   expect(main(root, ["--base", "HEAD"])).toBe(1);
   expect(errors).toHaveBeenCalledWith(expect.stringContaining("src/feature/example.ts: 3 > 2"));
 });
+
+it("distinguishes the update restore run IDs from session identities", () => {
+  const source = "restore.existing.runId === restore.runId && current.runId === captured.runId";
+  expect(countSessionIdentityPins(source, "src/state/state-upgrade.ts")).toBe(2);
+  expect(countSessionIdentityPins(`other.${source}`, "src/state/state-upgrade.ts")).toBe(4);
+  expect(countSessionIdentityPins(source, "src/agents/example.ts")).toBe(4);
+});

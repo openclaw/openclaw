@@ -56,12 +56,14 @@ import {
   recordUpdateRunDiagnostics,
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
+import { withUpdateRunRead } from "../../infra/update-run-read-admission.js";
 import type { UpdateRunRecord, UpdateRunStep } from "../../infra/update-run-record.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
-import { isUpdateRecoveryPending } from "../../infra/update-run-recovery-schema.js";
+import { UPDATE_RECOVERY_KEY_PREFIX } from "../../infra/update-run-recovery-keys.js";
+import { inspectUpdateRecovery } from "../../infra/update-run-recovery-schema.js";
+import { loadPluginCohortRecovery } from "../../infra/update-run-recovery-store.js";
 import {
-  inspectUpdateRecoveries,
-  assertNoPendingUpdateRecovery,
+  assertPluginCohortRecoveryContinuation,
   loadUpdateRecovery,
   type UpdateRecoveryFence,
 } from "../../infra/update-run-recovery.js";
@@ -79,6 +81,7 @@ import {
 } from "../../infra/update-system-package-ownership.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { defaultRuntime } from "../../runtime.js";
+import { readConfigMachineStateRowInDatabase } from "../../state/config-machine-state-row.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership-preflight.js";
 import { VERSION } from "../../version.js";
@@ -114,7 +117,6 @@ import {
 } from "./update-command-service-plan.js";
 import { preflightWindowsUpdateTask } from "./update-command-windows-preflight.js";
 import { verifyRecordedDataAtRiskBeforeUpdate } from "./update-data-at-risk-guidance.js";
-import { inspectInterruptedUpdateRecovery } from "./update-plugin-cohort-settlement.js";
 
 export {
   recordUpdateCommandTarget,
@@ -411,12 +413,13 @@ export function completeUpdateCommandRun(
     if (run.requesterAuthority?.isCurrent() === false) {
       throw new Error("Foreground update requester is no longer authorized.");
     }
-    const pair = assertNoPendingUpdateRecovery({
-      env: run.env,
-      allowNativeRead: true,
-      pluginCohort: { runId: run.runId, fence: run.executorFence },
-    });
+    const pair = loadPluginCohortRecovery(run.runId, { env: run.env, allowNativeRead: true });
     if (pair) {
+      assertPluginCohortRecoveryContinuation(
+        pair,
+        { runId: run.runId, fence: run.executorFence },
+        { env: run.env },
+      );
       if (
         result.after?.version !== pair.reservation.to.version ||
         (result.after?.buildId ?? null) !== pair.reservation.to.buildId
@@ -428,8 +431,13 @@ export function completeUpdateCommandRun(
   }
   // A process-local result cannot complete an operationally pending update or
   // authorize package retirement. Only the durable finalizer may close it.
-  const recoveries = inspectUpdateRecoveries({ env: run.env });
-  const inspected = recoveries.find((entry) => entry.record.runId === run.runId);
+  const inspected = withUpdateRunRead(
+    ({ db }) => {
+      const row = readConfigMachineStateRowInDatabase(db, UPDATE_RECOVERY_KEY_PREFIX + run.runId);
+      return row ? inspectUpdateRecovery(row.value_json, run.runId) : undefined;
+    },
+    { env: run.env },
+  );
   // A matching historical record only projects its saved outcome. Execution
   // remains strict, while unrelated completed history grants no authority.
   const recovery =
@@ -454,9 +462,6 @@ export function completeUpdateCommandRun(
           : (result.reason ?? "update-recovery-pending"),
       runId: run.runId,
     });
-  }
-  if (!ownPluginCohortPending && recoveries.some(({ record }) => isUpdateRecoveryPending(record))) {
-    return { ...result, status: "error", reason: "update-recovery-pending", runId: run.runId };
   }
   const recordOptions = { ...run, redactPaths: result.root ? [result.root] : [] };
   // Both finalization and outer CLI unwind come here. A verified restored generation
@@ -594,10 +599,6 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
   // owner. Check both roots before config/autostart preparation or history.
   const packageActivationNotes: string[] = [];
   const packageActivationSteps: UpdateStepResult[] = [];
-  // Read a killed update's recovery before package settlement claims the installation.
-  const settleInterruptedUpdate = postCoreUpdateResume
-    ? undefined
-    : await inspectInterruptedUpdateRecovery(discoveredRoot, opts, packageActivationSteps);
   const admitPackageActivation = async (root: string) => {
     if (!postCoreUpdateResume) {
       const settled = await settlePendingPackageActivation(
@@ -684,15 +685,6 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
       throw err;
     }
   }
-  // Every refusal above stands first. Settle under the state selection admission will use.
-  await settleInterruptedUpdate?.((invocationCwd) =>
-    resolveUpdateCommandAdmissionEnv({
-      opts,
-      root: packageAdmission.serviceRoot ?? discoveredRoot,
-      invocationCwd,
-      pkgOwnership,
-    }),
-  );
   return {
     startedAt,
     postCoreUpdateResume,
