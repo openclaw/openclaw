@@ -584,16 +584,24 @@ describe("attachment sidebar source ownership", () => {
       reason: "Too large to attach. Look for this file in Files.",
     },
     {
+      code: "delivery-failed",
+      wireReason: "hardlink",
+      label: "sample-report.pdf",
+      reason:
+        "Hardlinked file. Export a new standalone file from the source app to an allowed folder, then try again.",
+    },
+    {
       code: "invalid-reference",
       label: "Media not attached",
       reason: "Use a public HTTPS URL without credentials or attach a local file by a safe path.",
     },
-  ])("renders $code failures with separable status and reason text", ({ code, label, reason }) => {
+  ])("renders $code failures with separable status and reason text", (failure) => {
+    const { code, label, reason, wireReason } = failure;
     draw(
       expectDefined(
         normalizeAttachmentContentBlock({
           type: "attachment_error",
-          attachment: { code, kind: "document", label },
+          attachment: { code, reason: wireReason, kind: "document", label },
         }),
         "normalized attachment failure",
       ),

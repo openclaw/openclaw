@@ -246,7 +246,11 @@ function formatTuiAssistantContent(message: unknown, contentText: string): strin
     ) {
       // Assistant attachment labels can contain private paths or capability URLs.
       // Reuse the actionable receipt wording, but keep the TUI's generic labels.
-      failures.push({ code, kind, label: `${kind === "document" ? "file" : kind} attachment` });
+      failures.push({
+        code: code === "delivery-failed" && attachment?.reason === "hardlink" ? "hardlink" : code,
+        kind,
+        label: `${kind === "document" ? "file" : kind} attachment`,
+      });
     }
   }
   let text = contentText || contentAttachments?.join("\n") || "";

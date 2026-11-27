@@ -18,5 +18,7 @@ export function attachmentFailureReason(code: AttachmentFailureCode): string {
         ? t("chat.attachments.failureUnsupportedFormat")
         : code === "invalid-reference"
           ? t("chat.attachments.failureInvalidReference")
-          : t("chat.attachments.failureDeliveryFailed");
+          : code === "hardlink"
+            ? t("chat.attachments.failureHardlink")
+            : t("chat.attachments.failureDeliveryFailed");
 }

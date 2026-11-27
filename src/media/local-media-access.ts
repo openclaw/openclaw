@@ -11,10 +11,13 @@ import {
 import { isPathInside } from "../infra/path-guards.js";
 import { captureChannelReadScope } from "../shared/channel-read-authority.js";
 import { settleCurrentReadPreparations } from "../shared/current-read-authority.js";
+import { MEDIA_HARDLINK_MESSAGE } from "./hardlink-error.js";
 import { getDefaultMediaLocalRoots } from "./local-roots.js";
 import { MediaReferenceError, resolveInboundMediaReference } from "./media-reference.js";
+import { formatMediaSize } from "./store.shared.js";
 
 export type LocalMediaAccessErrorCode =
+  | "hardlink"
   | "path-not-allowed"
   | "invalid-root"
   | "invalid-file-url"
@@ -58,12 +61,52 @@ type LocalMediaBoundaryOptions = {
 const resolveCanonicalBoundaryPath = canonicalizeContainmentRoot;
 
 /** Reports absence only for paths that already passed containment, so it reveals nothing outside. */
-export function localMediaNotFoundError(mediaPath: string, cause: unknown): LocalMediaAccessError {
+function localMediaNotFoundError(mediaPath: string, cause: unknown): LocalMediaAccessError {
   return new LocalMediaAccessError(
     "not-found",
     `Local media file not found: ${mediaPath}. The path is in an allowed folder, but the file ` +
       "or one of its parent folders does not exist; check the path or create the file.",
     { cause },
+  );
+}
+
+export function localMediaReadError(
+  err: unknown,
+  mediaUrl: string,
+  sourceReadCap: number,
+): unknown {
+  if (!(err instanceof FsSafeError)) {
+    return err;
+  }
+  if (err.code === "hardlink") {
+    return new LocalMediaAccessError("hardlink", MEDIA_HARDLINK_MESSAGE, { cause: err });
+  }
+  if (err.code === "too-large") {
+    return new Error(`Media exceeds ${formatMediaSize(sourceReadCap)} limit`, {
+      cause: err,
+    });
+  }
+  if (err.code === "not-found") {
+    return localMediaNotFoundError(mediaUrl, err);
+  }
+  if (err.code === "not-file") {
+    return new LocalMediaAccessError("not-file", `Local media path is not a file: ${mediaUrl}`, {
+      cause: err,
+    });
+  }
+  if (err.code === "path-mismatch") {
+    // fs-safe reports pre-open identity drift as path-mismatch; keep the
+    // product-facing classification as an access denial, not a bad path.
+    return new LocalMediaAccessError(
+      "path-not-allowed",
+      `Local media path is not under an allowed directory: ${mediaUrl}`,
+      { cause: err },
+    );
+  }
+  return new LocalMediaAccessError(
+    "invalid-path",
+    `Local media path is not safe to read: ${mediaUrl}`,
+    { cause: err },
   );
 }
 
@@ -278,7 +321,7 @@ export async function openLocalMediaFile(
       throw pathNotAllowedError(mediaPath);
     }
     if (boundary.rejectHardlinks && opened.stat.nlink > 1) {
-      throw new FsSafeError("hardlink", "hardlinked path not allowed");
+      throw new FsSafeError("hardlink", MEDIA_HARDLINK_MESSAGE);
     }
     if (opened.stat.size > options.maxBytes) {
       throw new FsSafeError(

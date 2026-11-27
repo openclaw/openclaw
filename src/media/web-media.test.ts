@@ -586,6 +586,20 @@ describe("loadWebMedia", () => {
     },
   );
 
+  it("explains how to export a hardlinked channel file without changing the read boundary", async () => {
+    const root = tempDirs.make("channel-pickup-");
+    const source = await writeFile("source.pdf", "%PDF-original", root);
+    const pickup = path.join(root, "pickup.pdf");
+    await fs.link(source, pickup);
+    const options = { localRoots: [], inboundRoots: [root] };
+    await expect(loadLocal(pickup, options)).rejects.toMatchObject({
+      code: "hardlink",
+      message: expect.stringMatching(/export a new standalone file from the source app/i),
+    });
+    const exported = await writeFile("exported.pdf", "%PDF-export", root);
+    expect((await loadLocal(exported, options)).buffer.toString()).toBe("%PDF-export");
+  });
+
   it.runIf(process.platform !== "win32").each([
     [2, "invalid-path"],
     [3, "path-not-allowed"],

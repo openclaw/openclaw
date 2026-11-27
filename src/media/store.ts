@@ -26,6 +26,7 @@ import { writeSiblingTempFile } from "../infra/sibling-temp-file.js";
 import { captureChannelReadScope } from "../shared/channel-read-authority.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { pruneGeneratedHtmlProvenance } from "./generated-html-provenance.js";
+import { MEDIA_HARDLINK_MESSAGE } from "./hardlink-error.js";
 import { getMediaDir } from "./store-path.js";
 import { MEDIA_FILE_MODE, SaveMediaSourceError } from "./store.shared.js";
 
@@ -667,7 +668,12 @@ export async function resolveMediaBufferPath(id: string, subdir = "inbound"): Pr
   const relativePath = resolveMediaRelativePath(id, subdir, "resolveMediaBufferPath");
   await using opened = await openMediaStore()
     .open(relativePath)
-    .catch(() => null);
+    .catch((error: unknown) => {
+      if (error instanceof FsSafeError && error.code === "hardlink") {
+        throw new FsSafeError("hardlink", MEDIA_HARDLINK_MESSAGE, { cause: error });
+      }
+      return null;
+    });
   if (!opened?.stat.isFile()) {
     throw new Error(
       `resolveMediaBufferPath: media ID does not resolve to a file: ${JSON.stringify(id)}`,

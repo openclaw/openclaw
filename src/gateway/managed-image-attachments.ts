@@ -66,6 +66,7 @@ import {
   insertManagedImageRecordWithFile,
 } from "./managed-image-attachments.custody.js";
 import {
+  buildManagedMediaFailureBlock,
   createManagedImageAttachmentError,
   getSanitizedManagedImageAttachmentError,
 } from "./managed-image-attachments.errors.js";
@@ -172,22 +173,7 @@ function resolveManagedImageAttachmentLimits(
   };
 }
 
-export function buildManagedMediaFailureBlock(params: {
-  code: ReplyMediaFailureCode;
-  kind: ManagedMediaKind | "media";
-  label: string;
-  mimeType?: string;
-}): Record<string, unknown> {
-  return {
-    type: "attachment_error",
-    attachment: {
-      code: params.code,
-      kind: params.kind === "media" ? "document" : params.kind,
-      label: params.label,
-      ...(params.mimeType ? { mimeType: params.mimeType } : {}),
-    },
-  };
-}
+export { buildManagedMediaFailureBlock } from "./managed-image-attachments.errors.js";
 
 function assertManagedMediaByteLimit(
   size: number,

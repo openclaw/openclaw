@@ -1,5 +1,5 @@
 // Pure URI parsing shared by output extraction and native media resolution.
-type MediaReferenceErrorCode = "invalid-path" | "path-not-allowed";
+type MediaReferenceErrorCode = "invalid-path" | "path-not-allowed" | "hardlink";
 
 /** Error raised when a media reference cannot be mapped to an allowed local media file. */
 export class MediaReferenceError extends Error {

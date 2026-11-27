@@ -32,7 +32,10 @@ export function normalizeAttachmentContentBlock(
       {
         type: "attachment_error",
         attachment: {
-          code: attachment.code,
+          code:
+            attachment.code === "delivery-failed" && attachment.reason === "hardlink"
+              ? "hardlink"
+              : attachment.code,
           kind: attachment.kind,
           label: attachment.label,
           ...(mimeType !== undefined ? { mimeType } : {}),

@@ -164,6 +164,18 @@ describe("message-normalizer", () => {
     expect(assistant(structuredClone(input)).content).toEqual(expected);
   });
 
+  it.each([
+    [{ code: "delivery-failed" }, "delivery-failed"],
+    [{ code: "delivery-failed", reason: "hardlink" }, "hardlink"],
+    [{ code: "file-not-found", reason: "hardlink" }, "file-not-found"],
+    [{ code: "hardlink" }, null],
+  ] as const)("normalizes wire failure %j to %s", (wire, displayCode) => {
+    const file = { kind: "document", label: "sample-report.pdf" };
+    expect(assistant([attachment({ ...file, ...wire }, "attachment_error")]).content).toEqual(
+      displayCode ? [attachment({ ...file, code: displayCode }, "attachment_error")] : [],
+    );
+  });
+
   it("keeps structured size failures instead of the text-only client fallback", () => {
     const failure = attachment(
       { code: "file-too-large", kind: "document", label: "orders-large.zip" },

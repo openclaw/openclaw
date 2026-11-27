@@ -76,6 +76,12 @@ function resolveReplyMediaFailureCode(error: unknown): ReplyMediaFailure["code"]
   // Media loaders wrap filesystem/policy errors; bound cause traversal so malformed cycles fail safe.
   for (let depth = 0; current instanceof Error && depth < 4; depth += 1) {
     if (
+      (current instanceof LocalMediaAccessError || current instanceof FsSafeError) &&
+      current.code === "hardlink"
+    ) {
+      return "hardlink";
+    }
+    if (
       ((current instanceof FsSafeError || current instanceof SaveMediaSourceError) &&
         current.code === "too-large") ||
       current instanceof ImageOptimizationLimitError

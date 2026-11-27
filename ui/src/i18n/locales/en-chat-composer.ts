@@ -354,6 +354,8 @@ const catalog = {
       failureInvalidReference:
         "Use a public HTTPS URL without credentials or attach a local file by a safe path.",
       failureFileNotFound: "File not found. Check the path and try again.",
+      failureHardlink:
+        "Hardlinked file. Export a new standalone file from the source app to an allowed folder, then try again.",
       failureUnsupportedFormat:
         "This file type cannot be attached here. If it is saved in this session, download it from Files, or ask for a ZIP containing the original file.",
       history: "History",

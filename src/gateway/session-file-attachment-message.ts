@@ -88,6 +88,9 @@ export function sessionFileAttachmentMessage(
         type: block.type,
         attachment: {
           code: attachment.code,
+          ...(attachment.code === "delivery-failed" && attachment.reason === "hardlink"
+            ? { reason: "hardlink" }
+            : {}),
           kind: attachment.kind,
           label: attachment.label,
           mimeType: attachment.mimeType,

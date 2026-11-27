@@ -4,6 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as globals from "../../globals.js";
 import { collectReplyMediaEntries } from "../../infra/outbound/reply-media-entries.js";
 import { HostReadMediaTypeError, LocalMediaAccessError } from "../../media/local-media-access.js";
@@ -19,6 +20,7 @@ const ensureSandboxWorkspaceForSession = vi.hoisted(() => vi.fn());
 const resolveOutboundAttachmentFromUrl = vi.hoisted(() => vi.fn());
 const resolveAgentScopedHostOutboundMediaAccess = vi.hoisted(() => vi.fn());
 const stateDirEnvSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../../agents/sandbox/context.js", async () => ({
   ...(await vi.importActual<typeof import("../../agents/sandbox/context.js")>(
@@ -300,6 +302,17 @@ it("drops media for host-read media type rejection", async () => {
 });
 
 it("keeps surviving media and appends a named receipt for each dropped item", async () => {
+  const state = tempDirs.make("reply-media-pickup-");
+  setTestEnvValue("OPENCLAW_STATE_DIR", state);
+  const inbound = path.join(state, "media", "inbound");
+  await fs.mkdir(inbound, { recursive: true });
+  const originalFile = path.join(state, "source.pdf");
+  await fs.writeFile(originalFile, "%PDF-original");
+  await fs.link(originalFile, path.join(inbound, "linked.pdf"));
+  const outbound = path.join(state, "media", "outbound");
+  await fs.mkdir(outbound);
+  const linkedOutput = path.join(outbound, "outbound.pdf");
+  await fs.link(originalFile, linkedOutput);
   const localSource = "./out/clip.mp4";
   const stagedSource = "/tmp/outbound-media/clip.mp4";
   const remoteSource = "https://example.com/ok.png";
@@ -321,7 +334,13 @@ it("keeps surviving media and appends a named receipt for each dropped item", as
   const remoteAttachment = { url: remoteSource, name: "Remote chart.png", mimeType: "image/png" };
   const payload: ReplyPayload = {
     text: "Here is the surviving attachment",
-    mediaUrls: ["./out/missing.png", remoteSource, localSource],
+    mediaUrls: [
+      "media://inbound/linked.pdf",
+      linkedOutput,
+      "./out/missing.png",
+      remoteSource,
+      localSource,
+    ],
     attachments: [localAttachment, remoteAttachment],
   };
   const original = structuredClone(payload);
@@ -329,7 +348,12 @@ it("keeps surviving media and appends a named receipt for each dropped item", as
   const result = await createTestReplyMediaNormalizer()(payload);
 
   expect(result.text).toBe(
-    "Here is the surviving attachment\n⚠️ missing.png: File not found. Check the path and try again.",
+    [
+      "Here is the surviving attachment",
+      "⚠️ linked.pdf: Hardlinked file. Export a new standalone file from the source app to an allowed folder, then try again.",
+      "⚠️ outbound.pdf: Hardlinked file. Export a new standalone file from the source app to an allowed folder, then try again.",
+      "⚠️ missing.png: File not found. Check the path and try again.",
+    ].join("\n"),
   );
   expectMedia(result, remoteSource, [remoteSource, stagedSource]);
   expect(result.attachments).toEqual([

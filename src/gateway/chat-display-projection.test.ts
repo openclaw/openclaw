@@ -8,7 +8,8 @@ import {
 } from "../../packages/gateway-client/src/session-projection.js";
 import { getMediaDir } from "../media/store.js";
 import { readRunFailureNotice } from "../shared/run-failure-notice.js";
-import { extractTextFromMessage } from "../tui/tui-formatters.js";
+import { extractTextFromMessage, extractTuiAbortedText } from "../tui/tui-formatters.js";
+import { TuiStreamAssembler } from "../tui/tui-stream-assembler.js";
 import { augmentChatHistoryWithCanvasBlocks } from "./chat-display-projection.canvas.js";
 import {
   projectChatDisplayMessage,
@@ -16,8 +17,49 @@ import {
   projectChatDisplayMessagesWithState,
 } from "./chat-display-projection.js";
 import { sanitizeChatHistoryMessages } from "./chat-display-projection.sanitize.js";
+import { buildManagedMediaFailureBlock } from "./managed-image-attachments.errors.js";
 
 const text = (value: string) => ({ type: "text", text: value });
+
+it("keeps hardlink guidance in the failure card without replacing the caption", () => {
+  const card = buildManagedMediaFailureBlock({
+    code: "hardlink",
+    kind: "document",
+    label: "private.pdf",
+  });
+  expect(card.attachment).toMatchObject({ code: "delivery-failed", reason: "hardlink" });
+  const message = projectChatDisplayMessage({ role: "assistant", content: [card] })!;
+  expect(message.content).toEqual([card]);
+  expect(message).not.toHaveProperty("text");
+  const receipt =
+    "⚠️ file attachment: Hardlinked file. Export a new standalone file from the source app to an allowed folder, then try again.";
+  expect(extractTextFromMessage(message)).toBe(receipt);
+  expect(extractTuiAbortedText(message, false)).toBe("");
+  const stream = new TuiStreamAssembler();
+  stream.ingestDelta("run", { role: "assistant", content: [text("Here is the report.")] }, false);
+  expect(stream.finalize("run", message, false)).toBe(`Here is the report.\n${receipt}`);
+  const mixed = projectChatDisplayMessages(
+    [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "attachment",
+            attachment: {
+              kind: "document",
+              label: "report.pdf",
+              url: "https://example.org/report.pdf",
+            },
+          },
+          card,
+        ],
+      },
+    ],
+    { maxChars: 256 },
+  )[0]!;
+  expect(mixed).not.toHaveProperty("text");
+  expect(extractTextFromMessage(mixed)).toBe(`Attached file\n${receipt}`);
+});
 
 it("keeps size recovery in text fallback without adding prose to the rich card", () => {
   const card = {

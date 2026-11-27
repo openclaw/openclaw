@@ -1,3 +1,4 @@
+import type { ReplyMediaFailureCode } from "../auto-reply/reply-payload.js";
 import type { ManagedMediaKind } from "./managed-image-attachments.media-kind.js";
 
 export function createManagedImageAttachmentError(message: string) {
@@ -22,4 +23,23 @@ export function getSanitizedManagedImageAttachmentError(
   return createManagedImageAttachmentError(
     `Managed ${kind} attachment ${JSON.stringify(label)} could not be prepared`,
   );
+}
+
+export function buildManagedMediaFailureBlock(params: {
+  code: ReplyMediaFailureCode;
+  kind: ManagedMediaKind | "media";
+  label: string;
+  mimeType?: string;
+}): Record<string, unknown> {
+  return {
+    type: "attachment_error",
+    attachment: {
+      ...(params.code === "hardlink"
+        ? { code: "delivery-failed", reason: "hardlink" }
+        : { code: params.code }),
+      kind: params.kind === "media" ? "document" : params.kind,
+      label: params.label,
+      ...(params.mimeType ? { mimeType: params.mimeType } : {}),
+    },
+  };
 }

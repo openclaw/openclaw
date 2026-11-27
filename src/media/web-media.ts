@@ -17,7 +17,6 @@ import { uniqueValues } from "@openclaw/normalization-core/string-normalization"
 import { resolveCanvasHttpPathToLocalPath } from "../canvas/documents.js";
 import { logVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { FsSafeError } from "../infra/fs-safe.js";
 import type { PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
@@ -46,7 +45,7 @@ import {
   getDefaultLocalRootsCore,
   HostReadMediaTypeError,
   LocalMediaAccessError,
-  localMediaNotFoundError,
+  localMediaReadError,
   readLocalMediaFile,
   type LocalMediaAccessErrorCode,
 } from "./local-media-access.js";
@@ -686,38 +685,7 @@ async function loadWebMediaInternal(
         maxBytes: sourceReadCap,
       });
     } catch (err) {
-      if (err instanceof FsSafeError) {
-        if (err.code === "too-large") {
-          throw new Error(`Media exceeds ${formatMediaSize(sourceReadCap)} limit`, {
-            cause: err,
-          });
-        }
-        if (err.code === "not-found") {
-          throw localMediaNotFoundError(mediaUrl, err);
-        }
-        if (err.code === "not-file") {
-          throw new LocalMediaAccessError(
-            "not-file",
-            `Local media path is not a file: ${mediaUrl}`,
-            { cause: err },
-          );
-        }
-        if (err.code === "path-mismatch") {
-          // fs-safe reports pre-open identity drift as path-mismatch; keep the
-          // product-facing classification as an access denial, not a bad path.
-          throw new LocalMediaAccessError(
-            "path-not-allowed",
-            `Local media path is not under an allowed directory: ${mediaUrl}`,
-            { cause: err },
-          );
-        }
-        throw new LocalMediaAccessError(
-          "invalid-path",
-          `Local media path is not safe to read: ${mediaUrl}`,
-          { cause: err },
-        );
-      }
-      throw err;
+      throw localMediaReadError(err, mediaUrl, sourceReadCap);
     }
   }
   const validateHostReadMedia = hostReadCapability || explicitHtmlPublication;
