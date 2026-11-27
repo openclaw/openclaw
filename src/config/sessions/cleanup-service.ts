@@ -3,6 +3,7 @@ import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import { getLogger } from "../../logging/logger.js";
+import { peerKindMatches } from "../../routing/peer-kind-match.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import {
   normalizeAccountId,
@@ -170,6 +171,12 @@ function isMainScopeStaleDirectSessionKey(params: {
             accountId,
             defaultAgentId: params.targetAgentId,
             peer: { kind: "direct", id },
+            parentPeer:
+              channel === "matrix" &&
+              binding.match.peer &&
+              peerKindMatches(binding.match.peer.kind, "channel")
+                ? { kind: "channel", id: binding.match.peer.id }
+                : undefined,
             guildId: binding.match.guildId,
             teamId: binding.match.teamId,
             memberRoleIds,

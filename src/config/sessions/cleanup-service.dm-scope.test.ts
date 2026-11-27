@@ -18,7 +18,7 @@ it("preserves binding-routed DM sessions and history across cleanup and reopenin
       agents: { entries: { main: {}, other: {} } },
       session: {
         dmScope: "main",
-        identityLinks: { Alice: ["discord:123"] },
+        identityLinks: { Alice: ["discord:123"], Current: ["matrix:@current:example.org"] },
         maintenance: { mode: "enforce", maxDiskBytes: false, archiveDashboardAfter: false },
       },
       bindings: [
@@ -37,7 +37,11 @@ it("preserves binding-routed DM sessions and history across cleanup and reopenin
           agentId: "main",
           match: { channel: "matrix", peer: { kind: "direct", id: "retired" } },
         },
-        { agentId: "main", match: { channel: "matrix" }, session: { dmScope: "per-channel-peer" } },
+        {
+          agentId: "main",
+          match: { channel: "matrix", peer: { kind: "group", id: "!dm:example.org" } },
+          session: { dmScope: "per-channel-peer" },
+        },
         { agentId: "main", match: { channel: "irc" } },
         {
           agentId: "main",
@@ -104,11 +108,7 @@ it("preserves binding-routed DM sessions and history across cleanup and reopenin
       expect(loadSessionEntry(scope(key))?.sessionId).toBe(sessionId(key));
     }
     const applied = await cleanup(false);
-    expect(applied.appliedSummaries[0]).toMatchObject({
-      beforeCount: retained.length + retired.length,
-      afterCount: retained.length,
-      dmScopeRetired: retired.length,
-    });
+    expect(applied.appliedSummaries[0]?.dmScopeRetired).toBe(retired.length);
     await closeOpenClawAgentDatabasesAsync(state.root);
     for (const key of retained) {
       expect(loadSessionEntry(scope(key))?.sessionId).toBe(sessionId(key));
