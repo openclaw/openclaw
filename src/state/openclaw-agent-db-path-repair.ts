@@ -10,26 +10,26 @@ import { readMainTableList } from "../infra/sqlite-strict.js";
 import { readActiveUpdateRun } from "../infra/update-run-read.kernel.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 import { assertOpenClawStateDatabaseForMaintenance } from "./openclaw-state-db-maintenance.js";
+import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "./openclaw-state-db-readonly.js";
 import type { AgentDatabases, DB } from "./openclaw-state-db.generated.js";
 import {
   resolveOpenClawAgentDatabaseStoredPath,
   resolveOpenClawRegisteredAgentDatabasePath,
 } from "./openclaw-state-db.paths.js";
 
-/**
- * The caller retains shared-state write admission through this synchronous repair.
- * Update Doctor only counts: rollback compares the updater's captured exact-path inventory.
- */
-export function repairOpenClawAgentDatabasePaths(
-  database: Pick<OpenClawStateDatabase, "db" | "path">,
-  updateDoctor = false,
-): { repaired: number; warnings: string[] } {
-  const { db, path: pathname } = database;
-  const postgres = isPostgresSqlConnection(db);
-  if (!postgres && !updateDoctor) {
-    assertOpenClawStateDatabaseForMaintenance(db, { pathname });
-  }
+type AgentDatabasePathRepair = {
+  stored: string;
+  aliases: AgentDatabases[];
+  newest: AgentDatabases;
+  registeredPath: string;
+  sentinel: boolean;
+};
 
+/** The registrations to repair and how many rows they cover; reads `agent_databases` only. */
+function planOpenClawAgentDatabasePathRepairs(
+  database: Pick<OpenClawStateDatabase, "db" | "path">,
+): { repairs: AgentDatabasePathRepair[]; pending: number } {
+  const { db, path: pathname } = database;
   const queries = getNodeSqliteKysely<Pick<DB, "agent_databases">>(db);
   const rows = executeSqliteQuerySync(
     db,
@@ -66,6 +66,38 @@ export function repairOpenClawAgentDatabasePaths(
     (count, { sentinel, aliases }) => count + (sentinel ? aliases.length : 1),
     0,
   );
+  return { repairs, pending };
+}
+
+/**
+ * Read-only: the registrations `repairOpenClawAgentDatabasePaths` would repair, read directly
+ * from the existing state database (no copy, no write admission). Zero without a database.
+ */
+export function countOpenClawAgentDatabasePathRepairs(env: NodeJS.ProcessEnv): number {
+  return (
+    withExistingOpenClawStateDatabaseCurrentReadOnly(
+      (database) => planOpenClawAgentDatabasePathRepairs(database).pending,
+      { env, allowNativeRead: true },
+    ) ?? 0
+  );
+}
+
+/**
+ * The caller retains shared-state write admission through this synchronous repair.
+ * Update Doctor only counts: rollback compares the updater's captured exact-path inventory.
+ */
+export function repairOpenClawAgentDatabasePaths(
+  database: Pick<OpenClawStateDatabase, "db" | "path">,
+  updateDoctor = false,
+): { repaired: number; warnings: string[] } {
+  const { db } = database;
+  const postgres = isPostgresSqlConnection(db);
+  if (!postgres && !updateDoctor) {
+    assertOpenClawStateDatabaseForMaintenance(db, { pathname: database.path });
+  }
+
+  const queries = getNodeSqliteKysely<Pick<DB, "agent_databases">>(db);
+  const { repairs, pending } = planOpenClawAgentDatabasePathRepairs(database);
   if (pending === 0) {
     return { repaired: 0, warnings: [] };
   }

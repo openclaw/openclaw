@@ -1,5 +1,9 @@
+import { isDeepStrictEqual } from "node:util";
 import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import type { DoctorMaintenancePending } from "../commands/doctor-maintenance-pending.js";
+import { isLegacyParentWritableUpdateDoctorPass } from "../commands/doctor/shared/update-phase.js";
+import { copyConfigResolutionFactsThroughRewrite } from "../config/resolution-facts.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 import { noteDoctorRepairResult } from "./doctor-health-contribution-utils.js";
 import {
@@ -137,4 +141,108 @@ export async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise
   await measureGatewayBootstrapStep("doctor.legacy-cron.execution-context", () =>
     noteScheduledContextReport({ cfg: ctx.cfg, env: ctx.env }),
   );
+}
+
+/**
+ * Read-only: whether `runLegacyStateHealth` would write. Its two core repairs answer for
+ * themselves; the legacy-state migration runs unless preflight already migrated this exact
+ * config; the exec-approval cleanup removes only generated grants the store still holds.
+ */
+export async function checkLegacyStatePending(
+  ctx: DoctorHealthFlowContext,
+): Promise<DoctorMaintenancePending> {
+  const { checkCoreContributionRepairsPending } =
+    await import("./doctor-health-contribution-core.js");
+  const core = await checkCoreContributionRepairsPending(ctx, [
+    "core/doctor/removed-workspaces-state",
+    "core/doctor/session-archive-read-cache",
+  ]);
+  if (core !== "none") {
+    return core;
+  }
+  if (
+    !(ctx.options.repair === true || ctx.options.yes === true) ||
+    !isDeepStrictEqual(ctx.configResult.preflightLegacyStateConfig, ctx.cfg)
+  ) {
+    // The migration then decides through its own detection, whose snapshot read can copy the
+    // state database, so it is not repeated here.
+    return "work";
+  }
+  const { countStoredObsoleteGeneratedExecApprovals } =
+    await import("../infra/exec-approvals-generated-migration.js");
+  return countStoredObsoleteGeneratedExecApprovals() > 0 ? "work" : "none";
+}
+
+export async function checkLegacyRuntimeFilesPending(
+  ctx: DoctorHealthFlowContext,
+): Promise<DoctorMaintenancePending> {
+  if (!ctx.prompter.shouldRepair) {
+    return "none";
+  }
+  const { checkLegacyRuntimeFilesPending: check } =
+    await import("../commands/doctor-usage-cost-cache.js");
+  return check(ctx.env);
+}
+
+function configuredPluginInstallReleaseInputs(ctx: DoctorHealthFlowContext) {
+  return {
+    cfg: ctx.cfg,
+    env: ctx.env ?? process.env,
+    touchedVersion: ctx.configResult.sourceLastTouchedVersion ?? ctx.cfg.meta?.lastTouchedVersion,
+  };
+}
+
+export async function checkConfiguredPluginInstallReleasePending(
+  ctx: DoctorHealthFlowContext,
+): Promise<DoctorMaintenancePending> {
+  if (!ctx.sourceConfigValid || !ctx.prompter.shouldRepair) {
+    return "none";
+  }
+  const { checkConfiguredPluginInstallReleaseStepPending } =
+    await import("../commands/doctor/shared/release-configured-plugin-installs.js");
+  return checkConfiguredPluginInstallReleaseStepPending(configuredPluginInstallReleaseInputs(ctx));
+}
+
+export async function checkLegacyPluginSourceCapturesPending(
+  ctx: DoctorHealthFlowContext,
+): Promise<DoctorMaintenancePending> {
+  if (!ctx.prompter.shouldRepair) {
+    return "none";
+  }
+  const { checkLegacyPluginSourceCapturesPending: check } =
+    await import("../commands/doctor-plugin-source-captures.js");
+  return check(ctx.env ?? process.env);
+}
+
+export async function runConfiguredPluginInstallReleaseHealth(
+  ctx: DoctorHealthFlowContext,
+): Promise<void> {
+  if (!ctx.sourceConfigValid || !ctx.prompter.shouldRepair) {
+    return;
+  }
+  const { maybeRunConfiguredPluginInstallReleaseStep } =
+    await import("../commands/doctor/shared/release-configured-plugin-installs.js");
+  const { VERSION } = await import("../version.js");
+  const result = await maybeRunConfiguredPluginInstallReleaseStep(
+    configuredPluginInstallReleaseInputs(ctx),
+  );
+  if (result.pluginInventoryChanged) {
+    ctx.invalidatePluginMetadataSnapshot?.();
+  }
+  if (result.postInstallDoctorResult) {
+    ctx.postInstallDoctorResult = result.postInstallDoctorResult;
+  }
+  noteDoctorRepairResult(result);
+  if (!result.touchedConfig) {
+    return;
+  }
+  const lastTouchedVersion = isLegacyParentWritableUpdateDoctorPass(ctx.env ?? process.env)
+    ? ctx.configResult.sourceLastTouchedVersion?.trim() ||
+      ctx.cfg.meta?.lastTouchedVersion ||
+      VERSION
+    : VERSION;
+  const config = { ...ctx.cfg, meta: { ...ctx.cfg.meta, lastTouchedVersion } };
+  copyConfigResolutionFactsThroughRewrite(ctx.cfg, config);
+  ctx.cfg = config;
+  writeConfigMachineState("config.lastTouchedAt", new Date().toISOString());
 }

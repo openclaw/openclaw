@@ -5,6 +5,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import type { OpenClawAgentDatabaseOptions } from "../state/openclaw-agent-db-contract.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { withOpenClawAgentDatabaseWrite } from "../state/openclaw-agent-db-write.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import type { AgentDatabaseRequestExecutionSource } from "../state/openclaw-agent-execution-admission-contract.js";
@@ -16,6 +17,7 @@ import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db-contract.js";
 import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import {
+  hasRetiredSessionCostUsageCacheEntriesInDatabase,
   retireLegacySessionCostUsageCacheInDatabase,
   type SessionCostUsageRollupSnapshot,
 } from "./session-cost-usage-cache.kernel.js";
@@ -141,6 +143,27 @@ function createCacheWriter(
       await captured?.release();
     },
   };
+}
+
+/**
+ * Read-only: whether `retireLegacySessionCostUsageCache` would delete a row. A database
+ * without the agent schema is reported as having rows, so the retire path keeps owning it.
+ */
+export function hasRetiredSessionCostUsageCacheEntries(params: {
+  agentId?: string;
+  env?: NodeJS.ProcessEnv;
+  databasePath?: string;
+}): boolean {
+  const options = captureCacheDatabaseOptions({
+    agentId: normalizeAgentId(params.agentId),
+    env: params.env,
+    ...(params.databasePath ? { path: params.databasePath } : {}),
+  });
+  const inspected = withOpenClawAgentDatabaseReadOnly(
+    ({ db }) => hasRetiredSessionCostUsageCacheEntriesInDatabase(db),
+    options,
+  );
+  return inspected.found ? inspected.value : inspected.reason === "schema-missing";
 }
 
 export async function retireLegacySessionCostUsageCache(params: {
