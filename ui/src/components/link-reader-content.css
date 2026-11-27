@@ -52,11 +52,25 @@
 .lr-state--attention {
   color: var(--warn);
 }
+/* Truncate the repository, not the item number or commit ID. */
 .lr-eyebrow {
-  flex: 1 1 auto;
-  min-width: 0;
+  display: grid;
+  flex: 1;
+  grid-template-columns: minmax(0, max-content) max-content;
+  min-width: min-content;
   font-variant-numeric: tabular-nums;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+}
+.lr-identity:has(.lr-notice) .lr-eyebrow {
+  min-width: 0;
+  overflow: hidden;
+}
+.lr-eyebrow > :first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lr-eyebrow > :last-child {
+  white-space: pre;
 }
 .lr-identity time {
   flex: none;
@@ -83,20 +97,13 @@
   padding: 12px;
   overflow-wrap: anywhere;
 }
-@media (max-width: 480px) {
+@media (max-width: 560px) {
   .lr-notice-popover[data-placement="bottom-end"] {
     width: calc(100dvw - 2 * var(--lr-content-padding));
     position-area: bottom span-all;
     justify-self: center;
     position-try-fallbacks: flip-block;
   }
-}
-/* A notice outranks the reference: the reference keeps only the room left over, on one line. */
-.lr-identity--notice .lr-eyebrow {
-  flex-basis: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 /* The actions hang in the row's 22px line, so they add no height to the header. */
 .lr-actions {

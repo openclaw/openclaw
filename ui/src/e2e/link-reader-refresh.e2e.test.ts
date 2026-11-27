@@ -11,7 +11,7 @@ it("keeps the retained title readable through refresh failure and retry at every
   const overview: ControlUiLinkReaderDocument = {
     url,
     title: "Keep loaded reader controls reachable in constrained panes",
-    subtitle: "example/project #203950",
+    subtitle: "example/release-engineering-and-deployment-automation #203950",
     badge: { label: "Open", tone: "positive" },
     createdAt: "2026-09-23T11:08:47Z",
     body: "Readable retained details.\n\n".repeat(40),
@@ -36,6 +36,27 @@ it("keeps the retained title readable through refresh failure and retry at every
           await openChatPanels(page, "mobile");
         }
         await takeControlUiScreenshotFrame(page, panel, [heading], { animations: "disabled" });
+        const reference = panel.locator(".lr-eyebrow");
+        const referenceNumberIsVisible = () =>
+          reference.evaluate((node) => {
+            const text = node.textContent ?? "";
+            const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+            let offset = text.lastIndexOf("#203950");
+            for (let part = walker.nextNode(); part; part = walker.nextNode()) {
+              const length = part.textContent?.length ?? 0;
+              if (offset >= 0 && offset + 7 <= length) {
+                const range = document.createRange();
+                range.setStart(part, offset);
+                range.setEnd(part, offset + 7);
+                const number = range.getBoundingClientRect();
+                const ink = part.parentElement!.getBoundingClientRect();
+                return number.width > 0 && number.right <= ink.right + 1;
+              }
+              offset -= length;
+            }
+            return false;
+          });
+        expect(await referenceNumberIsVisible()).toBe(true);
         const before = await heading.boundingBox();
         const after = await gateway.deferNext("forge.detail");
         await refresh.click();

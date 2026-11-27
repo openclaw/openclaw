@@ -1,14 +1,14 @@
 import type { JSX } from "@solidjs/web";
-import { createSignal, createUniqueId, For, onSettled, Repeat, Show } from "solid-js";
+import { createMemo, createSignal, createUniqueId, For, onSettled, Repeat, Show } from "solid-js";
 import type { ControlUiLinkReaderDocument } from "../../../src/shared/control-ui-link-reader.js";
 import { registerLinkReaderEnglish } from "../i18n/locales/en-link-reader.ts";
 import { takeGraphemes } from "../lib/graphemes.ts";
 import { cancelLayout, scheduleLayout } from "../lib/layout-frame.ts";
-import { formatDateTimeMs, formatRelativeTimestamp } from "../lib/reactive/format.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { createIntersectionObserver } from "../lib/reactive/observers.ts";
 import { ChecksContent } from "./link-reader-checks.tsx";
+import { DateLabel } from "./link-reader-date-label.tsx";
 import { LinkReaderExternalAction } from "./link-reader-external-action.tsx";
 import { Diff, FileContent } from "./link-reader-files.tsx";
 import {
@@ -30,32 +30,8 @@ type SectionState = "idle" | "loading" | "error";
 
 registerEnglishCatalog(registerLinkReaderEnglish);
 
-// Recent activity reads as "2h ago"; older dates stay absolute and drop the seconds.
-const RELATIVE_DATE_MS = 7 * 24 * 60 * 60 * 1000;
 // Document order, which differs from the navigation: checks sit above the description.
 const SECTION_ORDER = ["checks", "overview", "files", "discussion"] as const;
-
-function DateLabel(props: { value: string | undefined }) {
-  return (
-    <Show when={props.value}>
-      {(value) => {
-        const time = () => new Date(value()).getTime();
-        return (
-          <time
-            datetime={value()}
-            title={Number.isNaN(time()) ? value() : formatDateTimeMs(time())}
-          >
-            {Number.isNaN(time())
-              ? value()
-              : Date.now() - time() < RELATIVE_DATE_MS
-                ? formatRelativeTimestamp(time())
-                : formatDateTimeMs(time(), { dateStyle: "medium" })}
-          </time>
-        );
-      }}
-    </Show>
-  );
-}
 
 /** A person: their picture when the source provides one, otherwise their initial. */
 function Avatar(props: { name: string; imageUrl?: string }) {
@@ -443,10 +419,12 @@ export function LinkReaderContent(props: {
   // A refresh in flight is announced, not shown: the button already spins.
   const notice = () => (props.refreshing ? undefined : props.notice);
   const noticeId = createUniqueId();
+  const subtitle = () => props.detail.subtitle ?? props.target.reader.label;
+  const reference = createMemo(() => / (?:#\d+|· [\da-f]{12})$/i.exec(subtitle()));
   return (
     <article class="lr-document">
       <header class="lr-document-header">
-        <div class={["lr-identity", { "lr-identity--notice": Boolean(notice()) }]}>
+        <div class="lr-identity">
           <Show when={props.detail.badge}>
             {(badge) => (
               <span class={["lr-state", `lr-state--${badge().tone}`]}>
@@ -455,14 +433,18 @@ export function LinkReaderContent(props: {
               </span>
             )}
           </Show>
-          <span class="lr-eyebrow">{props.detail.subtitle ?? props.target.reader.label}</span>
-          <Show when={!notice()}>
-            <DateLabel value={props.detail.badge?.timestamp ?? props.detail.createdAt} />
-          </Show>
+          <span class="lr-eyebrow" title={subtitle()}>
+            <span>{subtitle().slice(0, reference()?.index)}</span>
+            <span>{reference()?.[0]}</span>
+          </span>
           <span class="sr-only" role="status">
             {props.refreshing ? t("linkReader.refreshingSaved") : notice()}
           </span>
-          <Show when={notice()} keyed>
+          <Show
+            when={notice()}
+            keyed
+            fallback={<DateLabel value={props.detail.badge?.timestamp ?? props.detail.createdAt} />}
+          >
             {(message) => (
               <Popover
                 id={noticeId}
