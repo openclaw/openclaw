@@ -3101,6 +3101,25 @@ class TalkModeManager internal constructor(
             setStatus(nativeText("Microphone permission required"))
             return@withCurrentRecognition
           }
+          if (!pushToTalkActive &&
+            (error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED || error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE)
+          ) {
+            // Restarting cannot install a language, so end Talk with the reason instead of looping.
+            val failure =
+              if (error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED) {
+                nativeText("Device language not supported")
+              } else {
+                nativeText("On-device language model unavailable")
+              }
+            val generation = startGeneration.get()
+            // The owner notification takes runtime locks, so it runs after this callback releases ours.
+            mainHandler.post {
+              if (startGeneration.get() != generation) return@post
+              stop(TalkSessionCloseDisposition.Abort)
+              disableRealtimeModeAndNotifyOwner(startGeneration.get(), failure)
+            }
+            return@withCurrentRecognition
+          }
 
           setStatus(
             when (error) {
@@ -3130,7 +3149,7 @@ class TalkModeManager internal constructor(
             )
             return@withCurrentRecognition
           }
-          scheduleRestart(delayMs = 600)
+          scheduleRestart(delayMs = if (error == SpeechRecognizer.ERROR_TOO_MANY_REQUESTS) 15_000 else 600)
         }
 
       override fun onResults(results: Bundle?) =

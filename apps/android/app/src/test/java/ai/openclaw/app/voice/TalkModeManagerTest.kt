@@ -83,6 +83,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -1293,6 +1294,38 @@ class TalkModeManagerTest {
     }
 
   @Test
+  fun nativeTalkEndsWithFailureWhenSpeechLanguageIsUnsupported() =
+    runBlocking {
+      withNativeTalk { proof, _ ->
+        val recognizer = currentRecognizer()
+        val session = recognizer.lastRecognizerIntent
+        recognizer.triggerOnError(SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED)
+        advanceTalkRestart(proof, 1_000)
+
+        assertSame("An unsupported language must not restart recognition", session, recognizer.lastRecognizerIntent)
+        assertFalse(proof.manager.isEnabled.value)
+        val notice = checkNotNull(proof.manager.failureNotice.value)
+        assertEquals("Device language not supported", notice.text)
+      }
+    }
+
+  @Test
+  fun nativeTalkWaitsBeforeRestartingAfterTooManyRequests() =
+    runBlocking {
+      withNativeTalk { proof, _ ->
+        val recognizer = currentRecognizer()
+        val session = recognizer.lastRecognizerIntent
+        recognizer.triggerOnError(SpeechRecognizer.ERROR_TOO_MANY_REQUESTS)
+        advanceTalkRestart(proof, 14_000)
+        assertSame("A rate-limited recognizer must not restart at the normal cadence", session, recognizer.lastRecognizerIntent)
+
+        advanceTalkRestart(proof, 1_000)
+        assertNotSame(session, recognizer.lastRecognizerIntent)
+        assertTrue(proof.manager.isEnabled.value)
+      }
+    }
+
+  @Test
   fun nativeTalkKeepsListeningWithSpeakerOff() =
     runBlocking {
       withNativeTalk { proof, sends ->
@@ -1659,6 +1692,17 @@ class TalkModeManagerTest {
       proof.scheduler.advanceTimeBy(100)
       shadowOf(Looper.getMainLooper()).idle()
       proof.scheduler.runCurrent()
+    }
+  }
+
+  private fun advanceTalkRestart(
+    proof: RealtimePlaybackProof,
+    durationMs: Long,
+  ) {
+    repeat((durationMs / 100).toInt()) {
+      proof.scheduler.advanceTimeBy(100)
+      proof.scheduler.runCurrent()
+      shadowOf(Looper.getMainLooper()).idle()
     }
   }
 
