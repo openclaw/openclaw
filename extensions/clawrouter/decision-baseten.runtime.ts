@@ -74,6 +74,7 @@ export function resolveBasetenDecisionHttpContext(
           ...context.config.models?.providers,
           clawrouter: {
             ...provider,
+            baseUrl: normalizeClawRouterApiBaseUrl(provider?.baseUrl),
             models: provider?.models ?? [],
             headers: configuredHeaders,
             request,
