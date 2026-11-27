@@ -227,7 +227,7 @@ export function createCodexAppServerAgentHarness(
     contextEngineHostCapabilities: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES,
     conversationToolPolicySupport: "exact",
     nativeModelPolicySupport: "exact",
-    // Codex builds its own turn input; steering and mirrored sends never capture a projection.
+    // The app-server builds its own turn input, so OpenClaw cannot freeze what Codex sends.
     promptProjection: "external",
     conversationToolPolicySafeDenyTools: CODEX_TOOL_POLICY_SAFE_DENY_NAMES,
     conversationToolPolicyNativeTools: CODEX_NATIVE_TOOL_REQUIREMENTS,

@@ -4,7 +4,9 @@ import {
   type SessionSourceAssertion,
 } from "../../../config/sessions/session-source-authority.js";
 import type { ImageContent } from "../../../llm/types.js";
+import { readModelPromptProjection } from "../../../sessions/user-turn-transcript.message.js";
 import type { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
+import { isTextContentBlock } from "../../content-blocks.js";
 import { isOpenClawSystemUpdateMessage } from "../../internal-runtime-context.js";
 import type { Agent, AgentMessage } from "../../runtime/index.js";
 import type { NextUserMessagePersistence } from "../../session-tool-result-guard.js";
@@ -238,6 +240,19 @@ export async function submitEmbeddedAttemptPrompt(input: {
           }
           assertRequestCurrent();
           input.assertHostActive?.();
+          const sent = foregroundRequest ? projectionRecorder?.getPersistedMessage?.() : undefined;
+          const capture = projectionRecorder?.captureModelPromptProjection;
+          // A capturing harness never dispatches unfrozen: a turn the prompt transform could not
+          // project (it left the request, or has no text) freezes as its own transcript text.
+          if (sent && capture && readModelPromptProjection(sent) === undefined) {
+            const text =
+              typeof sent.content === "string"
+                ? sent.content
+                : (sent.content.find(isTextContentBlock)?.text ?? "");
+            const freeze = () => capture(text, assertRequestCurrent);
+            await (input.withTranscriptWrite ? input.withTranscriptWrite(freeze) : freeze());
+            assertRequestCurrent();
+          }
           if (foregroundRequest) {
             projectionRecorder?.markSentToProvider?.();
           }

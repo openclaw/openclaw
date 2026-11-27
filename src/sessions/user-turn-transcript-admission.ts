@@ -51,7 +51,7 @@ type AdmissionOwner = {
   sentToProvider: () => boolean;
   /** The dispatching harness's declaration; after a `captures` dispatch a late capture throws. */
   promptProjection?: "captures" | "external";
-  declarePromptProjection: (kind: "captures" | "external") => void;
+  declarePromptProjection: (kind: "captures" | "external" | undefined) => void;
   refresh: (
     admission: UserTurnTranscriptAdmissionReceipt,
     message: PersistedUserTurnMessage,
@@ -84,8 +84,8 @@ export function registerUserTurnTranscriptAdmissionOwner(
     invalidateSubmittedText() {
       delete owner.submittedText;
     },
-    // A harness attempt declares before it runs; the first provider dispatch keeps its value.
-    declarePromptProjection(kind: "captures" | "external") {
+    // Bound per harness attempt; the first provider dispatch keeps its value.
+    declarePromptProjection(kind: "captures" | "external" | undefined) {
       if (!owner.sentToProvider()) {
         owner.promptProjection = kind;
       }

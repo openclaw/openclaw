@@ -515,6 +515,31 @@ describe("user turn transcript persistence", () => {
       expect(readModelPromptProjection(sent.getPersistedMessage?.())).toBeUndefined();
     });
 
+    it("does not apply a declaration from an attempt that never sent to a later send", async () => {
+      const sent = record({ text: "sent by a worker" });
+      await sent.persistApproved();
+      // The capturing harness's attempt ends before dispatch; a send outside the lifecycle follows.
+      await runAgentHarnessLifecycleAttempt(
+        createLifecycleHarness({ promptProjection: "captures" }),
+        { ...createAttemptParams(), userTurnTranscriptRecorder: sent },
+      );
+      sent.markSentToProvider?.();
+      await expect(sent.captureModelPromptProjection!("later", () => {})).resolves.toMatchObject({
+        content: "sent by a worker",
+      });
+    });
+
+    it("replays an empty projection of a text-free turn without adding an empty text block", () => {
+      const image = { type: "image" as const, data: "aW1n", mimeType: "image/png" };
+      const frozen = {
+        role: "user" as const,
+        content: [image],
+        timestamp: 1,
+        __openclaw: { modelPromptProjection: { version: 1, text: "" } },
+      };
+      expect(projectRecordedModelPrompt(frozen).content).toEqual([image]);
+    });
+
     it("persists fallback user turns only once", async () => {
       const persistedMessages: unknown[] = [];
       const recorder = record(userInput("hello from fallback", "chat-run-1:user"), undefined, {

@@ -233,7 +233,8 @@ export function projectRecordedModelPrompt(
       replaced = true;
       return { ...block, text };
     });
-    if (!replaced) {
+    // An empty projection freezes a turn that had no text; it adds no empty text block.
+    if (!replaced && text) {
       content = [{ type: "text", text }, ...content];
     }
   } else if (text !== undefined) {
