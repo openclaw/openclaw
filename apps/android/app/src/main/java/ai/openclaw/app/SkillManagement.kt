@@ -1,6 +1,6 @@
 package ai.openclaw.app
 
-import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.ErrorShape
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -12,6 +12,60 @@ internal const val CLAWHUB_INSTALL_REQUEST_TIMEOUT_MS = 125_000L
 internal const val CLAWHUB_SKILL_GATEWAY_UNAVAILABLE = "Update the Gateway to search and install ClawHub skills from Android."
 internal val CLAWHUB_SKILL_GATEWAY_METHODS = setOf("skills.search", "skills.detail", "skills.install")
 internal const val CLAWHUB_UNSCANNED_TRUST_STATE = "not-scanned-by-clawhub"
+
+data class GatewaySkillSummary(
+  val skillKey: String,
+  val name: String,
+  val description: String?,
+  val source: String,
+  val emoji: String?,
+  val disabled: Boolean,
+  val eligible: Boolean,
+  val blockedByAllowlist: Boolean,
+  val blockedByAgentFilter: Boolean,
+  val bundled: Boolean,
+  val missingCount: Int,
+  val installCount: Int,
+  val clawHubSlug: String? = null,
+  val clawHubValid: Boolean = false,
+  /** Exact reference this skill was installed from; an install-only source keeps its identity. */
+  val clawHubRequestedReference: String? = null,
+  val clawHubOwnerHandle: String? = null,
+  val clawHubInstalledVersion: String? = null,
+)
+
+internal fun parseSkillSummaries(skills: JsonArray?): List<GatewaySkillSummary> =
+  skills
+    .mapObjects { obj ->
+      val name = obj.nonBlankString("name") ?: return@mapObjects null
+      val missing = obj["missing"] as? JsonObject
+      val clawHub = obj["clawhub"] as? JsonObject
+      GatewaySkillSummary(
+        skillKey = obj.nonBlankString("skillKey") ?: name,
+        name = name,
+        description = obj.nonBlankString("description"),
+        source = obj.nonBlankString("source") ?: "unknown",
+        emoji = obj.nonBlankString("emoji"),
+        disabled = obj.boolean("disabled"),
+        eligible = obj.boolean("eligible"),
+        blockedByAllowlist = obj.boolean("blockedByAllowlist"),
+        blockedByAgentFilter = obj.boolean("blockedByAgentFilter"),
+        bundled = obj.boolean("bundled"),
+        missingCount = skillMissingCount(missing),
+        installCount = (obj["install"] as? JsonArray)?.size ?: 0,
+        clawHubSlug =
+          clawHub.nonBlankString("slug"),
+        clawHubValid = clawHub.boolean("valid"),
+        clawHubRequestedReference =
+          clawHub.nonBlankString("requestedReference"),
+        clawHubOwnerHandle =
+          clawHub.nonBlankString("ownerHandle"),
+        clawHubInstalledVersion =
+          clawHub.nonBlankString("installedVersion"),
+      )
+    }
+
+private fun skillMissingCount(missing: JsonObject?): Int = listOf("bins", "env", "config", "os").sumOf { key -> (missing?.get(key) as? JsonArray)?.size ?: 0 }
 
 data class GatewayClawHubSkillSearchState(
   val query: String = "",
@@ -122,7 +176,7 @@ internal fun parseClawHubInstallReview(
   )
 }
 
-internal fun clawHubInstallRejection(error: GatewaySession.ErrorShape): GatewayClawHubInstallRejection =
+internal fun clawHubInstallRejection(error: ErrorShape): GatewayClawHubInstallRejection =
   GatewayClawHubInstallRejection(
     message = error.message.ifBlank { "The Gateway rejected this ClawHub install." },
     warning =

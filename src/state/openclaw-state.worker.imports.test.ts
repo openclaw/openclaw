@@ -106,6 +106,22 @@ it.each([
   },
 );
 
+it("keeps agent database execution independent of the host SQLite broker", () => {
+  expect(
+    findSourceImportBackedges("src/state/openclaw-agent-execution.worker.ts", [
+      "src/infra/sqlite-worker-broker.ts",
+    ]),
+  ).toEqual([]);
+});
+
+it("keeps the shared writer independent of ordinary agent lease management", () => {
+  expect(
+    findSourceImportBackedges("src/state/openclaw-state.worker.ts", [
+      "src/state/openclaw-agent-db-lease.ts",
+    ]),
+  ).toEqual([]);
+});
+
 it("keeps shared-state and session-upstream workers independent of host runtime discovery", () => {
   expect(
     findSourceImportBackedges(

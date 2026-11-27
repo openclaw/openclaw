@@ -93,7 +93,9 @@ export function dashboardGroups(
           label: (
             <>
               {renderSessionOwnerChip(author.avatar, "row")}
-              <span>{author.id === selfId ? t("dashboardsPage.you") : author.label}</span>
+              <span title={author.label}>
+                {author.id === selfId ? t("dashboardsPage.you") : author.label}
+              </span>
             </>
           ),
           rows: [row],

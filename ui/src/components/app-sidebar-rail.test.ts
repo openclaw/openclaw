@@ -9,6 +9,7 @@ import { isRouteId, locationForRoute, routePageSpec, type RouteId } from "../app
 import { selectShellRouteState } from "../app/app-host-route-state.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
+import { childSessionListQuery } from "../lib/sessions/child-session-data.ts";
 import * as toast from "../lib/toast.ts";
 import { createFrameClock } from "../test-helpers/animation-frame-clock.ts";
 import {
@@ -189,23 +190,77 @@ describe("personal navigation rail", () => {
     }
   });
 
-  it("keeps Home outbox attention and drafts visible with its run state when collapsed", async () => {
-    const { sidebar, publish, dom } = await fixture();
-    publish({ hasActiveRun: true, status: "running" }, "agent:main:main");
-    await update(sidebar, { storedOutboxes: outbox("agent:main:main"), navigationCollapsed: true });
+  it("shows only running or unread on rail Home, even with a draft and held inputs", async () => {
+    const key = "agent:main:main";
+    const { sidebar, publish, dom } = await fixture({
+      storedOutboxes: outbox(key),
+      navigationCollapsed: true,
+    });
     const home = dom.query(".sidebar-footer-bar__home")!;
-    const icons = domProbe(home);
-    expect(icons.attr(".session-glyph__ring", "aria-label")).toBe("Active run");
-    expect(icons.attr(".session-row-badge--attention", "aria-label")).toContain("2");
-    expect(icons.present(".session-row-badge--draft")).toEqual([true]);
-    await update(sidebar, { storedOutboxes: outbox("agent:main:main", 0) });
-    expect(
-      icons.present(
-        ".session-row-badge--attention",
-        ".session-row-badge--draft",
-        ".session-glyph__ring",
-      ),
-    ).toEqual([false, false, true]);
+    for (const [status, unread, labels] of [
+      ["queued", false, []],
+      ["queued", true, ["Unread"]],
+      ["running", true, ["Active run"]],
+      ["done", true, ["Unread"]],
+      ["done", false, []],
+    ] as const) {
+      publish({ status, unread, hasActiveRun: status === "queued" || status === "running" }, key);
+      await sidebar.updateComplete;
+      expect(
+        [...home.querySelectorAll('[role="img"]')].map((el) => el.getAttribute("aria-label")),
+      ).toEqual(labels);
+    }
+  });
+
+  it("spins rail Home only after a child is confirmed running", async () => {
+    const { sidebar, sessions, result, dom } = await fixture();
+    const key = "agent:main:main";
+    const childKey = "agent:main:subagent:worker";
+    const childWindow = { ...childSessionListQuery(key), source: "sidebar" as const };
+    const firstRead = createDeferred<typeof result>();
+    let children = { ...result, count: 0, sessions: [] as GatewaySessionRow[] };
+    sessions.list.mockImplementation(async (query) => {
+      if (query?.spawnedBy !== key) {
+        return sessions.result;
+      }
+      await firstRead.promise;
+      return children;
+    });
+    const running = () => dom.query(".sidebar-footer-bar__home .session-glyph__ring") !== null;
+    sessions.publishList({
+      agentId: "main",
+      result: {
+        ...result,
+        sessions: [{ key, kind: "direct", childSessions: [childKey], hasActiveSubagentRun: true }],
+      },
+    });
+    await sidebar.updateComplete;
+    expect(running()).toBe(false);
+
+    for (const status of ["queued", "running", "done"] as const) {
+      const ts = children.ts + 1;
+      children = {
+        ...result,
+        ts,
+        count: 1,
+        sessions: [
+          {
+            key: childKey,
+            sessionId: childKey,
+            kind: "direct",
+            spawnedBy: key,
+            status,
+            updatedAt: ts,
+          },
+        ],
+      };
+      firstRead.resolve(result);
+      await sessions.sessions.refreshList({ ...childWindow, force: true });
+      await sidebar.sessionData.loadChildSessions(key);
+      await sidebar.updateComplete;
+      expect(sidebar.sessionData.childSessionRowsByParent[key]?.[0]?.status).toBe(status);
+      expect(running(), status).toBe(status === "running");
+    }
   });
 
   it("pins and unpins sessions personally without sessions.patch", async () => {

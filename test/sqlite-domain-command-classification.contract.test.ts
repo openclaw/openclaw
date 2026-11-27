@@ -39,6 +39,7 @@ const domains = {
     "database.stage.start": true,
     "index.facts": true,
     "index.upgradeProviderKey": true,
+    "index.writeEmbeddingRefusal": true,
     "index.writeMetadata": true,
     "schema.admit": true,
     "source.chunks": true,

@@ -18,13 +18,13 @@ import {
   handleQuestionChannelRequested,
   handleQuestionChannelResolved,
 } from "../../infra/question-channel-runtime.js";
-import { GatewayOperatorRecoveryAuthorizationError } from "../../infra/restart-recovery-errors.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import {
   listSecretStoreEntries,
   SecretStoreValidationError,
 } from "../../secrets/store/secret-store.js";
 import { QUESTION_COMPOSER_REPLACEMENT } from "../../shared/question-composer-replacement.js";
+import { OperatorRefusalError } from "../operator-refusal.js";
 import { isNamedOperatorRoleEnforcementEnabled } from "../operator-role-enforcement.js";
 import { authorizeGatewaySessionCreation, hasOperatorBoundary } from "../operator-role-policy.js";
 import { canSelectQuestion, usesOwnRunQuestionAccess } from "../question-access.js";
@@ -422,7 +422,7 @@ export function createQuestionHandlers(
           create();
         }
       } catch (error) {
-        if (error instanceof GatewayOperatorRecoveryAuthorizationError) {
+        if (error instanceof OperatorRefusalError) {
           respondError(respond, ErrorCodes.FORBIDDEN, error.message);
           return;
         }

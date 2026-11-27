@@ -145,10 +145,10 @@ export function MeetingsPage(props: { routeSearch?: string }) {
 
   const listTask = createArchiveRead(async (signal, search = routeSearch()) => {
     const client = requestClient();
-    if (!client) {
+    const params = transcriptListParams(search);
+    if (!client || !params) {
       return;
     }
-    const params = transcriptListParams(search);
     const selector = selection(search).selector;
     await readArchive({
       client,

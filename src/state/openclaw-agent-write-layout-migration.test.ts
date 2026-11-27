@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
 import { corruptSqliteIndexKey } from "../infra/sqlite-index-corruption.test-support.js";
@@ -10,6 +9,7 @@ import {
 import { withAgentDatabaseMaintenanceLease as withLease } from "./openclaw-agent-db-maintenance-lease.js";
 import { getOpenClawAgentMigrationSchema } from "./openclaw-agent-db-schema-helpers.js";
 import { ensureOpenClawAgentDatabaseSchema as ensureSchema } from "./openclaw-agent-db-schema.js";
+import { OPENCLAW_AGENT_SCHEMA_V27_SQL } from "./openclaw-agent-schema-v25.test-support.js";
 import { assertOpenClawMigrationWitnessPreserved as assertWitnessPreserved } from "./openclaw-migration-witness.js";
 import {
   agentWitness,
@@ -20,10 +20,7 @@ import {
 } from "./schema-migration.test-support.js";
 
 // Frozen input independently checks the historical admission transform.
-const schemaV27 = fs.readFileSync(
-  new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v27.sql", import.meta.url),
-  "utf8",
-);
+const schemaV27 = OPENCLAW_AGENT_SCHEMA_V27_SQL;
 const scope = [
   "memory_entry_origins",
   "schema_meta",

@@ -223,7 +223,7 @@ export function listNodeTestConfigFiles(config: string): string[] | undefined {
   return files;
 }
 
-/** Measurement-only ownership; adding it must not change runtime partitioning. */
+/** Effective measurement ownership; timer/isolated runtime exception checks also use it. */
 export function listNodeTestVolumeConfigFiles(config: string): string[] | undefined {
   if (config === "test/vitest/vitest.unit-fast.config.ts") {
     const excluded = new Set([...getUnitFastTimerTestFiles(), ...getUnitFastIsolatedTestFiles()]);
@@ -466,7 +466,8 @@ export function scheduledTrackedTestFiles(): string[] {
   // Coverage itself runs in a complete checkout; retain the existing Git owner.
   const { listGitTrackedFiles }: typeof import("../../src/test-utils/repo-files.ts") =
     createRequire(import.meta.url)("../../src/test-utils/repo-files.ts");
-  const files = listGitTrackedFiles({ pathspecs: "." });
+  // Narrow before the Git owner checks existence; non-test paths cannot enter this census.
+  const files = listGitTrackedFiles({ pathspecs: ":(glob)**/*.test.*" });
   if (!files) {
     throw new Error("Scheduled test coverage requires git ls-files");
   }

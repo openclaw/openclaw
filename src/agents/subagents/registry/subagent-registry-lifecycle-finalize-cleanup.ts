@@ -2,7 +2,11 @@ import { isGatewayRestartDraining } from "../../../process/gateway-work-admissio
 import { isCronRunSessionKey } from "../../../sessions/session-key-utils.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
-import type { SubagentAnnounceFlowOutcome } from "../announce/subagent-announce.js";
+import {
+  planAnnounceCleanup,
+  resolveAnnounceCleanupOutcome,
+  type SubagentAnnounceFlowOutcome,
+} from "../announce/subagent-announce-obligation.js";
 import { settleSubagentCompletionInHistory } from "../completion/subagent-completion-admission.store.js";
 import {
   ensureCompletionState,
@@ -139,7 +143,13 @@ export const finalizeSubagentCleanup = async (
       completionReason,
       finalizeDelivery,
     });
-  if (entry.expectsCompletionMessage === false || skipRequesterDelivery) {
+  const action = planAnnounceCleanup({
+    expectsCompletionMessage: entry.expectsCompletionMessage,
+    skipRequesterDelivery,
+    outcome: announceOutcome,
+    delivered: entry.delivery?.status === "delivered",
+  });
+  if (action === "not_required") {
     const finalizeDelivery = (draft: SubagentRunRecord) => {
       clearSubagentPendingDelivery(draft);
       if (skipRequesterDelivery) {
@@ -155,11 +165,14 @@ export const finalizeSubagentCleanup = async (
     await finishCleanup(skipRequesterDelivery, undefined, finalizeDelivery);
     return;
   }
-  if (announceOutcome === "delivered" || announceOutcome === "requester_waiting") {
+  if (action === "delivered" || action === "requester_waiting") {
     const finalizeDelivery = (draft: SubagentRunRecord) => {
       const delivery = ensureDeliveryState(draft);
       const shouldCreditDelivery =
-        announceOutcome === "delivered" || delivery.status === "delivered";
+        resolveAnnounceCleanupOutcome(action, {
+          delivered: delivery.status === "delivered",
+          handedOff: false,
+        }) === "delivered";
       if (shouldCreditDelivery) {
         const deliveredAt = delivery.deliveredAt ?? delivery.announcedAt ?? Date.now();
         delivery.status = "delivered";
@@ -190,7 +203,7 @@ export const finalizeSubagentCleanup = async (
       completion.fallbackResultText = undefined;
       completion.fallbackCapturedAt = undefined;
     };
-    if (announceOutcome === "delivered") {
+    if (action === "delivered") {
       // The send receipt is already durable; finish its bookkeeping in one write.
       await finishCleanup(
         false,
@@ -204,7 +217,7 @@ export const finalizeSubagentCleanup = async (
     return;
   }
 
-  if (announceOutcome === "session_queued") {
+  if (action === "session_queued") {
     // The correlated queue owns transport now. Settlement, not admission,
     // decides delivered versus blocked and re-enters cleanup afterward.
     await commit(
@@ -216,18 +229,6 @@ export const finalizeSubagentCleanup = async (
     return;
   }
 
-  if (entry.delivery?.status === "delivered") {
-    await finalizeSubagentCleanup(
-      context,
-      entry,
-      cleanup,
-      "delivered",
-      cleanupGeneration,
-      stateContext,
-      options,
-    );
-    return;
-  }
   // Expiry settles delivery regardless of descendants; failed preparation must not block it.
   const expired = Date.now() >= resolveAnnounceDeliveryDeadline(entry, Date.now());
   // Settled descendant delivery cannot hold this completion for unfinished cleanup.
@@ -237,7 +238,15 @@ export const finalizeSubagentCleanup = async (
         excludeSettledDelivery: true,
       });
   assertCurrent();
-  if (activeDescendantRuns <= 0) {
+  const remainingAction = planAnnounceCleanup({
+    expectsCompletionMessage: entry.expectsCompletionMessage,
+    skipRequesterDelivery,
+    outcome: announceOutcome,
+    delivered: false,
+    expired,
+    activeDescendants: activeDescendantRuns,
+  });
+  if (remainingAction === "history") {
     // A result that missed its turn settles into requester history; nothing retries it.
     await finalizeResumedAnnounceGiveUp(context, {
       entry,

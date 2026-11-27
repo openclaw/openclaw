@@ -66,6 +66,18 @@ function withNativeErrorStacks<T>(run: () => T): T {
 }
 
 describe("Gateway timed work", () => {
+  it("reports a scheduled failure with its original stack", async () => {
+    const { time, job } = fixture();
+    schedulerLog.error.mockClear();
+    job("failure", { delayMs: 0 }, async function scheduledFailure() {
+      throw new Error("fixture failure");
+    });
+    await time.wake();
+    expect(schedulerLog.error).toHaveBeenCalledExactlyOnceWith(
+      expect.stringMatching(/failure failed: Error: fixture failure\n.*scheduledFailure/u),
+    );
+  });
+
   it("shares maintenance slots across owners and skips slots missed by async work and sleep", async () => {
     const { time, scheduler, job, at } = fixture();
     const scope = scheduler.scope();

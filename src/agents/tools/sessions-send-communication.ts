@@ -83,6 +83,8 @@ export async function prepareSessionsSendCommunication(params: {
   assertAccessCurrent?: () => void;
   /** An accepted request's result is not a fresh reverse-direction send. */
   acceptedReply?: SessionSendReplyAdmission;
+  /** Keep host-authored failure notices in the model transcript, out of visible chat/queue. */
+  hideInput?: boolean;
   callGateway: AgentToolGatewayRequestCaller;
 }) {
   const message = params.message;
@@ -623,7 +625,12 @@ export async function prepareSessionsSendCommunication(params: {
               message: dispatchMessage,
               ...(request.replyExpectation === "optional" &&
               typeof input.extraSystemPrompt === "string"
-                ? { returnedResult: { extraSystemPrompt: input.extraSystemPrompt } }
+                ? {
+                    returnedResult: {
+                      extraSystemPrompt: input.extraSystemPrompt,
+                      ...(params.hideInput ? { hideInput: true } : {}),
+                    },
+                  }
                 : {}),
             },
           },

@@ -135,6 +135,7 @@ function sameCatalogDescriptor(a: ToolSearchCatalogEntry, b: ToolSearchCatalogEn
       a.description === b.description &&
       (a.directVisible === true) === (b.directVisible === true) &&
       (a.requiresExactId === true) === (b.requiresExactId === true) &&
+      (a.onDemand === true) === (b.onDemand === true) &&
       (a.mcp === b.mcp || stableStringify(a.mcp) === stableStringify(b.mcp)) &&
       sameCatalogSchema(a.source, a.parameters, b.parameters) &&
       sameCatalogSchema(a.source, a.outputSchema, b.outputSchema))
@@ -211,12 +212,22 @@ function toCatalogEntry(
     ...(source === "openclaw" && (tool as AnyAgentTool).outputSchema
       ? { outputSchema: (tool as AnyAgentTool).outputSchema }
       : {}),
+    ...(source === "openclaw" && isOnDemandCatalogTool(tool) ? { onDemand: true as const } : {}),
     tool: catalogTool,
   };
 }
 
 function shouldCatalogTool(tool: AnyAgentTool): boolean {
   return !TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name) && tool.catalogMode !== "direct-only";
+}
+
+/** Deferred until called by name; only a direct call preserves its result and handoff contract. */
+export function isOnDemandCatalogTool(tool: CatalogTool): boolean {
+  return (
+    "catalogMode" in tool &&
+    tool.catalogMode === "on-demand" &&
+    classifyAgentToolSource(tool).source === "openclaw"
+  );
 }
 
 /**
@@ -237,6 +248,51 @@ export function isDirectVisibleCatalogTool(
   );
 }
 
+/**
+ * A run whose MCP tools need at most this many schema bytes declares them directly. Each
+ * avoided discovery step saves one re-sent request (about 51.5 KB measured on a fresh
+ * install) plus its tool_describe result (about 1 KB) and the directory rows, so over an
+ * eight-request session direct schemas break even near 8 KB. Measured catalogs: a 5-tool
+ * tracker 2.1 KB and server-everything 7.8 KB fit; filesystem 14 KB, github 16 KB and
+ * playwright 19 KB keep search.
+ */
+const MAX_DIRECT_MCP_SCHEMA_BYTES = 8_192;
+
+/**
+ * MCP tools declared directly. A series' first request decides from the catalog's schema
+ * bytes; later turns keep exactly the MCP tools the session pin already sends, so the
+ * provider tool list stays fixed while server inventory changes reach the directory. A name
+ * another tool also uses stays deferred: a lookalike never shadows a trusted direct tool. A
+ * server with instructions stays deferred too: tool_describe is where the model reads them.
+ */
+export function selectDirectMcpToolNames(
+  tools: readonly AnyAgentTool[],
+  pinnedToolNames: ReadonlySet<string> | undefined,
+): ReadonlySet<string> {
+  const nameCounts = new Map<string, number>();
+  for (const tool of tools) {
+    nameCounts.set(tool.name, (nameCounts.get(tool.name) ?? 0) + 1);
+  }
+  const mcpTools = tools.filter((tool) => {
+    const { source, mcp } = classifyAgentToolSource(tool);
+    return source === "mcp" && !mcp?.instructions && nameCounts.get(tool.name) === 1;
+  });
+  if (pinnedToolNames) {
+    return new Set(
+      mcpTools.filter((tool) => pinnedToolNames.has(tool.name)).map((tool) => tool.name),
+    );
+  }
+  let bytes = 0;
+  for (const tool of mcpTools) {
+    const { name, description, parameters } = tool;
+    bytes += Buffer.byteLength(JSON.stringify({ name, description, parameters }), "utf8");
+    if (bytes > MAX_DIRECT_MCP_SCHEMA_BYTES) {
+      return new Set();
+    }
+  }
+  return new Set(mcpTools.map((tool) => tool.name));
+}
+
 export function registerHeadlessToolSearchCatalog(params: {
   catalogRef: ToolSearchCatalogRef;
   tools: readonly AnyAgentTool[];
@@ -249,8 +305,9 @@ export function registerHeadlessToolSearchCatalog(params: {
     : config?.tools?.gatewayPolicy
       ? { config }
       : undefined;
+  // A headless catalog has no top-level call, so on-demand tools stay out like direct-only ones.
   const entries = applyGatewayToolPolicy([...tools], config)
-    .filter(shouldCatalogTool)
+    .filter((tool) => shouldCatalogTool(tool) && !isOnDemandCatalogTool(tool))
     .map((tool) => {
       const scopedTool = hookContext
         ? rewrapToolWithBeforeToolCallHook(tool, {
@@ -542,6 +599,11 @@ export function compactToolSearchCatalogEntry(
     input: entry.source === "client" ? "unknown" : compactToolInputHint(entry.parameters),
     ...(instructionsHint ? { instructionsHint } : {}),
     ...(output ? { output } : {}),
+    ...(entry.onDemand
+      ? {
+          call: "loads as a top-level tool once looked up; call it by name, not through dispatch_action or exec",
+        }
+      : {}),
   };
 }
 
@@ -587,6 +649,11 @@ export function applyToolCatalogCompaction(
   const directTools: AnyAgentTool[] = [];
   const catalog: ToolSearchCatalogEntry[] = [];
   const selected = createToolSearchSelectionMatcher(params.selection);
+  // An on-demand tool stays direct unless this runner can load it on its first direct call.
+  const keepOnDemandDirect = (tool: AnyAgentTool) =>
+    isOnDemandCatalogTool(tool) &&
+    (catalogRef.loadsOnDemandTools !== true ||
+      catalogRef.promotedToolNames?.has(tool.name) === true);
   for (const tool of tools) {
     if (params.isVisibleControlTool(tool)) {
       visible.push(
@@ -601,6 +668,7 @@ export function applyToolCatalogCompaction(
     }
     if (
       shouldCatalogTool(tool) &&
+      !keepOnDemandDirect(tool) &&
       (params.shouldCatalogTool?.(tool) ?? true) &&
       selected({ ...classifyAgentToolSource(tool), name: tool.name })
     ) {
@@ -622,7 +690,9 @@ export function applyToolCatalogCompaction(
     directTools,
   });
   catalogRef.directOnlyToolNames = new Set(
-    visible.filter((tool) => tool.catalogMode === "direct-only").map((tool) => tool.name),
+    visible
+      .filter((tool) => tool.catalogMode === "direct-only" || keepOnDemandDirect(tool))
+      .map((tool) => tool.name),
   );
   catalogRef.baselineDirectOnlyToolNames = catalogRef.directOnlyToolNames;
   return {

@@ -1,4 +1,4 @@
-// Install both immutable release artifacts before the pre-ready rollback oracle.
+// Install genuine T; its updater prepares T+1 and its resident owns rollback.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -38,30 +38,30 @@ fs.copyFileSync(
   path.join(sourceRoot, "downgrade-source.json"),
   path.join(artifacts, "downgrade-source.json"),
 );
-const installed = {};
-for (const [name, tarball, expected] of [
-  ["previous", path.join(sourceRoot, "previous.tgz"), source.previousBuild],
-  ["candidate", process.env.OPENCLAW_CURRENT_PACKAGE_TGZ, source.candidateBuild],
-]) {
-  const prefix = path.join(root, name);
-  execFileSync(
-    "npm",
-    ["install", "--global", "--prefix", prefix, tarball, "--no-audit", "--no-fund"],
-    { env, stdio: "inherit", timeout: 300_000 },
-  );
-  const codeRoot = path.join(prefix, "lib", "node_modules", "openclaw");
-  const actual = JSON.parse(
-    fs.readFileSync(path.join(codeRoot, "dist", "build-info.json"), "utf8"),
-  );
-  assert.equal(actual.commit, expected.commit, `${name} source identity mismatch`);
-  assert.equal(actual.buildId, expected.buildId, `${name} build identity mismatch`);
-  installed[name] = codeRoot;
-}
+const previousPrefix = path.join(root, "previous");
+const npmCache = path.join(root, "npm-cache");
+execFileSync(
+  "npm",
+  [
+    "install",
+    "--global",
+    "--prefix",
+    previousPrefix,
+    "--cache",
+    npmCache,
+    path.join(sourceRoot, "previous.tgz"),
+    "--no-audit",
+    "--no-fund",
+  ],
+  { env, stdio: "inherit", timeout: 300_000 },
+);
 await runSchemaDowngrade({
-  previousRoot: installed.previous,
-  candidateRoot: installed.candidate,
+  previousRoot: path.join(previousPrefix, "lib", "node_modules", "openclaw"),
+  previousPrefix,
+  candidateTarball: process.env.OPENCLAW_CURRENT_PACKAGE_TGZ,
   previousBuild: source.previousBuild,
   candidateBuild: source.candidateBuild,
+  npmCache,
   root: path.join(root, "fixture"),
   artifacts,
   env,

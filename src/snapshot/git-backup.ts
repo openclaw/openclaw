@@ -263,6 +263,7 @@ async function commitGitBackup(params: {
     if (changed.code !== 1) {
       requireGitCommandOutput("git diff --cached", changed);
     }
+    const preparedTree = await requireGit(params.repositoryPath, ["write-tree"], { env });
     const email = await runGit(params.repositoryPath, ["config", "--get", "user.email"]);
     const identityArgs =
       email.code === 0 && email.stdout.trim()
@@ -273,14 +274,25 @@ async function commitGitBackup(params: {
       [...identityArgs, "commit", "-m", `openclaw backup ${new Date().toISOString()}`],
       { env },
     );
+    const commit = await requireGit(params.repositoryPath, ["rev-parse", "HEAD"]);
+    // Hooks inherit the private index and can change the snapshot during commit.
+    const committedTree = await requireGit(params.repositoryPath, [
+      "rev-parse",
+      `${commit}^{tree}`,
+    ]);
+    if (committedTree !== preparedTree) {
+      throw new Error(
+        `Git backup commit ${commit} does not match the prepared snapshot. Check repository hooks and retry the backup.`,
+      );
+    }
     // Converge only the managed entries in the ordinary index; preserved extras
     // retain their exact staged blobs and modes across the private-index commit.
     await requireGit(
       params.repositoryPath,
-      ["reset", "--quiet", "HEAD", "--pathspec-from-file=-", "--pathspec-file-nul"],
+      ["reset", "--quiet", commit, "--pathspec-from-file=-", "--pathspec-file-nul"],
       { input: params.paths.map((file) => `:(literal)${file}\0`).join("") },
     );
-    return await requireGit(params.repositoryPath, ["rev-parse", "HEAD"]);
+    return commit;
   } finally {
     await cleanupGitBackupWorkspace(indexWorkspace);
   }

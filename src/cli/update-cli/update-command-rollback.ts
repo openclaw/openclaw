@@ -28,7 +28,6 @@ import type { UpdateDatabaseBackup } from "../../infra/update-database-backup.js
 import { NativePackageRollbackError } from "../../infra/update-native-package-stage.js";
 import { unsafeUpdateRecovery } from "../../infra/update-recovery.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
-import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { loadPluginCohortRecovery } from "../../infra/update-run-recovery-store.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
@@ -44,6 +43,7 @@ import {
 import { restoreFailedUpdateDatabases } from "./update-command-database-backup.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { readPackageUpdateIdentity } from "./update-command-package-identity.js";
+import { assertUpdateCommandPackageFinalization } from "./update-command-recovery.js";
 import { UpdateCommandPendingRecoveryFailure } from "./update-command-result.js";
 import type {
   UpdateServiceDefinitionRecovery,
@@ -121,16 +121,12 @@ export async function rollbackFailedUpdate(params: {
       assertCurrent();
       // A lost live context (including the same run ID) is not permission to
       // fall back to legacy rollback, even when publication removed the main DB.
-      const targetPath = resolveOpenClawStateSqlitePath(env);
-      const pluginCohort = run && executor ? { runId: run.runId, fence: executor } : undefined;
-      await assertUpdateRecoveryAdmission({ env, path: targetPath, pluginCohort });
+      await assertUpdateCommandPackageFinalization({
+        opts,
+        result: params.result,
+        ownedManagedUpdateEnv: env,
+      });
       assertCurrent();
-      // Service authority and diagnostic history can select distinct state
-      // roots. Neither may contain pending recovery before legacy mutation.
-      if (opts.run && resolveOpenClawStateSqlitePath(opts.run.env) !== targetPath) {
-        await assertUpdateRecoveryAdmission({ env: opts.run.env, pluginCohort });
-        assertCurrent();
-      }
     } catch (error) {
       return pendingRecovery(params.result, formatErrorMessage(error));
     }

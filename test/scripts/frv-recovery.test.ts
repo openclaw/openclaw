@@ -161,6 +161,7 @@ function fixture(candidateSha = Q) {
           typeof import("../../scripts/release-qualification-admission.mjs").verifyQualificationAdmission
         >[0],
       ) => ({
+        request: { inputs: {} },
         baselinePolicy: { candidateVersion: "2026.11.1" },
         coverage: { children: roles.map((key) => ({ key, parentJobName: key })) },
       }),
@@ -208,22 +209,41 @@ function fixture(candidateSha = Q) {
 }
 
 describe("retained receipt recovery operator", () => {
-  it.each([false, true])(
-    "recovers missing parent source from authenticated inputs (changed=%s)",
-    async (changed) => {
+  it.each([
+    [false, false],
+    [true, false],
+    [false, true],
+  ])(
+    "recovers missing parent source from authenticated inputs (changed=%s, preflight first=%s)",
+    async (changed, preflightFirst) => {
       const f = fixture();
-      const original = candidatePublicationFixture({ candidateSha: Q, runId: "10" });
+      const original = candidatePublicationFixture({
+        candidateSha: Q,
+        runId: "10",
+        preflightFirst,
+      });
       f.artifacts.set("10", []);
       for (const child of original.admission.receipt.coverage.children) {
         f.jobs.find((job) => job.name === child.key)!.name = child.parentJobName;
       }
       f.runs.get(10)!.head_branch = original.branch;
+      if (preflightFirst) {
+        for (const [stage, name] of [
+          ["npm", "Prepare initial release npm artifacts"],
+          ["candidate", "Acquire full release candidate"],
+          ["docker", "Prepare release Docker artifacts"],
+        ] as const) {
+          f.jobs.find((job) => job.name === stage)!.name = name;
+        }
+      }
       const frozen = f.client.getWorkflowSource(Q);
       f.client.getWorkflowSource.mockImplementation((_sha, path) =>
         path === "scripts/lib/release-validation-waivers.json"
           ? JSON.stringify({ schema: "openclaw.release-validation-waivers/v1", waivers: [] })
-          : frozen +
-            `
+          : preflightFirst
+            ? readFileSync(".github/workflows/full-release-validation.yml", "utf8")
+            : frozen +
+              `
   resolve_target:
     name: Resolve target ref
     steps:
@@ -461,6 +481,7 @@ describe("retained receipt recovery operator", () => {
     const f = fixture();
     f.client.verifyQualificationAdmission
       .mockImplementationOnce(async () => ({
+        request: { inputs: {} },
         baselinePolicy: { candidateVersion: "2026.11.1" },
         coverage: { children: roles.map((key) => ({ key, parentJobName: key })) },
       }))
@@ -470,6 +491,36 @@ describe("retained receipt recovery operator", () => {
     );
     expect(JSON.parse(readFileSync(f.path, "utf8")).phase).toBe("prepared");
     await dispatchReceiptRecovery(f.options, f.client);
+    expect(f.client.postRecovery).not.toHaveBeenCalled();
+  });
+
+  it("reports a prepared request while admission is pending and after a pre-dispatch 503", async () => {
+    const f = fixture();
+    const prepared = {
+      action: "recovery-prepared",
+      phase: "prepared",
+      runId: null,
+      complete: false,
+      guidance: expect.stringContaining("original command"),
+    };
+    const admission = f.client.verifyQualificationAdmission.getMockImplementation()!;
+    f.client.verifyQualificationAdmission
+      .mockImplementationOnce(admission)
+      .mockImplementationOnce(async () => {
+        // Another observer can reconcile while the original command still checks admission.
+        expect(await reconcileReceiptRecovery(f.path, f.client)).toMatchObject(prepared);
+        throw new Error("HTTP 503");
+      });
+    await expect(dispatchReceiptRecovery(f.options, f.client)).rejects.toThrow("HTTP 503");
+    expect(await dispatchReceiptRecovery(f.options, f.client)).toMatchObject(prepared);
+    f.observeRecovery();
+    const observed = await reconcileReceiptRecovery(f.path, f.client);
+    expect(observed).toMatchObject({
+      action: "recovery-unconfirmed",
+      phase: "prepared",
+      runId: "99",
+    });
+    expect(observed).not.toHaveProperty("guidance");
     expect(f.client.postRecovery).not.toHaveBeenCalled();
   });
 

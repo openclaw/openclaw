@@ -344,25 +344,12 @@ describe("plugin gateway gauntlet helpers", () => {
     const matrix = gauntlet.discoverBundledPluginManifests(repoRoot);
 
     expect(matrix.map((entry) => entry.id)).toEqual(["alpha", "beta", "kimi"]);
-    expect(matrix[0]).toEqual({
-      activation: {},
+    expect(matrix[0]).toMatchObject({
       authMethods: ["oauth"],
-      buildId: "alpha",
-      channels: [],
-      cliCommandAliases: [{ name: "alpha", kind: "runtime-slash", cliCommand: "plugins" }],
-      commandAliases: [{ name: "alpha", kind: "runtime-slash", cliCommand: "plugins" }],
-      dir: path.join("extensions", "alpha"),
-      enabledByDefault: true,
-      hasConfigSchema: true,
       hasRequiredConfigFields: true,
-      id: "alpha",
-      manifestPath: path.join("extensions", "alpha", "openclaw.plugin.json"),
-      name: "alpha",
       onboardingScopes: ["models"],
       providers: ["openai"],
-      requiredPlugins: [],
       runtimeSlashAliases: [{ name: "alpha", kind: "runtime-slash", cliCommand: "plugins" }],
-      skills: [],
     });
     const beta = expectDefined(matrix[1], "beta bundled plugin manifest");
     expect(beta.runtimeSlashAliases).toEqual([

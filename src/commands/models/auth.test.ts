@@ -652,6 +652,12 @@ it("retains the imported profile and allows its models after direct refresh fail
   });
 });
 
+it("reports the provider's recommended model from a credential-only login without applying it", async () => {
+  currentConfig = { agents: { defaults: { model: "other/current" } } };
+  expect((await loginFlow({ credentialOnly: true })).defaultModel).toBe("openai/gpt-5.5");
+  expect(currentConfig.agents?.defaults?.model).toBe("other/current");
+});
+
 it("refreshes saved credentials when the settings write fails and preserves its cause", async () => {
   const cause = new Error("config write failed");
   runProviderAuth.mockResolvedValueOnce({

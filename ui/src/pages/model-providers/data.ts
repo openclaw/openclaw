@@ -48,6 +48,8 @@ export type ModelProviderAuthKind = "ok" | "expiring" | "expired" | "missing" | 
 export type ModelProviderLogoutTarget = {
   provider: string;
   profileIds: string[];
+  /** Disconnect and manage actions the provider declares for its OAuth sign-ins. */
+  oauthAccountActions?: ModelAuthStatusProvider["oauthAccountActions"];
 };
 
 /** A provider-wide sign-out, or saved API keys and literal config keys for its auth owner. */
@@ -55,7 +57,11 @@ export type ModelProviderRemovalTarget = { provider: string; credentialType?: "a
 
 /** One account's sign-out, or a provider removal with its displayed credential scope. */
 export type ModelProviderPendingLogout = { cardId: string; label: string } & (
-  | { target: ModelProviderLogoutTarget }
+  | {
+      target: ModelProviderLogoutTarget;
+      /** Revoke the sign-in at its provider first; `label` is the action's text. */
+      disconnect?: { label: string };
+    }
   | { removeConfigKey: string; defaultModels?: string }
   | {
       removeTargets: ModelProviderRemovalTarget[];
@@ -180,6 +186,7 @@ function addLogoutTarget(
   targets: ModelProviderLogoutTarget[],
   provider: string,
   profileIds: string[],
+  oauthAccountActions: ModelAuthStatusProvider["oauthAccountActions"],
 ): void {
   if (profileIds.length === 0) {
     return;
@@ -189,7 +196,11 @@ function addLogoutTarget(
     (candidate) => normalizeProviderId(candidate.provider) === normalized,
   );
   if (!existing) {
-    targets.push({ provider, profileIds: [...new Set(profileIds)] });
+    targets.push({
+      provider,
+      profileIds: [...new Set(profileIds)],
+      ...(oauthAccountActions ? { oauthAccountActions } : {}),
+    });
     return;
   }
   existing.profileIds = [...new Set([...existing.profileIds, ...profileIds])];
@@ -337,6 +348,7 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
       provider.profiles
         .filter((profile) => profile.logoutSupported === true)
         .map((profile) => profile.profileId),
+      provider.oauthAccountActions,
     );
     draft.card.apiKey ??= provider.apiKey;
     if (provider.voiceApiKeyRequired) {

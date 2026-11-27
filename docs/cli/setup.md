@@ -174,7 +174,15 @@ rejects explicit onboarding, Gateway, auth, reset, or daemon options instead of
 silently ignoring them. If an existing config is invalid, baseline setup preserves
 it and asks you to run `openclaw doctor --fix` to apply supported repairs before retrying.
 
-Use `openclaw setup --baseline --skip-bootstrap` to create the directories without
+Baseline setup writes no files into the workspace and does not run `git init`. The
+starter files (`AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md`) are
+created by the agent's first conversation, through the Gateway or chat, which also runs
+the first-run bootstrap. Existing workspace files are never replaced. `--json` output
+reports this as `"starterFiles": "first-conversation"`, or `"skipped"` when
+`agents.defaults.skipBootstrap` is in effect. A one-shot
+`openclaw agent --local` run does not create them either.
+
+Use `openclaw setup --baseline --skip-bootstrap` to keep the first conversation from
 generating workspace bootstrap files. This persists `agents.defaults.skipBootstrap: true`
 as a local config override, preserves existing workspace files and included config files,
 and remains enabled on later baseline runs that omit the flag.

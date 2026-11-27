@@ -36,8 +36,9 @@ import {
   maybeRunCliInContainerMock,
   makeProgram,
 } from "./run-main.test-support.js";
+import { AsyncLocalStorage } from "node:async_hooks";
 import process from "node:process";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -49,6 +50,18 @@ import { registerRunMainTimelineTests } from "./run-main.timeline.test-support.j
 
 describe("runCli exit behavior", () => {
   installRunMainTestHooks();
+
+  function setStderrTty(isTTY: boolean) {
+    const original = Object.getOwnPropertyDescriptor(process.stderr, "isTTY");
+    Object.defineProperty(process.stderr, "isTTY", { configurable: true, value: isTTY });
+    onTestFinished(() => {
+      if (original) {
+        Object.defineProperty(process.stderr, "isTTY", original);
+      } else {
+        Reflect.deleteProperty(process.stderr, "isTTY");
+      }
+    });
+  }
 
   function expectNoCommandStartup() {
     expect(startProxyMock).not.toHaveBeenCalled();
@@ -90,6 +103,58 @@ describe("runCli exit behavior", () => {
     await runCli(cliArgs("plugins", "late"));
     expect(phases.at(-1)).not.toBe(owner);
     expect(getPluginCache()).toBe(outside);
+  });
+
+  it("shares process failure listeners across completed CLI calls", async () => {
+    const args = cliArgs("plugins", "list");
+    tryRouteCliMock.mockResolvedValueOnce(false).mockResolvedValueOnce(false);
+    buildProgramMock.mockReturnValue(makeProgram("plugins", async () => {}));
+
+    await runCli(args);
+    const exceptions = process.listeners("uncaughtException");
+    const rejections = process.listeners("unhandledRejection");
+    await runCli(args);
+
+    expect(process.listeners("uncaughtException")).toEqual(exceptions);
+    expect(process.listeners("unhandledRejection")).toEqual(rejections);
+  });
+
+  it("restores the outer command's diagnostics and releases argv in late callbacks", async () => {
+    const { handleCliUncaughtException } = await import("./failure-output.js");
+    const { registerSignalExitOwner } = await import("./signal-exit-barrier.js");
+    const { defaultRuntime } = await import("../runtime.js");
+    const previousArgv = process.argv;
+    process.argv = cliArgs("plugins", "list");
+    onTestFinished(() => {
+      process.argv = previousArgv;
+    });
+    onTestFinished(registerSignalExitOwner(() => {}));
+    using json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    using consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const report = (expectJson: boolean) => {
+      json.mockClear();
+      consoleError.mockClear();
+      handleCliUncaughtException(new Error("fixture failure"));
+      expect(consoleError).toHaveBeenCalled();
+      expect(json).toHaveBeenCalledTimes(expectJson ? 1 : 0);
+    };
+    let late: (() => void) | undefined;
+    tryRouteCliMock.mockResolvedValueOnce(false).mockResolvedValueOnce(false);
+    buildProgramMock
+      .mockReturnValueOnce(
+        makeProgram("plugins", async () => {
+          report(true);
+          const resume = AsyncLocalStorage.snapshot();
+          late = () => resume(() => report(false));
+          await runCli(cliArgs("plugins", "list"));
+          report(true);
+        }),
+      )
+      .mockReturnValueOnce(makeProgram("plugins", async () => report(false)));
+
+    await runCli(cliArgs("plugins", "list", "--json"));
+    expect(late).toBeDefined();
+    late?.();
   });
 
   it("renders nodes help from startup metadata without building the full program", async () => {
@@ -434,6 +499,7 @@ describe("runCli exit behavior", () => {
   );
 
   it("reports disabled-by-default plugin commands as expected after lazy registration", async () => {
+    setStderrTty(true);
     const program = { commands: [], parseAsync: vi.fn() };
     buildProgramMock.mockReturnValueOnce(program);
     tryRouteCliMock.mockResolvedValueOnce(false);
@@ -463,6 +529,7 @@ describe("runCli exit behavior", () => {
       },
     );
     expect(program.parseAsync).not.toHaveBeenCalled();
+    expect(progressDoneMock).toHaveBeenCalledOnce();
   });
 
   it("preserves plugins.allow diagnostics for roots owned only by CLI metadata", async () => {
@@ -636,7 +703,8 @@ describe("runCli exit behavior", () => {
     ]);
   });
 
-  it("keeps plain config startup out of machine-output mode", async () => {
+  it("stops interactive startup progress before parsing the command", async () => {
+    setStderrTty(true);
     tryRouteCliMock.mockResolvedValueOnce(false);
     const parseAsync = vi.fn(async () => expect(progressDoneMock).toHaveBeenCalled());
     buildProgramMock.mockReturnValueOnce(makeProgram("config", parseAsync));
@@ -645,8 +713,6 @@ describe("runCli exit behavior", () => {
 
     expect(createCliProgressMock).toHaveBeenCalledWith({
       label: "Loading OpenClaw CLI…",
-      indeterminate: true,
-      delayMs: 0,
     });
     expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "config"]);
   });
@@ -660,26 +726,19 @@ describe("runCli exit behavior", () => {
       expect(stopProxyMock).not.toHaveBeenCalled();
     },
   );
-  it("suppresses startup progress for plain model output before full CLI parsing", async () => {
+  it.each([
+    { isTTY: false, args: ["infer", "model", "run", "--local", "--prompt-stdin"] },
+    { isTTY: true, args: ["models", "aliases", "list", "--plain"] },
+    { isTTY: true, args: ["config", "--json"] },
+  ])("skips startup progress for $args with stderr TTY=$isTTY", async ({ isTTY, args }) => {
+    setStderrTty(isTTY);
     tryRouteCliMock.mockResolvedValueOnce(false);
-    const parseAsync = vi.fn(async () => expect(progressDoneMock).toHaveBeenCalled());
-    buildProgramMock.mockReturnValueOnce(makeProgram("models", parseAsync));
+    const parseAsync = vi.fn();
+    buildProgramMock.mockReturnValueOnce(makeProgram(args[0], parseAsync));
 
-    await runCli(["node", "openclaw", "models", "aliases", "list", "--plain"]);
+    await runCli(cliArgs(...args));
 
-    expect(createCliProgressMock).toHaveBeenCalledWith({
-      label: "Loading OpenClaw CLI…",
-      indeterminate: true,
-      delayMs: 0,
-      enabled: false,
-    });
-    expect(parseAsync).toHaveBeenCalledWith([
-      "node",
-      "openclaw",
-      "models",
-      "aliases",
-      "list",
-      "--plain",
-    ]);
+    expect(createCliProgressMock).not.toHaveBeenCalled();
+    expect(parseAsync).toHaveBeenCalledWith(cliArgs(...args));
   });
 });

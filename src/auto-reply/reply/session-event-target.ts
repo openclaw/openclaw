@@ -4,6 +4,7 @@ import {
   assertAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
+import type { TurnGrant } from "../../agents/admitted-run-operator-authority.types.js";
 import { prepareAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
 import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
 import {
@@ -27,8 +28,8 @@ import {
   type SessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
 import { sessionToolOverridesEqual } from "../../config/sessions/session-tool-overrides.js";
-import { checkRequesterOwner } from "../../cron/execution-context-admission.js";
 import type { ScheduledRequesterRef } from "../../cron/execution-context.js";
+import { admitScheduledRequesterGrant } from "../../gateway/operator-admission.js";
 import type { RestartRecoveryOperatorSource } from "../../gateway/operator-run-recovery-source.codec.js";
 import {
   restoreScheduledAutomationOperator,
@@ -55,7 +56,7 @@ import { deliveryContextFromSession } from "../../utils/delivery-context.read.js
 import {
   prepareCommandOwnerAuthority,
   type PreparedCommandOwnerAuthority,
-} from "../command-auth.js";
+} from "../command-owner-facts.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { SessionEventTarget } from "./session-event-contract.js";
 import { narrowSessionEventSettings } from "./session-event-policy-inheritance.js";
@@ -69,15 +70,14 @@ const targetScopes = resolveGlobalSingleton(
         env?: NodeJS.ProcessEnv;
         operatorAuthority?: AdmittedRunOperatorAuthority;
         operatorSource?: RestartRecoveryOperatorSource;
-        ownerContinuation?: true;
         hasOriginatingCaller?: true;
         /** The captured requester keys the authority, whose source label is shared by owners. */
         commandOwner?: {
           authority: PreparedCommandOwnerAuthority;
           requester: CommandOwnerRequester;
         };
-        /** A scheduled job's recorded requester; see `requesterOwner` on capture. */
-        requesterOwner?: SessionEventRequesterOwner;
+        /** A scheduled job's recorded requester; see `scheduledRequester` on capture. */
+        scheduledRequester?: SessionEventScheduledRequester;
         deletion?: { agentId: string; isBlocked: () => boolean };
       }
     >(),
@@ -125,19 +125,13 @@ export async function captureSessionEventTargetForHost(
     operatorAuthority?: AdmittedRunOperatorAuthority;
     /** Deferred requester reference, admitted by the event's start owner. */
     operatorSource?: RestartRecoveryOperatorSource;
-    /** The producing turn held command-owner authority under `operatorAuthority`. */
-    ownerContinuation?: true;
     /**
      * Continue the producing turn's requester as command owner while they remain one.
      * The identity comes from the host-owned caller, never from the producer.
      */
     retainRequesterOwner?: true;
-    /**
-     * The host names the work's originating requester from its own record (a scheduled
-     * job's requester). The turn holds owner tools only while `assertCurrent` passes; a
-     * requester without it is a known non-owner caller, so no session-principal fallback.
-     */
-    requesterOwner?: SessionEventRequesterOwner;
+    /** A source-less scheduled job's requester, admitted when the event starts; a known caller. */
+    scheduledRequester?: SessionEventScheduledRequester["requester"];
   } = {},
 ): Promise<SessionEventTarget> {
   const operatorAuthority = options.operatorAuthority;
@@ -231,9 +225,7 @@ export async function captureSessionEventTargetForHost(
       options.retainRequesterOwner && callerAgentMatches ? caller?.requesterOrigin : undefined;
     const commandOwner =
       requester?.messageProvider && requester.senderId
-        ? await (
-            await import("../command-auth.js")
-          ).prepareCommandOwnerAuthority(
+        ? await prepareCommandOwnerAuthority(
             cfg,
             {
               channel: requester.messageProvider,
@@ -267,16 +259,15 @@ export async function captureSessionEventTargetForHost(
       env,
       operatorAuthority,
       operatorSource: options.operatorSource,
-      ...(options.requesterOwner ||
+      ...(options.scheduledRequester ||
       options.operatorSource ||
       (callerAgentMatches &&
         (resolveRequesterPrincipalKey(caller) ||
           requesterCreatorProfileId(caller?.requesterOrigin)))
         ? { hasOriginatingCaller: true as const }
         : {}),
-      ...(options.requesterOwner ? { requesterOwner: options.requesterOwner } : {}),
-      ...((operatorAuthority || options.operatorSource) && options.ownerContinuation
-        ? { ownerContinuation: true }
+      ...(options.scheduledRequester
+        ? { scheduledRequester: { requester: options.scheduledRequester } }
         : {}),
       ...(requester?.messageProvider &&
       requester.senderId &&
@@ -404,12 +395,15 @@ export async function prepareSessionEventTargetForHost(
       });
       scope.operatorAuthority = restored.authority;
     }
-    if (scope?.requesterOwner) {
-      const admitted = await checkRequesterOwner(
-        getSessionEventRuntimeConfig(),
-        scope.requesterOwner.requester,
-      );
-      scope.requesterOwner = { ...scope.requesterOwner, ...admitted };
+    if (scope?.scheduledRequester) {
+      scope.scheduledRequester = {
+        requester: scope.scheduledRequester.requester,
+        grant: await admitScheduledRequesterGrant(
+          getSessionEventRuntimeConfig(),
+          target.agentId,
+          scope.scheduledRequester.requester,
+        ),
+      };
     }
     if (scope?.commandOwner) {
       const { requester, authority } = scope.commandOwner;
@@ -503,17 +497,16 @@ export function readSessionEventTargetOperatorAuthority(
   return targetScopes.get(target)?.operatorAuthority;
 }
 
-/** A host-recorded requester, admitted once by the event's start owner. */
-export type SessionEventRequesterOwner = Readonly<{
-  requester: Exclude<ScheduledRequesterRef, { kind: "operator-source" }>;
-  owner?: boolean;
-  recoveryReference?: PreparedCommandOwnerAuthority["recoveryReference"];
+/** A host-recorded requester and the grant the event's start admitted it with. */
+export type SessionEventScheduledRequester = Readonly<{
+  requester: Extract<ScheduledRequesterRef, { kind: "channel" | "profile" }>;
+  grant?: TurnGrant;
 }>;
 
-export function readSessionEventTargetRequesterOwner(
+export function readSessionEventTargetScheduledRequester(
   target: SessionEventTarget,
-): SessionEventRequesterOwner | undefined {
-  return targetScopes.get(target)?.requesterOwner;
+): SessionEventScheduledRequester | undefined {
+  return targetScopes.get(target)?.scheduledRequester;
 }
 
 /** A captured channel guest still has a caller even without a profile grant. */
@@ -522,11 +515,6 @@ export function hasSessionEventOriginatingCaller(target: SessionEventTarget): bo
     targetScopes.get(target)?.hasOriginatingCaller ||
     readSessionEventTargetOperatorAuthority(target),
   );
-}
-
-/** Whether the producing turn was an owner under the target's captured operator source. */
-export function readSessionEventTargetOwnerContinuation(target: SessionEventTarget): boolean {
-  return targetScopes.get(target)?.ownerContinuation === true;
 }
 
 export type CommandOwnerRequester = Readonly<{
@@ -576,12 +564,10 @@ export function combineSessionEventTargetsForHost(
       targetScopes.get(target)?.operatorSource !== targetScopes.get(first)?.operatorSource ||
       readSessionEventTargetOperatorAuthority(target) !==
         readSessionEventTargetOperatorAuthority(first) ||
-      readSessionEventTargetOwnerContinuation(target) !==
-        readSessionEventTargetOwnerContinuation(first) ||
       hasSessionEventOriginatingCaller(target) !== hasSessionEventOriginatingCaller(first) ||
       commandOwnerRequesterKey(target) !== commandOwnerRequesterKey(first) ||
-      readSessionEventTargetRequesterOwner(target) !==
-        readSessionEventTargetRequesterOwner(first) ||
+      readSessionEventTargetScheduledRequester(target) !==
+        readSessionEventTargetScheduledRequester(first) ||
       channelRouteDedupeKey(target.deliveryContext) !== route
     ) {
       throw new Error(
