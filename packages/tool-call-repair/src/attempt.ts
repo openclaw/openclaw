@@ -376,10 +376,3 @@ export function findPlainTextToolCallName(
   }
   return findStructuredCallName(body.trim(), hasToolName);
 }
-
-export function isPlainTextToolCallAttempt(
-  text: string,
-  hasToolName: PlainTextToolCallNameMatcher["hasExactName"],
-): boolean {
-  return findPlainTextToolCallName(text, hasToolName) !== undefined;
-}
