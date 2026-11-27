@@ -28,7 +28,7 @@ describe.skipIf(!mixedAgentConnection)("PostgreSQL prompt-cache recovery", () =>
         }
       }, options),
     );
-    const result = admit(() =>
+    const read = admit(() =>
       withOpenClawAgentDatabaseReadOnly((database) => {
         const db = database.db;
         if (!isPostgresSqlConnection(db)) {
@@ -62,6 +62,6 @@ describe.skipIf(!mixedAgentConnection)("PostgreSQL prompt-cache recovery", () =>
         }
       }, options),
     );
-    expect(result.found).toBe(true);
+    expect(read.found).toBe(true);
   });
 });
