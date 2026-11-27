@@ -149,16 +149,15 @@ it.each([
   },
 );
 
-it.each(["close", "dispose", "replace", "remain open"] as const)(
+it.each(["before load", "close", "dispose", "replace", "remain open"] as const)(
   "media permission lifetime: %s during pending discovery",
   async (transition) => {
     const initial = createDeferred<MediaDeviceInfo[]>();
     const replacement = createDeferred<MediaDeviceInfo[]>();
-    const enumerateDevices = vi.fn().mockReturnValueOnce(initial.promise);
+    const enumerateDevices = vi.fn().mockReturnValueOnce(initial.promise).mockResolvedValue([]);
     if (transition === "replace") {
       enumerateDevices.mockReturnValueOnce(replacement.promise);
     }
-    enumerateDevices.mockResolvedValue([]);
     const stop = vi.fn();
     const getUserMedia = vi.fn().mockResolvedValue({ getTracks: () => [{ stop }] });
     const addEventListener = vi.fn();
@@ -169,8 +168,9 @@ it.each(["close", "dispose", "replace", "remain open"] as const)(
     const discovery = vi.spyOn(realtimeTalkInput, "discoverRealtimeTalkInputs");
     picker = new ComposerMicrophoneOwner();
     picker.handleOpen();
-    expect(enumerateDevices).toHaveBeenCalledOnce();
-    expect(getUserMedia).not.toHaveBeenCalled();
+    if (transition !== "before load") {
+      await vi.waitFor(() => expect(enumerateDevices).toHaveBeenCalledOnce());
+    }
     if (transition === "dispose") {
       picker.dispose();
     } else if (transition !== "remain open") {
@@ -180,13 +180,15 @@ it.each(["close", "dispose", "replace", "remain open"] as const)(
       picker.handleOpen();
     }
     initial.resolve([]);
-    await discovery.mock.results[0]!.value;
-    const staleProbes = getUserMedia.mock.calls.length;
+    await vi.dynamicImportSettled().then(() => discovery.mock.results[0]?.value);
+    expect(getUserMedia).toHaveBeenCalledTimes(transition === "remain open" ? 1 : 0);
     if (transition === "replace") {
       replacement.resolve([]);
       await discovery.mock.results[1]!.value;
     }
-    expect(staleProbes).toBe(transition === "remain open" ? 1 : 0);
+    expect(addEventListener).toHaveBeenCalledTimes(
+      transition === "before load" ? 0 : transition === "replace" ? 2 : 1,
+    );
     const permits = transition === "remain open" || transition === "replace";
     expect(getUserMedia).toHaveBeenCalledTimes(permits ? 1 : 0);
     expect(stop).toHaveBeenCalledTimes(permits ? 1 : 0);

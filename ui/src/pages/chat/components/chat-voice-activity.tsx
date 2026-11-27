@@ -1,9 +1,7 @@
 import { type ComponentProps, Errored, lazy, Loading, Show } from "solid-js";
-import { InlineAlert } from "../../../components/solid/inline-alert.tsx";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { ComposerDictationOwner } from "../composer-dictation.ts";
-import { isRealtimeTalkMicrophoneIssueMessage } from "../talk/input.ts";
 import type { RealtimeTalkStatus } from "../talk/session.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 
@@ -40,43 +38,27 @@ export function MicrophoneActivity(props: ComponentProps<typeof ActiveMicrophone
   );
 }
 
-export function ChatVoiceStatus(props: {
-  status?: RealtimeTalkStatus;
-  detail?: string | null;
-  /** Defaults to warning for microphone access problems and danger otherwise. */
-  tone?: "danger" | "warning";
-  onDismissError?: () => void;
-  onUseSystemDefaultMicrophone?: () => Promise<void>;
-}) {
+const ChatVoiceProblem = lazy(() => import("./chat-voice-feedback.tsx"), {
+  export: "ChatVoiceProblem",
+});
+
+export function ChatVoiceStatus(
+  props: ComponentProps<typeof ChatVoiceProblem> & { status?: RealtimeTalkStatus },
+) {
   return (
     <Show
       when={props.status === "connecting"}
       fallback={
         <Show when={props.status === "error" && props.detail}>
-          <InlineAlert
-            tone={
-              props.tone ??
-              (props.detail && isRealtimeTalkMicrophoneIssueMessage(props.detail)
-                ? "warning"
-                : "danger")
-            }
-            class="agent-chat__composer-alert"
-            onDismiss={props.onDismissError}
-            dismissLabel={t("chat.composer.dismissVoiceInputError")}
-            action={
-              <Show when={props.onUseSystemDefaultMicrophone}>
-                <button
-                  class="btn btn--sm"
-                  type="button"
-                  onClick={() => void props.onUseSystemDefaultMicrophone?.()}
-                >
-                  {t("chat.composer.useSystemDefaultMicrophoneForCall")}
-                </button>
-              </Show>
+          <ChatLazyBoundary
+            fallback={
+              <div class="callout agent-chat__talk-status" role="status">
+                {props.detail}
+              </div>
             }
           >
-            {props.detail}
-          </InlineAlert>
+            <ChatVoiceProblem {...props} />
+          </ChatLazyBoundary>
         </Show>
       }
     >

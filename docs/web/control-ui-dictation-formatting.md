@@ -181,10 +181,11 @@ and offers no partial command checklist. These ceilings require corpus, UI, and
 maintainer qualification. Oversize or invalid input keeps an original-text
 fallback; it is not silently truncated.
 
-The proposed private finishing deadline is 2,500 ms from Stop for Explicit
-preparation. A deadline cannot authorize a late publication or turn a partial
-caption into a complete result. Provider, validation/rendering, and total latency
-must be reported separately. The proposed validation-plus-rendering goal is
+Explicit review waits for the transcription relay to finish, including its
+streaming drain. Only then does local formatting apply its 2,500 ms preparation
+budget. A deadline cannot authorize a late publication or turn a partial caption
+into a complete result. Report provider, validation/rendering, and total latency
+separately. The proposed validation-plus-rendering goal is
 50 ms p95 for a 10,000-character workload. The current benchmark fixtures stay
 within the confirmation limit: paragraph workloads have 20 commands and 21
 blocks; the nested workload has 18 commands, seven blocks, and depth three.

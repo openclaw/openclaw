@@ -1049,7 +1049,6 @@
   "ui/src/pages/chat/sidebar-layout-persistence.ts",
   "ui/src/pages/chat/split-layout-persistence.ts",
   "ui/src/pages/chat/stream-causal-boundary.ts",
-  "ui/src/pages/chat/talk/input.ts",
   "ui/src/pages/chat/terminal-message-identity.ts",
   "ui/src/pages/chat/user-message-content.ts",
   "ui/src/pages/cloud-workers/route.tsx",

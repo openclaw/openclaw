@@ -227,7 +227,7 @@ preparation from validation plus all renderings, and rejects fallback timings.
 It records source hashes, head, hardware/runtime, first call, p50/p95/max and
 between-iteration memory observations. The proposed validation/rendering target
 is p95 at most 50 ms. No first-call distribution, p99 or continuous memory peak
-is implied. Provider time, the private 2,500 ms finishing deadline, total
+is implied. Provider time, the separate 2,500 ms local preparation budget, total
 microphone-to-preview latency and user review time require separate measurements.
 
 After execution is authorized, reproduce the harness through the checkout's

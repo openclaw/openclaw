@@ -221,7 +221,6 @@ export class ComposerDictationSession {
       sessionKey?: string;
       inputDeviceId?: string;
       silenceTimeoutMs?: number;
-      finalizationDeadlineMs?: number;
     },
   ) {}
 
@@ -332,19 +331,9 @@ export class ComposerDictationSession {
   async finish(requireTranscript?: true): Promise<string> {
     const transcript =
       this.gatewayDisconnected || this.failed ? this.transcriptSnapshot() : this.waitForLateFinal();
-    // Explicit review bounds the existing drain, independently of provider close.
-    const deadline = this.options?.finalizationDeadlineMs;
-    const deadlineTimer =
-      deadline === undefined
-        ? undefined
-        : globalThis.setTimeout(() => {
-            this.finalizationTimedOut = true;
-            this.settleLateFinalDrain?.(false);
-          }, deadline);
     // Bound admission separately; a started close uses the media provider timeout.
     void this.stopAndClose(true).catch(() => undefined);
     const text = await transcript;
-    globalThis.clearTimeout(deadlineTimer);
     // Composer dictation needs a visible outcome; split Talk can quietly listen again.
     // Cancellation and already-reported provider failures keep their existing outcomes.
     if (requireTranscript && !text && !this.discarded && !this.failed) {
@@ -484,7 +473,6 @@ export class ComposerDictationSession {
           !this.failed &&
           !this.gatewayDisconnected &&
           !this.discarded &&
-          !this.finalizationTimedOut &&
           terminalSuccess &&
           transcripts.length > 0 &&
           partial.length === 0;
@@ -498,7 +486,10 @@ export class ComposerDictationSession {
       const transcript = () => [...transcripts, partial].filter(Boolean).join(" ").trim();
       this.pauseFinalDrain = () => globalThis.clearTimeout(timer);
       this.resumeFinalDrain = () => {
-        timer = globalThis.setTimeout(() => finish(transcript()), FINAL_TRANSCRIPT_MAX_WAIT_MS);
+        timer = globalThis.setTimeout(() => {
+          this.finalizationTimedOut = true;
+          finish(transcript());
+        }, FINAL_TRANSCRIPT_MAX_WAIT_MS);
       };
       this.resumeFinalDrain();
       unsubscribe = this.client.addEventListener((frame) => {

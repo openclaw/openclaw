@@ -524,10 +524,7 @@ export class ComposerDictationOwner extends EventTarget {
             }
           },
         },
-        {
-          sessionKey,
-          ...(this.captureMode === "explicit" ? { finalizationDeadlineMs: 2_500 } : {}),
-        },
+        { sessionKey },
       );
       this.session = session;
       await session.start();

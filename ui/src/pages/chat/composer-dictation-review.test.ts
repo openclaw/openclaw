@@ -67,18 +67,26 @@ describe("reviewed dictation lifecycle", () => {
     await finished;
   }
 
-  it("prepares a final list once and writes only after explicit review", async () => {
+  it("keeps the 4.5-second final, waits for the five-second close, and writes only after review", async () => {
     const fixture = reviewFixture();
     await startDirect(fixture.controller);
     emit({ type: "partial", text: "Shopping list bullet milk" });
     expect(fixture.controller.formattingReview).toBeUndefined();
     expect(fixture.onCommit).not.toHaveBeenCalled();
-    transcript("Shopping list bullet milk next item eggs");
+    transcript("Shopping list bullet milk");
     const finishing = fixture.controller.finishActive();
+    await vi.advanceTimersByTimeAsync(4_500);
+    transcript("next item eggs");
+    await vi.advanceTimersByTimeAsync(499);
     expect(fixture.controller.transcribing).toBe(true);
+    expect(fixture.controller.formattingReview).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
     emit({ type: "close", reason: "completed" });
     await finishing;
-    expect(fixture.controller.formattingReview?.result.status).toBe("needs-review");
+    expect(fixture.controller.formattingReview?.result).toMatchObject({
+      status: "needs-review",
+      originalText: "Shopping list bullet milk next item eggs",
+    });
     expect(fixture.onCommit).not.toHaveBeenCalled();
     fixture.controller.reprocessFormatting([
       { start: 14, end: 20 },
@@ -101,7 +109,7 @@ describe("reviewed dictation lifecycle", () => {
     expect(fixture.controller.formattingReview?.diagnostics).toMatchObject({
       version: 1,
       isFinal: true,
-      transcriptRevision: 1,
+      transcriptRevision: 2,
       providerPolicy: "local-deterministic",
       receipt: "committed",
     });
@@ -336,9 +344,10 @@ describe("reviewed dictation lifecycle", () => {
   it("keeps incomplete recovery incomplete after reprocessing and ignores a late final", async () => {
     const fixture = reviewFixture();
     await startDirect(fixture.controller);
-    emit({ type: "partial", text: "Shopping list bullet unfinished" });
+    transcript("Shopping list");
+    emit({ type: "partial", text: "bullet unfinished" });
     const finished = fixture.controller.finishActive();
-    await vi.advanceTimersByTimeAsync(2_500);
+    await vi.advanceTimersByTimeAsync(10_000);
     await finished;
     expect(fixture.controller.formattingReview?.result).toMatchObject({
       status: "raw-fallback",
@@ -356,17 +365,6 @@ describe("reviewed dictation lifecycle", () => {
       "Shopping list bullet unfinished",
     );
     expect(fixture.onCommit).not.toHaveBeenCalled();
-  });
-
-  it("requires terminal success even when an earlier final transcript exists", async () => {
-    const fixture = reviewFixture();
-    await startDirect(fixture.controller);
-    transcript("Shopping list bullet milk");
-    const finished = fixture.controller.finishActive();
-    await vi.advanceTimersByTimeAsync(2_500);
-    await finished;
-    expect(fixture.controller.formattingReview?.result.status).toBe("raw-fallback");
-    expect(fixture.controller.formattingReview?.diagnostics?.isFinal).toBe(false);
   });
 
   it.each([
