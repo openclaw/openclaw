@@ -791,7 +791,7 @@ export function usePrefixStabilityJourney() {
         for (const { at } of otherBreaks) {
           // The summary leads the rebuilt history (after the instructions item on Responses).
           expect(otherRequests[at]!.messages.slice(0, 2).join("\n"), otherMessage).toContain(
-            "compacted into the following summary",
+            "Compressed history from earlier turns",
           );
         }
         expect(unclassified).toEqual([]);
