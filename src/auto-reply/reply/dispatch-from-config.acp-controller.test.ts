@@ -1,9 +1,20 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withTestTimeout,
+} from "../../../test/helpers/promise.js";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { isEmbeddedMode, setEmbeddedMode } from "../../infra/embedded-mode.js";
+import {
+  getEmbeddedQuestionBroker,
+  EmbeddedQuestionBroker,
+  setEmbeddedQuestionBroker,
+} from "../../infra/embedded-question-broker.js";
 import type { AcpRuntimeEvent } from "../../plugin-sdk/acp-runtime.js";
 import type { SessionControllerInput } from "../../sessions/session-controller.mailbox.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 import { completeAcpSessionFixture } from "./dispatch-from-config.acp-fixture.test-support.js";
 import {
@@ -181,6 +192,120 @@ describe("dispatchReplyFromConfig ACP controller turns", () => {
     store.resolveSessionStorePathCore.mockReset().mockReturnValue(mockSessionStorePath);
     sessionBindingMocks.listBySession.mockReset().mockReturnValue([]);
     sessionBindingMocks.resolveByConversation.mockReset().mockReturnValue(null);
+  });
+
+  it("settles a bound channel answer before the asking ACP turn completes", async () => {
+    const { dispatchInboundMessageWithRoutedChannelDispatcher } = await import("../dispatch.js");
+    mockAcpSession(acpKey);
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      bindingId: "binding-controller",
+      targetSessionKey: acpKey,
+      targetKind: "session",
+      status: "active",
+      boundAt: Date.now(),
+      conversation: { channel: "discord", accountId: "default", conversationId: "C1" },
+    });
+    const promptDelivered = createDeferred();
+    const response = createDeferred<unknown>();
+    const release = createDeferred();
+    const cancel = new AbortController();
+    const runtime = createAcpRuntime([]);
+    const started: string[] = [];
+    runtime.runTurn.mockImplementation(async function* (input) {
+      started.push(input.text);
+      if (input.text === "ask") {
+        if (!input.onElicitation) throw new Error("missing ACP elicitation handler");
+        response.resolve(
+          await input.onElicitation(
+            {
+              mode: "form",
+              sessionId: "acp-session",
+              toolCallId: "color",
+              message: "Choose a color",
+              requestedSchema: {
+                type: "object",
+                properties: {
+                  color: { type: "string", enum: ["Red", "Blue"] },
+                },
+                required: ["color"],
+              },
+            },
+            { requestId: "color", signal: cancel.signal },
+          ),
+        );
+        await release.promise;
+      }
+      yield { type: "done" };
+    });
+    acpMocks.requireAcpRuntimeBackend.mockReturnValue({ id: "acpx", runtime });
+    const answerSettled = vi.fn();
+    const send = async (body: string) => {
+      const ctx = buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        OriginatingChannel: "discord",
+        AccountId: "default",
+        From: "C1",
+        To: "C1",
+        SenderId: "U1",
+        SessionKey: "agent:main:discord:channel:C1",
+        Body: body,
+        RawBody: body,
+        CommandBody: body,
+        BodyForAgent: body,
+        MessageSid: `m-${body}`,
+      });
+      const source = await prepareReplySourceInput(ctx, cfg, {});
+      return dispatchInboundMessageWithRoutedChannelDispatcher({
+        ctx,
+        cfg,
+        replyOptions: source.options,
+        dispatcherOptions: {
+          deliver: async (payload) => {
+            if (payload.text?.includes("Red")) promptDelivered.resolve();
+          },
+          onSettled: body === "1" ? answerSettled : undefined,
+        },
+      });
+    };
+    const previousBroker = getEmbeddedQuestionBroker();
+    const wasEmbedded = isEmbeddedMode();
+    const broker = new EmbeddedQuestionBroker(createTestGatewayScheduler());
+    setEmbeddedMode(true);
+    setEmbeddedQuestionBroker(broker);
+    const first = send("ask");
+    let answer: Promise<unknown> | undefined;
+    try {
+      await withTestTimeout(promptDelivered.promise, 10000, "bound question was not delivered");
+      answer = send("1");
+      expect(
+        await withTestTimeout(response.promise, 3000, "answer waited for the asking turn"),
+      ).toEqual({
+        action: "accept",
+        content: { color: "Red" },
+      });
+      await withTestTimeout(answer, 3000, "answer source did not settle");
+      expect(answerSettled).toHaveBeenCalledOnce();
+      release.resolve();
+      await withTestTimeout(first, 3000, "asking turn did not finish");
+      // A later ordinary turn crosses the same FIFO after any queued duplicate.
+      await withTestTimeout(send("next"), 3000, "next bound turn did not settle");
+      expect(started).toEqual(["ask", "next"]);
+    } finally {
+      cancel.abort();
+      release.resolve();
+      try {
+        await withTestTimeout(
+          Promise.allSettled([first, answer]),
+          3000,
+          "ACP dispatch did not drain",
+        );
+      } finally {
+        broker.stop();
+        setEmbeddedQuestionBroker(previousBroker);
+        setEmbeddedMode(wasEmbedded);
+      }
+    }
   });
 
   it.each(["agent", "bound"] as const)(
