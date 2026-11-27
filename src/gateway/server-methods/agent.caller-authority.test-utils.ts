@@ -31,7 +31,7 @@ import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js
 import { handleGatewayRequest } from "../server-methods.js";
 import { disconnectStaleSharedGatewayAuthClients } from "../server-shared-auth-generation.js";
 import { gatewayProfile } from "../server/client-fixtures.test-support.js";
-import { agentHandlers } from "./agent.js";
+import { agentRunHandler } from "./agent-run-handler.js";
 import {
   describe1AfterEach1,
   describe1BeforeEach0,
@@ -64,7 +64,7 @@ describe("gateway agent caller authority custody", () => {
             name: "agent",
             scope: "operator.write",
             owner: { kind: "core", area: "agents" },
-            handler: expectDefined(agentHandlers.agent, "agent handler missing"),
+            handler: agentRunHandler,
           },
           {
             name: "config.get",
@@ -240,7 +240,7 @@ describe("gateway agent caller authority custody", () => {
         name: "agent",
         scope: "operator.write",
         owner: { kind: "core", area: "agents" },
-        handler: expectDefined(agentHandlers.agent, "agent handler missing"),
+        handler: agentRunHandler,
       },
     ]);
     context.getGatewayMethodRegistry = () => registry;
@@ -324,10 +324,7 @@ describe("gateway agent caller authority custody", () => {
       await waitForAssertion(() => expect(commands.size).toBe(1));
       const guest = expectDefined(rpcSourceTesting.get(guestRunId), "guest run missing");
       const staff = expectDefined(rpcSourceTesting.get(staffRunId), "staff run missing");
-      const guestAuthority = expectDefined(
-        commands.get(guestRunId)?.operatorAuthority,
-        "guest authority missing",
-      );
+      expectDefined(commands.get(guestRunId)?.operatorAuthority, "guest authority missing");
       expect(guestConnection.signal.aborted).toBe(true);
       expect(staffConnection.signal.aborted).toBe(true);
       expect(source.signal.aborted).toBe(false);
@@ -336,21 +333,15 @@ describe("gateway agent caller authority custody", () => {
       expect(getRpcSourceIdentity(guest).sessionKey).toBe(getRpcSourceIdentity(staff).sessionKey);
       expect(isRpcSourceQueued(staff)).toBe(true);
       expect(commands.has(staffRunId)).toBe(false);
-      expect(() => guestAuthority.assertCurrent()).not.toThrow();
 
       source.abort(new Error("Guest invitation ended"));
 
       expect(guest.input.abortSignal.aborted).toBe(false);
-      expect(() => guestAuthority.assertCurrent()).not.toThrow();
       expect(staff.input.abortSignal.aborted).toBe(false);
       expect(rpcSourceTesting.get(staffRunId)).toBe(staff);
       finishCommands.resolve();
       await waitForAssertion(() => expect(commands.size).toBe(2));
-      const staffAuthority = expectDefined(
-        commands.get(staffRunId)?.operatorAuthority,
-        "staff authority missing",
-      );
-      expect(() => staffAuthority.assertCurrent()).not.toThrow();
+      expectDefined(commands.get(staffRunId)?.operatorAuthority, "staff authority missing");
       finishStaff.resolve();
       await waitForAssertion(() => {
         expect(rpcSourceTesting.size).toBe(0);
@@ -404,10 +395,7 @@ describe("gateway agent caller authority custody", () => {
     });
     try {
       await expect(
-        expectDefined(
-          agentHandlers.agent,
-          "agent handler missing",
-        )({
+        agentRunHandler({
           params: { message: "hi", sessionKey: "agent:main:main", idempotencyKey: runId },
           req: { type: "req", id: runId, method: "agent" },
           context,

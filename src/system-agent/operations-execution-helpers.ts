@@ -89,11 +89,17 @@ export async function resolveChannelSetupState() {
   const { listChannelSetupPlugins } = await import("../channels/plugins/setup-registry.js");
   const { resolveChannelSetupEntries, shouldShowChannelInSetup } =
     await import("../commands/channel-setup/discovery.js");
+  const { resolveChannelSetupWorkspaceDir } = await import("../flows/channel-setup.status.js");
   const { isStaticallyChannelConfigured } = await import("../config/channel-configured-shared.js");
   const snapshot = await readConfigFileSnapshotLazy();
   const cfg = snapshot.valid ? (snapshot.runtimeConfig ?? snapshot.config) : {};
   const installedPlugins = listChannelSetupPlugins();
-  const resolved = resolveChannelSetupEntries({ cfg, installedPlugins });
+  // Read the same owner workspace that `connect <channel>` sets up.
+  const resolved = resolveChannelSetupEntries({
+    cfg,
+    installedPlugins,
+    workspaceDir: resolveChannelSetupWorkspaceDir(cfg),
+  });
   return {
     cfg,
     installedPlugins,

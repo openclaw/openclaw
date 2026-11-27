@@ -493,6 +493,8 @@ export async function buildAnthropicRequest(
             : msg.runtimeContextCarrierRetained;
         if (
           msg.cacheCheckpoint === false ||
+          // A prewarm's trailing item is sent once; the cache entry belongs to the prefix before it.
+          (options?.cachePrewarm === true && end >= transformed.length) ||
           (hasRuntimeContextMarker(msg) && !(runtimeContextRetained ?? modelRetainsRuntimeContext))
         ) {
           cacheBreakpointOptOutMessageIndexes.add(messages.length - 1);

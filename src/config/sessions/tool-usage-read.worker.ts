@@ -120,7 +120,7 @@ export function readAgentToolUsageInWorker(input: AgentToolUsageReadInput) {
   }
   return {
     kind: input.kind,
-    status: read.found ? read.value : { ...emptyAgentToolUsageState(), rows: [] },
+    status: read.found ? read.value : { ...emptyAgentToolUsageState(), rows: [], firstSeen: {} },
   };
 }
 

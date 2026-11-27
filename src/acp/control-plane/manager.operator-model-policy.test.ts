@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
@@ -23,9 +23,6 @@ describe("ACP operator model ceiling", () => {
 
   async function run(
     model: string | undefined,
-    beforePrompt?: (
-      changePolicy: (policy: GatewayOperatorRoleDefinition["modelPolicy"]) => void,
-    ) => void,
     appliedModel?: string,
     initialPolicy: GatewayOperatorRoleDefinition["modelPolicy"] = {},
   ) {
@@ -48,23 +45,15 @@ describe("ACP operator model ceiling", () => {
     mockMutableSession(sessionKey, {
       currentMeta: readySessionMeta({ agent: "fixture", runtimeOptions: model ? { model } : {} }),
     });
-    let modelPolicy = prepareOperatorModelPolicy({
+    const modelPolicy = prepareOperatorModelPolicy({
       cfg,
       policy: initialPolicy,
       manifestPlugins: [],
     });
-    const policyListeners = new Set<() => void>();
     const authority = createTestOperatorAuthority({
       profileId: "fixture-person",
       scopes: ["operator.write"],
-      assertCurrent: () => {},
-      get modelPolicy() {
-        return modelPolicy;
-      },
-      onModelPolicyChanged: (listener) => {
-        policyListeners.add(listener);
-        return () => policyListeners.delete(listener);
-      },
+      modelPolicy,
     });
     const admission = prepareSystemAgentRunAdmission(
       cfg,
@@ -85,13 +74,6 @@ describe("ACP operator model ceiling", () => {
           text: "fixture request",
           mode: "prompt",
           requestId: "fixture-role-run",
-          onBeforePrompt: () =>
-            beforePrompt?.((policy) => {
-              modelPolicy = prepareOperatorModelPolicy({ cfg, policy, manifestPlugins: [] });
-              for (const listener of policyListeners) {
-                listener();
-              }
-            }),
         })
         .then(
           () => undefined,
@@ -107,19 +89,10 @@ describe("ACP operator model ceiling", () => {
     ["unqualified selection", [undefined], true],
     [
       "native model alias with an exact exclusion",
-      [
-        "google/gemini-3-pro",
-        undefined,
-        undefined,
-        { allow: ["google/*"], deny: ["google/gemini-3-pro"] },
-      ],
+      ["google/gemini-3-pro", undefined, { allow: ["google/*"], deny: ["google/gemini-3-pro"] }],
       true,
     ],
-    [
-      "backend substitution of an excluded model",
-      ["fixture/allowed", undefined, "fixture/denied"],
-      false,
-    ],
+    ["backend substitution of an excluded model", ["fixture/allowed", "fixture/denied"], false],
   ])("rejects %s without prompting", async (_name, args, beforeBackend) => {
     const { outcome, runtimeState } = await run(...args);
     expect(outcome).toBeInstanceOf(Error);
@@ -128,17 +101,5 @@ describe("ACP operator model ceiling", () => {
       expect(runtimeState.ensureSession).not.toHaveBeenCalled();
     }
     expect(runtimeState.runTurn).not.toHaveBeenCalled();
-  });
-
-  it("keeps the admitted applied-model ceiling through the pre-prompt guard", async () => {
-    const before = vi.fn<NonNullable<Parameters<typeof run>[1]>>((changePolicy) =>
-      changePolicy({ allow: ["fixture/allowed"] }),
-    );
-    const { outcome, runtimeState } = await run("fixture/allowed", before, "fixture/applied", {
-      allow: ["fixture/allowed", "fixture/applied"],
-    });
-    expect(outcome).toBeUndefined();
-    expect(before).toHaveBeenCalledOnce();
-    expect(runtimeState.runTurn).toHaveBeenCalledOnce();
   });
 });

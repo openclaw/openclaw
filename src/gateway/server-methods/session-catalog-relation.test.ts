@@ -1,5 +1,6 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   catalogHost,
   catalogProvider,
@@ -11,12 +12,21 @@ import { call, hoisted, resetSessionCatalogTestState } from "./session-catalog.t
 beforeEach(resetSessionCatalogTestState);
 
 it("separates shared queries while leaving local listing to its existing client-side filter", async () => {
-  const list = vi.fn<SessionCatalogProvider["list"]>(async (query) => [
-    {
-      ...catalogHost(),
-      ...(query.profileRelation ? { profileRelation: query.profileRelation } : {}),
-    },
-  ]);
+  const releaseLists = createDeferredCore();
+  const allListsStarted = createDeferredCore();
+  let listsStarted = 0;
+  const list = vi.fn<SessionCatalogProvider["list"]>(async (query) => {
+    if (++listsStarted === 2) {
+      allListsStarted.resolve();
+    }
+    await releaseLists.promise;
+    return [
+      {
+        ...catalogHost(),
+        ...(query.profileRelation ? { profileRelation: query.profileRelation } : {}),
+      },
+    ];
+  });
   const read = vi.fn<SessionCatalogProvider["read"]>(async ({ hostId, threadId }) => ({
     hostId,
     threadId,
@@ -29,13 +39,26 @@ it("separates shared queries while leaving local listing to its existing client-
     target: { type: "github-account", id: "101" },
   } as const;
   const involved = { ...owned, relationship: "involving" } as const;
-  for (const profileRelation of [owned, involved]) {
-    const result = await call("sessions.catalog.list", { catalogId: "shared", profileRelation });
+  const config = {};
+  const relations = [owned, involved];
+  const pending = relations.map((profileRelation) =>
+    call("sessions.catalog.list", { catalogId: "shared", profileRelation }, config),
+  );
+  try {
+    // A coalesced request can finish without starting the second provider call.
+    await Promise.race([allListsStarted.promise, Promise.all(pending)]);
+    expect(list).toHaveBeenCalledTimes(2);
+  } finally {
+    releaseLists.resolve();
+    await Promise.allSettled(pending);
+  }
+  for (const [index, profileRelation] of relations.entries()) {
+    const result = await pending[index]!;
     expectCatalog(result, {
       hosts: [expect.objectContaining({ profileRelation })],
       capabilities: expect.objectContaining({ profileRelation: true }),
     });
-    expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ profileRelation }));
+    expect(list).toHaveBeenCalledWith(expect.objectContaining({ profileRelation }));
   }
   expect(list).toHaveBeenCalledTimes(2);
   const request = {

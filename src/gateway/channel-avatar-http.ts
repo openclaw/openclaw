@@ -154,7 +154,7 @@ export async function handleChannelAvatarHttpRequest(
         current?.lifecycleRevision !== entry?.lifecycleRevision ||
         sessionDeliveryOrigin(current)?.avatar !== reference
       ) {
-        throw new Error("Channel avatar session authority changed");
+        throw new Error("Channel avatar session changed. Retry the request.");
       }
     };
     return serve(

@@ -1,7 +1,9 @@
-import { symlink } from "node:fs/promises";
+import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
+import { registerAgentWorkspaceAccess } from "../agents/workspace-access.js";
+import { createWorkspaceMemoryFileClient } from "../agents/workspace-memory-client.js";
 import * as pluginState from "../plugin-state/plugin-state-store.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import {
@@ -14,6 +16,7 @@ import {
   listMemoryArtifactProvenance as list,
   normalizeMemoryArtifactRelativePath as normalizePath,
   readMemoryArtifactProvenance as read,
+  recordCuratedMemoryArtifactRewrite as rewrite,
   recordMemoryArtifactWriteProvenance as recordWrite,
 } from "./memory-artifact-provenance.js";
 
@@ -135,8 +138,10 @@ test.for(["agent", "untrusted"] as const)(
 );
 
 test.for(["write", "rollback", "clear"] as const)(
-  "preserves concurrent provenance when %s conflicts",
-  async (operation, { address }) => {
+  "preserves concurrent daily provenance when %s conflicts",
+  async (operation, { tempRoot }) => {
+    // Daily records stay sticky; a curated record would follow the file bytes instead.
+    const address = { workspaceDir: tempRoot, relativePath: "memory/2026-08-20.md" };
     const firstRollback = expectDefined(await write(address, "", "first", 1), "first rollback");
     beforeNextPersist(async () => {
       await write(address, "first", "concurrent", 3, "untrusted");
@@ -151,6 +156,81 @@ test.for(["write", "rollback", "clear"] as const)(
       await clear({ ...address, contentBefore: "first" });
     }
     await expectOrigin(address, "untrusted", 3);
+  },
+);
+
+test.for(["local", "remote document", "remote memory maintenance"] as const)(
+  "applies a curated record only to the %s bytes it hashed",
+  async (storage, { tempRoot, address }) => {
+    const daily = { ...address, relativePath: "memory/2026-08-20.md" };
+    const remote = storage !== "local";
+    const storageDir = remote ? path.join(tempRoot, "remote") : tempRoot;
+    await mkdir(path.join(storageDir, "memory"), { recursive: true });
+    // Memory maintenance reads whole files; the capped document bridge refuses large ones.
+    const memoryFiles =
+      storage === "remote memory maintenance"
+        ? createWorkspaceMemoryFileClient({
+            workspaceDir: tempRoot,
+            remoteWorkspaceDir: "/remote",
+            signal: new AbortController().signal,
+            request: async (request) => {
+              const { method, args } = JSON.parse(request) as { method: string; args: string[] };
+              expect(method).toBe("readFile");
+              const bytes = await readFile(
+                path.join(storageDir, path.posix.relative("/remote", args[0]!)),
+              );
+              return JSON.stringify({ result: bytes.toString("base64") });
+            },
+            subscribe: async () => {},
+          })
+        : undefined;
+    const release = remote
+      ? registerAgentWorkspaceAccess(tempRoot, {
+          bridge: {
+            readFile: async ({ filePath }) => {
+              if (memoryFiles) {
+                throw new Error("Workspace document exceeds its read bound");
+              }
+              return await readFile(path.join(storageDir, filePath));
+            },
+            writeFile: async () => {},
+            stat: async () => null,
+          },
+          ...(memoryFiles ? { memoryFiles } : {}),
+        })
+      : undefined;
+    try {
+      if (remote) {
+        await writeFile(path.join(tempRoot, "MEMORY.md"), "local decoy");
+      }
+      // A missing file is unreadable and keeps its record.
+      await write(address, "", "tainted", 1, "untrusted");
+      await expectOrigin(address, "untrusted", 1);
+      await writeFile(path.join(storageDir, "MEMORY.md"), "tainted");
+      // An automatic rewrite carries the class of the bytes the owner reads, not a caller's claim.
+      await rewrite({ ...address, contentAfter: "tainted, kept", observedAt: 2 });
+      await writeFile(path.join(storageDir, "MEMORY.md"), "tainted, kept");
+      await expectOrigin(address, "untrusted", 2);
+      await expect(
+        rewrite({ ...daily, contentAfter: "daily rewrite", observedAt: 2 }),
+      ).resolves.toBeUndefined();
+
+      await writeFile(path.join(storageDir, "MEMORY.md"), "reviewed");
+      await expect(read(address)).resolves.toBeUndefined();
+      await write(address, "reviewed", "reviewed, extended", 3);
+      await writeFile(path.join(storageDir, "MEMORY.md"), "reviewed, extended");
+      await expectOrigin(address, "agent", 3);
+      await rewrite({ ...address, contentAfter: "reviewed, promoted", observedAt: 4 });
+      await writeFile(path.join(storageDir, "MEMORY.md"), "reviewed, promoted");
+      await expectOrigin(address, "agent", 4);
+
+      await write(daily, "", "flushed", 4, "untrusted");
+      await writeFile(path.join(storageDir, daily.relativePath), "flushed, edited");
+      await write(daily, "flushed, edited", "flushed, edited twice", 5);
+      await expectOrigin(daily, "untrusted", 5);
+    } finally {
+      release?.();
+    }
   },
 );
 

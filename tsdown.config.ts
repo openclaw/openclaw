@@ -11,6 +11,7 @@ import {
   createBundledPluginBuildInventory,
 } from "./scripts/lib/bundled-plugin-build-entries.mjs";
 import { createCompactModuleLabelsPlugin } from "./scripts/lib/compact-module-labels.mts";
+import { createEmptyRuntimeChunksPlugin } from "./scripts/lib/empty-runtime-chunks.mts";
 import { createFsSafeWindowsHelperAssetPlugin } from "./scripts/lib/fs-safe-windows-helper-asset.mts";
 import { createGatewayRunChunkMetadataPlugin } from "./scripts/lib/gateway-run-chunk-metadata.mts";
 import { createManagedHandoffBuildConfigs } from "./scripts/lib/managed-handoff-build-config.mts";
@@ -31,6 +32,7 @@ import { exactIdFilter } from "./scripts/lib/rolldown-id-filter.mts";
 import { createRuntimeDependencyOwnershipBuildPlugin } from "./scripts/lib/runtime-dependency-ownership-build-plugin.mts";
 import { createRootRuntimeProcessBuildEntries } from "./scripts/lib/runtime-process-build-entries.mts";
 import {
+  brokerNativeResourceBuildEntries,
   getStandaloneRuntimeProcessOutputOptions,
   sharedRuntimeProcessBuildEntries,
   shouldBundleRuntimeSqliteDependency,
@@ -547,6 +549,13 @@ function shouldAlwaysBundleDependency(id: string): boolean {
   );
 }
 
+// Single-file relays keep some external imports after their last binding is removed.
+// These audited subpaths belong to packages that declare sideEffects: false.
+const RELAY_UNUSED_IMPORT_RULES = [
+  /^@openclaw\/fs-safe\/(?:advanced|durability|errors|output|root|secure-file|walk)$/u,
+  /^@openclaw\/proc-safe\/(?:errors|identity|inspect|reaper)$/u,
+].map((test) => ({ test, external: true, sideEffects: false }));
+
 function listBundledPluginEntrySources(
   entries: Array<{
     id: string;
@@ -584,6 +593,8 @@ function buildCoreDistEntries(pluginIds: readonly string[]): Record<string, stri
     "cli/daemon-cli": "src/cli/daemon-cli.ts",
     // Keep recorded post-swap imports of this binding out of the shared updater graph.
     "cli/update-cli/node-runner": "src/cli/update-cli/node-runner.ts",
+    // Preserve the staged finalization export imported by shipped updater chunks.
+    "cli/update-cli/update-command-finalize": "src/cli/update-cli/update-command-finalize.ts",
     // Keep long-lived lazy runtime boundaries on stable filenames so rebuilt
     // dist/ trees do not strand already-running gateways on stale hashed chunks.
     "agents/agent-bundle-mcp-runtime": "src/agents/agent-bundle-mcp-runtime.ts",
@@ -1043,21 +1054,33 @@ const configs: UserConfig[] = [
       ),
     ),
   ).map((entry) => {
-    const bundleFsSafe = Object.keys(entry).some((name) =>
+    const firstEntry = Object.keys(entry)[0]!;
+    const isBrokerNativeResource = Object.hasOwn(brokerNativeResourceBuildEntries, firstEntry);
+    const bundleWorkerHelpers = Object.keys(entry).some((name) =>
       [
+        "config/sessions/disk-budget.worker",
+        "infra/fs-safe-copy.worker",
         "infra/sqlite-readonly-location.worker",
+        "plugins/plugin-generation-preparation.worker",
         "state/openclaw-state-read.worker",
         // Hosts the state reader and must load fs-safe the same way.
         "infra/shared-worker-host.worker",
       ].includes(name),
     );
+    const bundleFsSafe =
+      isBrokerNativeResource ||
+      bundleWorkerHelpers ||
+      firstEntry === "state/openclaw-state-lease-heartbeat.worker";
     const isFsSafe = (id: string) =>
       id === "@openclaw/fs-safe" || id.startsWith("@openclaw/fs-safe/");
     return nodeBuildConfig(
       {
         name: TSDOWN_UNIFIED_CONFIG_GROUP,
         entry,
-        minify: { codegen: true, compress: true, mangle: { keepNames: true } },
+        // Attached modules retain ordinary runtime codegen and module ownership labels.
+        ...(isBrokerNativeResource
+          ? {}
+          : { minify: { codegen: true, compress: true, mangle: { keepNames: true } } }),
         deps: {
           ...unifiedDeps,
           neverBundle: bundleFsSafe
@@ -1066,13 +1089,21 @@ const configs: UserConfig[] = [
           alwaysBundle: (id) =>
             shouldAlwaysBundleDependency(id) ||
             shouldBundleRuntimeSqliteDependency(id) ||
-            (bundleFsSafe &&
-              (isFsSafe(id) ||
-                ["semver", "tslog"].some(
-                  (packageName) => id === packageName || id.startsWith(`${packageName}/`),
-                ))),
+            (bundleFsSafe && isFsSafe(id)) ||
+            // Attachments keep runtime-selected companion exports, including tslog's Bun entry.
+            (bundleWorkerHelpers &&
+              ["semver", "tslog"].some(
+                (packageName) => id === packageName || id.startsWith(`${packageName}/`),
+              )),
         },
-        outputOptions: getStandaloneRuntimeProcessOutputOptions(Object.keys(entry)[0]!),
+        outputOptions: getStandaloneRuntimeProcessOutputOptions(firstEntry),
+        ...(Object.keys(entry).length === 1 &&
+        [
+          "process/supervisor/service-child-relay",
+          "agents/harness/native-hook-relay-client.worker",
+        ].includes(firstEntry)
+          ? { treeshake: { moduleSideEffects: RELAY_UNUSED_IMPORT_RULES } }
+          : {}),
         plugins: [
           createStateSchemaInlinePlugin(),
           ...(bundleFsSafe ? [createPackageRuntimeUrlBuildPlugin("@openclaw/fs-safe")] : []),
@@ -1190,7 +1221,11 @@ for (const config of configs) {
   if (typeof config.dts === "object" && config.dts.emitDtsOnly) {
     continue;
   }
-  config.plugins = [config.plugins, createStandaloneSourceModuleUrlPlugin({ rootDir: repoRoot })]
+  config.plugins = [
+    config.plugins,
+    createEmptyRuntimeChunksPlugin(),
+    createStandaloneSourceModuleUrlPlugin({ rootDir: repoRoot }),
+  ]
     .flat()
     .filter(Boolean);
 }

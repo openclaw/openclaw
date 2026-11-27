@@ -7,7 +7,11 @@ import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getCliParentPid } from "../../cli-parent-lifetime.mjs";
 import { isForegroundGatewayRunArgv } from "../../gateway-run-argv.mjs";
-import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
+import {
+  getFileLockProcessStartTime,
+  getProcessStartTime,
+  isPidAlive,
+} from "../shared/pid-alive.js";
 import { resolveOpenClawStateDirForDatabasePath } from "../state/openclaw-state-db.paths.js";
 import { readProcessMachineIdentity } from "./current-machine-identity.js";
 import { acquireFileLockSync } from "./file-lock-manager.js";
@@ -28,6 +32,7 @@ import {
 } from "./gateway-state-owner-directory.js";
 import {
   GatewayStateOwnerContentionError,
+  isTransientStateSchemaOwner,
   StateDatabaseAccessError,
   StateDatabaseAdmissionPendingError,
   StateDatabaseOfflineMaintenanceError,
@@ -53,8 +58,8 @@ function comparableStateOwnerStaleReason(
       : undefined;
 }
 
-/** Reclamation requires proof that the recorded owner stopped. */
-export function isGatewayStateOwnerDefinitelyStale(value: unknown, lockPath: string): boolean {
+/** Reclamation uses native identity for local owners and heartbeat expiry across namespaces. */
+export function isGatewayStateOwnerDefinitelyStale(value: unknown, lockPath?: string): boolean {
   const payload = isRecord(value) ? value : null;
   if (!payload) {
     // Exclusive creation precedes publication; an incomplete record still owns its lock.
@@ -138,7 +143,7 @@ export function assertPersistedStateDatabaseAccessAllowed(params: {
     return;
   }
   const maintenancePending = `OpenClaw state at ${databasePath} is undergoing offline maintenance by ${role} process ${owner.pid}, started ${owner.createdAt}; retry when it finishes. For update progress, run \`openclaw update status --json\`. ${describeGatewayLockHolder(owner, ownerPath, namespace === "same" ? "live" : "unknown")}`;
-  if (owner.stateOwnerKind === "schema" && owner.role === "sqlite-maintenance") {
+  if (isTransientStateSchemaOwner(owner)) {
     throw new StateDatabaseAdmissionPendingError(databasePath, maintenancePending);
   }
   throw new StateDatabaseOfflineMaintenanceError(databasePath, maintenancePending);
@@ -157,6 +162,7 @@ export function defaultPayload(databasePath: string): LockPayload {
     configPath: path.join(stateDir, "openclaw.json"),
     role: "sqlite-maintenance",
     processNamespace: readGatewayLockProcessNamespace(),
+    pidNsInitStartTicks: getProcessStartTime(1) ?? undefined,
     machineIdentity: process.platform === "darwin" ? readProcessMachineIdentity() : undefined,
     ...(parentPid === undefined ? {} : { parentPid }),
     ...(parentStartTime === null ? {} : { parentStartTime }),
@@ -172,8 +178,9 @@ export function reserveGatewayStateRestoration(
   assertOwnerCurrent();
   const lockPath = `${resolveStateOwnerIdentity(databasePath).ownerPath}.gateway-restoration`;
   const payload = defaultPayload(databasePath);
+  // Reservations do not renew their mtime; only actual owner locks carry a heartbeat.
   const stale = ({ payload: previous }: { payload: unknown }) =>
-    isGatewayStateOwnerDefinitelyStale(previous, lockPath);
+    isGatewayStateOwnerDefinitelyStale(previous);
   const lock = acquireFileLockSync(lockPath, {
     lockPath,
     timeoutMs: 0,
@@ -219,10 +226,7 @@ function assertGatewayRestorationPriority(
     throw error;
   }
   const reservation = parseGatewayLockPayload(raw);
-  if (
-    isGatewayStateOwnerDefinitelyStale(reservation, restorationPath) ||
-    reservation?.pid === payload.pid
-  ) {
+  if (isGatewayStateOwnerDefinitelyStale(reservation) || reservation?.pid === payload.pid) {
     return;
   }
   // Gateway bootstrap may need schema admission before acquiring its process root.
@@ -317,7 +321,9 @@ export function acquireGatewayStateOwnerFile(
           databasePath,
           error,
           holderDetail,
-          holder ? { pid: holder.pid, role: holder.role } : undefined,
+          holder
+            ? { pid: holder.pid, role: holder.role, stateOwnerKind: holder.stateOwnerKind }
+            : undefined,
         );
       }
       throw error;

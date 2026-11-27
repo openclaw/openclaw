@@ -33,6 +33,7 @@ import { parseArgs } from "node:util";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { GatewayClient } from "../../src/gateway/server-methods/types.js";
 import type { SessionSharingTarget } from "../../src/gateway/session-sharing-policy.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -191,12 +192,7 @@ async function measure(owner: (typeof owners)[number], pair: number, arm: string
   global.gc?.();
   const inspector = new Session();
   if (values.allocations) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 16384,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 16384);
   }
   const hostLoadBefore = loadavg();
   const memoryBefore = process.memoryUsage();

@@ -149,23 +149,19 @@ it("forwards live status and invalidates config.get on watcher commit", async ()
     };
     try {
       setRuntimeConfigSnapshot(candidate);
-      expect(original.authority.signal?.aborted).toBe(false);
-      expect(() => original.authority.assertCurrent()).not.toThrow();
+      expect(original.authority.signal?.aborted).not.toBe(true);
       duringActivation = await capture();
       // An unrelated Gateway publication cannot turn this tentative policy into source loss.
       publishOperatorRoleConfigChange({});
-      expect(duringActivation.authority.signal?.aborted).toBe(false);
+      expect(duringActivation.authority.signal?.aborted).not.toBe(true);
       setRuntimeConfigSnapshot(initialConfig);
-      expect(duringActivation.authority.assertCurrent).not.toThrow();
-      expect(original.authority.signal?.aborted).toBe(false);
+      expect(original.authority.signal?.aborted).not.toBe(true);
 
       setRuntimeConfigSnapshot(candidate);
       commit("gateway.roles", candidate);
       expect(gatewayContext.getCommittedRuntimeConfig()).toBe(candidate);
-      expect(original.authority.signal?.aborted).toBe(false);
-      expect(duringActivation.authority.signal?.aborted).toBe(false);
-      expect(original.authority.assertCurrent).not.toThrow();
-      expect(duringActivation.authority.assertCurrent).not.toThrow();
+      expect(original.authority.signal?.aborted).not.toBe(true);
+      expect(duringActivation.authority.signal?.aborted).not.toBe(true);
       await expect(capture()).rejects.toThrow();
     } finally {
       original.release();

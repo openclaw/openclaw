@@ -700,6 +700,30 @@ describe("CodexAppServerEventProjector terminal errors", () => {
       expect(terminal.promptErrorSource).toBe("prompt");
     },
   );
+
+  it("carries Codex's typed credit depletion for provider failover classification (#205277)", async () => {
+    const premium = {
+      limitId: "premium",
+      credits: { hasCredits: false },
+      planType: "team",
+      rateLimitReachedType: "workspace_owner_credits_depleted",
+    };
+    const projector = await createProjector(undefined, {
+      readRecentRateLimits: () => ({ rateLimits: premium }),
+    });
+    await fail(
+      projector,
+      {
+        message: "Your workspace is out of credits. Add credits to continue.",
+        codexErrorInfo: "usageLimitExceeded",
+      },
+      true,
+    );
+    const { promptError } = readAttemptTerminal(fixture.result(projector));
+    expect(expectUsageLimitPromptError(promptError)).toMatchObject({
+      code: "workspace_owner_credits_depleted",
+    });
+  });
 });
 
 describe("CodexAppServerEventProjector usage projection", () => {

@@ -4,7 +4,7 @@ import {
 } from "../../agents/cron-creator-authority-context.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
-import { resolveGatewayUiAdminSource } from "../operator-scopes.js";
+import { isGatewayUiAdmin } from "../operator-scopes.js";
 import type { ChatSendExternalAuthorityAdmission } from "./chat-send-external-authority-contract.js";
 import { handleChatSend } from "./chat-send-handler.js";
 import {
@@ -15,8 +15,7 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const externalAuthorityAdmission: ChatSendExternalAuthorityAdmission = {
   allowsDashboardReads: (params) =>
-    (params.client?.internal?.authenticatedControlUi === true ||
-      resolveGatewayUiAdminSource(params.client) !== undefined) &&
+    (params.client?.internal?.authenticatedControlUi === true || isGatewayUiAdmin(params.client)) &&
     authorizeOperatorScopesForMethod("chat.send", params.client?.connect.scopes ?? []).allowed &&
     isDirectGatewayChatUserTurn({
       ...params,
@@ -38,7 +37,6 @@ const externalAuthorityAdmission: ChatSendExternalAuthorityAdmission = {
           authority.managementEntitlement,
           authority.isCurrent,
           undefined,
-          authority.requesterOwner,
           authority.callerScopedCreation,
         )
       : undefined;

@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, expect, it, vi } from "vitest";
-import { renderUpdateRunReport } from "../../../src/infra/update-run-report.ts";
+import { renderUpdateRunSummary } from "../../../src/infra/update-run-notice.ts";
 import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import { flushMicrotasks, type RequestFn } from "./overlays-access.test-support.ts";
@@ -76,7 +76,7 @@ it("polls an OCM job through disconnect and failure without native recovery acti
   });
   await vi.advanceTimersByTimeAsync(5_000);
   expect(overlays.snapshot.updateRun?.steps[0]?.detail).toBe("Preparing package");
-  expect(renderUpdateRunReport(run).markdown).not.toContain("openclaw update status");
+  expect(renderUpdateRunSummary(run)).not.toContain("openclaw update status");
   const hello = harness.gateway.snapshot.hello;
   harness.update({ phase: "reconnecting", hello: null });
   await expectPollingStopped(request);
@@ -92,7 +92,7 @@ it("polls an OCM job through disconnect and failure without native recovery acti
     diagnosableUpdateFailureId: null,
     reportableUpdateFailureId: null,
   });
-  expect(renderUpdateRunReport(run).markdown).toContain("Check this update through OCM.");
-  expect(renderUpdateRunReport(run).markdown).not.toContain("openclaw triage");
+  expect(renderUpdateRunSummary(run)).toContain("Check this update through OCM.");
+  expect(renderUpdateRunSummary(run)).not.toContain("openclaw triage");
   await expectPollingStopped(request);
 });

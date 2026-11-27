@@ -6,21 +6,17 @@ import {
   unwrapToolResultTextForDisplay,
 } from "../../../../../src/agents/tool-display-call.js";
 import { groupToolCalls } from "../../../../../src/chat/tool-call-grouping.js";
-import {
-  isToolCallContentType,
-  isToolResultContentType,
-} from "../../../../../src/chat/tool-content.js";
 import { readCollectionErrorCount } from "../../../../../src/shared/subagent-completion.js";
-import type { MessageGroup as MessageGroupData, ToolCard } from "../../../lib/chat/chat-types.ts";
+import type {
+  ChatCompaction,
+  MessageGroup as MessageGroupData,
+  ToolCard,
+} from "../../../lib/chat/chat-types.ts";
 import {
   isStandaloneToolMessageForDisplay,
   normalizeMessage,
 } from "../../../lib/chat/message-normalizer.ts";
 import { resolveMessageVisibleContent } from "../../../lib/chat/message-visibility.ts";
-import {
-  readToolApprovalReviews,
-  readToolApprovalReviewOutcome,
-} from "../../../lib/chat/tool-approval-reviews.ts";
 import { readPreparedActivity } from "../../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached, resolveToolCardOutcome } from "../../../lib/chat/tool-cards.ts";
 import {
@@ -47,7 +43,6 @@ import {
   resolveFileLinkOwnerOptions,
   type NativeMessageGroupOptions,
 } from "./chat-message-group-options.ts";
-import { projectMessageMedia } from "./chat-message-media-projection.ts";
 
 function activityEntryGroupKey(
   group: MessageGroupData,
@@ -56,15 +51,22 @@ function activityEntryGroupKey(
   return entry === group.messages[0] ? group.key : `${group.key}:${entry.key}`;
 }
 
+export type ProjectedActivity = ReturnType<typeof readPreparedActivity>[number] & {
+  compaction?: ChatCompaction;
+  sourceOrder?: number;
+};
+
 export function collectActivityGroup(
   groups: readonly MessageGroupData[],
   opts: NativeMessageGroupOptions,
 ) {
+  const shownGroups =
+    opts.showToolCalls === false ? groups.filter((group) => group.compaction) : groups;
   const firstGroup = groups[0];
-  if (!firstGroup || opts.showToolCalls === false) {
+  if (!firstGroup || !shownGroups.length) {
     return undefined;
   }
-  const entries = groups.flatMap((group) => group.messages);
+  const entries = shownGroups.flatMap((group) => group.messages);
   const cards: ToolCard[] = [];
   const toolContexts = new Map<ToolCard, ActivityOperationContext>();
   const preparedByCard = new Map<ToolCard, ReturnType<typeof readPreparedActivity>[number]>();
@@ -72,8 +74,25 @@ export function collectActivityGroup(
   const preparedByCall = new Map<string, ReturnType<typeof readPreparedActivity>[number]>();
   const suppressedCards = new Set<ToolCard>();
   const activityKeys = new Map<ReturnType<typeof readPreparedActivity>[number], string>();
-  const activity = groups.flatMap((group) =>
-    group.messages.flatMap((entry) => {
+  const activity = shownGroups.flatMap<ProjectedActivity>((group, sourceOrder) => {
+    if (group.compaction) {
+      const compaction = group.compaction;
+      const item: ProjectedActivity = {
+        compaction,
+        sourceOrder,
+        itemId: group.key,
+        kind: "compaction",
+        phase: compaction.phase === "active" ? "start" : "end",
+        status: compaction.phase === "active" ? "running" : "completed",
+        title: compaction.label,
+      };
+      activityKeys.set(item, group.key);
+      if (compaction.phase === "active" || (opts.runActive && group.runId === opts.activityRunId)) {
+        currentRunActivity.add(item);
+      }
+      return [item];
+    }
+    return group.messages.flatMap((entry) => {
       const prepared = readPreparedActivity(entry.message);
       const fileOptions = resolveFileLinkOwnerOptions(
         group,
@@ -104,6 +123,7 @@ export function collectActivityGroup(
         cards.push(card);
         toolContexts.set(card, {
           messageKey: entry.key,
+          sourceOrder,
           runId: card.runId ?? runId,
           disclosureId: `${entry.key}:toolcard:${index}`,
           onOpenWorkspaceFile: fileOptions.onOpenWorkspaceFile,
@@ -116,8 +136,8 @@ export function collectActivityGroup(
         }
       }
       return prepared;
-    }),
-  );
+    });
+  });
   for (const card of cards) {
     const item = card.callId
       ? preparedByCall.get(JSON.stringify([toolContexts.get(card)!.runId, card.callId]))
@@ -224,7 +244,7 @@ export type ActivityGroupData = NonNullable<ReturnType<typeof collectActivityGro
 type ActivityEntry = { key: string } & (
   | { operation: ActivityOperationProps; activity?: never; message?: never }
   | {
-      activity: ReturnType<typeof readPreparedActivity>[number];
+      activity: ProjectedActivity;
       operation?: never;
       message?: never;
     }
@@ -270,7 +290,6 @@ export function segmentActivityGroup<State extends ActivityStructure>(
     runId?: string;
     entries: ActivityEntry[];
     context: typeof context;
-    imageInspection?: boolean;
   }> = [];
   const append = (item: ActivityEntry, standalone: boolean, inline: boolean, key: string) => {
     const operation =
@@ -289,40 +308,18 @@ export function segmentActivityGroup<State extends ActivityStructure>(
           ? ("stop" as const)
           : undefined;
     const previous = result.at(-1);
-    const source = item.message?.group.messages[0]?.message;
-    const content = source ? normalizeMessage(source).content : undefined;
-    const media =
-      source &&
-      operation &&
-      !permission &&
-      operation.children.length === 0 &&
-      unwrapToolCallForDisplay(operation.card).name === "view_image" &&
-      outcome === "succeeded" &&
-      !readToolApprovalReviews(operation.card.details).length &&
-      !readToolApprovalReviewOutcome(operation.card.details) &&
-      content?.every(
-        (block) =>
-          block.type === "text" ||
-          block.type === "image" ||
-          isToolCallContentType(block.type) ||
-          isToolResultContentType(block.type),
-      )
-        ? projectMessageMedia(source, content)
-        : undefined;
-    const imageInspection = Boolean(media?.images.length && media.attachments.length === 0);
     const coalescible =
       (launch
         ? launch.phase === "running" || launch.phase === "succeeded"
         : outcome === "running") ||
-      Boolean(operation && readSubagentCancellation(operation.card)?.stopped) ||
-      imageInspection;
+      Boolean(operation && readSubagentCancellation(operation.card)?.stopped);
     const action = operation && state.actionOrder.get(operation.card);
     const runId = operation && state.toolContexts.get(operation.card)?.runId;
     if (
-      (lifecycle || imageInspection) &&
+      lifecycle &&
       coalescible &&
       previous?.coalescible &&
-      (imageInspection ? previous.imageInspection : previous.lifecycle === lifecycle) &&
+      previous.lifecycle === lifecycle &&
       action !== undefined &&
       previous.lastAction === action - 1 &&
       previous.runId === runId
@@ -341,7 +338,6 @@ export function segmentActivityGroup<State extends ActivityStructure>(
         inline,
         lifecycle,
         coalescible,
-        imageInspection,
         lastAction: action,
         runId,
         entries: [item],
@@ -357,6 +353,16 @@ export function segmentActivityGroup<State extends ActivityStructure>(
   }
   const unmatched = new Set(context.state.unmatchedActivity);
   for (const group of context.groups) {
+    if (group.compaction) {
+      const activity = context.state.unmatchedActivity.find(
+        (item) => item.itemId === group.key && item.compaction,
+      )!;
+      append({ key: group.key, activity }, false, false, group.key);
+      continue;
+    }
+    if (context.options.showToolCalls === false) {
+      continue;
+    }
     for (const entry of group.messages) {
       const operations = byMessage.get(entry.key) ?? [];
       if (
@@ -418,7 +424,7 @@ export function segmentActivityGroup<State extends ActivityStructure>(
       )) {
         append(
           { key: context.state.activityKeys.get(activity)!, activity },
-          isStandaloneActivity({ id: activity.itemId, name: activity.name ?? "" }),
+          isStandaloneActivity({ id: activity.itemId, name: activity.name ?? "", activity }),
           false,
           `${entry.key}:activity`,
         );

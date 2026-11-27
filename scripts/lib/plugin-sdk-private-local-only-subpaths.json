@@ -80,6 +80,7 @@
   "media-generation-runtime",
   "meeting-config",
   "meeting-page-script-runtime",
+  "meeting-plugin-entry",
   "memory-core-host-embedding-registry",
   "memory-core-host-engine-curated",
   "memory-core-host-engine-embeddings",

@@ -4,6 +4,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { GatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
+import { DEGENERATE_OUTPUT_ERROR_CODE } from "../../llm/types.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import {
   CONTEXT_OVERFLOW_ERROR_MESSAGE,
@@ -69,8 +70,6 @@ const STORAGE_FAILURE_COPY: Record<GatewayStorageFailure, string> = {
 };
 
 const RUNTIME_COORDINATION_FAILURE_CODE_COPY: Readonly<Record<string, string>> = {
-  child_completion_delivery_failed:
-    "This reply was waiting for a child agent whose result couldn't be added to this conversation automatically. Check the child session for its outcome.",
   codex_node_disconnected: "Codex execution node disconnected. Start a fresh attempt.",
   node_runner_update_required:
     "The device worker requires an update before it can host sessions. Run `openclaw update`, reconnect it, then run `openclaw node restart` on a headless node before trying again.",
@@ -131,6 +130,9 @@ export function renderAssistantRequestFailureCopy(
   }
   if (facts.code === "incomplete_tool_call") {
     return "⚠️ The task couldn't finish. Some actions may have completed; check their results before continuing.";
+  }
+  if (facts.code === DEGENERATE_OUTPUT_ERROR_CODE) {
+    return "⚠️ The model's reply turned into a long run of blank characters, so OpenClaw stopped it. Send your message again, or choose another model.";
   }
   const reason =
     facts.reason === "timeout" && typeof facts.status === "number" && facts.status >= 500

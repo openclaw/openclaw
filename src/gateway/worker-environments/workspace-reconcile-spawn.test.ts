@@ -2,6 +2,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  onDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  setDiagnosticsEnabledForProcess,
+  type DiagnosticEventPayload,
+} from "../../infra/diagnostic-events.js";
 import { BrokerChild } from "../../process/spawn-broker/child.js";
 import { runWithSpawnBroker } from "../../process/spawn-broker/context.js";
 import { createSpawnBrokerHost } from "../../process/spawn-broker/host.js";
@@ -25,6 +31,7 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
   vi.restoreAllMocks();
+  resetDiagnosticEventsForTest();
   await drainGlobalSingletonLifecycleState();
 });
 
@@ -54,9 +61,7 @@ it.skipIf(!supportsSpawnBrokerCommandTransport())(
           appliedEntries: current.entries,
         });
         expect(gitLaunches()).toHaveLength(5);
-        expect(gitLaunches().filter(([, child]) => !(child instanceof BrokerChild))).toHaveLength(
-          2,
-        );
+        expect.soft(gitLaunches().every(([, child]) => child instanceof BrokerChild)).toBe(true);
         launches.mockClear();
         const empty = await createWorkspacePatch({
           root,
@@ -67,14 +72,24 @@ it.skipIf(!supportsSpawnBrokerCommandTransport())(
         expect(empty.patch.byteLength).toBe(0);
         expect(empty.baseTree).toBe("4b825dc642cb6eb9a060e54bf8d69288fbee4904");
         expect(gitLaunches()).toHaveLength(3);
-        expect(gitLaunches().filter(([, child]) => !(child instanceof BrokerChild))).toHaveLength(
-          1,
-        );
+        expect.soft(gitLaunches().every(([, child]) => child instanceof BrokerChild)).toBe(true);
         await applyWorkspacePatch({ root, patch: snapshot.patch });
         await expectWorkspaceFiles(root, newFiles);
         await expect(fs.stat(path.join(root, "removed"))).rejects.toMatchObject({ code: "ENOENT" });
         const stagedResultRef = "refs/openclaw/worker-results/spawn-proof";
         launches.mockClear();
+        const spawns: DiagnosticEventPayload[] = [];
+        setDiagnosticsEnabledForProcess(false);
+        diagnostics.emitChildProcessSpawnSample();
+        setDiagnosticsEnabledForProcess(true);
+        const unsubscribe = onDiagnosticEvent((event) => {
+          if (
+            event.type === "diagnostic.child_process.spawn" &&
+            event.operation === "unscoped.fast-import"
+          ) {
+            spawns.push(event);
+          }
+        });
         await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
           root,
           stagingRoot,
@@ -85,9 +100,13 @@ it.skipIf(!supportsSpawnBrokerCommandTransport())(
           currentManifestRaw: serializeWorkerWorkspaceManifest(current),
         });
         expect(gitLaunches()).toHaveLength(2);
-        expect(gitLaunches().filter(([, child]) => !(child instanceof BrokerChild))).toHaveLength(
-          1,
-        );
+        const now = performance.now() + 60_001;
+        vi.spyOn(performance, "now").mockReturnValueOnce(now);
+        diagnostics.emitChildProcessSpawnSample();
+        unsubscribe();
+        expect(spawns).toEqual([
+          expect.objectContaining({ family: "git", transport: "broker", count: 1 }),
+        ]);
         await withStagedWorkerWorkspaceResult({ root, stagedResultRef }, async (staged) => {
           expect(staged.changedEntryCount).toBe(Object.keys(newFiles).length);
           for (const [name, content] of Object.entries(newFiles)) {

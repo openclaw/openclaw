@@ -15,6 +15,16 @@ export type BrokerBootstrap = {
   nativeResource?: NativeResourceAuthority & { generation: number };
 };
 
+export function createBrokerBootstrap(
+  authority: NativeResourceAuthority | undefined,
+  generation: number,
+): BrokerBootstrap {
+  return {
+    type: "bootstrap",
+    ...(authority ? { nativeResource: { ...authority, generation } } : {}),
+  };
+}
+
 /** The domain decoder, not a transport adapter, restores this original cleanup payload. */
 export class BrokerNativeResourceCloseError extends Error {
   constructor(readonly payload: unknown) {

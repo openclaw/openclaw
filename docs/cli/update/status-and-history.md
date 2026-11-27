@@ -248,8 +248,15 @@ and a redacted diagnostic in the run history as well as the Gateway log. Status
 and the bounded run report show the cause after the campaign clears. This requires
 the updated Gateway; older runs cannot recover a cause that was never recorded.
 
-An admitted `openclaw update --json` includes `runId` and the `run` record. `openclaw update status --json`
-includes `activeRun` when a run is active and `lastRun` when history exists.
+For release updates, `openclaw update --json` returns the observed run record
+directly. If no status was observed after Gateway
+acknowledgement, they return `{ "status": "unknown", "runId": "..." }`. A status
+lookup error retains the ID in the CLI error response. A capability-consent retry
+reports its own acknowledged ID. An ID alone does not confirm completion.
+The in-place updater reports `runId` and adds the record under `run` when history
+is readable.
+`openclaw update status --json` includes `activeRun` when a run is active and
+`lastRun` when history exists.
 An automatic-update campaign stops showing as applying when its own admitted run
 finishes, including when a managed handoff fails before restarting the Gateway.
 The Gateway reconciles the exact campaign run, so newer unrelated runs do not

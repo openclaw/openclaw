@@ -1,15 +1,22 @@
 import { isDeepStrictEqual } from "node:util";
+import { resolveCompactionThreshold } from "@openclaw/ai/internal/shared";
 import {
   captureOpenAIResponsesCompaction,
   requestPreparedOpenAIResponsesCompaction,
+  resolveCompletionTokenReservation,
   usesNativeOpenAICodexResponsesBackend,
 } from "@openclaw/ai/transports";
-import type { AssistantHistoryMessage, Context, Model } from "@openclaw/llm-core";
+import {
+  hasRuntimeContextMarker,
+  type AssistantHistoryMessage,
+  type Context,
+  type Model,
+} from "@openclaw/llm-core";
 import { extractSummaryText } from "../../../../packages/agent-core/src/harness/compaction/utils.js";
 import { consumeAgentCoreStream } from "../../../../packages/agent-core/src/runtime-deps.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
-import { decideContextPressure } from "../../context-pressure.js";
+import { decideContextPressure, deferBoundaryMaintenanceOnce } from "../../context-pressure.js";
 import type { StreamFn } from "../../runtime/index.js";
 import { getRawSessionAppendMessageAsync } from "../../session-raw-append-message.js";
 import {
@@ -90,6 +97,7 @@ export function createRequestBoundaryCompaction(params: {
   config?: OpenClawConfig;
   contextTokenBudget: number;
   reserveTokens: number;
+  maxOutputTokens?: number;
   runId?: string;
   /** Soft fallbacks and text commits may stop only where the tool batch can continue. */
   isToolBoundarySafe?: () => boolean;
@@ -141,9 +149,13 @@ export function createRequestBoundaryCompaction(params: {
         sessionId: requestOptions.sessionId,
       },
     };
-    // A matching measured predecessor prices the unchanged prefix once, as the
-    // mid-turn precheck this boundary replaces does. Without one, keep the
-    // conservative preflight estimate, which honors persisted session usage.
+    // Price hard admission from the projected request, not maintenance headroom.
+    const outgoing = resolveProjectedRequestPressure({
+      ...budget,
+      context,
+      previousRequest: requestAnchor,
+    });
+    // Saved usage and preflight's margin can still request early maintenance.
     const preflight = requestAnchor
       ? undefined
       : shouldPreemptivelyCompactBeforePrompt({
@@ -155,27 +167,52 @@ export function createRequestBoundaryCompaction(params: {
             ? Math.ceil(fixedTokenPressure.toolTokens * SAFETY_MARGIN)
             : estimateToolSchemaTokenPressure(context.tools),
         });
-    const outgoing = preflight
-      ? (preflight.compactionReplay ?? preflight)
-      : resolveProjectedRequestPressure({ ...budget, context, previousRequest: requestAnchor });
-    // The boundary sends the complete window plus its summary request. Leave room
-    // for the next tool result instead of waiting for the reserve-based limit.
+    const maintenance = preflight ? (preflight.compactionReplay ?? preflight) : outgoing;
+    // The boundary sends the complete window plus its summary request. It starts at
+    // the client threshold ratio, capped by the reserve-based prompt budget, so every
+    // route compacts at the same occupancy and the summary request keeps headroom.
     const contextTokens = Math.min(
       params.contextTokenBudget,
       model.contextWindow ?? params.contextTokenBudget,
     );
     const softTriggerTokens = Math.min(
       outgoing.promptBudgetBeforeReserve,
-      Math.max(1, Math.floor(contextTokens * 0.9)),
+      Math.max(
+        1,
+        resolveCompactionThreshold({ contextWindowTokens: contextTokens, reserveTokensFloor: 0 }),
+      ),
     );
-    if (outgoing.estimatedPromptTokens < softTriggerTokens) {
+    const conservativeInputTokens = Math.max(
+      outgoing.estimatedPromptTokens,
+      maintenance.estimatedPromptTokens,
+    );
+    if (conservativeInputTokens < softTriggerTokens) {
+      return undefined;
+    }
+    const maxOutputTokens = resolveCompletionTokenReservation(
+      model,
+      options?.thinkingBudgets
+        ? model.maxTokens
+        : (options?.maxTokens ?? params.maxOutputTokens ?? model.maxTokens),
+      options?.reasoning,
+    );
+    if (
+      !failed &&
+      context.messages.findLast((message) => !hasRuntimeContextMarker(message))?.role ===
+        "toolResult" &&
+      params.session.agent.state.pendingToolCalls.size === 0 &&
+      params.isToolBoundarySafe?.() === true &&
+      maxOutputTokens > 0 &&
+      conservativeInputTokens + maxOutputTokens <= contextTokens &&
+      deferBoundaryMaintenanceOnce(params.runId)
+    ) {
       return undefined;
     }
     const fallback = (reason: string) => {
-      // The early V2 trigger must not move the client's compaction threshold, and a
+      // The V2 trigger must not move the client's compaction threshold, and a
       // soft fallback waits for a boundary where the tool batch can continue. The
       // text variant replaces the client threshold, so its maintenance is due.
-      const maintenanceDue = !native || outgoing.route !== "fits";
+      const maintenanceDue = !native || maintenance.route !== "fits";
       const pressure = decideContextPressure({
         estimatedPromptTokens: outgoing.estimatedPromptTokens,
         windowTokens: model.contextWindow ?? params.contextTokenBudget,

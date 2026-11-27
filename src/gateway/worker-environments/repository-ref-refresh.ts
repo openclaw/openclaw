@@ -1,10 +1,7 @@
 import type { GitHubCredentialReader } from "../../agents/github-credential-reader.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
-import {
-  AUTHENTICATED_GIT_JS,
-  WORKER_REPOSITORY_GIT_ARGS,
-} from "./node-worker-repository-preparation.js";
+import { AUTHENTICATED_REF_REFRESH_JS } from "../../worker/workspace-git-policy.js";
 import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import { matchesWorkerPlacementTarget } from "./placement-target.js";
@@ -58,25 +55,11 @@ export async function refreshRepositoryRefs(params: {
     const owned = tunnel;
     await github.start(async () => {
       let result = await owned.runWorkspaceCommand({
-        argv: [
-          "node",
-          "-e",
-          AUTHENTICATED_GIT_JS,
-          "--",
-          ...WORKER_REPOSITORY_GIT_ARGS,
-          "fetch",
-          "--no-tags",
-          "--no-auto-maintenance",
-          "--no-write-fetch-head",
-          "--no-recurse-submodules",
-          "--",
-          workspace.repository.url,
-          "+refs/heads/main:refs/remotes/origin/main",
-        ],
+        argv: ["node", "-e", AUTHENTICATED_REF_REFRESH_JS],
         input: JSON.stringify({
           origin: workspace.repository.url,
           token: github.token,
-          disableLazyFetch: true,
+          baseCommit: workspace.repository.baseCommit,
         }),
         process: { action: "start", processId },
         transportRetry: "never",

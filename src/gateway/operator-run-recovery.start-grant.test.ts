@@ -6,10 +6,10 @@ import { prepareInternalGetReplyOptions } from "../auto-reply/reply/get-reply.ty
 import { withAdminIngress } from "../channels/message-access/operator-authority.test-support.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { OperatorRefusalError } from "./operator-refusal.js";
 import { captureQueuedOperatorRecoverySource } from "./operator-run-recovery-source.js";
 import {
   captureGatewayOperatorContinuation,
@@ -39,14 +39,6 @@ type Start = (
   fixture: RecoveryFixture,
 ) => Promise<{ authority: { scopes: readonly string[] }; release: () => void }>;
 
-const cronSource = (fixture: RecoveryFixture) =>
-  ({
-    version: 1,
-    kind: "gateway",
-    agentId: fixture.target.agentId,
-    sourceRunId: "scheduled-source-run",
-    snapshot: fixture.snapshot,
-  }) as const;
 const queued = (fixture: RecoveryFixture) =>
   ({
     source: { kind: "gateway", snapshot: fixture.snapshot },
@@ -55,8 +47,7 @@ const queued = (fixture: RecoveryFixture) =>
     assertCurrent: () => {},
   }) as const;
 const chatStart: Start = (fixture) => restoreGatewayQueuedOperatorRecovery(queued(fixture));
-const automationStart: Start = (fixture) =>
-  restoreScheduledAutomationOperator({ ...queued(fixture), operatorSource: cronSource(fixture) });
+const automationStart: Start = (fixture) => restoreScheduledAutomationOperator(queued(fixture));
 
 // Each kind uses the entry its producer uses, with the saved-source shape it stores.
 const chatKinds: Array<[string, Start]> = [
@@ -70,9 +61,6 @@ const chatKinds: Array<[string, Start]> = [
       }),
   ],
   ["restart replay of a queued chat input", chatStart],
-  ["restart completion wake", chatStart],
-  ["system turn with a recorded requester", chatStart],
-  ["worker environment provision resume", chatStart],
   [
     "plugin service session work accepted in a chat turn",
     (fixture) =>
@@ -86,16 +74,6 @@ const chatKinds: Array<[string, Start]> = [
 ];
 const automationKinds: Array<[string, Start]> = [
   ["cron agent turn, command and script", automationStart],
-  ["cron conversation event", automationStart],
-  ["native stream source", automationStart],
-  [
-    "scheduled plugin command",
-    (fixture) =>
-      restoreScheduledAutomationOperator({
-        ...queued(fixture),
-        operatorSource: cronSource(fixture),
-      }),
-  ],
   [
     "plugin service session work accepted in a cron run",
     (fixture) => restoreScheduledAutomationOperator(queued(fixture)),
@@ -129,7 +107,7 @@ describe("saved requester start grant", () => {
     withRequester("chat-start@example.test", "writer", async (fixture, setRole) => {
       (await start(fixture)).release();
       setRole(role);
-      await expect(start(fixture)).rejects.toThrow(GatewayOperatorRecoveryAuthorizationError);
+      await expect(start(fixture)).rejects.toThrow(OperatorRefusalError);
     }),
   );
 
@@ -145,7 +123,7 @@ describe("saved requester start grant", () => {
       expect(admitted.authority.scopes).toEqual(["operator.read", "operator.talk"]);
       admitted.release();
       setRole("reader");
-      await expect(start()).rejects.toThrow(GatewayOperatorRecoveryAuthorizationError);
+      await expect(start()).rejects.toThrow(OperatorRefusalError);
     }));
 
   it.each(automationKinds)("admits %s for a cron-only creator", (_kind, start) =>
@@ -163,7 +141,7 @@ describe("saved requester start grant", () => {
     withRequester("automation-reader@example.test", "writer", async (fixture, setRole) => {
       (await start(fixture)).release();
       setRole("reader");
-      await expect(start(fixture)).rejects.toThrow(GatewayOperatorRecoveryAuthorizationError);
+      await expect(start(fixture)).rejects.toThrow(OperatorRefusalError);
     }),
   );
 

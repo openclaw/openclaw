@@ -15,7 +15,6 @@ import {
   withGatewayToolCallerIdentity,
 } from "../../agents/tools/gateway-caller-context.js";
 import * as gatewayModule from "../../agents/tools/gateway.js";
-import { isConfiguredCommandOwner } from "../../auto-reply/command-auth.js";
 import { getCommandOwnerAuthority } from "../../auto-reply/command-owner-authority.js";
 import { resolveReplyCronChannelRequester } from "../../auto-reply/reply/get-reply-run.cron-requester.js";
 import { buildSessionEventContext } from "../../auto-reply/reply/session-event-context.js";
@@ -107,7 +106,6 @@ async function withAgentManagement<T>(
     channel?: string;
     sessionKey?: string;
     channelRequester?: CronAuthenticatedChannelRequester;
-    ownerAuthority?: ReturnType<typeof getCommandOwnerAuthority>;
   } = {},
 ): Promise<T> {
   const callerSessionKey = options.sessionKey ?? sessionKey;
@@ -130,16 +128,7 @@ async function withAgentManagement<T>(
       createCronCreatorAuthorityCapability(
         runId,
         options.origin ?? { kind: "unknown" },
-        {
-          source: "channel-owner",
-          isCurrent:
-            options.ownerAuthority?.isCurrent ??
-            (() =>
-              isConfiguredCommandOwner(getRuntimeConfig(), {
-                channel,
-                senderId: "owner-1",
-              })),
-        },
+        { source: "channel-owner" },
         undefined,
         options.channelRequester,
       ),
@@ -333,7 +322,6 @@ it.each(["telegram", "discord", "slack"] as const)(
       ingressInput(message, { identity: { authentication: "verified" } }),
     );
     const ingressContext = host.buildContext({ ...message, channelIngress });
-    const ownerAuthority = expectDefined(getCommandOwnerAuthority(ingressContext), "host owner");
     const channelRequester = expectDefined(
       resolveReplyCronChannelRequester(ingressContext, {
         channel,
@@ -383,7 +371,6 @@ it.each(["telegram", "discord", "slack"] as const)(
         channel,
         sessionKey: parentSessionKey,
         channelRequester,
-        ownerAuthority,
       },
     );
     host.retire();

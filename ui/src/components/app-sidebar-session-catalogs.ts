@@ -5,6 +5,7 @@ import type {
   SessionCatalogProfileRelation,
   SessionCatalogSession,
 } from "../../../packages/gateway-protocol/src/index.ts";
+import { normalizeCatalogTimestamp } from "../../../packages/gateway-protocol/src/public-session-catalog.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
@@ -23,17 +24,14 @@ import type {
 
 export function catalogSessionActivity(
   sessions: readonly SessionCatalogSession[],
-  liveRowsByKey: ReadonlyMap<
-    string,
-    Pick<SidebarRecentSession, "unread" | "backgroundProcessCount" | "isRunVisuallyActive">
-  >,
+  liveRowsByKey: ReadonlyMap<string, Pick<SidebarRecentSession, "unread" | "isRunVisuallyActive">>,
 ) {
   let running = false;
   let unread = false;
   for (const session of sessions) {
     const row = session.sessionKey ? liveRowsByKey.get(session.sessionKey) : undefined;
     running ||= row
-      ? row.isRunVisuallyActive === true || (row.backgroundProcessCount ?? 0) > 0
+      ? row.isRunVisuallyActive === true
       : session.status === "active" || session.status === "running";
     unread ||= row?.unread === true;
   }
@@ -54,10 +52,6 @@ export function formatSidebarTimestamp(timestampMs: number | null | undefined): 
     fallback: "",
     suffix: timestampMs != null && timestampMs > now,
   });
-}
-
-export function normalizeCatalogTimestamp(timestamp: number | undefined): number | undefined {
-  return timestamp !== undefined && timestamp < 1_000_000_000_000 ? timestamp * 1000 : timestamp;
 }
 
 export function findCatalogSessionHovercardRow(params: {

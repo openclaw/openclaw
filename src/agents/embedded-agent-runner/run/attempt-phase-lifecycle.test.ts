@@ -191,9 +191,6 @@ describe("embedded attempt phase lifecycle state", () => {
       const attempt = {
         ...input.attempt,
         admittedRunContext,
-        // Prepared admission is deliberately absent from EmbeddedRunAttemptParams;
-        // include it as an extra legacy-spread fact to detect future consumer reads.
-        preparedRunAdmission: admission,
         operation: "settled-tool-finalization" as const,
         config: {},
         sessionTarget: { agentId: "main", sessionId: "session-1", sessionKey: "agent:main:main" },

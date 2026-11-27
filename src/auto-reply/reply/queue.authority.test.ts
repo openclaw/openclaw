@@ -62,14 +62,7 @@ function createOperatorAuthority() {
     scopes: ["operator.read", "operator.write"],
     source: {},
     signal: controller.signal,
-    assertCurrent: () => {
-      controller.signal.throwIfAborted();
-      if (references <= 0) {
-        throw new Error("operator source released");
-      }
-    },
     retain: () => {
-      authority.assertCurrent();
       references += 1;
       return () => {
         references -= 1;
@@ -385,7 +378,6 @@ describe("followup queue authority", () => {
       expect(recovery.run.turnAdoptionLifecycle).toBeUndefined();
       scheduleFollowupDrain(key, async (run) => {
         try {
-          run.operatorAuthority?.assertCurrent();
           expect(callbackReferences).toBe(1);
           delivered = run.operatorAuthority?.profileId === "guest";
         } catch (error) {

@@ -1,6 +1,5 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { createTestOperatorAuthority } from "../../../agents/admitted-run-context.test-support.js";
 import {
   beginSessionControllerSourceInjection,
   bindSessionControllerSource,
@@ -14,18 +13,6 @@ import type { FollowupRun } from "./types.js";
 
 const queue = queueFixture("steer");
 const source = (prompt: string, messageId = prompt) => queue.source(prompt, messageId);
-function authority(isCurrent: () => boolean, message: string) {
-  return createTestOperatorAuthority({
-    profileId: "fixture",
-    scopes: ["operator.write"],
-    source: {},
-    assertCurrent() {
-      if (!isCurrent()) {
-        throw new Error(message);
-      }
-    },
-  });
-}
 function recordDelivery(count: number, active?: FollowupRun) {
   const delivered: string[] = [];
   const done = createDeferred();
@@ -185,10 +172,6 @@ it.each(["summarize", "new", "old"] as const)(
   async (dropPolicy) => {
     queue.settings = { ...queue.settings, cap: 1, dropPolicy };
     const [active, first, newer] = [source("active"), source("steer-a"), source("steer-b")];
-    let firstCurrent = true;
-    if (dropPolicy === "old") {
-      first.operatorAuthority = authority(() => firstCurrent, "queued source authority expired");
-    }
     const disposition = vi.fn();
     newer.onQueueDisposition = disposition;
     const onAbandoned = vi.fn();
@@ -205,7 +188,6 @@ it.each(["summarize", "new", "old"] as const)(
       const newerSettlement = settleSource(newerInput);
       expect(getExistingFollowupQueue(queue.key)?.items).toEqual([active, first, newer]);
       expect(disposition).not.toHaveBeenCalled();
-      firstCurrent = false;
       newerReservation.fallback();
       expect(getExistingFollowupQueue(queue.key)?.items).toEqual([
         active,

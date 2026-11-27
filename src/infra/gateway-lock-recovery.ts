@@ -1,11 +1,16 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
+import { z } from "zod";
+import { getProcessStartTime } from "../shared/pid-alive.js";
 import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { acquireFileLockSync } from "./file-lock-manager.js";
 import {
   describeGatewayLockHolder,
+  GatewayProcessNamespaceSchema,
+  readGatewayLockProcessNamespace,
   parseGatewayLockPayload,
   type LockPayload,
 } from "./gateway-lock-payload.js";
@@ -24,6 +29,7 @@ import { decodeGatewayOwnerLease } from "./gateway-owner-lease.read.js";
 import { defaultPayload } from "./gateway-state-owner-record.js";
 import { acquireGatewayStateOwner, type StateDatabaseSchemaLease } from "./gateway-state-owner.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
+import { readSameNamespaceProcessOwnerStatus } from "./state-lease-process-owner.js";
 
 type ObservedFile = { path: string; raw: string; identity: string; holder: LockPayload | null };
 
@@ -99,13 +105,97 @@ export async function inspectGatewayLockRecovery(options: { env?: NodeJS.Process
   };
 }
 
-/** Explicit operator confirmation is bound to file identity, bytes, heartbeat and lease facts. */
-export async function recoverGatewayLock(options: { confirmation: string }) {
-  const inspection = await inspectGatewayLockRecovery();
-  if (inspection.confirmation !== options.confirmation) {
-    throw new Error(
-      "Gateway lock or heartbeat changed since inspection; run `openclaw gateway recover-lock` again.",
+const terminatedNamespaceSchema = GatewayProcessNamespaceSchema.options[0].extend({
+  pidNsInode: z.string().regex(/^[1-9]\d*$/u),
+  pidNsInitStartTicks: z.number().int().nonnegative(),
+});
+
+/** The supervisor verifies termination. OpenClaw verifies which holders belonged to it. */
+function assertTerminatedNamespace(
+  inspection: Awaited<ReturnType<typeof inspectGatewayLockRecovery>>,
+  namespace: unknown,
+) {
+  const parsed = terminatedNamespaceSchema.safeParse(namespace);
+  const local = readGatewayLockProcessNamespace();
+  if (!parsed.success || local?.platform !== "linux") {
+    throw new Error("Recovery requires the kernel identity of a terminated Linux PID namespace.");
+  }
+  const expected = parsed.data;
+  const sharesPidNumbers =
+    expected.identity === local.identity && expected.pidNsInode === local.pidNsInode;
+  const ownNamespace = sharesPidNumbers && getProcessStartTime(1) === expected.pidNsInitStartTicks;
+  function assertHolder(
+    label: string,
+    holder: {
+      processNamespace?: LockPayload["processNamespace"];
+      pid: number;
+      startTime?: number | null;
+    },
+    matchesIncarnation: boolean,
+  ) {
+    const { processNamespace: placement, pid, startTime } = holder;
+    if (
+      placement?.platform !== "linux" ||
+      placement.host !== expected.host ||
+      placement.identity !== expected.identity ||
+      placement.pidNsInode !== expected.pidNsInode ||
+      !matchesIncarnation ||
+      !Number.isSafeInteger(pid) ||
+      pid <= 0
+    ) {
+      throw new Error(`${label} does not belong to the supplied namespace.`);
+    }
+    // A local PID can still be live under another UTS hostname or after inode reuse.
+    if (
+      sharesPidNumbers &&
+      readSameNamespaceProcessOwnerStatus({
+        pid,
+        startedAt:
+          typeof startTime === "number" && Number.isSafeInteger(startTime) && startTime >= 0
+            ? startTime
+            : null,
+      }) !== "dead"
+    ) {
+      throw new Error(`Cannot verify that PID ${pid} stopped in the supplied namespace.`);
+    }
+  }
+  for (const { observed } of inspection.files) {
+    if (!observed) {
+      continue;
+    }
+    const holder = observed.holder;
+    if (!holder) {
+      throw new Error(`Cannot identify the Gateway holder at ${observed.path}.`);
+    }
+    // Only locally comparable PIDs can be checked without a recorded PID 1 start time.
+    const matchesIncarnation =
+      holder.pidNsInitStartTicks === undefined
+        ? ownNamespace
+        : holder.role !== undefined && holder.pidNsInitStartTicks === expected.pidNsInitStartTicks;
+    assertHolder(observed.path, holder, matchesIncarnation);
+  }
+  if (inspection.lease) {
+    const owner = decodeGatewayOwnerLease(inspection.lease);
+    const payload = safeParseJsonRecord(inspection.lease.payloadJson ?? "");
+    if (!owner || owner.host !== expected.host) {
+      throw new Error("Gateway owner lease does not belong to the supplied namespace.");
+    }
+    assertHolder(
+      "Gateway owner lease",
+      { ...owner, startTime: owner.startedAt },
+      payload?.pidNsInitStartTicks === expected.pidNsInitStartTicks,
     );
+  }
+}
+
+export async function recoverGatewayLock(
+  options: { confirmation: string } | { terminatedNamespace: unknown },
+) {
+  const inspection = await inspectGatewayLockRecovery();
+  if ("terminatedNamespace" in options) {
+    assertTerminatedNamespace(inspection, options.terminatedNamespace);
+  } else if (inspection.confirmation !== options.confirmation) {
+    throw new Error("Gateway lock or heartbeat changed since inspection; inspect the lock again.");
   }
   if (inspection.postgres) {
     assertPostgresGatewayRecoveryMutationSupported(inspection.postgres);

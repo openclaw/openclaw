@@ -19,7 +19,6 @@ import type { FollowupExecutionResult } from "./followup-turn-execution.js";
 import { enqueueFollowupRun, type FollowupRun } from "./queue.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
 import type { FollowupRunnerParams } from "./reply-agent-turn-preparation.js";
-import { createMockTypingController as createTypingController } from "./test-helpers.js";
 
 const state = vi.hoisted(() => ({
   account: vi.fn<typeof import("./agent-runner-result-accounting.js").accountFollowupTurn>(),
@@ -98,7 +97,6 @@ async function drain(queued: FollowupRun, overrides: Partial<FollowupRunnerParam
   activeKeys.add(sessionKey);
   const completed = createDeferred();
   const runner = createFollowupRunner({
-    typing: createTypingController(),
     typingMode: "never",
     defaultModel: "anthropic/claude",
     ...overrides,

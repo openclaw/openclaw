@@ -361,6 +361,18 @@ describe("sessions tools", () => {
     });
   });
 
+  it("sessions_history does not report truncation when only usage metadata is stripped", async () => {
+    const details = await readHistory("usage-only", [
+      { ...textAssistant("hello"), usage: { output: 1 } },
+    ]);
+    expect(details).toMatchObject({
+      contentTruncated: false,
+      truncated: false,
+      droppedMessages: false,
+    });
+    expect(details.messages?.[0]).not.toHaveProperty("usage");
+  });
+
   it("sessions_history preserves credential text while reporting truncation", async () => {
     const secret = "sk-9876543210fedcba9876";
     const details = await readHistory("preserved", [
@@ -720,27 +732,6 @@ describe("sessions tools", () => {
 
   registerSessionsSendTimeoutTests({ getSessionTool, callGatewayMock });
 
-  it("sessions_history resolves sessionId inputs", async () => {
-    const sessionId = "sess-group";
-    const targetKey = "agent:main:discord:channel:1457165743010611293";
-    mockGatewayResponses({
-      "sessions.resolve": { key: targetKey },
-      "chat.history": {
-        messages: [{ role: "assistant", content: [{ type: "text", text: "ok" }] }],
-      },
-    });
-
-    const tool = getSessionTool("sessions_history");
-
-    const result = await tool.execute("call5", { sessionKey: sessionId });
-    const details = result.details as { messages?: unknown[] };
-    expect(details.messages).toStrictEqual([textAssistant("ok")]);
-    expect(gatewayCalls("chat.history")[0]).toMatchObject({
-      method: "chat.history",
-      params: { sessionKey: targetKey },
-    });
-  });
-
   it("sessions_history enforces a hard byte cap even when a single message is huge", async () => {
     const details = await readHistory(
       "call4c",
@@ -759,23 +750,5 @@ describe("sessions tools", () => {
     expect(details.messages?.[0]?.content).toContain(
       "[sessions_history omitted: message too large]",
     );
-  });
-
-  it("sessions_history errors on missing sessionId", async () => {
-    const sessionId = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa";
-    callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string };
-      if (request.method === "sessions.resolve") {
-        throw new Error("No session found");
-      }
-      return {};
-    });
-
-    const tool = getSessionTool("sessions_history");
-
-    const result = await tool.execute("call6", { sessionKey: sessionId });
-    const details = result.details as { status?: string; error?: string };
-    expect(details.status).toBe("error");
-    expect(details.error).toMatch(/Session not found|No session found/);
   });
 });

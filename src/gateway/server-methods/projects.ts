@@ -9,6 +9,7 @@ import {
   validateProjectsCheckoutOptionsParams,
   validateProjectsRegisterParams,
   validateProjectsRemoveParams,
+  validateProjectsRenameParams,
   validateProjectsSearchRemoteParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
@@ -38,6 +39,7 @@ import {
   ProjectCheckoutError,
   registerProjectRegistry,
   removeProjectRegistry,
+  renameProjectRegistry,
   resolveProjectRegistry,
 } from "../../projects/project-registry.js";
 import { isTrustedSecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
@@ -169,7 +171,7 @@ export const projectsHandlers: GatewayRequestHandlers = {
       const registryProjects = await filterProjectsForRequester(
         cfg,
         await listProjectRegistry(cfg),
-        projectRequesterForClient(client),
+        projectRequesterForClient(client, cfg),
       );
       diagnostics?.mark("sessions");
       const githubHost = resolveConfiguredGitHubHost(cfg);
@@ -343,7 +345,7 @@ export const projectsHandlers: GatewayRequestHandlers = {
         cfg,
         projectId: params.projectId,
         targetAgentId: selected.agentId,
-        requester: projectRequesterForClient(client),
+        requester: projectRequesterForClient(client, cfg),
         resolveSandboxRequired: () =>
           resolveCreatorSandbox(cfg, resolveOperatorSessionCreation(client)) === "required",
         assertCurrent,
@@ -404,6 +406,27 @@ export const projectsHandlers: GatewayRequestHandlers = {
         ),
         undefined,
       );
+    },
+    projectCheckoutError,
+  ),
+  "projects.rename": defineValidatedGatewayHandler(
+    "projects.rename",
+    validateProjectsRenameParams,
+    async ({ params, respond, context }) => {
+      const unknownProject = errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        `unknown project id: ${params.projectId}`,
+      );
+      const project = await resolveProjectRegistry(context.getRuntimeConfig(), params.projectId);
+      const renamed =
+        project && project.source !== "workspace"
+          ? await renameProjectRegistry(project, params.name.trim())
+          : undefined;
+      if (!renamed) {
+        respond(false, undefined, unknownProject);
+        return;
+      }
+      respond(true, sanitizeProjectRecord(renamed), undefined);
     },
     projectCheckoutError,
   ),

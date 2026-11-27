@@ -137,7 +137,6 @@ it.each(["browser", "cli", "acp"] as const)(
       profileId: "prefix-operator",
       scopes: ["operator.write"],
       signal: new AbortController().signal,
-      assertCurrent: () => {},
     });
     const expected = await withGatewayToolCallerIdentity(
       { agentId: "main", sessionKey, operatorAuthority },
@@ -221,7 +220,6 @@ it.each([true, false])(
     const operatorAuthority = createTestOperatorAuthority({
       profileId: "prefix-operator",
       scopes: ["operator.write"],
-      assertCurrent: () => {},
     });
     const expected = await withGatewayToolCallerIdentity(
       { agentId: "main", sessionKey: session.sessionKey!, operatorAuthority },
@@ -248,7 +246,9 @@ it("refuses a wake-turn screen call without a requesting UI through the executio
     expect(result.details).toMatchObject({ gated: true });
     expect(JSON.stringify(result.content)).toContain("open Control UI");
     expect(JSON.stringify(result.content)).toContain(
-      senderIsOwner ? "requires a connected requesting client" : "needs the owner's authority",
+      senderIsOwner
+        ? "requires a connected requesting client"
+        : "needs the Gateway owner's authority",
     );
   }
 });

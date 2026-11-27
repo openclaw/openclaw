@@ -1,5 +1,4 @@
 import { beforeEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import { createTestOperatorAuthority } from "./admitted-run-context.test-support.js";
 import { FailoverError } from "./failover-error.js";
 import { runWithModelFallback } from "./model-fallback-runner.js";
@@ -12,11 +11,10 @@ const cfg = createModelFallbackConfig("fixture/primary", [
 ]);
 cfg.agents!.defaults!.models = { "fixture/restricted-v1": { alias: "special" } };
 
-const source = (assertCurrent = () => {}) =>
+const source = () =>
   createTestOperatorAuthority({
     profileId: "fixture-operator",
     scopes: ["operator.write"],
-    assertCurrent,
     modelPolicy: prepareOperatorModelPolicy({
       cfg,
       policy: { deny: ["fixture/restricted-*"] },
@@ -59,28 +57,5 @@ it("rejects a denied alias before provider or harness preparation", async () => 
     "operator role cannot use this model",
   );
   expect(prepare).not.toHaveBeenCalled();
-  expect(run).not.toHaveBeenCalled();
-});
-
-it("rechecks retained authority after asynchronous preparation before starting a model", async () => {
-  const entered = createDeferred();
-  const release = createDeferred();
-  let active = true;
-  const pending = fallback({
-    skipAuthProfileRuntime: true,
-    operatorAuthority: source(() => {
-      if (!active) {
-        throw new Error("source retired");
-      }
-    }),
-    prepareCandidateChain: async () => {
-      entered.resolve();
-      await release.promise;
-    },
-  });
-  await entered.promise;
-  active = false;
-  release.resolve();
-  await expect(pending).rejects.toThrow("source retired");
   expect(run).not.toHaveBeenCalled();
 });

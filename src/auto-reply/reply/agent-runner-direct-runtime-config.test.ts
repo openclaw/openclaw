@@ -40,7 +40,6 @@ import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
-import { resolveReplyOperationAgentTurn } from "./reply-operation-run-state.test-support.js";
 
 const freshCfg = { runtimeFresh: true };
 const sentinelError = new Error("stop-after-preflight");
@@ -403,7 +402,7 @@ describe("runReplyAgent runtime config", () => {
     },
   );
 
-  it("records abortForRestart during memory flush as cancellation without starting the main turn", async () => {
+  it("does not start the main turn after abortForRestart during memory flush", async () => {
     const { replyParams } = createDirectRuntimeReplyParams();
     const runState: ReplyOperationRunState = {};
     replyParams.opts = { [REPLY_OPERATION_RUN_STATE]: runState };
@@ -418,11 +417,10 @@ describe("runReplyAgent runtime config", () => {
     const result = await runReplyAgent(replyParams);
 
     expect(result).toEqual({});
-    expect(resolveReplyOperationAgentTurn(runState)).toBe("cancelled");
     expect(executeAgentTurnMock).not.toHaveBeenCalled();
   });
 
-  it("records an aborted user agent turn as cancellation", async () => {
+  it("keeps an aborted user agent turn silent", async () => {
     const { replyParams } = createDirectRuntimeReplyParams();
     const runState: ReplyOperationRunState = {};
     replyParams.opts = { [REPLY_OPERATION_RUN_STATE]: runState };
@@ -432,9 +430,7 @@ describe("runReplyAgent runtime config", () => {
       outcome: { kind: "aborted", reason: "user" },
     });
 
-    await runReplyAgent(replyParams);
-
-    expect(resolveReplyOperationAgentTurn(runState)).toBe("cancelled");
+    await expect(runReplyAgent(replyParams)).resolves.toEqual({});
   });
 
   it("delivers known pre-run OAuth refresh failures instead of dropping the reply", async () => {
@@ -487,9 +483,8 @@ describe("runReplyAgent runtime config", () => {
 
   it.each([
     { source: "current prepared", revokeDuring: undefined, kept: true },
-    { source: "revoked during preflight", revokeDuring: "preflight", kept: false },
-    { source: "stopped before authority revocation", revokeDuring: "stop", kept: false },
-    { source: "superseded before authority revocation", revokeDuring: "superseded", kept: false },
+    { source: "stopped during preflight", revokeDuring: "stop", kept: false },
+    { source: "superseded during preflight", revokeDuring: "superseded", kept: false },
     { source: "refused original input", revokeDuring: "source", kept: false },
     { source: "original input refused by its hook", revokeDuring: "hook", kept: false },
   ] as const)(
@@ -542,7 +537,6 @@ describe("runReplyAgent runtime config", () => {
           gatewayAccessGrant: null,
           source: {},
           signal: revocation.signal,
-          assertCurrent: () => {},
         });
         resolveQueuedReplyExecutionConfigMock.mockResolvedValue({
           ...freshCfg,
@@ -553,13 +547,6 @@ describe("runReplyAgent runtime config", () => {
             expectDefined(params.replyOperation, "preflight reply operation").abortByUser();
           } else if (revokeDuring === "superseded") {
             expectDefined(params.replyOperation, "preflight reply operation").supersede();
-          }
-          if (
-            revokeDuring === "preflight" ||
-            revokeDuring === "stop" ||
-            revokeDuring === "superseded"
-          ) {
-            revocation.abort(new Error("operator access revoked"));
           }
           throw new Error("Preflight compaction required but failed: summarization_failed");
         });
@@ -576,9 +563,7 @@ describe("runReplyAgent runtime config", () => {
             text: expect.stringContaining("couldn't shorten it"),
           });
         }
-        expect(followupRun.operatorAuthority.signal?.aborted).toBe(
-          revokeDuring === "preflight" || revokeDuring === "stop" || revokeDuring === "superseded",
-        );
+        expect(followupRun.operatorAuthority.signal?.aborted).toBe(false);
         expect(executeAgentTurnMock).not.toHaveBeenCalled();
         const failedTurn = expect.objectContaining({
           role: "user",

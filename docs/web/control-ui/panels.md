@@ -207,6 +207,8 @@ To paste into an Agent browser tab or Browser dashboard, click the page's input 
 
 In the macOS app, the same panel also hosts **Mac tabs**, rendered natively by WebKit, alongside **Agent browser tabs** from the Gateway. Mac tabs are available without `browser.request`; Agent browser tabs retain the Gateway and operator-access requirements above. External links clicked in the dashboard open as Mac tabs in the chat side panel, or in the shell-level Browser dock on non-chat routes. While Settings is open, external links open in the default browser because the Browser panel is hidden. Mac tabs have a tab strip, URL bar, back/forward/reload/stop, open-in-default-browser, and close controls. Mac tabs show the page’s own icon. Mac tabs belong to the chat session that opened them: another session starts with its own empty Browser panel, and returning restores the original session’s tabs. The window retains those tabs until they are closed or the window ends. Opening the same link reuses its existing tab only within that session, including a retained original URL after a redirect. The non-chat Browser dock has its own tabs. Login cookies remain shared within the window. Selecting another tab while a link is opening keeps your selection when the open request completes.
 
+In the macOS dashboard, press **⌘T** to open a blank Mac tab in the Browser panel without leaving the conversation. This also works while another Mac tab has focus. In a regular web browser, **⌘T** keeps its usual behavior.
+
 Session-local Mac tabs require both the Mac app and Gateway-served Control UI to support session ownership. During staggered upgrades, older app/UI combinations keep their existing shared-tab behavior so browsing continues to work. Tabs created without session ownership remain window-shared until closed or the window ends; new tabs become session-local once both sides are updated.
 
 Outside the macOS app, enable **Open links in Control UI browser** under **Settings → Infrastructure → Browser** to route external HTTP(S) links into new Agent browser tabs in this panel. The browser-local preference is off by default and appears only while the panel is available. It is hidden in the macOS app because unmodified external dashboard links open as Mac tabs outside Settings. Older Control UI bundles that send legacy `inline` requests open the default browser. Same-origin links, links marked for download, Shift/Alt clicks, file/editor links, email and phone links, right-click actions, and explicit open-in-your-browser actions keep their existing behavior.
@@ -238,22 +240,23 @@ can contribute the same docked reader surface through the
 
 Click a GitHub issue, pull request, or commit link to read it in a browser-style
 tab beside the conversation. Each tab has a GitHub icon, a title, and a close
-control; the address bar and **Open on GitHub** link stay visible. Opening the
-same item from chat selects its existing tab. Links inside the reader and URLs
-entered in the address bar navigate the current tab, with independent Back and
-Forward history. The **+** button opens a new tab. Up to ten tabs stay in memory,
-including their loaded documents while you switch between them.
+control. Once an item loads, **Refresh** and **Open on GitHub** appear in the
+document header. A link to an item that already has a tab selects that tab, and
+links to other supported items inside the reader open in their own tab. Use
+**+** (or choose **Link reader** from the Chat side panel's **+** menu) to open
+an empty tab where you can enter a URL. Up to ten tabs stay in memory, keeping
+their loaded documents while you switch between them.
 
 Hold Ctrl or Cmd to suppress link hover previews while opening several links.
 Pressing either key also dismisses an open preview and cancels a pending one.
 Normal hover and keyboard-focus previews resume on the next interaction after release.
 
 Loaded reader documents and link previews stay visible while the same Gateway
-reconnects. The reader refreshes after reconnect without clearing its address
-draft. Changing Gateway or losing reader access clears the protected content.
+reconnects. The reader refreshes after reconnect. Changing Gateway or losing
+reader access clears the protected content.
 
 Opening or loading an item keeps keyboard focus where you are typing. The
-**+** button focuses the address bar so you can enter a new URL.
+Adding an empty tab to a reader that is already open focuses its URL field.
 
 The reader shows descriptions, issue and pull-request discussion comments,
 commit comments, published inline PR review comments with file/line and diff

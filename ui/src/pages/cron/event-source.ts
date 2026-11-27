@@ -1,3 +1,4 @@
+import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import {
   isJsonSchemaValueValid,
   type JsonSchemaValue,
@@ -116,7 +117,14 @@ export function createCronEventSource(notify: () => void) {
         await catalog();
       } catch (error) {
         if (current()) {
-          state.error = formatUiError(error);
+          const message = formatUiError(error);
+          state.error =
+            error instanceof GatewayProtocolRequestError && error.gatewayCode === "UNAVAILABLE"
+              ? t("cron.events.catalogUnavailable", {
+                  action: t("cron.events.refresh"),
+                  error: message,
+                })
+              : message;
         }
       }
     };

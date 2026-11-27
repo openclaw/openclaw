@@ -66,6 +66,18 @@ import type { SandboxContext } from "../../src/agents/sandbox/types.js";
  * interleaved A/B pairs with one sample per fresh synthetic clone. Acceptance:
  * first-create native copies 2 -> 1, correct B HEAD/contents, lower latency,
  * no >20% total idle+first+warm CPU/allocation regression beyond A/A variation.
+ * --startup-refresh managed|sandbox sends at retained A while the idle pass builds C.
+ * Inject one 30-second completion delay after a background native clone and fsync,
+ * modeling delayed storage completion without claiming kernel metadata pressure.
+ * Foreground IO is unchanged. Seed A/B first; retain real Git, native btrfs, Podman and
+ * startup owners. Prepare a separate untimed session before measurement so the source
+ * loader's compilation is not charged to the running Gateway's first send at a new tip.
+ * The measured session still has no projection. Compare two A/A controls and five
+ * serial A/B pairs per kind; report cold-source runs separately.
+ * Acceptance: exact A HEAD/index/source/dependencies, zero inline builds, the send
+ * completes during the storage delay, lower send latency without >20% total CPU or
+ * allocation regression. refresh-overlap-total owns total resource accounting;
+ * the nested send row includes concurrent work and must not be added to it.
  * --alternate-commit alternates source generations without requiring a refresh.
  * Acceptance: after seeding both commits, no new generation on a flip back;
  * report owner latency, CPU/allocation, and retained IDs with matched A/A controls.
@@ -81,6 +93,7 @@ const { values } = parseArgs({
     "base-advance": { type: "boolean" },
     "first-send-image": { type: "string" },
     "first-send-layout": { type: "boolean" },
+    "startup-refresh": { type: "string" },
     "expected-inline-builds": { type: "string", default: "0" },
     "expected-commit": { type: "string" },
     "alternate-policy": { type: "boolean" },
@@ -106,6 +119,9 @@ assert(
   !values["first-send-layout"] || values["first-send-image"],
   "--first-send-layout requires --first-send-image",
 );
+const startupRefresh = values["startup-refresh"];
+assert(!startupRefresh || ["managed", "sandbox"].includes(startupRefresh));
+assert(!startupRefresh || values["first-send-layout"]);
 const output = path.resolve(values.output);
 if (process.env.OPENCLAW_BENCH_BASELINE_DIR) {
   await import("./worker-retained-heap-preload.js");
@@ -479,14 +495,24 @@ try {
       }
       return { ...created, sessionKey };
     };
-    await create("seed");
+    const seed = await create("seed");
+    const seedContents = startupRefresh
+      ? await fs.readFile(path.join(seed.path, "advance.txt"), "utf8")
+      : "";
+    if (startupRefresh) {
+      await prewarmLocalWorkspaceTemplates({
+        getConfig: () => config,
+        signal: new AbortController().signal,
+      });
+    }
+    const loaderWarmup = startupRefresh ? await create("loader-warmup") : undefined;
     assert(
       (await listTemplatesAsync(process.env)).some(
         (entry) => entry.status === "ready" && entry.backend === "btrfs",
       ),
       "Base-advance proof requires a ready native btrfs template",
     );
-    const contents = "synthetic base advance\n";
+    let contents = "synthetic base advance\n";
     await fs.writeFile(path.join(repo, "advance.txt"), contents);
     const git = (...args: string[]) =>
       execFileSync("git", ["-C", repo, ...args], {
@@ -504,14 +530,33 @@ try {
       "advance",
     );
     git("push", "origin", "main");
-    const target = git("rev-parse", "HEAD");
+    let target = git("rev-parse", "HEAD");
     // Let fetch freshness expire without skewing the host against lease workers.
     await delay(31_000);
     let clones = 0;
+    let storageDelay: { entered: () => void; completed: boolean } | undefined;
     const copy = nativeWorktreeFilesystem.copy;
     nativeWorktreeFilesystem.copy = async (...args) => {
       clones++;
       await copy(...args);
+      if (
+        storageDelay &&
+        args[2].idleIoPriority &&
+        args[1].includes("/.templates/") &&
+        args[1].includes("/worktree-projections/") === (startupRefresh === "sandbox")
+      ) {
+        const waiting = storageDelay;
+        storageDelay = undefined;
+        const directory = await fs.open(args[1], "r");
+        try {
+          await directory.sync();
+        } finally {
+          await directory.close();
+        }
+        waiting.entered();
+        await delay(30_000);
+        waiting.completed = true;
+      }
     };
     const childCpu = () => {
       if (process.platform !== "linux") {
@@ -578,14 +623,166 @@ try {
       console.log(JSON.stringify(row));
       return { result, row };
     };
+    const prepareSend = (created: { path: string; sessionKey: string }) =>
+      withWorktreePreparationTiming("sandbox", async () => {
+        if (values["first-send-layout"]) {
+          const context = await resolveSandboxContext({
+            config,
+            agentId: "main",
+            sessionKey: created.sessionKey,
+            workspaceDir: created.path,
+          });
+          try {
+            assert(context?.workspaceSource === "managed-worktree");
+            assert(context.skillsWorkspaceDir);
+            preparedLayouts.push({
+              canonical: created.path,
+              projection: context.workspaceDir,
+              skillsWorkspaceDir: context.skillsWorkspaceDir,
+              eligibility: context.skillsEligibility,
+              skillNames: (context.skillUsagePaths ?? [])
+                .map((skill) => skill.skillName)
+                .toSorted(),
+            });
+            return context.workspaceDir;
+          } finally {
+            context?.[Symbol.dispose]?.();
+          }
+        }
+        using prepared = await prepareLocalSandboxWorkspace({
+          cfg: config,
+          agentId: "main",
+          sandbox,
+          sessionKey: created.sessionKey,
+          workspaceDir: created.path,
+        });
+        assert(prepared);
+        return prepared.workspaceDir;
+      });
     try {
-      await measure("idle", () =>
-        prewarmLocalWorkspaceTemplates({
+      if (loaderWarmup) {
+        await prepareSend(loaderWarmup);
+        await delay(10);
+      }
+      await measure("idle", async () => {
+        let observed = false;
+        await prewarmLocalWorkspaceTemplates({
           getConfig: () => config,
           signal: new AbortController().signal,
-        }),
-      );
-      for (const name of ["first", "warm"]) {
+          shouldDefer: startupRefresh
+            ? async () => {
+                if (!observed) {
+                  observed = true;
+                  const { resolveWorktreeBase } =
+                    await import("../../src/agents/worktrees/base-ref.js");
+                  await resolveWorktreeBase(repo);
+                }
+                return false;
+              }
+            : undefined,
+        });
+      });
+      if (startupRefresh) {
+        const { resolveWorktreeBase } = await import("../../src/agents/worktrees/base-ref.js");
+        const { prepareSessionWorktree } =
+          await import("../../src/gateway/session-worktree-preparation.js");
+        const { resolveSessionStorePathCore } = await import("../../src/config/sessions/paths.js");
+        await fs.writeFile(path.join(repo, "advance.txt"), "synthetic base C\n");
+        git(
+          "-c",
+          "user.name=Synthetic",
+          "-c",
+          "user.email=synthetic@example.invalid",
+          "commit",
+          "-am",
+          "advance again",
+        );
+        git("push", "origin", "main");
+        // Model an already-observed advance, preserving the real fetch freshness window.
+        await delay(31_000);
+        const entered = Promise.withResolvers<void>();
+        const delayed = { entered: () => entered.resolve(), completed: false };
+        storageDelay = delayed;
+        target = commit;
+        contents = seedContents;
+        let created = seed;
+        await measure("refresh-overlap-total", async () => {
+          let observed = false;
+          const refresh = prewarmLocalWorkspaceTemplates({
+            getConfig: () => config,
+            signal: new AbortController().signal,
+            shouldDefer: async () => {
+              if (!observed) {
+                observed = true;
+                await resolveWorktreeBase(repo);
+              }
+              return false;
+            },
+          });
+          await Promise.race([
+            entered.promise,
+            refresh.then(() => {
+              throw new Error("Refresh finished before storage delay");
+            }),
+          ]);
+          try {
+            const { result: projection, row } = await measure(
+              "first-send-during-refresh",
+              async () => {
+                if (startupRefresh === "managed") {
+                  const sessionKey = "agent:main:retained-startup";
+                  const prepared = await prepareSessionWorktree({
+                    cfg: config,
+                    target: {
+                      agentId: "main",
+                      key: sessionKey,
+                      storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+                    },
+                    workspace: repo,
+                    name: "retained-startup",
+                    checkoutCommit: commit,
+                    runSetupScript: false,
+                  });
+                  assert(prepared.ok, JSON.stringify(prepared));
+                  assert(prepared.value.worktree && prepared.value.sessionRoot);
+                  await replaceSessionEntry(
+                    { agentId: "main", sessionKey },
+                    {
+                      sessionId: "retained-startup",
+                      updatedAt: Date.now(),
+                      worktree: prepared.value.worktree,
+                    },
+                  );
+                  created = { ...seed, path: prepared.value.sessionRoot, sessionKey };
+                }
+                return await prepareSend(created);
+              },
+            );
+            assert.equal(row.templateBuilds, 0);
+            assert.equal(await requireGit(created.path, ["rev-parse", "HEAD"]), commit);
+            assert.equal(await requireGit(projection, ["rev-parse", "HEAD"]), commit);
+            assert.equal(await requireGit(projection, ["status", "--porcelain"]), "");
+            assert.equal(
+              await fs.readFile(path.join(projection, "advance.txt"), "utf8"),
+              seedContents,
+            );
+            assert.equal(
+              await fs.readFile(path.join(projection, "node_modules/source-dependent.txt"), "utf8"),
+              seedContents,
+            );
+            console.log(
+              JSON.stringify({
+                startupRefresh,
+                storageDelayMs: 30_000,
+                storageStillPendingAtSendCompletion: !delayed.completed,
+              }),
+            );
+          } finally {
+            await refresh;
+          }
+        });
+      }
+      for (const name of startupRefresh ? [] : ["first", "warm"]) {
         const { result: created, row: creation } = await measure(name, () => create(name));
         assert(
           created &&
@@ -600,41 +797,7 @@ try {
         if (values["first-send-image"]) {
           assert.equal(creation.nativeCopies, 1, "Create must only clone its warm template");
           const { result: projection, row: measured } = await measure(`${name}-send`, () =>
-            withWorktreePreparationTiming("sandbox", async () => {
-              if (values["first-send-layout"]) {
-                const context = await resolveSandboxContext({
-                  config,
-                  agentId: "main",
-                  sessionKey: created.sessionKey,
-                  workspaceDir: created.path,
-                });
-                try {
-                  assert(context?.workspaceSource === "managed-worktree");
-                  assert(context.skillsWorkspaceDir);
-                  preparedLayouts.push({
-                    canonical: created.path,
-                    projection: context.workspaceDir,
-                    skillsWorkspaceDir: context.skillsWorkspaceDir,
-                    eligibility: context.skillsEligibility,
-                    skillNames: (context.skillUsagePaths ?? [])
-                      .map((skill) => skill.skillName)
-                      .toSorted(),
-                  });
-                  return context.workspaceDir;
-                } finally {
-                  context?.[Symbol.dispose]?.();
-                }
-              }
-              using prepared = await prepareLocalSandboxWorkspace({
-                cfg: config,
-                agentId: "main",
-                sandbox,
-                sessionKey: created.sessionKey,
-                workspaceDir: created.path,
-              });
-              assert(prepared);
-              return prepared.workspaceDir;
-            }),
+            prepareSend(created),
           );
           assert.equal(await requireGit(projection, ["rev-parse", "HEAD"]), target);
           assert.equal(await requireGit(projection, ["status", "--porcelain"]), "");

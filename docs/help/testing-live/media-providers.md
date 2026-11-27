@@ -114,7 +114,7 @@ request. Plugin dependencies are expected to be present before runtime load.
     - `vydra` (buffer-backed local image input is not supported in this lane)
   - Provider-specific Vydra coverage:
     - `OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_VYDRA_VIDEO=1 pnpm test:live -- extensions/vydra/vydra.live.test.ts`
-    - That file runs `veo3` text-to-video plus a `kling` image-to-video lane that uses a remote image URL fixture by default (`OPENCLAW_LIVE_VYDRA_KLING_IMAGE_URL` to override).
+    - That file runs `veo3` text-to-video and `kling` motion control. Kling uses a public character image and a separate motion video. Override them with `OPENCLAW_LIVE_VYDRA_KLING_IMAGE_URL` and `OPENCLAW_LIVE_VYDRA_KLING_VIDEO_URL`. [Vydra fixture requirements](/providers/vydra).
   - Provider-specific xAI coverage:
     - `OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_XAI_VIDEO=1 pnpm test:live -- extensions/xai/xai.live.test.ts -t "classic Grok Imagine"`
     - The classic case generates a square local PNG first frame, omits geometry, requests a one-second image-to-video clip, polls to completion, and verifies the downloaded buffer.

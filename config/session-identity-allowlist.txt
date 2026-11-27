@@ -279,7 +279,6 @@ src/agents/bash-tools.exec-cron-grant.ts	2
 src/agents/bash-tools.exec-host-gateway.ts	1
 src/agents/bash-tools.exec-host-node-policy.ts	2
 src/agents/bash-tools.exec-host-shared.ts	3
-src/agents/bash-tools.exec-run.ts	1
 src/agents/btw-transcript.ts	6
 src/agents/cli-output-events.ts	4
 src/agents/cli-output-stream.ts	2
@@ -311,7 +310,7 @@ src/agents/command/post-run.ts	9
 src/agents/command/session-store.ts	8
 src/agents/command/session.ts	8
 src/agents/command/transcript-persistence.ts	4
-src/agents/cron-creator-authority-context.ts	38
+src/agents/cron-creator-authority-context.ts	31
 src/agents/embedded-agent-runner/cli-backend-dispatch-transcript.ts	3
 src/agents/embedded-agent-runner/cli-backend-dispatch.ts	3
 src/agents/embedded-agent-runner/compact.queued-execution.ts	8
@@ -425,7 +424,6 @@ src/agents/sessions/transcript-turn-error.ts	2
 src/agents/subagents/announce/subagent-announce-delivery-retry.ts	1
 src/agents/subagents/announce/subagent-announce-delivery.ts	2
 src/agents/subagents/announce/subagent-announce-descendant-wake.ts	3
-src/agents/subagents/announce/subagent-announce-dispatch.ts	1
 src/agents/subagents/announce/subagent-announce-handoff.ts	4
 src/agents/subagents/announce/subagent-announce-output.ts	2
 src/agents/subagents/announce/subagent-announce-result.ts	1
@@ -436,14 +434,14 @@ src/agents/subagents/completion/session-followup-completion.ts	21
 src/agents/subagents/completion/subagent-completion-admission.store.ts	17
 src/agents/subagents/completion/subagent-completion-admission.worker.ts	13
 src/agents/subagents/completion/subagent-completion-delivery.ts	6
-src/agents/subagents/completion/subagent-completion-mutation.kernel.ts	16
+src/agents/subagents/completion/subagent-completion-mutation.kernel.ts	15
 src/agents/subagents/registry/subagent-active-context.ts	2
 src/agents/subagents/registry/subagent-child-owner-match.ts	4
 src/agents/subagents/registry/subagent-control-kill-capture.ts	6
 src/agents/subagents/registry/subagent-control-kill-intent.ts	2
 src/agents/subagents/registry/subagent-control-kill-runtime.ts	2
 src/agents/subagents/registry/subagent-control-kill-scope.ts	3
-src/agents/subagents/registry/subagent-control-kill-settlement.ts	2
+src/agents/subagents/registry/subagent-control-kill-settlement.ts	1
 src/agents/subagents/registry/subagent-control-kill.ts	7
 src/agents/subagents/registry/subagent-control-scope.ts	4
 src/agents/subagents/registry/subagent-control-session.ts	6
@@ -456,9 +454,9 @@ src/agents/subagents/registry/subagent-registry-execution-cleanup.ts	10
 src/agents/subagents/registry/subagent-registry-helpers.ts	13
 src/agents/subagents/registry/subagent-registry-lifecycle-announce-cleanup.ts	5
 src/agents/subagents/registry/subagent-registry-lifecycle-bookkeeping.ts	1
-src/agents/subagents/registry/subagent-registry-lifecycle-cleanup.ts	6
-src/agents/subagents/registry/subagent-registry-lifecycle-delivery.ts	3
-src/agents/subagents/registry/subagent-registry-lifecycle-finalize-cleanup.ts	2
+src/agents/subagents/registry/subagent-registry-lifecycle-cleanup.ts	5
+src/agents/subagents/registry/subagent-registry-lifecycle-delivery.ts	2
+src/agents/subagents/registry/subagent-registry-lifecycle-finalize-cleanup.ts	1
 src/agents/subagents/registry/subagent-registry-lifecycle-persistence.ts	3
 src/agents/subagents/registry/subagent-registry-lifecycle-wake.ts	2
 src/agents/subagents/registry/subagent-registry-lifecycle.ts	5
@@ -478,7 +476,6 @@ src/agents/subagents/registry/subagent-registry-sweep-cleanup.ts	2
 src/agents/subagents/registry/subagent-registry-sweep-kill.ts	6
 src/agents/subagents/registry/subagent-registry-sweep-settle.ts	2
 src/agents/subagents/registry/subagent-registry-sweeper-retire.ts	7
-src/agents/subagents/registry/subagent-registry-sweeper.ts	6
 src/agents/subagents/registry/subagent-registry-typing.ts	1
 src/agents/subagents/registry/subagent-registry.mocks.shared.ts	1
 src/agents/subagents/registry/subagent-registry.ts	1
@@ -636,7 +633,6 @@ src/cli/gateway-cli/run-loop-startup-failure.ts	1
 src/cli/gateway-cli/systemd-activation.ts	2
 src/cli/local-state-owner.ts	1
 src/cli/update-cli/shared.ts	1
-src/cli/update-cli/status.ts	2
 src/cli/update-cli/update-command-admitted.ts	2
 src/cli/update-cli/update-command-cohort.ts	8
 src/cli/update-cli/update-command-convergence.ts	1
@@ -649,12 +645,10 @@ src/cli/update-cli/update-command-executor.ts	2
 src/cli/update-cli/update-command-git.ts	1
 src/cli/update-cli/update-command-migrate.ts	1
 src/cli/update-cli/update-command-migrated.ts	6
-src/cli/update-cli/update-command-recovery.ts	4
 src/cli/update-cli/update-command-resume.ts	2
-src/cli/update-cli/update-command-run.ts	4
+src/cli/update-cli/update-command-run.ts	2
 src/cli/update-cli/update-command-service-drain.ts	3
 src/cli/update-cli/update-command-terminal-record.ts	4
-src/cli/update-cli/update-plugin-cohort-settlement.ts	1
 src/cli/update-cli/update-repair-command.ts	2
 src/cli/update-cli/update-repair-service.ts	2
 src/commands/agents.commands.delete.ts	1
@@ -699,7 +693,6 @@ src/context-engine/delegate.ts	2
 src/context-engine/transcript-byte-limit.ts	2
 src/cron/active-jobs.ts	4
 src/cron/isolated-agent/run-prepare-runtime.ts	2
-src/cron/isolated-agent/run-prompt-executor.ts	1
 src/cron/isolated-agent/run-session-state.ts	2
 src/cron/isolated-agent/session-cleanup.ts	2
 src/cron/run-continuation-cleanup.ts	2
@@ -774,7 +767,7 @@ src/gateway/control-ui-session-prs-checks.ts	1
 src/gateway/control-ui-session-task-prs.ts	4
 src/gateway/conversation-route-ownership.ts	1
 src/gateway/conversation-turn.ts	1
-src/gateway/cron-creator-authority-grant.ts	13
+src/gateway/cron-creator-authority-grant.ts	12
 src/gateway/cron-stream-sandbox-authority.ts	4
 src/gateway/cron-stream-sandbox.ts	1
 src/gateway/dashboard-session-title.ts	6
@@ -792,7 +785,6 @@ src/gateway/github-publication-coordinator-methods.ts	5
 src/gateway/github-publication-defer.worker.ts	3
 src/gateway/github-publication-discovery.ts	4
 src/gateway/github-publication-git-index.ts	2
-src/gateway/github-publication-requester.ts	3
 src/gateway/github-publication-shared-read.kernel.ts	10
 src/gateway/github-publication-shared-read.ts	10
 src/gateway/github-publication-store.worker.ts	6
@@ -805,7 +797,7 @@ src/gateway/github-repository-publication-workspace.ts	1
 src/gateway/github-repository-publication.kernel.ts	2
 src/gateway/github-repository-publication.ts	7
 src/gateway/hooks-mapping.ts	1
-src/gateway/human-mention-policy.ts	4
+src/gateway/human-mention-policy.ts	3
 src/gateway/in-process-session-run.ts	5
 src/gateway/internal-source-reply-persistence.ts	21
 src/gateway/managed-image-attachments.ts	2
@@ -862,10 +854,9 @@ src/gateway/server-methods/artifacts-session-read.ts	4
 src/gateway/server-methods/chat-abort-authorization.ts	12
 src/gateway/server-methods/chat-abort-exact-run.ts	4
 src/gateway/server-methods/chat-abort-handler.ts	11
-src/gateway/server-methods/chat-abort-runtime.ts	2
 src/gateway/server-methods/chat-abort-session-plan.ts	10
 src/gateway/server-methods/chat-aborted-partial.ts	7
-src/gateway/server-methods/chat-history-handler.ts	6
+src/gateway/server-methods/chat-history-handler.ts	2
 src/gateway/server-methods/chat-history-recovery.ts	2
 src/gateway/server-methods/chat-history-session-read.ts	6
 src/gateway/server-methods/chat-inject.ts	4
@@ -959,7 +950,7 @@ src/gateway/server-methods/sessions-read.ts	6
 src/gateway/server-methods/sessions-rewind.ts	9
 src/gateway/server-methods/sessions-search-projected.ts	2
 src/gateway/server-methods/sessions-sharing-authority.ts	7
-src/gateway/server-methods/sessions-sharing.ts	15
+src/gateway/server-methods/sessions-sharing.ts	14
 src/gateway/server-methods/sessions-suggestions-access.ts	6
 src/gateway/server-methods/sessions-suggestions.ts	14
 src/gateway/server-methods/sessions-typing.ts	8
@@ -976,7 +967,7 @@ src/gateway/server-plugin-in-process-session-read.ts	2
 src/gateway/server-plugin-session-facts.ts	2
 src/gateway/server-plugin-subagent-runtime.ts	1
 src/gateway/server-plugins.ts	3
-src/gateway/server-restart-plugin-cohort.ts	4
+src/gateway/server-restart-plugin-cohort.ts	2
 src/gateway/server-restart-sentinel-agent-delivery.ts	8
 src/gateway/server-restart-sentinel-snapshot.ts	2
 src/gateway/server-restart-sentinel.ts	2
@@ -1035,7 +1026,7 @@ src/gateway/session-repository-materialization.ts	17
 src/gateway/session-repository-preparation.ts	1
 src/gateway/session-reset-incognito.ts	3
 src/gateway/session-reset-service.ts	15
-src/gateway/session-restart-resume.ts	11
+src/gateway/session-restart-resume.ts	7
 src/gateway/session-row-child-activity.ts	2
 src/gateway/session-row-child-visibility.ts	2
 src/gateway/session-row-membership-read.ts	2
@@ -1057,7 +1048,6 @@ src/gateway/session-row-provider-review.ts	2
 src/gateway/session-row-selection-facts.ts	2
 src/gateway/session-row-transcript-backfill.ts	2
 src/gateway/session-send-delivery.ts	4
-src/gateway/session-sharing-authorization-async.ts	2
 src/gateway/session-sharing-authorization.ts	2
 src/gateway/session-sharing-policy.ts	4
 src/gateway/session-sharing-preparation.ts	4
@@ -1066,7 +1056,6 @@ src/gateway/session-sharing-target-read.ts	4
 src/gateway/session-sharing.ts	5
 src/gateway/session-subagent-reactivation.ts	4
 src/gateway/session-subagent-resume.ts	14
-src/gateway/session-system-turn-authority.ts	2
 src/gateway/session-transcript-files.fs.ts	4
 src/gateway/session-transcript-memory-reader.ts	3
 src/gateway/session-transcript-read-kernel.ts	2
@@ -1074,13 +1063,11 @@ src/gateway/session-transcript-title-reader.worker.ts	4
 src/gateway/session-utils-read-lifetime.ts	4
 src/gateway/sessions-history-http.ts	8
 src/gateway/sessions-patch-admission.ts	2
-src/gateway/sessions-patch-display-metadata.ts	2
 src/gateway/sessions-resolve.ts	3
 src/gateway/subagent-completion-tool-handoff.ts	4
 src/gateway/talk/client-agent-consult.ts	8
 src/gateway/talk/client-agent-runtime.ts	3
 src/gateway/talk/client-gateway-control.ts	2
-src/gateway/talk/client-run-authority.ts	2
 src/gateway/talk/handlers/client-legacy-voice-bindings.ts	2
 src/gateway/talk/handlers/client.ts	2
 src/gateway/talk/handlers/voice.ts	4
@@ -1324,17 +1311,14 @@ src/infra/update-recovery-baseline-capture.ts	2
 src/infra/update-result-claim.ts	2
 src/infra/update-run-activity.ts	2
 src/infra/update-run-interruption-store.ts	2
-src/infra/update-run-ledger.ts	4
 src/infra/update-run-mutation.async.ts	2
 src/infra/update-run-mutation.worker.ts	4
 src/infra/update-run-read.kernel.ts	2
 src/infra/update-run-reconciliation.read.ts	2
-src/infra/update-run-recovery-admission.ts	4
 src/infra/update-run-recovery-schema.ts	13
 src/infra/update-run-recovery-store.ts	2
 src/infra/update-run-recovery.ts	6
 src/infra/update-run-status.ts	1
-src/infra/update-run-terminal-record.ts	2
 src/logging/diagnostic-owned-activity.ts	2
 src/logging/diagnostic-repeated-request-activity.ts	8
 src/logging/diagnostic-run-activity-state.ts	4
@@ -1389,7 +1373,7 @@ src/plugins/host-hook-steering.ts	1
 src/plugins/http-registry.ts	2
 src/plugins/install-runtime-batch.ts	2
 src/plugins/installed-plugin-index-source-snapshots.ts	1
-src/plugins/memory-audience.ts	8
+src/plugins/memory-audience.ts	2
 src/plugins/plugin-command-execution.ts	1
 src/plugins/plugin-native-namespace.ts	1
 src/plugins/registry-contributions.ts	1
@@ -1494,7 +1478,6 @@ src/state/openclaw-state-db-open.ts	1
 src/state/openclaw-state-db-task-delivery-recovery.ts	1
 src/state/openclaw-state-worker-context.ts	1
 src/state/session-repository-workspaces.kernel.ts	3
-src/state/state-upgrade-tree.ts	1
 src/state/user-github-connections.types.ts	2
 src/state/user-github-connections.worker.ts	2
 src/state/user-preferences-publication.ts	1
