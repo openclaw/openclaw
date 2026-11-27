@@ -174,7 +174,7 @@ export async function assertUpdatePluginCohortReportingAdmission(
   pluginCohort: PluginCohortRecoveryContinuation | undefined,
   settlementFailed: boolean,
 ): Promise<void> {
-  const env = params.ownedManagedUpdateEnv ?? params.opts.run?.env;
+  const env = params.ownedManagedUpdateEnv ?? params.opts.run?.env ?? process.env;
   // Keep the first target stable if selectors change during admission.
   const targetPath = resolveOpenClawStateSqlitePath(env);
   await withUpdateStateRead(
