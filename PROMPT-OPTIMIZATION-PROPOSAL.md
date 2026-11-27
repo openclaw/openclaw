@@ -21,6 +21,8 @@ OpenClaw spends model context on its own bookkeeping. Historical runtime-context
 
 The first limits accumulation; the second shrinks what remains. Preserve attribution, chronology, trust boundaries, tool permissions and checkpoint compatibility. No global removal of tool instructions or security policy is proposed.
 
+**The present work is more fundamental to context growth than our August owner/non-owner cache fix.** That earlier fix prevented avoidable cache invalidation when sender permissions changed. These two optimizations tackle unnecessary context accumulation on ordinary turns, even when the sender, permissions and tool catalog remain unchanged. A cache can be almost entirely warm and still contain thousands of redundant tokens occupying the context window. By preventing repeated snapshots from accumulating and shrinking the remaining metadata, we address both the size of the prompt and its rate of growth. The August fix is evidence of our track record; the broader context-management improvements are the main contribution here. Their potential scope is greater, although comparative total usage savings across workloads have not been measured.
+
 ## We had working solutions months ago
 
 This is not hindsight. On August 10, 2026, we submitted [upstream PR #121683](https://github.com/openclaw/openclaw/pull/121683), addressing the fact that owner/non-owner tool permissions changed the durable registered-tool schema and destabilized Codex thread reuse. Our solution separated durable advertised tools from actual per-turn execution authority.
@@ -45,7 +47,7 @@ The generic renamed transient-context package is locally tested but not independ
 
 ## In summary: we have solutions, not just suggestions
 
-In August, we demonstrated a working solution to owner/non-owner cache instability. Sixty-eight days later, upstream merged a fix built on the same architectural principle. Today, we are presenting two further complementary optimizations backed by live results.
+In August, we demonstrated a working solution to owner/non-owner cache instability. Sixty-eight days later, upstream merged a fix built on the same architectural principle. Today, we are presenting two complementary optimizations that go further: they address the growth and size of the context itself, rather than only cache invalidation triggered by changes in tool authority.
 
 We've been using the general transient-turn approach in our Discord deployments for months, with an observed approximately threefold improvement in usage efficiency across our own operational experience, rather than a controlled benchmark of these two latest changes.
 
