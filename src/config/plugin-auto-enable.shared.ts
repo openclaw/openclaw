@@ -55,36 +55,25 @@ function resolveAutoEnableProviderPluginIds(
   return Object.fromEntries(entries);
 }
 
-function isProviderConfigured(cfg: OpenClawConfig, providerId: string): boolean {
-  const normalized = normalizeProviderId(providerId);
-  const profiles = cfg.auth?.profiles;
-  if (
-    profiles &&
-    typeof profiles === "object" &&
-    Object.values(profiles).some(
-      (profile) => isRecord(profile) && normalizeProviderId(profile.provider ?? "") === normalized,
-    )
-  ) {
-    return true;
-  }
-
-  const providerConfig = cfg.models?.providers;
-  if (
-    providerConfig &&
-    typeof providerConfig === "object" &&
-    Object.keys(providerConfig).some((key) => normalizeProviderId(key) === normalized)
-  ) {
-    return true;
-  }
-
-  return collectConfiguredModelRefs(cfg, { includeChannelModelOverrides: false }).some(
-    ({ value: ref }) => {
-      const trimmed = ref.trim();
-      const slash = trimmed.indexOf("/");
-      const provider = slash > 0 ? normalizeProviderId(trimmed.slice(0, slash)) : null;
-      return Boolean(provider) && provider === normalized;
-    },
+function collectConfiguredProviderIds(cfg: OpenClawConfig, modelRefs: ReadonlySet<string>) {
+  const ids = new Set(
+    Object.keys(asOptionalObjectRecord(cfg.models?.providers) ?? {}).map(normalizeProviderId),
   );
+  const profiles = cfg.auth?.profiles;
+  if (profiles && typeof profiles === "object") {
+    for (const profile of Object.values(profiles)) {
+      if (isRecord(profile)) {
+        ids.add(normalizeProviderId(profile.provider ?? ""));
+      }
+    }
+  }
+  for (const ref of modelRefs) {
+    const slash = ref.indexOf("/");
+    if (slash > 0) {
+      ids.add(normalizeProviderId(ref.slice(0, slash)));
+    }
+  }
+  return ids;
 }
 
 function hasPluginOwnedToolConfig(cfg: OpenClawConfig, plugin: PluginManifestRecord): boolean {
@@ -323,20 +312,23 @@ export function resolveConfiguredPluginAutoEnableCandidates(
       : [];
   };
 
-  for (const [providerId, pluginId] of Object.entries(
-    resolveAutoEnableProviderPluginIds(params.registry),
-  )) {
-    if (isProviderConfigured(params.config, providerId)) {
-      changes.push({ pluginId, kind: "provider-auth-configured", providerId });
+  const modelRefs = new Set(
+    collectConfiguredModelRefs(params.config, { includeChannelModelOverrides: false }).map(
+      ({ value }) => value,
+    ),
+  );
+  const providerClaims = Object.entries(resolveAutoEnableProviderPluginIds(params.registry));
+  if (providerClaims.length > 0) {
+    const configuredProviders = collectConfiguredProviderIds(params.config, modelRefs);
+    for (const [providerId, pluginId] of providerClaims) {
+      if (configuredProviders.has(normalizeProviderId(providerId))) {
+        changes.push({ pluginId, kind: "provider-auth-configured", providerId });
+      }
     }
   }
 
   const configuredModelPluginIds = new Set<string>();
-  for (const modelRef of new Set(
-    collectConfiguredModelRefs(params.config, { includeChannelModelOverrides: false }).map(
-      ({ value }) => value,
-    ),
-  )) {
+  for (const modelRef of modelRefs) {
     const owningPluginIds = resolveOwningPluginIdsForModelRef({
       model: modelRef,
       config: params.config,

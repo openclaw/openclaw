@@ -536,7 +536,7 @@ export function loadPluginManifest(
     return fail("invalid plugin manifest agentSkillsDir: must be one folder name");
   }
 
-  const themesResult = normalizeManifestThemes(raw.themes, id, file.contents.toString("utf8"));
+  const themesResult = normalizeManifestThemes(raw.themes, id, file.contents);
   if (!themesResult.ok) {
     return fail(`invalid plugin manifest themes: ${themesResult.error}`);
   }

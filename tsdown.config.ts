@@ -586,6 +586,8 @@ function buildCoreDistEntries(pluginIds: readonly string[]): Record<string, stri
     "cli/daemon-cli": "src/cli/daemon-cli.ts",
     // Keep recorded post-swap imports of this binding out of the shared updater graph.
     "cli/update-cli/node-runner": "src/cli/update-cli/node-runner.ts",
+    // Preserve the staged finalization export imported by shipped updater chunks.
+    "cli/update-cli/update-command-finalize": "src/cli/update-cli/update-command-finalize.ts",
     // Keep long-lived lazy runtime boundaries on stable filenames so rebuilt
     // dist/ trees do not strand already-running gateways on stale hashed chunks.
     "agents/agent-bundle-mcp-runtime": "src/agents/agent-bundle-mcp-runtime.ts",
