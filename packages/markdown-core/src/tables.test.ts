@@ -87,6 +87,7 @@ describe("convertMarkdownTables", () => {
   it.each([
     ["pre**fix** 前*斜体：*后", "prefix 前斜体：后", ["斜体："]],
     ["pre**fix**前*斜体：*后", "prefix前斜体：后", ["斜体："]],
+    ["pre**fix**前*斜体：*后 tail", "prefix前斜体：后 tail", ["斜体："]],
     ["前*斜体：*后 x**a**_b_", "前斜体：后 xab", ["斜体：", "b"]],
     ["前*斜体：*后 x*old***a**_b_", "前斜体：后 xoldab", ["斜体：", "old", "b"]],
     ["x*old***a**_b_ 前*斜体：*后", "xoldab 前斜体：后", ["old", "b", "斜体："]],
@@ -117,16 +118,19 @@ describe("convertMarkdownTables", () => {
     );
   });
 
-  it("preserves a parenthesized URL immediately after intraword strong", () => {
-    const url = "https://example.com/a_b";
-    const rendered = convertMarkdownTables(
-      `| Name | Price |\n| --- | --- |\n| pre**fix**(${url}) | 4 |`,
-      "bullets",
-    );
-    expect(new MarkdownIt({ linkify: true }).render(rendered)).toContain(
-      `(<a href="${url}">${url}</a>)`,
-    );
-  });
+  it.each(["", " tail"])(
+    "preserves a parenthesized URL after intraword strong with suffix %j",
+    (suffix) => {
+      const url = "https://example.com/a_b";
+      const rendered = convertMarkdownTables(
+        `| Name | Price |\n| --- | --- |\n| pre**fix**(${url})${suffix} | 4 |`,
+        "bullets",
+      );
+      expect(new MarkdownIt({ linkify: true }).render(rendered)).toContain(
+        `(<a href="${url}">${url}</a>)${suffix}`,
+      );
+    },
+  );
 
   it("keeps both italic runs around intraword strong in the row label", () => {
     const rendered = convertMarkdownTables(

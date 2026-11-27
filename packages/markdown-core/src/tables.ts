@@ -161,67 +161,14 @@ function renderLabelRuns(runs: LabelRun[], compact: boolean): string {
   );
 }
 
-function renderRowLabel(markdown: string, parser: MarkdownItParser, env: Env): string {
-  const runs = labelRuns(markdown, parser, env, true);
-  const original = `**${markdown}**`;
-  if (matchesLabel(runs, original, parser, env)) {
-    return original;
-  }
-
-  const { slices, flattened } = rowLabelSlices(markdown, env);
+function renderRowLabelFromSlices(
+  slices: string[],
+  runs: LabelRun[],
+  parser: MarkdownItParser,
+  env: Env,
+): string {
   if (slices.length === 1) {
-    const fallback = `**${renderLabelRuns(runs, false)}**`;
-    if (flattened === undefined || flattened === markdown) {
-      return fallback;
-    }
-    const project = (value: string) =>
-      markdownToIRWithMeta(value, { linkify: true, autolink: true }).ir;
-    const semantic = (ir: ReturnType<typeof project>) => {
-      const spans = ir.styles
-        .filter((span) => span.style !== "bold")
-        .map(({ style, language, start, end }) => ({
-          key: JSON.stringify([style, language]),
-          start,
-          end,
-        }))
-        .toSorted((left, right) => {
-          if (left.key === right.key) {
-            return left.start - right.start;
-          }
-          return left.key < right.key ? -1 : 1;
-        });
-      const coverage: typeof spans = [];
-      for (const span of spans) {
-        const previous = coverage.at(-1);
-        if (previous && previous.key === span.key && span.start <= previous.end) {
-          previous.end = Math.max(previous.end, span.end);
-        } else {
-          coverage.push(span);
-        }
-      }
-      return JSON.stringify([
-        ir.text,
-        ir.links.map(({ start, end, href }) => [start, end, href]),
-        coverage,
-      ]);
-    };
-    const expected = semantic(project(markdown));
-    if (semantic(project(fallback)) === expected) {
-      return fallback;
-    }
-    const candidate = `__${flattened}__`;
-    if (matchesLabel(runs, candidate, parser, env)) {
-      const ir = project(candidate);
-      if (
-        semantic(ir) === expected &&
-        ir.styles.some(
-          (span) => span.style === "bold" && span.start === 0 && span.end === ir.text.length,
-        )
-      ) {
-        return candidate;
-      }
-    }
-    return fallback;
+    return `**${renderLabelRuns(runs, false)}**`;
   }
   const content = slices
     .map((slice) => {
@@ -244,6 +191,68 @@ function renderRowLabel(markdown: string, parser: MarkdownItParser, env: Env): s
   }
   const alternate = `__${content}__`;
   return matchesLabel(runs, alternate, parser, env) ? alternate : bold;
+}
+
+function renderRowLabel(markdown: string, parser: MarkdownItParser, env: Env): string {
+  const runs = labelRuns(markdown, parser, env, true);
+  const original = `**${markdown}**`;
+  if (matchesLabel(runs, original, parser, env)) {
+    return original;
+  }
+
+  const { slices, flattened } = rowLabelSlices(markdown, env);
+  const fallback = renderRowLabelFromSlices(slices, runs, parser, env);
+  if (flattened === undefined || flattened === markdown) {
+    return fallback;
+  }
+  const project = (value: string) =>
+    markdownToIRWithMeta(value, { linkify: true, autolink: true }).ir;
+  const semantic = (ir: ReturnType<typeof project>) => {
+    const spans = ir.styles
+      .filter((span) => span.style !== "bold")
+      .map(({ style, language, start, end }) => ({
+        key: JSON.stringify([style, language]),
+        start,
+        end,
+      }))
+      .toSorted((left, right) => {
+        if (left.key === right.key) {
+          return left.start - right.start;
+        }
+        return left.key < right.key ? -1 : 1;
+      });
+    const coverage: typeof spans = [];
+    for (const span of spans) {
+      const previous = coverage.at(-1);
+      if (previous && previous.key === span.key && span.start <= previous.end) {
+        previous.end = Math.max(previous.end, span.end);
+      } else {
+        coverage.push(span);
+      }
+    }
+    return JSON.stringify([
+      ir.text,
+      ir.links.map(({ start, end, href }) => [start, end, href]),
+      coverage,
+    ]);
+  };
+  const expected = semantic(project(markdown));
+  if (semantic(project(fallback)) === expected) {
+    return fallback;
+  }
+  const candidate = `__${flattened}__`;
+  if (matchesLabel(runs, candidate, parser, env)) {
+    const ir = project(candidate);
+    if (
+      semantic(ir) === expected &&
+      ir.styles.some(
+        (span) => span.style === "bold" && span.start === 0 && span.end === ir.text.length,
+      )
+    ) {
+      return candidate;
+    }
+  }
+  return fallback;
 }
 
 /** Convert only parsed table ranges; unrelated Markdown retains its original source bytes. */
