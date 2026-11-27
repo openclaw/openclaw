@@ -497,7 +497,7 @@ export async function prepareSessionStoreCandidatesInWorker(
   request: SessionStoreTargetPreparationRequest,
   pointRead?: true,
 ) {
-  const { request: prepared, inputBytes } = prepareSessionStoreTargetDiscovery(request);
+  const { request: prepared, inputBytes, replyEnv } = prepareSessionStoreTargetDiscovery(request);
   const lane = sessionStoreLane;
   clearDatabaseWorkerIdleRetirement(lane);
   lane.pending++;
@@ -522,6 +522,9 @@ export async function prepareSessionStoreCandidatesInWorker(
       result.kind !== "session-target-prepare"
     ) {
       throw new Error("Session discovery worker returned an unexpected result kind");
+    }
+    if (result.inventory && replyEnv) {
+      result.inventory.env = replyEnv;
     }
     return result;
   } finally {

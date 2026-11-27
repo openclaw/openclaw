@@ -14,7 +14,10 @@ import type {
   SessionStoreTargetReadRequest,
   SessionStoreTargetReadResult,
 } from "./session-store-target-inventory.js";
-import type { SessionStoreTargetInventoryRequest } from "./session-store-target-routing.js";
+import type {
+  CapturedSessionStoreTargetInventory,
+  SessionStoreTargetInventoryRequest,
+} from "./session-store-target-routing.js";
 import { getSessionTranscriptHydrationCaller } from "./session-transcript-hydration-caller.js";
 import { createSessionTranscriptHydrationDecoder } from "./session-transcript-hydration-decoder.js";
 import type { SessionTranscriptHydrationChunk } from "./session-transcript-hydration.types.js";
@@ -527,12 +530,31 @@ function sessionDiscoveryConfig({ agents, acp, session }: OpenClawConfig) {
   return { agents, acp, session };
 }
 
+function forPhysicalQualification<T extends CapturedSessionStoreTargetInventory>(captured: T) {
+  // Logical paths already came from the original home and profile. Only the resolved
+  // state directory is needed to recognize the process-owned incognito sentinel.
+  return { ...captured, env: { OPENCLAW_STATE_DIR: captured.env.OPENCLAW_STATE_DIR } };
+}
+
 /** Routing projection and byte accounting belong to the discovery request serializer. */
 export function prepareSessionStoreTargetDiscovery(request: SessionStoreTargetPreparationRequest) {
   const prepared =
     "config" in request ? { ...request, config: sessionDiscoveryConfig(request.config) } : request;
+  let wire = prepared;
+  if ("inventory" in prepared) {
+    wire = forPhysicalQualification(prepared);
+  } else if ("observePaths" in prepared && prepared.observePaths.inventory) {
+    wire = {
+      observePaths: {
+        ...prepared.observePaths,
+        inventory: forPhysicalQualification(prepared.observePaths.inventory),
+      },
+    };
+  }
   return {
-    request: prepared,
+    request: wire,
+    // Keep the caller's detached result and the original pending-byte admission charge.
+    replyEnv: "inventory" in prepared ? { ...prepared.env } : undefined,
     inputBytes:
       "inventory" in prepared
         ? measureSessionStoreTargetInventoryInputBytes(prepared)
