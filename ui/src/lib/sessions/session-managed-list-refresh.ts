@@ -30,6 +30,7 @@ import {
 import type { SessionListRefreshHost } from "./session-refresh-types.ts";
 import {
   buildSessionListParams,
+  initialSessionsTables,
   normalizeManagedSessionListQuery,
   requestSessionListWindow,
   sessionListQueryKey,
@@ -242,11 +243,19 @@ export function createSessionManagedListRefresh(
         ? managedIsCurrent(read)
         : [...read.primary].some((consumer) => consumer.presentation?.isCurrent() !== false);
     try {
-      const window = await requestSessionListWindow(
-        read.scope.client,
-        read.params,
-        () => readIsCurrent(read) && hasDemand(),
-      );
+      const isCurrent = () => readIsCurrent(read) && hasDemand();
+      const source = read.params.source;
+      const table =
+        source === "sidebar" || source === "agent-roster"
+          ? initialSessionsTables.get(read.scope.client)
+          : undefined;
+      if (table) {
+        await table.waitForTable();
+      }
+      const window =
+        table && !isCurrent()
+          ? null
+          : await requestSessionListWindow(read.scope.client, read.params, isCurrent);
       const response = window?.result ?? null;
       read.expiry = window?.expiry;
       if (readIsCurrent(read) && (read.managed || hasDemand())) {

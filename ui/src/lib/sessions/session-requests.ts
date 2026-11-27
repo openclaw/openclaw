@@ -225,13 +225,6 @@ export async function requestSessionListWindow(
   options?: GatewayProtocolRequestOptions,
 ): Promise<{ result: SessionsListResult; expiry?: SessionWindowExpiry } | null> {
   const { pageSize, ...params } = query;
-  const table = initialSessionsTables.get(client);
-  if (table && (params.source === "sidebar" || params.source === "agent-roster")) {
-    await table.waitForTable();
-    if (!isCurrent()) {
-      return null;
-    }
-  }
   let earliestExpiry = Infinity;
   let sampledAt = -Infinity;
   const window = (result: SessionsListResult | null) =>

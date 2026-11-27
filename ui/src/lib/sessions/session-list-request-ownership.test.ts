@@ -7,8 +7,8 @@ import {
   createSubscriptionHydrationHarness,
   sessionsResult,
 } from "./session-capability.test-support.ts";
-import { prioritizeInitialSessionsTable, requestSessionListParams } from "./session-requests.ts";
-import { listRequest, rosterFixture } from "./session-roster-refresh.test-support.ts";
+import { prioritizeInitialSessionsTable } from "./session-requests.ts";
+import { coordinated, listRequest, rosterFixture } from "./session-roster-refresh.test-support.ts";
 import type { SessionListScope, SessionListSnapshot } from "./session-types.ts";
 
 const query = {
@@ -257,21 +257,18 @@ it.each(["primary", "observed"] as const)(
 );
 
 it.each(["sidebar", "agent-roster"] as const)(
-  "retires a queued %s query if the selection changes before the initial table arrives",
+  "retires a queued %s query when the connection changes before the initial table arrives",
   async (source) => {
     vi.useFakeTimers();
-    try {
-      const request = vi.fn();
-      const client = createTestGatewayClient(request);
-      prioritizeInitialSessionsTable(client);
-      let current = true;
-      const sidebar = requestSessionListParams(client, { ...query, source }, () => current);
-      current = false;
-      await vi.advanceTimersByTimeAsync(350);
-      expect(await sidebar).toBeNull();
-      expect(request).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
+    const request = vi.fn(listRequest(() => sessionsResult([row])));
+    const { client, sessions, publish, settle } = coordinated(request);
+    prioritizeInitialSessionsTable(client);
+    const read = sessions.refreshList({ ...query, source });
+    settle(() => read);
+    await vi.advanceTimersByTimeAsync(0);
+    publish(false);
+    await vi.advanceTimersByTimeAsync(350);
+    await read;
+    expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toEqual([]);
   },
 );

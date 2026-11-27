@@ -409,17 +409,16 @@ it("holds the initial sidebar read on the ordinary Sessions connection", async (
   const sidebar = () =>
     socket.sent
       .map((frame) => JSON.parse(frame))
-      .filter(
-        ({ method, params }) =>
-          method === "sessions.list" && params.source === "sidebar" && params.limit === 51,
-      );
-  const pending = requestSessionListParams(client, { source: "sidebar", limit: 51 }, () => true);
+      .filter(({ method, params }) => method === "sessions.list" && params.source === "sidebar");
+  const pending = requestSessionListParams(
+    client,
+    { source: "sidebar", group: "example", limit: 100 },
+    () => true,
+  );
   void pending.catch(() => {});
   await vi.advanceTimersByTimeAsync(0);
-  expect(sidebar()).toHaveLength(0);
+  expect(sidebar().map(({ params }) => params.group)).toEqual(["example"]);
 
-  await vi.advanceTimersByTimeAsync(350);
-  expect(sidebar()).toHaveLength(1);
   socket.emitMessage({
     type: "res",
     id: sidebar()[0].id,
@@ -427,4 +426,6 @@ it("holds the initial sidebar read on the ordinary Sessions connection", async (
     payload: { count: 0, sessions: [] },
   });
   await expect(pending).resolves.toMatchObject({ sessions: [] });
+  await vi.advanceTimersByTimeAsync(350);
+  expect(sidebar().map(({ params }) => params.group)).toEqual(["example", undefined]);
 });
