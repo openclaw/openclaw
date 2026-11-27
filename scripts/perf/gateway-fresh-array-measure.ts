@@ -16,6 +16,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { SubagentRunReadRecord } from "../../src/agents/subagents/registry/subagent-registry-read.types.js";
+import type * as SwarmSummary from "../../src/agents/subagents/registry/subagent-session-swarm-summary.js";
 import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
@@ -34,10 +35,7 @@ const source = path.join(
   "src/agents/subagents/registry/subagent-session-swarm-summary.ts",
 );
 const sourceSha256 = createHash("sha256").update(readFileSync(source)).digest("hex");
-const {
-  buildSessionSwarmSummary,
-}: typeof import("../../src/agents/subagents/registry/subagent-session-swarm-summary.js") =
-  await import(pathToFileURL(source).href);
+const { buildSessionSwarmSummary }: typeof SwarmSummary = await import(pathToFileURL(source).href);
 const sessionKey = "agent:main:dashboard:synthetic";
 const groupCount = 40;
 const runsPerGroup = 250;
