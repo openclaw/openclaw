@@ -120,7 +120,6 @@ async function replacementFixture(options?: {
     agentId: "main",
     payload: { text: "Saved final answer" },
     info: { kind: "final" },
-    retryAmbiguousFinalText: true,
     ctxPayload: {
       CommandAuthorized: true,
       CommandTurn: { kind: "normal", source: "message", authorized: false },
@@ -295,7 +294,13 @@ describe("final delivery after plugin replacement", () => {
       );
       const expectCustody = (deliveryState: "prepared" | "delivered") =>
         expect(loadSessionEntry(locator)?.pendingFinalDelivery?.deliveries).toEqual([
-          { id: completion.deliveryId, state: deliveryState },
+          {
+            id: completion.deliveryId,
+            state: deliveryState,
+            ...(deliveryState === "delivered"
+              ? { receipt: { platformMessageId: "accepted-final", resultCount: 1 } }
+              : {}),
+          },
         ]);
       expectCustody("prepared");
       if (tool) {

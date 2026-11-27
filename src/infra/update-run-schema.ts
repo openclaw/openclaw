@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   UPDATE_NPM_ERROR_CODES,
+  UPDATE_RUN_CAUSES,
   UPDATE_RUN_DRIVER_LIMIT,
   UPDATE_RUN_PHASES,
   UPDATE_RUN_STATUSES,
@@ -14,8 +15,15 @@ import {
 } from "./update-doctor-config-schema.js";
 import { updateRecoveryCaptureStateSchema } from "./update-recovery-receipt-schema.js";
 import { updateRecoverySchema } from "./update-recovery.js";
-import { UpdateRunDriverSchema as driver } from "./update-run-driver-schema.js";
-import { UPDATE_RUN_TEXT_LIMIT, UPDATE_RUN_DIAGNOSTIC_LIMIT } from "./update-run-limits.js";
+import {
+  RecordedUpdateRunDriverSchema as recordedDriver,
+  UpdateRunDriverSchema as driver,
+} from "./update-run-driver-schema.js";
+import {
+  UPDATE_RUN_TEXT_LIMIT,
+  UPDATE_RUN_DIAGNOSTIC_LIMIT,
+  UPDATE_RUN_STEP_LIMIT,
+} from "./update-run-limits.js";
 import { UpdateSnapshotCapacitySchema } from "./update-snapshot-capacity-schema.js";
 
 export const UPDATE_ADMISSION_PROTOCOL = 1;
@@ -222,6 +230,31 @@ const UpdateRunStepSchema = z.object({
   }).optional(),
 });
 
+const packageReleaseIdentity = z.object({
+  path: z.string().max(1024),
+  identity: z
+    .string()
+    .regex(/^\d+:\d+$/u)
+    .max(64),
+  version: z.string().max(128).nullable(),
+  build: z.string().max(96).nullable(),
+});
+
+/** Bounded so three paths leave room in origin's byte budget beside the other receipts. */
+export const UpdateRunPackageReleaseSchema = z.object({
+  slot: z.string().max(1024),
+  from: packageReleaseIdentity,
+  to: packageReleaseIdentity,
+  adoption: z.literal(true).optional(),
+});
+
+/** What an in-place Git checkout activation made live, recorded before its plugin cohort. */
+const UpdateRunGitActivationSchema = z.object({
+  sha: z.string().regex(/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/u),
+  buildId: z.string().min(1).max(96),
+  previousBuildId: z.string().min(1).max(96).nullable(),
+});
+
 export const UpdateRunRecordSchema = z.object({
   runId: z.uuid(),
   createdAtMs: timestamp,
@@ -239,10 +272,31 @@ export const UpdateRunRecordSchema = z.object({
       .optional(),
     admission: admission.optional(),
     candidateAdmission: candidateAdmission.optional(),
+    releaseAdmission: z
+      .object({
+        owner: z.literal("candidate"),
+        candidateVersion: text,
+        verdict: z.enum(["admit", "refuse"]),
+        reason: text.optional(),
+        warnings: z.array(z.object({ code: text, message: text })).max(UPDATE_RUN_DIAGNOSTIC_LIMIT),
+      })
+      .optional(),
     updateRecoveryCapture: updateRecoveryCaptureStateSchema.optional(),
-    driver: driver.optional(),
+    driver: recordedDriver.optional(),
+    managedHandoff: z.object({ parent: driver, helper: driver }).optional(),
+    packageStage: z
+      .object({
+        prefix: z.string().max(4096),
+        packageRoot: z.string().max(4096),
+        identity: z.object({ dev: z.number(), ino: z.number(), birthtimeMs: z.number() }),
+      })
+      .optional(),
+    // Advice for the next run about a release link switch; always rechecked on disk.
+    packageRelease: UpdateRunPackageReleaseSchema.optional(),
+    // Lets the next update recognize a killed checkout update's build; rechecked on disk.
+    gitActivation: UpdateRunGitActivationSchema.optional(),
     previousDrivers: z
-      .array(driver)
+      .array(recordedDriver)
       .max(UPDATE_RUN_DRIVER_LIMIT - 1)
       .optional(),
     requester: z
@@ -254,6 +308,7 @@ export const UpdateRunRecordSchema = z.object({
       })
       .optional(),
     sessionKey: text.optional(),
+    noticeSurface: z.literal("app").optional(),
     deliveryContext: z
       .object({
         channel: text.optional(),
@@ -265,6 +320,7 @@ export const UpdateRunRecordSchema = z.object({
     campaignId: text.optional(),
     doctorHint: text.optional(),
     nextAction: text.optional(),
+    cause: z.enum(UPDATE_RUN_CAUSES).optional(),
   }),
   target: z.object({
     channel: text.optional(),
@@ -279,7 +335,7 @@ export const UpdateRunRecordSchema = z.object({
   }),
   before: version,
   after: version,
-  steps: z.array(UpdateRunStepSchema).max(128),
+  steps: z.array(UpdateRunStepSchema).max(UPDATE_RUN_STEP_LIMIT),
   verification: z.object({
     rollbackOutcome: UpdateRollbackOutcomeSchema.nullable().optional(),
     recovery: updateRecoverySchema.nullable().optional(),

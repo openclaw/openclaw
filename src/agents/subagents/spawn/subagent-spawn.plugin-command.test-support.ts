@@ -118,17 +118,15 @@ export function registerNativePluginCommandCases(options: NativePluginSpawnTestO
         }
         return { text: "review queued" };
       }
-      expect(
-        await native.collect({
-          ids: [expectDefined(childRunId, "accepted run")],
-          timeoutSeconds: 0,
-        }),
-      ).toMatchObject({
-        errors: [{ runId: childRunId, error: "not_owner" }],
-        completed: [],
-        pending: [],
+      // The chat owns its children, so a reset keeps the stopped child collectable.
+      const afterReset = await native.collect({
+        ids: [expectDefined(childRunId, "accepted run")],
+        timeoutSeconds: 0,
       });
-      return { text: "old child refused" };
+      expect(afterReset.errors ?? []).not.toContainEqual(
+        expect.objectContaining({ error: "not_owner" }),
+      );
+      return { text: "old child still owned" };
     });
     // The actual registrar reads the manifest record before loader publication.
     const api = builder.createApi(record, { config: bound.cfg });
@@ -174,11 +172,11 @@ export function registerNativePluginCommandCases(options: NativePluginSpawnTestO
         },
         getPreDispatchAbortSignal: () => undefined,
         getDispatchAbortSignal: () => activeSignal,
-        assertProgressCurrent: source.authority.assertCurrent,
+        assertProgressCurrent: () => activeSignal?.throwIfAborted(),
         assertCurrentBindingRoute: async () => {
-          source.authority.assertCurrent();
+          activeSignal?.throwIfAborted();
         },
-        turnAdoption: { assertCurrent: source.authority.assertCurrent, adopt },
+        turnAdoption: { assertCurrent: () => activeSignal?.throwIfAborted(), adopt },
       };
       const params = buildCommandTestParams("/pstack-review", bound.cfg, ctx, { workspaceDir });
       params.sessionKey = parentSessionKey;
@@ -298,7 +296,7 @@ export function registerNativePluginCommandCases(options: NativePluginSpawnTestO
           activeSignal = undefined;
           expect(await invoke()).toEqual({
             shouldContinue: false,
-            reply: { text: "old child refused" },
+            reply: { text: "old child still owned" },
           });
         },
       );

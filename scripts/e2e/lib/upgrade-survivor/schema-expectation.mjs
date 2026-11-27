@@ -4,11 +4,13 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
 import {
   readSqliteTranscriptPayload,
   sqliteTranscriptPayloadColumns,
   transcriptIdentity,
 } from "../../../lib/sqlite-transcript-payload.mjs";
+import { hashFile, sqliteFamily } from "./fixture-files.mjs";
 import { readDatabase } from "./observations.mjs";
 import { readSessionArchiveBytes } from "./session-archive-proof.mjs";
 
@@ -80,6 +82,184 @@ function readSchemas(stateDir) {
 
 function hashBytes(value) {
   return createHash("sha256").update(value).digest("hex");
+}
+
+function databaseFamily(databasePath) {
+  return sqliteFamily(databasePath, (file) => {
+    const stat = fs.lstatSync(file);
+    assert(stat.isFile(), "schema witness requires regular SQLite files");
+    return { dev: stat.dev, ino: stat.ino, size: stat.size, sha256: hashFile(file, 1024 * 1024) };
+  });
+}
+
+function observeDeferredSchema(databasePath) {
+  const before = databaseFamily(databasePath);
+  // One short snapshot binds header, ownership metadata and content. Close the
+  // reader before Doctor so the witness cannot prolong deferred publication.
+  const schema = readDatabase(databasePath, (database) => {
+    database.exec("BEGIN");
+    try {
+      const userVersion = database.prepare("PRAGMA user_version").get().user_version;
+      const metadata = database
+        .prepare("SELECT role, schema_version FROM schema_meta WHERE meta_key = 'primary'")
+        .get();
+      assert.equal(metadata?.role, "global", "schema witness lacks the shared-state owner");
+      return {
+        userVersion,
+        metadataVersion: metadata.schema_version,
+        contentVersion: readContentVersion(database, "state", userVersion),
+      };
+    } finally {
+      database.exec("ROLLBACK");
+    }
+  });
+  const after = databaseFamily(databasePath);
+  assert.deepEqual(after.main, before.main, "schema observer changed the primary database");
+  return { before, schema, after };
+}
+
+function prepareDoctorWitness(snapshotFile, captureFile) {
+  const snapshot = readJson(snapshotFile);
+  assert.equal(snapshot.baselineVersion, "2026.9.2", "schema witness requires the tagged baseline");
+  assert(/^[a-f0-9]{40}$/u.test(snapshot.sourceSha), "schema witness requires the selected source");
+  const databasePath = path.join(snapshot.stateDir, "state/openclaw.sqlite");
+  const observation = observeDeferredSchema(databasePath);
+  const baselinePublishedVersion = snapshot.databases.find(
+    (database) => database.relative === "state/openclaw.sqlite",
+  )?.userVersion;
+  const { userVersion, metadataVersion, contentVersion } = observation.schema;
+  // The published 2026.9.2 writer owns header 15; content follows the selected TGZ.
+  const status =
+    userVersion === 15 &&
+    userVersion === baselinePublishedVersion &&
+    userVersion === metadataVersion &&
+    userVersion < contentVersion &&
+    contentVersion === snapshot.candidateSchemaVersions.state
+      ? "observed"
+      : "not-observed";
+  fs.writeFileSync(
+    captureFile,
+    JSON.stringify({
+      status,
+      databasePath,
+      observation,
+      baselinePublishedVersion,
+      baselineVersion: snapshot.baselineVersion,
+      candidateVersion: snapshot.candidateVersion,
+      candidateSha256: snapshot.candidateSha256,
+      sourceSha: snapshot.sourceSha,
+      expectedContentVersion: snapshot.candidateSchemaVersions.state,
+    }) + "\n",
+    { mode: 0o600 },
+  );
+  return status;
+}
+
+function assertDoctorWitness(captureFile, exitCode, reportFile, proofFile) {
+  const capture = readJson(captureFile);
+  const proof = {
+    status: capture.status,
+    relativePath: "state/openclaw.sqlite",
+    baselineVersion: capture.baselineVersion,
+    candidateVersion: capture.candidateVersion,
+    candidateSha256: capture.candidateSha256,
+    sourceSha: capture.sourceSha,
+    expectedContentVersion: capture.expectedContentVersion,
+    baselinePublishedVersion: capture.baselinePublishedVersion,
+    before: capture.observation.schema,
+  };
+  if (capture.status === "observed") {
+    const after = observeDeferredSchema(capture.databasePath);
+    // Capture CLI effects before the second observer opens SQLite; observer
+    // sidecar changes are reported separately from the joined command's effects.
+    fs.writeFileSync(captureFile + ".after", JSON.stringify(after) + "\n", { mode: 0o600 });
+    assert.deepEqual(
+      after.before.main,
+      capture.observation.after.main,
+      "Doctor replaced or changed the primary database",
+    );
+    assert.deepEqual(
+      after.schema,
+      capture.observation.schema,
+      "Doctor changed the deferred schema tuple",
+    );
+    assert.equal(
+      Number(exitCode),
+      1,
+      "info-level Doctor must return its documented findings status",
+    );
+    assert(
+      fs.statSync(reportFile).size <= 256 * 1024,
+      "Doctor schema report exceeds its byte budget",
+    );
+    let report;
+    try {
+      report = readJson(reportFile);
+    } catch {
+      throw new Error("Doctor schema report is not complete JSON");
+    }
+    assert(
+      report.schemaVersion === 1 &&
+        report.ok === false &&
+        report.checksRun === 1 &&
+        Array.isArray(report.findings),
+      "Doctor schema report has an unexpected envelope",
+    );
+    assert(
+      report.findings.every(
+        (finding) =>
+          finding.checkId === "core/doctor/database-engine" && finding.severity === "info",
+      ),
+      "Doctor reported a non-informational finding",
+    );
+    const selected = report.findings.filter(
+      (finding) =>
+        finding.details?.family === "state" &&
+        typeof finding.path === "string" &&
+        path.resolve(finding.path) === path.resolve(capture.databasePath),
+    );
+    assert.equal(
+      selected.length,
+      1,
+      "Doctor must report the witnessed state database exactly once",
+    );
+    const details = selected[0].details;
+    assert.equal(
+      path.resolve(details.path),
+      path.resolve(capture.databasePath),
+      "Doctor details identify another database",
+    );
+    assert.deepEqual(details.issues, [], "Doctor did not admit the state store");
+    assert.equal(
+      details.schema.version,
+      capture.expectedContentVersion,
+      "Doctor reported the raw header instead of content",
+    );
+    assert.equal(
+      details.schema.expectedVersion,
+      capture.expectedContentVersion,
+      "Doctor expected another candidate schema",
+    );
+    assert.equal(details.schema.pending, 0, "Doctor reported pending state migrations");
+    Object.assign(proof, {
+      status: "passed",
+      after: after.schema,
+      doctorExitCode: Number(exitCode),
+      diagnosticVersion: details.schema.version,
+      pendingMigrations: details.schema.pending,
+      sameDatabase: true,
+      beforeObserverFamilyUnchanged: isDeepStrictEqual(
+        capture.observation.before,
+        capture.observation.after,
+      ),
+      cliFamilyUnchanged: isDeepStrictEqual(capture.observation.after, after.before),
+      afterObserverFamilyUnchanged: isDeepStrictEqual(after.before, after.after),
+    });
+  } else {
+    assert.equal(capture.status, "not-observed", "invalid schema observation status");
+  }
+  fs.writeFileSync(proofFile, JSON.stringify(proof) + "\n", { mode: 0o600 });
+  return proof.status;
 }
 
 function sessionIdentities(index) {
@@ -324,6 +504,8 @@ function prepare(baselineVersion, candidateTarball, stateDir, snapshotFile, conf
     baselineVersion,
     candidateVersion: manifest.version,
     candidateSchemaVersions: manifest.openclaw.schemaVersions,
+    candidateSha256: hashFile(candidateTarball.replace(/^file:/u, ""), 1024 * 1024),
+    sourceSha: process.env.OPENCLAW_DOCKER_E2E_SELECTED_SHA ?? null,
     stateDir,
     databases: readSchemas(stateDir),
     agents: readSeededAgents(stateDir, configFile, path.dirname(snapshotFile)),
@@ -367,14 +549,28 @@ function assertOutcome(snapshotFile, exitCode, installedVersion, acceptedOutcome
   return "success";
 }
 
+const [command, ...args] = process.argv.slice(2);
 try {
-  const [command, ...args] = process.argv.slice(2);
   assert(
-    (command === "prepare" && args.length === 5) || (command === "assert" && args.length === 5),
-    "usage: schema-expectation.mjs prepare <baseline-version> <candidate.tgz> <state-dir> <snapshot.json> <config.json> | assert <snapshot.json> <exit-code> <installed-version> <accepted-outcome> <after.json>",
+    (command === "prepare" && args.length === 5) ||
+      (command === "assert" && args.length === 5) ||
+      (command === "doctor-before" && args.length === 2) ||
+      (command === "doctor-after" && args.length === 4),
+    "usage: schema-expectation.mjs prepare <baseline-version> <candidate.tgz> <state-dir> <snapshot.json> <config.json> | assert <snapshot.json> <exit-code> <installed-version> <accepted-outcome> <after.json> | doctor-before <snapshot.json> <capture.json> | doctor-after <capture.json> <exit-code> <report.json> <proof.json>",
   );
-  process.stdout.write(`${command === "prepare" ? prepare(...args) : assertOutcome(...args)}\n`);
+  const action = {
+    prepare,
+    assert: assertOutcome,
+    "doctor-before": prepareDoctorWitness,
+    "doctor-after": assertDoctorWitness,
+  }[command];
+  process.stdout.write(`${action(...args)}\n`);
 } catch (error) {
-  process.stderr.write(`Schema expectation failed: ${error.message}\n`);
+  // Assertion diffs and filesystem errors can contain private paths and inode IDs.
+  const message =
+    command === "doctor-before" || command === "doctor-after"
+      ? "deferred-schema Doctor witness refused; inspect private run evidence"
+      : error.message;
+  process.stderr.write(`Schema expectation failed: ${message}\n`);
   process.exitCode = 1;
 }

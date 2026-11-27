@@ -1,5 +1,10 @@
 import { codexAppIdentityKey } from "./app-identity.js";
-import { defaultCodexAppInventoryCache, CodexAppInventoryCache } from "./app-inventory-cache.js";
+import {
+  defaultCodexAppInventoryCache,
+  CodexAppInventoryCache,
+  resolveCodexPluginThreadAppCacheKey,
+} from "./app-inventory-cache.js";
+import { readCodexAppRuntimeTools } from "./app-runtime-tools.js";
 import { fingerprintCodexPolicy } from "./config-policy-json.js";
 import {
   readCodexPluginConfig,
@@ -25,7 +30,6 @@ import {
   readCodexConfigForAppAdmission,
   readCodexThreadAdmissibleAccountApps,
   refreshCodexPluginAppInventory,
-  resolveCodexPluginThreadAppCacheKey,
   resolveCodexExplicitAppEnablement,
   isCodexPluginAppThreadAdmissible,
   shouldForceRefreshCodexNotReadyPluginApps,
@@ -91,6 +95,9 @@ export function buildCodexPluginThreadConfigInputFingerprint(params: {
   const { policy } = params;
   return fingerprintCodexPolicy({
     version: CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION,
+    ...(policy.enabled && policy.pluginPolicies.some((plugin) => plugin.enabled && plugin.readOnly)
+      ? { readOnlyToolIdentity: "mcp-resource" }
+      : {}),
     policy: {
       enabled: policy.enabled,
       allowAllPlugins: policy.allowAllPlugins,
@@ -156,7 +163,11 @@ export async function buildCodexPluginThreadConfig(
     policy.pluginPolicies.length > 0
       ? await readInventory(true)
       : { policy, records: [], diagnostics: [] };
-  const refreshInventory = async (options: { forceRefetch: boolean; reason: string }) => {
+  const refreshInventory = async (options: {
+    forceRefetch: boolean;
+    reason: string;
+    reuseRecentForcedRefresh?: boolean;
+  }) => {
     await refreshCodexPluginAppInventory(params, appCache, {
       ...options,
       targetAppIds: collectCodexPluginOwnedAppIds(inventory),
@@ -214,6 +225,9 @@ export async function buildCodexPluginThreadConfig(
   if (shouldForceRefreshCodexNotReadyPluginApps(params, policy, inventory)) {
     await refreshInventory({
       forceRefetch: true,
+      // A missing/inaccessible connector is not evidence that the last forced
+      // refresh failed. Bound repeated repair while retaining periodic recovery.
+      reuseRecentForcedRefresh: true,
       reason: "not_ready_plugin_apps",
     });
   }
@@ -231,6 +245,8 @@ export async function buildCodexPluginThreadConfig(
     ...activationDiagnostics,
     ...(accountAppsResult.diagnostic ? [accountAppsResult.diagnostic] : []),
   ];
+  let runtimeTools: ReturnType<typeof readCodexAppRuntimeTools> | undefined;
+  const getRuntimeTools = () => (runtimeTools ??= readReadOnlyRuntimeTools(params, diagnostics));
   const provisionalAppIds = new Set<string>();
   const { apps } = buildDisabledAppsConfigPatch();
   const policyApps: Record<string, CodexAppPolicyContextEntry> = {};
@@ -304,7 +320,13 @@ export async function buildCodexPluginThreadConfig(
       // enabled owner must not remove a read-only cap through iteration order.
       const readOnlyPolicy =
         record.policy.readOnly || policyApps[app.id]?.readOnlyTools !== undefined
-          ? { readOnlyTools: buildCodexAppReadOnlyTools(admissionConfig.config, app) }
+          ? {
+              readOnlyTools: buildCodexAppReadOnlyTools(
+                admissionConfig.config,
+                app,
+                (await getRuntimeTools()).get(app.id),
+              ),
+            }
           : {};
       apps[app.id] = buildEnabledAppConfig(
         { ...record.policy, ...readOnlyPolicy },
@@ -499,6 +521,21 @@ export function buildCodexPluginAppsConfigPatchFromPolicyContext(
   return Object.keys(policyContext.apps).length > 0 ? { apps } : disabledConfigPatch;
 }
 
+async function readReadOnlyRuntimeTools(
+  params: Parameters<typeof readCodexAppRuntimeTools>[0],
+  diagnostics: CodexPluginThreadConfigDiagnostic[],
+): ReturnType<typeof readCodexAppRuntimeTools> {
+  try {
+    return await readCodexAppRuntimeTools(params);
+  } catch {
+    diagnostics.push({
+      code: "app_not_ready",
+      message: "Could not verify hosted tool identities. Read-only apps have no enabled tools.",
+    });
+    return new Map();
+  }
+}
+
 /** Projects current ask overrides before a side thread replays its bound app policy. */
 export async function refreshCodexPluginAppApprovalPolicy(params: {
   policyContext: PluginAppPolicyContext;
@@ -522,11 +559,14 @@ export async function refreshCodexPluginAppApprovalPolicy(params: {
   // A persisted binding can be replayed before any normal turn after restart.
   // Fresh targeted inventory retains the current non-read-only tool scope.
   const readParams = { ...params, appCacheKey: "approval-policy-replay" };
-  const [inventory, admissionConfig] = await Promise.all([
+  const [inventory, admissionConfig, runtimeTools] = await Promise.all([
     targetAppIds.length > 0
       ? refreshCodexPluginAppInventory(readParams, new CodexAppInventoryCache(), { targetAppIds })
       : undefined,
     readCodexConfigForAppAdmission(readParams),
+    targetApps.some(([, policy]) => policy.readOnlyTools !== undefined)
+      ? readReadOnlyRuntimeTools(params, diagnostics)
+      : undefined,
   ]);
   const configPatch = disableUnlistedCodexApps(
     buildCodexPluginAppsConfigPatchFromPolicyContext(params.policyContext),
@@ -551,6 +591,7 @@ export async function refreshCodexPluginAppApprovalPolicy(params: {
               readOnlyTools: buildCodexAppReadOnlyTools(
                 admissionConfig.config,
                 app,
+                runtimeTools?.get(id),
                 policy.readOnlyTools,
               ),
             }

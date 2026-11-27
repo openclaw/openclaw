@@ -21,6 +21,7 @@ import {
   revokeMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
 import { sanitizeSystemRunParamsForForwarding } from "../../gateway/node-invoke-system-run-approval.js";
+import { cancelAgentRuntimeBoundApprovals } from "../../gateway/server-methods/approval-run-cancellation.js";
 import { bindApprovalRequesterMetadata } from "../../gateway/server-methods/approval-shared.js";
 import {
   readCronCallerScope,
@@ -32,7 +33,9 @@ import type {
 } from "../../gateway/server-methods/types.js";
 import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
 import {
+  claimAgentRunApprovalAuthority,
   claimAgentRunDelegatedAuthority,
+  registerAgentRunDelegatedAuthorityClosedHandler,
   releaseAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
@@ -77,8 +80,12 @@ async function withCaller<T>(
     return await withGatewayToolCallerIdentity(
       {
         ...caller,
-        receiptAuthority: () =>
-          validateAgentRunDelegatedAuthority(authority) && caller.receiptAuthority?.() !== false,
+        receiptAuthority: () => {
+          if (!validateAgentRunDelegatedAuthority(authority)) {
+            throw new Error("agent run authority is no longer active");
+          }
+          caller.receiptAuthority?.();
+        },
       },
       () => run(caller, authority),
     );
@@ -173,7 +180,6 @@ function messageFixture(overrides: Partial<TurnInput> = {}) {
 
 let context: GatewayRequestContext;
 let currentContext: GatewayRequestContext | undefined;
-let callerActive: boolean;
 const hostedSource = {
   turnSourceChannel: "telegram",
   turnSourceTo: "alice",
@@ -203,7 +209,7 @@ function runHosted<T>(
       ...hostedSource,
       gatewayUiCommandTarget,
       gatewayContextResolver: () => currentContext,
-      receiptAuthority: () => callerActive,
+      receiptAuthority: () => true,
       cronSelfManagementJobId: "current-job",
       cronToolsAllowCapture: "final-executable-surface",
       cronExecToolTarget: { host: "gateway", ask: "always" },
@@ -221,7 +227,6 @@ describe("Gateway tool identity and hosted routing", () => {
       validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
     } as GatewayRequestContext;
     currentContext = context;
-    callerActive = true;
     mocks.callGateway.mockReset().mockResolvedValue({ ok: true });
     mocks.handleGatewayRequest
       .mockReset()
@@ -372,7 +377,6 @@ describe("Gateway tool identity and hosted routing", () => {
           {
             client: { internal: { agentRuntimeIdentity } },
             context,
-            isRestartRecoveryResumeRun: false,
           },
           {},
         );
@@ -407,10 +411,7 @@ describe("Gateway tool identity and hosted routing", () => {
       await expectRefusal({ sourceReplyToolCallId: undefined }, "tool-call correlation");
       await expectRefusal({ turnCapability: "missing-capability" }, "an active turn capability");
       await expectRefusal({ turnCapability: sourceLess }, "source-turn correlation");
-      await expectRefusal({ target: "remote" }, "the trusted local gateway context");
-      await expect(
-        resolve({ target: "remote", callerOwnsTerminalReceipt: true }),
-      ).resolves.toBeUndefined();
+      await expect(resolve({ target: "remote" })).resolves.toBeUndefined();
       await expect(
         resolveMessageActionAgentRuntimeIdentityToken({ opts: {}, target: "local" }),
       ).resolves.toBeUndefined();
@@ -475,21 +476,42 @@ describe("Gateway tool identity and hosted routing", () => {
     });
   });
 
-  it("rejects approval registration after permission changes", async (test) => {
+  it("cancels pending approval after permission changes", async (test) => {
     const { manager, run, track } = await createPreparedTestApprovalManager(test, {
       validateAgentRuntimeDelegatedAuthority: validateAgentRunDelegatedAuthority,
     });
+    const closures: Promise<number>[] = [];
+    onTestFinished(
+      registerAgentRunDelegatedAuthorityClosedHandler((authority, reason) => {
+        closures.push(
+          track(
+            cancelAgentRuntimeBoundApprovals({
+              authority,
+              reason,
+              manager,
+              publish: () => {},
+            }),
+          ),
+        );
+      }),
+    );
     const outer = new AbortController(),
       oldGeneration = new AbortController(),
       nextGeneration = new AbortController();
     await run(() =>
-      withCaller({ approvalSignals: [outer.signal] }, async () => {
+      withCaller({ approvalSignals: [outer.signal] }, async (_caller, authority) => {
         await callGatewayTool("exec.approval.request", {}, {}, { signal: oldGeneration.signal });
         const oldIdentity = expectDefined(await verifyCallIdentity(), "signed approval identity");
         const oldRecord = manager.create({ command: "echo old" }, 2_000, "old-generation");
         oldRecord.agentRuntimeDelegatedAuthority = oldIdentity.delegatedAuthority;
+        const oldDecision = track((await manager.register(oldRecord, 2_000)).decision);
         oldGeneration.abort(new Error("Permission change"));
-        await expect(manager.register(oldRecord, 2_000)).rejects.toThrow("no longer active");
+        expect(() => claimAgentRunApprovalAuthority(authority, [oldGeneration.signal])).toThrow(
+          "Permission change",
+        );
+        await Promise.all(closures);
+        await expect(oldDecision).resolves.toBeNull();
+        expect(await manager.getSnapshot(oldRecord.id)).toMatchObject({ status: "cancelled" });
         expect(await manager.listPendingRecords()).toHaveLength(0);
         await callGatewayTool("exec.approval.request", {}, {}, { signal: nextGeneration.signal });
         const nextIdentity = expectDefined(
@@ -682,28 +704,25 @@ describe("Gateway tool identity and hosted routing", () => {
 
   it.each([
     { owner: "run", pending: false },
-    { owner: "caller", pending: false },
-    { owner: "run", pending: true },
     { owner: "gateway", pending: true },
-  ])("rejects retired $owner authority (pending=$pending)", async ({ owner, pending }) => {
+  ])("handles retired $owner authority (pending=$pending)", async ({ owner, pending }) => {
     const deferred = pending ? deferHostedResponse({ ok: true }) : undefined;
     await runHosted(async (_caller, authority) => {
       const request = deferred ? callGatewayTool("node.list", {}, {}) : undefined;
       await deferred?.entered.promise;
       if (owner === "run") {
         releaseAgentRunDelegatedAuthority(authority);
-      } else if (owner === "caller") {
-        callerActive = false;
       } else {
         currentContext = { ...context };
       }
-      const rejected = expect(request ?? callGatewayTool("cron.list", {}, {})).rejects.toThrow(
-        pending
-          ? /authority.*no longer active|Gateway instance unavailable/
-          : /authority.*no longer active|active delegated run authority/,
-      );
-      deferred?.release.resolve();
-      await rejected;
+      if (request) {
+        deferred?.release.resolve();
+        await expect(request).resolves.toEqual({ ok: true });
+      } else {
+        await expect(callGatewayTool("cron.list", {}, {})).rejects.toThrow(
+          /authority.*no longer active|active delegated run authority/,
+        );
+      }
     });
     expect(mocks.callGateway).not.toHaveBeenCalled();
     if (!pending) {

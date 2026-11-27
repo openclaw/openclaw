@@ -207,6 +207,7 @@ export const MODEL_COMPAT_CATALOG_RULES: LegacyConfigRule[] = [
     message:
       "Catalog-known model compat differs from the provider catalog and was preserved for review. Use a distinct custom route when the endpoint really has different capabilities.",
     match: (value) => hasModelCompatOverrides(value, "divergent"),
+    reviewOnly: true,
   },
 ];
 

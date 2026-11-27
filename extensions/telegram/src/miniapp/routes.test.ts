@@ -33,11 +33,14 @@ const issueDeviceBootstrapToken = vi.hoisted(() =>
 );
 const { publishedUrls, resolveTelegramMiniAppUrls } = vi.hoisted(() => {
   const urls = {
-    pageUrl: "https://host.tailnet.ts.net/__openclaw_tg_miniapp/",
-    controlUiUrl: "https://host.tailnet.ts.net/openclaw",
-    gatewayUrl: "wss://host.tailnet.ts.net",
+    pageUrl: "https://gateway.example/__openclaw_tg_miniapp/",
+    controlUiUrl: "https://gateway.example/openclaw",
+    gatewayUrl: "wss://gateway.example/openclaw",
   };
-  return { publishedUrls: urls, resolveTelegramMiniAppUrls: vi.fn(async () => urls) };
+  return {
+    publishedUrls: urls,
+    resolveTelegramMiniAppUrls: vi.fn<typeof import("./url.js").resolveTelegramMiniAppUrls>(),
+  };
 });
 
 vi.mock("openclaw/plugin-sdk/device-bootstrap", async (importOriginal) => ({
@@ -45,10 +48,11 @@ vi.mock("openclaw/plugin-sdk/device-bootstrap", async (importOriginal) => ({
   issueDeviceBootstrapToken,
 }));
 
-vi.mock("./url.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./url.js")>()),
-  resolveTelegramMiniAppUrls,
-}));
+vi.mock("./url.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./url.js")>();
+  resolveTelegramMiniAppUrls.mockImplementation(actual.resolveTelegramMiniAppUrls);
+  return { ...actual, resolveTelegramMiniAppUrls };
+});
 
 vi.mock("node:timers", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:timers")>();
@@ -234,7 +238,10 @@ function config(
 ): OpenClawConfig {
   return {
     channels: { telegram: { botToken, allowFrom, accounts } },
-    gateway: { tailscale: { mode: "funnel" } },
+    gateway: {
+      publicOrigin: "https://gateway.example",
+      controlUi: { basePath: "/openclaw" },
+    },
   };
 }
 
@@ -317,8 +324,8 @@ it("recovers wildcard-only Control UI access with an explicit owner ID and rejec
   expect(res.statusCode).toBe(200);
   expect(JSON.parse(res.body)).toEqual({
     bootstrapToken: "issued",
-    controlUiUrl: "https://host.tailnet.ts.net/openclaw",
-    gatewayUrl: "wss://host.tailnet.ts.net",
+    controlUiUrl: "https://gateway.example/openclaw",
+    gatewayUrl: "wss://gateway.example/openclaw",
   });
   expect(issueDeviceBootstrapToken.mock.calls[0]?.[0]?.profile).toEqual({
     roles: ["operator"],

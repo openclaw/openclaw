@@ -1,6 +1,4 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { hasTerminalControl } from "../../../../packages/terminal-core/src/safe-text.js";
-import { shellEscapeBackslash as shellQuote } from "../../../../src/shared/shell-quote.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 
 const CLOUD_WORKSPACE_CONFLICT_TRANSCRIPT_TYPE = "cloud-workspace-conflict";
@@ -85,32 +83,5 @@ export function visibleWorkspaceConflictPaths(conflict: WorkspaceResultConflict)
   return {
     paths,
     remaining: Math.max(0, workspaceConflictCount(conflict) - paths.length),
-  };
-}
-
-export function workspaceConflictGitCommands(
-  conflict: WorkspaceResultConflict,
-  requestedPath?: string,
-):
-  | {
-      inspect: string;
-      takeCloud: string;
-    }
-  | undefined {
-  const entryPath =
-    requestedPath === undefined
-      ? conflict.paths.find((candidate) => !hasTerminalControl(candidate))
-      : conflict.paths.includes(requestedPath) && !hasTerminalControl(requestedPath)
-        ? requestedPath
-        : undefined;
-  if (!entryPath) {
-    return undefined;
-  }
-  const stagedPath = shellQuote(`${conflict.stagedResultRef}:${entryPath}`);
-  const stagedRef = shellQuote(conflict.stagedResultRef);
-  const literalPathspec = shellQuote(`:(top,literal)${entryPath}`);
-  return {
-    inspect: `git show ${stagedPath}`,
-    takeCloud: `git checkout ${stagedRef} -- ${literalPathspec}`,
   };
 }

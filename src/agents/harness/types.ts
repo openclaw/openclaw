@@ -11,7 +11,7 @@ import type {
   ProviderModelRouteRuntimePolicy,
   ProviderRouteOverridePresence,
 } from "../../plugin-sdk/provider-model-types.js";
-import type { McpToolCatalog } from "../agent-bundle-mcp-types.js";
+import type { McpToolCatalog } from "../agent-bundle-mcp-catalog.types.js";
 import type { PreparedAgentRunTerminalReply } from "../agent-run-terminal-reply.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 import type { AgentHarnessRuntimeArtifactBinding } from "./runtime-artifact.types.js";
@@ -36,6 +36,8 @@ export type AgentHarnessSupportContext = {
   provider: string;
   modelId?: string;
   modelProvider?: {
+    /** Configured native command route admitted by the host; not a credential health probe. */
+    nativeCommandAuth?: { runtimeId: string };
     api?: string;
     baseUrl?: string;
     azureApiVersion?: string;
@@ -67,6 +69,17 @@ export type AgentHarnessSupport =
       /** Lossless host fallback when this harness cannot reproduce the prepared request. */
       fallbackRuntime?: "openclaw";
     };
+
+/** Activation facts and model-route rules for read-only selection without a plugin call. */
+export type AgentHarnessRouteSupport = {
+  runtimeId: string;
+  runtimeName: string;
+  providerIds: readonly string[];
+  routeOptionalProviderIds?: readonly string[];
+  unobservedModelProvider?: string;
+  acceptsNativeCommand?: boolean;
+  availability: AgentHarnessSupport;
+};
 
 type InternalEmbeddedRunAttemptParams =
   import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptParams;
@@ -164,8 +177,8 @@ type AgentHarnessSettledTurnFinalizationParams<
   settledAttempt: AgentHarnessCanonicalAttemptResult;
 };
 export type AgentHarnessSettledTurnFinalizationResult = {
-  /** The single completed assistant answer produced by the isolated operation. */
-  assistant: import("../../llm/types.js").AssistantMessage;
+  /** Completed answer projected from the isolated attempt; stored usage may lack a price. */
+  assistant: import("../../llm/types.js").AssistantHistoryMessage;
   preparedTerminalReply?: PreparedAgentRunTerminalReply;
   /** Normalized usage for the finalization model call only. */
   usage?: import("../usage.js").NormalizedUsage;
@@ -312,9 +325,32 @@ export type AgentHarnessSideQuestionParams = {
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
 };
+export type AgentHarnessSideQuestionRequest = {
+  prompt: string;
+  prependContext?: string;
+  appendContext?: string;
+  images?: Array<import("../../llm/types.js").ImageContent & { displayName?: string }>;
+};
+
 /** Current side-question contract for hosts that always provide closure-bound authority. */
 export type AgentHarnessSideQuestionParamsV2 = AgentHarnessSideQuestionParams & {
   hostCapabilities: AgentHarnessHostCapabilities;
+  /** Prepare sanitized context and exact auth for a fresh tool-free side completion.
+   * The host retains transcript/fork ownership; new calls fail after this side execution closes.
+   */
+  prepareIsolatedSideQuestion?: () => Promise<
+    | { kind: "handled"; result: AgentHarnessSideQuestionResult }
+    | {
+        kind: "completion";
+        params: AgentHarnessIsolatedCompletionParamsV2;
+        messages: import("../../llm/types.js").Message[];
+        images: import("../../llm/types.js").ImageContent[];
+        /** Apply the host's final request policy inside the completion deadline. */
+        prepareRequest: (
+          request: AgentHarnessSideQuestionRequest,
+        ) => Promise<AgentHarnessSideQuestionRequest>;
+      }
+  >;
   /** Non-authorizing native ownership captured before model and auth preparation. */
   expectedSessionRuntimeOwnership?: InternalEmbeddedRunAttemptParams["expectedSessionRuntimeOwnership"];
   /** Core-prepared search policy, bound to the side question's model and requester facts. */
@@ -480,6 +516,8 @@ export type AgentHarnessModelCatalogParams = {
   agentDir: string;
   workspaceDir: string;
   configuredModelRefs?: readonly ModelRef[];
+  /** Requested discovery scope; omitted for unscoped picker enumeration. */
+  providerIds?: readonly string[];
 };
 
 export type AgentHarnessModelCatalogResult =
@@ -542,6 +580,8 @@ type AgentHarnessContract<
   contextEngineHostCapabilities?: readonly import("../../context-engine/types.js").ContextEngineHostCapability[];
   /** Native context management ignores OpenClaw Responses compaction tuning, not request policy. */
   contextManagement?: "native";
+  /** Optional prepared facts for projections that carry no execution auth. */
+  routeSupport?: AgentHarnessRouteSupport;
   deliveryDefaults?: AgentHarnessDeliveryDefaults;
   /** Core must reject containment this runtime cannot implement before invoking it. */
   executionEnvironment?: "host-only";
@@ -722,6 +762,8 @@ type AgentHarnessContract<
     },
   ): Promise<import("../agent-bundle-mcp-types.js").SessionMcpRuntimeLease | undefined>;
 
+  /** Providers listed by this catalog, independent of configured execution routes. */
+  modelCatalogProviderIds?: readonly string[];
   /** Lists account-scoped models owned by this native runtime. */
   loadModelCatalog?(
     params: AgentHarnessModelCatalogParams,

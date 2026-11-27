@@ -168,7 +168,7 @@ export async function startOrResumeThread(
       threadId: string,
       ownerClientId = initialBoundClientId,
       assertCurrent?: () => void,
-      afterThreadWrite = false,
+      { afterThreadWrite = false, waitForBackgroundCleanup = false } = {},
     ) =>
       releaseCodexBoundLiveThread({
         client: params.client,
@@ -181,6 +181,7 @@ export async function startOrResumeThread(
         withCurrent: authority.withCurrent,
         signal: params.signal,
         onExitWaitCancelled: afterThreadWrite ? undefined : params.onPrewriteHandoffCancelled,
+        waitForBackgroundCleanup,
       });
     if (binding?.pendingSupervisionBranch) {
       if (params.params.providerReviewAcknowledgment) {
@@ -276,7 +277,7 @@ export async function startOrResumeThread(
         threadId: current.threadId,
         ...details,
       });
-      stageBindingReplacement("rotating a stale thread binding");
+      stageBindingReplacement(`changing ${changed}`);
     };
     const transientDelegationRestriction =
       params.params.delegationCapability === "report_only" ||
@@ -642,11 +643,13 @@ export async function startOrResumeThread(
             buildLoadedPluginThreadConfig,
             prepareResume: () => prepareCodexThreadResume(params, resumeBinding, requestContext),
             releaseRetainedThread: async (assertCurrent) => {
-              await releaseRetainedThread(
+              const released = await releaseRetainedThread(
                 resumeBinding.threadId,
                 resumeBinding.clientId,
                 assertCurrent,
+                { waitForBackgroundCleanup: true },
               );
+              return released && (!resumeBinding.clientId || resumeBinding.clientId === clientId);
             },
           });
           if (resumed) {
@@ -704,7 +707,7 @@ export async function startOrResumeThread(
         replacementPredecessor.threadId,
         replacementPredecessor.clientId,
         undefined,
-        true,
+        { afterThreadWrite: true },
       );
     }
     return publishCodexThreadInferenceBinding(params, started);

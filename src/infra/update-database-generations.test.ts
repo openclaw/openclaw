@@ -6,7 +6,9 @@ import { fileURLToPath } from "node:url";
 import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { hashFileDescriptorSync } from "./file-descriptor.js";
 import * as nodeSqlite from "./node-sqlite.js";
+import * as fileGeneration from "./sqlite-file-generation.js";
 import {
   createSqliteFileGenerationReader,
   readStableSqliteFileGeneration,
@@ -15,7 +17,15 @@ import {
 import * as readOnlyLocation from "./sqlite-readonly-location.js";
 import * as snapshotSource from "./sqlite-snapshot-source.js";
 import { readDatabaseIdentityBirthtime } from "./sqlite-worker-identity.js";
-import { readUpdatePhysicalDatabaseGenerations } from "./update-physical-database-generations.js";
+import {
+  readUnchangedUpdateDatabaseGeneration,
+  readUpdateDatabaseGeneration,
+  readUpdateDatabaseGenerationPair,
+} from "./update-database-generations.js";
+import {
+  readUpdatePhysicalDatabaseGenerations,
+  readUpdatePhysicalDatabaseObservation,
+} from "./update-physical-database-generations.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
@@ -69,7 +79,13 @@ function generationFixture(layout = "delete") {
   vi.spyOn(readOnlyLocation, "prepareSqliteReadOnlyLocationSyncInProcess").mockImplementation(
     (pathname, _staging, ...rest) => prepare(pathname, staging, ...rest),
   );
-  return { file, staging, prepare };
+  // These fixtures pin the private copy, which owns every refusal.
+  const immutableRead = vi
+    .spyOn(nodeSqlite, "resolveImmutableSqliteFileUri")
+    .mockImplementation(() => {
+      throw new Error("immutable read unavailable");
+    });
+  return { file, staging, prepare, immutableRead };
 }
 
 function expectedClosedGeneration(file: string): string {
@@ -87,6 +103,305 @@ function expectedClosedGeneration(file: string): string {
     )
     .digest("hex");
 }
+
+// Hook the final stable read so a real native connection changes the family mid-read.
+function duringGenerationRead(event: () => void) {
+  const read = fileGeneration.readStableSqliteFileGeneration;
+  vi.spyOn(fileGeneration, "readStableSqliteFileGeneration").mockImplementationOnce((...args) => {
+    const generation = read(...args);
+    event();
+    return generation;
+  });
+}
+
+function openReader(file: string) {
+  const database = new DatabaseSync(file, { readOnly: true });
+  database.prepare("SELECT count(*) FROM receipt").get();
+  return database;
+}
+
+it.for([
+  "different path",
+  "same bytes replacement",
+  "symlink to original",
+  "coarse-clock write",
+  "missing main with journal",
+  "torn SHM header",
+  "changing SHM header",
+  "appearing committed SHM header",
+  "linked empty WAL",
+  "linked journal",
+] as const)("does not reuse a successful SQLite receipt after %s", (change, { skip }) => {
+  if (
+    process.platform === "win32" &&
+    (change === "symlink to original" || change.startsWith("linked "))
+  ) {
+    skip(); // File symlinks require privileges on Windows.
+  }
+  const { file, staging } = generationFixture();
+  if (change === "coarse-clock write") {
+    const identity = fs.statSync(file, { bigint: true });
+    const timestamp = BigInt(Date.now() - 5_000) * 1_000_000n;
+    transformBigintStats((stat) => {
+      if (stat.dev === identity.dev && stat.ino === identity.ino) {
+        stat.mtimeNs = timestamp;
+        stat.ctimeNs = timestamp;
+      }
+      return stat;
+    });
+  }
+  const observation = readUpdatePhysicalDatabaseObservation(file);
+  expect(observation.generation.ok).toBe(true);
+  const receipt = observation.sqliteReceipt;
+  if (!receipt) {
+    throw new Error("Expected a successful SQLite receipt before changing its source");
+  }
+  expect(Object.isFrozen(receipt)).toBe(true);
+  expect(readUnchangedUpdateDatabaseGeneration(file, receipt)).toBe(receipt.generation);
+  let pathname = file;
+  if (change === "different path") {
+    pathname = `${file}.other`;
+    fs.copyFileSync(file, pathname);
+  } else if (change === "same bytes replacement" || change === "symlink to original") {
+    fs.renameSync(file, `${file}.original`);
+    if (change === "symlink to original") {
+      fs.symlinkSync(`${file}.original`, file);
+    } else {
+      fs.copyFileSync(`${file}.original`, file);
+    }
+  } else if (change === "coarse-clock write") {
+    fs.writeFileSync(file, replaceText(fs.readFileSync(file), "before", "after!"));
+  } else if (change === "missing main with journal") {
+    fs.unlinkSync(file);
+    fs.writeFileSync(`${file}-journal`, "retained recovery bytes");
+  } else if (change === "linked empty WAL" || change === "linked journal") {
+    fs.writeFileSync(`${file}.sidecar`, "");
+    fs.symlinkSync(`${file}.sidecar`, `${file}-${change === "linked journal" ? "journal" : "wal"}`);
+  } else {
+    const header = Buffer.alloc(96);
+    // Torn: copy 1 disagrees. Changing: both copies change. Appearing: iChange is nonzero.
+    const appearing = change === "appearing committed SHM header";
+    if (change === "torn SHM header") {
+      header[0] = 1;
+    } else {
+      duringGenerationRead(() => {
+        header[appearing ? 8 : 0] = header[appearing ? 56 : 48] = 1;
+        fs.writeFileSync(`${file}-shm`, header);
+      });
+    }
+    if (!appearing) {
+      fs.writeFileSync(`${file}-shm`, header);
+    }
+  }
+  if (["different path", "same bytes replacement", "coarse-clock write"].includes(change)) {
+    expect(readUnchangedUpdateDatabaseGeneration(pathname, receipt)).toBeUndefined();
+  } else {
+    expect(() => readUnchangedUpdateDatabaseGeneration(pathname, receipt)).toThrow(
+      change === "missing main with journal"
+        ? /absent but retained journal/
+        : change === "torn SHM header"
+          ? /WAL commit header is unavailable or changing/
+          : change === "changing SHM header" || change === "appearing committed SHM header"
+            ? /WAL commit publication could not be verified/
+            : /requires a regular file/,
+    );
+  }
+  expect(readOnlyLocation.prepareSqliteReadOnlyLocationSyncInProcess).toHaveBeenCalledTimes(1);
+  expect(fs.readdirSync(staging)).toEqual([]);
+});
+
+it.skipIf(process.platform === "win32").each(["", "-wal", "-journal"] as const)(
+  "rejects a linked family member %s installed during receipt verification",
+  (suffix) => {
+    const { file, staging } = generationFixture();
+    if (suffix) {
+      fs.writeFileSync(file + suffix, "");
+    }
+    const receipt = readUpdatePhysicalDatabaseObservation(file).sqliteReceipt;
+    if (!receipt) {
+      throw new Error("Expected a successful SQLite receipt before replacing its family");
+    }
+    duringGenerationRead(() => {
+      fs.renameSync(file + suffix, `${file + suffix}.original`);
+      fs.symlinkSync(`${file + suffix}.original`, file + suffix);
+    });
+    expect(() => readUnchangedUpdateDatabaseGeneration(file, receipt)).toThrow(
+      /requires a regular file/,
+    );
+    expect(readOnlyLocation.prepareSqliteReadOnlyLocationSyncInProcess).toHaveBeenCalledTimes(1);
+    expect(fs.readdirSync(staging)).toEqual([]);
+  },
+);
+
+it.each(["appears", "disappears", "is replaced"] as const)(
+  "reuses a receipt when only an empty WAL %s without a commit header change",
+  (change) => {
+    const { file, staging } = generationFixture(change === "appears" ? "wal-absent" : "wal-empty");
+    const receipt = readUpdatePhysicalDatabaseObservation(file).sqliteReceipt;
+    if (!receipt) {
+      throw new Error("Expected a successful SQLite receipt before the empty WAL transition");
+    }
+    if (change !== "appears") {
+      fs.renameSync(`${file}-wal`, `${file}.empty-wal`);
+    }
+    if (change !== "disappears") {
+      fs.writeFileSync(`${file}-wal`, "");
+    }
+    expect(readUnchangedUpdateDatabaseGeneration(file, receipt)).toBe(receipt.generation);
+    expect(readOnlyLocation.prepareSqliteReadOnlyLocationSyncInProcess).toHaveBeenCalledTimes(1);
+    expect(fs.readdirSync(staging)).toEqual([]);
+  },
+);
+
+it.each([
+  "a non-writing connection opens",
+  "a non-writing connection closes",
+  "the last writer closes after checkpointing its commit",
+] as const)("binds the post-read generation when %s during the read", (event) => {
+  const { file, staging } = generationFixture("wal-absent");
+  const opens = event === "a non-writing connection opens";
+  let connection: DatabaseSync | undefined;
+  if (!opens) {
+    connection = new DatabaseSync(file);
+    if (event === "a non-writing connection closes") {
+      connection.prepare("SELECT count(*) FROM receipt").get();
+    } else {
+      connection.exec("INSERT INTO receipt VALUES ('committed'); PRAGMA wal_checkpoint(TRUNCATE);");
+      // The index this close removes carries commit evidence, but the WAL holds no frames.
+      expect(fs.readFileSync(`${file}-shm`).readUInt32LE(8)).not.toBe(0);
+      expect(fs.statSync(`${file}-wal`).size).toBe(0);
+    }
+  }
+  const expected = expectedClosedGeneration(file);
+  const before = fs.readFileSync(file);
+  duringGenerationRead(() => {
+    if (connection) {
+      connection.close();
+      connection = undefined;
+    } else {
+      connection = openReader(file);
+    }
+  });
+  try {
+    const pair = readUpdateDatabaseGenerationPair([file]);
+    expect(fs.existsSync(`${file}-shm`)).toBe(opens);
+    // The opener's zero-commit index stays bound; its closed equivalent is the alternate.
+    expect(opens ? pair.emptyReaderAlternates[file] : pair.committed[file]).toBe(expected);
+    expect(readUpdateDatabaseGenerationPair([file]).committed).toEqual(pair.committed);
+  } finally {
+    connection?.close();
+  }
+  expect(fs.readFileSync(file)).toEqual(before);
+  expect(fs.readdirSync(staging)).toEqual([]);
+});
+
+// Readers that outlive the last writer retain its index, even after a checkpoint.
+function retainedWalFixture(checkpointed = false) {
+  const fixture = generationFixture("wal");
+  const writer = new DatabaseSync(fixture.file);
+  writer.exec("INSERT INTO receipt VALUES ('retained');");
+  const reader = openReader(fixture.file);
+  if (checkpointed) {
+    writer.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+  }
+  writer.close();
+  reader.close();
+  if (checkpointed) {
+    expect(fs.statSync(`${fixture.file}-wal`).size).toBe(0);
+  } else {
+    expect(fs.statSync(`${fixture.file}-wal`).size).toBeGreaterThan(32);
+  }
+  expect(fs.readFileSync(`${fixture.file}-shm`).readUInt32LE(8)).not.toBe(0);
+  return fixture;
+}
+
+it("hashes SQLite's lock bytes as the zeros SQLite leaves", () => {
+  // Windows enforces SQLite's EXCLUSIVE lock on these 512 bytes: reading them fails with EBUSY.
+  const lockBytes = 0x4000_0000;
+  const file = path.join(dirs.make("update-generation-lock-bytes-"), "state.sqlite");
+  fs.writeFileSync(file, "SQLite format 3\0");
+  fs.truncateSync(file, lockBytes + 4096);
+  const fd = fs.openSync(file, "r+");
+  try {
+    const fullRead = hashFileDescriptorSync(fd).sha256;
+    fs.writeSync(fd, Buffer.alloc(512, 0xff), 0, 512, lockBytes);
+    expect(createSqliteFileGenerationReader()(file).database.sha256).toBe(fullRead);
+  } finally {
+    fs.closeSync(fd);
+  }
+});
+
+it("binds a WAL index an outside reader rebuilds over retained frames during the read", () => {
+  const { file, staging } = retainedWalFixture();
+  const live = readUpdateDatabaseGenerationPair([file]);
+  let rebuilt: DatabaseSync | undefined;
+  duringGenerationRead(() => {
+    rebuilt = openReader(file);
+  });
+  try {
+    const pair = readUpdateDatabaseGenerationPair([file]);
+    expect(fs.readFileSync(`${file}-shm`).readUInt32LE(8)).toBe(0);
+    expect(pair.committed[file]).not.toBe(live.committed[file]);
+    expect(pair.committed[file]).toBe(live.rebuiltIndexAlternates[file]);
+    expect(readUpdateDatabaseGenerationPair([file]).committed).toEqual(pair.committed);
+  } finally {
+    rebuilt?.close();
+  }
+  expect(fs.readdirSync(staging)).toEqual([]);
+});
+
+it.each([false, true])(
+  "refuses a writer committing during the read (checkpointed=%s)",
+  (checkpointed) => {
+    const { file, staging } = checkpointed
+      ? retainedWalFixture(true)
+      : generationFixture("wal-absent");
+    const writer = new DatabaseSync(file);
+    let reader: DatabaseSync | undefined;
+    if (checkpointed) {
+      expect(fs.readFileSync(`${file}-shm`).readUInt32LE(8)).not.toBe(0);
+    }
+    try {
+      duringGenerationRead(() => {
+        writer.exec("INSERT INTO receipt VALUES ('during')");
+        if (checkpointed) {
+          writer.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+          writer.close();
+          reader = openReader(file);
+        }
+      });
+      expect(() => readUpdateDatabaseGenerationPair([file])).toThrow(
+        checkpointed
+          ? /SQLite (?:file generation changed while reading|WAL commit publication could not be verified)/
+          : /SQLite file generation changed while reading/,
+      );
+    } finally {
+      reader?.close();
+      if (writer.isOpen) {
+        writer.close();
+      }
+    }
+    expect(fs.readdirSync(staging)).toEqual([]);
+  },
+);
+
+it("reuses a receipt when a reader opens without committing during verification", () => {
+  const { file, staging } = generationFixture("wal-absent");
+  const receipt = readUpdatePhysicalDatabaseObservation(file).sqliteReceipt;
+  if (!receipt) {
+    throw new Error("Expected a successful SQLite receipt before a reader opens");
+  }
+  let reader: DatabaseSync | undefined;
+  duringGenerationRead(() => {
+    reader = openReader(file);
+  });
+  try {
+    expect(readUnchangedUpdateDatabaseGeneration(file, receipt)).toBe(receipt.generation);
+  } finally {
+    reader?.close();
+  }
+  expect(fs.readdirSync(staging)).toEqual([]);
+});
 
 it.each(["auto", "off"] as const)(
   "retains exact closed generations and source bytes with native copying %s",
@@ -169,7 +484,7 @@ it("refuses a malformed engine anchor from the captured image and cleans up", as
   const database = new DatabaseSync(file);
   database.exec(
     "CREATE TABLE openclaw_engine_anchor (store_id TEXT, engine TEXT, schema TEXT);" +
-      "INSERT INTO openclaw_engine_anchor VALUES ('test-store', 'postgres', 'invalid-schema');",
+      "INSERT INTO openclaw_engine_anchor VALUES ('test-store', 'postgres', 'invalid.schema');",
   );
   database.close();
   const before = fs.readFileSync(file);
@@ -503,4 +818,43 @@ it("captures opened file identity when Windows pathname stats report unknown IDs
     dev: expected.dev,
     ino: expected.ino,
   });
+});
+
+it.each(["delete", "wal-absent", "wal-empty"])(
+  "reads a drained %s family without a copy or a change to its source",
+  async (layout) => {
+    const { file, immutableRead } = generationFixture(layout);
+    const copy = vi.mocked(readOnlyLocation.prepareSqliteReadOnlyLocationSyncInProcess);
+    const pinned = await readUpdatePhysicalDatabaseGenerations([file]);
+    expect(copy).toHaveBeenCalledOnce();
+    const family = () =>
+      ["", "-wal", "-journal", "-shm"].map((suffix) => {
+        const stat = fs.statSync(file + suffix, { bigint: true, throwIfNoEntry: false });
+        return stat && [stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs];
+      });
+    const before = family();
+    immutableRead.mockRestore();
+    copy.mockClear();
+    expect(await readUpdatePhysicalDatabaseGenerations([file])).toEqual(pinned);
+    expect(copy).not.toHaveBeenCalled();
+    expect(family()).toEqual(before);
+  },
+);
+
+it("refuses a write that lands during a drained read", () => {
+  const { file, immutableRead } = generationFixture();
+  immutableRead.mockRestore();
+  const copy = vi.mocked(readOnlyLocation.prepareSqliteReadOnlyLocationSyncInProcess);
+  let wrote = false;
+  expect(() =>
+    readUpdateDatabaseGeneration(file, () => {
+      if (!wrote) {
+        wrote = true;
+        using writer = new DatabaseSync(file);
+        writer.exec("INSERT INTO receipt VALUES ('raced');");
+      }
+    }),
+  ).toThrow(/snapshot hash mismatch/);
+  expect(wrote).toBe(true);
+  expect(copy).toHaveBeenCalledOnce();
 });

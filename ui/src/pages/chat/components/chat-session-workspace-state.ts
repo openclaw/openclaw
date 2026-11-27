@@ -1,5 +1,5 @@
+import type { ArtifactsListResult } from "../../../../../packages/gateway-protocol/src/schema/artifacts.js";
 import { createChangeListeners } from "../../../../../src/shared/listeners.js";
-import type { SessionWorkspaceListResult } from "../../../api/types.ts";
 import { showConfirmChoiceDialog } from "../../../components/confirm-dialog.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
@@ -165,9 +165,12 @@ export function loadSessionWorkspaceArtifacts(
   const client = state.client;
   const request = (async () => {
     try {
-      const result = await client.request<{
-        artifacts?: SessionWorkspaceListResult["artifacts"];
-      } | null>("artifacts.list", {
+      const atRequest = new WeakSet(
+        !messageRole
+          ? state.chatMessages?.filter((m): m is object => m !== null && typeof m === "object")
+          : undefined,
+      );
+      const result = await client.request<ArtifactsListResult | null>("artifacts.list", {
         sessionKey: workspace.sessionKey,
         agentId: workspace.agentId,
         ...(messageRole ? { messageRole } : {}),
@@ -177,6 +180,9 @@ export function loadSessionWorkspaceArtifacts(
         return;
       }
       artifacts.items = result?.artifacts ?? [];
+      artifacts.attachments = result?.attachments
+        ? { ...result.attachments, atRequest }
+        : undefined;
       artifacts.loaded = true;
       artifacts.resolved = true;
       if (!messageRole && workspace.list) {
@@ -290,20 +296,27 @@ export function captureSessionWorkspaceNavigation(
   };
 }
 
-/** The tabs owner calls this without changing preview identity or reader contents. */
-function restoreSessionWorkspaceNavigation(
-  state: SessionWorkspaceHost,
+function applySessionWorkspaceNavigation(
+  workspace: SessionWorkspaceState,
   navigation: SessionWorkspaceNavigation,
 ) {
-  const workspace = getSessionWorkspace(state);
   clearWorkspaceTimer(workspace);
   const { browserPath, browserSearch, filter, ...tree } = navigation;
   workspace.browserPath = browserPath;
   workspace.browserSearch = browserSearch;
   workspace.filter = filter;
   workspace.tree = { ...tree, expandedPaths: [...tree.expandedPaths] };
+}
+
+/** The tabs owner calls this without changing preview identity or reader contents. */
+function restoreSessionWorkspaceNavigation(
+  state: SessionWorkspaceHost,
+  navigation: SessionWorkspaceNavigation,
+) {
+  const workspace = getSessionWorkspace(state);
+  applySessionWorkspaceNavigation(workspace, navigation);
   loadSessionWorkspace(state, workspace);
-  for (const path of tree.expandedPaths) {
+  for (const path of navigation.expandedPaths) {
     void loadSessionWorkspaceDirectory(state, path);
   }
   sessionWorkspaceForHost(state).publish();
@@ -406,6 +419,7 @@ export function refreshSessionWorkspaceState(
       void loadSessionWorkspaceArtifacts(state, true, role === "assistant" ? role : undefined);
     }
   }
+  workspace.fileLinksRevision = (workspace.fileLinksRevision ?? 0) + 1;
   workspace.directories = Object.create(null);
   directoryLoads.delete(workspace);
   fileLoads.delete(workspace);
@@ -456,9 +470,15 @@ export function openSessionWorkspacePreview(
       workspace.catalogNavigation = captureSessionWorkspaceNavigation(workspace);
     }
   }
-  if (workspace.activePreviewId === null && content.kind !== "mcp-app") {
+  // Apps leave the catalog in place, but must keep an existing return snapshot current.
+  if (
+    workspace.activePreviewId === null &&
+    (content.kind !== "mcp-app" || workspace.catalogNavigation)
+  ) {
     workspace.catalogNavigation = captureSessionWorkspaceNavigation(workspace);
-    workspace.tree!.treeVisible = false;
+    if (content.kind !== "mcp-app") {
+      workspace.tree!.treeVisible = false;
+    }
   }
   let preview = workspace.previews.find(
     (entry) =>
@@ -563,6 +583,14 @@ function closeSessionWorkspacePreview(state: SessionWorkspaceHost, id: string) {
 export function clearSessionWorkspacePreviews(state: SessionWorkspaceHost) {
   const workspace = state.sessionWorkspaceState;
   if (workspace) {
+    if (workspace.activePreviewId !== null) {
+      workspace.activeId = null;
+      if (workspace.catalogNavigation) {
+        applySessionWorkspaceNavigation(workspace, workspace.catalogNavigation);
+        // Hidden panes retire readers now; Files admits its catalog read on presentation.
+        workspace.pendingReload = true;
+      }
+    }
     workspace.pendingPreview = undefined;
     workspace.previews = [];
     workspace.activePreviewId = null;
@@ -637,7 +665,8 @@ export async function requestCloseSessionWorkspacePreview(
     } else {
       try {
         const choice = await showConfirmChoiceDialog({
-          message: t("chat.sidePanel.closeFileChanges", { file: preview.label }),
+          title: t("chat.sidePanel.closeFileChanges", { file: preview.label }),
+          message: t("chat.detailPanel.discardBody"),
           confirmLabel: t("common.save"),
           alternativeLabel: t("chat.detailPanel.discard"),
           cancelLabel: t("common.cancel"),
@@ -656,7 +685,7 @@ export async function requestCloseSessionWorkspacePreview(
       } catch (error) {
         if (current()) {
           reveal();
-          showToast({ message: formatUiError(error) });
+          showToast({ severity: "error", message: formatUiError(error) });
         }
         return false;
       }

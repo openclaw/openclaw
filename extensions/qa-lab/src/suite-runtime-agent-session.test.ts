@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { closeQaRuntimeStores } from "openclaw/plugin-sdk/qa-runtime";
+import { closeQaRuntimeStores, wrapPromptDataBlock } from "openclaw/plugin-sdk/qa-runtime";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -18,12 +18,10 @@ import { appendSqliteSessionTranscriptEventForTest } from "openclaw/plugin-sdk/s
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { nestedToolActivityFixture } from "../test/nested-tool-activity-fixture.js";
 import {
-  createSession,
-  readEffectiveTools,
   readRawQaSessionStore as readStore,
+  readSubagentHandoffReply,
   readSessionTranscriptSummary as readSummary,
   readSessionToolActivity as readActivity,
-  readSkillStatus,
   seedQaSessionEntries,
   seedQaSessionTranscript as seedTranscript,
 } from "./suite-runtime-agent-session.js";
@@ -60,7 +58,6 @@ describe("qa suite runtime agent session helpers", () => {
   beforeEach(async () => {
     tempRoot = await makeTempDir("qa-session-");
     setRuntimeConfigSnapshot({});
-    gatewayCall.mockReset();
   });
 
   const qaPath = (...parts: string[]) => path.join(tempRoot, "state", "agents", "qa", ...parts);
@@ -93,6 +90,66 @@ describe("qa suite runtime agent session helpers", () => {
       read: (options?: Parameters<typeof readSummary>[2]) => readSummary(env, sessionKey, options),
     };
   }
+
+  it("credits the active handoff turn across metadata, but not a side append", async () => {
+    const { sessionKey, append } = await makeTranscript();
+    const appendEvent = (event: Record<string, unknown>) =>
+      appendSqliteSessionTranscriptEventForTest({ ...identityFor("session", sessionKey), event });
+    const childKey = "agent:qa:subagent:child";
+    const childReply = "Child complete.";
+    const request = await append({ role: "user", content: "Delegate a task." });
+    const settlement = await append({
+      role: "user",
+      content:
+        "status: ok\n" +
+        wrapPromptDataBlock({ label: "Child result", text: childReply, encoding: "verbatim" }),
+      provenance: {
+        kind: "inter_session",
+        sourceChannel: "internal",
+        sourceTool: "subagent_settle",
+        sourceSessionKey: childKey,
+      },
+    });
+    assert(request && settlement);
+    await appendEvent({
+      type: "custom_message",
+      id: "context",
+      parentId: settlement.messageId,
+      customType: "openclaw.runtime-context",
+      content: "Runtime context for the child.",
+      display: false,
+    });
+    await appendEvent({ type: "custom", id: "prompt", parentId: "context", customType: "fixture" });
+    const reply = {
+      role: "assistant",
+      content: `Delegated task:\nCheck fixture.\nResult:\n${childReply}\nEvidence:\nDone.`,
+    };
+    const readReply = (id: string) =>
+      readSubagentHandoffReply(env, sessionKey, childKey, childReply, [
+        { ...reply, __openclaw: { id } },
+      ]);
+    const report = await append(reply);
+    assert(report);
+    await expect(readReply(report.messageId)).resolves.toBe(reply.content);
+
+    await appendEvent({
+      type: "leaf",
+      id: "navigate",
+      parentId: report.messageId,
+      targetId: request.messageId,
+    });
+    await append({ role: "user", content: "Start another task." });
+    await appendEvent({
+      type: "custom",
+      id: "side-note",
+      parentId: settlement.messageId,
+      appendMode: "side",
+      customType: "fixture",
+    });
+    const otherReport = await append(reply);
+    assert(otherReport);
+    await expect(readReply(otherReport.messageId)).resolves.toBeUndefined();
+  });
 
   function toolCall(id: string, name: string, args: Record<string, unknown> = {}) {
     return { type: "toolCall", id, name, arguments: args };
@@ -164,36 +221,6 @@ describe("qa suite runtime agent session helpers", () => {
       timestamp,
     };
   }
-
-  it.each(["sessions.create", "skills.status"] as const)(
-    "reads %s with its default arguments and normalized result",
-    async (method) => {
-      const session = method === "sessions.create";
-      gatewayCall.mockResolvedValueOnce(
-        session ? { key: "  session-1  " } : { skills: [{ name: "alpha", eligible: true }] },
-      );
-      await expect(
-        session ? createSession(env, "Test Session") : readSkillStatus(env),
-      ).resolves.toEqual(session ? "session-1" : [{ name: "alpha", eligible: true }]);
-      expect(gatewayCall).toHaveBeenNthCalledWith(
-        1,
-        method,
-        session ? { label: "Test Session" } : { agentId: "qa" },
-        expect.objectContaining({ timeoutMs: session ? 60_000 : 45_000 }),
-      );
-    },
-  );
-
-  it("reads effective tool ids once and drops blanks", async () => {
-    gatewayCall.mockResolvedValueOnce({
-      groups: [
-        { tools: [{ id: "alpha" }, { id: " beta " }] },
-        { tools: [{ id: "alpha" }, { id: "" }, {}] },
-      ],
-    });
-
-    await expect(readEffectiveTools(env, "session-1")).resolves.toEqual(new Set(["alpha", "beta"]));
-  });
 
   it("seeds QA session metadata and transcript messages in SQLite", async () => {
     const sessionId = "seeded-session";
@@ -503,7 +530,7 @@ describe("qa suite runtime agent session helpers", () => {
     await transcript.appendMany([
       ...pending("checkpoint-1", "await qa_restart_wait(); return 'CHECKPOINT-1';"),
       toolResult("checkpoint-1-wait", "wait", { status: "completed" }),
-      ...pending("audit", "return await catalog.search('qa_restart_unsafe_probe');"),
+      ...pending("audit", "return await catalog.search('read');"),
     ]);
 
     await expect(readPending("CHECKPOINT-1")).resolves.toMatchObject({

@@ -1,10 +1,7 @@
-import { copyFileSync, renameSync, symlinkSync } from "node:fs";
-import path from "node:path";
-import { expect, it as baseIt, vi } from "vitest";
+import { copyFileSync, renameSync } from "node:fs";
+import { expect, it as baseIt } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "../infra/node-sqlite.js";
-import { readSqliteDatabaseCleanClose as isClean } from "../infra/sqlite-database-admission.js";
-import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { runSqliteSchemaReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
 import {
   admitSqliteSchema,
@@ -22,23 +19,24 @@ import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { persistAgentSchemaMetadata as persistMetadata } from "./openclaw-agent-db-metadata-write.js";
 import { readExistingAgentSchemaMeta as readMetadata } from "./openclaw-agent-db-metadata.js";
 import { openOpenClawAgentDatabaseReadOnly as openReader } from "./openclaw-agent-db-readonly-open.js";
-import { listOpenClawRegisteredAgentDatabases as registeredAgents } from "./openclaw-agent-db-registry.js";
+import { readRegisteredAgentDatabases } from "./openclaw-agent-db-registry-listing.js";
+import {
+  listOpenClawRegisteredAgentDatabases as registeredAgents,
+  registerOpenClawAgentDatabase,
+} from "./openclaw-agent-db-registry.js";
 import { ensureOpenClawAgentDatabaseSchema as ensureAgentSchema } from "./openclaw-agent-db-schema.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync as closeAgent,
   openOpenClawAgentDatabase as openAgent,
 } from "./openclaw-agent-db.js";
 import { readOpenClawDatabaseQuarantineFailure as quarantineFailure } from "./openclaw-quarantine-store.js";
-import {
-  OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-  openOpenClawStateDatabase as openState,
-} from "./openclaw-state-db.js";
 import { resolveQuarantineStorePath } from "./openclaw-state-db.paths.js";
 
 const metadataSchema = `CREATE TABLE schema_meta (
   meta_key TEXT PRIMARY KEY, role TEXT, schema_version INTEGER,
   agent_id TEXT, app_version TEXT, created_at INTEGER, updated_at INTEGER
 )`;
+const agentOwner = { agentId: "main", role: "agent" };
 
 const it = baseIt.extend<{ state: OpenClawTestState }>({
   state: async ({ task: _task }, use) => withOpenClawTestState({ scenario: "minimal" }, use),
@@ -59,7 +57,7 @@ function observeReads() {
 
 function expectCachedMetadata(database: Parameters<typeof readMetadata>[0], schemaVersion: number) {
   using observed = observeReads();
-  expect(readMetadata(database)).toEqual({ agentId: "main", role: "agent", schemaVersion });
+  expect(readMetadata(database)).toEqual({ ...agentOwner, schemaVersion });
   expect(observed.queries).toEqual([]);
 }
 
@@ -91,7 +89,7 @@ it.for(["transaction", "implicit snapshot"] as const)(
       });
       {
         using observed = observeReads();
-        expect(readMetadata(reader)).toEqual({ agentId: "main", role: "agent", schemaVersion: 1 });
+        expect(readMetadata(reader)).toEqual({ ...agentOwner, schemaVersion: 1 });
         // Only the explicit schema cursor proves its catalog before the sibling DDL.
         expect(observed.queries).toHaveLength(snapshot === "transaction" ? 4 : 0);
       }
@@ -117,7 +115,7 @@ it.for(["drop", "recreate"] as const)(
     writer.exec(`PRAGMA user_version=1; ${metadataSchema}`);
     admitSqliteSchema(writer);
     persistMetadata(writer, "main", 1);
-    expect(readMetadata(writer)).toEqual({ agentId: "main", role: "agent", schemaVersion: 1 });
+    expect(readMetadata(writer)).toEqual({ ...agentOwner, schemaVersion: 1 });
     writer.exec(
       change === "drop" ? "DROP TABLE schema_meta" : `DROP TABLE schema_meta; ${metadataSchema}`,
     );
@@ -132,45 +130,6 @@ it.for(["drop", "recreate"] as const)(
     }
   },
 );
-
-it("reuses live agent admission and its seal after writer idle retirement", async ({
-  state: { env },
-}) => {
-  const options = { agentId: "main", env };
-  const shared = openState({ env });
-  using registry = openNodeSqliteDatabase(shared.path, { readOnly: true });
-  admitSqliteSchema(registry);
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  try {
-    const first = openAgent(options);
-    const firstNative = first.db;
-    expect(firstNative.prepare("PRAGMA busy_timeout").get()).toEqual({
-      timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-    });
-    using quarantine = openNodeSqliteDatabase(resolveQuarantineStorePath(env), { readOnly: true });
-    admitQuarantine(quarantine, first.path, env);
-    expect(isClean(first.path)).toBe(false);
-    using observation = observeReads();
-    const reader = openReader(options);
-    expect(reader.found).toBe(true);
-    if (reader.found) {
-      reader.database.close();
-    }
-    expect(validationStatements(observation.queries)).toEqual([]);
-    vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
-    expect(firstNative.isOpen).toBe(false);
-    expect(isClean(first.path)).toBe(true);
-    const reopened = openAgent(options);
-    expect(reopened.db === firstNative).toBe(false);
-    expect(reopened.db.isOpen).toBe(true);
-    expect(reopened.db.prepare("PRAGMA busy_timeout").get()).toEqual({
-      timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-    });
-    expect(validationStatements(observation.queries)).toEqual([]);
-  } finally {
-    vi.useRealTimers();
-  }
-});
 
 it("reuses closed-writer ownership for read-only admission until tracked schema changes", async ({
   state: { env },
@@ -236,11 +195,13 @@ it("validates a replacement agent file even when the pathname was admitted", asy
   const replacement = `${first.path}.replacement`;
   copyFileSync(first.path, replacement);
   const raw = new (requireNodeSqlite().DatabaseSync)(replacement);
-  raw.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1}`);
+  raw.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1};
+    UPDATE schema_meta SET schema_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1},
+      app_version = '2026.10.8' WHERE meta_key = 'primary'`);
   raw.close();
   renameSync(replacement, first.path);
   using observation = observeReads();
-  expect(() => openReader(options)).toThrow(/newer schema version/iu);
+  expect(() => openReader(options)).toThrow(/OpenClaw 2026\.10\.8;.*doctor --fix/isu);
   expect(validationStatements(observation.queries).length).toBeGreaterThan(0);
 });
 
@@ -282,21 +243,111 @@ it.for(["tracked", "raw"] as const)(
   },
 );
 
-it("registers a new alias without repeating the physical database admission", async ({ state }) => {
-  const options = { agentId: "main", env: state.env };
-  const first = openAgent(options);
-  using quarantine = openNodeSqliteDatabase(resolveQuarantineStorePath(state.env), {
-    readOnly: true,
+it.for(["compatible", "raised"] as const)(
+  "admits a newer agent writer only at its declared reader floor (%s)",
+  async (floor, { state: { env } }) => {
+    const options = { agentId: "main", env };
+    const first = openAgent(options);
+    await closeAgent(first.path);
+    {
+      using writer = openNodeSqliteDatabase(first.path);
+      writer.exec("BEGIN IMMEDIATE");
+      writer.exec("ALTER TABLE schema_meta ADD COLUMN min_reader INTEGER");
+      writer.exec(`CREATE TABLE future_agent_data (value TEXT);
+        ALTER TABLE auth_profile_state ADD COLUMN future_note TEXT;
+        ALTER TABLE session_canonical_validation_pending ADD COLUMN future_note TEXT;
+        PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1};`);
+      writer
+        .prepare(`UPDATE schema_meta SET schema_version = ?, min_reader = ?,
+          app_version = '2099.1.1', updated_at = 123 WHERE meta_key = 'primary'`)
+        .run(
+          OPENCLAW_AGENT_SCHEMA_VERSION + 1,
+          floor === "compatible"
+            ? OPENCLAW_AGENT_SCHEMA_VERSION
+            : OPENCLAW_AGENT_SCHEMA_VERSION + 1,
+        );
+      writer.exec("COMMIT");
+    }
+    // T+1 publishes the actual version before T performs registry-only discovery.
+    registerOpenClawAgentDatabase({
+      ...options,
+      path: first.path,
+      schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION + 1,
+    });
+    for (const entries of [
+      registeredAgents({ env }),
+      readRegisteredAgentDatabases({ env }, false),
+    ]) {
+      expect(entries).toContainEqual(
+        expect.objectContaining({
+          path: first.path,
+          schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION + 1,
+        }),
+      );
+    }
+    if (floor !== "compatible") {
+      expect(() => openAgent(options)).toThrow(
+        expect.objectContaining({
+          name: "SqliteSchemaVersionError",
+          message: expect.stringContaining(
+            `Minimum reader schema version is ${OPENCLAW_AGENT_SCHEMA_VERSION + 1}`,
+          ),
+        }),
+      );
+      return;
+    }
+    const reopened = openAgent(options);
+    expect(reopened.db.prepare("PRAGMA user_version").get()?.user_version).toBe(
+      OPENCLAW_AGENT_SCHEMA_VERSION + 1,
+    );
+    expect(
+      reopened.db
+        .prepare("SELECT schema_version, min_reader, app_version, updated_at FROM schema_meta")
+        .get(),
+    ).toEqual({
+      schema_version: OPENCLAW_AGENT_SCHEMA_VERSION + 1,
+      min_reader: OPENCLAW_AGENT_SCHEMA_VERSION,
+      app_version: "2099.1.1",
+      updated_at: 123,
+    });
+    await closeAgent(reopened.path);
+    const reader = openReader(options);
+    expect(reader.found).toBe(true);
+    if (reader.found) {
+      reader.database.close();
+    }
+  },
+);
+
+it("publishes agent writer version and reader floor in the same rollback boundary", () => {
+  using database = openNodeSqliteDatabase(":memory:");
+  database.exec(metadataSchema);
+  persistMetadata(database, "main", 1);
+  expect(database.prepare("PRAGMA table_info(schema_meta)").all()).not.toContainEqual(
+    expect.objectContaining({ name: "min_reader" }),
+  );
+  expect(readMetadata(database)).toEqual({ ...agentOwner, schemaVersion: 1 });
+  expect(() =>
+    runSqliteImmediateTransactionSync(database, () => {
+      persistMetadata(database, "main", 2, 1);
+      throw new Error("cancel migration");
+    }),
+  ).toThrow("cancel migration");
+  expect(database.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
+    schema_version: 1,
   });
-  admitQuarantine(quarantine, first.path, state.env);
-  const aliasDirectory = state.path("agent-alias");
-  symlinkSync(path.dirname(first.path), aliasDirectory, "junction");
-  const aliasPath = path.join(aliasDirectory, path.basename(first.path));
-  {
-    using observation = observeReads();
-    const alias = openAgent({ ...options, path: aliasPath });
-    expect(alias.db.isOpen).toBe(true);
-    expect(validationStatements(observation.queries)).toEqual([]);
-  }
-  expect(registeredAgents({ env: state.env }).map((row) => row.path)).toContain(aliasPath);
+  runSqliteImmediateTransactionSync(database, () => persistMetadata(database, "main", 2, 1));
+  const stamp = database.prepare("SELECT schema_version, min_reader FROM schema_meta");
+  expect(stamp.get()).toEqual({ schema_version: 2, min_reader: 1 });
+  expect(readMetadata(database)).toEqual({ ...agentOwner, schemaVersion: 2, minReader: 1 });
+  expect(() =>
+    runSqliteImmediateTransactionSync(database, () => {
+      persistMetadata(database, "main", 3);
+      throw new Error("cancel strict publication");
+    }),
+  ).toThrow("cancel strict publication");
+  expect(stamp.get()).toEqual({ schema_version: 2, min_reader: 1 });
+  runSqliteImmediateTransactionSync(database, () => persistMetadata(database, "main", 3));
+  expect(stamp.get()).toEqual({ schema_version: 3, min_reader: null });
+  expect(readMetadata(database)).toEqual({ ...agentOwner, schemaVersion: 3 });
 });

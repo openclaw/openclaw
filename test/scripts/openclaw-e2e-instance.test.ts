@@ -1,10 +1,4 @@
-import {
-  execFileSync,
-  spawn,
-  spawnSync,
-  type ChildProcess,
-  type SpawnSyncReturns,
-} from "node:child_process";
+import { spawn, spawnSync, type ChildProcess, type SpawnSyncReturns } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -17,6 +11,8 @@ import {
 } from "../helpers/fixture-receipts.js";
 import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { writePackageTarball } from "./docker-all-harness.test-support.js";
+import { isProcessPresent } from "./run-process.test-support.js";
 
 const pendingChildCompletions = new Set<Promise<unknown>>();
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -139,22 +135,13 @@ async function closeBashFixture(fixture: ReturnType<typeof startBash>) {
   await fixture.closed;
 }
 
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 // Shell stop/watchdog escalation can return before a foreign PID has been reaped.
 async function waitForProcessGone(
   pid: number,
   signal: AbortSignal,
   message: string,
 ): Promise<void> {
-  while (isProcessAlive(pid)) {
+  while (isProcessPresent(pid)) {
     await delay(5, undefined, { signal }).catch((error: unknown) => {
       throw new Error(`${message}: ${pid}`, { cause: error });
     });
@@ -260,18 +247,11 @@ function createPackageInstallFixture(
   const fixture = {
     logPath: path.join(directory, "install.log"),
     npmArgsPath: path.join(directory, "npm-args.txt"),
-    packagePath: path.join(directory, "openclaw.tgz"),
+    packagePath: writePackageTarball(directory, "openclaw-e2e-fixture", "0.0.0"),
     prefixPath: path.join(directory, "prefix"),
     redactorPath: path.join(directory, "redactor.mjs"),
     timeoutArgsPath: path.join(directory, "timeout-args.txt"),
   };
-  const packageRoot = tempDirs.make("openclaw-e2e-package-");
-  fs.mkdirSync(path.join(packageRoot, "package"));
-  fs.writeFileSync(
-    path.join(packageRoot, "package/package.json"),
-    JSON.stringify({ name: "openclaw-e2e-fixture", version: "0.0.0" }),
-  );
-  execFileSync("tar", ["-czf", fixture.packagePath, "-C", packageRoot, "package"]);
   fs.writeFileSync(
     fixture.redactorPath,
     "export const redactSensitiveText = (value) => value;\n",

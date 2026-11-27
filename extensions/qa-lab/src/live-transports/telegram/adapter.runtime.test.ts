@@ -55,6 +55,7 @@ vi.mock("./userbot-skill.runtime.js", () => ({
 }));
 
 import { createQaBusState } from "../../bus-state.js";
+import { createQaStateBackedTransportAdapter } from "../../qa-transport.js";
 import { readQaScenarioById } from "../../scenario-catalog.js";
 import { createTelegramQaTransportAdapter } from "./adapter.runtime.js";
 import type { TelegramUserbotUpdate } from "./userbot-driver.runtime.js";
@@ -563,6 +564,67 @@ it.each([
   }
 });
 
+it.each(["primary", "participant"] as const)(
+  "reports the %s startup phase and cleans owned resources after early driver exit",
+  async (role) => {
+    const root = mocks.createStateRoot();
+    const participantRoot = path.join(root, "participant");
+    fs.mkdirSync(participantRoot);
+    const roots = [root, participantRoot];
+    mocks.createStateRoot.mockImplementation(() => roots.shift() ?? root);
+    mocks.acquireQaCredentialLease.mockResolvedValueOnce(lease(identityCredential));
+    const script = path.join(root, "failed-driver.py");
+    const diagnostic = JSON.stringify({
+      type: "startup",
+      phase: "selected-chat",
+      method: "loadChats",
+      outcome: "timeout",
+    });
+    fs.writeFileSync(
+      script,
+      [
+        "import sys",
+        "print('x' * 5000, file=sys.stderr)",
+        `print(${JSON.stringify(diagnostic)}, file=sys.stderr)`,
+        "print('Timed out waiting for loadChats', file=sys.stderr)",
+        "sys.exit(1)",
+      ].join("\n"),
+    );
+    const actual = await vi.importActual<typeof import("./userbot-driver.runtime.js")>(
+      "./userbot-driver.runtime.js",
+    );
+    let starts = 0;
+    mocks.userbotStart.mockImplementation(async (params) => {
+      starts += 1;
+      if (starts !== (role === "primary" ? 1 : 2)) {
+        return driver(mocks.userbotSend);
+      }
+      return await actual.TelegramUserbotDriver.start({ ...params, userDriverPath: script });
+    });
+    let failure: unknown;
+    try {
+      await createAdapter();
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(Error);
+    const message = String(failure);
+    expect(message).toContain(`Telegram userbot (role=${role}) exited before cleanup (1)`);
+    expect(message).toContain('"phase":"selected-chat"');
+    expect(message).toContain('"method":"loadChats","outcome":"timeout"');
+    expect(message).toContain("Timed out waiting for loadChats");
+    expect(message.length).toBeLessThan(4300);
+    expect(mocks.userbotSend).not.toHaveBeenCalled();
+    expect(mocks.userbotClose).toHaveBeenCalledTimes(role === "participant" ? 1 : 0);
+    expectOnce(mocks.proxyClose, mocks.heartbeatStop, mocks.leaseRelease);
+    expect(mocks.proxyClose.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.leaseRelease.mock.invocationCallOrder[0]!,
+    );
+    expect(fs.existsSync(root)).toBe(false);
+    expect(fs.existsSync(participantRoot)).toBe(false);
+  },
+);
+
 it("retains a quarantined lease after stopping the userbot and proxy", async () => {
   mocks.shouldRetainQaGatewayCredentialLease.mockResolvedValueOnce(true);
   const adapter = await createAdapter();
@@ -572,4 +634,81 @@ it("retains a quarantined lease after stopping the userbot and proxy", async () 
 
   expectOnce(mocks.userbotClose, mocks.proxyClose, mocks.leaseHeartbeat, mocks.heartbeatStop);
   expect(mocks.leaseRelease).not.toHaveBeenCalled();
+});
+
+it("quarantines retired native replies and correlates recovery after reset", async () => {
+  const onUpdate = observe();
+  mocks.userbotSend
+    .mockResolvedValueOnce({ messageId: 10, senderId: 100, chatId: -100123 })
+    .mockResolvedValueOnce({ messageId: 20, senderId: 100, chatId: -100123 });
+  const state = createQaBusState();
+  await using adapter = await createAdapter(state);
+  const transport = createQaStateBackedTransportAdapter(state, adapter);
+  const readMessages = await prepareMessageReader(adapter);
+  const partial = "TELEGRAM-VISIBLE-PARTIAL-BEFORE-FAILURE";
+  const recovery = `${partial}\n\nSynthetic terminal recovery`;
+  const update = nativeMessage({ replyToMessageId: 10, timestamp: 100_000, text: partial });
+  await transport.sendInbound(inbound("recovery-room", "first attempt"));
+  await onUpdate(update);
+  await transport.reset();
+  const current = await transport.sendInbound(inbound("recovery-room", "second attempt"));
+  await onUpdate({ ...update, kind: "edit", text: recovery });
+  await onUpdate({ ...update, kind: "edit", messageId: 12, text: recovery });
+  const currentUpdate = { ...update, messageId: 21, replyToMessageId: 20 };
+  await onUpdate(currentUpdate);
+  await onUpdate({ ...currentUpdate, kind: "edit", text: recovery });
+  expect(readMessages()).toEqual([{ ...currentUpdate, kind: "edit", text: recovery }]);
+  expect(readMessages(current.id)).toEqual(readMessages());
+  expect(readMessages("unknown-inbound")).toEqual([]);
+  expect(
+    state.getSnapshot().messages.filter((message) => message.direction === "outbound"),
+  ).toMatchObject([{ text: recovery, replyToId: current.id }]);
+});
+
+it("drains admitted observer writes and quarantines updates arriving during reset", async () => {
+  const onUpdate = observe();
+  mocks.userbotSend.mockResolvedValue({ messageId: 10, senderId: 100, chatId: -100123 });
+  const state = createQaBusState();
+  const gate = Promise.withResolvers<void>();
+  const addOutboundMessage = vi.fn(
+    async (input: Parameters<typeof state.addOutboundMessage>[0]) => {
+      await gate.promise;
+      return state.addOutboundMessage(input);
+    },
+  );
+  await using adapter = await createAdapter({ ...state, addOutboundMessage });
+  const transport = createQaStateBackedTransportAdapter(state, adapter);
+  const readMessages = await prepareMessageReader(adapter);
+  const update = nativeMessage({ timestamp: 100_000, text: "late" });
+  try {
+    await transport.sendInbound(inbound("recovery-room", "first"));
+    const pending = onUpdate(update);
+    expect(addOutboundMessage).toHaveBeenCalledTimes(1);
+    const resetting = transport.reset();
+    await onUpdate({ ...update, messageId: 12 });
+    gate.resolve();
+    await Promise.all([pending, resetting]);
+    expect(state.getSnapshot().messages).toEqual([]);
+    await transport.sendInbound(inbound("recovery-room", "second"));
+    await onUpdate({ ...update, kind: "edit" });
+    await onUpdate({ ...update, kind: "edit", messageId: 12 });
+    expect(readMessages()).toEqual([]);
+    expect(addOutboundMessage).toHaveBeenCalledTimes(1);
+  } finally {
+    gate.resolve();
+  }
+});
+
+it("keeps the inbound reply target when a native edit omits it", async () => {
+  const onUpdate = observe();
+  mocks.userbotSend.mockResolvedValueOnce({ messageId: 10, senderId: 100, chatId: -100123 });
+  const state = createQaBusState();
+  await using adapter = await createAdapter(state);
+  const readMessages = await prepareMessageReader(adapter);
+  const sent = await adapter.sendInbound(inbound("recovery-room", "attempt"));
+  const reply = nativeMessage({ replyToMessageId: 10, text: "partial" });
+  await onUpdate(reply);
+  const { replyToMessageId: _omitted, ...edit } = { ...reply, kind: "edit", text: "recovered" };
+  await onUpdate(edit);
+  expect(readMessages(sent.id)).toEqual([{ ...edit, replyToMessageId: 10 }]);
 });

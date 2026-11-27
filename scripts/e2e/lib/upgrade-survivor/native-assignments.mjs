@@ -553,6 +553,8 @@ function configure() {
     ],
     "configure-native-agent",
   );
+  // The synthetic native peer retains its separate full execution policy.
+  set("agents.entries.native-proof.tools.exec.mode", "full");
   const configured = readJson(required("OPENCLAW_CONFIG_PATH"));
   if (
     config.agents?.defaults?.systemAgent === undefined &&

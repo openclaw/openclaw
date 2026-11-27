@@ -77,7 +77,12 @@ export class TooltipOwner {
       !containsComposed(active.#triggerElement ?? undefined, focused)
         ? active.#resolveDescribedElement()
         : null;
+    // Hiding an overlapping popup can expose its trigger under a stationary pointer.
+    active.#suppressHoverUntilLeave = active.#triggerHovered || active.#contentHovered;
     const accepted = active.#close();
+    if (!accepted) {
+      active.#suppressHoverUntilLeave = false;
+    }
     if (accepted && restoreTarget instanceof HTMLElement) {
       active.focusTriggerWithoutOpening(restoreTarget);
     }
@@ -107,6 +112,7 @@ export class TooltipOwner {
   #describedBy: string | null = null;
   #descriptionCaptured = false;
   #suppressNextFocusOpen = false;
+  #suppressHoverUntilLeave = false;
   #descriptionElement: HTMLSpanElement | null = null;
   #richContentNodes: readonly Node[] = [];
   #stopRichContent: (() => void) | undefined;
@@ -213,6 +219,7 @@ export class TooltipOwner {
     }
     this.#restoreDescription();
     this.#triggerElement = null;
+    this.#suppressHoverUntilLeave = false;
   }
 
   previewForAnchor(anchor: HTMLElement | SVGElement, content: string, input: "pointer" | "focus") {
@@ -230,6 +237,17 @@ export class TooltipOwner {
   }
 
   readonly #handlePointerEnter = (event: Event) => {
+    if (this.#suppressHoverUntilLeave) {
+      // Exposure from our popup is not fresh intent; entry from outside is.
+      const previous =
+        event instanceof MouseEvent && event.relatedTarget instanceof Node
+          ? event.relatedTarget
+          : null;
+      if (!(event instanceof MouseEvent) || this.#containsInteractionTarget(previous)) {
+        return;
+      }
+      this.#suppressHoverUntilLeave = false;
+    }
     if (!("pointerType" in event) || event.pointerType !== "touch") {
       this.#triggerHovered = true;
       this.#hoverExitPending = false;
@@ -240,6 +258,7 @@ export class TooltipOwner {
 
   readonly #handlePointerLeave = (event: Event) => {
     if (!("pointerType" in event) || event.pointerType !== "touch") {
+      this.#suppressHoverUntilLeave = false;
       this.#triggerHovered = false;
       this.#hoverExitPending = true;
       this.#clearTimers(false);
@@ -415,21 +434,23 @@ export class TooltipOwner {
         },
         true,
       );
-      const stopInput = listen(
-        view,
-        "input",
-        (event) => {
-          const target = event.composedPath()[0];
-          // Layout can move a hovered action under the pointer while another field is typing.
-          if (target instanceof view.Node && !this.#containsInteractionTarget(target)) {
-            this.#close();
-          }
-        },
-        true,
+      const stopOutsideInteractions = ["input", "contextmenu"].map((type) =>
+        listen(
+          view,
+          type,
+          (event) => {
+            const target = event.composedPath()[0];
+            // Cancel stale hover intent before another field or context menu takes input.
+            if (target instanceof view.Node && !this.#containsInteractionTarget(target)) {
+              this.#close();
+            }
+          },
+          true,
+        ),
       );
       this.#stopDismissal = () => {
         stopEscape();
-        stopInput();
+        stopOutsideInteractions.forEach((stop) => stop());
       };
     }
   }
@@ -634,7 +655,8 @@ export class TooltipOwner {
     if (this.#shouldRemainOpen(pointerExit)) {
       return;
     }
-    if (!this.#richContentText) {
+    // Only a visible rich card needs time for the pointer to cross into it.
+    if (this.#pending || !this.#richContentText) {
       this.#close();
       return;
     }

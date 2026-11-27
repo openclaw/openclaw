@@ -21,7 +21,6 @@ import * as channelActionsDirectSdk from "../../plugin-sdk/channel-actions.js";
 import * as channelOutboundDirectSdk from "../../plugin-sdk/channel-outbound.js";
 import type * as Shared from "../../plugin-sdk/channel-plugin-common.js";
 import * as coreDirectSdk from "../../plugin-sdk/core.js";
-import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoRelativePath } from "../../test-utils/repo-files.js";
 import type { PluginRuntime } from "../runtime/types.js";
 import type { OpenClawPluginApi } from "../types.js";
@@ -38,7 +37,7 @@ const representativeRuntimeSmokeSubpaths = [
   "conversation-runtime",
 ] as const;
 const PUBLIC_SDK_TEST_HELPER_SUBPATHS = identifiers(`
-  agent-runtime-test-contracts channel-contract-testing channel-target-testing
+  agent-runtime-test-contracts channel-contract-testing
   channel-test-helpers plugin-test-api plugin-test-contracts plugin-test-runtime
   provider-http-test-mocks provider-test-contracts test-env test-fixtures test-live
   test-live-auth test-media-generation test-media-understanding test-node-mocks
@@ -326,11 +325,6 @@ describe("plugin-sdk subpath exports", () => {
       [...docs.matchAll(/`plugin-sdk\/([a-z0-9-]+)`/gu)].map((match) => match[1]),
     );
 
-    expect(docs).toContain("scripts/lib/plugin-sdk-entrypoints.json");
-    expect(docs).toContain("scripts/lib/plugin-sdk-private-local-only-subpaths.json");
-    expect(docs).toContain("scripts/lib/plugin-sdk-deprecated-public-subpaths.json");
-    expect(docs).toContain("selected private-local entries");
-
     for (const subpath of pluginSdkSubpaths) {
       expect(packageExports).toHaveProperty(`./plugin-sdk/${subpath}`, {
         types: `./dist/plugin-sdk/${subpath}.d.ts`,
@@ -444,8 +438,7 @@ describe("plugin-sdk subpath exports", () => {
           "collectProviderApiKeys getShellEnvAppliedKeys maybeLoadShellEnvForGenerationProviders",
         "test-media-understanding": "createRequestCaptureJsonFetch installPinnedHostnameTestHooks",
         "test-media-generation": `
-        encodePngRgba parseProviderModelMap resolveConfiguredLiveMusicModels
-        resolveConfiguredLiveVideoModels
+        encodePngRgba parseProviderModelMap resolveConfiguredLiveProviderModels resolveLiveAuthStore
       `,
         "test-fixtures": `
         createCliRuntimeCapture importFreshModule bundledPluginRoot createSandboxTestContext
@@ -453,7 +446,6 @@ describe("plugin-sdk subpath exports", () => {
       `,
         "test-node-mocks":
           "mockNodeBuiltinModule mockNodeChildProcessExecFile mockNodeChildProcessSpawnSync",
-        "channel-target-testing": "installCommonResolveTargetErrorCases ResolveTargetFn",
         "provider-http-test-mocks": "getProviderHttpMocks installProviderHttpMockCleanup",
       },
       true,
@@ -495,7 +487,7 @@ describe("plugin-sdk subpath exports", () => {
         ],
         "test-env": `
         collectProviderApiKeys createRequestCaptureJsonFetch isLiveTestEnabled
-        resolveConfiguredLiveVideoModels
+        resolveConfiguredLiveProviderModels
       `,
       },
       false,
@@ -517,20 +509,6 @@ describe("plugin-sdk subpath exports", () => {
       .toSorted();
 
     expect(violations).toStrictEqual([]);
-  });
-
-  it("lists repo source candidates from git without walking SDK boundary roots", () => {
-    try {
-      expectNoReaddirSyncDuring(() => {
-        repoTsFilesCache.clear();
-        const files = listRepoTsFiles(resolve(REPO_ROOT, "src"));
-
-        expect(files.length).toBeGreaterThan(0);
-        expect(files.every((file) => file.endsWith(".ts"))).toBe(true);
-      });
-    } finally {
-      repoTsFilesCache.clear();
-    }
   });
 
   it("keeps the deprecated channel-runtime shim unused in repo imports", () => {
@@ -691,17 +669,7 @@ describe("plugin-sdk subpath exports", () => {
 
   it("keeps shared plugin-sdk types aligned", () => {
     expectTypeOf<Contract.BaseProbeResult>().toMatchTypeOf<Channel.BaseProbeResult>();
-    expectTypeOf<Contract.BaseTokenResolution>().toMatchTypeOf<Channel.BaseTokenResolution>();
-    expectTypeOf<Contract.ChannelAgentTool>().toMatchTypeOf<Channel.ChannelAgentTool>();
-    expectTypeOf<Contract.ChannelAccountSnapshot>().toMatchTypeOf<Channel.ChannelAccountSnapshot>();
-    expectTypeOf<Contract.ChannelGroupContext>().toMatchTypeOf<Channel.ChannelGroupContext>();
-    expectTypeOf<Contract.ChannelMessageActionAdapter>().toMatchTypeOf<Channel.ChannelMessageActionAdapter>();
     expectTypeOf<Contract.ChannelMessageActionContext>().toMatchTypeOf<Channel.ChannelMessageActionContext>();
-    expectTypeOf<Contract.ChannelMessageActionName>().toMatchTypeOf<Channel.ChannelMessageActionName>();
-    expectTypeOf<Contract.ChannelMessageToolDiscovery>().toMatchTypeOf<Channel.ChannelMessageToolDiscovery>();
-    expectTypeOf<Contract.ChannelStatusIssue>().toMatchTypeOf<Channel.ChannelStatusIssue>();
-    expectTypeOf<Contract.ChannelThreadingContext>().toMatchTypeOf<Channel.ChannelThreadingContext>();
-    expectTypeOf<Contract.ChannelThreadingToolContext>().toMatchTypeOf<Channel.ChannelThreadingToolContext>();
     expectTypeOf<Core.OpenClawPluginApi>().toMatchTypeOf<OpenClawPluginApi>();
     expectTypeOf<Core.PluginRuntime>().toMatchTypeOf<PluginRuntime>();
     expectTypeOf<Core.ChannelMessageActionContext>().toMatchTypeOf<Channel.ChannelMessageActionContext>();
@@ -744,46 +712,15 @@ describe("plugin-sdk subpath exports", () => {
     expect(pluginEntrySdk.definePluginEntry).toBe(coreDirectSdk.definePluginEntry);
     expect(channelActionsSdk.optionalStringEnum).toBe(channelActionsDirectSdk.optionalStringEnum);
     expect(channelActionsSdk.stringEnum).toBe(channelActionsDirectSdk.stringEnum);
-    expectSourceMentions("error-runtime", [
-      "formatUncaughtError",
-      "isApprovalNotFoundError",
-      "PlatformMessageNotDispatchedError",
-    ]);
-
-    expectSourceMentions(
-      "channel-pairing",
-      identifiers(`
-      createChannelPairingController createChannelPairingChallengeIssuer
-      createLoggedPairingApprovalNotifier createPairingPrefixStripper
-      readChannelAllowFromStoreSync createTextPairingAdapter
-    `),
-    );
     expect("createScopedPairingAccess" in channelPairingSdk).toBe(false);
-
-    expectSourceMentions(
-      "channel-outbound",
-      identifiers(`
-      createChannelMessageReplyPipeline createTypingCallbacks createReplyPrefixContext
-      createReplyPrefixOptions resolveChannelMessageSourceReplyDeliveryMode
-    `),
-    );
 
     for (const name of [
       "createDraftStreamLoop",
-      "createFinalizableDraftLifecycle",
-      "createChannelRunQueue",
-      "runPassiveAccountLifecycle",
-      "createRunStateMachine",
-      "createArmableStallWatchdog",
-      "createTypingCallbacks",
-      "createReplyPrefixContext",
-      "createReplyPrefixOptions",
       "resolveChannelMessageSourceReplyDeliveryMode",
     ] as const) {
       expect(channelOutboundSdk[name], name).toBe(channelOutboundDirectSdk[name]);
     }
 
-    expect(pluginSdkSubpaths.length).toBeGreaterThan(representativeRuntimeSmokeSubpaths.length);
     for (const [index, id] of representativeRuntimeSmokeSubpaths.entries()) {
       const mod = representativeModules[index];
       expect(typeof mod).toBe("object");

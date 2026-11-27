@@ -408,48 +408,6 @@ describe("scenario-flow-runner", () => {
     );
   });
 
-  it("supports qaImport inside flow expressions", async () => {
-    const result = await runScenarioFlow({
-      api: createImportApi("qa-import"),
-      scenarioTitle: "qa-import",
-      vars: { preparedValue: "ready" },
-      flow: {
-        steps: [
-          {
-            name: "uses qaImport",
-            actions: [
-              {
-                set: "basename",
-                value: {
-                  expr: '(await qaImport("node:path")).basename("/tmp/skill/SKILL.md")',
-                },
-              },
-              {
-                assert: {
-                  expr: 'basename === "SKILL.md"',
-                },
-              },
-              { assert: 'preparedValue === "ready"' },
-            ],
-            detailsExpr: "basename",
-          },
-        ],
-      },
-    });
-
-    expect(result).toEqual({
-      name: "qa-import",
-      status: "pass",
-      steps: [
-        {
-          name: "uses qaImport",
-          status: "pass",
-          details: "SKILL.md",
-        },
-      ],
-    });
-  });
-
   it("loads bundled QA runtime modules through qaImport", async () => {
     const result = await runScenarioFlow({
       api: createImportApi("qa-fixture-import"),
@@ -562,10 +520,10 @@ describe("scenario-flow-runner", () => {
       runLoadedScenarioFlow("qa-channel-reconnect-dedupe", {
         onWaitForOutboundMessage: ({ waitCount, state }) => {
           if (waitCount === 1) {
-            addQaFlowTestOutbound(state, "channel:qa-room", "RECONNECT-FIRST-OK");
+            addQaFlowTestOutbound(state, "group:qa-room", "RECONNECT-FIRST-OK");
             return;
           }
-          addQaFlowTestOutbound(state, "channel:qa-room", "RECONNECT-FIRST-OK");
+          addQaFlowTestOutbound(state, "group:qa-room", "RECONNECT-FIRST-OK");
         },
       }),
     ).rejects.toThrow("waiting for outbound marker");
@@ -576,11 +534,11 @@ describe("scenario-flow-runner", () => {
       runLoadedScenarioFlow("qa-channel-reconnect-dedupe", {
         onWaitForOutboundMessage: ({ waitCount, state }) => {
           if (waitCount === 1) {
-            addQaFlowTestOutbound(state, "channel:qa-room", "RECONNECT-FIRST-OK");
+            addQaFlowTestOutbound(state, "group:qa-room", "RECONNECT-FIRST-OK");
             return;
           }
-          addQaFlowTestOutbound(state, "channel:qa-room", "RECONNECT-SECOND-OK");
-          addQaFlowTestOutbound(state, "channel:qa-room", "unmarked duplicate delivery");
+          addQaFlowTestOutbound(state, "group:qa-room", "RECONNECT-SECOND-OK");
+          addQaFlowTestOutbound(state, "group:qa-room", "unmarked duplicate delivery");
         },
       }),
     ).rejects.toThrow("exactly one marked post-restart reply");

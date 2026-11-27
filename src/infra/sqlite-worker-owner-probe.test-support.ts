@@ -49,8 +49,8 @@ export const sqliteWorkerOwnerProbe = {
     const create = module.createSqliteWorkerOperationAdmission;
     return vi
       .spyOn(module, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        create((request, grant) => intercept(request, grant, admit), attachment),
+      .mockImplementation((admit, attachment, prepare) =>
+        create((request, grant) => intercept(request, grant, admit), attachment, prepare),
       );
   },
 

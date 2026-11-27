@@ -77,6 +77,7 @@ it.each([
       },
     );
 
+    expect(provider.maxInputTokens).toBeUndefined();
     const result = provider.embed("hello", { inputType: "query" });
     await expect(result).resolves.toEqual([0.25, 0.5, 0.75]);
     expect(acquireLocalService).not.toHaveBeenCalled();
@@ -97,6 +98,46 @@ it.each([
     }
   });
 });
+
+it.each([true, false])(
+  "reports the failed native preload context only if JIT inference also fails (JIT success: %s)",
+  async (jitSucceeds) => {
+    const requests: string[] = [];
+    const handler: RequestListener = (request, response) => {
+      request.resume();
+      request.once("end", () => {
+        requests.push(request.url ?? "");
+        if (request.url === "/api/v1/models") {
+          json(response, {
+            models: [{ ...serverModel, max_context_length: 32768, loaded_instances: [] }],
+          });
+        } else if (request.url === "/api/v1/models/load") {
+          json(response, { error: "fixture load refused" }, 503);
+        } else if (request.url === "/v1/embeddings" && jitSucceeds) {
+          json(response, { data: [{ index: 0, embedding: [1, 0] }] });
+        } else {
+          json(response, { error: "Model is unloaded" }, 400);
+        }
+      });
+    };
+    await withServer(handler, async (origin) => {
+      const { provider } = await createProvider(
+        { baseUrl: `${origin}/v1`, models: [] },
+        { remote: { apiKey: "fixture" } },
+      );
+      expect(provider.maxInputTokens).toBeUndefined();
+      const result = provider.embedBatch(["synthetic note"]);
+      if (jitSucceeds) {
+        await expect(result).resolves.toEqual([[1, 0]]);
+      } else {
+        await expect(result).rejects.toThrow(
+          /preload requested 32768 context tokens.*400.*Model is unloaded/s,
+        );
+      }
+      expect(requests.slice(-2)).toEqual(["/api/v1/models/load", "/v1/embeddings"]);
+    });
+  },
+);
 
 it.each(["documents", "queries", "cancelled"] as const)(
   "routes %s embeddings to sufficient-context instances across eviction while holding the service lease",
@@ -153,7 +194,7 @@ it.each(["documents", "queries", "cancelled"] as const)(
               input: ["text"],
               cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
               maxTokens: 0,
-              contextTokens: 2048,
+              contextTokens: 4096,
             },
           ],
         },
@@ -170,6 +211,7 @@ it.each(["documents", "queries", "cancelled"] as const)(
         },
       );
       expect(leases).toBe(0);
+      expect(provider.maxInputTokens).toBe(2044);
       await expect(provider.embed("first")).resolves.toEqual([1, 0]);
       expect(requests).not.toContain("/api/v1/models/load");
       loaded = false;

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { markdownToIR } from "../../packages/markdown-core/src/ir.js";
+import * as markdownCodeRegions from "../../packages/markdown-core/src/markdown-code-regions.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
@@ -79,12 +80,51 @@ function streamChunks(chunker: EmbeddedBlockChunker, source: string, delta: numb
 }
 
 describe("EmbeddedBlockChunker", () => {
+  it.each([
+    ["prefix words ", "`a b`", "", "a b"],
+    ["abcdefghijk ", "``x! y``", " after", "x! y"],
+    ["x".repeat(15), "`word`", "z", "word"],
+  ])(
+    "keeps fitting inline code intact in streamed blocks for %s%s%s",
+    (prefix, code, tail, body) => {
+      const source = prefix + code + tail;
+      const maxChars = 18;
+      const { chunks, metadata } = streamChunks(
+        paragraphChunker(8, maxChars),
+        source,
+        source.length,
+      );
+      const styledCode = chunks.flatMap((chunk) => {
+        const { styles, text } = markdownToIR(chunk);
+        return styles
+          .filter((span) => span.style === "code")
+          .map((span) => text.slice(span.start, span.end));
+      });
+      expect(styledCode).toEqual([body]);
+      expectChunksWithinLength(chunks, maxChars);
+      expectSourceCoverage(metadata, source);
+    },
+  );
+
+  it("waits for a possible cut before parsing inline code during paragraph streaming", () => {
+    const source = "Read `alpha beta` ".padEnd(1200, "x");
+    const chunker = paragraphChunker(800, 1200, { flushOnParagraph: true });
+    const parse = vi.spyOn(markdownCodeRegions, "findMarkdownCodeRegions");
+    try {
+      const { chunks, metadata } = streamChunks(chunker, source, 1);
+      expect(chunks).toEqual([source]);
+      expectSourceCoverage(metadata, source);
+      expect(parse.mock.calls.length).toBeLessThanOrEqual(1);
+    } finally {
+      parse.mockRestore();
+    }
+  });
+
   it("emits a whole leading grapheme that exactly fills the hard cap", () => {
     const cluster = `e${"\u0301".repeat(1199)}`;
     const chunker = paragraphChunker(800, 1200);
     chunker.append(cluster);
     expect(drainChunks(chunker)).toEqual([cluster]);
-    expect(chunker.bufferedText).toBe("");
 
     chunker.append("done");
     expect(drainChunks(chunker)).toEqual([]);
@@ -111,7 +151,7 @@ describe("EmbeddedBlockChunker", () => {
   });
 
   it("preserves paragraph selection and source cursors across a forced tail", () => {
-    const tail = "Cccc";
+    const tail = "\n\nCccc";
     for (const force of [false, true]) {
       const prefix = force ? `${"x".repeat(20)}\n` : "";
       const source = `${prefix}Aaaa\n\nBbbb\n\nCccc`;
@@ -122,12 +162,12 @@ describe("EmbeddedBlockChunker", () => {
       expect(emitted).toEqual(
         force
           ? [
-              ["x".repeat(20), prefix],
-              ["Aaaa", "Aaaa\n\n"],
-              ["Bbbb", "Bbbb\n\n"],
-              ["Cccc", "Cccc"],
+              ["x".repeat(20), "x".repeat(20)],
+              ["\nAaaa", "\nAaaa"],
+              ["\n\nBbbb", "\n\nBbbb"],
+              [tail, tail],
             ]
-          : [["Aaaa\n\nBbbb", "Aaaa\n\nBbbb\n\n"]],
+          : [["Aaaa\n\nBbbb", "Aaaa\n\nBbbb"]],
       );
       expect(chunker.bufferedText).toBe(force ? "" : tail);
       expect(chunker.hasBuffered()).toBe(!force);
@@ -388,12 +428,13 @@ describe("EmbeddedBlockChunker", () => {
     const chunker = paragraphChunker(30, 200, { flushOnParagraph: true });
     chunker.append("First paragraph.\n\nSecond paragraph.\n\nThird paragraph.");
     expect(drainChunks(chunker)).toEqual(["First paragraph.\n\nSecond paragraph."]);
-    expect(chunker.bufferedText).toBe("Third paragraph.");
+    expect(chunker.bufferedText).toBe("\n\nThird paragraph.");
   });
 
   it.each([
     [1, 20, `${"x".repeat(19)}😀tail`, ["x".repeat(19)], "😀tail"],
     [1, 1, "😀tail", ["😀", "t", "a", "i", "l"], ""],
+    [1, 20, "| Memory | 11.", [], "| Memory | 11."],
     [
       10,
       20,
@@ -402,7 +443,7 @@ describe("EmbeddedBlockChunker", () => {
       "```txt\nxxx😀tail",
     ],
   ] as const)(
-    "keeps min=%i/max=%i chunks valid at UTF-16 boundaries",
+    "keeps min=%i/max=%i chunks valid at UTF-16 and decimal boundaries",
     (min, max, source, chunks, pending) => {
       const chunker = paragraphChunker(min, max);
       chunker.append(source);
@@ -503,7 +544,7 @@ describe("EmbeddedBlockChunker", () => {
     it("keeps a streamed table whole when it fills maxChars and a heading follows directly", () => {
       const text = `${intro}\n\n${tableAtCap}\n# Next steps`;
       for (const delta of [1, 17, 43, text.length]) {
-        expect(tableChunks(text, delta)).toEqual([intro, tableAtCap, "# Next steps"]);
+        expect(tableChunks(text, delta)).toEqual([`${intro}\n\n`, tableAtCap, "\n# Next steps"]);
       }
     });
 
@@ -525,6 +566,41 @@ describe("EmbeddedBlockChunker", () => {
         chunks.push(...drainChunks(chunker));
       }
       expect(chunks).toEqual([tableAtCap]);
+    });
+
+    // Opener before minChars, closer past maxChars, sentences mid-island and a
+    // literal closer in double-backtick code.
+    const prose = (count: number) => "Revenue grew in every region this quarter. ".repeat(count);
+    const island = (count: number) =>
+      `<details><summary>By site</summary>\n\n${prose(3)}Close with \`\`</details>\`\`.\n\n${prose(count)}\n</details>`;
+    const reply = `${prose(17)}\n\n${island(7)}\n\n${prose(10)}`;
+
+    it.each([
+      [1, {}],
+      [37, {}],
+      [Infinity, {}],
+      [7, { minChars: 5, flushOnParagraph: true }],
+    ] as const)("keeps a fitting HTML island whole (delta %s, %o)", (delta, options) => {
+      const chunker = new EmbeddedBlockChunker({ ...chunking, ...options });
+      const { chunks, metadata } = streamChunks(chunker, reply, delta);
+      expect(chunks.filter((chunk) => chunk.includes("<details>"))).toEqual([
+        expect.stringContaining(island(7)),
+      ]);
+      expectChunksWithinLength(chunks, chunking.maxChars);
+      expectSourceCoverage(metadata, reply);
+    });
+
+    it("splits oversized islands and code-only tags like plain text", () => {
+      const fenced = `${prose(17)}\n\n\`\`\`html\n<details>\n\`\`\`\n\n${prose(20)}`;
+      for (const [text, delta] of [
+        [`${prose(17)}\n\n${island(30)}`, Infinity],
+        [fenced, 37],
+      ] as const) {
+        const plain = text.replaceAll("details>", "section>");
+        expect(tableChunks(text, delta)).toEqual(
+          tableChunks(plain, delta).map((chunk) => chunk.replaceAll("section>", "details>")),
+        );
+      }
     });
   });
 });

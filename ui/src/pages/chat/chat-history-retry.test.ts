@@ -22,6 +22,7 @@ afterEach(async () => {
   await vi.advanceTimersByTimeAsync(0);
   expect(vi.getTimerCount()).toBe(0);
   vi.useRealTimers();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -97,6 +98,7 @@ describe("shared chat history transient recovery", () => {
     ["older", "denied"],
     ["shared", "recover"],
     ["shared", "retire"],
+    ["shared", "clock"],
   ])("settles a %s read after %s without stale or denied replay", async (kind, outcome) => {
     const error =
       kind === "shared"
@@ -113,7 +115,7 @@ describe("shared chat history transient recovery", () => {
     const isCurrent = () => state.sessionKey !== "agent:main:replacement";
     const reads =
       kind === "older"
-        ? [loadOlderChatHistoryPage(state, 80)]
+        ? [loadOlderChatHistoryPage(state, { cursor: "older-80" })]
         : [
             readHistory(state.client!, "shared", isCurrent),
             readHistory(state.client!, "shared", isCurrent),
@@ -123,15 +125,18 @@ describe("shared chat history transient recovery", () => {
     if (outcome === "retire") {
       state.sessionKey = "agent:main:replacement";
     }
+    if (outcome === "clock") {
+      vi.setSystemTime(Date.now() + 120_000);
+    }
     await vi.advanceTimersByTimeAsync(499);
     expect(request).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(1);
-    if (outcome === "recover") {
+    if (outcome === "recover" || outcome === "clock") {
       expect(await outcomes).toEqual(reads.map(() => page));
     } else {
       expect(await outcomes).toBe(error);
     }
-    expect(request).toHaveBeenCalledTimes(outcome === "recover" ? 2 : 1);
+    expect(request).toHaveBeenCalledTimes(outcome === "retire" || outcome === "denied" ? 1 : 2);
   });
   it.each([false, true])(
     "keeps manual Retry after the recovery deadline (startup=%s)",
@@ -167,7 +172,7 @@ describe("shared chat history transient recovery", () => {
         phase: "failed",
         retryable: true,
         startup,
-        message: expect.stringContaining("timed out"),
+        message: expect.stringContaining("in time"),
       });
       expect(isChatHistoryRetrying(state)).toBe(false);
       expect(state).toMatchObject({
@@ -203,7 +208,12 @@ describe("shared chat history transient recovery", () => {
         requestHandlers: {
           "chat.history": () => {
             // A suspended tab can observe an RPC timeout before its overdue reader timer runs.
+            // Close the elapsed window without firing the overdue abort timer.
             vi.setSystemTime(Date.now() + elapsedMs);
+            if (elapsedMs !== 0) {
+              const advanced = performance.now() + elapsedMs;
+              vi.spyOn(performance, "now").mockReturnValue(advanced);
+            }
             return Promise.reject(error);
           },
         },
@@ -303,9 +313,9 @@ describe("shared chat history transient recovery", () => {
       .catch((error: unknown) => error)
       .finally(secondSettled);
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(await first).toMatchObject({ message: expect.stringContaining("timed out") });
+    expect(await first).toMatchObject({ message: expect.stringContaining("in time") });
     expect(request).toHaveBeenCalledTimes(1);
     expect(secondSettled).toHaveBeenCalledOnce();
-    expect(await second).toMatchObject({ message: expect.stringContaining("timed out") });
+    expect(await second).toMatchObject({ message: expect.stringContaining("in time") });
   });
 });

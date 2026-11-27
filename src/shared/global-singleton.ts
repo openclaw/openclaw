@@ -8,7 +8,8 @@ type GlobalSingletonLifecycle =
   | "close-and-restart"
   | "close-only"
   | "plugin-registry"
-  | "shared-state";
+  | "shared-state"
+  | "native-workers";
 type GlobalSingletonReset<T> = (value: T) => void | Promise<void>;
 type RegisteredGlobalSingletonReset = {
   lifecycle: GlobalSingletonLifecycle;
@@ -31,6 +32,11 @@ export function readGlobalSingleton(key: symbol): unknown {
   // SAFETY: Singleton slots are symbol-keyed properties owned by this registry.
   const globalStore = globalThis as Record<PropertyKey, unknown>;
   return Object.hasOwn(globalStore, key) ? globalStore[key] : undefined;
+}
+
+/** Run an existing owner's cleanup without importing or initializing that owner. */
+export async function resetGlobalSingletonLifecycleState(key: symbol): Promise<void> {
+  await resolveGlobalSingletonResetRegistry().get(key)?.reset();
 }
 
 /** Resolves a process-local singleton for caches and registries that tolerate helper lookup. */
@@ -86,10 +92,13 @@ export function resolveGlobalSet<T>(key: symbol, lifecycle: GlobalSingletonLifec
 /** Resets every opt-in singleton while preserving shared object identity for the next lifecycle. */
 export async function drainGlobalSingletonLifecycleState(
   event: "close" | "plugin-registry" | "restart" | "shared-state" = "close",
-  options: { retainSharedState?: boolean } = {},
+  options: {
+    retainSharedState?: boolean;
+    measureReset?: (name: string, reset: () => Promise<void>) => Promise<void>;
+  } = {},
 ): Promise<void> {
-  const resets = [...resolveGlobalSingletonResetRegistry().values()]
-    .filter(({ lifecycle }) => {
+  const resets = [...resolveGlobalSingletonResetRegistry().entries()].filter(
+    ([, { lifecycle }]) => {
       if (event === "shared-state") {
         return lifecycle === "shared-state";
       }
@@ -102,20 +111,36 @@ export async function drainGlobalSingletonLifecycleState(
       if (lifecycle === "plugin-registry") {
         return false;
       }
-      return event === "close" || lifecycle === "close-and-restart";
-    })
-    .map(({ reset }) => {
-      try {
-        return Promise.resolve(reset());
-      } catch (error) {
-        return Promise.reject(
-          error instanceof Error
-            ? error
-            : new Error("Global singleton reset failed", { cause: error }),
-        );
-      }
+      return (
+        event === "close" || lifecycle === "close-and-restart" || lifecycle === "native-workers"
+      );
+    },
+  );
+  // Execution owners join their workers before the shared native supervisor checks custody.
+  const phases = [
+    resets.filter(([, { lifecycle }]) => lifecycle !== "native-workers"),
+    resets.filter(([, { lifecycle }]) => lifecycle === "native-workers"),
+  ];
+  const settled: PromiseSettledResult<void>[] = [];
+  for (const phase of phases) {
+    const pending = phase.map(([key, { reset }]) => {
+      const runReset = () => {
+        try {
+          return Promise.resolve(reset());
+        } catch (error) {
+          return Promise.reject(
+            error instanceof Error
+              ? error
+              : new Error("Global singleton reset failed", { cause: error }),
+          );
+        }
+      };
+      return options.measureReset
+        ? options.measureReset(key.description ?? String(key), runReset)
+        : runReset();
     });
-  const settled = await Promise.allSettled(resets);
+    settled.push(...(await Promise.allSettled(pending)));
+  }
   const errors = settled.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
   if (errors.length > 0) {
     throw new AggregateError(errors, "Failed to reset global singleton lifecycle state");

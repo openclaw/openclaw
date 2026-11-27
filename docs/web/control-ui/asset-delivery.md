@@ -15,8 +15,9 @@ security headers, cache policy, and WebSocket behavior.
 ## Current delivery owners
 
 The [UI build](https://github.com/openclaw/openclaw/blob/main/ui/vite.config.ts)
-produces Brotli quality 10 and libdeflate gzip level 11 sidecars for eligible
-assets. The
+produces Brotli quality 11 for the measured boot assets and service worker,
+quality 10 for other eligible assets, and libdeflate gzip level 11 sidecars.
+Maximum Brotli effort stays on the first-load graph to limit rebuild cost. The
 [static response owner](https://github.com/openclaw/openclaw/blob/main/src/gateway/control-ui-static.ts)
 selects a representation using `Accept-Encoding`, emits `Vary: Accept-Encoding`,
 and serves versioned assets with immutable caching. HTML remains a separate
@@ -104,7 +105,8 @@ commit `c9db73543a42`. Five rotated codec rounds produced:
 
 Brotli 11 saved 1.88% for 2.36 times the codec CPU. A separate 20-pair browser
 comparison at 100 ms RTT improved median transcript readiness only 1.37%
-(1,518 to 1,498 ms), so the build retains Brotli 10.
+(1,518 to 1,498 ms). The build now uses quality 11 only for the measured boot
+graph and service worker; deferred assets retain quality 10.
 
 For 300 warm requests per sample, the isolated static server consumed a median
 31.4 ms CPU with Brotli, 40.7 ms with gzip, and 61.1 ms with identity. Compressed

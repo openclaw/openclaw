@@ -17,6 +17,76 @@ const sessionKey = "agent:main:dashboard:bubble-activity";
 
 suite.define(() => {
   it.each([
+    { width: 1600, height: 1000 },
+    { width: 932, height: 430 },
+    { width: 390, height: 844 },
+  ])("keeps Markdown tables inside chat bubbles at $width px", async (viewport) => {
+    await suite.withPage({ viewport }, async ({ page }) => {
+      await page.addInitScript(
+        ({ key, session }) => {
+          localStorage.setItem(key, JSON.stringify({ chatBubbleSessionKeys: [session] }));
+        },
+        { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), session: sessionKey },
+      );
+      const markdown = [
+        "Service availability across the supported deployment regions.",
+        "| Service | Operational evidence | Availability |\n| --- | --- | --- |\n" +
+          "| Background jobs | Scheduled processing continues while interactive requests complete. | Healthy across all regions. |",
+        "| " +
+          Array.from({ length: 8 }, (_, index) => `Region ${index + 1}`).join(" | ") +
+          " |\n" +
+          "| " +
+          Array(8).fill("---").join(" | ") +
+          " |\n" +
+          "| " +
+          Array(8).fill("0123456789abcdef0123456789abcdef").join(" | ") +
+          " |",
+      ].join("\n\n");
+      await installMockGateway(page, {
+        sessionKey,
+        historyMessages: [{ role: "assistant", content: markdown, timestamp: 1 }],
+      });
+      await page.route("**/control-ui-config.json", (route) =>
+        route.fulfill({
+          json: { ...createControlUiMockBootstrapConfig(), chatBubblesEnabled: true },
+        }),
+      );
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      const chat = page.locator("section.chat");
+      await browserExpect(chat).toHaveClass(/chat--bubbles/);
+      const bubble = chat.locator(".chat-group.assistant .chat-bubble");
+      const tables = bubble.locator(".markdown-table");
+      await browserExpect(tables).toHaveCount(2);
+      const frame = await takeControlUiScreenshotFrame(page, chat, [tables.first()], {
+        animations: "disabled",
+        elements: [chat],
+      });
+      writeFileSync(
+        path.join(suite.artifactDir, `table-bubbles-${viewport.width}.png`),
+        frame.elements[0]!.png,
+      );
+      for (const table of await tables.all()) {
+        const geometry = await table.evaluate((element) => {
+          const bounds = element.getBoundingClientRect();
+          const parent = element.closest(".chat-bubble")!;
+          const bubbleBounds = parent.getBoundingClientRect();
+          const style = getComputedStyle(parent);
+          return {
+            leadingGap: bounds.left - bubbleBounds.left - Number.parseFloat(style.paddingLeft),
+            trailingGap: bubbleBounds.right - bounds.right - Number.parseFloat(style.paddingRight),
+          };
+        });
+        expect(geometry.leadingGap).toBeGreaterThanOrEqual(-1);
+        expect(geometry.trailingGap).toBeGreaterThanOrEqual(-1);
+      }
+      const dense = tables.last().locator(".markdown-table__viewport");
+      expect(
+        await dense.evaluate((element) => element.scrollWidth - element.clientWidth),
+      ).toBeGreaterThan(0);
+    });
+  });
+
+  it.each([
     { width: 1280, height: 900 },
     { width: 390, height: 844 },
   ])("keeps identity on the first message and work compact at $width px", async (viewport) => {
@@ -148,39 +218,13 @@ suite.define(() => {
       ]);
       expect(await chat.locator(".chat-bubble-dots").count()).toBe(0);
       expect(await chat.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
-      const work = chat.locator(".chat-work-group > .chat-activity-group__summary");
-      await browserExpect(work).toHaveCount(1);
-      await browserExpect(work.locator(".chat-activity-group__label")).toHaveText("Worked");
-      await browserExpect(work).toHaveAttribute("aria-expanded", "false");
-      expect((await work.boundingBox())!.height).toBeLessThanOrEqual(36);
-      await work.click();
-      await browserExpect(work).toHaveAttribute("aria-expanded", "true");
-      // The in-place chunk reveals the tool group's own raw-details disclosure.
-      const activity = chat.locator(
-        ".chat-activity-group:not(.chat-work-group) > .chat-activity-group__summary",
-      );
-      await browserExpect(activity).toHaveCount(1);
-      await browserExpect(activity).toHaveAttribute("aria-expanded", "false");
-      await browserExpect(chat.locator(".chat-tool-msg-summary")).toHaveCount(0);
+      // Bubble mode keeps narration in place: one activity disclosure, no completed-work rollup.
+      await browserExpect(chat.locator(".chat-work-group")).toHaveCount(0);
+      const activity = chat.locator(".chat-activity-group > button").first();
+      await browserExpect(activity).toHaveText(/operation|Read|Raw details/);
+      expect((await activity.boundingBox())!.height).toBeLessThanOrEqual(36);
       await activity.click();
-      await browserExpect(activity).toHaveAttribute("aria-expanded", "true");
-      const tool = chat.locator(".chat-tool-msg-summary");
-      await browserExpect(tool).toHaveCount(1);
-      await browserExpect(tool).toBeVisible();
-      await tool.click();
-      await browserExpect(
-        chat.getByText("Layout inspection complete.", { exact: true }),
-      ).toBeVisible();
-      await work.click();
-      await browserExpect(work).toHaveAttribute("aria-expanded", "false");
-      await browserExpect(chat.locator(".chat-tool-msg-summary")).toHaveCount(0);
-      for (const text of [
-        "I’ll check the spacing first.",
-        "The layout now has room to breathe.",
-        "The second message keeps its rounded corners.",
-      ]) {
-        await browserExpect(chat.getByText(text, { exact: true })).toBeVisible();
-      }
+      await browserExpect(chat.locator(".chat-tool-msg-summary").first()).toBeVisible();
     });
   });
 

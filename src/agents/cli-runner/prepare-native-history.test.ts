@@ -1,12 +1,9 @@
-// Proves preparation seeds saved history into a fresh Claude CLI session only for the native login that owns it.
+// Proves preparation seeds saved history into a fresh Claude CLI session unless another login already ran it.
 import fs from "node:fs";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockClaudeManagedSettings } from "../../../test/helpers/claude-managed-settings.js";
-import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { stageSessionPendingInput } from "../../config/sessions/session-accessor.pending-inputs.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
@@ -15,7 +12,7 @@ import {
   createCliRunnerPrepareFixture,
   createTestMcpLoopbackServer,
 } from "../cli-runner.test-helpers.js";
-import { prepareCliHistoryBoundary } from "./history-boundary.js";
+import { admitCliHistoryAccount } from "./history-boundary.js";
 import {
   mockCliMcpPreparation,
   createJsonlStdinBackendConfig,
@@ -100,6 +97,7 @@ describe("native Claude login history on preparation", () => {
   async function prepareAfterTurn(
     nextConfig: OpenClawConfig = attestNativeLogin,
     expiresAt?: number,
+    firstConfig: OpenClawConfig = attestNativeLogin,
   ) {
     const { dir, sessionTarget } = fixture.session;
     const runId = "native-history-run";
@@ -113,11 +111,11 @@ describe("native Claude login history on preparation", () => {
     const admission = prepareSystemAgentRunAdmission({}, runId, "main", "native-history");
     try {
       login();
-      const writer = await prepareCliHistoryBoundary(
+      const admitted = await admitCliHistoryAccount(
         {
           admittedRunContext: await admission.admit("embedded"),
           ...params,
-          config: attestNativeLogin,
+          config: firstConfig,
           agentDir: path.join(dir, "agents", "main", "agent"),
           prompt: "seed",
           workspaceDir: dir,
@@ -128,29 +126,13 @@ describe("native Claude login history on preparation", () => {
         },
         { preparedBackend: { backend: { command: "claude" } } },
       );
-      expect(writer).toBeDefined();
-      await runWithCliHistoryWriter(writer, async () =>
-        fixture.appendTranscript({
-          id: "prior",
-          parentId: null,
-          timestamp: "2020-01-01T00:00:00.000Z",
-          message: { role: "user", content: "native canary", timestamp: 1 },
-        }),
-      );
-      // Interrupted input must obey the same history-replay boundary.
-      const pending = await stageSessionPendingInput(sessionTarget, {
-        runId: "interrupted-native-request",
-        message: {
-          role: "user",
-          content: "PRIVATE-INTERRUPTED",
-          timestamp: 2,
-          idempotencyKey: "interrupted-native-request:user",
-        },
-        assertCurrent: () => {},
+      expect(admitted?.replaysHistory).toBe(true);
+      fixture.appendTranscript({
+        id: "prior",
+        parentId: null,
+        timestamp: "2020-01-01T00:00:00.000Z",
+        message: { role: "user", content: "native canary", timestamp: 1 },
       });
-      const receipt = expectDefined(pending, "interrupted input receipt");
-      receipt.finish("interrupted");
-      await receipt.settled?.();
       login(expiresAt);
       profile.mockClear();
       const context = await fixture.prepare({
@@ -168,23 +150,22 @@ describe("native Claude login history on preparation", () => {
 
   it("seeds saved history for the same native login with no auth profile", async () => {
     const context = await prepareAfterTurn();
-    expect(context.cliHistoryWriter).toBeDefined();
+    expect(context.cliHistoryAdmission?.replaysHistory).toBe(true);
     expect(context.openClawHistoryPrompt).toContain("native canary");
-    expect(context.promptForHooks ?? context.params.prompt).toContain("PRIVATE-INTERRUPTED");
   });
 
-  it("never sends the native token to Anthropic unless the operator opted in", async () => {
-    // A token this process never attested, so only the missing opt-in keeps it off the network.
-    const context = await prepareAfterTurn({}, Date.parse("2031-01-01T00:00:00Z"));
-    expect(context.cliHistoryWriter).toBeUndefined();
-    expect(context.openClawHistoryPrompt).toBeUndefined();
+  it("seeds saved history for a native login that was never identified", async () => {
+    const context = await prepareAfterTurn({}, undefined, {});
+    expect(context.cliHistoryAdmission?.replaysHistory).toBe(true);
+    expect(context.openClawHistoryPrompt).toContain("native canary");
     expect(profile).not.toHaveBeenCalled();
   });
 
-  it("keeps coverage but sends no saved history while the CLI is about to rotate the token", async () => {
-    const context = await prepareAfterTurn(attestNativeLogin, Date.now() + 60_000);
-    expect(context.cliHistoryWriter?.replaysHistory).toBe(false);
+  it("never sends the native token to Anthropic unless the operator opted in", async () => {
+    // The login that wrote history was identified; this one cannot be, so it gets none.
+    const context = await prepareAfterTurn({}, Date.parse("2031-01-01T00:00:00Z"));
+    expect(context.cliHistoryAdmission?.replaysHistory).toBe(false);
     expect(context.openClawHistoryPrompt).toBeUndefined();
-    expect(context.promptForHooks ?? context.params.prompt).not.toContain("PRIVATE-INTERRUPTED");
+    expect(profile).not.toHaveBeenCalled();
   });
 });

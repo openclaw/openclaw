@@ -2,16 +2,17 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { loadExecApprovalsReadOnly } from "./exec-approvals-store.js";
 import { openLegacyAuditRawCheckpointStore } from "./state-migrations.audit-checkpoints.js";
 import {
   AuditMigrationFixture,
   buildAuditScrubbedContent,
   configAuditRecord,
+  failArchiveHardening,
   failAuditMove,
   systemAuditEvent,
   writeAuditRestoreJournal,
@@ -20,6 +21,7 @@ import { autoMigrateLegacyState } from "./state-migrations.doctor.js";
 import { throwIfDoctorStateMigrationRefused } from "./state-migrations.messages.js";
 
 afterEach(() => vi.restoreAllMocks());
+type MigrationResult = Awaited<ReturnType<typeof autoMigrateLegacyState>>;
 
 async function withDoctorAudit(
   run: (
@@ -49,12 +51,9 @@ const seedApprovals = (state: OpenClawTestState) =>
     defaults: { security: "allowlist", ask: "on-miss" },
     agents: {},
   });
-const receipt = (result: Awaited<ReturnType<typeof autoMigrateLegacyState>>, id: string) =>
+const receipt = (result: MigrationResult, id: string) =>
   result.stepReceipts.find((entry) => entry.id === id);
-async function expectContinued(
-  result: Awaited<ReturnType<typeof autoMigrateLegacyState>>,
-  file: string,
-) {
+async function expectContinued(result: MigrationResult, file: string) {
   expect(() => throwIfDoctorStateMigrationRefused(result.stepReceipts)).not.toThrow();
   expect(receipt(result, "exec-approvals")).toMatchObject({ outcome: "completed" });
   await expect(fs.access(file)).rejects.toMatchObject({ code: "ENOENT" });
@@ -64,6 +63,8 @@ it.each([
   ["checkpointless whitespace", "checkpointless raw archive begins with ambiguous whitespace"],
   ["checkpoint capacity", "durable raw-archive checkpoint capacity is exhausted"],
   ["hard links unavailable", "filesystem rejects native no-replace rename and hard links"],
+  ["missing companion, empty", "sanitized companion is missing"],
+  ["missing companion, imported", "sanitized companion is missing"],
 ])("continues later repairs after %s and preserves recovery inputs", (shape, warning) =>
   withDoctorAudit(async (state, audit, migrate) => {
     const { source, raw, sanitized } = audit.config;
@@ -71,32 +72,41 @@ it.each([
     let preservedPath = raw;
     if (shape === "checkpointless whitespace") {
       await audit.seedRawArchive(audit.config, buildAuditScrubbedContent(512));
-      await audit.writeJsonLines(
-        sanitized,
-        Array.from({ length: 45 }, () => record),
-      );
-    } else if (shape === "checkpoint capacity") {
+      await audit.writeJsonLines(sanitized, Array(45).fill(record));
+    } else if (shape !== "hard links unavailable") {
       await audit.writeJsonLines(source, [record]);
       expect((await audit.migrate()).warnings).toEqual([]);
       const store = openLegacyAuditRawCheckpointStore(state.stateDir);
       const checkpoint = store.entries()[0]!;
-      store.registerLegacyMany(
-        Array.from({ length: 9_999 }, (_, index) => ({
-          ...checkpoint,
-          key: `retained-generation-${index}`,
-          value: { ...checkpoint.value, generationKey: `retained-generation-${index}` },
-        })),
-      );
-      await audit.writeJsonLines(source, [record]);
-      preservedPath = source;
+      if (shape === "checkpoint capacity") {
+        store.registerLegacyMany(
+          Array.from({ length: 9_999 }, (_, index) => ({
+            ...checkpoint,
+            key: `retained-generation-${index}`,
+            value: { ...checkpoint.value, generationKey: `retained-generation-${index}` },
+          })),
+        );
+        await audit.writeJsonLines(source, [record]);
+        preservedPath = source;
+      } else {
+        if (shape.endsWith("imported")) {
+          await audit.appendJsonLines(raw, [record]);
+          const failure = failArchiveHardening(audit, sanitized, "interrupted import");
+          expect((await audit.migrate()).warnings.join("\n")).toContain("interrupted import");
+          failure.mockRestore();
+        } else {
+          // Revisit unchanged content after a backup restore changes file metadata.
+          await fs.utimes(raw, 1, 1);
+        }
+        await fs.rm(sanitized);
+      }
     } else {
       await audit.writeJsonLines(source, [record]);
       preservedPath = source;
       failAuditMove(audit, source);
     }
     const sourceBytes = await fs.readFile(preservedPath);
-    const sanitizedBytes =
-      shape === "hard links unavailable" ? undefined : await fs.readFile(sanitized);
+    const sanitizedBytes = await fs.readFile(sanitized).catch(() => undefined);
     const execPath = await seedApprovals(state);
 
     const result = await migrate();
@@ -106,24 +116,15 @@ it.each([
       changes: [],
       warnings: [expect.stringContaining(warning)],
     });
-    const warnings = result.warnings.join("\n");
-    expect(warnings).toContain(warning);
-    if (shape === "hard links unavailable") {
-      expect(warnings).toContain(source);
-      expect(warnings).toContain("OPENCLAW_STATE_DIR=");
-      expect(warnings).toContain(state.stateDir);
-      expect(warnings).toContain("openclaw doctor --fix");
-    } else {
-      expect(warnings).toContain("https://docs.openclaw.ai/cli/update/repair-and-recovery");
+    const guidance =
+      shape === "hard links unavailable"
+        ? [source, "OPENCLAW_STATE_DIR=", state.stateDir, "openclaw doctor --fix"]
+        : ["https://docs.openclaw.ai/cli/update/repair-and-recovery"];
+    for (const part of guidance) {
+      expect(result.warnings.join("\n")).toContain(part);
     }
     await expectContinued(result, execPath);
-    expect(
-      openOpenClawStateDatabase({ env: state.env })
-        .db.prepare(
-          "SELECT default_security FROM exec_approvals_config WHERE config_key = 'current'",
-        )
-        .get()?.default_security,
-    ).toBe("allowlist");
+    expect(loadExecApprovalsReadOnly().defaults?.security).toBe("allowlist");
     const repeated = await migrate();
     expect(receipt(repeated, "audit-logs")?.outcome).toBe("skipped");
     expect(repeated.warnings.join("\n")).toContain(warning);

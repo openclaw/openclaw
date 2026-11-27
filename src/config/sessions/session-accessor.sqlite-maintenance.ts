@@ -1,12 +1,16 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { captureSessionMaintenanceMcpRuntimes } from "../../agents/agent-bundle-mcp-manager-cleanup.js";
+import type { captureRuntimeWorkerGenerationContext } from "../../infra/runtime-worker-generation.js";
 import { getChildLogger } from "../../logging/logger.js";
-import { groupPluginRecords as groupRecords } from "../../plugins/record-groups.js";
 import {
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
 import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
+import type { captureOpenClawDatabaseMaintenanceResource } from "../../state/openclaw-state-db-async-lifecycle.js";
+import { withSqliteTranscriptArchiveSession } from "./session-accessor.sqlite-archive-session.js";
 import { publishSessionStateArchives } from "./session-accessor.sqlite-archive-store.js";
 import type { SessionStateDeletePlan } from "./session-accessor.sqlite-archive-types.js";
 import {
@@ -18,13 +22,19 @@ import { withSqliteSessionDeletions } from "./session-accessor.sqlite-deletion.j
 import type {
   SessionEntryMaintenancePlan,
   SessionEntryMaintenanceResult,
+  SessionMaintenanceMcpRelease,
   SqliteSessionReclamationPlan,
   SqliteSessionReclamationResult,
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
   capturePendingSessionMaintenanceAgeChanges,
   type SessionEntryMaintenanceAgeChange,
+  type SessionEntryMaintenanceAgeFact,
 } from "./session-accessor.sqlite-maintenance-age.js";
+import {
+  buildSessionMaintenanceBatches,
+  MAX_SESSION_MAINTENANCE_BATCH_ENTRIES,
+} from "./session-accessor.sqlite-maintenance-batches.js";
 import {
   applySessionEntryMaintenanceInDatabase,
   emptySessionEntryMaintenancePlan,
@@ -35,7 +45,6 @@ import {
   createSessionMaintenanceStatisticsOperation,
   resolveSessionReclamationDatabaseOptions,
 } from "./session-accessor.sqlite-reclamation.js";
-import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
 import {
   toDatabaseOptions,
   type ResolvedSqliteReadScope,
@@ -57,17 +66,39 @@ import {
 
 // Live-entry pruning owner. Produces plans inside writes; finalizes archives afterward.
 
-const MAX_SESSION_MAINTENANCE_BATCH_ENTRIES = 64;
-const MAX_SESSION_MAINTENANCE_BATCH_ARCHIVE_BYTES = 64 * 1024 * 1024;
 const SESSION_TRANSCRIPT_BYTE_QUERY_BATCH = MAX_SESSION_MAINTENANCE_BATCH_ENTRIES;
 // One full maintenance batch is the bulk-deletion boundary. Smaller routine
 // cleanups must not pay the measured synchronous full-database analysis cost.
 const SESSION_PLANNER_ANALYSIS_MIN_DELETED_ENTRIES = MAX_SESSION_MAINTENANCE_BATCH_ENTRIES;
 const plannerMaintenanceByStore = new Map<string, Promise<void>>();
 
+export type SessionEntryMaintenanceState = {
+  activeSessionKeys: Set<string>;
+  ageChanges: Map<string, SessionEntryMaintenanceAgeChange>;
+  assertCurrent: () => void;
+  captureExecution: () => Promise<OpenClawAgentDatabaseExecution | undefined>;
+  readCustody?: AgentDatabaseRequestExecutionSource["readCustody"];
+  runInRuntimeGeneration: ReturnType<typeof captureRuntimeWorkerGenerationContext>;
+  maintenanceResource?: ReturnType<typeof captureOpenClawDatabaseMaintenanceResource>;
+  execution?: OpenClawAgentDatabaseExecution;
+  active?: Promise<void>;
+  release?: Promise<void>;
+  retirement?: Promise<void>;
+  generation: number;
+  running: boolean;
+  ageFact?: SessionEntryMaintenanceAgeFact;
+  noCandidates?: boolean;
+  rejections: number;
+  retryDelayMs?: number;
+  immediate?: ReturnType<typeof setImmediate>;
+  timer?: ReturnType<typeof setTimeout>;
+  timerDeadlineMonotonicMs?: number;
+  unregisterClose?: () => void;
+};
+
 export function releaseSessionEntryMaintenanceExecution(
   databasePath: string,
-  owner: { execution?: OpenClawAgentDatabaseExecution; release?: Promise<void> },
+  owner: Pick<SessionEntryMaintenanceState, "execution" | "release">,
 ): void {
   if (!owner.execution) {
     return;
@@ -92,6 +123,8 @@ export async function readSessionEntryMaintenanceAgeAfterWriterRelease(
   > & {
     ageChanges: Map<string, SessionEntryMaintenanceAgeChange>;
     assertCurrent: () => void;
+    retainedExecution?: OpenClawAgentDatabaseExecution;
+    readCustody?: AgentDatabaseRequestExecutionSource["readCustody"];
   },
 ): Promise<
   Extract<SqliteSessionReclamationResult, { kind: "maintenance-age" | "maintenance-plan-stale" }>
@@ -100,6 +133,8 @@ export async function readSessionEntryMaintenanceAgeAfterWriterRelease(
   const result = await runSqliteSessionReclamation({
     diagnostics: { kind: "maintenance-age" },
     assertCommitAllowed: params.assertCurrent,
+    retainedExecution: params.retainedExecution,
+    readCustody: params.readCustody,
     plan: {
       kind: "maintenance-age",
       databaseOptions: params.databaseOptions,
@@ -116,7 +151,11 @@ export async function readSessionEntryMaintenanceAgeAfterWriterRelease(
 export async function refreshSqliteSessionPlannerStatisticsBestEffort(
   scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
   deletedEntries: number,
-  options: { isCurrent?: () => boolean; retainedExecution?: OpenClawAgentDatabaseExecution } = {},
+  options: {
+    isCurrent?: () => boolean;
+    retainedExecution?: OpenClawAgentDatabaseExecution;
+    readCustody?: AgentDatabaseRequestExecutionSource["readCustody"];
+  } = {},
 ): Promise<void> {
   const isCurrent = options.isCurrent ?? (() => true);
   if (deletedEntries < SESSION_PLANNER_ANALYSIS_MIN_DELETED_ENTRIES || !isCurrent()) {
@@ -148,6 +187,7 @@ export async function refreshSqliteSessionPlannerStatisticsBestEffort(
         resolveSessionReclamationDatabaseOptions(toDatabaseOptions(scope)),
         options.retainedExecution,
         assertCurrent,
+        options.readCustody,
       )
     : runSqliteSessionReclamation({
         diagnostics: { kind: "maintenance-statistics" },
@@ -167,142 +207,6 @@ export async function refreshSqliteSessionPlannerStatisticsBestEffort(
     });
   plannerMaintenanceByStore.set(storePath, completion);
   await completion;
-}
-
-type SessionMaintenanceBatch = {
-  archiveBytes: number;
-  entryRemovals: SessionEntryMaintenancePlan["entryRemovals"];
-  stateDeletePlans: SessionStateDeletePlan[];
-  workItems: number;
-};
-
-function buildSessionMaintenanceBatches(params: {
-  archiveBytesBySessionId: ReadonlyMap<string, number>;
-  entryRemovals: SessionEntryMaintenancePlan["entryRemovals"];
-  stateDeletePlans: readonly SessionStateDeletePlan[];
-}): SessionMaintenanceBatch[] {
-  const parent = params.entryRemovals.map((_, index) => index);
-  const find = (index: number): number => {
-    let root = index;
-    while (parent[root] !== root) {
-      root = parent[root] ?? root;
-    }
-    let current = index;
-    while (parent[current] !== current) {
-      const next = parent[current] ?? root;
-      parent[current] = root;
-      current = next;
-    }
-    return root;
-  };
-  const union = (left: number, right: number): void => {
-    const leftRoot = find(left);
-    const rightRoot = find(right);
-    if (leftRoot !== rightRoot) {
-      parent[rightRoot] = leftRoot;
-    }
-  };
-
-  const removalIndexBySessionId = new Map<string, number>();
-  const removalIndexBySessionKey = new Map<string, number>();
-  const addRemovalIndex = (sessionId: string, index: number): void => {
-    const firstIndex = removalIndexBySessionId.get(sessionId);
-    if (firstIndex === undefined) {
-      removalIndexBySessionId.set(sessionId, index);
-    } else {
-      union(firstIndex, index);
-    }
-  };
-  for (const [index, removal] of params.entryRemovals.entries()) {
-    if (!removal.expectedEntry) {
-      continue;
-    }
-    removalIndexBySessionKey.set(removal.sessionKey, index);
-    for (const sessionId of collectSessionStateIdsForEntry(removal.expectedEntry)) {
-      addRemovalIndex(sessionId, index);
-    }
-  }
-  for (const plan of params.stateDeletePlans) {
-    const ownerIndex = plan.snapshot.sessionKey
-      ? removalIndexBySessionKey.get(plan.snapshot.sessionKey)
-      : undefined;
-    if (ownerIndex !== undefined) {
-      addRemovalIndex(plan.sessionId, ownerIndex);
-    }
-  }
-
-  const groupsByRoot = new Map<number, SessionMaintenanceBatch>();
-  for (const [index, removal] of params.entryRemovals.entries()) {
-    const root = find(index);
-    const group = groupsByRoot.get(root) ?? {
-      archiveBytes: 0,
-      entryRemovals: [],
-      stateDeletePlans: [],
-      workItems: 0,
-    };
-    group.entryRemovals.push(removal);
-    groupsByRoot.set(root, group);
-  }
-
-  const plansBySessionId = groupRecords(params.stateDeletePlans, (plan) => plan.sessionId);
-  const standaloneGroups: SessionMaintenanceBatch[] = [];
-  for (const [sessionId, plans] of plansBySessionId) {
-    const removalIndex = removalIndexBySessionId.get(sessionId);
-    const removalGroup =
-      removalIndex === undefined ? undefined : groupsByRoot.get(find(removalIndex));
-    const group = removalGroup ?? {
-      archiveBytes: 0,
-      entryRemovals: [],
-      stateDeletePlans: [],
-      workItems: 0,
-    };
-    group.stateDeletePlans.push(...plans);
-    if (plans.some((plan) => plan.archiveTranscript)) {
-      group.archiveBytes += params.archiveBytesBySessionId.get(sessionId) ?? 0;
-    }
-    if (!removalGroup) {
-      standaloneGroups.push(group);
-    }
-  }
-
-  const groups = [...groupsByRoot.values(), ...standaloneGroups];
-  const batches: SessionMaintenanceBatch[] = [];
-  let batch: SessionMaintenanceBatch = {
-    archiveBytes: 0,
-    entryRemovals: [],
-    stateDeletePlans: [],
-    workItems: 0,
-  };
-  const flush = (): void => {
-    if (batch.workItems === 0) {
-      return;
-    }
-    batches.push(batch);
-    batch = { archiveBytes: 0, entryRemovals: [], stateDeletePlans: [], workItems: 0 };
-  };
-  // Limits apply between ownership groups. One inseparable group may exceed them so shared or
-  // historical session state is never deleted in a different transaction from its last owner.
-  for (const group of groups) {
-    group.workItems = Math.max(
-      group.entryRemovals.length,
-      new Set(group.stateDeletePlans.map((plan) => plan.sessionId)).size,
-    );
-    const exceedsEntryLimit =
-      batch.workItems > 0 &&
-      batch.workItems + group.workItems > MAX_SESSION_MAINTENANCE_BATCH_ENTRIES;
-    const exceedsByteLimit =
-      batch.workItems > 0 &&
-      batch.archiveBytes + group.archiveBytes > MAX_SESSION_MAINTENANCE_BATCH_ARCHIVE_BYTES;
-    if (exceedsEntryLimit || exceedsByteLimit) {
-      flush();
-    }
-    batch.archiveBytes += group.archiveBytes;
-    batch.entryRemovals.push(...group.entryRemovals);
-    batch.stateDeletePlans.push(...group.stateDeletePlans);
-    batch.workItems += group.workItems;
-  }
-  flush();
-  return batches;
 }
 
 async function readSessionTranscriptJsonlBytes(
@@ -396,6 +300,28 @@ export function applySessionEntryMaintenance(
   );
 }
 
+function captureMaintenanceMcpRetirement(entries: SessionEntryMaintenancePlan["entryRemovals"]) {
+  const ids = entries.flatMap(({ expectedEntry }) =>
+    expectedEntry ? [expectedEntry.sessionId] : [],
+  );
+  const captured = captureSessionMaintenanceMcpRuntimes(ids);
+  if (!captured) {
+    return undefined;
+  }
+  let committed: SessionMaintenanceMcpRelease | undefined;
+  return {
+    sessionIds: captured.sessionIds,
+    record(this: void, release: SessionMaintenanceMcpRelease) {
+      committed = release;
+    },
+    async drain() {
+      if (committed) {
+        await captured.retire(committed.sessionIds, committed.source);
+      }
+    },
+  };
+}
+
 /** Finalizes maintenance after its caller releases the per-store writer lane. */
 export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
   scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
@@ -404,6 +330,7 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
     deletedEntriesBeforeMaintenance?: number;
     isCurrent?: () => boolean;
     retainedExecution?: OpenClawAgentDatabaseExecution;
+    readCustody?: AgentDatabaseRequestExecutionSource["readCustody"];
     publishArchives?: (
       requested: readonly SessionLifecycleArchivedTranscript[],
     ) => Promise<SessionLifecycleArchivedTranscript[]>;
@@ -455,6 +382,7 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
     if (!owner || entryRemovals.length === 0) {
       return emptyResult();
     }
+    let mcp: ReturnType<typeof captureMaintenanceMcpRetirement>;
     try {
       if (stateDeletePlans.some((plan) => plan.archiveTranscript)) {
         throw new Error("Incognito session maintenance cannot archive transcripts");
@@ -479,10 +407,12 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
           entries,
           async (assertDeletionCurrent, capture) => {
             let settlement: ReturnType<typeof capture> | undefined;
+            mcp = captureMaintenanceMcpRetirement(entryRemovals);
             const outcome = await actor.storage!.mutate(
               {
                 type: "session.lifecycle.reclaim",
                 input: {
+                  ...(mcp && { retainedMcpSessionIds: mcp.sessionIds }),
                   entries: entries.map(({ sessionKey, entry }) => ({
                     sessionKey,
                     expected: entry,
@@ -504,7 +434,21 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
                   );
                   return settlement.beforeCommit();
                 },
-                settled: (settledOutcome) => settlement?.settle(settledOutcome.kind),
+                settled(settledOutcome) {
+                  if (
+                    settledOutcome.kind === "committed" &&
+                    settledOutcome.value.retiredMcpSessionIds
+                  ) {
+                    mcp?.record({
+                      sessionIds: settledOutcome.value.retiredMcpSessionIds,
+                      source: {
+                        agentId: owner.agentId,
+                        databaseIdentity: owner.identity.incarnation,
+                      },
+                    });
+                  }
+                  return settlement?.settle(settledOutcome.kind);
+                },
               },
             );
             const result = readSessionActorStorageResult(outcome);
@@ -529,6 +473,10 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
       }
     } catch (error) {
       warn("Memory session maintenance cleanup failed", error, stateDeletePlans);
+    } finally {
+      await mcp
+        ?.drain()
+        .catch((error: unknown) => warn("Session MCP retirement failed", error, []));
     }
     return emptyResult();
   }
@@ -536,7 +484,7 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
     await refreshSqliteSessionPlannerStatisticsBestEffort(
       scope,
       options.deletedEntriesBeforeMaintenance ?? 0,
-      { isCurrent, retainedExecution: options.retainedExecution },
+      options,
     );
     return emptyResult();
   }
@@ -553,7 +501,7 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
     await refreshSqliteSessionPlannerStatisticsBestEffort(
       scope,
       options.deletedEntriesBeforeMaintenance ?? 0,
-      { isCurrent, retainedExecution: options.retainedExecution },
+      options,
     );
     return emptyResult();
   }
@@ -576,8 +524,16 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
     > = [];
     let changedEntryRemovals: typeof removalOutcomes;
     let committedEntryRemovals: typeof removalOutcomes;
+    let mcp: ReturnType<typeof captureMaintenanceMcpRetirement>;
     try {
-      const materializedPlans = await materializeSessionStateDeletePlans(batch.stateDeletePlans);
+      const materializedPlans = await withSqliteTranscriptArchiveSession(
+        {
+          ...toDatabaseOptions(scope),
+          // Native planning can resolve a caller's symlink to its physical database path.
+          path: batch.stateDeletePlans[0]?.databasePath ?? scope.path,
+        },
+        () => materializeSessionStateDeletePlans(batch.stateDeletePlans),
+      );
       if (!isCurrent()) {
         break;
       }
@@ -598,8 +554,10 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
             sessionKey,
             maintenanceReason,
           }));
+          mcp = captureMaintenanceMcpRetirement(batch.entryRemovals);
           const plan = createSessionMaintenanceFinalizationOperation({
             agentId: scope.agentId,
+            ...(mcp && { retainedMcpSessionIds: mcp.sessionIds }),
             databaseOptions: toDatabaseOptions(scope),
             entries: batch.entryRemovals,
             materializedPlans,
@@ -609,9 +567,12 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
                 plan,
                 options.retainedExecution,
                 assertCommitAllowed,
+                options.readCustody,
+                mcp?.record,
               )
             : runSqliteSessionReclamation({
                 diagnostics: { kind: "maintenance-finalize" },
+                onMaintenanceMcpCommit: mcp?.record,
                 assertCommitAllowed,
                 plan,
               });
@@ -626,6 +587,11 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
     } catch (error) {
       warn("SQLite session maintenance cleanup failed", error, batch.stateDeletePlans);
       break;
+    } finally {
+      // A postcommit companion may reject after the writer has already removed the last owner.
+      await mcp
+        ?.drain()
+        .catch((error: unknown) => warn("Session MCP retirement failed", error, []));
     }
     if (!isCurrent()) {
       break;
@@ -662,10 +628,7 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
     }
   }
   if (isCurrent()) {
-    await refreshSqliteSessionPlannerStatisticsBestEffort(scope, deletedEntries, {
-      isCurrent,
-      retainedExecution: options.retainedExecution,
-    });
+    await refreshSqliteSessionPlannerStatisticsBestEffort(scope, deletedEntries, options);
   }
   return { archivedTranscripts: publishedTranscripts, ...committedCounts };
 }

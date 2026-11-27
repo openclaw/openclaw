@@ -8,6 +8,7 @@ import {
   withWorkspaceHashMemo,
   type WorkspaceHashMemo,
 } from "./workspace-hash-memo.js";
+import { prepareWorkspaceReconciliation } from "./workspace-manifest-comparison.js";
 import type { WorkerWorkspaceManifest } from "./workspace-manifest.js";
 import {
   type WorkerWorkspaceApplyResult,
@@ -55,7 +56,6 @@ export async function prepareLocalWorkspaceReconciliation(params: {
     const additionalPaths = snapshot.current.baseCommit
       ? await selectLocalWorkspaceCanonicalPaths({
           root: request.localPath,
-          admittedPaths: "[]",
           assertCurrent: () => request.assertCurrent?.(),
         })
       : undefined;
@@ -65,16 +65,18 @@ export async function prepareLocalWorkspaceReconciliation(params: {
             inspectAcceptedWorkerWorkspace({
               root: request.localPath,
               expectedManifestRef: request.baseManifestRef,
-              base: snapshot.base,
+              reconciliation: prepareWorkspaceReconciliation(snapshot.base, snapshot.current),
               current: snapshot.current,
               additionalPaths,
             }),
           )
         : undefined;
-    const hasWorkerCommits =
-      snapshot.gitHistory && snapshot.gitHistory.headCommit !== snapshot.gitHistory.baseCommit;
+    const needsHistorySettlement =
+      snapshot.gitHistory &&
+      (snapshot.gitHistory.unavailableReason ||
+        snapshot.gitHistory.headCommit !== snapshot.gitHistory.baseCommit);
     const unchanged =
-      !hasWorkerCommits && inspected?.conflictPaths.length === 0 ? inspected : undefined;
+      !needsHistorySettlement && inspected?.conflictPaths.length === 0 ? inspected : undefined;
     if (!unchanged) {
       await snapshot.verifyStable();
     }

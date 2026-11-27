@@ -7,10 +7,10 @@ import {
   validateReleaseChildRunProvenance,
   validateReleaseExecutionPlanArtifact,
 } from "./full-release-validation-policy.mjs";
+import { npmPreparationJobName } from "./lib/full-release-publication-inputs.mjs";
 import { authenticateOriginalExecutionPlanDigest } from "./release-ci-summary.mjs";
 
 const ARTIFACT_JOBS = [
-  ["Prepare release npm artifacts", "npm"],
   ["Prepare release Docker artifacts", "docker"],
   ["Acquire full release candidate", "candidate"],
   ["Prepare exact plugin npm artifacts", "plugin-npm"],
@@ -55,8 +55,21 @@ function assertParent(run, plan, repository) {
 
 function completedJob(jobs, name, attempt) {
   const matches = jobs.filter((job) => job.name === name && Number(job.run_attempt) === attempt);
-  const observed = matches.length
-    ? composeReleaseAttemptJobs([{ jobs: matches, runAttempt: attempt }], {
+  const completed = matches.filter(
+    (job) => job.status === "completed" && job.conclusion !== "skipped",
+  );
+  // Cancellation still needs the authenticated executed row when an unsealable
+  // attempt contains GitHub's runnerless queued ghost copies. Keep rejecting
+  // any runner-assigned ambiguity.
+  const observable =
+    completed.length === 1
+      ? matches.filter(
+          (job) =>
+            job === completed[0] || job.status !== "queued" || job.runner_id || job.runner_name,
+        )
+      : matches;
+  const observed = observable.length
+    ? composeReleaseAttemptJobs([{ jobs: observable, runAttempt: attempt }], {
         plannedRunAttempt: attempt,
         effectiveRunAttempt: attempt,
       }).jobs
@@ -66,9 +79,8 @@ function completedJob(jobs, name, attempt) {
       `${name} attempt ${attempt}: dispatch observation unavailable; repeat cancellation after it settles`,
     );
   }
-  // The evidence owner rejects real ambiguity but drops runnerless rerun copies.
   // Keep the original executed row for its authenticated log ID and upload steps.
-  return matches.find((job) => job.status === "completed" && job.conclusion !== "skipped");
+  return completed[0];
 }
 
 /** Cancel only producer-authenticated descendants; a fresh observation makes repetition resumable. */
@@ -164,7 +176,10 @@ export async function cancelReleaseTree(runId, client, options = {}) {
       failures.push(error.message);
     }
   }
-  for (const [name, stage] of ARTIFACT_JOBS) {
+  for (const [name, stage] of [
+    [npmPreparationJobName(plan.qualificationInputs), "npm"],
+    ...ARTIFACT_JOBS,
+  ]) {
     const matches = jobs.filter(
       (job) => job.name === name && Number(job.run_attempt) === plan.parentRunAttempt,
     );

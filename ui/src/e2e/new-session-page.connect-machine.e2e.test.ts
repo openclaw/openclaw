@@ -34,7 +34,7 @@ async function openConnection(scenario: ControlUiMockGatewayScenario) {
   await page.getByRole("button", { name: "Connect a device" }).click();
   const request = await gateway.waitForRequest("device.pair.setupCode");
   expect(request.params).toEqual({ includeQr: false, joinUrl: true });
-  const dialog = page.locator('openclaw-modal-dialog[label="Connect a machine"]');
+  const dialog = page.locator('openclaw-modal-dialog[label="Connect a device"]');
   return { page, gateway, dialog };
 }
 
@@ -59,7 +59,7 @@ suite.define(() => {
     await commandOnly.click();
     await dialog.getByText(first.serviceCommand, { exact: true }).waitFor();
     await commandOnly.click();
-    await dialog.getByRole("button", { name: "Mint fresh code" }).click();
+    await dialog.getByRole("button", { name: "Create new code" }).click();
     await expect.poll(() => command.textContent()).toBe(second.command);
     expect(
       (await gateway.getRequests("device.pair.setupCode")).map(({ params }) => params),

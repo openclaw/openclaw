@@ -258,6 +258,25 @@ struct ChatTranscriptExporterTests {
             messages: [message]) == "# Media chat\n")
     }
 
+    @MainActor
+    @Test func `exports the selected session title for the main alias`() {
+        let model = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: TestChatTransport(historyResponses: []))
+        defer { model.detachTransport() }
+        model.messages = [self.message(role: "user", text: "Keep this line.", timestamp: 0)]
+        let body = "\n\n### User — 1970-01-01T00:00:00Z\n\nKeep this line.\n"
+
+        model.sessions = [OpenClawChatSessionEntry(key: "agent:main:main", displayName: "A")]
+        #expect(model.exportTranscriptMarkdown() == "# A" + body)
+
+        model.sessions.append(OpenClawChatSessionEntry(key: "main", displayName: "Review / Friday"))
+        #expect(model.exportTranscriptMarkdown() == "# Review / Friday" + body)
+
+        model.sessions = [OpenClawChatSessionEntry(key: "agent:other:other", displayName: "Unrelated")]
+        #expect(model.exportTranscriptMarkdown() == "# main" + body)
+    }
+
     @Test func `sanitizes filename`() {
         #expect(
             ChatTranscriptExporter.filename(
@@ -273,6 +292,14 @@ struct ChatTranscriptExporterTests {
             sessionKey: "fallback")
         #expect(emojiFilename.utf8.count <= 243)
         #expect(emojiFilename.hasSuffix(".md"))
+    }
+
+    @Test func `uses chat for untitled export fallbacks`() {
+        #expect(ChatTranscriptExporter.filename(sessionTitle: nil, sessionKey: "") == "chat.md")
+        #expect(ChatTranscriptExporter.markdown(
+            sessionTitle: nil,
+            sessionKey: "",
+            messages: []) == "# Chat\n")
     }
 
     @Test func `empty transcript contains header only`() {

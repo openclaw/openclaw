@@ -9,9 +9,19 @@ read_when:
 # SubQ
 
 The `subq` plugin connects the optional [decision model role](/concepts/decision-models)
-to **SubQ Snap**, a hosted model for Boolean judgments, choices, and rubric scores.
-It appears in the **Decision** picker, not the conversational model picker. It does
-not replace your chat model or provide text generation or agent tool calling.
+to the SubQ Decisions API, which hosts **SubQ Snap** models for Boolean judgments,
+choices, and rubric scores. It does not replace your chat model or provide text
+generation or agent tool calling.
+
+<Warning>
+SubQ retired `subq-snap-preview` on November 11, 2026 and now routes it to another
+Snap model ([SubQ Models page](https://docs.subq.ai/using-the-api/models/)). OpenClaw
+no longer lists or calls it, and currently lists no SubQ Decision model: SubQ
+models will appear in the **Decision** picker once the hosted model catalog
+publishes them. A saved `subq/subq-snap-preview` selection shows as unavailable,
+and its evaluations return `unsupported-input` without contacting SubQ.
+`openclaw doctor --fix` removes it.
+</Warning>
 
 ## Install and configure
 
@@ -38,16 +48,13 @@ preserve other entries in `plugins.allow`:
       },
     },
   },
-  agents: {
-    defaults: { decisionModel: "subq/subq-snap-preview" },
-  },
 }
 ```
 
 The plugin is disabled by default. Enabling it does not select a model, schedule
-work, or change your primary model. Select **SubQ Snap (preview)** in the Decision
-picker, or set `agents.defaults.decisionModel` as above. An individual agent can
-set its own `decisionModel`; an empty override disables that role for the agent.
+work, or change your primary model. Select a SubQ model in the Decision picker when
+the catalog lists one. An individual agent can set its own `decisionModel`; an empty
+override disables that role for the agent.
 
 Credentials must be SecretRefs, not plaintext. Environment, file, and exec
 SecretRefs are also supported through the host's [secrets system](/gateway/secrets).
@@ -87,16 +94,16 @@ Automatic experimental consumers still require the separate
 ## API and limits
 
 The adapter targets `POST https://api.subq.ai/v1/systemone` with Bearer auth and
-model ID `subq-snap-preview`. It translates OpenClaw's `boolean` questions to
+sends the selected Decision model ID. It translates OpenClaw's `boolean` questions to
 the API's `noul` type. It does not route Snap through OpenAI chat completions;
 the separate `subq-preview` chat model is not part of this integration.
 
-According to SubQ's public documentation, checked October 13, 2026:
+According to SubQ's public Decisions API documentation, checked November 12, 2026:
 
-- Snap is in public preview with a 393,216-token (384K) context window.
-- Requests support 1–16 questions; question IDs are at most 100 characters.
+- Requests support 1–128 questions; question IDs are at most 100 characters.
 - Choice questions support 2–255 alternatives; Score questions support 2–10 levels.
-- Input costs $0.05 per million tokens; output tokens are free and reported as zero.
+- Output tokens are free and reported as zero. Per-model prices and context
+  windows are on the [Models page](https://docs.subq.ai/using-the-api/models/).
 - The vendor API supports up to four PNG, JPEG, or WebP images, each up to 4 MiB
   decoded and 8 MiB decoded total, within a 13 MiB request body. It does not accept
   video.
@@ -128,7 +135,7 @@ The adapter has synthetic HTTP-boundary tests for the documented wire format,
 limits, errors, cancellation, and secret refresh. Authenticated live inference
 has not been verified; a SubQ account with model access and credits is required.
 Developers can run `pnpm test:live -- extensions/subq/src/runtime.live.test.ts`
-with a protected `SUBQ_API_KEY` environment variable. The live runner opts in
+with a protected `SUBQ_API_KEY` and the SubQ model ID in `SUBQ_DECISION_MODEL`. The live runner opts in
 with `OPENCLAW_LIVE_TEST=1`; the test sends only its fixed synthetic example
 and makes one paid request.
 Vendor benchmark and latency claims are not OpenClaw validation results.

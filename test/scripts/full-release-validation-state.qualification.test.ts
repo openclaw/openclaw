@@ -7,6 +7,7 @@ import {
   validateReleaseExecutionPlanArtifact,
   releaseExecutionPlanSha256,
 } from "../../scripts/full-release-validation-policy.mjs";
+import { buildReleaseValidationManifest } from "../../scripts/lib/full-release-manifest.mjs";
 import { validateReleaseRunEvidence } from "../../scripts/release-ci-summary.mjs";
 import {
   resolveQualificationCoverage,
@@ -29,12 +30,17 @@ describe("candidate-owned frozen qualification coverage", () => {
     readFileSync("scripts/lib/release-qualification-coverage.json", "utf8"),
   );
 
-  it.each([false, true])(
-    "revalidates whole-parent reuse with the admitted P verifier before passing the decision (descendant=%s)",
-    async (descendant) => {
-      const root = candidatePublicationFixture();
+  it.each(["exact", "changelog", "beta promotion"])(
+    "revalidates admitted whole-parent reuse through decision, drain, and manifest upload validation (%s)",
+    async (mode) => {
+      const descendant = mode !== "exact";
+      const promotion = mode === "beta promotion";
+      const root = candidatePublicationFixture(
+        promotion ? { candidateVersion: "2026.8.28-beta.1", releaseProfile: "stable" } : {},
+      );
       const current = candidatePublicationFixture({
         candidateSha: descendant ? "d".repeat(40) : root.q,
+        ...(promotion ? { candidateVersion: "2026.8.28" } : {}),
         runId: "29071366026",
       });
       current.plan.sourceAdmission = JSON.parse(
@@ -52,33 +58,47 @@ describe("candidate-owned frozen qualification coverage", () => {
         },
         root.client,
       );
+      const reusePolicy = promotion
+        ? "stable-qualified-beta-final-v1"
+        : descendant
+          ? "split-changelog-release-v1"
+          : "exact-target-full-validation-v1";
+      const changedPaths = promotion
+        ? ["package.json"]
+        : descendant
+          ? ["CHANGELOG/2026.8.28.md", "CHANGELOG/records/2026.8.28.md"]
+          : [];
       const sealed = buildReleaseExecutionPlanArtifact({
         ...current.plan,
         expected: current.plan,
         children: root.plan.children.map((child) => ({ ...child, source: "reused" })),
         evidenceReuse: {
           requested: true,
-          policy: descendant ? "split-changelog-release-v1" : "exact-target-full-validation-v1",
+          policy: reusePolicy,
           rootRunId: root.runId,
           selectedRunId: root.runId,
           evidenceSha: root.q,
-          changedPaths: descendant
-            ? ["CHANGELOG/2026.8.28.md", "CHANGELOG/records/2026.8.28.md"]
-            : [],
+          changedPaths,
           runUrl: root.parent.html_url,
-          sourceManifest: root.manifest,
+          sourceArtifact: evidence.root.artifact,
+          sourceWorkflow: { ref: root.manifest.workflowRef, sha: root.manifest.workflowSha },
         },
       });
+      expect(sealed.evidenceReuse.sourceManifest).toBeUndefined();
       const directory = tempDirs.make("frv-admitted-reuse-decision-");
       const bin = join(directory, "bin");
       mkdirSync(bin);
       const planPath = join(directory, "plan.json");
       const statePath = join(directory, "decision.json");
       const validator = join(directory, "verifier.mjs");
+      const evidencePath = join(directory, "evidence.json");
       writeFileSync(planPath, JSON.stringify(sealed));
+      // Keep full evidence out of environment entries, which have OS size limits.
+      writeFileSync(evidencePath, JSON.stringify(evidence));
       writeFileSync(
         validator,
-        `import { isDeepStrictEqual } from "node:util";
+        `import { readFileSync } from "node:fs";
+import { isDeepStrictEqual } from "node:util";
 const args = process.argv;
 const value = (flag) => args[args.indexOf(flag) + 1];
 const expected = JSON.parse(process.env.FRV_EXPECTED_VERIFIER);
@@ -86,7 +106,7 @@ for (const [flag, wanted] of Object.entries(expected)) {
   const actual = flag === "--qualification-reuse-json" ? JSON.parse(value(flag)) : value(flag);
   if (!isDeepStrictEqual(actual, wanted)) throw new Error("Admitted verifier mismatch: " + flag);
 }
-console.log(process.env.FRV_VERIFIED_EVIDENCE);
+console.log(readFileSync(process.env.FRV_VERIFIED_EVIDENCE_PATH, "utf8"));
 `,
       );
       const responses: Record<string, string> = {};
@@ -110,13 +130,13 @@ console.log(response);
 `,
       );
       chmodSync(gh, 0o755);
-      const result = runCollector("decision", {
+      const env = {
         GITHUB_RUN_ID: current.runId,
         GITHUB_RUN_ATTEMPT: "1",
         GITHUB_REF_NAME: current.branch,
         GITHUB_SHA: current.q,
         TARGET_SHA: current.q,
-        RELEASE_PROFILE: "beta",
+        RELEASE_PROFILE: current.plan.releaseProfile,
         RERUN_GROUP: "all",
         FULL_RELEASE_EXECUTION_PLAN_PATH: planPath,
         FULL_RELEASE_STATE_PATH: statePath,
@@ -137,23 +157,53 @@ console.log(response);
             ? {
                 "--expected-target-sha": current.q,
                 "--expected-evidence-sha": root.q,
-                "--expected-evidence-policy": "split-changelog-release-v1",
-                "--expected-changed-paths-json": JSON.stringify([
-                  "CHANGELOG/2026.8.28.md",
-                  "CHANGELOG/records/2026.8.28.md",
-                ]),
+                "--expected-evidence-policy": reusePolicy,
+                "--expected-changed-paths-json": JSON.stringify(changedPaths),
               }
             : {}),
         }),
-        FRV_VERIFIED_EVIDENCE: JSON.stringify(evidence),
+        FRV_VERIFIED_EVIDENCE_PATH: evidencePath,
         FRV_GITHUB_RESPONSES: JSON.stringify(responses),
         PATH: `${bin}:${process.env.PATH}`,
-      });
+      };
+      const result = runCollector("decision", env);
       const decisionJson = existsSync(statePath)
         ? readFileSync(statePath, "utf8")
         : "<missing decision>";
-      expect(result.status, [result.stderr, result.stdout, decisionJson].join("\n")).toBe(0);
+      expect(
+        result.status,
+        [result.error, result.signal, result.stderr, result.stdout, decisionJson].join("\n"),
+      ).toBe(0);
       expect(JSON.parse(readFileSync(statePath, "utf8"))).toMatchObject({ state: "passed" });
+      const drainPath = join(directory, "drain.json");
+      const drained = runCollector("drain", { ...env, FULL_RELEASE_STATE_PATH: drainPath });
+      expect(drained.status, drained.stderr).toBe(0);
+      const drain = JSON.parse(readFileSync(drainPath, "utf8"));
+      const manifestPath = join(directory, "manifest.json");
+      const manifest = buildReleaseValidationManifest({
+        plan: sealed,
+        drain,
+        context: current.manifest,
+        reusedManifest: root.manifest,
+      });
+      writeFileSync(manifestPath, JSON.stringify(manifest));
+      const manifestEnv = {
+        ...env,
+        RELEASE_EXECUTION_PLAN_PATH: planPath,
+        RELEASE_DECISION_PATH: statePath,
+        DIAGNOSTIC_DRAIN_PATH: drainPath,
+        RELEASE_VALIDATION_MANIFEST_PATH: manifestPath,
+      };
+      const validated = runCollector("validate-manifest-evidence", manifestEnv);
+      expect(validated.status, validated.stderr).toBe(0);
+      expect(JSON.parse(readFileSync(manifestPath, "utf8")).evidenceReuse.publication).toEqual(
+        manifest.evidenceReuse.publication,
+      );
+      delete manifest.evidenceReuse.publication;
+      writeFileSync(manifestPath, JSON.stringify(manifest));
+      const missingRoot = runCollector("validate-manifest-evidence", manifestEnv);
+      expect(missingRoot.status).not.toBe(0);
+      expect(missingRoot.stderr).toContain("differs from the immutable execution plan");
     },
   );
 

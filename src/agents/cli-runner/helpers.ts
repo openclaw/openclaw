@@ -17,10 +17,11 @@ import { resolveRuntimeOsLabel } from "../../infra/os-summary.js";
 import { privateFileStore } from "../../infra/private-file-store.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import type { ImageContent } from "../../llm/types.js";
-import type { MediaFact } from "../../media/media-facts.js";
+import { isMeaningfulMediaFact, type MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import type { BootstrapMode } from "../bootstrap-mode.js";
 import { formatCliImageTurnContext } from "../cli-image-turn-correlation.js";
 import type { EmbeddedContextFile } from "../embedded-agent-helpers/context-file.js";
@@ -29,6 +30,7 @@ import {
   detectImageReferences,
 } from "../embedded-agent-runner/run/images.js";
 import type { MediaImageLayout } from "../embedded-agent-runner/run/prompt-image-metadata.js";
+import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
 import type { AgentTool } from "../runtime/index.js";
 import { detectRuntimeShell } from "../shell-utils.js";
@@ -39,7 +41,8 @@ import { cliBackendLog } from "./log.js";
 import { formatTomlConfigOverride } from "./toml-inline.js";
 
 const CLI_IMAGE_SWEEP_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
-const sweptCliImageRoots = new Set<string>();
+const CLI_IMAGE_SWEEP_RECURRENCE_MS = 24 * 60 * 60 * 1_000;
+const lastCliImageRootSweepMs = new Map<string, number>();
 
 export function isClaudeCliBackendId(providerId: string): boolean {
   return normalizeOptionalLowercaseString(providerId) === "claude-cli";
@@ -81,12 +84,14 @@ export function resolveCliRunQueueKey(params: {
 export function buildCliAgentSystemPrompt(params: {
   preparedTtsPreferences?: import("../../tts/tts-preferences.js").PreparedTtsPreferences;
   requesterProfileId?: string;
+  prepareSessionProjectGuidance?: () => Promise<string | undefined>;
   workspaceDir: string;
   cwd?: string;
   config?: OpenClawConfig;
   preparedModelRuntime?: Parameters<
     typeof buildConfiguredAgentSystemPrompt
   >[0]["preparedModelRuntime"];
+  preparedRepoRoot?: string | null;
   preparedGitCoauthorPrompt?: string;
   preparedSessionEntry?: Parameters<typeof buildSystemPromptParams>[0]["preparedSessionEntry"];
   extraSystemPrompt?: string;
@@ -103,7 +108,7 @@ export function buildCliAgentSystemPrompt(params: {
   sourcePath?: string;
   tools: AgentTool[];
   contextFiles?: EmbeddedContextFile[];
-  bootstrapMode?: BootstrapMode;
+  bootstrap?: { bootstrapMode: BootstrapMode; bootstrapCompleted: boolean };
   bootstrapTruncationNotice?: string;
   skillsPrompt?: string;
   modelDisplay: string;
@@ -116,12 +121,14 @@ export function buildCliAgentSystemPrompt(params: {
     cfg: params.config ?? {},
     agentId: params.agentId,
   });
-  const defaultModelLabel = `${defaultModelRef.provider}/${defaultModelRef.model}`;
+  const defaultModelLabel =
+    defaultModelRef && `${defaultModelRef.provider}/${defaultModelRef.model}`;
   const { runtimeInfo } = buildSystemPromptParams({
     config: params.config,
     agentId: params.agentId,
     workspaceDir: runtimeCwd,
     cwd: runtimeCwd,
+    preparedRepoRoot: params.preparedRepoRoot,
     preparedGitCoauthorPrompt: params.preparedGitCoauthorPrompt,
     preparedSessionEntry: params.preparedSessionEntry,
     requesterProfileId: params.requesterProfileId,
@@ -144,6 +151,7 @@ export function buildCliAgentSystemPrompt(params: {
   });
   return buildConfiguredAgentSystemPrompt({
     config: params.config,
+    prepareSessionProjectGuidance: params.prepareSessionProjectGuidance,
     preparedModelRuntime: params.preparedModelRuntime,
     preparedTtsPreferences: params.preparedTtsPreferences,
     agentId: params.agentId,
@@ -168,7 +176,8 @@ export function buildCliAgentSystemPrompt(params: {
     messageTool: params.tools.find((tool) => tool.name.trim().toLowerCase() === "message"),
     skillsPrompt: params.skillsPrompt,
     contextFiles: params.contextFiles,
-    bootstrapMode: params.bootstrapMode,
+    bootstrapMode: params.bootstrap?.bootstrapMode,
+    bootstrapCompleted: params.bootstrap?.bootstrapCompleted,
     bootstrapTruncationNotice: params.bootstrapTruncationNotice,
   });
 }
@@ -233,13 +242,16 @@ function resolveCliImageFileName(image: ImageContent): string {
 }
 
 async function sweepCliImageRoot(imageRoot: string): Promise<void> {
-  if (sweptCliImageRoots.has(imageRoot)) {
+  const nowMs = Date.now();
+  const lastSweep = lastCliImageRootSweepMs.get(imageRoot);
+  if (lastSweep !== undefined && nowMs - lastSweep < CLI_IMAGE_SWEEP_RECURRENCE_MS) {
     return;
   }
-  sweptCliImageRoots.add(imageRoot);
+  lastCliImageRootSweepMs.set(imageRoot, nowMs);
   try {
     await fileStore({ rootDir: imageRoot }).pruneExpired({ ttlMs: CLI_IMAGE_SWEEP_TTL_MS });
   } catch (error) {
+    lastCliImageRootSweepMs.delete(imageRoot);
     cliBackendLog.debug(`cli image cache sweep failed: ${String(error)}`);
   }
 }
@@ -302,25 +314,26 @@ export async function writeCliSystemPromptFile(params: {
   };
 }
 
-export async function prepareCliPromptImagePayload(params: {
-  backend: CliBackendConfig;
+type CliPromptImageInput = {
   prompt: string;
   imagePrompt?: string;
   workspaceDir: string;
   localRoots?: readonly string[];
+  /** Owning run config: its image limits apply to hydrated images. */
+  config?: OpenClawConfig;
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
   mediaImageLayout?: MediaImageLayout;
   media?: MediaFact[];
-  imageTurnKey?: string;
-}): Promise<{
-  prompt: string;
-  imagePaths?: string[];
-}> {
-  let prompt = params.prompt;
-  const imagePrompt = params.imagePrompt ?? prompt;
+  /** Steered input: its recorded media facts own image hydration. */
+  userTurnTranscriptRecorder?: Pick<UserTurnTranscriptRecorder, "resolveMessage">;
+};
+
+export async function loadCliPromptImages(params: CliPromptImageInput): Promise<ImageContent[]> {
+  const imagePrompt = params.imagePrompt ?? params.prompt;
   const needsHydration =
     params.imagePrompt !== undefined ||
+    params.userTurnTranscriptRecorder !== undefined ||
     Boolean(params.media?.length) ||
     Boolean(params.mediaImageLayout) ||
     (!params.images?.length && detectImageReferences(imagePrompt).length > 0);
@@ -333,7 +346,9 @@ export async function prepareCliPromptImagePayload(params: {
         existingImages: params.images,
         imageOrder: params.imageOrder,
         mediaImageLayout: params.mediaImageLayout,
+        userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
         maxBytes: MAX_IMAGE_BYTES,
+        maxDimensionPx: resolveImageSanitizationLimits(params.config).maxDimensionPx,
         localRoots: params.localRoots,
       })
     : undefined;
@@ -342,7 +357,32 @@ export async function prepareCliPromptImagePayload(params: {
       `failed to hydrate ${imageResult.failedMediaCount} structured image attachment(s) for CLI input`,
     );
   }
-  const resolvedImages = imageResult?.images ?? params.images ?? [];
+  return imageResult?.images ?? params.images ?? [];
+}
+
+export async function prepareCliPromptImagePayload(
+  params: CliPromptImageInput & {
+    backend: CliBackendConfig;
+    imageTurnKey?: string;
+    /** Run-owned snapshot already inspected by the input gate; never reload its source paths. */
+    preparedImages?: ImageContent[];
+  },
+): Promise<{
+  prompt: string;
+  imagePaths?: string[];
+}> {
+  let prompt = params.prompt;
+  const resolvedImages = params.preparedImages ?? (await loadCliPromptImages(params));
+  const inlinePaths =
+    !params.backend.imageArg || params.backend.input === "stdin" || params.backend.imageArg === "@";
+  // Documents expand into model-facing text without an @image path. Correlate
+  // that native prompt with its persisted attachment turn just as for images.
+  if (
+    params.imageTurnKey &&
+    (params.media?.some(isMeaningfulMediaFact) || (resolvedImages.length && inlinePaths))
+  ) {
+    prompt = `${prompt.trimEnd()}\n\n${formatCliImageTurnContext(params.imageTurnKey)}`;
+  }
   if (resolvedImages.length === 0) {
     return { prompt };
   }
@@ -351,14 +391,7 @@ export async function prepareCliPromptImagePayload(params: {
     workspaceDir: params.workspaceDir,
     images: resolvedImages,
   });
-  if (
-    !params.backend.imageArg ||
-    params.backend.input === "stdin" ||
-    params.backend.imageArg === "@"
-  ) {
-    if (params.imageTurnKey) {
-      prompt = `${prompt.trimEnd()}\n\n${formatCliImageTurnContext(params.imageTurnKey)}`;
-    }
+  if (inlinePaths) {
     prompt = appendImagePathsToPrompt(
       prompt,
       imagePaths,

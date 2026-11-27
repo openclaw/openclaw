@@ -4,7 +4,7 @@ import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-m
 import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../../plugins/installed-plugin-index-policy.js";
 import { getPluginExecutionFrame } from "../../plugins/plugin-instance-invocation.js";
-import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/generation-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/generation-state.js";
 import { runPreparedReply } from "./get-reply-run.js";
 import { baseParams } from "./get-reply-run.test-support.js";
 import { bindPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
@@ -55,6 +55,7 @@ it("keeps the admitted Gateway generation active through a different reply works
       pluginRegistry: selectedGeneration.pluginRegistry,
       workspaceDir,
     },
+    run: <T>(run: () => T): T => run(),
     [Symbol.asyncDispose]: release,
     pluginGeneration: selectedGeneration,
   }));

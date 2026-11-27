@@ -27,7 +27,7 @@ export function ReviewFilename(props: { name: string }) {
   return (
     <span class="session-diff__filename-label">
       <span ref={createTextOverflow(() => props.name)} class="session-diff__basename">
-        {split() ? props.name.slice(0, split()) : props.name}
+        <bdi>{split() ? props.name.slice(0, split()) : props.name}</bdi>
       </span>
       {split() > 0 && <span class="session-diff__extension">{props.name.slice(split())}</span>}
     </span>
@@ -43,9 +43,9 @@ function reviewTree(files: readonly SessionDiffFile[], query: string): ReviewNod
     path: "",
     children: [],
   };
-  const filter = query.trim().toLocaleLowerCase();
+  const filter = query.trim().toLowerCase().normalize("NFC");
   for (const file of files) {
-    if (filter && !file.path.toLocaleLowerCase().includes(filter)) {
+    if (filter && !file.path.toLowerCase().normalize("NFC").includes(filter)) {
       continue;
     }
     const parts = file.path.replace(/\/$/, "").split("/");

@@ -2,13 +2,22 @@
  * Owner-only synthetic recordEvent measurement; no Gateway or database writes.
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/trajectory-record-event-measure.ts
  *   --mode timing --iterations 2000
- * Repeat with --mode allocation, alternating five base/candidate process samples.
+ * Repeat with --mode allocation or survivor, alternating five base/candidate samples.
+ * Survivor sampling includes major-collected objects, excludes minor-collected ones;
+ * it is a promotion-candidate proxy, not exact promoted bytes.
  * Baseline: OPENCLAW_BENCH_BASELINE_DIR=/absolute/source-overlay plus
  * --import ./scripts/perf/worker-retained-heap-preload.ts after the TSX preload.
  * The sink alone is replaced; runtime limiting, projection and serialization are real.
  * Compare outputHash before metrics. Acceptance: unchanged captured bytes, zero
  * omitted-replay reads, reduced allocation/CPU. Untraced timing owns CPU/GC evidence.
- * Context models 60 messages and 40 tools; tool lifecycle is a no-replay control.
+ * Eight event payloads cover attempt context (60 messages/40 tools), startup metadata
+ * (40 plugins/10 skills), session start, tool call and tool result. Inputs are frozen
+ * outside measurement; payload builders and sink persistence are excluded. Ordinary
+ * subscribed tools and nested tool lifecycles use the same call/result record owner.
+ * Oversized context has 12 30-KiB messages and 40 8-KiB tool descriptions; completion
+ * snapshots and oversized results cover the other reduction paths. A separate byte
+ * corpus covers escapes, Unicode, JSON leaves, colliding
+ * marker keys, custom hooks and media projection before size measurement.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -18,6 +27,8 @@ import { loadavg } from "node:os";
 import { PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import { freezeJsonSnapshot } from "../../src/shared/immutable-data.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -27,7 +38,7 @@ const { values } = parseArgs({
   },
 });
 assert(global.gc, "Use --expose-gc");
-assert(["timing", "allocation"].includes(values.mode));
+assert(["timing", "allocation", "survivor"].includes(values.mode));
 const iterations = parseStrictIntegerOption({
   raw: values.iterations,
   fallback: 2000,
@@ -80,6 +91,129 @@ const context = {
     name: `tool_${index}`,
     parameters: { type: "object", properties: { query: { type: "string" } } },
   })),
+  prompt: "Inspect the synthetic workspace",
+  imagesCount: 0,
+  streamStrategy: "default",
+  transport: "sse",
+  transcriptLeafId: "synthetic-leaf",
+};
+const started = {
+  trigger: "user",
+  sessionFile: "/synthetic/session",
+  workspaceDir: "/synthetic/workspace",
+  agentId: "main",
+  messageProvider: "webchat",
+  messageChannel: "webchat",
+  localModelLean: false,
+  toolCount: 40,
+  clientToolCount: 0,
+};
+const metadata = {
+  capturedAt: "2026-10-28T00:00:00.000Z",
+  harness: {
+    type: "openclaw",
+    name: "OpenClaw",
+    version: "synthetic",
+    gitSha: "synthetic",
+    os: { platform: "darwin", arch: "arm64", release: "synthetic", label: "synthetic" },
+    runtime: { node: process.version },
+    invocation: ["node", "openclaw"],
+    entrypoint: "<workspace>/openclaw",
+    workspaceDir: "<workspace>",
+    sessionFile: "<state>/session",
+  },
+  model: {
+    provider: "synthetic",
+    name: "mock",
+    api: "synthetic",
+    fastMode: false,
+    thinkLevel: "medium",
+    reasoningLevel: "off",
+  },
+  config: {
+    redacted: {
+      agents: { defaults: { model: "synthetic/mock" } },
+      plugins: {
+        entries: Object.fromEntries(
+          Array.from({ length: 40 }, (_, i) => [`plugin_${i}`, { enabled: true }]),
+        ),
+      },
+    },
+    runtime: {
+      timeoutMs: 600000,
+      trigger: "user",
+      disableTools: false,
+      toolResultFormat: "markdown",
+    },
+  },
+  plugins: {
+    source: "active-registry",
+    importedRuntimePluginIds: Array.from({ length: 40 }, (_, i) => `plugin_${i}`),
+    entries: Array.from({ length: 40 }, (_, i) => ({
+      id: `plugin_${i}`,
+      name: `Synthetic plugin ${i}`,
+      version: "1.0.0",
+      description: "Synthetic plugin description",
+      origin: "bundled",
+      enabled: true,
+      explicitlyEnabled: true,
+      activated: true,
+      imported: true,
+      activationSource: "config",
+      activationReason: "enabled",
+      status: "loaded",
+      format: "openclaw",
+      kind: "tool",
+      source: `/synthetic/plugins/plugin_${i}/index.ts`,
+      rootDir: `/synthetic/plugins/plugin_${i}`,
+      workspaceDir: "/synthetic/workspace",
+      toolNames: [`tool_${i}`],
+      hookNames: [],
+      channelIds: [],
+      cliBackendIds: [],
+      providerIds: [],
+    })),
+  },
+  skills: {
+    snapshotVersion: 1,
+    entries: Array.from({ length: 10 }, (_, i) => ({
+      id: `skill_${i}`,
+      name: `skill_${i}`,
+      description: "Synthetic skill",
+      filePath: `<workspace>/skill_${i}/SKILL.md`,
+      baseDir: `<workspace>/skill_${i}`,
+      source: "bundled",
+      available: true,
+    })),
+  },
+  prompting: {
+    skillsPrompt: "Synthetic skill catalog. ".repeat(100),
+    userPromptPrefixText: "Synthetic prefix",
+    systemPromptReport: {
+      source: "run",
+      workspaceDir: "<workspace>",
+      systemPrompt: { chars: 3000, projectContextChars: 1000, nonProjectContextChars: 2000 },
+    },
+  },
+  redaction: {
+    config: { mode: "redactConfigObject", secretsMasked: true },
+    payloads: {
+      mode: "sanitizeDiagnosticPayload",
+      credentialsRemoved: true,
+      imageDataRedacted: true,
+    },
+    harness: {
+      mode: "diagnostic-support-redaction",
+      programArgumentsRedacted: true,
+      localPathsRedacted: true,
+    },
+  },
+  metadata: {
+    sessionKey: "synthetic:main",
+    agentId: "main",
+    messageProvider: "webchat",
+    messageChannel: "webchat",
+  },
 };
 const call = { name: "synthetic_tool", toolCallId: "call-1", args: { query: "inspect" } };
 const result = {
@@ -88,38 +222,91 @@ const result = {
   success: true,
   result: { content: [{ type: "text", text: "Synthetic result. ".repeat(64) }] },
 };
+const fixtureInputs = freezeJsonSnapshot([context, started, metadata, call, result]);
+const oversizedMessages = Array.from({ length: 12 }, (_, index) => ({
+  role: index % 2 ? "assistant" : "user",
+  content: `Message ${index}. ${"Synthetic context. ".repeat(1600)}`,
+}));
+const oversized = {
+  ...context,
+  messages: oversizedMessages,
+  tools: context.tools.map((tool) => ({ ...tool, description: "Synthetic tool. ".repeat(550) })),
+};
+const completion = { messagesSnapshot: oversizedMessages, usage: { input: 120, output: 30 } };
+const compact = {
+  ...result,
+  contentItems: Array.from({ length: 64 }, () => ({ text: "synthetic ".repeat(800) })),
+};
+const serializedInputs = JSON.stringify(fixtureInputs);
 const golden = [];
+const normalizedLine = () =>
+  sink
+    .readLine()
+    .replace(/"ts":"[^"]*"/u, '"ts":"<time>"')
+    .replace(/"seq":\d+/u, '"seq":0')
+    .replace(/"sourceSeq":\d+/u, '"sourceSeq":0');
+for (const data of [
+  {
+    messages: oversizedMessages,
+    prompt: "你好🙂",
+    'quote"\\\u0001': "\ud800\udfff\ud800",
+    "10": 1,
+    "2": 2,
+  },
+  { messages: oversizedMessages, prompt: '"\\\b\f\n\r\t\u0000\ud800'.repeat(2000) },
+  {
+    messages: oversizedMessages,
+    missing: undefined,
+    symbol: Symbol("omit"),
+    values: [undefined, Symbol("null"), Number.NaN, Infinity, -0, null, "", [], {}],
+  },
+  {
+    messages: oversizedMessages,
+    originalBytes: 1,
+    limitBytes: 2,
+    reason: "original",
+    droppedFields: ["original"],
+    truncated: false,
+  },
+  { messages: oversizedMessages, custom: { toJSON: () => ({ count: 1n }) } },
+  {
+    messages: Array.from({ length: 12 }, () => ({
+      image: "data:image/png;base64," + "A".repeat(30000),
+    })),
+  },
+]) {
+  recorder.recordEvent("context.compiled", data);
+  golden.push(normalizedLine());
+}
 const scenarios = [];
 for (const [name, capture] of [
   ["attempt-context", () => recorder.recordEvent("context.compiled", context)],
-  [
-    "tool-lifecycle",
-    () => {
-      recorder.recordEvent("tool.call", call);
-      recorder.recordEvent("tool.result", result);
-    },
-  ],
+  ["session-started", () => recorder.recordEvent("session.started", started)],
+  ["trace-metadata", () => recorder.recordEvent("trace.metadata", metadata)],
+  ["tool-call", () => recorder.recordEvent("tool.call", call)],
+  ["tool-result", () => recorder.recordEvent("tool.result", result)],
+  ["oversized-context", () => recorder.recordEvent("context.compiled", oversized)],
+  ["oversized-completion", () => recorder.recordEvent("model.completed", completion)],
+  ["oversized-result", () => recorder.recordEvent("tool.result", compact)],
 ] as const) {
   capture();
-  const captured = JSON.parse(sink.readLine());
-  delete captured.ts;
-  delete captured.seq;
-  delete captured.sourceSeq;
-  assert(!JSON.stringify(captured).includes("providerReplay"));
-  golden.push(captured);
+  assert(!sink.readLine().includes("providerReplay"));
+  golden.push(normalizedLine());
   for (let index = 0; index < 100; index++) {
     capture();
   }
   global.gc();
   await nextTurn();
   const inspector = new Session();
-  if (values.mode === "allocation") {
+  if (values.mode === "survivor") {
     inspector.connect();
     await inspector.post("HeapProfiler.startSampling", {
       samplingInterval: 8192,
       includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
+      includeObjectsCollectedByMinorGC: false,
     });
+  } else if (values.mode === "allocation") {
+    await startCollectedHeapSampling(inspector, 8192);
   }
   const collections: Array<{ kind: number; start: number; duration: number }> = [];
   const observer = new PerformanceObserver((list) => {
@@ -143,7 +330,7 @@ for (const [name, capture] of [
   await nextTurn();
   observer.disconnect();
   let allocation;
-  if (values.mode === "allocation") {
+  if (values.mode !== "timing") {
     const { profile } = await inspector.post("HeapProfiler.stopSampling");
     allocation = {
       bytesPerOperation: profile.samples.reduce((sum, sample) => sum + sample.size, 0) / iterations,
@@ -155,6 +342,7 @@ for (const [name, capture] of [
   scenarios.push({
     name,
     iterations,
+    serializedBytes: Buffer.byteLength(sink.readLine()),
     cpuUsPerOperation: (elapsedCpu.user + elapsedCpu.system) / iterations,
     wallMs: end - start,
     allocation,
@@ -172,6 +360,7 @@ for (const [name, capture] of [
     after,
   });
 }
+assert.equal(JSON.stringify(fixtureInputs), serializedInputs, "Capture mutated caller input");
 console.log(
   JSON.stringify({
     mode: values.mode,

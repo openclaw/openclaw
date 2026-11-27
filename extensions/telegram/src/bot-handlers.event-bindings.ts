@@ -292,7 +292,7 @@ export function createTelegramEventBindings({
           return;
         }
 
-        let { route } = await resolveTelegramConversationRoute({
+        const conversationRoute = await resolveTelegramConversationRoute({
           cfg: eventAuthContext.cfg,
           accountId,
           chatId,
@@ -301,10 +301,12 @@ export function createTelegramEventBindings({
           senderId,
           topicAgentId: eventAuthContext.topicConfig?.agentId,
         });
+        let { route } = conversationRoute;
         if (recoveredThreadSpec?.scope === "dm") {
           route = applyTelegramTargetSession({
             cfg: eventAuthContext.cfg,
             route,
+            bindingMode: conversationRoute.bindingMode,
             chatId,
             isGroup,
             senderId,

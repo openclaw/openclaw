@@ -44,10 +44,7 @@ import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js"
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { registerSubagentRun, replaceSubagentRunAfterSteerCore } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
-import {
-  finalizeInterruptedSubagentRun,
-  releaseSubagentRun,
-} from "./subagent-registry.test-helpers.js";
+import { releaseSubagentRun } from "./subagent-registry.test-helpers.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
 const fixture = useSubagentControlFixture();
@@ -472,13 +469,15 @@ it.each(["successor", "source retirement"] as const)(
     });
     const previous = subagentRuns.get("rollback-predecessor")!;
     const error = "subagent run lost active execution context";
-    expect(
-      await finalizeInterruptedSubagentRun({
-        runId: previous.runId,
-        expectedEntry: previous,
-        error,
-      }),
-    ).toBe(1);
+    await updateRun(previous.runId, (draft) => {
+      draft.execution = {
+        ...draft.execution,
+        status: "terminal",
+        endedAt: Date.now(),
+        outcome: { status: "error", error },
+      };
+      draft.completion = { required: true, resultText: null };
+    });
     await fixture.settle();
     await updateRun(previous.runId, (draft) => {
       draft.collect = true;
@@ -541,7 +540,7 @@ it.each(["successor", "source retirement"] as const)(
   },
 );
 
-it("rearms native execution for an interrupted run's successor", async () => {
+it("rearms native execution for a failed run's successor", async () => {
   fixture.announce.mockResolvedValue("delivered");
   const childSessionKey = "agent:main:subagent:interrupted-task";
   const requesterSessionKey = "agent:main:main";
@@ -558,9 +557,15 @@ it("rearms native execution for an interrupted run's successor", async () => {
   });
   const previous = subagentRuns.get("interrupted-task-old")!;
   const error = "subagent run lost active execution context";
-  expect(
-    await finalizeInterruptedSubagentRun({ runId: previous.runId, expectedEntry: previous, error }),
-  ).toBe(1);
+  await updateRun(previous.runId, (draft) => {
+    draft.execution = {
+      ...draft.execution,
+      status: "terminal",
+      endedAt: Date.now(),
+      outcome: { status: "error", error },
+    };
+    draft.completion = { required: true, resultText: null };
+  });
   await fixture.settle();
   expect(loadSubagentRegistryFromSqlite().get(previous.runId)).toMatchObject({
     task: "Resume interrupted work",
@@ -598,8 +603,11 @@ it("rearms native execution for an interrupted run's successor", async () => {
     "interrupted-task-session",
   );
   expect(
-    await finalizeInterruptedSubagentRun({ runId: previous.runId, expectedEntry: previous, error }),
-  ).toBe(0);
+    await replaceRun(previous.runId, "stale-predecessor-successor", {
+      expected: previous,
+      allowEndedSource: true,
+    }),
+  ).toBe(false);
   expect(subagentRuns.get(successor.runId)).toBe(successor);
   expect(await replaceRun(successor.runId, "interrupted-task-newer", { expected: successor })).toBe(
     true,

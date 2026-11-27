@@ -228,7 +228,8 @@ function readHeadlessShellProfilePids(userDataDir: string): number[] | null {
       const output = execFileSync("ps", ["-axww", "-o", "pid=,command="], {
         encoding: "utf8",
         timeout: 1000,
-        maxBuffer: 1024 * 1024,
+        // Match the browser MCP census budget for a host-wide argument listing.
+        maxBuffer: 4 * 1024 * 1024,
       });
       for (const line of output.split(/\r?\n/)) {
         const match = /^\s*(\d+)\s+(.+)$/.exec(line);

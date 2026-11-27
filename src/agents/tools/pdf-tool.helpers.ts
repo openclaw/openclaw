@@ -1,20 +1,11 @@
-import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import {
   filterStringEntries,
   normalizeUniqueTrimmedStringList,
 } from "@openclaw/normalization-core/string-normalization";
-import {
-  resolveAgentModelFallbackValues,
-  resolveAgentModelPrimaryValue,
-} from "../../config/model-input.js";
-import type { AgentModelConfig } from "../../config/types.agents-shared.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Context } from "../../llm/types.js";
 import { renderDocumentTruncationNotice } from "../../media/document-extraction-metadata.js";
 import type { PdfExtractedContent } from "../../media/pdf-extract.js";
 import { wrapExternalContent } from "../../security/external-content.js";
-
-type PdfModelConfig = Exclude<AgentModelConfig, string>;
 
 export function resolvePdfInputs(record: Record<string, unknown>): string[] {
   const pdfInputs = normalizeUniqueTrimmedStringList([
@@ -78,23 +69,6 @@ export function parsePageRange(
   return { pages, truncated: false };
 }
 
-export function coercePdfModelConfig(cfg?: OpenClawConfig): PdfModelConfig {
-  const primary = resolveAgentModelPrimaryValue(cfg?.agents?.defaults?.pdfModel);
-  const fallbacks = resolveAgentModelFallbackValues(cfg?.agents?.defaults?.pdfModel);
-  const modelConfig: PdfModelConfig = {};
-  if (primary?.trim()) {
-    modelConfig.primary = primary.trim();
-  }
-  if (fallbacks.length > 0) {
-    modelConfig.fallbacks = fallbacks;
-  }
-  return modelConfig;
-}
-
-export function resolvePdfToolMaxTokens(modelMaxTokens: number | undefined) {
-  return Math.min(4096, asPositiveFiniteNumber(modelMaxTokens) ?? 4096);
-}
-
 const CODEX_PDF_INSTRUCTIONS =
   "Analyze the provided PDF content and answer the user's request accurately.";
 
@@ -103,13 +77,17 @@ export function buildPdfExtractionContext(
   extractions: PdfExtractedContent[],
   explicitSelectionLimit?: number,
   model?: { api?: string },
-): Context {
+): { context: Context; truncationNotices: string[] } {
   const content: Array<
     { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
   > = [];
+  const truncationNotices: string[] = [];
 
   for (const [i, extraction] of extractions.entries()) {
     const notice = renderDocumentTruncationNotice(extraction.metadata, explicitSelectionLimit);
+    if (notice) {
+      truncationNotices.push(extractions.length > 1 ? `PDF ${i + 1}: ${notice}` : notice);
+    }
     if (extraction.text.trim() || notice) {
       const label = extractions.length > 1 ? `[PDF ${i + 1} text]\n` : "[PDF text]\n";
       const text = extraction.text.trim()
@@ -131,7 +109,10 @@ export function buildPdfExtractionContext(
     model?.api === "openai-chatgpt-responses" ? CODEX_PDF_INSTRUCTIONS : undefined;
 
   return {
-    ...(systemPrompt ? { systemPrompt } : {}),
-    messages: [{ role: "user", content, timestamp: Date.now() }],
+    context: {
+      ...(systemPrompt ? { systemPrompt } : {}),
+      messages: [{ role: "user", content, timestamp: Date.now() }],
+    },
+    truncationNotices,
   };
 }

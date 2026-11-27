@@ -103,6 +103,7 @@ function isActiveDraft(record: StoredDurableComposerDraft): boolean {
     record.goalMode ||
     record.replyTarget ||
     record.modelSelection ||
+    record.permissionMode ||
     record.attachments.length > 0 ||
     record.questionDrafts?.length ||
     record.selectionAnnotations?.length,
@@ -119,6 +120,7 @@ function tombstone(record: StoredDurableComposerDraft, now: number): StoredDurab
     goalMode: undefined,
     replyTarget: undefined,
     modelSelection: undefined,
+    permissionMode: undefined,
     attachments: [],
     questionDrafts: undefined,
     updatedAt: now,
@@ -465,12 +467,16 @@ export async function readDurableComposerDraft(
       status: "found",
       draft: {
         revision: current.revision,
+        ...(current.attachmentVersion !== undefined
+          ? { attachmentVersion: current.attachmentVersion }
+          : {}),
         writeId: current.writeId,
         text: current.text,
         ...(current.mentions?.length ? { mentions: current.mentions } : {}),
         ...(current.goalMode ? { goalMode: current.goalMode } : {}),
         ...(current.replyTarget ? { replyTarget: current.replyTarget } : {}),
         ...(current.modelSelection ? { modelSelection: current.modelSelection } : {}),
+        ...(current.permissionMode ? { permissionMode: current.permissionMode } : {}),
         attachments: current.attachments,
         ...(current.questionDrafts?.length ? { questionDrafts: current.questionDrafts } : {}),
         ...(current.selectionAnnotations?.length
@@ -534,11 +540,15 @@ export async function writeDurableComposerDraft(
       recoveryScope: scope.recoveryScope,
       scopeKey: scope.scopeKey,
       revision: draft.revision,
+      ...(draft.attachmentVersion !== undefined
+        ? { attachmentVersion: draft.attachmentVersion }
+        : {}),
       text: draft.text,
       ...(draft.mentions?.length ? { mentions: draft.mentions } : {}),
       ...(draft.goalMode ? { goalMode: draft.goalMode } : {}),
       ...(draft.replyTarget ? { replyTarget: draft.replyTarget } : {}),
       ...(draft.modelSelection ? { modelSelection: draft.modelSelection } : {}),
+      ...(draft.permissionMode ? { permissionMode: draft.permissionMode } : {}),
       attachments: draft.attachments,
       ...(draft.questionDrafts?.length ? { questionDrafts: draft.questionDrafts } : {}),
       ...(draft.selectionAnnotations?.length

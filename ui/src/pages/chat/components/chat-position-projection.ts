@@ -1,6 +1,6 @@
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { resolveMessageVisibleContent } from "../../../lib/chat/message-visibility.ts";
-import { assistantMessageCanCompleteTurn } from "../chat-assistant-reply.ts";
+import { resolveAssistantReplyPhase } from "../chat-assistant-reply.ts";
 import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { isSessionActivityGroup } from "../chat-turn-boundary.ts";
@@ -47,9 +47,11 @@ export function projectChatPositions(
   ) => {
     const marker = markers.get(id);
     if (marker) {
+      // Inline commentary must not replace a delivered answer in the position rail.
       if (
-        !assistantMessageCanCompleteTurn(marker.message, true) ||
-        assistantMessageCanCompleteTurn(message, true)
+        role !== "assistant" ||
+        resolveAssistantReplyPhase(message) !== "commentary" ||
+        resolveAssistantReplyPhase(marker.message) !== "final_answer"
       ) {
         marker.message = message;
       }
@@ -57,7 +59,9 @@ export function projectChatPositions(
       markers.set(id, { id, role, anchorId: messageId, message });
     }
     markerIdsByMessageId.set(messageId, id);
-    messageRowKeysById.set(messageId, rowKey);
+    if (!messageRowKeysById.has(messageId)) {
+      messageRowKeysById.set(messageId, rowKey);
+    }
   };
   const group = (item: MessageGroup, rowKey: string) => {
     if (

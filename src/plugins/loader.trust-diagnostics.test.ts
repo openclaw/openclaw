@@ -13,6 +13,7 @@ import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.j
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
+import { writeFixtureJson } from "./loader-fixture-builders.test-support.js";
 import { clearPluginRegistryLoadCache, loadOpenClawPlugins } from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -412,14 +413,11 @@ describe("recorded plugin trust diagnostics", () => {
       }),
     );
     for (const plugin of plugins) {
-      fs.writeFileSync(
-        path.join(plugin.dir, "openclaw.plugin.json"),
-        JSON.stringify({
-          id: plugin.id,
-          configSchema: { type: "object" },
-          contracts: { tools: [plugin.id] },
-        }),
-      );
+      writeFixtureJson(plugin.dir, "openclaw.plugin.json", {
+        id: plugin.id,
+        configSchema: { type: "object" },
+        contracts: { tools: [plugin.id] },
+      });
     }
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const dispatchHookAgentTurn = vi.fn(async () => ({

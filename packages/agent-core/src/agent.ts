@@ -13,13 +13,17 @@ import { runAgentLoop } from "./agent-loop.js";
 import { TranscriptNotContinuableError } from "./errors.js";
 import {
   attachInternalSyncSteeringGetter,
-  getInternalBeforeToolBatch,
+  getInternalBeforeRequest,
+  getInternalToolRepeatPolicy,
   getInternalRepetitionGuard,
   getInternalToolTurnCompletion,
+  setInternalBeforeRequest,
 } from "./internal-hooks.js";
 import { PendingMessageQueue } from "./pending-message-queue.js";
 import { resolveAgentReasoningOption } from "./reasoning.js";
 import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";
+import { ToolInterruptions } from "./tool-interruption.js";
+import { createToolRepeatState, type ToolRepeatState } from "./tool-repeat-guard.js";
 import {
   appendInterruptedTurnMessage,
   createFailureMessage,
@@ -36,7 +40,6 @@ import type {
   QueueMode,
   StreamFn,
   ToolExecutionMode,
-  ToolLoopRecoveryState,
 } from "./types.js";
 
 export type { QueueMode } from "./types.js";
@@ -138,7 +141,8 @@ export class Agent {
   >();
   private readonly steeringQueue: PendingMessageQueue;
   private readonly followUpQueue: PendingMessageQueue;
-  private toolLoopRecoveryState: ToolLoopRecoveryState = { criticalToolLoopSeen: false };
+  private toolRepeatState: ToolRepeatState = createToolRepeatState();
+  private readonly toolInterruptions = new ToolInterruptions();
 
   public convertToLlm: NonNullable<AgentOptions["convertToLlm"]>;
   public transformContext?: NonNullable<AgentOptions["transformContext"]>;
@@ -305,6 +309,10 @@ export class Agent {
     return this.steeringQueue.hasItems() || this.followUpQueue.hasItems();
   }
 
+  hasPendingSteeringMessage(predicate: (message: AgentMessage) => boolean): boolean {
+    return this.steeringQueue.hasPending(predicate);
+  }
+
   /** Active abort signal for the current run, if any. */
   get signal(): AbortSignal | undefined {
     return this.activeRun?.abortController.signal;
@@ -313,6 +321,19 @@ export class Agent {
   /** Abort the current run, if one is active. */
   abort(reason?: unknown): void {
     this.activeRun?.abortController.abort(reason);
+  }
+
+  getToolInterruptionStatus() {
+    return this.toolInterruptions.status();
+  }
+
+  subscribeToolInterruptionStatus(listener: () => void): () => void {
+    return this.toolInterruptions.subscribe(listener);
+  }
+
+  /** Request safe call cancellation without ending the active run. */
+  interruptTools() {
+    return this.toolInterruptions.interrupt();
   }
 
   /**
@@ -331,7 +352,7 @@ export class Agent {
     this.mutableState.streamingMessage = undefined;
     this.mutableState.pendingToolCalls = new Set<string>();
     this.mutableState.errorMessage = undefined;
-    this.toolLoopRecoveryState = { criticalToolLoopSeen: false };
+    this.toolRepeatState = createToolRepeatState();
     this.clearAllQueues();
   }
 
@@ -347,7 +368,6 @@ export class Agent {
         "Agent is already processing a prompt. Use steer() or followUp() to queue messages, or wait for completion.",
       );
     }
-    this.toolLoopRecoveryState.criticalToolLoopSeen = false;
     let messages: AgentMessage[];
     if (Array.isArray(input)) {
       messages = input;
@@ -490,7 +510,8 @@ export class Agent {
         },
       },
     );
-    return {
+    const config: AgentLoopConfig = {
+      toolInterruptions: this.toolInterruptions,
       model: this.mutableState.model,
       repetitionGuard: getInternalRepetitionGuard(this),
       thinkingLevel: this.mutableState.thinkingLevel,
@@ -506,9 +527,10 @@ export class Agent {
       maxRetryDelayMs: this.maxRetryDelayMs,
       toolExecution: this.toolExecution,
       beforeToolCall: this.beforeToolCall,
-      beforeToolBatch: getInternalBeforeToolBatch(this),
+      toolRepeatGuard: getInternalToolRepeatPolicy(this)?.enabled,
+      onToolRepeat: getInternalToolRepeatPolicy(this)?.onVerdict,
       completesToolTurn: getInternalToolTurnCompletion(this),
-      toolLoopRecoveryState: this.toolLoopRecoveryState,
+      toolRepeatState: this.toolRepeatState,
       resolveDeferredTool: this.resolveDeferredTool,
       afterToolCall: this.afterToolCall,
       afterToolOutcome: this.afterToolOutcome,
@@ -530,6 +552,17 @@ export class Agent {
         this.steeringQueue.consumeCancellation(message) ||
         this.followUpQueue.consumeCancellation(message),
     };
+    const beforeRequest = getInternalBeforeRequest(this);
+    if (beforeRequest) {
+      setInternalBeforeRequest(config, async (signal) => {
+        const messages = await beforeRequest(signal);
+        if (messages?.length) {
+          this.mutableState.messages.push(...messages);
+        }
+        return messages;
+      });
+    }
+    return config;
   }
 
   /**
@@ -574,9 +607,6 @@ export class Agent {
           this.mutableState.streamingMessage = undefined;
         }
         this.mutableState.messages.push(event.message);
-        if (event.message.role === "user") {
-          delete this.toolLoopRecoveryState.repeatedToolError;
-        }
         this.steeringQueue.commit(event.message);
         this.followUpQueue.commit(event.message);
         break;

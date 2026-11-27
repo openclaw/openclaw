@@ -55,7 +55,6 @@ function expectConfiguredModelRef(params: Partial<Selection> & Pick<Selection, "
   return expect(
     resolveConfiguredModelRef({
       defaultProvider: "openai",
-      defaultModel: "unused",
       ...params,
     }),
   );
@@ -138,7 +137,6 @@ describe("configured model manifest workspace scope", () => {
       cfg,
       agentId: "ops",
       defaultProvider: "openai",
-      defaultModel: "gpt-5.6-sol",
     }).toEqual({ provider: "openai", model: "ops" });
     expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
     expect(normalizeProviderModelIdWithRuntimeMock).not.toHaveBeenCalled();
@@ -162,13 +160,13 @@ describe("configured model manifest workspace scope", () => {
   it.each([
     ["openai/entry", "middle"],
     ["entry@", "entry@"],
-    ["/", "unused"],
+    ["/", undefined], // unresolvable primary: no implicit default model
   ])("normalizes captured selection %s once", (primary, model) => {
     expectConfiguredModelRef({
       cfg: modelConfig({ primary }),
       manifestPlugins: defaultNormalizationSnapshot,
       allowPluginNormalization: false,
-    }).toEqual({ provider: "openai", model });
+    }).toEqual(model && { provider: "openai", model });
     expectNoMetadataLoads();
   });
 
@@ -213,7 +211,6 @@ describe("configured model manifest workspace scope", () => {
     expectConfiguredModelRef({
       cfg,
       defaultProvider: "anthropic",
-      defaultModel: "claude-sonnet-4-6",
     }).toEqual({ provider, model });
     expectNoMetadataLoads();
   });
@@ -238,7 +235,6 @@ describe("configured model manifest workspace scope", () => {
     expectConfiguredModelRef({
       cfg: modelConfig({ primary }, models),
       defaultProvider: primary === "openrouter:auto" ? "anthropic" : "openai",
-      defaultModel: primary === "openrouter:auto" ? "claude-sonnet-4-6" : "gpt-5.4",
       allowPluginNormalization: primary === "entry" ? false : undefined,
     }).toEqual({ provider, model });
     expect(loadManifestMetadataSnapshotMock).toHaveBeenCalledTimes(1);

@@ -7,7 +7,6 @@ import {
   reconnectMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { cronJobsListResponse } from "../test-helpers/cron.ts";
-import { expectText } from "./activity-assertions.test-support.ts";
 import { captureUiProof } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -20,13 +19,12 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         historyMessages: [],
         methodResponses: {
-          "cron.status": { enabled: true, jobs: 0, nextWakeAtMs: null },
           "cron.list": cronJobsListResponse([], { snapshotRevision: "idle" }),
         },
       });
       await page.goto(`${suite.server.baseUrl}chat#token=test-token`);
       await page.locator(".agent-chat__composer-combobox textarea").waitFor();
-      const methods = ["agent.identity.get", "cron.list", "cron.status", "models.list"];
+      const methods = ["agent.identity.get", "cron.list", "models.list"];
       // The sidebar defers startup reads until the foreground conversation is ready.
       await Promise.all(methods.map((method) => gateway.waitForRequest(method)));
       await pauseVirtualClock(page);
@@ -53,7 +51,37 @@ suite.define(() => {
           details: { reason: "gateway-restarting" },
         },
       });
-      await gateway.emitGatewayEvent("config.changed", { hash: "synthetic-restart" });
+      const unaffected = [
+        "models.list",
+        "session.members.listEvidence",
+        "sessions.processes.list",
+        "sessions.describe",
+        "agents.list",
+        "agent.identity.get",
+      ];
+      const beforeProfiles = await Promise.all(
+        unaffected.map(async (method) => (await gateway.getRequests(method)).length),
+      );
+      for (const changedPaths of [
+        ["browser.profiles.temporary"],
+        ["browser.profiles"],
+        ["ui.prefs.sidebarEntries"],
+        ["logging.level"],
+        ["browser.headless"],
+      ]) {
+        await gateway.emitGatewayEvent("config.changed", { changedPaths });
+        await page.clock.runFor(1_000);
+      }
+      expect(
+        await Promise.all(
+          unaffected.map(async (method) => (await gateway.getRequests(method)).length),
+        ),
+      ).toEqual(beforeProfiles);
+
+      await gateway.emitGatewayEvent("config.changed", {
+        hash: "synthetic-restart",
+        changedPaths: ["agents.entries.main.identity"],
+      });
       await page.clock.runFor(1_000);
       const beforeDrain = await counts();
       await gateway.emitGatewayEvent("shutdown", { restartExpectedMs: 1_500 });
@@ -65,7 +93,7 @@ suite.define(() => {
       });
       await page.clock.resume();
       await reconnectMockGateway(page, gateway);
-      await expectText(page.locator(".agent-chat__welcome-identity h2")).toBe("Cedar");
+      await page.getByPlaceholder("Message Cedar", { exact: true }).waitFor();
       expect({ idle, afterDrain }).toEqual({ idle: connected, afterDrain: beforeDrain });
     });
   });
@@ -78,7 +106,13 @@ suite.define(() => {
         async ({ page }) => {
           const config = { agents: { entries: { main: {} } } };
           const gateway = await installMockGateway(page, {
-            featureMethods: [...defaultControlUiFeatureMethods, "agents.update"],
+            featureMethods: [
+              ...defaultControlUiFeatureMethods,
+              "agents.list",
+              "agents.update",
+              "config.get",
+              "agent.identity.get",
+            ],
             methodResponses: {
               "agents.update": { ok: true },
               "config.get": sourceConfigSnapshot(config, "identity-fixture"),

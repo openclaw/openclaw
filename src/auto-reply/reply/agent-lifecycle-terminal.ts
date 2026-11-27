@@ -1,14 +1,24 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { classifyOAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
+import { resolveCompactionRecoveryLifecycleError } from "../../agents/compaction-recovery-lifecycle-error.js";
 import { renderAgentHarnessPreflightUserMessage } from "../../agents/embedded-agent-helpers/user-facing-text.js";
+import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { renderStorageFailureSummary } from "../../agents/failover/assistant-request-failure-copy.js";
 import { getFailoverErrorCode } from "../../agents/failover/error.js";
 import { renderFailoverCodeUserCopy } from "../../agents/failover/user-copy.js";
+import {
+  AgentHarnessModelRequestPolicyError,
+  AgentHarnessRuntimeUpdateRequiredError,
+} from "../../agents/harness/errors.js";
+import { isProviderAuthError } from "../../agents/model-auth-runtime-shared.js";
 import { AGENT_RUN_RESTART_ABORT_STOP_REASON } from "../../agents/run-termination.js";
 import { captureAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
+import { readProviderAuthFailure } from "../../plugins/provider-auth-failure.js";
+import { buildProviderLoginRecovery } from "../provider-login-recovery.js";
 
 export type AgentLifecycleTerminalBackstop = {
   beginAttempt: () => void;
@@ -62,6 +72,22 @@ export function resolveAgentLifecycleTerminalMetadata(meta: unknown): Record<str
   return metadata;
 }
 
+/** The deferred terminal error and metadata to publish once the run result is known. */
+export function resolveDeferredLifecycleTerminal(
+  result: Pick<EmbeddedAgentRunResult, "meta">,
+  deferredError: string | undefined,
+  metadata: Record<string, unknown> = resolveAgentLifecycleTerminalMetadata(result.meta),
+): { error: string | undefined; metadata: Record<string, unknown> } {
+  const recoveryError = resolveCompactionRecoveryLifecycleError(result, deferredError);
+  return recoveryError
+    ? // The precheck's overflow observation no longer describes this failure.
+      {
+        error: recoveryError,
+        metadata: { ...metadata, errorNotice: recoveryError, errorObservation: undefined },
+      }
+    : { error: deferredError, metadata };
+}
+
 export function createAgentLifecycleTerminalBackstop(params: {
   runId: string;
   sessionKey?: string;
@@ -79,8 +105,10 @@ export function createAgentLifecycleTerminalBackstop(params: {
   // Preparation can fail before a lifecycle start. Capture its real boundary
   // without signaling readiness; an observed model start replaces it below.
   let startedAt = params.startedAt ?? Date.now();
+  let observedBackendStart = false;
   const beginAttempt = () => {
     if (state.kind !== "emitted") {
+      observedBackendStart = false;
       state = { kind: "pending", metadata: {} };
     }
   };
@@ -92,6 +120,7 @@ export function createAgentLifecycleTerminalBackstop(params: {
     const phase = readStringValue(evt.data.phase);
     if (phase === "start") {
       beginAttempt();
+      observedBackendStart = true;
       if (typeof evt.data.startedAt === "number") {
         startedAt = evt.data.startedAt;
       }
@@ -119,7 +148,7 @@ export function createAgentLifecycleTerminalBackstop(params: {
       : params.resolveTerminationFields(terminalPhase === "error" ? terminalValue : undefined);
     const restartAbort = terminationFields.stopReason === AGENT_RUN_RESTART_ABORT_STOP_REASON;
     const data: Record<string, unknown> = {
-      ...pending.metadata,
+      ...(workspaceFailure ? {} : pending.metadata),
       phase: restartAbort ? "end" : terminalPhase,
       endedAt: Date.now(),
       startedAt,
@@ -143,6 +172,26 @@ export function createAgentLifecycleTerminalBackstop(params: {
           ...(oauthFailure.errorType ? { providerErrorType: oauthFailure.errorType } : {}),
           ...(oauthFailure.status ? { httpStatus: oauthFailure.status } : {}),
         };
+      } else if (
+        isProviderAuthError(terminalValue) &&
+        buildProviderLoginRecovery({
+          provider: terminalValue.provider,
+          providerAuthFailure: readProviderAuthFailure(terminalValue),
+        })
+      ) {
+        // The saved sign-in needs a new login; clients offer their sign-in action for it.
+        data.errorObservation = { provider: terminalValue.provider, failoverReason: "auth" };
+      } else if (terminalValue instanceof AgentHarnessModelRequestPolicyError) {
+        data.errorObservation = {
+          ...(isRecord(data.errorObservation) ? data.errorObservation : {}),
+          providerErrorCode: terminalValue.code,
+          httpStatus: terminalValue.status,
+        };
+      } else if (terminalValue instanceof AgentHarnessRuntimeUpdateRequiredError) {
+        data.errorObservation = {
+          ...(isRecord(data.errorObservation) ? data.errorObservation : {}),
+          providerErrorCode: terminalValue.code,
+        };
       }
       Object.assign(data, terminationFields);
     } else {
@@ -158,17 +207,12 @@ export function createAgentLifecycleTerminalBackstop(params: {
         data.stopReason = terminationFields.stopReason;
       }
     }
-    Object.assign(data, extraData);
-    if (workspaceFailure) {
-      // Cancellation stops inference; preparation's original error owns the
-      // one terminal outcome, rather than reporting a user-requested Stop.
-      data.phase = "error";
-      data.error = workspaceFailure.message;
-      delete data.aborted;
-      delete data.stopReason;
-      delete data.timeoutPhase;
-      delete data.providerStarted;
-      delete data.yielded;
+    if (!workspaceFailure) {
+      Object.assign(data, extraData);
+      // Admission also has a run ID. Only the backend start identifies an executing attempt at shutdown.
+      if (observedBackendStart && data.stopReason === AGENT_RUN_RESTART_ABORT_STOP_REASON) {
+        data.executionStarted ??= true;
+      }
     }
     return {
       runId: params.runId,

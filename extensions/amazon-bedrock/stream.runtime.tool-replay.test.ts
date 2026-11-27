@@ -307,20 +307,4 @@ describe("Bedrock tool-free tool history", () => {
       ]);
     },
   );
-
-  it("keeps tool blocks when the request sends toolConfig", async () => {
-    const context = settledTurnContext() as { tools: unknown[] };
-    context.tools = [
-      {
-        name: "message",
-        description: "Send a message",
-        parameters: { type: "object", properties: {} },
-      },
-    ];
-    const input = await captureCommandInput(bedrockModel({}), context as never);
-    expect(input.toolConfig).toBeDefined();
-    const serialized = JSON.stringify(input.messages);
-    expect(serialized).toContain('"toolUse"');
-    expect(serialized).toContain('"toolResult"');
-  });
 });

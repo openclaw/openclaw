@@ -4,16 +4,17 @@ import { scopeLegacySessionKeyToAgent } from "../../../routing/session-key.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { retireSessionMcpRuntime } from "../../agent-bundle-mcp-tools.js";
+import type { subagentTerminalTransition } from "../completion/subagent-terminal-transition.js";
 import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
-import {
-  SUBAGENT_ENDED_REASON_KILLED,
-  type SubagentLifecycleEndedReason,
-} from "./subagent-lifecycle-events.js";
+import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import type { SubagentLifecycleCompletionContext } from "./subagent-registry-lifecycle-context.js";
 import { buildSafeLifecycleErrorMeta } from "./subagent-registry-lifecycle-log.js";
-import { commitSubagentLifecycleMutation } from "./subagent-registry-lifecycle-persistence.js";
+import {
+  commitSubagentLifecycleMutation,
+  SubagentLifecycleOwnerChangedError,
+} from "./subagent-registry-lifecycle-persistence.js";
 import { getCurrentSubagentRunOwner } from "./subagent-registry-memory.js";
 import { SubagentRegistryWriteError } from "./subagent-registry-persistence.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
@@ -25,7 +26,7 @@ export async function completeTerminalEffects(
     completeParams: SubagentCompletionRequest;
     completionReason: SubagentLifecycleEndedReason;
     entry: SubagentRunRecord;
-    mutated: boolean;
+    effects: NonNullable<ReturnType<typeof subagentTerminalTransition.complete>>["effects"];
     sessionSuperseded: boolean;
     suppressSessionEffects: boolean;
     stateContext: OpenClawStateWorkerContext;
@@ -36,7 +37,7 @@ export async function completeTerminalEffects(
   },
 ): Promise<void> {
   const params = context.options;
-  const { completeParams, completionReason, mutated } = args;
+  const { completeParams, completionReason, effects } = args;
   let entry = args.entry;
   if (resolveSubagentChildAuthority(entry).status === "mismatch") {
     return;
@@ -90,7 +91,7 @@ export async function completeTerminalEffects(
     return;
   }
   const retireSupersededSession = async (currentEntry: SubagentRunRecord) => {
-    if (completionReason !== SUBAGENT_ENDED_REASON_KILLED) {
+    if (effects.retireSuperseded) {
       await params.retireSupersededRun(currentEntry.runId, currentEntry);
     }
   };
@@ -106,17 +107,16 @@ export async function completeTerminalEffects(
     await retireSupersededSession(entry);
     return;
   }
-  if (entry.collect) {
+  if (effects.releaseSwarm) {
     releaseSwarmRun(entry.schedulerSlotId ?? entry.runId);
   }
   await refreshSessionEffectsSuppression();
   if (!isCurrentTerminalCallback()) {
     return;
   }
-  const isProvisionalKill = entry.killReconciliation !== undefined;
 
   // Duplicate receipts drain cleanup without replaying best-effort timing writes.
-  if (!suppressSessionEffects && (mutated || completeParams.recoverInterrupted !== undefined)) {
+  if (!suppressSessionEffects && effects.persistTiming) {
     try {
       const assertSessionEffectsOwnerCurrent = () => {
         if (!isCurrentSessionEffectsOwner()) {
@@ -151,20 +151,7 @@ export async function completeTerminalEffects(
     return;
   }
 
-  const suppressedForSteerRestart = params.suppressAnnounceForSteerRestart(entry);
-  // Recovery persists its terminal state before draining this callback, so an
-  // unchanged row still needs its first session-status and progress events.
-  const shouldPublishTerminalStatus =
-    mutated ||
-    (completeParams.recoverInterrupted !== undefined &&
-      !isProvisionalKill &&
-      !context.progressEndedEntries.has(getSubagentRunRuntimeKey(entry)));
-  if (
-    shouldPublishTerminalStatus &&
-    !suppressedForSteerRestart &&
-    !suppressSessionEffects &&
-    isCurrentSessionEffectsOwner()
-  ) {
+  if (effects.publishStatus && !suppressSessionEffects && isCurrentSessionEffectsOwner()) {
     emitSessionLifecycleEvent({
       sessionKey: entry.childSessionKey,
       reason: "subagent-status",
@@ -172,7 +159,10 @@ export async function completeTerminalEffects(
       label: entry.label,
     });
     // The enclosing steer/session-effects guard admits only the real terminal generation.
-    if (!isProvisionalKill && !context.progressEndedEntries.has(getSubagentRunRuntimeKey(entry))) {
+    if (
+      effects.publishProgress &&
+      !context.progressEndedEntries.has(getSubagentRunRuntimeKey(entry))
+    ) {
       context.progressEndedEntries.add(getSubagentRunRuntimeKey(entry));
       await params.emitSubagentProgressEndedForRun(entry);
       await refreshSessionEffectsSuppression();
@@ -182,12 +172,10 @@ export async function completeTerminalEffects(
     }
   }
   const shouldEmitEndedHook =
-    !suppressedForSteerRestart &&
-    !isProvisionalKill &&
+    effects.endedHook &&
     !suppressSessionEffects &&
     params.shouldEmitEndedHookForRun({ entry, reason: completionReason });
-  const shouldDeferEndedHook =
-    shouldEmitEndedHook && completeParams.triggerCleanup && entry.expectsCompletionMessage === true;
+  const shouldDeferEndedHook = shouldEmitEndedHook && effects.deferEndedHook;
   if (!shouldDeferEndedHook && shouldEmitEndedHook) {
     await params.emitSubagentEndedHookForRun({
       entry,
@@ -224,7 +212,7 @@ export async function completeTerminalEffects(
     suppressSessionEffects = true;
     return true;
   };
-  if (!completeParams.triggerCleanup || suppressedForSteerRestart) {
+  if (!effects.cleanup) {
     return;
   }
   await refreshCleanupSuppression();
@@ -291,11 +279,13 @@ export async function completeTerminalEffects(
           // A newer terminal publication can retire this callback while its
           // cleanup claim waits for persistence. Only that pre-commit refusal
           // is harmless; persistence and unknown-outcome failures must propagate.
+          const rejection =
+            error instanceof SubagentRegistryWriteError && error.outcome === "not-committed"
+              ? error.cause
+              : error;
           if (
-            error === retiredOwner ||
-            (error instanceof SubagentRegistryWriteError &&
-              error.outcome === "not-committed" &&
-              error.cause === retiredOwner)
+            rejection === retiredOwner ||
+            rejection instanceof SubagentLifecycleOwnerChangedError
           ) {
             if (isCurrentTerminalCallback() && context.newerGenerationOwnsSession(entry)) {
               await retireSupersededSession(entry);
@@ -353,7 +343,7 @@ export async function completeTerminalEffects(
       return;
     }
     try {
-      if (entry.spawnMode !== "session") {
+      if (effects.retireMcp) {
         const cleanupEntry = entry;
         await retireSessionMcpRuntime({
           sessionId: cleanupEntry.childSessionIdentity?.sessionId,
@@ -382,7 +372,7 @@ export async function completeTerminalEffects(
     }
   }
 
-  if (isProvisionalKill) {
+  if (effects.cleanupTail === "confirm-kill") {
     // Browser and MCP resources can close immediately; completion delivery waits
     // for the kill's confirmation once the run's controller operation settles.
     if (isCurrentTerminalCallback()) {

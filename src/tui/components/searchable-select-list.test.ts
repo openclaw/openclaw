@@ -32,6 +32,21 @@ const makeAnsiList = (items: SearchableSelectItem[], maxVisible = 5) =>
 const render = (list: SearchableSelectList, width = 80) => list.render(width).join("\n");
 
 describe("SearchableSelectList", () => {
+  it.each(["label", "description", "searchText"] as const)(
+    "matches canonical Unicode in %s without changing the value",
+    (field) => {
+      for (const [stored, query] of [
+        ["Café".normalize("NFD"), "Café"],
+        ["Café", "Café".normalize("NFD")],
+      ] as const) {
+        const value = "original-value";
+        const list = makeList([{ value, label: "model", [field]: stored }]);
+        typeText(list, query);
+        expect(select(list)?.value).toBe(value);
+      }
+    },
+  );
+
   it("keeps replacement empty-state errors on one safe terminal row", () => {
     const list = makeAnsiList([], 7);
     list.setItems([], "network\nunavailable\u001b[2J");

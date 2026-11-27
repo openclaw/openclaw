@@ -190,7 +190,7 @@ suite.define(() => {
         const stopManaged = managed.getByRole("button", { name: `Stop ${child.label}` });
         await openManaged.waitFor();
         await stopManaged.waitFor();
-        const native = panel.getByRole("region", { name: "Live native agents", exact: true });
+        const native = panel.getByRole("region", { name: "Live subagents", exact: true });
         const nativeRow = native.getByRole("listitem").filter({ hasText: nativeLabel });
         // The suite allocates one retained artifact directory per test attempt.
         const directory = suite.artifactDir;
@@ -256,6 +256,7 @@ suite.define(() => {
         expect(await stopManaged.isVisible()).toBe(true);
         await capture("native-completed");
 
+        await page.clock.resume();
         await page.setViewportSize({ width: 390, height: 900 });
         await page.locator(".shell--mobile-nav").waitFor();
         await openChatSidePanelType(page, "Subagents");
@@ -265,6 +266,7 @@ suite.define(() => {
         expect(await stopManaged.isVisible()).toBe(true);
         await capture("native-mobile-completed");
 
+        await pauseVirtualClock(page);
         await gateway.setMethodResponse(
           "sessions.describe",
           describeResponse({
@@ -283,6 +285,7 @@ suite.define(() => {
           .getByText("Updates retry automatically while this panel is visible.")
           .waitFor();
         await capture("native-parent-denied");
+        await page.clock.resume();
         await page.setViewportSize({ width: 1440, height: 1000 });
         await page.locator(".shell:not(.shell--mobile-nav)").waitFor();
         await openChatSidePanelType(page, "Subagents");
@@ -296,7 +299,118 @@ suite.define(() => {
     );
   });
 
-  it("uses narrow subagent panel width without empty avatar gutters", async () => {
+  it.each([390, 820, 1180, 1440])(
+    "keeps similar child names distinguishable and the longest heading readable at %i px",
+    async (width) => {
+      const mobile = width === 390;
+      await suite.withPage(
+        {
+          viewport: {
+            width,
+            height: width === 820 ? 1180 : width === 1180 ? 820 : width === 1440 ? 900 : 844,
+          },
+          hasTouch: mobile,
+          isMobile: mobile,
+          reducedMotion: "reduce",
+        },
+        async ({ page }) => {
+          const { parent, child, other, finished } = scenario();
+          const prefix =
+            "Compare municipal drinking water sampling receipts for the autumn inspection — ";
+          child.label = prefix + "North district";
+          other.label = prefix + "South district";
+          finished.label = "Observation-".repeat(42) + "END-157!";
+          await installMockGateway(page, {
+            ...previewModel,
+            sessionKey: parent.key,
+            communityInvite: false,
+            sessions: [parent, child, other, finished],
+            historyMessages: [{ role: "assistant", content: "Parent report." }],
+            sessionTranscripts: {
+              [other.key]: { messages: [{ role: "assistant", content: "South sampling report." }] },
+              [finished.key]: {
+                messages: [{ role: "assistant", content: "The observation report is ready." }],
+              },
+            },
+          });
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, parent.key));
+          await openChatSidePanelType(page, "Subagents");
+          const panel = page.locator("openclaw-chat-subagents-panel:visible");
+          const row = (key: string) => panel.locator('[data-session-key="' + key + '"]');
+          for (const entry of [child, other]) {
+            const name = row(entry.key).locator(
+              ".chat-subagents-mobile__copy strong,.subagents-desktop__name",
+            );
+            await name.waitFor();
+            expect(await name.textContent()).toBe(entry.label);
+            const suffix = name.locator(".subagent-list-name__tail");
+            expect(await suffix.textContent()).toContain(
+              entry === child ? "North district" : "South district",
+            );
+            expect(await suffix.evaluate((e) => e.scrollWidth <= e.clientWidth + 1)).toBe(true);
+            expect(
+              await name.evaluate((e) => e.getBoundingClientRect().height),
+            ).toBeLessThanOrEqual(22);
+            expect(await name.evaluate((e) => e.scrollWidth - e.clientWidth)).toBeLessThanOrEqual(
+              1,
+            );
+          }
+          const south = row(other.key).locator(
+            ".chat-subagents-mobile__open,.subagents-desktop__open",
+          );
+          await south.press("Enter");
+          const detailPane = panel.locator(".chat-subagents__detail-pane");
+          await detailPane.getByText("South sampling report.", { exact: true }).waitFor();
+          expect(
+            await detailPane
+              .locator(".chat-subagents-mobile__title,.subagents-desktop__child-name")
+              .textContent(),
+          ).toBe(other.label);
+          await detailPane.getByRole("button", { name: "Back to Subagents" }).press("Enter");
+          await expect.poll(() => south.evaluate((e) => e === document.activeElement)).toBe(true);
+          const open = row(finished.key).locator(
+            ".chat-subagents-mobile__open,.subagents-desktop__open",
+          );
+          const maxName = row(finished.key).locator(
+            ".chat-subagents-mobile__copy strong,.subagents-desktop__name",
+          );
+          expect(await maxName.textContent()).toBe(finished.label);
+          expect(await maxName.evaluate((e) => e.getBoundingClientRect().height)).toBeLessThan(145);
+          await open.press("Enter");
+          const detail = panel.locator(".chat-subagents__detail-pane");
+          const report = detail.getByText("The observation report is ready.", { exact: true });
+          await report.waitFor();
+          const heading = detail.locator(
+            ".chat-subagents-mobile__title,.subagents-desktop__child-name",
+          );
+          expect(await heading.textContent()).toBe(finished.label);
+          const overflows = await heading.evaluate((e) => e.scrollHeight > e.clientHeight + 1);
+          await expect.poll(() => heading.evaluate((e) => e.tabIndex)).toBe(overflows ? 0 : -1);
+          expect(await heading.evaluate((e) => e.scrollWidth - e.clientWidth)).toBeLessThanOrEqual(
+            1,
+          );
+          if (overflows) {
+            await heading.press("End");
+          }
+          await expect
+            .poll(() => heading.evaluate((e) => e.scrollHeight - e.clientHeight - e.scrollTop))
+            .toBeLessThanOrEqual(1);
+          expect(
+            await report.evaluate((e) => {
+              const rect = e.getBoundingClientRect();
+              return e.contains(
+                document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2),
+              );
+            }),
+          ).toBe(true);
+          await detail.getByRole("button", { name: "Back to Subagents" }).press("Enter");
+          await expect.poll(() => open.evaluate((e) => e === document.activeElement)).toBe(true);
+        },
+      );
+    },
+  );
+
+  it("keeps narrow subagent reports inside the panel and scrollable", async () => {
     await suite.withPage(
       { viewport: { width: 1440, height: 1000 }, colorScheme: "dark" },
       async ({ page }) => {
@@ -365,22 +479,54 @@ suite.define(() => {
         );
         expect(stopInk.fill, "Stop paints its destructive glyph foreground").toBe(stopInk.label);
 
-        const geometry = await copy.evaluate((element) => {
-          const thread = element.closest<HTMLElement>(".chat-thread")!;
-          const column = element.closest(".chat-group-messages")!;
-          const outer = thread.getBoundingClientRect();
-          const inner = column.getBoundingClientRect();
-          return {
-            width: outer.width,
-            left: inner.left - outer.left,
-            right: outer.right - inner.right,
-            overflow: thread.scrollWidth - thread.clientWidth,
-          };
-        });
-        expect(geometry.width).toBeLessThanOrEqual(560);
-        expect(geometry.left).toBeLessThanOrEqual(24);
-        expect(geometry.right).toBeLessThanOrEqual(24);
-        expect(geometry.overflow).toBeLessThanOrEqual(1);
+        const thread = detail.locator(".chat-thread");
+        const initialWidth = (await thread.boundingBox())!.width;
+        expect(initialWidth).toBeLessThanOrEqual(560);
+        await page.setViewportSize({ width: 1440, height: 600 });
+        await page.getByRole("separator", { name: "Resize side panel", exact: true }).press("End");
+        await expect
+          .poll(async () => (await panel.boundingBox())!.width)
+          .toBeLessThan(initialWidth);
+        // The transcript receives its narrowed width through ResizeObserver.
+        await expect
+          .poll(() =>
+            thread.evaluate((element) => {
+              const outer = element
+                .closest("openclaw-chat-subagents-panel")!
+                .getBoundingClientRect();
+              const inner = element.getBoundingClientRect();
+              return Math.max(
+                outer.left - inner.left,
+                inner.right - outer.right,
+                element.scrollWidth - element.clientWidth,
+              );
+            }),
+          )
+          .toBeLessThanOrEqual(1);
+        const bounds = (await panel.boundingBox())!;
+        await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+        await page.mouse.wheel(0, -2000);
+        await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBe(0);
+        await page.mouse.wheel(0, 2000);
+        await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+        const last = detail.getByText(
+          "Confirmed that narrow panels keep long paths and reports readable.",
+          { exact: true },
+        );
+        await expect
+          .poll(() =>
+            last.evaluate((element) => {
+              const text = element.getBoundingClientRect();
+              const viewport = element.closest(".chat-thread")!.getBoundingClientRect();
+              return text.top >= viewport.top && text.bottom <= viewport.bottom;
+            }),
+          )
+          .toBe(true);
+        await panel.getByRole("button", { name: "Back to Subagents", exact: true }).click();
+        await panel
+          .locator(".subagents-desktop__open")
+          .filter({ has: page.getByText(child.label, { exact: true }) })
+          .waitFor();
       },
     );
   });
@@ -554,6 +700,14 @@ suite.define(() => {
           .filter({ has: page.getByText(child.label, { exact: true }) })
           .waitFor();
         await expect.poll(() => panel.locator(".subagents-desktop__row").count()).toBe(5);
+        const adjacentRoots = panel
+          .locator(
+            '.subagents-desktop__row[data-depth="0"]:has(+ .subagents-desktop__row[data-depth="0"])',
+          )
+          .first();
+        expect(
+          await adjacentRoots.evaluate((root) => getComputedStyle(root, "::after").content),
+        ).toBe('""');
         await panel
           .locator(`[data-group="waiting"][data-session-key="${queued.key}"]`)
           .getByText("Queued", { exact: true })
@@ -563,9 +717,8 @@ suite.define(() => {
           .getByText(swarm.label, { exact: true })
           .waitFor();
         expect(await panel.getByText(persistent.label, { exact: true }).count()).toBe(0);
-        await expect
-          .poll(() => row.locator(".subagents-desktop__open").getAttribute("title"))
-          .toContain("2 calls");
+        const openRow = row.locator(".subagents-desktop__open");
+        await expect.poll(() => openRow.ariaSnapshot()).toContain("2 calls");
 
         const activity = {
           sessionKey: child.key,
@@ -586,13 +739,11 @@ suite.define(() => {
           },
         };
         await gateway.emitGatewayEvent("agent", activity);
-        await expect
-          .poll(() => row.locator(".subagents-desktop__open").getAttribute("title"))
-          .toContain("Reading notice component");
+        await expect.poll(() => openRow.ariaSnapshot()).toContain("Reading notice component");
         await gateway.emitGatewayEvent("agent", activity);
-        expect(await row.locator(".subagents-desktop__open").getAttribute("title")).toContain(
-          "2 calls",
-        );
+        expect(await openRow.ariaSnapshot()).toContain("2 calls");
+        await openRow.hover({ position: { x: 12, y: 34 } });
+        expect(await openRow.getAttribute("title")).toBeNull();
         await gateway.emitGatewayEvent("agent", {
           sessionKey: other.key,
           agentId: "main",
@@ -603,13 +754,11 @@ suite.define(() => {
           data: { ...keyboardActivity, phase: "update" },
         });
         const otherRow = panel.locator(`[data-session-key="${other.key}"]`);
-        await otherRow.locator(".subagents-desktop__open").waitFor();
+        const openOtherRow = otherRow.locator(".subagents-desktop__open");
         await expect
-          .poll(() => otherRow.locator(".subagents-desktop__open").getAttribute("title"))
+          .poll(() => openOtherRow.ariaSnapshot())
           .toContain("Retry failed benchmark targets");
-        await expect
-          .poll(() => otherRow.locator(".subagents-desktop__open").getAttribute("title"))
-          .toContain("1+ calls");
+        await expect.poll(() => openOtherRow.ariaSnapshot()).toContain("1+ calls");
         expect(await row.locator(".subagents-desktop__avatar").count()).toBe(1);
 
         await panel

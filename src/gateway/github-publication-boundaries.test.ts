@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -221,7 +223,7 @@ describe("Gateway GitHub publication boundaries", () => {
     const coordinator = createTestGitHubPublicationCoordinator({ placements });
 
     await expect(publish(coordinator, "local-turn-during-snapshot")).rejects.toThrow(
-      "session authority changed during snapshot",
+      "session moved during snapshot",
     );
     expectNoCommands("commit-tree", "push");
   });
@@ -285,53 +287,40 @@ describe("Gateway GitHub publication boundaries", () => {
     expect(await coordinator.readAsync(queued.requestId)).toMatchObject({ status: "published" });
   });
 
-  it.each([
-    { boundary: "update-ref", status: "failed", effects: [] },
-    { boundary: "push", status: "failed", effects: ["push"] },
-    { boundary: "pull_request", status: "published", effects: ["push", "pull_request"] },
-  ] as const)(
-    "settles accepted shared publication work when authority closes after $boundary",
-    async ({ boundary, status, effects }) => {
-      const workspace = await createRealPublicationWorkspace();
-      const database = openOpenClawStateDatabase();
-      const coordinator = createLocalCoordinator(database);
-      const transport = mocks.runCommand.getMockImplementation()!;
-      let current = true;
-      mocks.runCommand.mockImplementation(async (argv: string[], options) => {
-        const result = await transport(argv, options);
-        if (
-          result.code === 0 &&
-          (boundary === "pull_request"
-            ? argv.includes("POST") && argv.includes("repos/openclaw/openclaw/pulls")
-            : argv[0] === "git" && argv.includes(boundary))
-        ) {
-          current = false;
+  it("finishes admitted shared publication work when authority changes after update-ref", async () => {
+    const workspace = await createRealPublicationWorkspace();
+    const database = openOpenClawStateDatabase();
+    const coordinator = createLocalCoordinator(database);
+    const transport = mocks.runCommand.getMockImplementation()!;
+    let current = true;
+    mocks.runCommand.mockImplementation(async (argv: string[], options) => {
+      const result = await transport(argv, options);
+      if (result.code === 0 && argv[0] === "git" && argv.includes("update-ref")) {
+        current = false;
+      }
+      return result;
+    });
+    const result = await coordinator.requestForSessionV2({
+      ...sessionRequest("shared-authority-after-update-ref"),
+      assertCurrent: () => {
+        if (!current) {
+          throw new GitHubPublicationRequesterUnavailableError();
         }
-        return result;
-      });
-      const result = await coordinator.requestForSessionV2({
-        ...sessionRequest(`shared-authority-after-${boundary}`),
-        assertCurrent: () => {
-          if (!current) {
-            throw new GitHubPublicationRequesterUnavailableError();
-          }
-        },
-      });
-      expect(result.status).toBe(status);
-      expect(await coordinator.readAsync(result.requestId)).toEqual(result);
-      expect(current).toBe(false);
-      await coordinator.resumeSessionRequests();
-      expect(await coordinator.readAsync(result.requestId)).toEqual(result);
-      const headCommit = await workspace.git("rev-parse", "HEAD");
-      expect(receipt(database, result.requestId)).toMatchObject({
-        status,
-        head_commit: headCommit,
-        pull_request_url:
-          boundary === "pull_request" ? "https://github.com/openclaw/openclaw/pull/125200" : null,
-      });
-      expect(workspace.effects).toEqual(effects);
-    },
-  );
+      },
+    });
+    expect(result.status).toBe("published");
+    expect(await coordinator.readAsync(result.requestId)).toEqual(result);
+    expect(current).toBe(false);
+    await coordinator.resumeSessionRequests();
+    expect(await coordinator.readAsync(result.requestId)).toEqual(result);
+    const headCommit = await workspace.git("rev-parse", "HEAD");
+    expect(receipt(database, result.requestId)).toMatchObject({
+      status: "published",
+      head_commit: headCommit,
+      pull_request_url: "https://github.com/openclaw/openclaw/pull/125200",
+    });
+    expect(workspace.effects).toEqual(["push", "pull_request"]);
+  });
 
   it.each(["lookup", "fetch", "ancestry"] as const)(
     "reports unavailable without mutation when base %s verification fails",
@@ -560,12 +549,16 @@ describe("Gateway GitHub publication boundaries", () => {
     expect(commands).toEqual([]);
   });
 
-  it("publishes deferred session requests alongside an accepted turn claim", async () => {
-    const { placements, claim: claimTurn } = await cloudFixture();
+  it("captures deferred session requests alongside an accepted turn claim", async () => {
+    const { database, placements, claim: claimTurn } = await cloudFixture();
+    const workspace = await createRealPublicationWorkspace(undefined, REQUEST.sessionKey);
+    const sourceHead = await workspace.git("rev-parse", "HEAD");
+    const sourceIndex = await workspace.git("write-tree");
     const coordinator = createTestGitHubPublicationCoordinator({ placements });
     const deferred = await coordinator.requestForSessionV2(
       cloudRequest("accepted-deferred-session"),
     );
+    const queued = await coordinator.requestForSessionV2(cloudRequest("second-deferred-session"));
     const claim = await claimTurn("run-accepted-deferred", "claim-accepted-deferred");
     const claimed = await coordinator.requestForClaimV2({
       claim,
@@ -575,10 +568,31 @@ describe("Gateway GitHub publication boundaries", () => {
     await coordinator.prepareClaimWorkspace(claim);
     await placements.acceptWorkspaceResult(claim);
 
-    await expect(coordinator.processClaim(claim)).resolves.toEqual([
-      expect.objectContaining({ requestId: claimed.requestId, status: "published" }),
-      expect.objectContaining({ requestId: deferred.requestId, status: "published" }),
-    ]);
+    for (const { requestId } of [deferred, queued, claimed]) {
+      const frozen = receipt(database, requestId)!;
+      expect(frozen).toMatchObject({
+        source_head_commit: sourceHead,
+        source_index_tree: sourceIndex,
+      });
+      expect(await workspace.git("show", `${frozen.workspace_tree}:artifact.txt`)).toBe("accepted");
+    }
+    await fs.writeFile(path.join(workspace.cwd, "artifact.txt"), "later edit\n");
+    await coordinator.prepareClaimWorkspace(claim);
+    await coordinator.deferClaimPreparationAsync(claim);
+    await placements.completeWorkspaceResultAndReleaseTurn(claim);
+    await coordinator.resumeSessionRequests();
+    const publishedHead = await workspace.git("rev-parse", "HEAD");
+    for (const { requestId } of [deferred, queued, claimed]) {
+      expect(await coordinator.readAsync(requestId)).toMatchObject({
+        status: "published",
+        headCommit: publishedHead,
+      });
+    }
+    expect(await workspace.git("show", "HEAD:artifact.txt")).toBe("accepted");
+    expect(await fs.readFile(path.join(workspace.cwd, "artifact.txt"), "utf8")).toBe(
+      "later edit\n",
+    );
+    expect(workspace.effects).toEqual(["push", "pull_request"]);
   });
 
   it.each(["local", "worker"] as const)(

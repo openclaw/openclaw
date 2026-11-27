@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -28,10 +29,8 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-cha
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { getFinishedSession } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
-import type {
-  ExecApprovalFollowupFactory,
-  ExecApprovalFollowupOutcome,
-} from "./bash-tools.exec-types.js";
+import type { ExecApprovalFollowupOutcome } from "./bash-tools.exec-result.types.js";
+import type { ExecApprovalFollowupFactory } from "./bash-tools.exec-types.js";
 import { createExecTool } from "./bash-tools.js";
 
 const TEST_ENV_KEYS = [
@@ -190,6 +189,98 @@ describe("gateway-hosted exec approvals", () => {
     const { client: operator } = await connect("approval operator");
     return { config, configPath, operator, connect, port: claim.port, workspaceDir };
   }
+
+  it.skipIf(process.platform === "win32" || !existsSync("/usr/bin/printf"))(
+    "gates dynamic predicates through real gateway approval and process owners",
+    async () => {
+      const { operator, workspaceDir } = await startApprovalGateway(() => ({
+        tools: { exec: { host: "gateway", security: "allowlist", ask: "on-miss" } },
+      }));
+      await fs.writeFile(path.join(workspaceDir, "proof.txt"), "fixture");
+      const command = "test -e *.txt && /usr/bin/printf 'approved\\n'";
+      const setPolicy = async (security: "allowlist" | "deny", ask: "on-miss" | "off") => {
+        const previous = await operator.request<{ hash: string }>("exec.approvals.get", {});
+        await operator.request("exec.approvals.set", {
+          baseHash: previous.hash,
+          file: {
+            version: 1,
+            defaults: { security, ask, askFallback: "deny" },
+            agents: { main: { allowlist: [{ pattern: "/usr/bin/printf" }] } },
+          },
+        });
+        const current = await operator.request<{
+          file: { defaults: { security: string; ask: string } };
+        }>("exec.approvals.get", {});
+        expect(current.file.defaults).toMatchObject({ security, ask });
+      };
+      const tool = createExecTool({
+        host: "gateway",
+        security: "allowlist",
+        ask: "on-miss",
+        safeBins: [],
+        cwd: workspaceDir,
+        agentId: "main",
+      });
+      const pendingApprovalId = async () => {
+        let id: string | undefined;
+        await vi.waitFor(
+          async () => {
+            const pending = await operator.request<
+              Array<{ id: string; request: { command?: string } }>
+            >("exec.approval.list", {});
+            id = pending.find((entry) => entry.request.command === command)?.id;
+            expect(id).toBeDefined();
+          },
+          { timeout: 15_000, interval: 100 },
+        );
+        return expectDefined(id, "pending dynamic predicate approval");
+      };
+
+      await setPolicy("allowlist", "off");
+      const deniedTool = createExecTool({
+        host: "gateway",
+        security: "allowlist",
+        ask: "off",
+        safeBins: [],
+        cwd: workspaceDir,
+        agentId: "main",
+      });
+      await expect(
+        deniedTool.execute("dynamic-predicate-denied", { command, workdir: workspaceDir }),
+      ).rejects.toThrow("exec denied: allowlist miss");
+
+      await setPolicy("allowlist", "on-miss");
+      const approved = tool.execute("dynamic-predicate-approved", {
+        command,
+        workdir: workspaceDir,
+      });
+      const approvedId = await pendingApprovalId();
+      await operator.request("exec.approval.resolve", {
+        id: approvedId,
+        decision: "allow-once",
+      });
+      expect((await approved).details).toMatchObject({
+        status: "completed",
+        exitCode: 0,
+        aggregated: "approved\n",
+      });
+
+      const revoked = tool.execute("dynamic-predicate-revoked", {
+        command,
+        workdir: workspaceDir,
+      });
+      // Policy updates can reject execution before their driver RPC returns.
+      const rejected = expect(revoked).rejects.toThrow("Exec approval changed before execution");
+      const revokedId = await pendingApprovalId();
+      await setPolicy("deny", "off");
+      await operator.request("exec.approval.resolve", {
+        id: revokedId,
+        decision: "allow-once",
+      });
+      await rejected;
+    },
+    EXEC_APPROVAL_E2E_TIMEOUT_MS,
+  );
 
   it(
     "keeps a scheduled approval floor in a reused full-permission session",
@@ -356,7 +447,7 @@ describe("gateway-hosted exec approvals", () => {
       const newName = "OPENCLAW_E2E_HOOK_SOURCE_NEW";
       const oldValue = "synthetic-old-hook-ingress-value";
       const newValue = "synthetic-new-hook-ingress-value";
-      const { config, configPath, operator, port, workspaceDir } = await startApprovalGateway(
+      const { config, operator, port, workspaceDir } = await startApprovalGateway(
         () => {
           setTestEnvValue(oldName, oldValue);
           setTestEnvValue(newName, newValue);
@@ -382,12 +473,12 @@ describe("gateway-hosted exec approvals", () => {
         resolveOutcome(outcome);
         return undefined;
       });
-      const queue = async (id: string, command = "env") => {
+      const queue = async (id: string) => {
         const outcome = new Promise<ExecApprovalFollowupOutcome>((resolve) => {
           resolveOutcome = resolve;
         });
         const pending = await tool.execute(id, {
-          command,
+          command: "env",
           workdir: workspaceDir,
           timeoutSeconds: 5,
         });
@@ -416,25 +507,25 @@ describe("gateway-hosted exec approvals", () => {
       expect(await approve(await queue("hook-token-startup"))).toEqual([newName]);
 
       // An approval still pending when hooks.token is reloaded to another env name.
-      const markerPath = path.join(workspaceDir, "queued-across-reload");
-      const queued = await queue("hook-token-queued", `touch ${JSON.stringify(markerPath)}`);
-      await fs.writeFile(
-        configPath,
-        `${JSON.stringify({ ...config, hooks: { enabled: true, token: `\${${newName}}` } }, null, 2)}\n`,
-        "utf8",
-      );
+      const queued = await queue("hook-token-queued");
+      const before = await operator.request<{ hash: string }>("config.get", {});
+      await operator.request("config.patch", {
+        baseHash: before.hash,
+        raw: JSON.stringify({ hooks: { token: `\${${newName}}` } }),
+      });
       await vi.waitFor(async () => expect(await wake(newValue)).toBe(400), {
         timeout: 15_000,
         interval: 500,
       });
-      await allowOnce(queued.approvalId);
+      // The started exec still launches. Its env was prepared at startup without the old
+      // name, and launch drops the newly referenced one. Awaiting it keeps its follow-up
+      // from settling the next probe's outcome.
+      expect(await approve(queued)).toEqual([]);
 
       // After reload: ingress follows the new name and only that name is withheld.
       expect(await approve(await queue("hook-token-after-reload"))).toEqual([oldName]);
       expect(await wake(newValue)).toBe(400);
       expect(await wake(oldValue)).toBe(401);
-      // The reload fenced the pending approval wait, so the queued command never launched.
-      await expect(fs.stat(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
     },
     EXEC_APPROVAL_E2E_TIMEOUT_MS,
   );

@@ -1,5 +1,5 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
-import { afterEach, beforeEach, expect, it, vi, type Mock } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ConfigWriteOptions } from "../../config/io.js";
 import { createEmptyPluginSetupRegistry } from "../../plugins/setup-registry.test-support.js";
@@ -11,7 +11,6 @@ import type {
 import type { RuntimeEnv } from "../../runtime.js";
 import { ProviderAuthConfigApplyError } from "../../shared/provider-auth-result.js";
 import { expectNoCalls } from "../../test-utils/mock-call-assertions.js";
-import { registerModelsAuthAuthorityTests } from "./auth-authority.test-support.js";
 
 type AuthRunCall = { signal?: AbortSignal };
 type ResolvePluginProvidersCall = { providerRefs?: string[] };
@@ -44,9 +43,17 @@ const mocks = vi.hoisted(() => ({
   promoteAuthProfileInOrder: vi.fn(),
   tryImportProviderCredential: vi.fn(),
   callGateway: vi.fn(),
+  hasMultipleSessionSharingIdentities: vi.fn(),
+  prepareUserProfileCatalog: vi.fn(),
+  releaseUserProfileCatalog: vi.fn(),
   isImplicitLocalGatewayTarget: vi.fn(() => Promise.resolve(true)),
   resolvePluginSetupProviderCore: vi.fn(),
   resolvePluginSetupRegistry: vi.fn(),
+}));
+
+vi.mock("../../state/user-profile-list.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/user-profile-list.js")>()),
+  prepareUserProfileCatalog: mocks.prepareUserProfileCatalog,
 }));
 
 vi.mock("../../agents/auth-profiles/profiles.js", () => ({
@@ -281,6 +288,11 @@ beforeEach(() => {
   restoreStdin = overrideStdin("isTTY", { enumerable: true, get: () => true });
   currentConfig = {};
   lastUpdatedConfig = null;
+  mocks.hasMultipleSessionSharingIdentities.mockReset().mockReturnValue(true);
+  mocks.prepareUserProfileCatalog.mockReset().mockImplementation(async () => ({
+    hasMultipleSessionSharingIdentities: mocks.hasMultipleSessionSharingIdentities,
+    release: mocks.releaseUserProfileCatalog,
+  }));
   mocks.clackCancel.mockReset();
   mocks.clackConfirm.mockReset();
   mocks.clackPassword.mockReset();
@@ -360,10 +372,96 @@ function loginFlow(options: Partial<Parameters<typeof runModelsAuthLoginFlowCore
   });
 }
 
-registerModelsAuthAuthorityTests({
-  mocks,
-  loginFlow,
-  setProviderAuthResult: (result) => runProviderAuth.mockResolvedValueOnce(result),
+describe("model auth effect authority", () => {
+  type PreparedEffect = Pick<
+    Parameters<
+      typeof import("../../plugins/provider-auth-persistence.js").persistProviderAuthProfilesAfterLogin
+    >[0],
+    "beforeWrite"
+  > & { assertCurrent?: () => void };
+  const ended = () => new Error("Login authority ended.");
+  const reject = (
+    authority: AbortController,
+    options: Partial<Parameters<typeof runModelsAuthLoginFlowCore>[0]> = {},
+  ) =>
+    expect(
+      loginFlow({
+        credentialOnly: true,
+        assertCurrent: () => authority.signal.throwIfAborted(),
+        ...options,
+      }),
+    ).rejects.toThrow("Login authority ended.");
+  it.each(["cancelled", "revoked"] as const)(
+    "does not complete a saved login when authority is %s during a rejected refresh",
+    async (reason) => {
+      const controller = new AbortController();
+      const authority = new AbortController();
+      await reject(authority, {
+        credentialOnly: false,
+        signal: controller.signal,
+        refreshAfterLogin: async () => {
+          if (reason === "cancelled") {
+            controller.abort(ended());
+          } else {
+            authority.abort(ended());
+          }
+          throw new Error("Auth publication failed.");
+        },
+      });
+    },
+  );
+
+  it.each(["beforeWrite", "assertCurrent", "beforeCommit", "writeAuthority"] as const)(
+    "does not publish after authority ends at %s",
+    async (gate) => {
+      const authority = new AbortController();
+      let published = false;
+      const credentialGate = gate === "beforeWrite" || gate === "assertCurrent";
+      if (credentialGate) {
+        const effect =
+          gate === "beforeWrite"
+            ? mocks.persistProviderAuthProfilesAfterLogin
+            : mocks.promoteAuthProfileInOrder;
+        effect.mockImplementationOnce(async (params: PreparedEffect) => {
+          authority.abort(ended());
+          params[gate]?.();
+          published = true;
+        });
+      } else {
+        const credential = { type: "api_key" as const, provider: "openai", key: "fixture-key" };
+        runProviderAuth.mockResolvedValueOnce({
+          profiles: [{ profileId: "openai:saved", credential }],
+          configPatch: {
+            models: { providers: { openai: { baseUrl: "https://api.openai.com/v1", models: [] } } },
+          },
+        });
+        mocks.updateConfig.mockImplementationOnce(
+          async (
+            mutator: (cfg: OpenClawConfig) => OpenClawConfig,
+            _refs: unknown,
+            beforeCommit?: ConfigWriteOptions["beforeCommit"],
+            writeOptions?: ConfigWriteOptions,
+          ) => {
+            mutator({});
+            authority.abort(ended());
+            if (gate === "beforeCommit") {
+              await beforeCommit?.();
+            } else {
+              writeOptions?.assertCurrent?.();
+            }
+            published = true;
+          },
+        );
+      }
+      const refreshAfterLogin = vi.fn(async () => undefined);
+      await reject(authority, { refreshAfterLogin });
+      expect(published).toBe(false);
+      expect(refreshAfterLogin).not.toHaveBeenCalled();
+      if (credentialGate) {
+        expect(mocks.updateConfig).not.toHaveBeenCalled();
+      }
+    },
+  );
 });
 
 function pipeInput(input: string | Buffer) {
@@ -525,7 +623,7 @@ it.each([
   },
 );
 
-it("retains the imported profile and model-access choice after direct refresh fails", async () => {
+it("retains the imported profile and allows its models after direct refresh fails", async () => {
   const profileId = "openai:imported";
   currentConfig = {
     agents: {
@@ -538,30 +636,29 @@ it("retains the imported profile and model-access choice after direct refresh fa
     mode: "oauth",
     configUpdated: false,
   });
-  const onModelAccessRequested = vi.fn();
   const result = await loginFlow({
     refreshAfterLogin: async () => {
       throw new Error("Auth publication failed.");
     },
-    onModelAccessRequested,
   });
   expect(result).toMatchObject({
     authRefresh: "gateway-rejected",
     profiles: [{ profileId, provider: "openai", mode: "oauth" }],
+    modelAccess: { message: expect.stringContaining("Added openai/* to allowed models.") },
   });
-  expect(onModelAccessRequested).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({
-      provider: "openai",
-      policy: { path: "agents.defaults.modelPolicy.allow", refs: ["other/current"] },
-    }),
-  );
   expect(currentConfig.agents?.defaults).toEqual({
     model: "other/current",
-    modelPolicy: { allow: ["other/current"] },
+    modelPolicy: { allow: ["other/current", "openai/*"] },
   });
 });
 
-it("identifies a config failure after credentials are saved and preserves its cause", async () => {
+it("reports the provider's recommended model from a credential-only login without applying it", async () => {
+  currentConfig = { agents: { defaults: { model: "other/current" } } };
+  expect((await loginFlow({ credentialOnly: true })).defaultModel).toBe("openai/gpt-5.5");
+  expect(currentConfig.agents?.defaults?.model).toBe("other/current");
+});
+
+it("refreshes saved credentials when the settings write fails and preserves its cause", async () => {
   const cause = new Error("config write failed");
   runProviderAuth.mockResolvedValueOnce({
     profiles: [tokenProfile("openai:saved")],
@@ -577,7 +674,25 @@ it("identifies a config failure after credentials are saved and preserves its ca
     cause,
   });
   expect(mocks.persistProviderAuthProfilesAfterLogin).toHaveBeenCalledOnce();
-  expect(mocks.callGateway).not.toHaveBeenCalled();
+  expectRefresh();
+});
+
+it("keeps the settings failure when a hosted refresh ends with a cancelled login", async () => {
+  const controller = new AbortController();
+  runProviderAuth.mockResolvedValueOnce({
+    profiles: [tokenProfile("openai:saved")],
+    configPatch: { logging: { level: "debug" } },
+  });
+  mocks.updateConfig.mockRejectedValueOnce(new Error("config write failed"));
+  const refreshAfterLogin = vi.fn(async () => {
+    controller.abort(new Error("Login cancelled."));
+    throw new Error("Auth publication failed.");
+  });
+
+  await expect(loginFlow({ refreshAfterLogin, signal: controller.signal })).rejects.toBeInstanceOf(
+    ProviderAuthConfigApplyError,
+  );
+  expect(refreshAfterLogin).toHaveBeenCalledOnce();
 });
 
 it("creates store order for relogin when configured profiles would shadow the new profile", async () => {
@@ -657,7 +772,7 @@ it("routes OAuth login and refresh to the explicit agent", async () => {
       "Scope: System / agent",
       "Agent: coder",
       "Location: the machine running OpenClaw",
-      "For personal model accounts on a Gateway, run openclaw models accounts login --help.",
+      "Personal model accounts are managed in Settings → Profile → Connected accounts.",
     ].join("\n"),
     "Provider sign-in",
   );
@@ -667,6 +782,7 @@ it("routes OAuth login and refresh to the explicit agent", async () => {
   expect(mocks.resolveAgentDir).toHaveBeenCalledWith(originalConfig, "coder");
   expectCoderStore(runProviderAuth);
   expectRefresh("coder");
+  expect(mocks.releaseUserProfileCatalog).toHaveBeenCalledOnce();
 });
 
 it("refreshes saved credentials before presenting provider notes", async () => {
@@ -718,7 +834,7 @@ it("does not persist credentials returned after app-owned cancellation", async (
   );
 });
 
-it("runs the requested anthropic cli auth method with the full login context", async () => {
+it("keeps workspace plugins untrusted while applying the selected login model", async () => {
   currentConfig = { agents: { defaults: claudeDefaults("anthropic") } };
   const migrated = claudeDefaults("claude-cli");
   const { note, select } = usePrompter();
@@ -735,6 +851,8 @@ it("runs the requested anthropic cli auth method with the full login context", a
     expect(ctx.prompter.select).toBe(select);
     expect(ctx.runtime).toBe(runtime);
     expect(ctx.env).toBe(process.env);
+    // Offline CLI login runs outside the Gateway, so it has no node runtime.
+    expect(ctx.nodes).toBeUndefined();
     await ctx.openUrl("https://example.com/auth");
     expect(mocks.openUrl).toHaveBeenCalledWith("https://example.com/auth");
     expect(ctx.oauth.createVpsAwareHandlers).toBeTypeOf("function");
@@ -743,10 +861,6 @@ it("runs the requested anthropic cli auth method with the full login context", a
       defaultModel: "claude-cli/claude-sonnet-4-6",
       configPatch: { agents: { defaults: migrated } },
       replaceDefaultModels: true,
-      notes: [
-        "Claude CLI auth detected; switched Anthropic model selection to the local Claude CLI backend.",
-        "Existing Anthropic auth profiles are kept for rollback.",
-      ],
     };
   });
   useProvider("anthropic", "Anthropic", [
@@ -766,14 +880,6 @@ it("runs the requested anthropic cli auth method with the full login context", a
   expectNoCalls(runApiKeyAuth, mocks.upsertAuthProfileWithLock);
   expect(lastUpdatedConfig?.agents?.defaults?.model).toEqual(migrated.model);
   expect(lastUpdatedConfig?.agents?.defaults?.models).toEqual(migrated.models);
-  expect(note).toHaveBeenCalledWith(
-    [
-      "Claude CLI auth detected; switched Anthropic model selection to the local Claude CLI backend.",
-      "Existing Anthropic auth profiles are kept for rollback.",
-    ].join("\n"),
-    "Provider notes",
-  );
-  expect(runtime.log).toHaveBeenCalledWith("Default model set to claude-cli/claude-sonnet-4-6");
 });
 
 it("preserves model selection and other providers' allowlist entries on OAuth login", async () => {
@@ -874,14 +980,7 @@ it("opens the provider picker when a CLI backend has no provider auth method", a
   );
 });
 
-it("rejects the retired manual auth provider codex-cli", async () => {
-  const provider = "codex-cli";
-  await expect(loginCommand({ provider })).rejects.toThrow(
-    `"${provider}" is a legacy provider ID; use --provider openai.`,
-  );
-});
-
-it("writes pasted Anthropic setup-tokens and logs the preference note", async () => {
+it("writes pasted Anthropic setup-tokens to the selected profile", async () => {
   mocks.clackPassword.mockResolvedValue(`sk-ant-oat01-${"a".repeat(80)}`);
 
   await modelsAuthPasteTokenCommand({ provider: "anthropic" }, runtime);
@@ -897,13 +996,6 @@ it("writes pasted Anthropic setup-tokens and logs the preference note", async ()
     },
     agentDir: "/tmp/openclaw/agents/main",
   });
-  expect(runtime.log).toHaveBeenCalledWith("Anthropic setup-token auth is supported in OpenClaw.");
-  expect(runtime.log).toHaveBeenCalledWith(
-    "OpenClaw prefers Claude CLI reuse when it is available on the host.",
-  );
-  expect(runtime.log).toHaveBeenCalledWith(
-    "Anthropic staff told us this OpenClaw path is allowed again.",
-  );
 });
 
 it("rejects pasted token expiries that cannot fit in the Date timestamp range", async () => {

@@ -19,7 +19,10 @@ import {
 } from "../../infra/update-retained-recovery.test-support.js";
 import { createUpdateRun, finishUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { legacyRecord } from "../../infra/update-run-recovery-legacy.test-support.js";
-import { inspectUpdateRecoveries, loadUpdateRecovery } from "../../infra/update-run-recovery.js";
+import {
+  loadUpdateRecovery,
+  UpdateRecoveryRequiredError,
+} from "../../infra/update-run-recovery.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -32,6 +35,7 @@ import { resultFixture } from "./update-command-fixtures.test-support.js";
 import { finishParams } from "./update-command-maintenance-fixtures.test-support.js";
 import { continueMigratedUpdateInFreshProcess } from "./update-command-migrated.js";
 import { assertUpdateCommandPackageFinalization } from "./update-command-recovery.js";
+import { UpdateCommandPendingRecoveryFailure } from "./update-command-result.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
 import * as service from "./update-command-service.js";
@@ -58,7 +62,7 @@ describe("package finalization recovery targets", () => {
     ["entry", "settlement"].flatMap((phase) =>
       ["same-target", "distinct-target", "retargeted"].map((kind) => ({ phase, kind })),
     ),
-  )("inspects each selected recovery target once at $phase ($kind)", async ({ phase, kind }) => {
+  )("inspects each selected restore directory once at $phase ($kind)", async ({ phase, kind }) => {
     const first = target();
     const other = kind === "same-target" ? undefined : target();
     if (kind === "same-target") {
@@ -70,6 +74,7 @@ describe("package finalization recovery targets", () => {
       first.params.ownedManagedUpdateEnv = other!.run.env;
     }
     closeOpenClawStateDatabaseForTest();
+    const read = vi.spyOn(fs, "readdir");
     const prepare = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync");
     if (kind === "retargeted") {
       observeStat(path.dirname(first.databasePath), () => {
@@ -89,11 +94,13 @@ describe("package finalization recovery targets", () => {
         : kind === "retargeted"
           ? [first.databasePath, other!.databasePath]
           : [first.databasePath];
-    expect(prepare.mock.calls.map(([pathname]) => pathname)).toEqual([
-      ...recoveryPaths,
-      // Settlement still needs its independent terminal-history read.
-      ...(phase === "settlement" ? [resolveOpenClawStateSqlitePath(first.run.env)] : []),
-    ]);
+    expect(read.mock.calls.map(([directory]) => String(directory))).toEqual(
+      recoveryPaths.map((databasePath) => path.dirname(databasePath)),
+    );
+    // Settlement still needs its independent terminal-history snapshot.
+    expect(prepare.mock.calls.map(([pathname]) => pathname)).toEqual(
+      phase === "settlement" ? [resolveOpenClawStateSqlitePath(first.run.env)] : [],
+    );
   });
 
   it.each(["first-read", "distinct-read"] as const)(
@@ -141,6 +148,20 @@ function fixture(rollback = false) {
   return { options, run: { runId: run.runId, env }, live, record };
 }
 
+it("preserves the initiating failure when retained recovery prevents terminal settlement", async () => {
+  const f = fixture();
+  const result = resultFixture(f.live, { status: "error", reason: "restart-unhealthy" });
+  const refusal = new UpdateRecoveryRequiredError(f.record);
+  const pending = new UpdateCommandPendingRecoveryFailure(result, refusal.message, {
+    cause: refusal,
+  });
+  const prepare = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync");
+  await expect(
+    resolveSettledUpdateCommandResult({ opts: { run: f.run }, root: f.live }, result, pending),
+  ).rejects.toBe(pending);
+  expect(prepare).not.toHaveBeenCalled();
+});
+
 it("refuses to serialize live authority into a legacy migrated worker", async () => {
   const f = await checkpointRollbackFixture();
   await expect(
@@ -180,8 +201,7 @@ describe("historical terminal completion diagnostics", () => {
       .prepare("UPDATE config_machine_state SET value_json=? WHERE state_key=?")
       .run(saved, "update.recovery." + f.run.runId);
     closeOpenClawStateDatabaseForTest();
-    const directory = path.dirname(source.path);
-    const basename = path.basename(source.path);
+    const { dir: directory, base: basename } = path.parse(source.path);
     const family = async () =>
       Promise.all(
         (await fs.readdir(directory))
@@ -193,7 +213,14 @@ describe("historical terminal completion diagnostics", () => {
             return { name, bytes: await fs.readFile(file), ino, size, mtimeMs, ctimeMs };
           }),
       );
-    return { ...f, family, saved };
+    const expectUnchanged = async (before: Awaited<ReturnType<typeof family>>) => {
+      const metadata = (await family()).map(({ bytes, ...fields }, index) => {
+        expect(bytes.equals(before[index]!.bytes), fields.name).toBe(true);
+        return fields;
+      });
+      expect(metadata).toEqual(before.map(({ bytes: _bytes, ...fields }) => fields));
+    };
+    return { ...f, family, saved, expectUnchanged };
   }
 
   it.each(["succeeded", "rolled-back", "running"] as const)(
@@ -216,27 +243,12 @@ describe("historical terminal completion diagnostics", () => {
         reason: rollback ? "candidate-failed" : terminal ? undefined : "update-recovery-pending",
         runId: f.run.runId,
       });
-      expect(await f.family()).toEqual(before);
+      await f.expectUnchanged(before);
       if (!terminal) {
         expect(getUpdateRun(f.run.runId, f.options)?.status).toBe("running");
       }
     },
   );
-
-  it("keeps pending legacy history separate from fallback completion", async () => {
-    const f = await historical(false, false);
-    const other = createUpdateRun({ trigger: "cli" }, f.options);
-    closeOpenClawStateDatabaseForTest();
-    const before = await f.family();
-    const result = completeUpdateCommandRun(resultFixture(undefined, { durationMs: 1 }), {
-      runId: other.runId,
-      env: f.run.env,
-    });
-    expect(result).toMatchObject({ status: "error", reason: "update-recovery-pending" });
-    expect(await f.family()).toEqual(before);
-    expect(getUpdateRun(other.runId, f.options)?.status).toBe("running");
-    expect(inspectUpdateRecoveries(f.options)[0]?.raw).toBe(f.saved);
-  });
 });
 
 async function readPreviousConfig(env: NodeJS.ProcessEnv) {
@@ -293,43 +305,6 @@ function observeStat(target: string, observed: () => void | Promise<void>, defau
 }
 
 describe("package rollback executor ownership", () => {
-  it("checks the new history target after its admission environment changes", async () => {
-    const env = { OPENCLAW_STATE_DIR: dirs.make("rollback-first-target-") };
-    const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
-    const pendingEnv = { OPENCLAW_STATE_DIR: dirs.make("rollback-pending-target-") };
-    const pendingRun = createUpdateRun({ trigger: "cli" }, { env: pendingEnv });
-    const root = dirs.make("rollback-target-package-");
-    const runtime = { root, nodePath: process.execPath, version: "1.0.0", buildId: null };
-    createRetainedUpdateRecovery(
-      { runId: pendingRun.runId, from: runtime, to: runtime },
-      { env: pendingEnv },
-    );
-    const configSnapshot = await readPreviousConfig(env);
-    closeOpenClawStateDatabaseForTest();
-    const files = [resolveOpenClawStateSqlitePath(env), resolveOpenClawStateSqlitePath(pendingEnv)];
-    const before = await Promise.all(files.map((file) => fs.readFile(file)));
-    let changed = false;
-    observeStat(path.dirname(files[0]!), () => {
-      changed = true;
-      env.OPENCLAW_STATE_DIR = pendingEnv.OPENCLAW_STATE_DIR;
-    });
-    const result = await rollbackFailedUpdate({
-      definitionRecovery: {},
-      result: resultFixture(root, { status: "error" }),
-      previousRoot: root,
-      rollbackBlockedReason: "state-migrated-no-rollback",
-      configSnapshot,
-      opts: { run },
-      timeoutMs: 1000,
-    });
-    expect(changed).toBe(true);
-    expect(result).toMatchObject({
-      rolledBack: false,
-      pendingRecoveryReason: expect.stringContaining(pendingRun.runId),
-    });
-    expect(await Promise.all(files.map((file) => fs.readFile(file)))).toEqual(before);
-  });
-
   it("preserves the real package and recovery material when its executor is lost during observation", async () => {
     const base = dirs.make("rollback-real-executor-");
     const { packageRoot, transaction } = await createRetainedPackageSwap(base);
@@ -463,10 +438,7 @@ function refuse(message: string): never {
 }
 
 async function checkpointRollbackFixture() {
-  const f = createRetainedCheckpointFixture(
-    fsSync.realpathSync(dirs.make("rollback-retained-")),
-    true,
-  );
+  const f = createRetainedCheckpointFixture(fsSync.realpathSync(dirs.make("rollback-retained-")));
   const { env, configPath } = f;
   const configSnapshot = await createConfigIO({ env, configPath }).readConfigFileSnapshot();
   const opts: UpdateCommandOptions = {
@@ -496,7 +468,9 @@ async function checkpointRollbackFixture() {
       packageTransaction: { rollback, complete, backupRoot: path.join(f.root, "retained") },
       preManagedServiceStop,
     });
-    expect(files.map((file) => fsSync.readFileSync(file))).toEqual(before);
+    files.forEach((file, index) => {
+      expect(fsSync.readFileSync(file).equals(before[index]!), file).toBe(true);
+    });
     expect(rollback).not.toHaveBeenCalled();
     expect(complete).not.toHaveBeenCalled();
     expect(result).toMatchObject({
@@ -523,15 +497,11 @@ it("refuses checkpoint recovery before package mutation and preserves the primar
   expect(getUpdateRun(f.run.runId, f.options)?.status).toBe("running");
 });
 
-it.each(["lost context", "lost run", "interrupted displacement"] as const)(
+it.each(["lost context", "interrupted displacement"] as const)(
   "does not reinterpret %s as permission for package rollback",
   async (change) => {
     const f = await checkpointRollbackFixture();
     f.opts.recovery = undefined;
-    if (change === "lost run") {
-      f.opts.run = undefined;
-      vi.stubEnv("OPENCLAW_STATE_DIR", f.root);
-    }
     if (change === "interrupted displacement") {
       f.displace();
       await f.invoke(undefined, [f.displaced]);

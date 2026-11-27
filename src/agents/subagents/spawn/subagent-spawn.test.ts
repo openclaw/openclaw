@@ -391,16 +391,6 @@ describe("spawnSubagentDirect seam flow", () => {
     });
 
     expect(result).toMatchObject({ status: "accepted", modelApplied: true });
-    const queuedLaunch = requireRecord(firstRegisteredSubagentRun().queuedLaunch);
-    const persistedLaunchJson = JSON.stringify(queuedLaunch);
-    const persistedLaunch: unknown = JSON.parse(persistedLaunchJson);
-    expect(requireRecord(persistedLaunch).requesterRecovery).toEqual({});
-    const queuedRequest = requireRecord(queuedLaunch.request);
-    expect(queuedRequest).not.toHaveProperty("provider");
-    expect(queuedRequest).not.toHaveProperty("model");
-    expect(queuedLaunch).toMatchObject({
-      authorization: { modelOverride: { provider: "openai", model: "gpt-5.4" } },
-    });
     await vi.waitFor(() => expect(gatewayRequest("agent")).toBeDefined());
     expect(gatewayRequest("agent")).toMatchObject({
       scopes: ["operator.admin"],
@@ -585,10 +575,14 @@ describe("spawnSubagentDirect seam flow", () => {
 
   it("rejects the collector lifetime cap with its config-key error", async () => {
     configureSwarm({ enabled: true, maxChildrenPerGroup: 1, maxTotalPerGroup: 2 });
-    hoisted.listSwarmRunsForGroupMock.mockReturnValueOnce([
-      { runId: "done", collect: true, collectorCompletion: { status: "done" } },
-      { runId: "failed", collect: true, collectorCompletion: { status: "failed" } },
-    ]);
+    hoisted.listSwarmRunsForGroupMock.mockReturnValue(
+      ["done", "failed"].map((status) => ({
+        runId: status,
+        collect: true,
+        execution: { status: "terminal" },
+        collectorCompletion: { status },
+      })),
+    );
     const totalRejected = await spawnCollector("third lifetime child", { groupId: "group" });
     expect(totalRejected.status).toBe("forbidden");
     expect(totalRejected.error).toContain("tools.swarm.maxTotalPerGroup");

@@ -8,6 +8,7 @@ import { clearGatewayAgentCliShim } from "../infra/openclaw-cli-shim.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import { prepareRemoteModelCatalogStartupSnapshot } from "../model-catalog/remote-overlay.js";
+import { createLegacyPluginSdkReplyDispatch } from "../plugins/legacy-sdk-reply-dispatch.js";
 import {
   LegacyPluginSdkResourceHost,
   bindLegacyPluginSdkResourceHost,
@@ -119,7 +120,9 @@ export async function createGatewayKernel(
     opts.startupConfigSnapshotRead?.databaseEngineSelection,
   );
   const scheduler = new GatewayScheduler();
-  const sdkResourceHost = options.sdkResourceHost ?? new LegacyPluginSdkResourceHost();
+  const sdkResourceHost =
+    options.sdkResourceHost ??
+    new LegacyPluginSdkResourceHost(createLegacyPluginSdkReplyDispatch());
   sdkResourceHost.bindScheduler(scheduler);
   return await sdkResourceHost.run(() =>
     createGatewayKernelWithSdkHost(port, opts, options, sdkResourceHost, scheduler),
@@ -214,12 +217,16 @@ async function createGatewayKernelWithSdkHost(
         log,
         logCron,
         shutdownRuntime,
+        exitAfterStartupFailure: opts.exitAfterStartupFailure,
       }),
     );
     lifecycleRuntime = preparedLifecycleRuntime;
     const databaseStartupAdmission = getAgentDatabaseStartupAdmission();
     if (databaseStartupAdmission) {
-      preparedLifecycleRuntime.registerGatewayLifetimeSidecars(databaseStartupAdmission.adopt());
+      preparedLifecycleRuntime.registerGatewayLifetimeSidecars({
+        name: "database-admission",
+        ...databaseStartupAdmission.adopt(),
+      });
     }
     // Retain teardown first. A timer turn lets I/O run before more cached imports.
     await delay(0, undefined, { signal: runtime.connectionWork.signal });
@@ -266,7 +273,7 @@ async function createGatewayKernelWithSdkHost(
     await prelude;
     if (lifecycleRuntime) {
       // The lifecycle releases metadata only after its required joins succeed.
-      await lifecycleRuntime.closeOnStartupFailure();
+      await lifecycleRuntime.closeOnStartupFailure(startupError);
     } else {
       closeStartupTrace?.();
       await kernelState?.mentionInbox.dispose();

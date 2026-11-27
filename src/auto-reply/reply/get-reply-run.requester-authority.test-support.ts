@@ -4,6 +4,7 @@ import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
 } from "../../agents/cron-creator-authority-context.js";
+import { readReplyInputChannel } from "../../agents/harness/host-private-capabilities.js";
 import { createSubagentRunRecord } from "../../agents/subagent-test-fixtures.test-helpers.js";
 import {
   captureRequesterContinuationCaller,
@@ -25,14 +26,21 @@ import {
   releaseAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
 import { readUserTurnRequesterOrigin } from "../../sessions/user-turn-transcript-admission.js";
-import { bindRequesterProfile } from "../requester-profile.js";
+import {
+  bindRequesterProfile,
+  bindUnlinkedChannelRequester,
+  readAdmittedUnlinkedChannelRequester,
+} from "../requester-profile.js";
 import { runReplyAgent } from "./agent-runner-run.js";
+import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 import type { runPreparedReply } from "./get-reply-run.js";
+import { registerTelegramRequesterAuthorityCases } from "./get-reply-run.telegram-requester.test-support.js";
 import {
   baseParams,
   createProviderSurface,
   type createPreparedReplyTurn,
 } from "./get-reply-run.test-support.js";
+import { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority-inbound.js";
 
 type ReplyParams = Parameters<typeof runPreparedReply>[0];
 export function registerPendingRequesterAuthorityCases({
@@ -46,6 +54,59 @@ export function registerPendingRequesterAuthorityCases({
   requireRunReplyAgentCall: () => Parameters<typeof runReplyAgent>[0];
   turn: typeof createPreparedReplyTurn;
 }): void {
+  registerTelegramRequesterAuthorityCases(runPrepared);
+  it.each([
+    { internal: false, revokeSource: false },
+    { internal: false, revokeSource: true },
+    { internal: true, revokeSource: false },
+  ])(
+    "carries only direct originally-unlinked requester facts into admission (internal=$internal, revokeSource=$revokeSource)",
+    async ({ internal, revokeSource }) => {
+      const params = turn("Create a session", {
+        ...createProviderSurface("discord"),
+        SenderId: "unlinked-sender",
+        AccountId: "default",
+        ...(internal ? { InputProvenance: { kind: "internal_system" as const } } : {}),
+      });
+      bindUnlinkedChannelRequester(params.ctx, () => true);
+      await runPrepared(params);
+      // prepareReplyAgentTurn clones this projection before run admission.
+      const sourceContext = { ...requireRunReplyAgentCall().followupRun.run };
+      const source = new AbortController();
+      const prepare = (runId: string) =>
+        prepareChannelRunAdmission({
+          cfg: {},
+          agentId: "default",
+          runId,
+          ingressKind: "channel",
+          boundary: "prepared-reply-test",
+          sourceContext,
+          assertSourceCurrent: () => source.signal.throwIfAborted(),
+        });
+      const admission = prepare("originally-unlinked");
+      const later = prepare("later-system-turn");
+      try {
+        const admitted = await admission.admit("embedded");
+        const requester = readAdmittedUnlinkedChannelRequester(admitted.operationalRunInstance);
+        expect(Boolean(requester)).toBe(!internal);
+        requester?.();
+        const next = await later.admit("embedded");
+        expect(readAdmittedUnlinkedChannelRequester(next.operationalRunInstance)).toBeUndefined();
+        if (requester) {
+          if (revokeSource) {
+            source.abort(new Error("unlinked request source revoked"));
+          } else {
+            admission.close();
+          }
+          expect(requester).toThrow(/no longer active/);
+        }
+      } finally {
+        admission.close();
+        later.close();
+      }
+    },
+  );
+
   it("retains a linked nonadmin requester as the causal origin of delegated work", async () => {
     const params = turn("Please inspect this", {
       ...createProviderSurface("x"),
@@ -63,26 +124,48 @@ export function registerPendingRequesterAuthorityCases({
     expect(run.run.requesterOrigin).toMatchObject({ delegatedCreatorProfileId: "linked-human" });
   });
 
-  it("persists admitted external-contact sender attribution on direct turns", async () => {
-    await runPrepared({
-      ...turn(
-        "hello",
-        { OriginatingChannel: "telegram", OriginatingTo: "chat-1", ChatType: "direct" },
-        { Provider: "telegram", SenderId: "user-42", SenderName: "Ada", SenderUsername: "ada" },
-        { InboundAccessAuthorized: true },
-      ),
-      sessionEntry: {
-        sessionId: "session-1",
-        updatedAt: 1,
-        chatType: "direct",
-      },
-    });
+  it.each([false, true])(
+    "preserves sender attribution and human continuation eligibility (bot=%s)",
+    async (isBot) => {
+      const params = {
+        ...turn(
+          "hello",
+          {
+            ...createProviderSurface("telegram"),
+            OriginatingChannel: "telegram",
+            OriginatingTo: "chat-1",
+            ChatType: "direct",
+            SenderId: "user-42",
+            SenderName: "Ada",
+            SenderUsername: "ada",
+            SenderIsBot: isBot,
+          },
+          {},
+          { InboundAccessAuthorized: true },
+        ),
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: 1,
+          chatType: "direct" as const,
+        },
+      };
+      await runPrepared(params);
 
-    const message = requireRunReplyAgentCall().followupRun.userTurnTranscriptRecorder?.message;
-    expect(message).toMatchObject({
-      __openclaw: { senderId: "user-42", senderName: "Ada", senderUsername: "ada" },
-    });
-  });
+      const message = requireRunReplyAgentCall().followupRun.userTurnTranscriptRecorder?.message;
+      expect(message).toMatchObject({
+        __openclaw: { senderId: "user-42", senderName: "Ada", senderUsername: "ada" },
+      });
+      const overlay = resolveInboundReplyToolAuthorityOverlay({
+        ctx: params.ctx,
+        senderIsOwner: true,
+        disableTools: false,
+      });
+      expect([
+        readReplyInputChannel(requireRunReplyAgentCall().followupRun.run),
+        readReplyInputChannel(overlay),
+      ]).toEqual(isBot ? [undefined, undefined] : ["telegram", "telegram"]);
+    },
+  );
 
   type IdentityCase = [string, ReplyParams["ctx"], string?, string?];
   const direct = { ChatType: "direct", From: " discord:alice " };
@@ -141,7 +224,7 @@ export function registerPendingRequesterAuthorityCases({
       const scope = createCronCreatorAuthorityCapability(
         originalRunId,
         { kind: "external", channel: "discord" },
-        { source: "channel-owner", isCurrent: () => true },
+        { source: "channel-owner" },
       )!;
       const params = baseParams();
       setRuntimeConfigSnapshot(params.cfg);

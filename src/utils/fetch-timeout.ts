@@ -1,6 +1,7 @@
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import { resolveSafeTimeoutDelayMs } from "./timer-delay.js";
 
 const log = createSubsystemLogger("fetch-timeout");
@@ -12,6 +13,8 @@ type TimeoutAbortSignalParams = {
   signal?: AbortSignal;
   operation?: string;
   url?: string;
+  /** Read-only callers report the returned timeout without creating file logs. */
+  logTimeout?: boolean;
 };
 
 /**
@@ -69,12 +72,13 @@ function abortDueToTimeout(
   operation?: string,
   url?: string,
   combinedSignal?: AbortSignal,
+  logTimeout = true,
 ) {
   if (combinedSignal?.aborted ?? controller.signal.aborted) {
     return;
   }
   const sanitizedUrl = sanitizeTimeoutLogUrl(url);
-  const elapsedMs = Math.max(0, Date.now() - startedAtMs);
+  const elapsedMs = Math.max(0, monotonicNow() - startedAtMs);
   const delayMs = Math.max(0, elapsedMs - timeoutMs);
   // A large elapsed/timeout gap means the timer callback itself was starved,
   // which is more useful for operators than another plain timeout message.
@@ -91,14 +95,16 @@ function abortDueToTimeout(
   ]
     .filter((part): part is string => Boolean(part))
     .join(" ");
-  log.warn("fetch timeout reached; aborting operation", {
-    timeoutMs,
-    elapsedMs,
-    ...(eventLoopDelayHint ? { timerDelayMs: delayMs, eventLoopDelayHint } : {}),
-    consoleMessage,
-    ...(operation ? { operation } : {}),
-    ...(sanitizedUrl ? { url: sanitizedUrl } : {}),
-  });
+  if (logTimeout) {
+    log.warn("fetch timeout reached; aborting operation", {
+      timeoutMs,
+      elapsedMs,
+      ...(eventLoopDelayHint ? { timerDelayMs: delayMs, eventLoopDelayHint } : {}),
+      consoleMessage,
+      ...(operation ? { operation } : {}),
+      ...(sanitizedUrl ? { url: sanitizedUrl } : {}),
+    });
+  }
   const error = new Error("request timed out");
   error.name = "TimeoutError";
   controller.abort(error);
@@ -131,10 +137,11 @@ export function buildTimeoutAbortSignal(params: TimeoutAbortSignalParams): {
       normalizedTimeoutMs,
       controller,
       normalizedTimeoutMs,
-      Date.now(),
+      monotonicNow(),
       params.operation,
       params.url,
       signal,
+      params.logTimeout,
     );
   };
   scheduleTimeout();

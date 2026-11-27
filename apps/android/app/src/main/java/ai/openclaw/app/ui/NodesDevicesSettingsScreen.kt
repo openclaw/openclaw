@@ -213,8 +213,8 @@ private fun NodesDevicesPanel(
       NodesSection(title = nativeString("Paired Devices"), items = summary.pairedDevices) { device ->
         val (statusText, status) =
           when {
-            device.tokens.isEmpty() -> nativeString("Paired") to ClawStatus.Neutral
-            device.tokens.any { !it.revoked } -> nativeString("Active") to ClawStatus.Success
+            device.tokenCount == 0 -> nativeString("Paired") to ClawStatus.Neutral
+            device.activeTokenCount > 0 -> nativeString("Active") to ClawStatus.Success
             else -> nativeString("Needs Token") to ClawStatus.Warning
           }
         DeviceWithActionsRow(
@@ -296,15 +296,53 @@ private fun DevicePairingConfirmationDialog(
         }
 
         is DevicePairingConfirmation.Reject -> {
-          Text(nativeString("Reject the pairing request from this device?"))
+          DevicePairingTarget(
+            message = nativeString("Reject the pairing request from this device?"),
+            displayName = confirmation.device.displayName,
+            deviceId = confirmation.device.deviceId,
+          )
         }
 
         is DevicePairingConfirmation.Remove -> {
-          Text(nativeString("This device will lose its trusted Gateway access."))
+          DevicePairingTarget(
+            message = nativeString("This device will lose its trusted Gateway access."),
+            displayName = confirmation.device.displayName,
+            deviceId = confirmation.device.deviceId,
+          )
         }
       }
     },
   )
+}
+
+@Composable
+private fun DevicePairingTarget(
+  message: String,
+  displayName: String?,
+  deviceId: String,
+) {
+  Column(
+    modifier = Modifier.verticalScroll(rememberScrollState()),
+    verticalArrangement = Arrangement.spacedBy(8.dp),
+  ) {
+    Text(message)
+    SelectionContainer {
+      Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        val identity =
+          listOfNotNull(
+            displayName?.let { nativeString("Name") to pairingIdentityForDisplay(it, maxCodePoints = 160) },
+            nativeString("Device ID") to pairingIdentityForDisplay(deviceId),
+          )
+        identity.forEach { (label, value) ->
+          Text(
+            text = nativeString("\$label: \$value", label, value),
+            style = ClawTheme.type.body,
+            fontFamily = FontFamily.Monospace,
+          )
+        }
+      }
+    }
+  }
 }
 
 internal fun pendingDeviceIdentityLines(device: GatewayPendingDeviceSummary): List<Pair<String, String>> =
@@ -502,8 +540,8 @@ private fun pairedDeviceSubtitle(device: GatewayPairedDeviceSummary): String {
   val tokens =
     nativeString(
       "\${device.tokens.count { !it.revoked }}/\${device.tokens.size} active tokens",
-      device.tokens.count { !it.revoked },
-      device.tokens.size,
+      device.activeTokenCount,
+      device.tokenCount,
     )
   return listOfNotNull(roles, scopes, tokens, device.remoteIp).joinToString(" · ")
 }

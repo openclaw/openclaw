@@ -42,9 +42,16 @@ const execRequest = createExecRequest("approval-1", "uname -a", 0, 120_000);
 const approvalRuntimes: Array<ReturnType<typeof createChannelNativeApprovalRuntimeRaw>> = [];
 
 function createChannelNativeApprovalRuntime(
-  params: Parameters<typeof createChannelNativeApprovalRuntimeRaw>[0],
+  params: Omit<
+    Parameters<typeof createChannelNativeApprovalRuntimeRaw>[0],
+    "clientDisplayName" | "isConfigured"
+  >,
 ) {
-  const runtime = createChannelNativeApprovalRuntimeRaw(params);
+  const runtime = createChannelNativeApprovalRuntimeRaw({
+    ...params,
+    clientDisplayName: "Test",
+    isConfigured: () => true,
+  });
   approvalRuntimes.push(runtime);
   return runtime;
 }
@@ -104,11 +111,9 @@ describe("createChannelNativeApprovalRuntime", () => {
 
     const runtime = createChannelNativeApprovalRuntime({
       label: "test/native-runtime-dedupe",
-      clientDisplayName: "Test",
       cfg: {} as never,
       nowMs: () => 0,
       nativeAdapter: adapter,
-      isConfigured: () => true,
       shouldHandle: () => true,
       buildPendingContent: () => "pending exec",
       prepareTarget,
@@ -151,11 +156,9 @@ describe("createChannelNativeApprovalRuntime", () => {
 
     const runtime = createChannelNativeApprovalRuntime({
       label: "test/native-runtime-delivery-failure",
-      clientDisplayName: "Test",
       cfg: {} as never,
       nowMs: () => 0,
       nativeAdapter: adapter,
-      isConfigured: () => true,
       shouldHandle: () => true,
       buildPendingContent: () => "pending exec",
       prepareTarget: ({ plannedTarget }) => ({
@@ -180,7 +183,6 @@ describe("createChannelNativeApprovalRuntime", () => {
     const finalizeExpired = vi.fn().mockResolvedValue(undefined);
     const runtime = createChannelNativeApprovalRuntime({
       label: "test/system-agent-native-runtime",
-      clientDisplayName: "Test",
       channel: "telegram",
       channelLabel: "Telegram",
       cfg: {} as never,
@@ -195,7 +197,6 @@ describe("createChannelNativeApprovalRuntime", () => {
         }),
         resolveOriginTarget: () => ({ to: "123" }),
       },
-      isConfigured: () => true,
       shouldHandle: vi.fn().mockReturnValue(true),
       buildPendingContent: vi.fn().mockResolvedValue({ text: "pending" }),
       prepareTarget: ({ plannedTarget }) => ({
@@ -244,7 +245,6 @@ describe("createChannelNativeApprovalRuntime", () => {
     const finalizeResolved = vi.fn().mockResolvedValue(undefined);
     const runtime = createChannelNativeApprovalRuntime({
       label: "test/native-runtime",
-      clientDisplayName: "Test",
       channel: "telegram",
       channelLabel: "Telegram",
       cfg: {} as never,
@@ -254,7 +254,6 @@ describe("createChannelNativeApprovalRuntime", () => {
         describeDeliveryCapabilities,
         resolveApproverDmTargets,
       },
-      isConfigured: () => true,
       shouldHandle: () => true,
       buildPendingContent,
       prepareTarget,
@@ -330,10 +329,8 @@ describe("createChannelNativeApprovalRuntime", () => {
     const buildPendingContent = vi.fn().mockResolvedValue("pending");
     const runtime = createChannelNativeApprovalRuntime({
       label: "test/native-runtime-legacy-kind",
-      clientDisplayName: "Test",
       cfg: {} as never,
       resolveApprovalKind,
-      isConfigured: () => true,
       shouldHandle: () => true,
       buildPendingContent,
       prepareTarget: async () => null,
@@ -362,7 +359,6 @@ describe("createChannelNativeApprovalRuntime", () => {
   it("sends route notices over least-privilege gateway calls", async () => {
     const runtime = createChannelNativeApprovalRuntime({
       label: "test/native-runtime-route-notice",
-      clientDisplayName: "Test",
       channel: "slack",
       channelLabel: "Slack",
       cfg: { gateway: { auth: { token: "configured-token" } } } as never,
@@ -381,7 +377,6 @@ describe("createChannelNativeApprovalRuntime", () => {
         }),
         resolveApproverDmTargets: async () => [{ to: "user:owner" }],
       },
-      isConfigured: () => true,
       shouldHandle: () => true,
       buildPendingContent: async () => "pending exec",
       prepareTarget: async ({ plannedTarget }) => ({
@@ -433,7 +428,6 @@ describe("createChannelNativeApprovalRuntime", () => {
     const finalizeExpired = vi.fn().mockResolvedValue(undefined);
     const runtime = createChannelNativeApprovalRuntime({
       label: "test/native-runtime-expiry",
-      clientDisplayName: "Test",
       channel: "telegram",
       channelLabel: "Telegram",
       cfg: {} as never,
@@ -447,7 +441,6 @@ describe("createChannelNativeApprovalRuntime", () => {
         }),
         resolveApproverDmTargets: async () => [{ to: "owner" }],
       },
-      isConfigured: () => true,
       shouldHandle: () => true,
       buildPendingContent: async () => "pending exec",
       prepareTarget: async () => ({

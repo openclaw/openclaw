@@ -1,25 +1,24 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { beforeEach, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
-  beginTerminalSourceReplyDelivery,
   isDeliveredCurrentSourceReply,
   mirrorDeliveredSourceReplyToTranscript,
-  reconcileTerminalSourceReplyDelivery,
 } from "./source-reply-mirror.js";
 
-const receiptMocks = vi.hoisted(() => ({ cancel: vi.fn(), complete: vi.fn() }));
 const channelPluginMocks = vi.hoisted(() => ({
   getChannelPlugin: vi.fn(),
   getLoadedChannelPlugin: vi.fn(),
 }));
-const transcriptMocks = vi.hoisted(() => ({ append: vi.fn(async () => ({ ok: true })) }));
+const transcriptMocks = vi.hoisted(() => ({
+  append: vi.fn(async (_params?: { prepareDisplayContent?: () => Promise<unknown> }) => ({
+    ok: true,
+  })),
+}));
 vi.mock("../../config/sessions.js", () => ({
   appendAssistantMessageToSessionTranscript: transcriptMocks.append,
-}));
-vi.mock("../../config/sessions/restart-recovery-receipt.js", () => ({
-  beginRestartRecoveryTerminalDelivery: vi.fn(),
-  cancelRestartRecoveryTerminalDelivery: receiptMocks.cancel,
-  completeRestartRecoveryTerminalDelivery: receiptMocks.complete,
 }));
 vi.mock("../../channels/plugins/index.js", () => channelPluginMocks);
 
@@ -51,12 +50,6 @@ const topicDelivery = {
   chatId: "-100123",
   receipt: { parts: [], threadId: "77" },
 };
-const terminal = {
-  sessionId: "session-1",
-  sourceTurnId: "source-turn-1",
-  storePath: "/tmp/sessions.json",
-  toolCallId: "message-call-1",
-};
 const failed = { ok: false, messageId: "attempt-id" };
 const partial = { ok: false, sentBeforeError: true, messageId: "partial-receipt" };
 const googleThread = "spaces/AAA/threads/canonical";
@@ -79,7 +72,7 @@ function installTelegramTopicPlugin() {
 }
 
 beforeEach(() => {
-  for (const mock of [...Object.values(receiptMocks), ...Object.values(channelPluginMocks)]) {
+  for (const mock of Object.values(channelPluginMocks)) {
     mock.mockReset();
   }
   transcriptMocks.append.mockClear();
@@ -95,7 +88,6 @@ it.each([
   ].map(([name, payload]) => [name, payload, "not-delivered", direct] as const),
   ["partial delivery", partial, "delivered", direct],
   ["wrapped partial delivery", { sendResult: partial }, "delivered", direct],
-  ["earlier ambiguous Gateway attempt", { ok: false, status: "failed" }, "pending", direct],
   [
     "another recipient",
     { ok: true, messageId: "sent-elsewhere", channelId: "other-chat" },
@@ -111,32 +103,14 @@ it.each([
     "not-source",
     topic,
   ],
-] as const)("reconciles %s", async (_name, payload, outcome, mirror) => {
+] as const)("classifies %s", async (_name, payload, outcome, mirror) => {
   if (mirror === topic) {
     installTelegramTopicPlugin();
   }
-  const receipt = { ...terminal, sessionKey: mirror.sessionKey };
-  await expect(
-    reconcileTerminalSourceReplyDelivery({
-      deliveredPayload: payload,
-      mirror,
-      receipt,
-      preservePendingOnExplicitFailure: outcome === "pending",
-    }),
-  ).resolves.toBe(outcome);
-  expect({
-    complete: receiptMocks.complete.mock.calls,
-    cancel: receiptMocks.cancel.mock.calls,
-  }).toEqual({
-    complete: outcome === "delivered" ? [[receipt]] : [],
-    cancel: outcome === "not-delivered" ? [[receipt]] : [],
-  });
-  if (outcome !== "pending") {
-    expect(isDeliveredCurrentSourceReply({ ...mirror, deliveredPayload: payload })).toBe(
-      outcome === "delivered",
-    );
-  }
-  if (mirror === direct && outcome !== "pending") {
+  expect(isDeliveredCurrentSourceReply({ ...mirror, deliveredPayload: payload })).toBe(
+    outcome === "delivered",
+  );
+  if (mirror === direct) {
     await expect(
       mirrorDeliveredSourceReplyToTranscript({ ...mirror, deliveredPayload: payload }),
     ).resolves.toBe(false);
@@ -182,8 +156,8 @@ it.each([
   expect(isDeliveredCurrentSourceReply(params)).toBe(expected);
 });
 
-// Completion eligibility does not grant transcript or restart-receipt ownership.
-it("keeps a non-send action outside transcript and terminal-receipt ownership", async () => {
+// Completion eligibility does not grant transcript ownership.
+it("keeps a non-send action outside transcript ownership", async () => {
   const params = source("testchat", "direct:user-1", {
     action: "thread-reply",
     actionParams: { to: "direct:user-1", message: "visible thread reply" },
@@ -196,7 +170,6 @@ it("keeps a non-send action outside transcript and terminal-receipt ownership", 
   expect(isDeliveredCurrentSourceReply(params)).toBe(false);
   await expect(mirrorDeliveredSourceReplyToTranscript(params)).resolves.toBe(false);
   expect(transcriptMocks.append).not.toHaveBeenCalled();
-  await expect(beginTerminalSourceReplyDelivery(params)).resolves.toBeUndefined();
 });
 
 it.each([
@@ -226,3 +199,34 @@ it.each([
     expect.objectContaining({ sessionKey: params.sessionKey, text }),
   );
 });
+
+it.each([
+  ["with a platform receipt", { ok: true, messageId: "sent-1" }, true],
+  ["without a platform receipt", { ok: true }, false],
+] as const)("mirrors an untrusted local document %s", (_name, deliveredPayload, sent) =>
+  withOpenClawTestState({ label: "source-reply-document" }, async ({ workspaceDir }) => {
+    const report = path.join(workspaceDir, "report.pdf");
+    await fs.writeFile(report, "%PDF-1.4\n%%EOF\n");
+    await expect(
+      mirrorDeliveredSourceReplyToTranscript({
+        ...direct,
+        deliveredPayload,
+        deliveredPayloads: [{ mediaUrl: report }],
+        mediaAccess: { localRoots: [workspaceDir] },
+      }),
+    ).resolves.toBe(true);
+
+    const prepareDisplayContent = transcriptMocks.append.mock.lastCall?.[0]?.prepareDisplayContent;
+    await expect(prepareDisplayContent?.()).resolves.toMatchObject([
+      sent
+        ? {
+            type: "text",
+            text: "Attachment sent to the channel. Preview unavailable in chat history.",
+          }
+        : {
+            type: "attachment_error",
+            attachment: { code: "delivery-failed", label: "report.pdf" },
+          },
+    ]);
+  }),
+);

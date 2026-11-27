@@ -149,6 +149,22 @@ function denseTitles(count = 1, options: MarqueeOptions = {}) {
 }
 
 describe("hover marquee measurement budget", () => {
+  it("does not mutate a resting label when drawer visibility changes", () => {
+    const { clock, label, show } = denseTitles(1, { loop: true });
+    show("Short");
+    reveal(clock);
+    const observer = new MutationObserver(() => {});
+    observer.observe(label, { attributes: true, attributeFilter: ["class"] });
+    try {
+      clock.visible(false);
+      clock.visible(true);
+      clock.resize(label);
+      expect(observer.takeRecords()).toHaveLength(0);
+    } finally {
+      observer.disconnect();
+    }
+  });
+
   it.each([false, true])("defers unseen label measurement and observers (loop=%s)", (loop) => {
     const { clock, labels, operations } = denseTitles(2, { loop });
     const style = vi.spyOn(globalThis, "getComputedStyle");

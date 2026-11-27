@@ -13,6 +13,11 @@ import {
   runUpdateDoctorIncludeWrite,
 } from "../infra/update-doctor-result.js";
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
+import {
+  cronModelRefsAfterConfigWriteParams,
+  hasInitialConfigWrite,
+  planConfigWrite,
+} from "./doctor-health-contribution-runners.config-plan.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 import {
   isUpdateDoctorRun,
@@ -68,12 +73,8 @@ export async function runWriteConfigHealth(
   const { logConfigUpdated } = await import("../config/logging.js");
   const { shortenHomePath } = await import("../utils.js");
   const providerRenames = ctx.configResult.providerRenames ?? [];
-  const providerRenamePending = ctx.prompter.shouldRepair && providerRenames.length > 0;
-  const configResultWritePending =
-    (ctx.configResult.shouldWriteConfig === true && ctx.configResultWriteCommitted !== true) ||
-    providerRenamePending;
-  const shouldWriteConfig =
-    configResultWritePending || JSON.stringify(ctx.cfg) !== JSON.stringify(ctx.cfgForPersistence);
+  const { providerRenamePending, configResultWritePending, shouldWriteConfig } =
+    planConfigWrite(ctx);
   if (resolveIsConfigReadOnly(ctx.env ?? process.env)) {
     if (shouldWriteConfig) {
       const { reportDoctorExternalConfigRepairs } = await import("./doctor-external-config.js");
@@ -132,6 +133,9 @@ export async function runWriteConfigHealth(
     });
     const { restoreDoctorConfigEnvRefs } =
       await import("../commands/doctor/shared/config-flow-steps.js");
+    const { preparePluginDoctorContractModules } =
+      await import("../plugins/doctor-contract-preparation.js");
+    await preparePluginDoctorContractModules({ config: ctx.cfg, surfaces: ["configRepair"] });
     const { prepareDoctorConfigWriteStage } =
       await import("../commands/doctor/shared/roster-include-write.js");
     let stageSnapshot = configResultWritePending
@@ -266,6 +270,7 @@ export async function runWriteConfigHealth(
         });
       }
       const { path, hash } = confirmedConfigSource;
+      await preparePluginDoctorContractModules({ config: ctx.cfg, surfaces: ["configRepair"] });
       const nextConfig = restoreDoctorConfigEnvRefs(
         ctx.cfg,
         ctx.configResult.referenceSource,
@@ -499,6 +504,8 @@ export async function runWriteConfigHealth(
       path: committed.path,
       hash: committed.persistedHash,
     };
+    // A later config commit needs cron repair against that newly durable config.
+    ctx.postConfigWriteRepairsCommitted = false;
     // The atomic write committed: repair panels queued by the config flow are now
     // true statements about disk state, so print them exactly once.
     const pendingChangePanels = ctx.configResult.pendingChangePanels;
@@ -557,46 +564,26 @@ export async function runWriteConfigHealth(
     const cleanup = await finalizeRetiredPhoneControlCleanup({ env: ctx.env ?? process.env });
     noteDoctorRepairResult(cleanup);
   }
-  if (
-    (!ctx.prompter.shouldRepair &&
-      !ctx.configResult.openAICodexAuthProfileIdMap?.size &&
-      ctx.configResult.shouldRepairCronCodexModelRefsAfterConfigWrite !== true) ||
-    ctx.postConfigWriteRepairsCommitted === true
-  ) {
+  const cron = cronModelRefsAfterConfigWriteParams(ctx);
+  if (!cron) {
     return true;
   }
   // The config write above must finish before cron rows are rewritten against
   // the now-durable model policy; otherwise a failed write could corrupt them.
   const { repairCronCodexModelRefsAfterConfigWrite } =
     await import("../commands/doctor/cron/legacy-repair.js");
-  const result = await repairCronCodexModelRefsAfterConfigWrite({
-    cfg: ctx.cfg,
-    migrateCodexModelRefs:
-      ctx.prompter.shouldRepair ||
-      ctx.configResult.shouldRepairCronCodexModelRefsAfterConfigWrite === true,
-    ...(ctx.configResult.retiredModelRefConfig
-      ? { retiredModelRefConfig: ctx.configResult.retiredModelRefConfig }
-      : {}),
-    repairRetiredModelRefs: ctx.prompter.shouldRepair,
-    modelReplacements: ctx.options.modelReplacements,
-    authProfileIdMap: ctx.configResult.openAICodexAuthProfileIdMap,
-    ...(ctx.configResult.blockedCodexModelIdentities?.length
-      ? { blockedModelIdentities: new Set(ctx.configResult.blockedCodexModelIdentities) }
-      : {}),
-  });
+  const result = await repairCronCodexModelRefsAfterConfigWrite(cron);
   ctx.postConfigWriteRepairsCommitted = true;
+  if (result.warnings.length > 0) {
+    ctx.retirementOnly = false;
+  }
   noteDoctorRepairResult(result);
   return true;
 }
 
 /** Commits the finalized config-flow candidate before fallible health diagnostics start. */
 export async function runInitialConfigWriteHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  if (
-    ctx.configResult.shouldWriteConfig !== true &&
-    !ctx.configResult.modelBillingRouteWarnings?.length &&
-    ctx.configResult.modelRetirementRepairRan !== true &&
-    !ctx.configResult.providerRenames?.length
-  ) {
+  if (!hasInitialConfigWrite(ctx)) {
     return;
   }
   await runWriteConfigHealth(ctx, { runPostWriteRepairs: false });
@@ -690,25 +677,5 @@ function isDirectoryPath(path: string): boolean {
     return fs.statSync(path).isDirectory();
   } catch {
     return false;
-  }
-}
-
-export async function runFinalConfigValidationHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { readConfigFileSnapshot } = await import("../config/config.js");
-  const { readDeferredPluginMigrationsAsync } =
-    await import("../infra/deferred-plugin-migrations.js");
-  const deferredPluginMigrations = await readDeferredPluginMigrationsAsync({
-    env: ctx.env ?? process.env,
-  });
-  const finalSnapshot = await readConfigFileSnapshot({
-    skipPluginValidation: isUpdateDoctorRun(ctx.env ?? process.env),
-    preservedLegacyRootKeys: ctx.configResult.preservedLegacyRootKeys,
-    deferredPluginMigrations,
-  });
-  if (finalSnapshot.exists && !finalSnapshot.valid) {
-    ctx.runtime.error("Invalid config:");
-    for (const issue of finalSnapshot.issues) {
-      ctx.runtime.error(`- ${issue.path || "<root>"}: ${issue.message}`);
-    }
   }
 }

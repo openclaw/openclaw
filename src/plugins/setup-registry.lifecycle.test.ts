@@ -23,7 +23,7 @@ import {
 import { getPluginSetupModuleLoader } from "./plugin-setup-module.js";
 import { prepareAuthChoiceLoadedPluginProvider } from "./provider-auth-choice.js";
 import { detectAvailableSetupProviderIds } from "./provider-setup-availability.js";
-import { resolvePluginSetupRegistry } from "./setup-registry.js";
+import { resolvePluginSetupRegistry, resolvePluginSetupRegistryAsync } from "./setup-registry.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
@@ -146,6 +146,49 @@ describe("plugin setup registry artifact lifecycle", () => {
     clearPluginMetadataLifecycleCaches();
     cleanupTrackedTempDirs(tempDirs);
   });
+
+  it.each(["missing", "invalid", "dependency", "metadata", "syntax"] as const)(
+    "keeps a healthy setup sibling after a %s source fails preparation without retrying",
+    async (failure) => {
+      const broken = writeSetupLifecycleFixture("broken", "module.exports = {};");
+      const healthy = writeSetupLifecycleFixture(
+        "healthy",
+        'module.exports={register(api){api.registerProvider({id:"healthy",label:"Healthy",auth:[]});}};',
+      );
+      if (failure === "missing") {
+        fs.rmSync(broken.rootDir, { recursive: true });
+      } else if (failure === "invalid") {
+        fs.symlinkSync("loop", path.join(broken.rootDir, "loop"));
+      } else if (failure === "syntax") {
+        fs.writeFileSync(broken.source, "module.exports = ;");
+      } else {
+        fs.writeFileSync(
+          path.join(broken.rootDir, "package.json"),
+          failure === "metadata"
+            ? "{"
+            : JSON.stringify({ dependencies: { "missing-required": "*" } }),
+        );
+      }
+      const cache = createPluginCache();
+      try {
+        await withPluginCache(cache, async () => {
+          const params = { manifestRegistry: registry(broken, healthy) };
+          const result = await resolvePluginSetupRegistryAsync(params);
+          expect(result.providers.map(({ provider }) => provider.id)).toEqual(["healthy"]);
+          expect(result.diagnostics).toMatchObject([
+            { pluginId: "broken", code: "setup-entry-load-failed" },
+          ]);
+          fs.mkdirSync(broken.rootDir, { recursive: true });
+          fs.rmSync(path.join(broken.rootDir, "loop"), { force: true });
+          fs.rmSync(path.join(broken.rootDir, "package.json"), { force: true });
+          fs.writeFileSync(broken.source, 'throw new Error("failed capture retried");');
+          expect(await resolvePluginSetupRegistryAsync(params)).toEqual(result);
+        });
+      } finally {
+        await retirePluginCache(cache);
+      }
+    },
+  );
 
   it("records setup load failures with inaccessible error messages after native evaluation", async () => {
     const event = "setup-display-load";

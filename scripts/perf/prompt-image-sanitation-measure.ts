@@ -16,7 +16,7 @@
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { Session, type HeapProfiler } from "node:inspector/promises";
+import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import { resolve } from "node:path";
 import { PerformanceObserver, performance } from "node:perf_hooks";
@@ -26,6 +26,7 @@ import { buildOpenAIResponsesParams } from "../../packages/ai/src/transports/ope
 import { sanitizeResponsesImagePayload } from "../../packages/ai/src/transports/responses-image-payload-sanitizer.js";
 import type { Context, ImageContent, Model } from "../../packages/llm-core/src/types.js";
 import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 const mode = process.argv[2];
 assert(mode === "cpu" || mode === "allocation", "mode must be cpu or allocation");
@@ -55,9 +56,6 @@ const images = Array.from({ length: 12 }, (_, index) => ({
 }));
 const inspector = new Session();
 inspector.connect();
-function allocated(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + allocated(child), 0);
-}
 for (const dialect of ["canonical", "whitespace"] as const) {
   const blocks = images.map((image) =>
     Object.freeze({
@@ -136,7 +134,7 @@ for (const dialect of ["canonical", "whitespace"] as const) {
   const cpu = process.cpuUsage(cpuStart);
   const sampledBytes =
     mode === "allocation"
-      ? allocated((await inspector.post("HeapProfiler.stopSampling")).profile.head)
+      ? sumSampledHeapBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
       : undefined;
   await setImmediate();
   await setImmediate();

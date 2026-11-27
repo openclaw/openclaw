@@ -331,7 +331,7 @@ it.each([
       await runExternalMutation.mock.results[0]?.value;
       expect(setEnabled).not.toHaveBeenCalled();
       if (change === "reconnect" || change === "boot") {
-        expect(element.textContent).not.toContain("Could not update Active memory");
+        expect(element.textContent).not.toContain("Couldn’t update Active memory. Try again.");
       }
     } else {
       await waitForSolid(() => expect(addonSwitch(element, "Active memory")).toBeNull());
@@ -428,7 +428,7 @@ it.each(["add-on", "engine"] as const)(
       isEngine ? selectEngine(element, "other") : toggleAddon(element, "Active memory", false);
     const control = () =>
       isEngine
-        ? element.querySelector(".settings-segmented__input")
+        ? element.querySelector("select[aria-label='Memory engine']")
         : addonSwitch(element, "Active memory");
     mountMemoryPage(element);
     try {
@@ -446,12 +446,14 @@ it.each(["add-on", "engine"] as const)(
       firstMutation.resolve(committed(pluginId, isEngine));
       await waitForSolid(() => expect(setEnabled).toHaveBeenCalledTimes(2));
       await waitForCatalog(request, 3);
-      expect(element.textContent).not.toContain("Could not change the memory engine");
+      expect(element.textContent).not.toContain("Couldn’t change the memory engine. Try again.");
       flush();
-      expect(control()?.hasAttribute("aria-disabled")).toBe(true);
+      expect(control()?.hasAttribute(isEngine ? "aria-busy" : "aria-disabled")).toBe(true);
 
       secondMutation.resolve(committed(pluginId, isEngine));
-      await waitForSolid(() => expect(control()?.hasAttribute("aria-disabled")).toBe(false));
+      await waitForSolid(() =>
+        expect(control()?.hasAttribute(isEngine ? "aria-busy" : "aria-disabled")).toBe(false),
+      );
     } finally {
       firstMutation.resolve(committed(pluginId, isEngine));
       secondMutation.resolve(committed(pluginId, isEngine));
@@ -511,7 +513,7 @@ it.each(["memory-boot-b", undefined])(
       await waitForCatalog(request, 3);
       flush();
       expect(element.textContent).not.toContain("Old boot runtime warning.");
-      expect(element.textContent).not.toContain("Could not update Active memory");
+      expect(element.textContent).not.toContain("Couldn’t update Active memory. Try again.");
     } finally {
       reply.resolve(committed("active-memory", false));
 
@@ -569,7 +571,7 @@ it.each([
       );
       if (first === "engine") {
         expect(element.textContent).toContain("Needs attention");
-        expect(element.textContent).not.toContain("Could not change the memory engine");
+        expect(element.textContent).not.toContain("Couldn’t change the memory engine. Try again.");
       }
 
       if (second === "reconnect") {

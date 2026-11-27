@@ -9,6 +9,7 @@ import {
   listExtensionTestFilesForRoots,
   splitExtensionTestJobTargets,
 } from "../../scripts/lib/extension-test-plan.mts";
+import { resolveVitestPretestBuildMode } from "../../scripts/lib/vitest-build-prerequisites.mts";
 import { createVitestRunSpecs } from "../../scripts/test-projects.test-support.mts";
 import { codexExtensionTestRoots } from "../vitest/vitest.extension-codex-paths.mjs";
 import { createExtensionVitestConfig } from "../vitest/vitest.extension-config.ts";
@@ -181,6 +182,20 @@ export const collectBundledPluginSources=()=>[{dirName:'source-only',manifestPat
       expect(row).toMatchObject({ requires_bun: false, test_runtime_policy: "node" });
     }
     const telegramRows = fileRows("telegram");
+    for (const row of [...codexRows, ...telegramRows]) {
+      expect(row.pretest_build_mode).toBe(
+        resolveVitestPretestBuildMode([
+          { configs: [row.vitest_config], includePatterns: row.includePatterns },
+        ]),
+      );
+    }
+    expect(
+      telegramRows.find((row) =>
+        row.includePatterns.includes(
+          "extensions/telegram/src/bot.create-telegram-bot.native-pipeline.test.ts",
+        ),
+      )?.pretest_build_mode,
+    ).toBe("runtime");
     const allFiles = listExtensionTestFilesForRoots(["extensions/telegram"]);
     const telegramFiles = [
       ...listRunnableExtensionTestFiles(),
@@ -253,6 +268,12 @@ export const collectBundledPluginSources=()=>[{dirName:'source-only',manifestPat
       OPENCLAW_EXTENSION_TASK: "${{ matrix.task }}",
       OPENCLAW_EXTENSION_VITEST_CONFIG: "${{ matrix.vitest_config }}",
     });
+    const buildStep = findStep(extensionJob, "Build extension test runtime");
+    expect(buildStep).toMatchObject({
+      if: "matrix.pretest_build_mode != null",
+      run: "pnpm build qaRuntime",
+    });
+    expect(extensionJob.steps.indexOf(buildStep)).toBeLessThan(extensionJob.steps.indexOf(runStep));
     expect(runStep?.run).toContain("extension-file-shard)");
     expect(runStep?.run).toContain("OPENCLAW_TEST_PROJECTS_PARALLEL=2");
     expect(runStep?.run).toContain('OPENCLAW_VITEST_INCLUDE_FILE="$include_file"');

@@ -14,7 +14,7 @@ type PreparedRuntime = Awaited<
 const registries: ReturnType<typeof createEmptyPluginRegistry>[] = [];
 
 afterEach(() => {
-  registries.splice(0).forEach(markPluginRegistryRetired);
+  registries.splice(0).forEach((registry) => markPluginRegistryRetired(registry));
 });
 
 function preparePluginRuntime(generation: number, execute = () => jsonResult({ generation })) {

@@ -7,7 +7,7 @@ import type { CodexThreadListResponse } from "./app-server/protocol.js";
 import { CODEX_APP_SERVER_VERSION } from "./app-server/version.js";
 import type { CodexCatalogPreviewCache } from "./session-catalog-native-projection.js";
 
-export type NativeCatalogBoundary = "ordinary" | "catalog";
+type NativeCatalogBoundary = "ordinary" | "catalog";
 const CREATED_AT = "2025-01-01T00:00:00.000Z";
 const rolloutRecord = (type: string, payload: unknown) =>
   JSON.stringify({ timestamp: CREATED_AT, type, payload });
@@ -66,7 +66,7 @@ export async function startNativeCatalogPerformanceClient(
     env: state.env,
     stdio: ["pipe", "pipe", "pipe"],
   });
-  const client = CodexAppServerClient.fromTransportForTests(child);
+  const client = CodexAppServerClient.fromTransport(child);
   try {
     await client.initialize();
     return client;

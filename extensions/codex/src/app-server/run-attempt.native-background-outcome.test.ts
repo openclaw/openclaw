@@ -2,6 +2,7 @@ import path from "node:path";
 import { initializeGlobalHookRunner, registerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import {
   isCodexAppServerLiveThreadProtected,
@@ -247,9 +248,11 @@ it("delivers fresh prompt-hook parent context on the same protected thread", asy
     }
     expect(received[1]).not.toContain("Synthetic first-turn recall");
     systemPrompt = "Changed persistent thread policy";
-    await expect(runCodexAppServerAttempt(paramsFor("changed-policy"))).rejects.toThrow(
-      "Codex thread thread-1 is claimed by active work; stop it first.",
-    );
+    await expect(runCodexAppServerAttempt(paramsFor("changed-policy"))).rejects.toMatchObject({
+      name: "AgentHarnessPreflightError",
+      message:
+        "Codex thread thread-1 still has background work after waiting for cleanup; stop its running work and retry.",
+    });
     expect(isCodexAppServerLiveThreadProtected(harness.client, "thread-1")).toBe(true);
     expect(harness.requests).not.toContainEqual(unsubscribe);
     expect(
@@ -273,6 +276,7 @@ it.each([
   ["revoked during inventory", "52627"],
   ["inventory unavailable", "52627"],
   ["retained", null],
+  ["silent retained", "52627"],
 ] as const)("native background outcome: %s (%s)", async (scenario, startProcessId) => {
   const abort = new AbortController();
   const params = createTestParams();
@@ -328,11 +332,13 @@ it.each([
   try {
     await run.waitForTurnAccepted();
     await harness.notify(itemNotification("item/started", command));
-    await harness.notify(answerCompleted("Retained handle 52627."));
-    const tool = (await run).messagesSnapshot.find(
+    await harness.notify(answerCompleted(scenario.startsWith("silent") ? "NO_REPLY" : "Retained."));
+    const result = await run;
+    const tool = result.messagesSnapshot.find(
       (message) => message.role === "toolResult" && message.toolCallId === command.id,
     );
-    if (scenario === "retained") {
+    if (scenario.endsWith("retained")) {
+      expect(readAttemptTerminal(result).promptError).toBeNull();
       expect(tool).toMatchObject({
         isError: false,
         content: [{ type: "text", text: expect.stringContaining("still running") }],

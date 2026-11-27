@@ -7,6 +7,9 @@ import {
   readClientCredentialReceipt,
 } from "../infra/client-credential-readiness.js";
 import { openClientCredentialCustody } from "../infra/client-credential-store.js";
+import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
+import { resolveDatabaseFamilyEngines } from "../infra/database-engine/registry.js";
+import type { DatabaseEngineId } from "../infra/database-engine/types.js";
 import {
   assertNoPendingLegacyExecApprovals,
   ExecApprovalsMigrationRequiredError,
@@ -29,7 +32,6 @@ async function prepareRequiredLegacyClientCredentials(env: NodeJS.ProcessEnv) {
       withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
       withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync,
     },
-    { withEngineStoreAdmission },
     { isStatePostgres },
     { resolveExecApprovalsPath },
   ] = await Promise.all([
@@ -42,7 +44,6 @@ async function prepareRequiredLegacyClientCredentials(env: NodeJS.ProcessEnv) {
     import("../state/openclaw-state-db-schema-version.js"),
     import("../state/openclaw-state-db-contract.js"),
     import("../state/openclaw-state-db-readonly.js"),
-    import("../infra/database-engine/admission-scope.js"),
     import("../state/openclaw-state-db-engine.js"),
     import("../infra/exec-approvals-config.js"),
   ]);
@@ -106,15 +107,22 @@ async function prepareRequiredLegacyClientCredentials(env: NodeJS.ProcessEnv) {
       `Legacy client credentials require migration: ${String(error)}`,
     );
   }
-  await prepareLegacyExecApprovals({ stateDir, env, facts: source?.approvals });
-  return detectedIdentity;
+  const retainedApprovals = await prepareLegacyExecApprovals({
+    stateDir,
+    env,
+    facts: source?.approvals,
+  });
+  return { detectedIdentity, retainedApprovals };
 }
 
 async function readCredentialPreparationState(
   env: NodeJS.ProcessEnv,
+  retainedApprovals = false,
 ): Promise<"ready" | "upgrade" | "required"> {
   try {
-    assertNoPendingLegacyExecApprovals({ env });
+    if (!retainedApprovals) {
+      assertNoPendingLegacyExecApprovals({ env });
+    }
     return await prepareClientCredentialStoreAsync(env);
   } catch (error) {
     if (
@@ -127,17 +135,27 @@ async function readCredentialPreparationState(
   }
 }
 
+async function prepareNativeStartupRuntimePins(
+  env: NodeJS.ProcessEnv,
+  stateEngine?: DatabaseEngineId,
+) {
+  const { withDaemonRuntimePinMigration } = await import("../daemon/runtime-pin-state.js");
+  await withDaemonRuntimePinMigration(env, () => undefined, stateEngine);
+}
+
 /** Complete the selected root's cutover before any client acquires credentials. */
 export async function prepareStartupClientCredentials(
   params: {
     env?: NodeJS.ProcessEnv;
     runtime?: RuntimeEnv;
     config?: OpenClawConfig;
+    /** Native startup must settle service intent before choosing a Gateway runtime. */
+    prepareRuntimePins?: boolean;
   } = {},
 ): Promise<void> {
   const env = cloneEnvWithPlatformSemantics(params.env ?? process.env);
   const preparation = await readCredentialPreparationState(env);
-  if (preparation === "ready") {
+  if (preparation === "ready" && !params.prepareRuntimePins) {
     return;
   }
   const runtime = params.runtime ?? defaultRuntime;
@@ -162,11 +180,38 @@ export async function prepareStartupClientCredentials(
     }
     config = snapshot.config;
   }
+  if (preparation === "ready") {
+    // Native startup still settles local runtime pins after an interrupted first launch.
+    // The configured state engine identifies the legacy pin source without resolving its DSN.
+    await prepareNativeStartupRuntimePins(env, resolveDatabaseFamilyEngines(config).state);
+    return;
+  }
   // Gateway recovery may have validated a backup before its lease-owned application.
   const selection = await resolveDatabaseEngineSelection(config, engineEnv);
   await withDatabaseEngineSelection(selection, async () => {
+    let retainedApprovals = false;
     if (preparation === "required") {
-      await prepareRequiredLegacyClientCredentials(env);
+      retainedApprovals = Boolean(
+        (await prepareRequiredLegacyClientCredentials(env)).retainedApprovals,
+      );
+      if (retainedApprovals && (await readCredentialPreparationState(env, true)) === "ready") {
+        return;
+      }
+    }
+    const { getExistingOpenClawStateSchemaPath } =
+      await import("../state/openclaw-state-db-schema-policy.js");
+    const managedStatePath = getExistingOpenClawStateSchemaPath();
+    if (managedStatePath) {
+      // A managed node runtime may not take repair ownership; retrying would loop forever.
+      if (preparation === "upgrade") {
+        runtime.error(
+          "Client credential metadata upgrade deferred to the installation that owns shared state; existing credentials remain available.",
+        );
+        return;
+      }
+      throw new ClientCredentialMigrationRequiredError(
+        `Client credentials for ${managedStatePath} need repair by the installation that owns it; run openclaw doctor --fix with that installation. The managed node retries automatically.`,
+      );
     }
     const { beginDoctorMaintenance } = await import("./doctor-maintenance.js");
     let maintenance: Awaited<ReturnType<typeof beginDoctorMaintenance>>;
@@ -201,7 +246,7 @@ export async function prepareStartupClientCredentials(
         !hasCommandProcessCleanupError(error) &&
         (optionalUpgrade ||
           causes.some((cause) => cause instanceof GatewayStateOwnerContentionError)) &&
-        (await readCredentialPreparationState(env)) !== "required"
+        (await readCredentialPreparationState(env, retainedApprovals)) !== "required"
       ) {
         resolveCommandProcessSignal()?.throwIfAborted();
         if (optionalUpgrade) {
@@ -219,14 +264,15 @@ export async function prepareStartupClientCredentials(
     }
     try {
       await maintenance.run(async () => {
-        const currentPreparation = await readCredentialPreparationState(env);
+        const currentPreparation = await readCredentialPreparationState(env, retainedApprovals);
         if (currentPreparation === "ready") {
           return;
         }
-        const preparedIdentity =
+        const prepared =
           currentPreparation === "required"
             ? await prepareRequiredLegacyClientCredentials(env)
             : undefined;
+        retainedApprovals = Boolean(prepared?.retainedApprovals) || retainedApprovals;
         const { prepareOpenClawStateDatabaseSchema } =
           await import("../state/openclaw-state-db.js");
         const { isStatePostgres } = await import("../state/openclaw-state-db-engine.js");
@@ -244,7 +290,8 @@ export async function prepareStartupClientCredentials(
           import("../infra/state-migrations.exec-approvals.js"),
         ]);
         const context = { env, stateDir: resolveStateDir(env), doctorOnlyStateMigrations: true };
-        const detectedIdentity = preparedIdentity ?? identity.detectLegacyDeviceIdentity(context);
+        const detectedIdentity =
+          prepared?.detectedIdentity ?? identity.detectLegacyDeviceIdentity(context);
         if (detectedIdentity.hasInvalidCanonical) {
           throw new Error(
             "Invalid client identity requires explicit repair; startup preserved it.",
@@ -258,16 +305,20 @@ export async function prepareStartupClientCredentials(
               detected: auth.detectLegacyDeviceAuth(context),
             }),
           () =>
-            approvals.migrateLegacyExecApprovals({
-              ...context,
-              detected: approvals.detectLegacyExecApprovals(context),
-            }),
+            retainedApprovals
+              ? { warnings: [] }
+              : approvals.migrateLegacyExecApprovals({
+                  ...context,
+                  detected: withEngineStoreAdmission(() =>
+                    approvals.detectLegacyExecApprovals(context),
+                  ),
+                }),
         ]) {
           for (const warning of (await migrate()).warnings) {
             runtime.error(warning);
           }
         }
-        if ((await readCredentialPreparationState(env)) !== "ready") {
+        if ((await readCredentialPreparationState(env, retainedApprovals)) !== "ready") {
           throw new ClientCredentialMigrationRequiredError();
         }
       });
@@ -275,6 +326,12 @@ export async function prepareStartupClientCredentials(
       await maintenance.release();
     }
   });
+  if (params.prepareRuntimePins) {
+    // Credential cutover may advance shared state beyond the old seeded Gateway.
+    // Release Doctor custody first; the daemon owner admits its own offline migration
+    // under native service custody, preserving explicit pins and refusing conflicts.
+    await withDatabaseEngineSelection(selection, () => prepareNativeStartupRuntimePins(env));
+  }
 }
 
 export async function preparePostgresClientCredentials(
@@ -285,13 +342,11 @@ export async function preparePostgresClientCredentials(
   const [
     preflight,
     { prepareDoctorDatabaseMigrations },
-    { withEngineStoreAdmission },
     state,
-    credentials,
+    { prepareClientCredentialRecoveryCustody, recoverClientCredentialStore },
   ] = await Promise.all([
     import("../state/openclaw-database-preflight.js"),
     import("./doctor-schema-migrations.js"),
-    import("../infra/database-engine/admission-scope.js"),
     import("../state/openclaw-state-db.js"),
     import("../infra/client-credential-migration.js"),
   ]);
@@ -318,17 +373,35 @@ export async function preparePostgresClientCredentials(
       runtime.error(warning);
     }
   }
-  withEngineStoreAdmission(() => {
-    const source = state.openOpenClawStateDatabase({ env });
-    const result = credentials.recoverClientCredentialStore(source.db, {
-      env,
-      path: source.path,
-      rebindMissing,
-    });
+  const source = withEngineStoreAdmission(() => state.openOpenClawStateDatabase({ env }));
+  const prepared = await prepareClientCredentialRecoveryCustody({
+    env,
+    path: source.path,
+    rebindMissing,
+  });
+  try {
+    const recover = () =>
+      withEngineStoreAdmission(() =>
+        recoverClientCredentialStore(source.db, {
+          env,
+          path: source.path,
+          rebindMissing,
+          recovery: prepared,
+        }),
+      );
+    const result = prepared
+      ? await (
+          await import("../infra/update-doctor-migration-context.js")
+        ).runUpdateSqliteMigrationAsync(prepared.custody.database, prepared.custody.path, recover, {
+          retainExclusive: true,
+        })
+      : recover();
     if (result === "rebound") {
       runtime.error(
         "Local client credentials were missing and have been re-created for the existing PostgreSQL state store. Clients on this host have new identities and must pair again; paired remote devices that kept their credentials stay paired.",
       );
     }
-  });
+  } finally {
+    prepared?.custody.close();
+  }
 }

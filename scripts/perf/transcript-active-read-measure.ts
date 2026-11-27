@@ -6,7 +6,7 @@
  * --baseline-dir <absolute-overlay> substitutes saved source files under src/config/sessions/
  * through worker-retained-heap-preload.ts, without a second checkout or dependency install.
  * The fixture has 512 linked events (tool calls/results, usage and compaction markers),
- * mixed identity/compressed bodies, and a 64-event/page read. Setup, checks and warmup
+ * mixed identity/compressed bodies, 64-event pages and the bounded 512-event accounting tail. Setup, checks and warmup
  * are unmeasured. Acceptance: identical reply digests, lower bytes/op, no material CPU rise.
  * Allocation sampling includes collected objects. Its CPU/GC timing is context only;
  * use the separate untraced timing pass for CPU and GC comparisons.
@@ -22,6 +22,7 @@ import { parseArgs } from "node:util";
 import { GCProfiler } from "node:v8";
 import type { TranscriptEvent } from "../../src/config/sessions/session-accessor.sqlite-contract.js";
 import type { CurrentTranscriptProjection } from "../../src/config/sessions/session-accessor.sqlite-projection-read.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -216,7 +217,6 @@ const requests = [
         includeByteSize: false,
         includeUsage: true,
         includeTurnTaint: true,
-        usageEventLimit: 64,
       }),
     expected: (_index: number) => ({
       usage: { promptTokens: 20000, outputTokens: 400, trailingMessages: [] },
@@ -242,12 +242,7 @@ for (const request of requests) {
   globalThis.gc();
   const inspector = values.mode === "allocation" ? new Session() : undefined;
   if (inspector) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 32768,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 32768);
   }
   const gc = new GCProfiler();
   gc.start();
@@ -281,7 +276,7 @@ for (const request of requests) {
       iterations,
       rows: events.length,
       compressedRows,
-      rowsPerRead: 64,
+      rowsPerRead: request.name === "accounting" ? 512 : 64,
       fixtureBytes: json.reduce((sum, value) => sum + Buffer.byteLength(value), 0),
       elapsedMs,
       cpuUsPerOp: (cpuUsage.user + cpuUsage.system) / iterations,

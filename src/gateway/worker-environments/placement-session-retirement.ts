@@ -3,20 +3,23 @@ import {
   sessionChanges,
   sessionChangeScopeAffectsStoredRows,
 } from "../../sessions/session-row-changes.js";
-import type { WorkerSessionPlacementRecord } from "./placement-record.js";
+import type {
+  WorkerSessionPlacementIdentity,
+  WorkerSessionPlacementRecord,
+} from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import { isFailedWorkerPlacementEnvironmentGone } from "./placement-target.js";
 import type { WorkerEnvironmentService } from "./service.js";
 
 export type PlacementSessionEvidence = "current" | "absent" | "unknown";
 export type PlacementSessionEvidenceResolver = (
-  placement: WorkerSessionPlacementRecord,
+  placement: WorkerSessionPlacementIdentity,
 ) => Promise<PlacementSessionEvidence>;
 
 type PlacementSessionRetirementDeps = {
   placements: Pick<
     WorkerSessionPlacementStore,
-    "getAsync" | "getManyAsync" | "listAsync" | "retireSessionPlacementAsync"
+    "getAsync" | "getManyAsync" | "listSessionIdentitiesAsync" | "retireSessionPlacementAsync"
   >;
   environments: Pick<WorkerEnvironmentService, "get">;
   forceDestroyEnvironment: (
@@ -24,7 +27,7 @@ type PlacementSessionRetirementDeps = {
     onCleanupError?: (error: unknown) => void,
   ) => Promise<unknown>;
   createSessionEvidenceResolver: (
-    placements: readonly WorkerSessionPlacementRecord[],
+    placements: readonly WorkerSessionPlacementIdentity[],
     signal?: AbortSignal,
   ) => Promise<PlacementSessionEvidenceResolver>;
   reportChanges: (operation: () => Promise<void>) => Promise<void>;
@@ -45,11 +48,7 @@ export function createPlacementSessionRetirement(deps: PlacementSessionRetiremen
   ) => {
     const unsubscribeFacts = sessionChanges.subscribeFacts((change) => {
       if ("all" in change) {
-        if (
-          change.scope === "config" ||
-          change.scope === "worker-environments" ||
-          sessionChangeScopeAffectsStoredRows(change)
-        ) {
+        if (change.scope === "config" || sessionChangeScopeAffectsStoredRows(change)) {
           invalidateAll();
         }
       } else if (
@@ -119,7 +118,7 @@ export function createPlacementSessionRetirement(deps: PlacementSessionRetiremen
   };
 
   const reconcilePlacement = async (
-    placement: WorkerSessionPlacementRecord,
+    placement: WorkerSessionPlacementIdentity,
     resolveSessionEvidence: PlacementSessionEvidenceResolver,
     signal?: AbortSignal,
   ): Promise<boolean> => {
@@ -186,7 +185,7 @@ export function createPlacementSessionRetirement(deps: PlacementSessionRetiremen
     }
     try {
       const placements = readAll
-        ? await deps.placements.listAsync()
+        ? await deps.placements.listSessionIdentitiesAsync()
         : [...(await deps.placements.getManyAsync(sessionIds)).values()];
       if (placements.length === 0) {
         return;

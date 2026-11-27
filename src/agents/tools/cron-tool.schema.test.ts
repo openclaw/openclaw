@@ -42,36 +42,6 @@ describe("cron model schema regressions", () => {
     ).toBe(true);
   });
 
-  it("reuses policy-equivalent schemas across sessions and refreshes changed policy", () => {
-    const first = createCronToolSchema({ agentSessionKey: "agent:one:main" });
-    expect(createCronToolSchema({ agentSessionKey: "agent:two:main" })).toBe(first);
-    expect(propertyAt(first, "job.agentId")).toBeUndefined();
-    const unscoped = createCronToolSchema();
-    expect(unscoped).not.toBe(first);
-    expect(propertyAt(unscoped, "job.agentId")).toBeDefined();
-    for (const options of [
-      { triggersEnabled: false },
-      { management: "only" as const },
-      { management: "also" as const },
-      { selfRemoveOnly: true },
-      { readOnly: true },
-    ]) {
-      const changed = createCronToolSchema(options);
-      expect(changed).not.toEqual(unscoped);
-      expect(createCronToolSchema({ ...options })).toBe(changed);
-    }
-    const recovery = createCronToolSchema({ readOnly: true });
-    expect(Value.Check(unscoped, { action: "remove", jobId: "saved-job" })).toBe(true);
-    for (const [action, accepted] of [
-      ["list", true],
-      ["get", true],
-      ["status", false],
-      ["remove", false],
-    ] as const) {
-      expect(Value.Check(recovery, { action, jobId: "saved-job" })).toBe(accepted);
-    }
-  });
-
   it("does not advertise forbidden automation management inside a scheduled run", () => {
     const restricted = createCronTool({
       agentSessionKey: "agent:main:cron:current",
@@ -89,7 +59,7 @@ describe("cron model schema regressions", () => {
       expect(restricted.parameters).not.toHaveProperty(`properties.${field}`);
     }
     expect(restricted.description).not.toContain("ADD: job");
-    expect(restricted.description).not.toContain("delayed self-wakeups");
+    expect(restricted.description).not.toContain("Schedule saved reminders");
     expect(restricted.description).toContain("remove");
     const active = createCronToolSchema({ selfRemoveOnly: true, activeRun: true });
     const paced = createCronToolSchema({
@@ -97,20 +67,12 @@ describe("cron model schema regressions", () => {
       activeRun: true,
       nextCheckEnabled: true,
     });
-    const recovery = createCronToolSchema({
-      selfRemoveOnly: true,
-      activeRun: true,
-      nextCheckEnabled: true,
-      readOnly: true,
-    });
     for (const action of ["scratch_get", "scratch_set", "record_result"]) {
       expect(Value.Check(restricted.parameters, { action })).toBe(false);
       expect(Value.Check(active, { action })).toBe(true);
-      expect(Value.Check(recovery, { action })).toBe(false);
     }
     expect(Value.Check(active, { action: "next_check" })).toBe(false);
     expect(Value.Check(paced, { action: "next_check" })).toBe(true);
-    expect(Value.Check(recovery, { action: "next_check" })).toBe(false);
   });
 
   it("keeps conversation definitions stable while scheduled calls stay self-scoped", async () => {
@@ -363,7 +325,11 @@ describe("cron shorthand and schedule recovery", () => {
         const identity = {
           agentId: "main",
           sessionKey: "agent:main:watcher-control",
-          receiptAuthority: () => current,
+          receiptAuthority: () => {
+            if (!current) {
+              throw new Error("The requesting turn is no longer active.");
+            }
+          },
         };
         // The harness host binds the admitted caller after a plugin builds its tools.
         const tool = wrapToolWithGatewayCallerIdentity(

@@ -18,9 +18,11 @@ import {
   type NativeInferenceStartup,
 } from "./native-inference-startup.js";
 import type { NativeRuntime, NativeRuntimeResolved } from "./native-runtime.js";
+import type { NodeExecutionContext } from "./node-execution-context.js";
 import { WorkerAdmissionDeadlineExceededError } from "./worker-connection-contract.js";
 import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
 import { createWorkerExecApprovalTransport } from "./worker-exec-approval.js";
+import type { WorkerLocalMcpCall } from "./worker-local-mcp.js";
 import { WorkerNodeLostError } from "./worker-node-loss.js";
 import type { WorkerRuntimeResult } from "./worker-process-protocol.js";
 import { WorkerInferenceProxyClient } from "./worker-rpc-inference-client.js";
@@ -53,6 +55,11 @@ async function assertWorkerDirectory(pathname: string, label: string): Promise<s
 
 /** Holds process-local state until every command owned by this environment has exited. */
 export async function createWorkerRuntimeEnvironment(sessionId: string) {
+  // The dedicated node supplies this process-local transport outside the descriptor.
+  // Register again in the worker process before any turn can emit diagnostics.
+  if (process.env.IDENTITY_HEADER) {
+    registerSecretValueForRedaction(process.env.IDENTITY_HEADER);
+  }
   const stateDir = await mkdtemp(path.join(tmpdir(), "openclaw-worker-"));
   await chmod(stateDir, 0o700);
   const previousStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -127,9 +134,11 @@ export async function runWorkerDescriptor(
     signal?: AbortSignal;
     onConnectionFailure?: (cause: string | undefined) => void;
     browserRuntime?: WorkerBrowserRuntime;
+    localMcp?: WorkerLocalMcpCall;
     /** Supplied by the managed process owner, which closes state after its final turn. */
     environmentStateDir?: string;
     nativeInference?: NativeInferenceStartup;
+    nodeExecution?: NodeExecutionContext;
     /** Managed device folders retain the node-approved canonical target across startup. */
     assertWorkspaceCurrent?: () => void;
   } = {},
@@ -350,6 +359,12 @@ export async function runWorkerDescriptor(
           allowedToolNames: toolAuthority.allowedToolNames,
           toolSurface,
           execAuthority: toolAuthority.exec,
+          // A turn with its own GitHub identity must never fall back to the node's Git helper,
+          // including when the worker cannot create a private identity profile.
+          nodeExecution:
+            descriptor.assignment.github && options.nodeExecution?.gitConfigFile
+              ? { ...options.nodeExecution, gitConfigFile: undefined }
+              : options.nodeExecution,
           ...(computer
             ? {
                 computer: {
@@ -391,6 +406,8 @@ export async function runWorkerDescriptor(
             },
           },
           gatewayTools: connection,
+          mcpTools: toolAuthority.mcpTools,
+          localMcp: options.localMcp,
           createApprovalTransport: (toolCallId, signal) =>
             createWorkerExecApprovalTransport(connection, toolCallId, signal),
           signal: abortController.signal,

@@ -72,6 +72,22 @@ successful cleanup; `drained` remains false while the backend is still settling.
 Cleanup preserves committed outcomes and successor sessions. If the writer cannot
 be safely revoked, `forceCleared` stays false and its custody remains retained.
 
+### Implicit default model
+
+OpenClaw no longer picks a model when config names none. As of November 21, 2026,
+`resolveDefaultModelForAgent` from `openclaw/plugin-sdk/agent-runtime` and
+`runtime.modelConfig.resolveDefaultModelForAgent` return `undefined` when no model
+is configured; a plugin that needs a model must handle that case, usually by telling
+the user to choose one. This return-type change ships without an alias because
+returning a model nobody configured was the defect.
+
+`openclaw/plugin-sdk/agent-runtime.DEFAULT_PROVIDER` and `runtime.agent.defaults`
+are deprecated under the `plugin-sdk-implicit-default-model` record. They keep
+their values (`openai` and the retired implicit model) until a later stable release,
+after a separately announced deprecation window and explicit maintainer approval
+for removal. `DEFAULT_PROVIDER` remains only the provider assumed for a legacy bare
+model id. Neither value is a configured model; do not run one as a fallback.
+
 ### Channel prepared tool policy
 
 `BuildChannelInboundEventContextParams.access.toolPolicy` and
@@ -892,19 +908,19 @@ reader sweep finds no remaining users.
 
 `await AuthStorage.forAgentAsync(agentDir)` is the standard constructor for host session
 storage. It persists provider-default credentials through the agent's
-`openclaw-agent.sqlite` auth-profile rows and never creates `auth.json`.
+auth-profile rows in the selected agent engine and never creates `auth.json`.
 Harness plugins receive the prepared storage instance as `params.authStorage`.
 
 `AuthStorage.create(authPath)` remains as a named deprecated adapter for
 existing plugins. The path is used only to derive the owning agent directory;
-the adapter reads and writes SQLite, not the named JSON file. Migrate to
+the adapter reads and writes the auth-profile database, not the named JSON file. Migrate to
 `await AuthStorage.forAgentAsync(...)` now. The path-taking form emits
 `AUTH_STORAGE_CREATE_DEPRECATED`. The earlier October review condition is
 superseded by the common synchronous SQLite compatibility window: the final
 compatibility day is 2026-12-31, with removal in the first January 2027 stable
 release and no Plugin SDK major version.
 
-`FileAuthStorageBackend` is an internal SQLite-backed adapter, not an exported
+`FileAuthStorageBackend` is an internal database-backed adapter, not an exported
 Plugin SDK backend. It is not available as a named import from
 `openclaw/plugin-sdk/agent-sessions`. Harness plugins should use the
 host-prepared `params.authStorage`; host code that constructs storage should

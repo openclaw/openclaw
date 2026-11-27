@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { expect, it, vi } from "vitest";
 import { resolveAgentModelFallbacksOverride } from "../agents/agent-scope.js";
@@ -16,7 +18,10 @@ import {
   writeSession,
 } from "./doctor-model-repair.test-support.js";
 import { createRetiredModelFixture } from "./doctor-retired-models.test-support.js";
-import { repairCronCodexModelRefsAfterConfigWrite } from "./doctor/cron/legacy-repair.js";
+import {
+  hasCronCodexModelRefsAfterConfigWriteWork,
+  repairCronCodexModelRefsAfterConfigWrite,
+} from "./doctor/cron/legacy-repair.js";
 import { maybeRepairCodexSessionRoutes } from "./doctor/shared/codex-route-session-repair.js";
 import { collectBlockedLegacyOpenAICodexProviderPlan } from "./doctor/shared/legacy-config-migrations.runtime.models.codex.js";
 import { createTestModelDefinition } from "./test-runtime-config-helpers.js";
@@ -43,6 +48,43 @@ async function writePlatformProfile(state: Awaited<ReturnType<typeof fixture>>["
     "platformagent",
   );
 }
+
+it.each(["sqlite", "legacy"] as const)(
+  "reports constrained %s session selections without changing healthy routes",
+  async (storage) => {
+    const { state, sessions } = await fixture();
+    const sessionKey = "agent:main:retirement-selection";
+    const storePath = path.join(state.sessionsDir(), "sessions.json");
+    for (const [selection, requiresFullDoctor] of [
+      [{ modelSelectionLocked: true }, true],
+      [{ modelOverride: "current-model", modelOverrideSource: "user" }, true],
+      [{ authProfileOverride: "chatgpt", authProfileOverrideSource: "user" }, true],
+      [{}, false],
+    ] as const) {
+      const entry = {
+        sessionId: "retirement-selection",
+        updatedAt: 1,
+        modelProvider: "openai",
+        model: "current-model",
+        ...selection,
+      };
+      if (storage === "sqlite") {
+        await writeSession(state, sessionKey, entry);
+      } else {
+        fs.mkdirSync(state.sessionsDir(), { recursive: true });
+        fs.writeFileSync(storePath, JSON.stringify({ [sessionKey]: entry }));
+      }
+      const result = await sessions();
+      expect(result.requiresFullDoctor).toBe(requiresFullDoctor ? true : undefined);
+      expect(result.changes).toEqual([]);
+      expect(
+        storage === "sqlite"
+          ? readSession(state, sessionKey)
+          : JSON.parse(fs.readFileSync(storePath, "utf8"))[sessionKey],
+      ).toMatchObject(entry);
+    }
+  },
+);
 
 it("repairs only the retired physical route in OAuth config", async () => {
   const { cfg, defaults, main, repair } = await fixture("oauth");
@@ -203,13 +245,18 @@ it("repairs persisted cron primary and fallbacks in the existing post-config-wri
     state: { autoDisabled: { reason: "consecutive-failures", atMs: 1, consecutiveErrors: 10 } },
   });
   await saveCronJobsStore(storePath, { version: 1, jobs: [job] });
-  await repairCronCodexModelRefsAfterConfigWrite({ migrateCodexModelRefs: true, cfg });
+  const migrateOnly = { migrateCodexModelRefs: true, cfg };
+  const retire = { ...migrateOnly, repairRetiredModelRefs: true };
+  // Each read-only check agrees with the repair it precedes, and leaves the rows alone.
+  const fresh = await loadCronJobsStore(storePath);
+  await expect(hasCronCodexModelRefsAfterConfigWriteWork(migrateOnly)).resolves.toBe(true);
+  expect(await loadCronJobsStore(storePath)).toEqual(fresh);
+  await repairCronCodexModelRefsAfterConfigWrite(migrateOnly);
   expect((await loadCronJobsStore(storePath)).jobs[0]?.payload).toEqual(job.payload);
-  const result = await repairCronCodexModelRefsAfterConfigWrite({
-    migrateCodexModelRefs: true,
-    cfg,
-    repairRetiredModelRefs: true,
-  });
+  await expect(hasCronCodexModelRefsAfterConfigWriteWork(migrateOnly)).resolves.toBe(false);
+  await expect(hasCronCodexModelRefsAfterConfigWriteWork(retire)).resolves.toBe(true);
+  const result = await repairCronCodexModelRefsAfterConfigWrite(retire);
+  await expect(hasCronCodexModelRefsAfterConfigWriteWork(retire)).resolves.toBe(false);
   const saved = (await loadCronJobsStore(storePath)).jobs[0]!;
   expect(saved.payload).toEqual({
     kind: "agentTurn",

@@ -46,6 +46,7 @@ import {
 } from "../infra/gateway-supervision.js";
 import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-firewall-diagnostics.js";
 import { ExitError, type RuntimeEnv } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { runTui } from "../tui/tui.js";
 import { resolveUserPath } from "../utils.js";
 import { listConfiguredWebSearchProviders } from "../web-search/runtime.js";
@@ -637,10 +638,14 @@ export async function finalizeSetupWizard(
         const document = await waitForControlUiDocument({
           url: target.documentUrl,
           tlsConfig: target.tlsConfig,
+          signal: getAsyncWorkSignal(),
           onPending: () => {
             progress = prompter.progress(t("wizard.guided.controlUiPreparing"));
           },
         });
+        if (getAsyncWorkSignal()?.aborted) {
+          return { launchedTui: false };
+        }
         dashboardReady = document.ready;
         if (!document.ready) {
           runtime.error(document.reason);

@@ -44,6 +44,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
       const hasModelOverride = Boolean(
         requestProvider || configuredProvider || requestModel || configuredModel,
       );
+      // Parsing only: the provider assumed for a bare id or alias target. It selects no model.
       const defaultProvider =
         normalizeOptionalString(requestedProvider) ??
         normalizeOptionalString(api.runtime.agent.defaults.provider);
@@ -78,7 +79,8 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
 
       const providerId = provider?.trim();
       const modelId = model?.trim();
-      if (!providerId || !modelId) {
+      // Without an override, the completion runtime owns default model selection.
+      if (hasModelOverride && (!providerId || !modelId)) {
         throw new Error(
           `provider/model could not be resolved (provider=${provider ?? ""}, model=${model ?? ""})`,
         );
@@ -166,7 +168,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         }
       }
 
-      return textResult(JSON.stringify(parsed, null, 2), {
+      return textResult(JSON.stringify(parsed), {
         json: parsed,
         provider: result.provider,
         model: result.model,

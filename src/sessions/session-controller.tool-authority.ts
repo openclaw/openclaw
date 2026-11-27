@@ -68,12 +68,7 @@ export function createReplyTurnParticipants(
         if (closed) {
           throw new Error("This turn has ended; ask again in a new turn.");
         }
-        try {
-          if (retentionFailed) {
-            throw new Error("Participant authority could not be retained");
-          }
-          authority.assertCurrent();
-        } catch {
+        if (retentionFailed) {
           throw new Error(`${name}'s access changed; ask them again`);
         }
       },
@@ -100,7 +95,9 @@ export function createReplyTurnParticipants(
       user === undefined ? people[0] : people.find((candidate) => candidate.profileId === user);
     if (user !== undefined && !person) {
       throw new Error(
-        `User is not a participant of this turn.${choices ? ` Choose ${choices}.` : " Ask again from your signed-in Control UI."}`,
+        choices
+          ? `User is not a participant of this turn. Choose ${choices}.`
+          : "This turn has no person authority. A person must resume this work before selecting a user.",
       );
     }
     person?.assertCurrent();
@@ -199,7 +196,7 @@ export function createReplyOperationToolAuthority(lifecycle: {
         getAttachedBackend(operation) !== backend ||
         getAgentEventLifecycleGeneration() !== generation
       ) {
-        throw new Error("Reply operation authority is no longer active");
+        throw new Error("This agent run is no longer active. Start a new turn to retry.");
       }
     };
     assertCurrent();
@@ -435,7 +432,7 @@ export function createReplyOperationToolAuthority(lifecycle: {
         selected.fingerprint(preparedRoute));
       assertCurrent();
       if (snapshot !== selected || route !== previousRoute) {
-        throw new Error("Reply operation tool authority changed during preparation");
+        throw new Error("The reply route changed during preparation. Start a new turn to retry.");
       }
       route = preparedRoute;
       fingerprint = prepared;
@@ -458,7 +455,7 @@ export function createReplyOperationToolAuthority(lifecycle: {
           route !== selectedRoute ||
           fingerprint !== expected
         ) {
-          throw new Error("question creator reply authority is no longer active");
+          throw new Error("The question's reply target changed. Start a new turn to retry.");
         }
       };
       assertCurrent();
@@ -505,38 +502,47 @@ export function bindCapturedReplyToolAuthorityCallerRead(params: {
       toolAuthority?.assertActive();
     };
     assertCaptured();
-    if (!attemptAuthority && caller && "kind" in caller) {
-      const selected = operation.requestedToolAuthorityRoute;
-      const active = operation.toolAuthorityRoute;
-      const fallback = operation.automaticFallbackRoute;
-      const selectionChanged =
-        selected !== undefined &&
-        (selected.provider !== caller.selectedRoute.provider ||
-          selected.model !== caller.selectedRoute.model);
-      const activeDiffers =
-        active !== undefined &&
-        (active.provider !== caller.selectedRoute.provider ||
-          active.model !== caller.selectedRoute.model);
-      const compatibleFallback =
-        selected &&
-        !selectionChanged &&
-        caller.fallbackAvailability.kind !== "disabled_by_model_override" &&
-        caller.fallbackAvailability.kind !== "disabled_by_model_selection_lock" &&
-        fallback?.provider === active?.provider &&
-        fallback?.model === active?.model;
-      if (selectionChanged || (activeDiffers && !compatibleFallback)) {
-        throw new MessageInjectionPolicyMismatchError(
-          "model-fallback-changed",
-          "The selected model changed before steering",
-        );
-      }
-    }
-    return captureReplyToolAuthorityCallerBinding(
+    const selectedBinding = captureReplyToolAuthorityCallerBinding(
       toolAuthority?.projectAsync ?? operation.projectToolAuthorityFingerprintAsync,
       caller,
       expected,
       operation.toolAuthorityRoute,
       assertCaptured,
     );
+    if (!selectedBinding) {
+      return undefined;
+    }
+    return {
+      ...selectedBinding,
+      prepare: async () => {
+        if (!attemptAuthority && caller && "kind" in caller) {
+          const selected = operation.requestedToolAuthorityRoute;
+          const active = operation.toolAuthorityRoute;
+          const fallback = operation.automaticFallbackRoute;
+          const selectionChanged =
+            selected !== undefined &&
+            (selected.provider !== caller.selectedRoute.provider ||
+              selected.model !== caller.selectedRoute.model);
+          const activeDiffers =
+            active !== undefined &&
+            (active.provider !== caller.selectedRoute.provider ||
+              active.model !== caller.selectedRoute.model);
+          const compatibleFallback =
+            selected &&
+            !selectionChanged &&
+            caller.fallbackAvailability.kind !== "disabled_by_model_override" &&
+            caller.fallbackAvailability.kind !== "disabled_by_model_selection_lock" &&
+            fallback?.provider === active?.provider &&
+            fallback?.model === active?.model;
+          if (selectionChanged || (activeDiffers && !compatibleFallback)) {
+            throw new MessageInjectionPolicyMismatchError(
+              "model-fallback-changed",
+              "The selected model changed before steering",
+            );
+          }
+        }
+        return selectedBinding.prepare();
+      },
+    };
   });
 }

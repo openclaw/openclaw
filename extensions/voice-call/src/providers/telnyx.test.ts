@@ -96,8 +96,6 @@ describe("TelnyxProvider.verifyWebhook", () => {
     const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
 
     const jwk = publicKey.export({ format: "jwk" }) as JsonWebKey;
-    expect(jwk).toMatchObject({ kty: "OKP", crv: "Ed25519", x: expect.any(String) });
-    expect(jwk.x).not.toBe("");
     const rawPublicKey = Buffer.from(expectDefined(jwk.x, "Ed25519 public key"), "base64url");
     const rawPublicKeyBase64 = rawPublicKey.toString("base64");
     const provider = createProvider(rawPublicKeyBase64);

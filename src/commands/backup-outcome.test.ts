@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { expectBytesEqual } from "../../test/helpers/file-snapshots.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetConfigRuntimeState } from "../config/config.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
@@ -85,15 +86,15 @@ function expectOwnerChanged(response: Awaited<ReturnType<typeof receive>>) {
   expect(response).toHaveBeenCalledWith(false, undefined, ownerChangedError);
 }
 
-it("rejects non-decimal --bytes forms instead of coercing them", async () => {
+it.each([
+  ["done", "label", undefined],
+  ["ok", "  ", undefined],
+  ...["0x10", "1e3", "0b101", "0o17", "0.5", "12abc", ""].map((b) => ["ok", "hex", b] as const),
+] as const)("rejects malformed record arguments: %s %s %s", async (status, target, bytes) => {
   const { runtime } = await fixture();
-  for (const bytes of ["0x10", "1e3", "0b101", "0o17", "0.5", "12abc", ""]) {
-    await expect(
-      backupRecordCommand(runtime, { status: "ok", target: "hex", bytes, json: true }),
-    ).rejects.toThrow("--bytes must be a nonnegative integer.");
-  }
+  const result = backupRecordCommand(runtime, { status, target, bytes });
+  await expect(result).rejects.toMatchObject({ name: "ExpectedCliError" });
   expect(await readBackupRuns(process.env)).toEqual([]);
-  expect(runtime.error).not.toHaveBeenCalled();
 });
 
 it("records decimal bytes under offline custody and leaves an absent database absent", async () => {
@@ -153,7 +154,7 @@ it.each(["accepted", "reply-lost", "refused"])(
     await backupRecordCommand(runtime, { status: "ok", target: "host-restic", bytes: 42 });
     expect(transport.call).toHaveBeenCalledTimes(1);
     if (outcome === "refused") {
-      expect(await fs.readFile(databasePath)).toEqual(before);
+      expectBytesEqual(await fs.readFile(databasePath), before!, "refused backup database");
       expect(await readBackupRuns(process.env)).toEqual([]);
     } else {
       expect(await readBackupRuns(process.env)).toEqual([

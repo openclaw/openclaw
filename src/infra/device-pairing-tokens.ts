@@ -2,7 +2,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "../state/openclaw-state-db-cache.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-// Device token operations preserve live handshake authority through worker commit.
+// Device token operations preserve the profile-row lifetime through worker commit.
 import type {
   RevokeDeviceTokenResult,
   RotateDeviceTokenResult,
@@ -54,11 +54,12 @@ export async function ensureDeviceToken(params: {
   role: string;
   scopes: string[];
   issuer?: DeviceAuthToken["issuer"];
+  approval?: DeviceAuthToken["approval"];
   isIssuanceCurrent?: () => boolean;
 }): Promise<DeviceAuthToken | null> {
   const { isIssuanceCurrent, ...input } = params;
   return readCurrentPairedDevice(input.deviceId, (device) => {
-    if (isIssuanceCurrent?.() === false) {
+    if (isIssuanceCurrent?.() === false || !device) {
       return null;
     }
     const reusable = reusablePairedDeviceToken(device, input);
@@ -71,7 +72,9 @@ export async function ensureDeviceToken(params: {
         onAuthorityRefused: () => null,
         assertCurrent: () => {
           if (isIssuanceCurrent?.() === false) {
-            throw new DevicePairingAuthorityRefusedError("Device token issuance authority changed");
+            throw new DevicePairingAuthorityRefusedError(
+              "Device token issuance ended. Reconnect to retry.",
+            );
           }
         },
       },

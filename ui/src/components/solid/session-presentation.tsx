@@ -8,11 +8,11 @@ import {
   SESSION_ICON_GLYPH_IDS,
   SESSION_ICON_SVG_DATA_URL_PREFIX,
 } from "../../../../packages/gateway-protocol/src/session-agent-status.js";
-import { registerChatToolLabelsEnglish } from "../../i18n/locales/en-chat-tool-labels.ts";
 import { resolveToolDisplayIcon } from "../../lib/chat/tool-display-icon.ts";
-import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import type { SessionCreatedActor, SessionOwnerOption } from "../../lib/session-owner.ts";
 import {
+  childShowsParentWorking,
   summarizeSidebarSessionAttention,
   type SidebarRecentSession,
   type SidebarSessionAttention,
@@ -20,7 +20,6 @@ import {
 import {
   sessionAttentionTooltipParts,
   sessionAttentionIconName,
-  resolveSessionIdleBadge,
 } from "../session-attention-presentation.ts";
 import {
   resolveSessionRowBadges,
@@ -32,8 +31,6 @@ import { ChannelAvatar } from "./channel-avatar.tsx";
 import "../tooltip.ts";
 import { Icon, sessionIcon, sessionIconMask } from "./icon.tsx";
 import { SessionOwnerAvatar, SessionOwnerChip } from "./session-owner-chip.tsx";
-
-registerEnglishCatalog(registerChatToolLabelsEnglish);
 
 type SessionRunVisibility = typeof sessionRunVisibility;
 export { sessionRunVisibility };
@@ -74,7 +71,7 @@ function SessionAttentionIcon(props: { attention: SidebarSessionAttention; size:
             }
           }}
         >
-          {sessionIcon(icon(), props.size, 1.8)}
+          {sessionIcon(icon(), props.size, 1.75)}
         </span>
         <Show when={parts().preview}>
           <span slot="content" class="sidebar-session-attention-tooltip">
@@ -89,7 +86,7 @@ function SessionAttentionIcon(props: { attention: SidebarSessionAttention; size:
     </Show>
   );
 }
-const PAIR_TRACE_PATH = "M0,-9.798A11,11 0 1 1 0,9.798A11,11 0 1 1 0,-9.798Z";
+const PAIR_TRACE_PATH = "M0 -9.165A10 10 0 1 1 0 9.165A10 10 0 1 1 0 -9.165Z";
 export function SessionGlyph(props: {
   content: JSX.Element;
   running: boolean;
@@ -209,11 +206,12 @@ export function SessionRowBadges(props: SessionRowBadgesParams) {
           element.setAttribute(`data-${key}`, String(value));
         }
       }
-      element.append(sessionIcon(badge.icon, 12, 1.6));
-      if (badge.count) {
+      element.append(sessionIcon(badge.icon, 14, 1.6));
+      const countText = badge.countLabel ?? (badge.count ? String(badge.count) : undefined);
+      if (countText) {
         const count = document.createElement("span");
         count.setAttribute("aria-hidden", "true");
-        count.textContent = String(badge.count);
+        count.textContent = countText;
         element.append(count);
       }
       group.append(element);
@@ -272,36 +270,6 @@ export function renderSessionOwnerAvatar(
   return <SessionOwnerAvatar owner={owner} />;
 }
 
-function SessionIdleState(props: { session: SidebarRecentSession }) {
-  const state = () => resolveSessionIdleBadge(props.session.status, t);
-  return (
-    <Show
-      when={props.session.isChild}
-      fallback={
-        props.session.unread ? (
-          <span class="session-unread-dot" role="img" aria-label={t("sessionsView.unread")} />
-        ) : undefined
-      }
-    >
-      <Show when={state()}>
-        {(current) => (
-          <span
-            class={[
-              "sidebar-child-session__status",
-              `sidebar-child-session__status--${props.session.status}`,
-            ]}
-            role="img"
-            aria-label={current().label}
-            title={current().label}
-          >
-            {sessionIcon(current().icon, 12, 1.8)}
-          </span>
-        )}
-      </Show>
-    </Show>
-  );
-}
-
 export function summarizeTeamSessionSlots(
   rows: readonly SidebarRecentSession[],
   includeChildren: boolean,
@@ -323,11 +291,10 @@ export function summarizeTeamSessionSlots(
   for (const row of rows) {
     const children = includeChildren ? row : row.subagentSummary;
     const visuallyActive = row.isRunVisuallyActive ?? row.hasActiveRun;
-    active += Number(visuallyActive) + (children?.runningChildCount ?? 0);
+    active += Number(childShowsParentWorking(row)) + (children?.runningChildCount ?? 0);
     queued += Number(visuallyActive && row.status === "queued") + (children?.queuedChildCount ?? 0);
     unread += Number(row.unread) + (children?.unreadChildCount ?? 0);
-    failed ||=
-      row.status === "failed" || row.status === "timeout" || (children?.failedChildCount ?? 0) > 0;
+    failed ||= row.status === "failed" || row.status === "timeout";
   }
   return { attention, active, queued, unread, failed };
 }
@@ -343,19 +310,12 @@ export type TeamSessionSlotsProps = {
 
 export function TeamSessionSlots(props: TeamSessionSlotsProps) {
   const summary = createMemo(() => summarizeTeamSessionSlots(props.rows, props.includeChildren));
-  const idleChild = createMemo(() =>
-    props.rows.length === 1 &&
-    props.rows[0]?.isChild &&
-    resolveSessionIdleBadge(props.rows[0].status, t)
-      ? props.rows[0]
-      : undefined,
-  );
   const hasState = createMemo(
     () =>
       summary().attention.kind !== "none" ||
       summary().failed ||
       Boolean(props.groupConflicts) ||
-      (!props.statusOnly && (summary().active > 0 || Boolean(idleChild()))),
+      (!props.statusOnly && summary().active > 0),
   );
   return (
     <Show
@@ -396,7 +356,7 @@ export function TeamSessionSlots(props: TeamSessionSlotsProps) {
               </Match>
               <Match when={summary().failed}>
                 <span
-                  class="sidebar-child-session__status--failed"
+                  class="sidebar-session-team-state__failure"
                   role="img"
                   aria-label={t("sessionsView.statusFailed")}
                 >
@@ -420,9 +380,6 @@ export function TeamSessionSlots(props: TeamSessionSlotsProps) {
                   queued={summary().active === summary().queued}
                   runVisibility={props.runVisibility}
                 />
-              </Match>
-              <Match when={!props.statusOnly && idleChild()}>
-                {(row) => <SessionIdleState session={row()} />}
               </Match>
             </Switch>
           </span>
@@ -449,7 +406,7 @@ function SessionIcon(props: { icon: string }) {
             <i
               class="session-css-icon"
               aria-hidden="true"
-              style={{ "mask-image": sessionIconMask(name()) }}
+              style={{ "mask-image": sessionIconMask(name(), 1.75) }}
             />
           )}
         </Match>
@@ -470,7 +427,9 @@ export function renderSessionLeadingState(props: {
 }) {
   const session = () => props.session;
   const subagentsWorking = createMemo(
-    () => !props.trailingState && session().runningChildCount > 0,
+    () =>
+      !props.trailingState &&
+      (session().subagentSummary?.runningChildCount ?? session().runningChildCount) > 0,
   );
   const ownRunActive = () => session().isRunVisuallyActive ?? session().hasActiveRun;
   const running = createMemo(() => ownRunActive() || subagentsWorking());
@@ -488,8 +447,7 @@ export function renderSessionLeadingState(props: {
     () => session().attention.kind !== "none" && !props.trailingState,
   );
   const hasIcon = createMemo(() => attentionIcon() || props.icon != null || Boolean(icon()));
-  const child = createMemo(() => session().isChild && !props.trailingState);
-  const hasOwner = createMemo(() => !child() && Boolean(props.ownerActor?.id?.trim()));
+  const hasOwner = createMemo(() => Boolean(props.ownerActor?.id?.trim()));
   const OwnerChip = () => (
     <Show when={hasOwner()}>
       <SessionOwnerChip
@@ -521,11 +479,7 @@ export function renderSessionLeadingState(props: {
       (hasIcon() || Boolean(channelAvatarUrl()) || hasOwner()),
   );
   const showGlyph = createMemo(
-    () =>
-      hasIcon() ||
-      (child() && !channelAvatarUrl()
-        ? running()
-        : Boolean(channelAvatarUrl()) || hasOwner() || showRun()),
+    () => hasIcon() || Boolean(channelAvatarUrl()) || hasOwner() || showRun(),
   );
   const content = (
     <Switch fallback={<OwnerChip />}>
@@ -547,20 +501,14 @@ export function renderSessionLeadingState(props: {
       </Match>
     </Switch>
   );
-  const unreadBadge = createMemo(
-    () =>
-      session().unread &&
-      !running() &&
-      !props.trailingState &&
-      !(!hasIcon() && child() && !channelAvatarUrl()),
-  );
+  const unreadBadge = createMemo(() => session().unread && !running() && !props.trailingState);
   // Keep the glyph mounted while session facts change so its CSS animation keeps its timeline.
   const leadingIndicator = (
     <Show
       when={showGlyph()}
       fallback={
-        <Show when={!props.trailingState}>
-          <SessionIdleState session={session()} />
+        <Show when={unreadBadge()}>
+          <span class="session-unread-dot" role="img" aria-label={t("sessionsView.unread")} />
         </Show>
       }
     >

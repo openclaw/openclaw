@@ -1,6 +1,7 @@
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as stateOwnerHeartbeat from "../infra/gateway-state-owner-heartbeat.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import * as schemaFacts from "../infra/sqlite-schema-facts.js";
@@ -8,6 +9,7 @@ import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-asyn
 import {
   borrowOpenClawStateDatabaseForAsyncRead,
   openClawStateDatabaseCache as cache,
+  prepareOpenClawStateCachedRead,
   retainOpenClawStateDatabase,
   retainOpenClawStateDatabaseForIdle,
   retainOpenClawStateDatabaseForIndependentRead,
@@ -91,6 +93,22 @@ it.each([
   { pin: "writer", ending: "release" },
   { pin: "writer", ending: "scope close" },
 ] as const)("keeps idle custody through $pin until $ending", async ({ pin, ending }) => {
+  const heartbeatStops: Promise<void>[] = [];
+  if (ending === "explicit close") {
+    const startHeartbeat = stateOwnerHeartbeat.startGatewayStateOwnerHeartbeat;
+    vi.spyOn(stateOwnerHeartbeat, "startGatewayStateOwnerHeartbeat").mockImplementation(
+      (...args) => {
+        const heartbeat = startHeartbeat(...args);
+        const stop = heartbeat.stop;
+        vi.spyOn(heartbeat, "stop").mockImplementation(() => {
+          const stopped = stop();
+          heartbeatStops.push(stopped);
+          return stopped;
+        });
+        return heartbeat;
+      },
+    );
+  }
   const { pathname, open } = fixture();
   const scope = createOpenClawDatabaseMaintenanceScope();
   const database = pin === "writer" ? scope.run(open) : open();
@@ -106,6 +124,8 @@ it.each([
       expect(vi.getTimerCount()).toBeGreaterThan(0);
       cache.closeOpenClawStateDatabaseByPath(pathname);
       expect(database.db.isOpen).toBe(false);
+      // Schema admission's released heartbeat still owns its asynchronous close deadline.
+      await Promise.all(heartbeatStops);
     } else {
       await database.walMaintenance.stop();
       if (pin === "writer") {
@@ -133,13 +153,18 @@ it.each([
   }
 });
 
-it("defers idle close while a native transaction is active", () => {
-  const database = fixture().open();
+it("defers idle close for a native transaction, not prepared fact checks", () => {
+  const { pathname, open } = fixture();
+  const database = open();
+  const read = prepareOpenClawStateCachedRead(pathname);
   database.db.exec("BEGIN");
   vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
   expect(database.db).toMatchObject({ isOpen: true, isTransaction: true });
   database.db.exec("ROLLBACK");
-  advance(database, SQLITE_IDLE_HANDLE_TTL_MS, false);
+  advance(database, SQLITE_IDLE_HANDLE_TTL_MS - 1, true);
+  expect(read()).toBe(database);
+  advance(database, 1, false);
+  expect(read()).toBeUndefined();
 });
 
 it.each(["native", "maintenance"] as const)(

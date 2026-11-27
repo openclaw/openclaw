@@ -115,6 +115,35 @@ function nextPollSchedule() {
 }
 
 describe("Gateway update run watcher", () => {
+  it("publishes late diagnostic writes after a succeeded run has retired", async () => {
+    beginRun();
+    const published = createDeferredCore();
+    const broadcast = vi.fn(() => published.resolve());
+    watcher = startUpdateRunWatcher({ lifecycle, broadcast, log: { warn: vi.fn() } });
+    await published.promise;
+    const retired = nextLedgerRead("status");
+    ledger.run = { ...ledger.run!, status: "succeeded", phase: "finished", updatedAtMs: 2 };
+    await clock.advanceBy(2_000);
+    await retired;
+    const late = createDeferredCore();
+    broadcast.mockImplementation(() => late.resolve());
+    ledger.run = {
+      ...ledger.run,
+      updatedAtMs: 3,
+      steps: [
+        {
+          step: "warning:post-activation doctor inspections:0",
+          status: "completed",
+          detail: "Plaintext secret found.",
+        },
+      ],
+    };
+    wakeUpdateRunWatcher(ledger.run.runId);
+    await late.promise;
+    expect(broadcast).toHaveBeenLastCalledWith("update.run.changed", currentRunEvent());
+    expect(ledger.run.status).toBe("succeeded");
+  });
+
   it("joins in-flight schema publication on shutdown without arming its returned deadline", async () => {
     const publication = createDeferredCore<StateSchemaPublicationBlocker>();
     const entered = createDeferredCore();
@@ -247,6 +276,45 @@ describe("Gateway update run watcher", () => {
       ]);
       expect(broadcast).toHaveBeenLastCalledWith("update.run.changed", currentRunEvent());
       expect(ledger.reconcile).toHaveBeenCalledOnce();
+    } finally {
+      verification.resolve([]);
+    }
+  });
+
+  it("observes terminal completion after a transient ledger failure without another wake", async () => {
+    beginRun();
+    ledger.run!.steps = [{ step: "notice:ack", status: "completed" }];
+    const verification = createDeferredCore<UpdateRunRecord[]>();
+    ledger.reconcile.mockReturnValueOnce(verification.promise);
+    const failure = createDeferredCore();
+    const delivered = createDeferredCore();
+    const warn = vi.fn(() => failure.resolve());
+    const broadcast = vi.fn();
+    ledger.notice.mockImplementationOnce(async () => delivered.resolve());
+    const polling = nextPollSchedule();
+    watcher = startUpdateRunWatcher({ lifecycle, broadcast, log: { warn } });
+    try {
+      await polling;
+      ledger.reads.mockImplementation(() => {
+        throw new Error("ledger temporarily unavailable");
+      });
+      await clock.advanceBy(2_000);
+      await failure.promise;
+      expect(warn).toHaveBeenCalledOnce();
+      expect(scheduler.nextWakeAtMs).toBe(clock.clock.now() + 2_000);
+
+      ledger.reads.mockImplementation(() => {});
+      ledger.run = { ...ledger.run!, phase: "finished", status: "succeeded", updatedAtMs: 2 };
+      const idle = nextLedgerRead("status");
+      await clock.advanceBy(2_000);
+      await delivered.promise;
+      await idle;
+      expect(broadcast).toHaveBeenLastCalledWith("update.run.changed", currentRunEvent());
+      expect(ledger.notice).toHaveBeenCalledExactlyOnceWith(ledger.run);
+      const reads = ledger.reads.mock.calls.length;
+      await clock.advanceBy(60_000);
+      expect(ledger.reads).toHaveBeenCalledTimes(reads);
+      expect(scheduler.nextWakeAtMs).toBeNull();
     } finally {
       verification.resolve([]);
     }
@@ -470,8 +538,19 @@ describe("Gateway update run watcher", () => {
     beginRun();
     const initial = createDeferredCore();
     const broadcast = vi.fn(() => initial.resolve());
-    watcher = startUpdateRunWatcher({ lifecycle, broadcast, log: { warn: vi.fn() } });
+    const failure = createDeferredCore();
+    watcher = startUpdateRunWatcher({
+      lifecycle,
+      broadcast,
+      log: { warn: () => failure.resolve() },
+    });
     await initial.promise;
+    ledger.reads.mockImplementation(() => {
+      throw new Error("ledger temporarily unavailable");
+    });
+    await clock.advanceBy(2_000);
+    await failure.promise;
+    expect(scheduler.nextWakeAtMs).toBe(clock.clock.now() + 2_000);
     const sibling = vi.fn();
     scheduler.schedule({ id: "sibling", delayMs: 1_000, run: sibling });
     await watcher.stop();

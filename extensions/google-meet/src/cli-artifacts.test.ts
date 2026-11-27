@@ -75,6 +75,103 @@ it("prints calendar event previews", async () => {
   cli.expectText(output(), "meet events: 1", "* Project sync", MEET_URL);
 });
 
+function calendarListUrl(timeMin: Date, timeMax: Date, pageToken?: string) {
+  const query = new URLSearchParams({
+    maxResults: "50",
+    orderBy: "startTime",
+    showDeleted: "false",
+    singleEvents: "true",
+    timeMin: timeMin.toISOString(),
+    timeMax: timeMax.toISOString(),
+  });
+  if (pageToken) {
+    query.set("pageToken", pageToken);
+  }
+  return `https://www.googleapis.com/calendar/v3/calendars/primary/events?${query}`;
+}
+
+it("selects the first current Meet when another event ends at the same instant", async () => {
+  const noon = new Date(2026, 10, 25, 12);
+  const at = (minutes: number) => ({
+    dateTime: new Date(noon.getTime() + minutes * 60_000).toISOString(),
+  });
+  const ending = {
+    start: at(-30),
+    end: at(0),
+    hangoutLink: "https://meet.google.com/aaa-aaaa-aaa",
+  };
+  const starting = { start: at(0), end: at(30), hangoutLink: MEET_URL };
+  const tied = { ...starting, hangoutLink: "https://meet.google.com/ccc-cccc-ccc" };
+  const events = [ending, starting, tied];
+  const todayUrl = calendarListUrl(new Date(2026, 10, 25), new Date(2026, 10, 26));
+  const defaultUrl = calendarListUrl(noon, new Date(2026, 11, 2, 12));
+  const fetchMock = cli.stubJsonRoutes({
+    [todayUrl]: { items: events },
+    [defaultUrl]: { items: [starting, tied] },
+  });
+
+  vi.useFakeTimers({ toFake: ["Date"] }).setSystemTime(noon);
+  try {
+    for (const { args, visible } of [
+      { args: ["--today"], visible: events },
+      { args: [], visible: [starting, tied] },
+    ]) {
+      await runApiCommand("calendar-events", [...args, "--json"]);
+      expect(json()).toMatchObject({
+        events: visible.map(({ hangoutLink }) => ({
+          meetingUri: hangoutLink,
+          selected: hangoutLink === MEET_URL,
+        })),
+      });
+    }
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([todayUrl, defaultUrl]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it.each([
+  // Local day has begun in Kiritimati and is still in progress in Los Angeles.
+  ["Pacific/Kiritimati", "2024-02-28T10:00:15Z", "2024-02-29", "2024-03-01"],
+  ["America/Los_Angeles", "2024-03-01T04:00:15Z", "2024-02-29", "2024-03-01"],
+  // Equal future starts, including Havana's first occurrence of midnight.
+  ["Pacific/Kiritimati", "2024-02-28T09:59:00Z", "2024-02-29", "2024-03-01"],
+  ["America/Havana", "2024-11-03T03:59:00Z", "2024-11-03", "2024-11-04"],
+  // Sep 7 ends when Santiago jumps directly to 01:00 on Sep 8.
+  ["America/Santiago", "2024-09-08T03:58:00Z", "2024-09-07", "2024-09-08"],
+  ["UTC", "2024-02-29T00:00:15Z", "2024-02-29", "2024-03-01"],
+])("selects the all-day Meet in calendar zone %s at %s", async (timeZone, clock, start, end) => {
+  const now = new Date(clock);
+  const week = new Date(now);
+  week.setDate(week.getDate() + 7);
+  const allDay = {
+    start: { date: start },
+    end: { date: end },
+    hangoutLink: MEET_URL,
+  };
+  const timed = {
+    start: { dateTime: new Date(now.getTime() + 60_000).toISOString() },
+    end: { dateTime: new Date(now.getTime() + 90_000).toISOString() },
+    hangoutLink: "https://meet.google.com/bbb-bbbb-bbb",
+  };
+  cli.stubJsonRoutes({
+    [calendarListUrl(now, week)]: { timeZone, items: [allDay], nextPageToken: "next" },
+    [calendarListUrl(now, week, "next")]: { items: [timed] },
+  });
+  vi.useFakeTimers({ toFake: ["Date"] }).setSystemTime(now);
+  try {
+    await runApiCommand("calendar-events", ["--json"]);
+    expect(json()).toMatchObject({
+      events: [
+        { event: allDay, meetingUri: MEET_URL, selected: true },
+        { meetingUri: timed.hangoutLink, selected: false },
+      ],
+    });
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it("ends an active conference for a Meet space", async () => {
   const endUrl = "https://meet.googleapis.com/v2/spaces/space-resource-123:endActiveConference";
   const fetchMock = cli.stubJsonRoutes({
@@ -162,35 +259,92 @@ it("quotes carriage returns in formula-neutralized CSV cells", async () => {
   expect(output()).toContain('conferenceRecords/rec-1,"\'\r=1+1",users/alice');
 });
 
-it("writes an export bundle", async () => {
-  await runRecordCommand("export", ["--include-doc-bodies", "--zip", "--output", tempDir]);
-  expect(output()).toContain(`export: ${tempDir}`);
+it("writes an export bundle to the literal CLI output directory", async () => {
+  const outputDir = path.join(tempDir, process.platform === "win32" ? "out" : "out ");
+  const readBundleFile = (name: string) => readFileSync(path.join(outputDir, name), "utf8");
+  const flags = ["--include-doc-bodies", "--no-transcript-entries", "--zip"];
+  await runRecordCommand("export", [...flags, "--output", outputDir]);
+  expect(output()).toContain(`export: ${outputDir}`);
   cli.expectText(
-    readOutput("summary.md"),
+    readBundleFile("summary.md"),
     "# Google Meet Artifacts",
     `## ${record}`,
-    `### Transcript Entries: ${transcript}`,
-    "Hello from the transcript.",
+    "Transcript entries: 0",
   );
-  expect(readOutput("attendance.csv")).toContain("conferenceRecords/rec-1,Alice,users/alice");
+  expect(readBundleFile("attendance.csv")).toContain("conferenceRecords/rec-1,Alice,users/alice");
   cli.expectText(
-    readOutput("transcript.md"),
-    "Hello from the transcript.",
+    readBundleFile("transcript.md"),
+    "_No transcript entries._",
     "Transcript document body.",
   );
-  const manifest = JSON.parse(readOutput("manifest.json"));
+  const manifest = JSON.parse(readBundleFile("manifest.json"));
   expect(manifest).toMatchObject({
     request: { conferenceRecord: "rec-1", includeDocumentBodies: true },
     tokenSource: "cached-access-token",
     counts: { attendanceRows: 1, warnings: 0 },
   });
-  expect(manifest.files.toSorted()).toEqual(readdirSync(tempDir).toSorted());
-  expect(JSON.parse(readOutput("artifacts.json"))).toMatchObject({
+  expect(manifest.files.toSorted()).toEqual(readdirSync(outputDir).toSorted());
+  expect(JSON.parse(readBundleFile("artifacts.json"))).toMatchObject({
     conferenceRecords: [{ name: record }],
     artifacts: [{ transcripts: [{ documentText: "Transcript document body." }] }],
   });
-  const zip = await JSZip.loadAsync(readFileSync(`${tempDir}.zip`));
+  const zip = await JSZip.loadAsync(readFileSync(`${outputDir}.zip`));
   expect(await zip.file("summary.md")?.async("string")).toContain("# Google Meet Artifacts");
+});
+
+it("keeps namesakes distinct across a conference's transcript exports", async () => {
+  const conference = (name: string, repeat: boolean) => {
+    const first = `${name}/participants/p1`;
+    const second = `${name}/participants/p2`;
+    const entry = (id: string, text: string, participant?: string) => ({
+      name: id,
+      text,
+      participant,
+    });
+    return {
+      conferenceRecord: { name },
+      recordings: [],
+      transcripts: [],
+      smartNotes: [],
+      participants: [
+        { name: second, anonymousUser: { displayName: "Sam" } },
+        { name: first, signedinUser: { displayName: "Sam" } },
+        { name: "phone", phoneUser: { displayName: "Caller" } },
+      ],
+      transcriptEntries: [
+        { transcript: "first", entries: repeat ? [entry("a", "First commitment.", first)] : [] },
+        {
+          transcript: "next",
+          entries: [
+            entry("b", "Second commitment.", second),
+            entry("c", "Phone remark.", "phone"),
+            entry("d", "Missing roster entry.", "unlisted"),
+            entry("e", "Unattributed."),
+          ],
+        },
+      ],
+    };
+  };
+  const records = [conference(record, true), conference("conferenceRecords/rec-2", false)];
+  const artifacts = {
+    conferenceRecords: records.map((entry) => entry.conferenceRecord),
+    artifacts: records,
+  };
+  await writeMeetExportBundle({
+    outputDir: tempDir,
+    artifacts,
+    attendance: { conferenceRecords: [], attendance: [] },
+  });
+  for (const file of ["summary.md", "transcript.md"]) {
+    const [first, next] = readOutput(file).split("## conferenceRecords/rec-2");
+    expect(first).toContain("Sam: First commitment.");
+    expect(first).toContain("Sam (2): Second commitment.");
+    expect(next).toContain("Sam: Second commitment.");
+    expect(first).toContain("Caller: Phone remark.");
+    expect(first).toContain("unlisted: Missing roster entry.");
+    expect(first).toContain(file === "summary.md" ? "- Unattributed." : "- unknown: Unattributed.");
+  }
+  expect(JSON.parse(readOutput("artifacts.json"))).toEqual(artifacts);
 });
 
 it("includes artifact warnings in export summaries and manifests", async () => {
@@ -279,24 +433,17 @@ it.each([false, true])(
   },
 );
 
-it.each([
-  { label: "repeated native", trailingSeparators: path.sep.repeat(2) },
-  ...(process.platform === "win32"
-    ? [
-        { label: "repeated alternate", trailingSeparators: "//" },
-        { label: "mixed", trailingSeparators: "\\/" },
-      ]
-    : []),
-])(
-  "writes the ZIP beside an output directory with $label trailing separators",
-  async ({ trailingSeparators }) => {
+it.each([path.sep.repeat(2), ...(process.platform === "win32" ? ["//", "\\/"] : [" "])])(
+  "preserves the literal output directory and writes its ZIP beside it (%j)",
+  async (trailingSeparators) => {
     const suppliedOutputDir = `${publicationDir}${trailingSeparators}`;
-    const zipPath = `${publicationDir}.zip`;
+    const directory = trailingSeparators === " " ? suppliedOutputDir : publicationDir;
+    const zipPath = `${directory}.zip`;
     const result = await writeBundle(suppliedOutputDir, true);
-    const manifest = JSON.parse(readFileSync(path.join(publicationDir, "manifest.json"), "utf8"));
+    const manifest = JSON.parse(readFileSync(path.join(directory, "manifest.json"), "utf8"));
     expect(result).toMatchObject({ outputDir: suppliedOutputDir, zipFile: zipPath });
     expect(manifest.zipFile).toBe(zipPath);
     expect(existsSync(zipPath)).toBe(true);
-    expect(existsSync(path.join(publicationDir, ".zip"))).toBe(false);
+    expect(existsSync(path.join(directory, ".zip"))).toBe(false);
   },
 );

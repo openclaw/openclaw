@@ -9,10 +9,14 @@ import {
   readSessionKeyBySessionIdInDatabase,
   type ResolvedSessionEntryRow,
 } from "./session-accessor.sqlite-entry-read.js";
+import { getSessionEntryWriteQueries } from "./session-accessor.sqlite-entry-write-queries.js";
+import type { SessionEntryReplacementCommit } from "./session-accessor.sqlite-replacement-types.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope-helpers.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
 
 export type SessionEntryReplacementSelection = {
+  includeArchiveUndoMarkers?: boolean;
+  fieldPatch?: SessionEntryReplacementCommit["fieldPatch"];
   sessionKeys?: readonly string[];
   includeSessionWindowOwner?: string;
   includeLabelOwners?: string;
@@ -62,18 +66,31 @@ export function readSessionEntryReplacementState(
   const selected = selectedSessionKeys
     ? uniqueStrings([...selectedSessionKeys, ...labelOwnerKeys])
     : [...iterateSessionEntryKeys(database)];
+  const markerQueries = params.includeArchiveUndoMarkers
+    ? getSessionEntryWriteQueries(database.db).archiveUndo
+    : undefined;
   const expectedRows = new Map<string, ResolvedSessionEntryRow>();
+  const projection = params.fieldPatch?.snapshotFields ?? (params.fieldPatch ? "list" : "full");
   const readPrepared =
-    selected.length > 1 ? prepareExactSessionEntryRowReads(database, selected) : undefined;
+    selected.length > 1
+      ? prepareExactSessionEntryRowReads(database, selected, projection)
+      : undefined;
   const entries = selected.flatMap((sessionKey) => {
     const row = readPrepared
       ? readPrepared(sessionKey)
-      : readExactSessionEntryRow(database, sessionKey);
+      : readExactSessionEntryRow(database, sessionKey, projection);
     if (!row) {
       return [];
     }
     expectedRows.set(sessionKey, row);
-    return [{ entry: structuredClone(row.entry), sessionKey }];
+    const marker = markerQueries?.read({ key: sessionKey }).rows[0]?.archive_undo_marker;
+    return [
+      {
+        entry: structuredClone(row.entry),
+        sessionKey,
+        ...(marker ? { archiveUndoMarker: marker } : {}),
+      },
+    ];
   });
   return { entries, expectedRows, labelOwnerKeys, selectedSessionKeys };
 }

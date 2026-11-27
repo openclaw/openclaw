@@ -1,18 +1,27 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { makeRegistry } from "../config/plugin-auto-enable.test-helpers.js";
+import {
+  createPluginMetadataSnapshot,
+  makeRegistry,
+} from "../config/plugin-auto-enable.test-helpers.js";
 import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
-import { loadPluginRegistryHandle } from "../plugins/loader.js";
+import { loadOpenClawPluginsAsync, loadPluginRegistryHandle } from "../plugins/loader.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { prepareWorkspacePluginRegistries } from "./prepared-model-runtime.inbound-registry.js";
 import { loadAgentRuntimePluginRegistryHandle } from "./runtime-plugins.js";
 
-vi.mock("../plugins/loader.js", () => ({ loadPluginRegistryHandle: vi.fn() }));
+// mock-isolation: observe the real load plan before plugin code executes.
+vi.mock("../plugins/loader.js", () => ({
+  loadOpenClawPluginsAsync: vi.fn(),
+  loadPluginRegistryHandle: vi.fn(),
+}));
 
 afterEach(() => {
   clearPluginMetadataLifecycleCaches();
   vi.mocked(loadPluginRegistryHandle).mockReset();
+  vi.mocked(loadOpenClawPluginsAsync).mockReset();
 });
 
 it("carries one captured fleet to every already-enabled runtime load and projects real policy changes", () => {
@@ -39,7 +48,7 @@ it("carries one captured fleet to every already-enabled runtime load and project
       workspaceDir: `/tmp/fleet-${index}`,
       metadataSnapshot,
       basePluginIds: ["fleet-owner"],
-      configuredHarnessRuntimes: [],
+      getConfiguredHarnessRuntimes: () => [],
       selections: [],
     });
   }
@@ -62,7 +71,7 @@ it("carries one captured fleet to every already-enabled runtime load and project
     workspaceDir: "/tmp/fleet-changed",
     metadataSnapshot,
     basePluginIds: ["fleet-owner"],
-    configuredHarnessRuntimes: [],
+    getConfiguredHarnessRuntimes: () => [],
     selections: [],
   });
   const projected = load.mock.calls.at(-1)?.[0]?.config;
@@ -73,3 +82,46 @@ it("carries one captured fleet to every already-enabled runtime load and project
   expect(changed.plugins?.allow).toEqual([" fleet-owner ", "fleet-owner", "existing"]);
   expect(changed.plugins?.entries?.["new-engine"]).toBeUndefined();
 });
+
+it.each([
+  ["agent", 1, ["configured-harness", "selected-harness"]],
+  ["isolated-completion", 0, ["selected-harness"]],
+  ["model-catalog", 0, []],
+] as const)(
+  "reads configured harnesses only when the %s plan uses them",
+  async (purpose, calls, ids) => {
+    const harnesses = ["configured-harness", "selected-harness"];
+    const config = {
+      plugins: {
+        allow: harnesses,
+        slots: { memory: "none" },
+        entries: Object.fromEntries(harnesses.map((id) => [id, { enabled: true }])),
+      },
+    };
+    const metadata = createPluginMetadataSnapshot({
+      config,
+      manifestRegistry: makeRegistry(
+        harnesses.map((id) => ({ id, channels: [], activation: { onAgentHarnesses: [id] } })),
+      ),
+    });
+    const configured = vi.fn(() => ["configured-harness"]);
+    const load = vi.mocked(loadOpenClawPluginsAsync).mockResolvedValue(createEmptyPluginRegistry());
+    await prepareWorkspacePluginRegistries(
+      {
+        agentDir: "/fixture/agent",
+        config,
+        loadRuntimePlugins: true,
+        runtimePluginPurpose: purpose,
+        runtimePluginSelections: [{ provider: "", modelId: "", runtime: "selected-harness" }],
+      },
+      metadata,
+      () => {},
+      undefined,
+      false,
+      undefined,
+      configured,
+    );
+    expect(configured).toHaveBeenCalledTimes(calls);
+    expect(load.mock.lastCall?.[0]?.onlyPluginIds).toEqual(ids);
+  },
+);

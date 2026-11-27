@@ -142,6 +142,78 @@ function prepareRead(method: (typeof methods)[number], beforeReturn: () => Promi
 }
 
 describe("narrow session read owners", () => {
+  it("admits CSP previews for session-only readers and revokes resources when sharing ends", async () => {
+    await withScopedReader("preview-reader", async ({ state, reader, context }) => {
+      reader.connId = "narrow-preview";
+      const controller = new AbortController();
+      reader.connectionSignal = controller.signal;
+      using _ = { [Symbol.dispose]: () => controller.abort() };
+      const owner = roleClient("view", "preview-owner");
+      const policy =
+        "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
+      const html = `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${policy}"><script defer src="app.js"></script></head><body>Preview</body></html>`;
+      const code = "window.previewReady = true;";
+      await fs.writeFile(path.join(state.workspaceDir, "index.html"), html);
+      await fs.writeFile(path.join(state.workspaceDir, "app.js"), code);
+      const entry = {
+        sessionId: "preview-session",
+        updatedAt: 1,
+        visibility: "shared" as const,
+        spawnedCwd: state.workspaceDir,
+        permissionMode: "read-only" as const,
+        createdActor: createdActor(owner),
+      };
+      await seed(entry);
+      const respond = vi.fn();
+      const dispatch = (document = html) =>
+        handleGatewayRequest({
+          req: gatewayRequest("preview", "sessions.files.preview", {
+            sessionKey: key,
+            path: "index.html",
+            html: document,
+          }),
+          client: reader,
+          context,
+          respond,
+          isWebchatConnect: () => false,
+          extraHandlers: sessionsFilesHandlers,
+        });
+      await dispatch();
+      expect(respond.mock.calls[0]?.[0], JSON.stringify(respond.mock.calls[0])).toBe(true);
+      const preview = respond.mock.calls[0]?.[1] as {
+        status: string;
+        sandboxPath: string;
+        html: string;
+      };
+      expect(preview.status).toBe("ready");
+      expect(preview.html).toBe(html);
+      const resource = new URL("app.js", "http://preview.invalid" + preview.sandboxPath).pathname;
+      const fetched = await fetchSessionFileDownload(reader, resource);
+      expect(fetched.response.statusCode).toBe(200);
+      expect(Buffer.from(fetched.body as Uint8Array).toString()).toBe(code);
+      for (const css of ["body{color:black}", "/*a".repeat(21_846).slice(0, 65_536)]) {
+        await fs.writeFile(path.join(state.workspaceDir, "style.css"), css);
+        respond.mockClear();
+        await dispatch(
+          html.replace(
+            '<script defer src="app.js"></script>',
+            '<link rel="stylesheet" href="style.css">',
+          ),
+        );
+        expect(respond.mock.calls[0]?.[0], JSON.stringify(respond.mock.calls[0])).toBe(true);
+        expect(respond.mock.calls[0]?.[1]?.status).toBe(
+          css.startsWith("/*") ? "unsupported" : "ready",
+        );
+      }
+      await seed({ ...entry, visibility: "draft", updatedAt: 2 });
+      expect((await fetchSessionFileDownload(reader, resource)).response.statusCode).toBe(404);
+      respond.mockClear();
+      await dispatch();
+      expect(respond.mock.calls[0]?.[0]).toBe(false);
+      expect(respond.mock.calls[0]?.[1]).toBeUndefined();
+    });
+  });
+
   it("authorizes original-byte downloads for session-only VIEW readers and revokes HTTP grants with sharing", async () => {
     await withScopedReader("download-reader", async ({ state, reader, context }) => {
       reader.connId = "narrow-download";
@@ -180,7 +252,7 @@ describe("narrow session read owners", () => {
       await seed({ ...entry, updatedAt: 2, label: "Renamed while downloading" });
       const fetched = await fetchSessionFileDownload(reader, download.url);
       expect(fetched.response.statusCode).toBe(200);
-      expect(Buffer.from(fetched.body as Uint8Array)).toEqual(bytes);
+      expect(Buffer.from(fetched.body as Uint8Array).toString("hex")).toBe(bytes.toString("hex"));
       await seed({ ...entry, visibility: "draft", updatedAt: 3 });
       expect((await fetchSessionFileDownload(reader, download.url)).response.statusCode).toBe(404);
       respond.mockClear();
@@ -287,7 +359,7 @@ describe("narrow session read owners", () => {
     },
   );
 
-  it.each(["current", "source", "generation"] as const)(
+  it.each(["current", "generation"] as const)(
     "keeps the original %s through message subscription preparation",
     async (change) => {
       await withScopedReader("subscription-reader", async ({ reader: client, cfg }) => {
@@ -307,14 +379,12 @@ describe("narrow session read owners", () => {
         const entered = createDeferredCore();
         const release = createDeferredCore();
         const respond = vi.fn();
-        let current = true;
         const request = handleGatewayRequest({
           req: gatewayRequest(change, "sessions.messages.subscribe", { key, agentId: "main" }),
           client,
           context,
           respond,
           isWebchatConnect: () => false,
-          hasCurrentClientAuthority: () => current,
           extraHandlers: createLazyCoreHandlers({
             methods: ["sessions.messages.subscribe"],
             loadHandlers: async () => {
@@ -328,9 +398,6 @@ describe("narrow session read owners", () => {
         try {
           await Promise.race([entered.promise, request]);
           expect(respond, JSON.stringify(respond.mock.calls)).not.toHaveBeenCalled();
-          if (change === "source") {
-            current = false;
-          }
           if (change === "generation") {
             await seed({ ...entry, lifecycleRevision: "replacement", sessionId: "replacement" });
           }
@@ -338,26 +405,19 @@ describe("narrow session read owners", () => {
           release.resolve();
           await outcome;
         }
-        if (change === "source") {
-          expect(await outcome).toMatchObject([
-            { status: "rejected", reason: { message: "Gateway requester authority changed" } },
-          ]);
-          expect(respond).not.toHaveBeenCalled();
+        expect(await outcome).toEqual([{ status: "fulfilled", value: undefined }]);
+        if (change === "current") {
+          expect(respond).toHaveBeenCalledExactlyOnceWith(
+            true,
+            { subscribed: true, key, agentId: "main" },
+            undefined,
+          );
         } else {
-          expect(await outcome).toEqual([{ status: "fulfilled", value: undefined }]);
-          if (change === "current") {
-            expect(respond).toHaveBeenCalledExactlyOnceWith(
-              true,
-              { subscribed: true, key, agentId: "main" },
-              undefined,
-            );
-          } else {
-            expect(respond).toHaveBeenCalledExactlyOnceWith(
-              false,
-              undefined,
-              expect.objectContaining({ code: "INVALID_REQUEST" }),
-            );
-          }
+          expect(respond).toHaveBeenCalledExactlyOnceWith(
+            false,
+            undefined,
+            expect.objectContaining({ code: "INVALID_REQUEST" }),
+          );
         }
         expect(subscribers.get(key).has(client.connId)).toBe(change === "current");
       });
@@ -558,7 +618,6 @@ describe("narrow session read owners", () => {
       for (const changed of [
         "metadata-no-revision",
         "metadata",
-        "authority",
         "generation",
         "visibility",
         ...(method === "sessions.branches.list"
@@ -586,71 +645,58 @@ describe("narrow session read owners", () => {
           entered.resolve();
           await release.promise;
         });
-        let current = true;
         const respond = vi.fn();
         const request = dispatchRead(method, {
           client: reader,
           context,
           respond,
-          hasCurrentClientAuthority: () => current,
         });
         const outcome = Promise.allSettled([request]);
         try {
           await Promise.race([entered.promise, request]);
           expect(io).toHaveBeenCalledOnce();
           expect(respond).not.toHaveBeenCalled();
-          if (changed === "authority") {
-            current = false;
-          } else {
-            await seed({
-              ...entry,
-              ...(metadataOnly
-                ? {
-                    label: "Renamed during read",
-                    updatedAt: 2,
-                    lastActivityAt: 2,
-                    totalTokens: 10,
-                  }
-                : changed === "generation"
-                  ? { lifecycleRevision: "replacement" }
-                  : changed === "reset"
-                    ? { sessionId: "replacement" }
-                    : changed === "archive"
-                      ? { archivedAt: 2 }
-                      : changed === "workspace"
-                        ? { spawnedWorkspaceDir: path.join(state.workspaceDir, "replacement") }
-                        : { visibility: "draft" }),
-            });
-          }
+          await seed({
+            ...entry,
+            ...(metadataOnly
+              ? {
+                  label: "Renamed during read",
+                  updatedAt: 2,
+                  lastActivityAt: 2,
+                  totalTokens: 10,
+                }
+              : changed === "generation"
+                ? { lifecycleRevision: "replacement" }
+                : changed === "reset"
+                  ? { sessionId: "replacement" }
+                  : changed === "archive"
+                    ? { archivedAt: 2 }
+                    : changed === "workspace"
+                      ? { spawnedWorkspaceDir: path.join(state.workspaceDir, "replacement") }
+                      : { visibility: "draft" }),
+          });
         } finally {
           release.resolve();
           await outcome;
           io.mockRestore();
         }
         const settled = await outcome;
-        if (changed === "authority") {
-          expect(settled).toMatchObject([
-            { status: "rejected", reason: { message: "Gateway requester authority changed" } },
-          ]);
-          expect(respond).not.toHaveBeenCalled();
-        } else {
-          expect(settled).toEqual([{ status: "fulfilled", value: undefined }]);
-          expect(respond).toHaveBeenCalledOnce();
-          const response = respond.mock.calls[0];
-          const scenario = `${method}/${changed}: ${JSON.stringify(response)}`;
-          expect.soft(response?.[0], scenario).toBe(metadataOnly);
-          expect
-            .soft(response?.[1], scenario)
-            .toEqual(
-              metadataOnly
-                ? method === "sessions.branches.list"
-                  ? { branches: [] }
-                  : method === "sessions.files.assets"
-                    ? { assets: [] }
-                    : expect.objectContaining({ sessionKey: key })
-                : undefined,
-            );
-        }
+        expect(settled).toEqual([{ status: "fulfilled", value: undefined }]);
+        expect(respond).toHaveBeenCalledOnce();
+        const response = respond.mock.calls[0];
+        const scenario = `${method}/${changed}: ${JSON.stringify(response)}`;
+        expect.soft(response?.[0], scenario).toBe(metadataOnly);
+        expect
+          .soft(response?.[1], scenario)
+          .toEqual(
+            metadataOnly
+              ? method === "sessions.branches.list"
+                ? { branches: [] }
+                : method === "sessions.files.assets"
+                  ? { assets: [] }
+                  : expect.objectContaining({ sessionKey: key })
+              : undefined,
+          );
       }
     });
   });

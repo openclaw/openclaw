@@ -30,6 +30,7 @@ type WorkflowJob = {
   permissions?: Record<string, string>;
   env?: Record<string, string>;
   "runs-on": string;
+  "timeout-minutes"?: number;
   "continue-on-error"?: boolean | string;
   steps: WorkflowStep[];
 };
@@ -264,9 +265,11 @@ describe("check-workflows", () => {
       default: false,
       type: "boolean",
     });
-    expect(workflow.on.workflow_dispatch.inputs.runner_label?.default).toBe(
-      "blacksmith-16vcpu-windows-2025",
-    );
+    expect(workflow.on.workflow_dispatch.inputs.runner_label).toMatchObject({
+      default: "windows-2025",
+      options: ["blacksmith-16vcpu-windows-2025", "blacksmith-32vcpu-windows-2025", "windows-2025"],
+    });
+    expect(workflow.on.workflow_dispatch.inputs.keepalive_minutes?.default).toBe("0");
     expect(native).not.toBe(probe);
     expect(native.if).toBe(
       "${{ inputs.run_windows_ci && inputs.installed_startup_package == '' && !inputs.run_private_node_provisioning && !inputs.installed_repair_worker && inputs.windows_ci_replay == '' }}",
@@ -290,6 +293,12 @@ describe("check-workflows", () => {
       probe.steps.find((step) => step.name === "Keep runner alive for SSH inspection")?.if,
     ).toBe(
       "${{ always() && !cancelled() && !inputs.run_private_node_provisioning && inputs.windows_ci_replay == '' }}",
+    );
+    expectContains(
+      findStep(probe, "Keep runner alive for SSH inspection").run,
+      "$minutes = 0",
+      "$minutes = [int]$env:KEEPALIVE_MINUTES",
+      "$minutes = [Math]::Max(0, [Math]::Min($minutes, 60))",
     );
     expect(probe.steps.find((step) => step.name === "Enforce WSL2 requirement")?.if).toBe(
       "${{ always() && !cancelled() && inputs.require_wsl2 }}",
@@ -321,7 +330,6 @@ describe("check-workflows", () => {
     }
     for (const name of [
       "Checkout",
-      "Setup Node.js",
       "Setup pnpm",
       "Runtime versions",
       "Capture node path",
@@ -335,8 +343,8 @@ describe("check-workflows", () => {
       ref: "${{ inputs.target_ref || github.ref }}",
       "persist-credentials": false,
     });
-    expect(native.steps.find((step) => step.name === "Setup Node.js")?.env).toMatchObject({
-      REQUESTED_NODE_VERSION:
+    expect(native.steps.find((step) => step.name === "Setup pnpm")?.with).toMatchObject({
+      "node-version":
         "${{ inputs.windows_ci_replay != '' && env.OPENCLAW_WINDOWS_REPLAY_NODE_VERSION || inputs.installed_startup_package != '' && inputs.startup_node_version || '24.22.1' }}",
     });
     expect(native.steps.find((step) => step.name === "Setup pnpm")?.uses).toBe(
@@ -520,13 +528,42 @@ describe("check-workflows", () => {
 
   it("retains exact-source native proof and cleanup evidence even on failure", () => {
     const { native } = readWindowsProbe();
+    const prepare = findStep(native, "native_prepare_source", "id");
     const proof = findStep(native, "native_schtasks", "id");
     const cleanup = findStep(native, "native_cleanup", "id");
     const upload = findStep(native, "native_proof_upload", "id");
     const remove = findStep(native, "Remove retained native Scheduled Task evidence");
+    expect(native["timeout-minutes"]).toBe(75);
+    expect(prepare["timeout-minutes"]).toBe(5);
     expect(proof["timeout-minutes"]).toBe(5);
-    expect(proof.if).toBe("${{ inputs.run_windows_ci && inputs.installed_startup_package == '' }}");
+    expect(prepare.if).toBe(
+      "${{ inputs.run_windows_ci && inputs.installed_startup_package == '' }}",
+    );
+    expect(prepare.env).toMatchObject({
+      OPENCLAW_VITEST_WORKER_CACHE: "1",
+      CI_WINDOWS_SCHTASKS_INTEGRATION: "1",
+      EXPECTED_HEAD: "${{ inputs.target_ref }}",
+    });
+    expectContains(
+      prepare.run,
+      "set -euo pipefail",
+      '[[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]',
+      'test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"',
+      "node scripts/prepare-vitest-worker-cache.mts",
+    );
+    for (const outcome of ["success", "failure", "cancelled", "skipped"] as const) {
+      expect(
+        evaluateWorkflowExpression(proof.if, {
+          eventName: "workflow_dispatch",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          inputs: { run_windows_ci: true, installed_startup_package: "" },
+          steps: { native_prepare_source: { outputs: {}, outcome } },
+        }),
+      ).toBe(outcome === "success");
+    }
     expect(proof.env).toMatchObject({
+      OPENCLAW_VITEST_WORKER_CACHE: "1",
       EXPECTED_HEAD: "${{ inputs.target_ref }}",
       CI_WINDOWS_SCHTASKS_ROOT:
         "${{ runner.temp }}\\openclaw-schtasks-${{ github.run_id }}-${{ github.run_attempt }}",
@@ -578,7 +615,7 @@ describe("check-workflows", () => {
     expect(remove.if).toBe(
       "${{ always() && inputs.run_windows_ci && inputs.installed_startup_package == '' && steps.native_cleanup.outcome == 'success' && steps.native_proof_upload.outcome == 'success' }}",
     );
-    const sourceStepOrder = [proof, cleanup, upload, remove].map((step) =>
+    const sourceStepOrder = [prepare, proof, cleanup, upload, remove].map((step) =>
       native.steps.indexOf(step),
     );
     expect(sourceStepOrder).toEqual(sourceStepOrder.toSorted((left, right) => left - right));

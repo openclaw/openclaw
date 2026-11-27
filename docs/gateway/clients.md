@@ -125,7 +125,7 @@ handshake does not report an error.
 
 Capability-gated agent tools are a separate use of the same declaration. If an
 agent tool requires a client capability, the Gateway lists it using the operator
-capabilities recorded for that session. Internal wakes and restart recovery retain
+capabilities recorded for that session. Internal wakes, including a post-restart resume input, retain
 that declaration. Current client capabilities still gate calls, and tools that
 act on a browser require their bound, connected recipient at execution.
 
@@ -188,17 +188,18 @@ current in-memory run state:
 Classify the source before applying `activeRunIds`; the same omission has
 different meaning in a full snapshot and an incremental delta.
 
-| Client cache             | Read path                                                  | Class    | Required behavior                                                                                  |
-| ------------------------ | ---------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------- |
-| Web session roster       | `sessions.list`, reconnect hydration                       | Snapshot | Replace the row; omission clears cached exact IDs to unavailable.                                  |
-| Web selected session     | `chat.history.sessionInfo`                                 | Snapshot | Replace the row projection; omission clears cached exact IDs.                                      |
-| Web session events       | `sessions.changed`, `session.message`, lifecycle snapshots | Delta    | Omission is inert; `null` clears; an array replaces.                                               |
-| Android session roster   | `sessions.list`, reconnect hydration                       | Snapshot | Replace the list rows; omission clears cached exact IDs.                                           |
-| Android selected session | `chat.history.sessionInfo`, reconnect recovery             | Snapshot | Replace `activeRunIds` even while other partial history fields merge.                              |
-| Android session events   | `sessions.changed`, `session.message`, lifecycle snapshots | Delta    | Field presence controls replacement; `null` clears and omission is inert.                          |
-| Apple session roster     | `sessions.list`, reconnect hydration                       | Snapshot | Replace live rows; the offline cache strips transient active-run facts.                            |
-| Apple selected session   | `chat.history.sessionInfo`, reconnect recovery             | Snapshot | Replace both the current row and its run-ID projection; omission clears both.                      |
-| Apple session events     | `sessions.changed`, `session.message`, lifecycle snapshots | Delta    | Preserve field presence through decoding; omission is inert, `null` clears, and an array replaces. |
+| Client cache             | Read path                                                       | Class    | Required behavior                                                                                               |
+| ------------------------ | --------------------------------------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------- |
+| Web session roster       | `sessions.list`, reconnect hydration                            | Snapshot | Replace the row; omission clears cached exact IDs to unavailable.                                               |
+| Web selected session     | `chat.history.sessionInfo`                                      | Snapshot | Replace the row projection; omission clears cached exact IDs.                                                   |
+| Web session events       | `sessions.changed`, `session.message`, lifecycle snapshots      | Delta    | Omission is inert; `null` clears; an array replaces.                                                            |
+| Android session roster   | `sessions.list`, reconnect hydration                            | Snapshot | Replace the list rows; omission clears cached exact IDs.                                                        |
+| Android selected session | `chat.history.sessionInfo`, reconnect recovery                  | Snapshot | Replace `activeRunIds` even while other partial history fields merge.                                           |
+| Android session events   | `sessions.changed`, `session.message`, lifecycle snapshots      | Delta    | Field presence controls replacement; `null` clears and omission is inert.                                       |
+| Apple session roster     | `sessions.list`, reconnect hydration                            | Snapshot | Replace live rows; the offline cache strips transient active-run facts.                                         |
+| Apple selected session   | `chat.history.sessionInfo`, reconnect recovery                  | Snapshot | Replace both the current row and its run-ID projection; omission clears both.                                   |
+| Apple nested event rows  | Identified nested `session` rows in `sessions.changed`          | Delta    | Merge present fields for the same session incarnation; omission is inert, `null` clears, and an array replaces. |
+| Apple incremental events | Partial `sessions.changed`, `session.message`, lifecycle fields | Delta    | Preserve field presence through decoding; omission is inert, `null` clears, and an array replaces.              |
 
 The outer event frame also has an optional `seq`, which orders events on the
 current WebSocket connection. It resets with a new connection. The `seq` inside

@@ -77,6 +77,10 @@ Doctor prints this one-time note when migration completes:
 
 > Migrated heartbeats now use standard Automations delivery. Heartbeat-specific duplicate suppression and no-route skipping were removed: repeated updates can be delivered, and a missing route no longer skips the run before execution. Delivery failures follow ordinary automation handling. Review the migrated jobs' delivery settings if you relied on either behavior.
 
+When an alert includes an edge `HEARTBEAT_OK` acknowledgement, delivery removes
+the token without flattening the alert's line breaks or indentation. Paragraphs,
+lists, and fenced code blocks retain their formatting.
+
 Migrated model overrides follow the agent's existing model policy. If a heartbeat
 model is outside that policy, Doctor drops the job's model override and reports
 the affected agent, job, dropped model, and configured default. The job then uses
@@ -126,8 +130,15 @@ Doctor leaves an incomplete `HEARTBEAT.md` in place before importing it.
 
 ## First setup
 
-Explicit setup provisions one enabled **Proactive check** job for the ambient
-owner agent. It runs every 30 minutes unless the provider supplies a different
+Fresh setup creates one **Proactive check** job for the ambient owner agent and
+leaves it disabled. To turn it on, find its ID and enable it:
+
+```bash
+openclaw automations list --all
+openclaw automations enable <job-id>
+```
+
+Once enabled, it runs every 30 minutes unless the provider supplies a different
 initial cadence, uses the agent's main conversation, waits for idle execution,
 and delivers to a resolved owner DM. The job skips an explicitly empty scratch
 checklist; missing scratch still runs. Edit its schedule, prompt, model, or

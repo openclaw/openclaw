@@ -73,6 +73,7 @@ export function reportDoctorUnresolvedEngine(
     ? "Run `openclaw config validate` to inspect the parse error."
     : "Fix database settings or supply the referenced credentials, then rerun `openclaw doctor`.";
   const lint = hasFlag(argv, "--lint");
+  process.exitCode = 2;
   const machineOutput = isDoctorMachineOutput({ argv, stdoutIsTTY: process.stdout.isTTY });
   if (lint || machineOutput) {
     const failure = new Error([message, details, nextStep].filter(Boolean).join("\n"));
@@ -80,9 +81,6 @@ export function reportDoctorUnresolvedEngine(
       writeRuntimeJson(defaultRuntime, formatDoctorLintFailure(failure));
     } else {
       defaultRuntime.error(failure.message);
-    }
-    if (lint) {
-      process.exitCode = 2;
     }
     return;
   }
@@ -101,5 +99,7 @@ export function reportDoctorUnresolvedEngine(
   for (const section of sections) {
     note(message, section);
   }
-  showDoctorOutro("Doctor complete. Database checks remain unknown.");
+  showDoctorOutro(
+    "Doctor blocked. Database checks remain unknown; no state migrations were performed.",
+  );
 }

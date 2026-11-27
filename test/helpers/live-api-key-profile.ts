@@ -1,4 +1,4 @@
-import type { ModelsAuthSetApiKeyResult } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+import type { ModelsAuthSetApiKeyResult } from "../../packages/gateway-protocol/src/schema/models-auth.js";
 import type { OpenClawTestInstance } from "./openclaw-test-instance.js";
 
 /** Persist through the same Gateway owner as `models auth`, without keys in CLI arguments. */

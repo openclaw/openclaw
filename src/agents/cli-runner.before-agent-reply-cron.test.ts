@@ -11,6 +11,7 @@ import {
   onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
+  waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import { captureGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
@@ -127,9 +128,7 @@ async function captureRejectedClaudeRun(
   } catch (caught) {
     error = caught;
   } finally {
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await waitForDiagnosticEventsDrained();
     unsubscribe();
   }
   return { error, events };
@@ -154,6 +153,7 @@ async function makeStubContext(params: Parameters<ProductionRunCliAgent>[0]) {
     authEpochVersion: 0,
     backendResolved: {},
     preparedBackend: { backend: { sessionMode: "none" } },
+    executionTarget: { kind: "process" },
     reusableCliSession: { mode: "none" },
   };
 }
@@ -341,8 +341,8 @@ describe("runCliAgent before_agent_reply seam", () => {
         } else {
           expect((await operation).payloads).toEqual([{ text: "hook result" }]);
           expect(effect).toHaveBeenCalledOnce();
-          expect(heldRequest).toThrow("no longer active");
-          expect(heldClaim).toThrow("no longer active");
+          expect(heldRequest).toThrow("The guarded request ended.");
+          expect(heldClaim).toThrow("The guarded request ended.");
         }
         expect(prepareMock).not.toHaveBeenCalled();
         expect(executeMock).not.toHaveBeenCalled();
@@ -375,9 +375,7 @@ describe("runCliAgent before_agent_reply seam", () => {
         model: "sonnet-4.6",
         runId,
       });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await waitForDiagnosticEventsDrained();
     } finally {
       unsubscribe();
     }

@@ -39,6 +39,49 @@ function pendingApprovalClient() {
     }),
   };
 }
+it("merges provisional and committed live-output interest without changing the wire observer", async () => {
+  const admission = createDeferred<unknown>();
+  const { coordinator, request } = createClient(async (method, params) =>
+    method === "sessions.messages.subscribe" && !params.includeLiveToolOutput
+      ? await admission.promise
+      : { key: params.key },
+  );
+  const plainPending = coordinator.acquire("main");
+  const inlinePending = coordinator.acquire("main", { includeLiveToolOutput: true });
+  admission.resolve({ key: "main" });
+  const [plain, inline] = await Promise.all([plainPending, inlinePending]);
+  expect(plain.includeLiveToolOutput).toBeUndefined();
+  expect(inline.includeLiveToolOutput).toBe(true);
+  expectWireCalls(request, "subscribe", [{}, { includeLiveToolOutput: true }]);
+  const secondInline = await coordinator.acquire("main", { includeLiveToolOutput: true });
+  await coordinator.release(inline);
+  expectWireCalls(request, "subscribe", [{}, { includeLiveToolOutput: true }]);
+  await coordinator.release(secondInline);
+  expectWireCalls(request, "subscribe", [{}, { includeLiveToolOutput: true }, {}]);
+  const ids = request.mock.calls.map(([, params]) => params.subscriptionId);
+  expect(new Set(ids).size).toBe(1);
+  await coordinator.release(plain);
+  expectWire(request, "unsubscribe");
+});
+
+it("settles the final plain release after a failed provisional output/approval admission", async () => {
+  const { approval, coordinator, request } = pendingApprovalClient();
+  const plain = await coordinator.acquire("main");
+  const inline = coordinator.acquire("main", {
+    includeLiveToolOutput: true,
+    includeApprovals: true,
+  });
+  const release = coordinator.release(plain);
+  approval.reject(new Error("approval replay unavailable"));
+  await expect(inline).rejects.toThrow("approval replay unavailable");
+  await release;
+  expectWireCalls(request, "subscribe", [
+    {},
+    { includeApprovals: true, includeLiveToolOutput: true },
+  ]);
+  expectWire(request, "unsubscribe");
+});
+
 it.each([
   { ok: true as const, payload: { messages: [{ role: "assistant", content: "initial" }] } },
   { ok: false as const, error: { code: "UNAVAILABLE", message: "history unavailable" } },
@@ -57,6 +100,27 @@ it.each([
   await coordinator.release(later);
   expectWire(request, "unsubscribe");
 });
+it.each([false, true])(
+  "returns fresh initial history to the viewer upgrading sidebar narration (approvals: %s)",
+  async (includeApprovals) => {
+    const fresh = { ok: true, payload: { messages: ["saved answer"] } };
+    const query = { limit: 20 };
+    const { coordinator, request } = createClient(async (_method, params) => ({
+      key: params.key,
+      ...(params.initialHistory ? { initialHistory: fresh } : {}),
+    }));
+    const sidebar = await coordinator.acquire("main", { mode: "narration" });
+    const viewer = coordinator.acquire("main", { includeApprovals, initialHistory: query });
+    const peer = coordinator.acquire("main", { mode: "narration", includeApprovals });
+    expect((await viewer).initialHistory).toEqual(fresh);
+    expect(await peer).not.toHaveProperty("initialHistory");
+    expect(sidebar).not.toHaveProperty("initialHistory");
+    expectWireCalls(request, "subscribe", [
+      { mode: "narration" },
+      { initialHistory: query, ...(includeApprovals ? { includeApprovals: true } : {}) },
+    ]);
+  },
+);
 it("coalesces configured main aliases before the first canonical acknowledgment", async () => {
   const requestedKey = "agent:ops:main";
   const canonicalKey = "agent:ops:work";
@@ -108,15 +172,19 @@ it("keeps unacknowledged subscriptions isolated by canonical agent", async () =>
   const { coordinator, request } = createClient(async (_method, params) =>
     params.agentId === "main" ? await acknowledgement.promise : { key: params.key },
   );
-  const main = coordinator.acquire("global", { agentId: "main" });
+  const main = coordinator.acquire("global", { agentId: "main", includeLiveToolOutput: true });
   const research = await coordinator.acquire("global", { agentId: "research" });
   expect(research).toEqual({ key: "global", agentId: "research" });
   expectWireCalls(request, "subscribe", [
-    { key: "global", agentId: "main" },
+    { key: "global", agentId: "main", includeLiveToolOutput: true },
     { key: "global", agentId: "research" },
   ]);
   acknowledgement.resolve({ key: "global" });
-  await expect(main).resolves.toEqual({ key: "global", agentId: "main" });
+  await expect(main).resolves.toEqual({
+    key: "global",
+    agentId: "main",
+    includeLiveToolOutput: true,
+  });
 });
 it("subscribes another session before its agent's stalled subscription times out", async () => {
   vi.useFakeTimers();

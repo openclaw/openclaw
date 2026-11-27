@@ -56,6 +56,7 @@ work. The delivery path depends on that shape.
 
     - The parent asks for work with `sessions_spawn({ runtime: "acp", mode: "run" })`.
     - The child runs in its own ACP harness session.
+    - With the acpx backend and a harness that supports session loading or resuming, `sessions_send` to the same child key continues its recorded conversation after completion. Completion releases the worker; reset and deletion prevent reuse.
     - Child turns run on the same background lane used by native sub-agent spawns, so a slow ACP harness does not block unrelated main-session work.
     - Completion reports back through the task-completion announce path. OpenClaw converts internal completion metadata into a plain ACP prompt before sending it to an external harness, so harnesses do not see OpenClaw-only runtime context markers.
     - The parent rewrites the child result in normal assistant voice when a user-facing reply is useful.
@@ -79,15 +80,16 @@ work. The delivery path depends on that shape.
     message an ACP target, for example under broad `tools.sessions.visibility`
     settings.
 
-    OpenClaw skips the A2A follow-up only when the requester is the parent of
-    its own parent-owned one-shot ACP child. In that case, running A2A on top
-    of task completion can wake the parent with the child's result, forward
-    the parent's reply back into the child, and create a parent/child echo
-    loop. Accepted `sessions_send` results report target admission separately
+    While a delegated task or caller owns completion, OpenClaw skips the
+    A2A follow-up to avoid returning the same result twice. Persistent ACP
+    children retain their delegated completion path. After a completed run-mode
+    ACP child receives a new follow-up from its parent, a one-way completion
+    returns the result to the parent without a parent/child echo loop.
+    Accepted `sessions_send` results report target admission separately
     from announcement delivery: `targetDisposition` is `queued` or `steered`,
-    while `delivery.status` is `pending` or `skipped`. For this owned-child case,
-    `delivery.status="skipped"` because the completion path is already responsible
-    for the result.
+    while `delivery.status` is `pending` or `skipped`. A follow-up to a completed
+    run-mode child reports `delivery.status="pending"` until its reply is returned;
+    `skipped` applies when another completion owner is already responsible.
 
   </Accordion>
   <Accordion title="Resume an existing session">

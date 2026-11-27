@@ -11,7 +11,7 @@ import {
   parseTcpListenerEndpoint,
   parseWindowsNetstatListeners,
 } from "./ports-netstat.js";
-import { probePortUsage } from "./ports-probe.js";
+import { probePortUsage, probeTcpListener } from "./ports-probe.js";
 import type {
   PortConnection,
   PortConnectionDirection,
@@ -492,17 +492,87 @@ async function readWindowsNetstatEntries<T extends PortListener>(
   return ports.map((port) => ({ entries: parse(res.stdout, port), errors }));
 }
 
+async function readPortListeners(port: number, signal?: AbortSignal) {
+  return process.platform === "win32"
+    ? (await readWindowsNetstatEntries([port], parseWindowsNetstatListeners, signal))[0]!
+    : await readUnixListeners(port, undefined, signal);
+}
+
+function listenerMatchesHost(listener: PortListener, port: number, probeHost: string) {
+  const endpoint = parseTcpListenerEndpoint(listener.address);
+  if (!endpoint || endpoint.port !== port) {
+    return false;
+  }
+  const host = normalizeLowercaseStringOrEmpty(probeHost);
+  if (isWildcardTcpHost(endpoint.host) || isWildcardTcpHost(host)) {
+    return isSameTcpAddressFamily(endpoint.host, host);
+  }
+  return endpoint.host === host;
+}
+
+/** Match an app-owned launch argument only on the process listening at the requested address. */
+export async function localListenerHasArgument(
+  endpoint: URL,
+  argument: { flag: string; value: string },
+  signal?: AbortSignal,
+): Promise<boolean> {
+  const host = endpoint.hostname.replace(/^\[|\]$/g, "");
+  if (
+    (process.platform !== "darwin" && process.platform !== "win32") ||
+    (host !== "127.0.0.1" && host !== "::1")
+  ) {
+    return false;
+  }
+  const port = Number(endpoint.port || (endpoint.protocol === "https:" ? 443 : 80));
+  // Most Gateways have no desktop server. A TCP connect avoids spawning process inspectors there.
+  const reachable = await probeTcpListener(port, host, signal);
+  signal?.throwIfAborted();
+  if (reachable !== "busy") {
+    return false;
+  }
+  const { entries } = await readPortListeners(port, signal);
+  signal?.throwIfAborted();
+  const { readProcessCommand } = await import("@openclaw/proc-safe/inspect");
+  return entries.some((listener) => {
+    const pid = listener.pid;
+    if (!pid || !listenerMatchesHost(listener, port, host)) {
+      return false;
+    }
+    try {
+      // Native argv retains boundaries that ps display text loses for paths containing spaces.
+      const argv = readProcessCommand(pid)?.argv;
+      return (
+        argv?.some(
+          (value, index) => value === argument.flag && argv[index + 1] === argument.value,
+        ) ?? false
+      );
+    } catch {
+      // An inaccessible or exited listener cannot establish which app owns this endpoint.
+      return false;
+    }
+  });
+}
+
 export async function inspectPortUsage(
   port: number,
-  options?: { probeHosts?: readonly string[]; signal?: AbortSignal; deadlineMs?: number },
+  options?: {
+    probeHosts?: readonly string[];
+    signal?: AbortSignal;
+    deadlineMs?: number;
+    knownRuntimePid?: number;
+  },
 ): Promise<PortUsage> {
   const signal = options?.signal;
   signal?.throwIfAborted();
-  const result =
-    process.platform === "win32"
-      ? (await readWindowsNetstatEntries([port], parseWindowsNetstatListeners, signal))[0]!
-      : await readUnixListeners(port, undefined, signal);
-  await enrichListenerProcessInfo(result.entries, signal);
+  const result = await readPortListeners(port, signal);
+  // Exact runtime ownership is already known; other PIDs still need parent/command attribution.
+  await enrichListenerProcessInfo(
+    result.entries.filter(
+      (listener) =>
+        options?.knownRuntimePid === undefined || listener.pid !== options.knownRuntimePid,
+    ),
+    signal,
+  );
   return buildPortUsage(port, result, options?.probeHosts, signal, options?.deadlineMs);
 }
 
@@ -524,22 +594,9 @@ async function buildPortUsage(
   if (status !== "busy") {
     listeners = [];
   } else if (probeHosts) {
-    listeners = listeners.filter((listener) => {
-      const endpoint = parseTcpListenerEndpoint(listener.address);
-      if (!endpoint || endpoint.port !== port) {
-        return false;
-      }
-      return probeHosts.some((probeHost) => {
-        const normalizedProbeHost = normalizeLowercaseStringOrEmpty(probeHost);
-        if (isWildcardTcpHost(endpoint.host)) {
-          return isSameTcpAddressFamily(endpoint.host, normalizedProbeHost);
-        }
-        if (isWildcardTcpHost(normalizedProbeHost)) {
-          return isSameTcpAddressFamily(normalizedProbeHost, endpoint.host);
-        }
-        return normalizedProbeHost === endpoint.host;
-      });
-    });
+    listeners = listeners.filter((listener) =>
+      probeHosts.some((host) => listenerMatchesHost(listener, port, host)),
+    );
   }
   const hints = buildPortHints(listeners, port);
   if (status === "busy" && listeners.length === 0) {

@@ -6,7 +6,6 @@ import type {
 } from "./goals-operations.types.js";
 import type {
   PendingInputHistoryQuery,
-  PendingInputHistoryReceipt,
   PendingInputHistorySnapshot,
 } from "./session-pending-input-history.types.js";
 import type {
@@ -42,9 +41,6 @@ export type SessionActorMemoryPendingWrites = {
     input: PendingInputMutation;
     output: PendingInputMutationReceipt;
   };
-  "session.pendingInput.interruptHistory": {
-    input: { sessionKey: string; sessionId: string; ids: string[] };
-    output: PendingInputHistoryReceipt;
-  };
+
   "session.goal.mutate": { input: SessionGoalManagementInput; output: SessionGoalManagementCommit };
 };

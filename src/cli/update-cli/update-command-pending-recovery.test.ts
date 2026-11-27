@@ -9,14 +9,13 @@ import * as launchd from "../../daemon/launchd.js";
 import * as scheduledTasks from "../../daemon/schtasks-control.js";
 import * as gatewayService from "../../daemon/service.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
+import * as databaseEngine from "../../infra/database-engine/config.js";
 import { listDirectoryTreeStrictSync } from "../../infra/directory-walk.js";
 import { resolvePackageActivationAnchor } from "../../infra/package-update-activation-journal.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
 import * as failureArtifacts from "../../infra/update-failure-report-artifact.js";
-import * as updateGlobal from "../../infra/update-global.js";
-import * as handoffCleanup from "../../infra/update-managed-service-handoff-cleanup.js";
 import {
   POST_CORE_UPDATE_CHANNEL_ENV,
   POST_CORE_UPDATE_ENV,
@@ -35,8 +34,6 @@ import { resolveProfileStateDir } from "../profile-utils.js";
 import { registerSignalExitGate, waitForCliSignalExit } from "../signal-exit-barrier.js";
 import * as updateShared from "./shared.js";
 import type { UpdateCommandOptions } from "./shared.js";
-import * as updateConfig from "./update-command-config.js";
-import * as updateExecutor from "./update-command-executor.js";
 import { updateFinalizeCommand } from "./update-command-finalize.js";
 import { resultFixture } from "./update-command-fixtures.test-support.js";
 import {
@@ -47,7 +44,8 @@ import {
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
 import * as updateResume from "./update-command-resume.js";
-import { stubNodeRuntime } from "./update-command-runtime-recovery.test-support.js";
+import * as commandRun from "./update-command-run.js";
+import { getNodeRuntimeFixture } from "./update-command-runtime-recovery.test-support.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
 import { withUpdateCommandRecoveryUnwind } from "./update-command-unwind.js";
@@ -106,9 +104,6 @@ function pendingPackageInvocation(
     profile?: string;
   } = {},
 ) {
-  if (params.serviceDrift) {
-    stubNodeRuntime();
-  }
   const home = fs.realpathSync(makeTempDir(dirs, "pending-package-admission-"));
   const identity = createManagedServiceIdentityFixture(home);
   const state = resolveProfileStateDir(params.profile ?? "default", process.env, () => home);
@@ -165,7 +160,7 @@ function pendingPackageInvocation(
       params.serviceDrift
         ? {
             programArguments: [
-              process.execPath,
+              getNodeRuntimeFixture().execPath,
               path.join(serviceRoot, "dist", "entry.js"),
               "gateway",
             ],
@@ -207,7 +202,6 @@ function pendingPackageInvocation(
       prepareTriage: vi.spyOn(triage, "prepareUpdateFailureTriage").mockResolvedValue(runTriage),
       writeTriage: vi.spyOn(failureArtifacts, "writeTriageUpdateFailure"),
       runTriage,
-      cleanupHandoffs: vi.spyOn(handoffCleanup, "cleanupStaleManagedServiceUpdateHandoffs"),
       loadPlugins: vi.spyOn(installedPlugins, "loadInstalledPluginIndexInstallRecords"),
       resumePostCore: vi
         .spyOn(updateResume, "resumePostCoreUpdate")
@@ -222,15 +216,59 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
     { name: "canonical source behind an alias", alias: true },
     { name: "managed service in another prefix", serviceDrift: true, existingRun: true },
     { name: "caller with another profile", profile: "other", existingRun: true },
+    {
+      name: "malformed preview after service discovery",
+      serviceDrift: true,
+      malformedPreview: true,
+    },
+    {
+      name: "malformed preview with existing service recovery",
+      serviceDrift: true,
+      malformedPreview: true,
+      pendingBeforeDiscovery: true,
+    },
+    {
+      name: "readable preview with existing service recovery",
+      serviceDrift: true,
+      readablePreview: true,
+      pendingBeforeDiscovery: true,
+    },
+    {
+      name: "readable preview after service discovery",
+      serviceDrift: true,
+      readablePreview: true,
+    },
   ])("refuses $name before writable preparation or run admission", async (params) => {
     const f = pendingPackageInvocation(params);
+    const dryRun = params.malformedPreview || params.readablePreview;
+    const engineSelection = vi.spyOn(databaseEngine, "resolveDatabaseEngineSelection");
     try {
       f.writers.manager.mockRejectedValue(
         new Error("Package manager selection reached before retained recovery admission"),
       );
-      f.addPending();
-      const before = materialSnapshot(f.home);
-      await expect(updateCommand({ json: true, yes: true })).rejects.toMatchObject({ code: 1 });
+      let before: ReturnType<typeof materialSnapshot> | undefined;
+      const retainPending = () => {
+        f.addPending();
+        before = materialSnapshot(f.home);
+      };
+      if (params.malformedPreview) {
+        fs.mkdirSync(path.join(f.home, "tmp"));
+        vi.stubEnv("TMPDIR", path.join(f.home, "tmp"));
+        fs.writeFileSync(path.join(f.state, "openclaw.json"), "{");
+      }
+      if (dryRun && !params.pendingBeforeDiscovery) {
+        const prepare = commandRun.prepareUpdateCommand;
+        vi.spyOn(commandRun, "prepareUpdateCommand").mockImplementation(async (opts) => {
+          const prepared = await prepare(opts);
+          retainPending();
+          return prepared;
+        });
+      } else {
+        retainPending();
+      }
+      await expect(updateCommand({ json: true, yes: true, dryRun })).rejects.toMatchObject({
+        code: 1,
+      });
       expectPendingReport({
         status: "error",
         reason: "update-recovery-pending",
@@ -240,97 +278,17 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
         expect.stringMatching(/recovery artifacts|publication recovery/i),
       );
       expectNoCalls(...Object.values(f.writers));
+      if (params.malformedPreview) {
+        expect(engineSelection).not.toHaveBeenCalled();
+      } else if (params.readablePreview && !params.pendingBeforeDiscovery) {
+        expect(engineSelection).toHaveBeenCalled();
+      }
+      expect(before).toBeDefined();
       expect(materialSnapshot(f.home)).toEqual(before);
     } finally {
       f.restore();
     }
   });
-
-  it.each([false, true])(
-    "reports pending after lease acquisition (existing history and service drift=%s) without changing retained material",
-    async (existingRun) => {
-      const serviceDrift = existingRun;
-      const f = pendingPackageInvocation({ existingRun, serviceDrift });
-      const withExecutor = updateExecutor.withUpdateCommandExecutor;
-      let anchor: string | undefined;
-      let record: ReturnType<typeof ledger.getUpdateRun> | undefined;
-      const retainedMaterial = () => ({
-        source: materialSnapshot(f.source),
-        service: materialSnapshot(f.serviceRoot),
-        anchor: anchor ? materialSnapshot(anchor) : undefined,
-        config: fs.readFileSync(path.join(f.state, "openclaw.json")),
-        triage: fs.readFileSync(path.join(f.home, "triage.json")),
-        sentinel: fs.readFileSync(path.join(f.home, "sentinel.json")),
-      });
-      let before: ReturnType<typeof retainedMaterial> | undefined;
-      vi.spyOn(updateConfig, "readUpdateChannelConfig").mockResolvedValue({
-        configSnapshot: await config.readConfigFileSnapshot({
-          skipPluginValidation: true,
-          observe: false,
-        }),
-        configReadFailure: undefined,
-        legacyConfigPlan: undefined,
-        storedChannel: null,
-      });
-      const metadata = vi
-        .spyOn(updateGlobal, "createGlobalInstallEnv")
-        .mockRejectedValue(
-          new Error("package metadata must not run after pending lease admission"),
-        );
-      vi.spyOn(updateExecutor, "withUpdateCommandExecutor").mockImplementation(
-        (runId, operation, options) =>
-          withExecutor(
-            runId,
-            async (executor) =>
-              operation({
-                async enter(root, enterOptions) {
-                  expect(root).toBe(f.source);
-                  const fence = await executor.enter(root, enterOptions);
-                  if (!anchor) {
-                    anchor = f.addPending();
-                    record = ledger.getUpdateRun(runId);
-                    before = retainedMaterial();
-                  }
-                  return fence;
-                },
-              }),
-            options,
-          ),
-      );
-      try {
-        await expect(updateCommand({ json: true, yes: true })).rejects.toMatchObject({ code: 1 });
-        expect(anchor).toBeDefined();
-        if (existingRun) {
-          expect(record).toMatchObject({ status: "running" });
-        } else {
-          expect(record).toBeUndefined();
-          expect(f.writers.createRun).not.toHaveBeenCalled();
-          expect(fs.existsSync(path.join(f.state, "state", "openclaw.sqlite"))).toBe(false);
-        }
-        expectPendingReport({
-          status: "error",
-          reason: "update-recovery-pending",
-          root: serviceDrift ? f.serviceRoot : f.source,
-        });
-        const { disableAutoStart, cleanupHandoffs, loadPlugins, writeTriage, runTriage } =
-          f.writers;
-        expectNoCalls(
-          metadata,
-          disableAutoStart,
-          cleanupHandoffs,
-          loadPlugins,
-          writeTriage,
-          runTriage,
-        );
-        expect(retainedMaterial()).toEqual(before);
-        if (record) {
-          expect(ledger.getUpdateRun(record.runId)).toMatchObject({ runId: record.runId });
-        }
-      } finally {
-        f.restore();
-      }
-    },
-  );
 });
 
 async function fixture() {
@@ -407,7 +365,7 @@ describe("pending recovery finalizer", () => {
         { ...process.env, ...f.env, OPENCLAW_CONFIG_PATH: configPath },
         () => invoke({ json: true, yes: true, deferCompletionCache: true }),
       ),
-    ).rejects.toThrow("full-state recovery is deferred");
+    ).rejects.toThrow("Interrupted shared-database publication left");
     expect(resolveRoot).not.toHaveBeenCalled();
     f.expectRetained();
     expect(fs.readFileSync(configPath)).toEqual(originalConfig);

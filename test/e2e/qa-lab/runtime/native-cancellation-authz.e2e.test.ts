@@ -180,8 +180,7 @@ it("allows the owner and rejects foreign or replaced backing runs before termina
         .spyOn(subagentRegistry, "activateSubagentRegistry")
         .mockImplementation((resolver) => {
           activationEntered.resolve();
-          const settled = releaseActivation.promise.then(() => activate(resolver).settled);
-          return { initial: settled, pending: new Map(), settled };
+          return releaseActivation.promise.then(() => activate(resolver));
         });
       onTestFinished(() => {
         releaseActivation.resolve();
@@ -227,7 +226,7 @@ it("allows the owner and rejects foreign or replaced backing runs before termina
         }),
       );
       const acpxService = acpxServices.at(0);
-      if (!acpxService) {
+      if (!acpxService || acpxService.apiVersion === 2 || acpxService.apiVersion === 3) {
         throw new Error("ACPX plugin did not register its runtime service");
       }
       const scheduler = createTestPluginServiceScheduler();

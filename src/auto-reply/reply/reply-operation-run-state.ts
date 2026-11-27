@@ -5,7 +5,6 @@ import type {
   ReplyOperationRunState,
   ReplyPreRunRejectionCode,
 } from "../../sessions/session-controller.contracts.js";
-import { resolveAgentTurnExecutionStatus } from "./agent-runner-execution-status.js";
 import type { SessionEventExecution } from "./session-event-contract.js";
 export type {
   ReplyOperationRunState,
@@ -29,9 +28,13 @@ export function resolveReplyOperationRunState(
 /** Either source owner can prevent its retained background work from adding delivery. */
 export function resolveReplySessionEventDelivery(
   options: object | undefined,
-  run: { internalEventExecution?: Pick<SessionEventExecution, "deliver"> },
+  run: {
+    internalEventExecution?: Pick<SessionEventExecution, "deliver">;
+    sessionEventOrigin?: { deliver?: false };
+  },
 ): false | undefined {
   return run.internalEventExecution?.deliver === false ||
+    run.sessionEventOrigin?.deliver === false ||
     resolveReplyOperationRunState(options)?.sessionEventDelivery === false
     ? false
     : undefined;
@@ -52,9 +55,6 @@ export function recordReplyOperationAgentTurn(
       },
 ): void {
   for (const state of states ?? []) {
-    state.agentTurn = resolveAgentTurnExecutionStatus(
-      outcome ?? (owner?.result?.kind === "aborted" ? owner.result : undefined),
-    );
     if (outcome?.kind === "settled") {
       state.messagingToolSentTargets = outcome.result.messagingToolSentTargets;
       state.backgroundWorkStarted = Boolean(

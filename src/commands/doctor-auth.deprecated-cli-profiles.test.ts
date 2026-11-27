@@ -27,8 +27,12 @@ const providerPolicyMocks = vi.hoisted(() => ({
   applyConfigDefaults: vi.fn((params: { config: OpenClawConfig }) => params.config),
 }));
 
+// mock-isolation: Legacy OAuth repair uses fixture callbacks without discovering installed providers.
 vi.mock("../plugins/providers.runtime.js", () => ({
-  resolvePluginProvidersCore: () => resolvePluginProvidersMock(),
+  withPluginProviders: async <T>(
+    _params: unknown,
+    run: (providers: ProviderPlugin[]) => Promise<T>,
+  ) => run(resolvePluginProvidersMock()),
 }));
 
 vi.mock("../agents/auth-profiles/repair.js", () => ({

@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { projectSessionsPatchEntry } from "./sessions-patch.js";
 import {
   MAIN_SESSION_KEY,

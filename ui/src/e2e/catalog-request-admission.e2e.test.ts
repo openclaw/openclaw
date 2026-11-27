@@ -41,6 +41,14 @@ async function client(path: string) {
   const fixture = createControlUiTeamScaleFixture({ baseUrl: suite.server.baseUrl });
   const gateway = await installMockGateway(page, {
     ...fixture.scenario,
+    operatorScopes: ["operator.read", "operator.admin"],
+    featureMethods: [
+      ...(fixture.scenario.featureMethods ?? []),
+      "models.list",
+      "config.get",
+      "tools.catalog",
+      "tools.effective",
+    ],
     models: [model("Initial fixture model")],
     methodResponses: {
       ...fixture.scenario.methodResponses,
@@ -74,7 +82,7 @@ suite.define(() => {
       const trigger =
         path === "new"
           ? page.locator('.new-session-page__composer [data-chat-model-select="true"]')
-          : page.getByRole("button", { name: /^Primary model/ });
+          : page.locator("openclaw-agents-page").getByRole("button", { name: /^Model:/ });
       await trigger.click();
       await page.getByRole("option", { name: /Initial fixture model/ }).waitFor();
       await page.keyboard.press("Escape");

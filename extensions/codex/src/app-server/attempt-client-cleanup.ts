@@ -175,10 +175,12 @@ export async function terminateCodexBackgroundTerminals(
   threadId: string,
   oneShotCliRun = false,
   waitForNativeItems?: (signal: AbortSignal) => Promise<void>,
+  assertCurrent?: () => void,
 ): Promise<void> {
   const options = {
     timeoutMs: CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
     signal: AbortSignal.timeout(CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS),
+    assertCurrent,
   };
   try {
     // Codex returns the complete inventory when limit is omitted. Its process

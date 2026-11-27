@@ -1,5 +1,5 @@
 import { getRuntimeConfig } from "../config/io.js";
-import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js";
+import { resolveCronJobSessionBindings } from "../cron/job-session-bindings.js";
 import type { CronJob } from "../cron/types.js";
 import type { getChildLogger } from "../logging.js";
 import type { GatewayBroadcastFn } from "./server-broadcast-types.js";
@@ -19,25 +19,25 @@ export function createGatewayCronPublisher(params: {
     // Retargeting can remove a reader from the detailed event's new audience.
     params.broadcast("cron.inventory.changed", undefined, { dropIfSlow: true });
     const cron = params.getCron();
-    const boundKeys = new Set<string>();
+    const bindings = new Map<string, { sessionKey: string; agentId: string }>();
     for (const job of [previous, next]) {
       if (job) {
-        for (const key of resolveCronJobBoundSessionKeys(job, {
+        for (const [key, agentId] of resolveCronJobSessionBindings(job, {
           cfg: getRuntimeConfig(),
           defaultAgentId: cron.getDefaultAgentId(),
         })) {
-          boundKeys.add(key);
+          bindings.set(`${agentId}\0${key}`, { sessionKey: key, agentId });
         }
       }
     }
     // Badges consume refreshed session rows after their projection has settled.
-    for (const sessionKey of boundKeys) {
+    for (const { sessionKey, agentId } of bindings.values()) {
       const context = params.resolveGatewayContext?.();
       const projection = getSessionRowProjection(context);
       const publish = () =>
         params.broadcast(
           "sessions.changed",
-          { sessionKey, reason: "cron-binding", ts: Date.now() },
+          { sessionKey, agentId, reason: "cron-binding", ts: Date.now() },
           { dropIfSlow: true },
         );
       if (projection) {

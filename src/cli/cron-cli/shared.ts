@@ -1,12 +1,13 @@
 import {
-  MAX_DATE_TIMESTAMP_MS,
   parseStrictNonNegativeInteger,
   parseStrictPositiveInteger,
-  resolveExpiresAtMsFromDurationMs,
   timestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalString,
+  readNonBlankString,
+} from "@openclaw/normalization-core/string-coerce";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import { readCronJobNotFoundError } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
 import { truncateToVisibleWidth, visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
@@ -14,30 +15,26 @@ import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-t
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import { normalizeThinkLevel, THINKING_LEVELS_HELP } from "../../auto-reply/thinking.shared.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
+import { buildCronCommandShellArgv } from "../../cron/command-shell.js";
 import { parseAbsoluteTimeMs } from "../../cron/parse.js";
 import type { assertSupportedJobSpec } from "../../cron/service/jobs-validation.js";
 import { resolveCronStaggerMs } from "../../cron/stagger.js";
 import type { CronDeliveryPreview, CronJob, CronSchedule } from "../../cron/types.js";
 import { danger } from "../../globals.js";
+import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { resolveTimezone } from "../../infra/format-time/format-datetime.js";
 import { formatExactDuration } from "../../infra/format-time/format-duration-exact.js";
 import { formatDurationHuman } from "../../infra/format-time/format-duration.ts";
-import { parseOffsetlessIsoDateTimeInTimeZone } from "../../infra/format-time/parse-offsetless-zoned-datetime.js";
 import { formatTimestamp } from "../../logging/timestamps.js";
 import { defaultRuntime, ExitError, type RuntimeEnv } from "../../runtime.js";
-import { isOffsetlessIsoDateTime } from "../../shared/iso-time.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { formatCliCommand } from "../command-format.js";
-import {
-  ExpectedCliError,
-  formatCliOperatorError,
-  rethrowExpectedCliError,
-} from "../failure-output.js";
+import { ExpectedCliError } from "../expected-cli-error.js";
+import { formatCliOperatorError, rethrowExpectedCliError } from "../failure-output.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { callGatewayFromCli } from "../gateway-rpc.js";
 import { isJsonOutputModeActive } from "../json-output-mode.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
-import { parseDurationMs as parseSharedDurationMs } from "../parse-duration.js";
 import { CronCliError, type CronCliJobMatch } from "./cron-cli-error.js";
 
 export async function assertCronCliJobSpec(job: Parameters<typeof assertSupportedJobSpec>[0]) {
@@ -101,34 +98,6 @@ export function parseCronNoOutputTimeoutOption(opts: Record<string, unknown>): n
       ? opts.outputTimeoutSeconds
       : undefined);
   return parseCronIntegerOption(raw, "--no-output-timeout-seconds");
-}
-
-function parseCronArgv(value: unknown, flag: string): string[] | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    throw new CronCliError(`${flag} must be a JSON array of strings`);
-  }
-  if (
-    !Array.isArray(parsed) ||
-    parsed.length === 0 ||
-    parsed.some((entry) => typeof entry !== "string" || entry.length === 0)
-  ) {
-    throw new CronCliError(`${flag} must be a non-empty JSON array of non-empty strings`);
-  }
-  return parsed;
-}
-
-export function parseCronCommandArgv(value: unknown): string[] | undefined {
-  return parseCronArgv(value, "--command-argv");
-}
-
-export function parseCronStreamCommandArgv(value: unknown): string[] | undefined {
-  return parseCronArgv(value, "--stream-command");
 }
 
 export function parseCronCommandEnv(values: unknown): Record<string, string> | undefined {
@@ -304,23 +273,24 @@ export function handleCronCliError(err: unknown) {
   if (err instanceof ExitError) {
     throw err;
   }
+  // Cancelled reads belong to root cleanup; uncancelled mutation failures remain visible.
+  if (getAsyncWorkSignal()?.aborted && isAbortError(err)) {
+    return;
+  }
   rethrowExpectedCliError(err);
   const missingJob = readCronJobNotFoundError(err);
+  if (missingJob) {
+    exitForCronLookupMiss(missingJob.jobId);
+  }
   const diagnostic = err instanceof CronCliError ? (err.originalError ?? err) : err;
   const matches = err instanceof CronCliError ? err.matches : undefined;
   if (isJsonOutputModeActive(process.argv)) {
-    if (
-      !missingJob &&
-      !(err instanceof CronCliError) &&
-      !(err instanceof GatewayClientRequestError)
-    ) {
+    if (!(err instanceof CronCliError) && !(err instanceof GatewayClientRequestError)) {
       throw err;
     }
     // Both machine-mode streams share the canonical debug gate. Unexpected
     // exceptions keep their identity and reach the root crash renderer.
-    const message = missingJob
-      ? formatCronLookupMiss(missingJob.jobId)
-      : formatCliOperatorError(diagnostic);
+    const message = formatCliOperatorError(diagnostic);
     throw new ExpectedCliError({
       message,
       humanOutput: danger(message),
@@ -328,9 +298,7 @@ export function handleCronCliError(err: unknown) {
       matches,
     });
   }
-  const message = missingJob
-    ? formatCronLookupMiss(missingJob.jobId)
-    : formatErrorMessage(diagnostic);
+  const message = formatErrorMessage(diagnostic);
   defaultRuntime.error(danger(matches ? `${message}\n${formatCronJobMatches(matches)}` : message));
   exitCliAfterOutput(defaultRuntime, 1);
 }
@@ -365,8 +333,22 @@ function formatCronJobMatches(matches: readonly CronCliJobMatch[]): string {
   ].join("\n");
 }
 
-export const formatCronLookupMiss = (jobId: string) =>
-  `Automation not found: ${sanitizeTerminalText(jobId)}. Run \`${formatCliCommand("openclaw cron list")}\` to see recent automation ids.`;
+export function exitForCronLookupMiss(jobId: string): never {
+  const id = sanitizeTerminalText(jobId);
+  const listCommand = formatCliCommand("openclaw cron list --all");
+  const humanOutput = danger(
+    formatErrorMessage(
+      `OpenClaw couldn’t find the automation “${id}”. Run \`${listCommand}\` to see IDs for enabled and disabled automations.`,
+    ),
+  );
+  if (isJsonOutputModeActive(process.argv)) {
+    // Preserve the existing stdout message for machine consumers.
+    const message = `Automation not found: ${id}. Run \`${formatCliCommand("openclaw cron list")}\` to see recent automation ids.`;
+    throw new ExpectedCliError({ message, humanOutput, machineOutput: message });
+  }
+  defaultRuntime.error(humanOutput);
+  exitCliAfterOutput(defaultRuntime, 1);
+}
 
 // A blank id usually comes from an empty shell variable; reject it here instead of
 // letting the Gateway answer with a raw params-schema error.
@@ -410,30 +392,27 @@ export async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
   }
 }
 
-export function parsePositiveCronDurationMs(input: string): number | null {
+/** Build `--command` argv for the shell of the Gateway host that will run the job. */
+export async function buildCronCommandShellArgvForGateway(
+  command: string,
+  opts: GatewayRpcOpts,
+): Promise<string[]> {
+  const unknownPlatform =
+    "The Gateway did not report its platform, so --command cannot pick its shell. Pass the exact argv with --command-argv instead.";
+  let info: Record<string, unknown>;
   try {
-    const result = parseSharedDurationMs(input);
-    return result > 0 && result <= MAX_DATE_TIMESTAMP_MS ? result : null;
-  } catch {
-    return null;
+    info = await callGatewayFromCli("system.info", opts, {});
+  } catch (err) {
+    if (err instanceof GatewayClientRequestError && err.message === "unknown method: system.info") {
+      throw new CronCliError(unknownPlatform, { cause: err });
+    }
+    throw err;
   }
-}
-
-export function parseCronStaggerMs(params: {
-  staggerRaw: string;
-  useExact: boolean;
-}): number | undefined {
-  if (params.useExact) {
-    return 0;
+  const platform = readNonBlankString(info.platform);
+  if (!platform) {
+    throw new CronCliError(unknownPlatform);
   }
-  if (!params.staggerRaw) {
-    return undefined;
-  }
-  const parsed = parsePositiveCronDurationMs(params.staggerRaw);
-  if (!parsed) {
-    throw new CronCliError("Invalid --stagger; use e.g. 30s, 1m, 5m");
-  }
-  return parsed;
+  return buildCronCommandShellArgv(command, platform);
 }
 
 export function parseCronStringList(input: unknown): string[] | undefined {
@@ -446,51 +425,6 @@ export function parseCronStringList(input: unknown): string[] | undefined {
       ? input
       : "";
   return raw.split(/[,\s]+/u).filter(Boolean);
-}
-
-const INVALID_CRON_TIMEZONE_MESSAGE =
-  "Invalid --tz. Use an IANA timezone such as America/New_York.";
-
-export function parseCronTimezoneOption(value: unknown): string | undefined {
-  const timezone = normalizeOptionalString(value);
-  if (timezone && !resolveTimezone(timezone)) {
-    throw new CronCliError(INVALID_CRON_TIMEZONE_MESSAGE);
-  }
-  return timezone;
-}
-
-// Offset-less datetimes use the supplied IANA timezone instead of UTC.
-export function parseAt(input: string, tz?: string): string | null {
-  const raw = input.trim();
-  if (!raw) {
-    return null;
-  }
-
-  // If a timezone is provided and the input looks like an offset-less ISO datetime,
-  // resolve it in the given IANA timezone so users get the time they expect.
-  if (tz && isOffsetlessIsoDateTime(raw)) {
-    const parsed = parseOffsetlessIsoDateTimeInTimeZone(raw, tz);
-    if (!parsed.ok) {
-      if (parsed.reason === "invalid-timezone") {
-        throw new CronCliError(INVALID_CRON_TIMEZONE_MESSAGE);
-      }
-      return null;
-    }
-    return parsed.iso;
-  }
-  parseCronTimezoneOption(tz);
-
-  const absolute = parseAbsoluteTimeMs(raw);
-  if (absolute !== null) {
-    return timestampMsToIsoString(absolute) ?? null;
-  }
-  const durationInput = raw.startsWith("+") ? raw.slice(1) : raw;
-  const dur = parsePositiveCronDurationMs(durationInput);
-  if (dur !== null) {
-    const expiresAt = resolveExpiresAtMsFromDurationMs(dur);
-    return timestampMsToIsoString(expiresAt) ?? null;
-  }
-  return null;
 }
 
 const CRON_COLUMNS = [
@@ -529,12 +463,6 @@ const formatCell = (value: unknown, width: number) => {
   return remaining > 0 ? `${truncated}${" ".repeat(remaining)}` : truncated;
 };
 
-const formatIsoMinute = (iso: string) => {
-  const isoStr = timestampMsToIsoString(parseAbsoluteTimeMs(iso));
-  // Date.toISOString() has a fixed :ss.sssZ suffix but variable-width years.
-  return isoStr ? `${isoStr.slice(0, -8).replace("T", " ")}Z` : "-";
-};
-
 const formatSpan = (ms: number) => (ms < 60_000 ? "<1m" : formatDurationHuman(ms));
 
 const formatRelative = (ms: number | null | undefined, nowMs: number) => {
@@ -546,10 +474,17 @@ const formatRelative = (ms: number | null | undefined, nowMs: number) => {
   return delta >= 0 ? `in ${label}` : `${label} ago`;
 };
 
-const formatSchedule = (schedule: CronSchedule | undefined, hasTrigger = false) => {
+const formatSchedule = (
+  schedule: CronSchedule | undefined,
+  hasTrigger = false,
+  mode: "summary" | "detail" = "summary",
+) => {
   const suffix = hasTrigger ? "+trigger" : "";
   if (schedule?.kind === "at") {
-    return `at ${formatIsoMinute(schedule.at)}${suffix}`;
+    const iso = timestampMsToIsoString(parseAbsoluteTimeMs(schedule.at));
+    // Date.toISOString() has a fixed :ss.sssZ suffix but variable-width years.
+    const timestamp = iso && mode === "summary" ? `${iso.slice(0, -8)}Z` : iso;
+    return `at ${timestamp?.replace("T", " ") ?? "-"}${suffix}`;
   }
   if (schedule?.kind === "every") {
     return `every ${formatExactDuration(schedule.everyMs)}${suffix}`;
@@ -691,7 +626,8 @@ export function printCronShow(
   runtime.log(`owner agent: ${showValue(job.owner?.agentId)}`);
   runtime.log(`owner session: ${showValue(job.owner?.sessionKey)}`);
   runtime.log(`enabled: ${job.enabled ? "yes" : "no"}`);
-  runtime.log(`schedule: ${showValue(formatSchedule(job.schedule, job.trigger !== undefined))}`);
+  const schedule = formatSchedule(job.schedule, job.trigger !== undefined, "detail");
+  runtime.log(`schedule: ${showValue(schedule)}`);
   runtime.log(`policies: ${formatCronPolicies(job) || "-"}`);
   if (job.schedule?.kind === "stream") {
     runtime.log(`stream status: ${showValue(state.streamStatus)}`);

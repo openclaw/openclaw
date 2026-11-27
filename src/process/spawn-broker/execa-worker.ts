@@ -7,6 +7,8 @@ import path from "node:path";
 import { Transform, type TransformCallback } from "node:stream";
 import { execa } from "execa";
 import { getProcessInstanceStartTime } from "../../shared/pid-alive.js";
+import { reopenCommandStdinFile } from "../command-stdin-file.js";
+import { spawnInAgentExecCgroup } from "../linux-exec-cgroup.js";
 import { setProcessTimeout } from "../process-deadline.js";
 import {
   serializeExecaError,
@@ -15,10 +17,15 @@ import {
   type BrokerOutputOption,
 } from "./execa-protocol.js";
 import { holdPipeForTransfer } from "./pipe.js";
+import { fitsBrokerSocketPath } from "./socket-directory.js";
 
 /** Execa retains its reader; the Gateway receives a separate native output socket. */
 async function createExecaOutput(): Promise<{ receiver: Socket; transform: Transform }> {
-  const directory = await mkdtemp(path.join(tmpdir(), "oc-spawn-"));
+  let directory = await mkdtemp(path.join(tmpdir(), "oc-spawn-"));
+  if (!fitsBrokerSocketPath(directory, "out")) {
+    await rm(directory, { recursive: true, force: true });
+    directory = await mkdtemp("/tmp/oc-spawn-");
+  }
   const server = createServer({ pauseOnConnect: true });
   let writer: Socket | undefined;
   let receiver: Socket | undefined;
@@ -86,6 +93,7 @@ export async function startBrokerExeca(
   argv: string[],
   options: BrokerExecaOptions,
   assertCurrent: () => void,
+  execCgroup?: string,
 ): Promise<BrokerExecaProcess> {
   const controller = new AbortController();
   const outputs = new Map<number, { receiver: Socket; transform: Transform }>();
@@ -98,10 +106,12 @@ export async function startBrokerExeca(
         outputs.set(fd, await createExecaOutput());
       }
     }
-    assertCurrent();
-    const { encoding, executionDeadlineMs, ...processOptions } = options;
+    const { encoding, executionDeadlineMs, stdinFile, ...processOptions } = options;
+    const input = stdinFile ? await reopenCommandStdinFile(stdinFile) : undefined;
     const spawnOptions = {
       ...processOptions,
+      // SAFETY: Execa forwards the verified descriptor to Node despite its fd-0 type.
+      ...(input ? { stdin: input.fd as 0 } : {}),
       ...(outputs.has(1)
         ? { stdout: { transform: outputs.get(1)!.transform, objectMode: false as const } }
         : {}),
@@ -117,9 +127,13 @@ export async function startBrokerExeca(
         : execa(argv[0]!, argv.slice(1), { ...spawnOptions, encoding });
     let subprocess: ReturnType<typeof start>;
     try {
-      subprocess = start();
+      assertCurrent();
+      subprocess = spawnInAgentExecCgroup(execCgroup, start);
     } catch (error) {
       throw await adoptAbandonedSpawnError(error);
+    } finally {
+      // The child has its own fd. Do not yield before capturing its identity and streams.
+      void input?.close().catch(() => {});
     }
     const child = subprocess.nodeChildProcess;
     // Capture before returning across an await: libuv may reap a short-lived leader.

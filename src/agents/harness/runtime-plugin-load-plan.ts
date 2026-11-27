@@ -5,6 +5,7 @@ import { withActivatedPluginIds } from "../../plugins/activation-context.js";
 import { resolveManifestActivationPluginIds } from "../../plugins/activation-planner.js";
 import { normalizePluginsConfigWithResolverCore } from "../../plugins/config-normalization-shared.js";
 import {
+  createPluginActivationSource,
   isTestDefaultMemorySlotDisabled,
   resolveEffectivePluginActivationState,
   resolveSelectedContextEnginePluginId,
@@ -118,7 +119,10 @@ function resolveAgentRuntimeMetadataPluginIds(params: {
   }
   const pluginIds = new Set<string>();
   for (const plugin of params.index.plugins) {
-    if (plugin.startup.agentHarnesses.length) {
+    if (
+      plugin.startup.agentHarnesses.length ||
+      plugin.contributions?.contracts.agentToolResultMiddleware?.length
+    ) {
       pluginIds.add(plugin.pluginId);
     }
   }
@@ -384,9 +388,10 @@ export function resolveAgentRuntimePluginSelectionOwners(params: {
   return { pluginIds, forceActivatedPluginIds };
 }
 
-/** Folds selected harness, memory, and context-engine owners into one deterministic load plan. */
+/** Folds selected harness and shared agent capabilities into one deterministic load plan. */
 export function resolveAgentRuntimePluginLoadPlan(params: {
   config?: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
   workspaceDir: string;
   basePluginIds?: readonly string[];
   selections: readonly AgentHarnessPluginSelection[];
@@ -410,11 +415,38 @@ export function resolveAgentRuntimePluginLoadPlan(params: {
         })),
       )
     : undefined;
+  const middlewarePluginIds: string[] = [];
+  if (includeAgentOwners) {
+    const activationSource = createPluginActivationSource({
+      config: params.activationSourceConfig ?? config,
+    });
+    for (const manifest of params.metadataSnapshot.manifestRegistry.plugins) {
+      if (!manifest.contracts?.agentToolResultMiddleware?.length) {
+        continue;
+      }
+      const activation = resolveEffectivePluginActivationState({
+        id: manifest.id,
+        origin: manifest.origin,
+        channelIds: manifest.channels,
+        rootConfig: config,
+        enabledByDefault: isPluginEnabledByDefaultForPlatform(manifest),
+        activationSource,
+      });
+      if (activation.enabled && (manifest.origin === "bundled" || activation.explicitlyEnabled)) {
+        middlewarePluginIds.push(manifest.id);
+      }
+    }
+  }
   const contextEnginePluginIds = contextEnginePluginId ? [contextEnginePluginId] : [];
   const basePluginIds = (params.basePluginIds ?? []).filter(
     (pluginId) => !restrictiveAllowlistOmitsPlugin(params.config, pluginId),
   );
-  const pluginIds = [...basePluginIds, ...memoryPluginIds, ...contextEnginePluginIds];
+  const pluginIds = [
+    ...basePluginIds,
+    ...middlewarePluginIds,
+    ...memoryPluginIds,
+    ...contextEnginePluginIds,
+  ];
   const forceActivatedPluginIds = [...memoryPluginIds, ...contextEnginePluginIds];
   if (params.purpose !== "model-catalog") {
     const selection = resolveAgentRuntimePluginSelectionOwners(params);
@@ -426,7 +458,7 @@ export function resolveAgentRuntimePluginLoadPlan(params: {
   );
   config = withRuntimePluginIdsAllowed(
     config,
-    [...basePluginIds, ...forceActivatedPluginIds],
+    [...basePluginIds, ...middlewarePluginIds, ...forceActivatedPluginIds],
     params.basePluginIds !== undefined,
   );
   const activatedConfig =

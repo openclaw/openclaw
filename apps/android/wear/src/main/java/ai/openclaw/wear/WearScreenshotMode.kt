@@ -59,10 +59,9 @@ internal object WearScreenshotFixture {
         ),
       models =
         listOf(
-          WearModelSummary(
+          WearModel(
             ref = "openai/gpt-5.2",
             name = "GPT-5.2",
-            selected = true,
           ),
         ),
       modelControlsSupported = true,

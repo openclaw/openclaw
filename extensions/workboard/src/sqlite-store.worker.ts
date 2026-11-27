@@ -32,6 +32,7 @@ export function createSqliteWorkerBackend(
     "cards.lookup": kernel.cards.lookup.bind(kernel.cards),
     "cards.delete": kernel.cards.delete.bind(kernel.cards),
     "cards.entries": kernel.cards.entries.bind(kernel.cards),
+    "cards.findCardIdsByPrefix": kernel.cards.findCardIdsByPrefix.bind(kernel.cards),
     "cards.listCardStatuses": kernel.cards.listCardStatuses.bind(kernel.cards),
     "cards.listBoardAggregates": kernel.cards.listBoardAggregates.bind(kernel.cards),
     "cards.listStatsAggregates": kernel.cards.listStatsAggregates.bind(kernel.cards),
@@ -67,6 +68,7 @@ export function createSqliteWorkerBackend(
         const readOnly = [
           "cards.lookup",
           "cards.entries",
+          "cards.findCardIdsByPrefix",
           "cards.listCardStatuses",
           "cards.listBoardAggregates",
           "cards.listStatsAggregates",
@@ -100,6 +102,7 @@ export function createSqliteWorkerBackend(
         return { ok: false, failure: encodeWorkboardSqliteFailure(error) };
       }
     },
+    assertSettled: kernel.assertSettled,
     close: kernel.close,
   };
 }

@@ -33,6 +33,8 @@ export function createChatFixture(
       response: ServerResponse,
     ) => Promise<string | undefined>;
     reset?: () => void;
+    caps?: string[];
+    onEvent?: Parameters<typeof startGatewayWithClient>[0]["onEvent"];
   } = {},
 ) {
   const requests: string[] = [];
@@ -70,6 +72,8 @@ export function createChatFixture(
     const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
     gateway = await startGatewayWithClient({
       ...startup,
+      onEvent: options.onEvent,
+      caps: options.caps,
       portClaim,
       clientName: GATEWAY_CLIENT_NAMES.CONTROL_UI,
       mode: GATEWAY_CLIENT_MODES.WEBCHAT,
@@ -125,6 +129,12 @@ export function createChatFixture(
       }
       await disconnectGatewayClient(gateway.client);
       await gateway.server.close({ reason: "prompt-prefix restart proof" });
+      // Match the run loop's in-process restart, which starts a new lifecycle generation.
+      const [lifecycleRuntime, { prepareGatewayRestartIteration }] = await Promise.all([
+        import("../cli/gateway-cli/lifecycle.runtime.js"),
+        import("../cli/gateway-cli/run-loop-startup.js"),
+      ]);
+      await prepareGatewayRestartIteration(lifecycleRuntime, { warn: console.warn }, () => true);
       await launch();
     },
     async close() {

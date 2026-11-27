@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeForLog, stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
@@ -51,7 +52,7 @@ export function formatCommandResult(command: string, result: SpawnResult): strin
 
 export function createCommandError(
   command: string,
-  result: SpawnResult | Awaited<ReturnType<typeof runCommandBuffered>>,
+  result: (SpawnResult | Awaited<ReturnType<typeof runCommandBuffered>>) & { error?: Error },
   options: { timeoutMs: number },
 ): Error {
   const stderr = formatCommandOutput(result.stderr, 2_000);
@@ -64,6 +65,13 @@ export function createCommandError(
     const tail = (output: string, limit: number) =>
       output.length <= limit ? output : `…\n${sliceUtf16Safe(output, 2 - limit)}`;
     detail = `stderr: ${tail(stderr, first)}\nstdout: ${tail(stdout, budget - first)}`;
+  }
+  if (result.error) {
+    const cause = formatCommandOutput(
+      formatErrorMessage(result.error, { includeCode: true }),
+      2_000,
+    );
+    detail = [detail, cause].filter(Boolean).join("\n");
   }
   const signal = result.signal ? `signal ${result.signal}` : "";
   const limited =
@@ -81,6 +89,7 @@ export function createCommandError(
   const label = truncateUtf16Safe(stripAnsi(command).replace(/[\r\n]+/g, " "), 256);
   const error = new Error(
     `${label} failed${reason ? ` (${reason})` : ""}${detail ? `:\n${detail}` : ""}`,
+    result.error ? { cause: result.error } : undefined,
   );
   error.name = COMMAND_ERROR_NAME;
   return error;

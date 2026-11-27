@@ -2,15 +2,16 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { inventory, loadInventorySources } from "../database-worker-inventory.mjs";
+import { type inventory, loadInventorySources } from "../database-worker-inventory.mjs";
 import {
-  acquireBuildArtifactLock,
+  acquireBuildArtifactLockAsync,
   finalizeBuildStepCache,
   hashInputFiles,
   resolveBuildStepCacheState,
   restoreBuildStepCacheOutputs,
   type BuildCacheStep,
 } from "./build-artifact-cache.mts";
+import { inventoryInSubprocess } from "./database-worker-inventory-process.mts";
 import { nativeTypeScriptToolchainFiles } from "./native-typescript-toolchain.mts";
 import {
   reportNativeTypeScriptPhase,
@@ -23,6 +24,7 @@ const analyzerFiles = [
   "scripts/check-database-worker-ratchet.mts",
   "scripts/database-worker-inventory.mjs",
   "scripts/lib/database-worker-inventory-cache.mts",
+  "scripts/lib/database-worker-inventory-process.mts",
   "scripts/lib/database-worker-compat.mts",
   "scripts/lib/personal-credential-writer-guard.mts",
   "scripts/lib/native-typescript.mts",
@@ -44,12 +46,12 @@ function analyzerSignature() {
 const loadedAnalyzerSignature = analyzerSignature();
 
 /** The fresh head validates credential writers even when both source snapshots match. */
-export function baseInventory(
+export async function baseInventory(
   root: string,
   ref: string,
   current?: { sources: ReadonlyMap<string, string>; rows: ReturnType<typeof inventory> },
   observer?: NativeTypeScriptObserver,
-): ReturnType<typeof inventory> {
+): Promise<ReturnType<typeof inventory>> {
   const trace: NativeTypeScriptObserver | undefined =
     observer && ((phase, facts) => reportNativeTypeScriptPhase(observer, `base.${phase}`, facts));
   const git = (revision: string) =>
@@ -60,7 +62,7 @@ export function baseInventory(
   const commit = git(`${ref}^{commit}`);
   if (analyzerSignature() !== loadedAnalyzerSignature) {
     reportNativeTypeScriptPhase(trace, "reuse", { outcome: "changed-analyzer" });
-    return inventory(root, commit, false, undefined, { observer: trace });
+    return inventoryInSubprocess(root, commit, false, undefined, trace);
   }
   // The semantic project denies disk fallback and embeds its config in the analyzer.
   // A whole-tree key conservatively includes every source path, byte and membership change.
@@ -83,7 +85,7 @@ export function baseInventory(
   };
   const params = { rootDir: root, inputSignature: () => signature };
   // Serialize this checkout's output file across lookup, generation and publication.
-  const lock = acquireBuildArtifactLock(path.join(root, output));
+  const lock = await acquireBuildArtifactLockAsync(path.join(root, output));
   try {
     const state = resolveBuildStepCacheState(step, params);
     reportNativeTypeScriptPhase(trace, "lookup");
@@ -105,7 +107,7 @@ export function baseInventory(
     reportNativeTypeScriptPhase(trace, "equality");
     const rows = identical
       ? current.rows
-      : inventory(root, commit, false, sources, { observer: trace });
+      : await inventoryInSubprocess(root, commit, false, sources, trace);
     reportNativeTypeScriptPhase(trace, "reuse", { outcome: identical ? "identical" : "analyzed" });
     if (identical) {
       console.log("SQLite worker snapshots identical: reusing fresh current-tree analysis.");
@@ -118,7 +120,7 @@ export function baseInventory(
     reportNativeTypeScriptPhase(trace, "publish");
     return rows;
   } finally {
-    lock.release();
+    await lock.release();
     reportNativeTypeScriptPhase(trace, "release");
   }
 }

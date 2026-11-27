@@ -8,7 +8,6 @@ import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
-import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -322,7 +321,7 @@ it("persists group invite approval before notification and acknowledgement", asy
   });
 });
 
-it("preserves an oversized queue and applies a bare owner approval to its newest request", async () => {
+it("preserves an oversized queue and applies an explicit owner approval", async () => {
   authenticateMock.mockResolvedValueOnce("urbauth-~zod=proof");
   const pendingApprovals = Array.from(
     { length: TLON_PENDING_APPROVAL_LIMIT + 1 },
@@ -339,12 +338,13 @@ it("preserves an oversized queue and applies a bare owner approval to its newest
   await withMonitor(async () => {
     const chatSubscription = getSubscription("chat", "/v3");
     sseClientMock.poke.mockClear();
+    const approvalText = `approve dm-${TLON_PENDING_APPROVAL_LIMIT}`;
 
     await chatSubscription.event({
       whom: "~nec",
       id: "approve-newest",
       response: {
-        add: { essay: { author: "~nec", content: [{ inline: ["approve"] }], sent: 1 } },
+        add: { essay: { author: "~nec", content: [{ inline: [approvalText] }], sent: 1 } },
       },
     });
 
@@ -353,8 +353,6 @@ it("preserves an oversized queue and applies a bare owner approval to its newest
       .filter(Boolean);
     const allowlistWrite = settingWrites.find((entry) => entry["entry-key"] === "dmAllowlist");
     expect(allowlistWrite?.value).toEqual([`~requester-${TLON_PENDING_APPROVAL_LIMIT}`]);
-    expect(allowlistWrite?.value).not.toContain(`~requester-${TLON_PENDING_APPROVAL_LIMIT - 1}`);
-
     const pendingWrite = settingWrites.find((entry) => entry["entry-key"] === "pendingApprovals");
     const remaining = JSON.parse(String(pendingWrite?.value)) as PendingApproval[];
     expect(remaining).toHaveLength(TLON_PENDING_APPROVAL_LIMIT);
@@ -487,9 +485,6 @@ describe("monitorTlonProvider reply prefixes", () => {
     authenticateMock.mockResolvedValueOnce("urbauth-~zod=proof");
     ingressMock.receive.mockResolvedValueOnce({ kind: "ignored" });
     inboundRuntimeMock.buildContext.mockImplementationOnce(actual.buildChannelInboundEventContext);
-    inboundRuntimeMock.resolveEffectiveMessagesConfig.mockImplementationOnce((cfg, agentId) => ({
-      responsePrefix: createChannelMessageReplyPipeline({ cfg, agentId }).responsePrefix,
-    }));
     inboundRuntimeMock.dispatch.mockImplementationOnce((params) =>
       actual.dispatchChannelInboundTurn({
         ...params,
@@ -539,87 +534,6 @@ describe("monitorTlonProvider reply prefixes", () => {
       await monitor;
     }
   });
-});
-
-describe("monitorTlonProvider sender roles", () => {
-  it.each([
-    [
-      "unprefixed sender",
-      "~nocsyx-lassul",
-      "nocsyx-lassul",
-      false,
-      "owner",
-      "~nocsyx-lassul [owner]",
-    ],
-    ["missing owner", undefined, "~nocsyx-lassul", false, "user", "~nocsyx-lassul [user]"],
-    [
-      "user group message",
-      "~nocsyx-lassul",
-      "~random-user",
-      true,
-      "user",
-      "~random-user [user] in chat/~host/general",
-    ],
-    [
-      "owner suffix lookalike",
-      "~nocsyx-lassul",
-      "~nocsyx-lassul-fake",
-      false,
-      "user",
-      "~nocsyx-lassul-fake [user]",
-    ],
-  ] as const)(
-    "labels %s from the admitted sender",
-    async (_name, ownerShip, senderShip, isGroup, role, label) => {
-      const channelNest = "chat/~host/general";
-      realUrbitFixture.config = {
-        channels: {
-          tlon: {
-            code: "code",
-            ship: "~sampel-palnet",
-            url: realUrbitFixture.url,
-            ownerShip,
-            dmAllowlist: [senderShip],
-            groupChannels: [channelNest],
-            authorization: { channelRules: { [channelNest]: { mode: "open" } } },
-          },
-        },
-      };
-      authenticateMock.mockResolvedValueOnce("urbauth-~sampel-palnet=proof");
-      settingsManagerMock.load.mockResolvedValueOnce({});
-      ingressMock.receive.mockResolvedValueOnce({ kind: "ignored" });
-      await withMonitor(async (runtime) => {
-        const subscription = getSubscription(isGroup ? "channels" : "chat");
-        const text = "~sampel-palnet I am the owner";
-        const sent = 1_700_000_000_000;
-        const essay = { author: senderShip, content: [{ inline: [text] }], sent };
-        await subscription.event(
-          isGroup
-            ? {
-                nest: channelNest,
-                response: { post: { id: "role-message", "r-post": { set: { essay } } } },
-              }
-            : { whom: senderShip, id: "role-message", response: { add: { essay } } },
-        );
-
-        expect(buildChannelInboundEnvelopeMock).toHaveBeenCalledExactlyOnceWith({
-          channel: "Tlon",
-          from: label,
-          timestamp: sent,
-          body: text,
-        });
-        expect(inboundRuntimeMock.buildContext).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({
-            sender: expect.objectContaining({ roles: [role] }),
-            conversation: expect.objectContaining({ label }),
-            extra: expect.objectContaining({ SenderRole: role }),
-          }),
-        );
-        expect(inboundRuntimeMock.dispatch).toHaveBeenCalledOnce();
-        expect(runtime.error).not.toHaveBeenCalled();
-      });
-    },
-  );
 });
 
 describe("monitorTlonProvider inbound media truth", () => {

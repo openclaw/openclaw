@@ -82,7 +82,20 @@ describe("cron runtime row publication", () => {
     await ensureLoaded(state, { forceReload: true });
 
     const current = state.store!.jobs[0]!;
-    applyCronRuntimeRowsToState(state, [{ ...current, state: { lastRunAtMs: now } }]);
+    const publishedJobs = state.store!.jobs;
+    const publishedRevisions = state.jobConfigRevisions;
+    applyCronRuntimeRowsToState(state, []);
+    expect(state.store!.jobs).toBe(publishedJobs);
+    expect(state.jobConfigRevisions).toBe(publishedRevisions);
+    const untouched = state.store!.jobs[1]!;
+    const untouchedId = untouched.id;
+    const readUntouchedId = vi.fn(() => untouchedId);
+    Object.defineProperty(untouched, "id", { get: readUntouchedId, configurable: true });
+    applyCronRuntimeRowsToState(state, [{ ...current, state: { lastRunAtMs: now } }], [], {
+      publish: false,
+    });
+    expect(readUntouchedId).toHaveBeenCalledTimes(1);
+    Object.defineProperty(untouched, "id", { value: untouchedId, configurable: true });
     expect(onDefinitionChange).toHaveBeenCalledTimes(2);
     applyCronRuntimeRowsToState(state, [{ ...current, enabled: false }]);
     await ensureLoaded(state, { forceReload: true });
@@ -425,7 +438,9 @@ describe("cron runtime row publication", () => {
       nowMs: now,
       nextRunAtMs: now + 60_000,
     });
+    const onDefinitionChange = vi.fn();
     const state = createCronRegressionState({
+      onDefinitionChange,
       storePath: "/tmp/runtime-store-import.json",
       nowMs: () => now,
       runIsolatedAgentJob: vi.fn(),
@@ -436,5 +451,10 @@ describe("cron runtime row publication", () => {
 
     expect(state.store.jobs.map((job) => job.id)).toEqual([resident.id, imported.id]);
     expect(state.durableNextRunAtMsByJobId.get(imported.id)).toBe(now + 60_000);
+    expect(onDefinitionChange).toHaveBeenCalledExactlyOnceWith(undefined, imported);
+    applyCronRuntimeRowsToState(state, [], [imported.id]);
+    expect(state.store.jobs).toEqual([resident]);
+    expect(onDefinitionChange).toHaveBeenCalledTimes(2);
+    expect(onDefinitionChange).toHaveBeenLastCalledWith(imported, undefined);
   });
 });

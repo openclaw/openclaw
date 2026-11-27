@@ -27,9 +27,11 @@ import {
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { defaultRuntime } from "../../runtime.js";
+import { monotonicDeadlineAfter, monotonicNow } from "../../shared/monotonic-time.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../../utils/absolute-deadline.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { measureCliCommandStartup } from "../command-startup-timing.js";
+import { throwExpectedCliError } from "../expected-cli-error.js";
 import { formatHelpExamples } from "../help-format.js";
 import { resolveMessageSecretScope } from "../message-secret-scope.js";
 import { requestExitAfterOneShotOutput } from "../one-shot-exit.js";
@@ -67,7 +69,7 @@ function validateMessageNumericOptions(opts: Record<string, unknown>): void {
   ] as const) {
     for (const [key, flag] of options) {
       if (opts[key] !== undefined && parse(opts[key]) === undefined) {
-        throw new Error(`${flag} must be a ${kind} integer.`);
+        throwExpectedCliError(`${flag} must be a ${kind} integer.`);
       }
     }
   }
@@ -81,7 +83,8 @@ async function runPluginStopHooks(registry: PluginRegistry): Promise<void> {
       withPluginRuntimeRegistryScope(registry, () =>
         runner.runGatewayStop({ reason: "cli message action complete" }, {}),
       ),
-    Date.now() + GATEWAY_STOP_TIMEOUT_MS,
+    monotonicDeadlineAfter(GATEWAY_STOP_TIMEOUT_MS),
+    monotonicNow,
   );
   if (result === ABSOLUTE_DEADLINE_EXPIRED) {
     defaultRuntime.error(
@@ -175,7 +178,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/message", "docs.openclaw.ai/cli/m
           async () => {
             validateMessageNumericOptions(opts);
             if (action === "poll" && opts.pollAnonymous === true && opts.pollPublic === true) {
-              throw new Error("--poll-anonymous and --poll-public are mutually exclusive.");
+              throwExpectedCliError("--poll-anonymous and --poll-public are mutually exclusive.");
             }
             const { channel: scopedChannel } = resolveMessageSecretScope({
               channel: opts.channel,

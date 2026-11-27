@@ -10,6 +10,7 @@ import {
   captureSessionUpstreamLinkReadSource,
   prepareSessionUpstreamLink,
 } from "../../sessions/session-upstream-links-runtime.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { withGatewaySessionEntryReadOnly } from "../session-utils-read-lifetime.js";
 import { retainSessionScopedRead } from "./session-scoped-read.js";
@@ -71,6 +72,7 @@ export async function listSessionBranchesForGateway(
               sessionKey: current.canonicalKey,
               sessionStoreKey: current.canonicalKey,
               storePath: current.storePath,
+              signal: getAsyncWorkSignal(),
             });
         assertCurrent();
         read?.assertCurrent();
@@ -82,7 +84,7 @@ export async function listSessionBranchesForGateway(
               result.status === "failed" ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
               {
                 "missing-session": "session not found",
-                "unsupported-storage": "session transcript storage does not support branch listing",
+                "unsupported-storage": "chat history storage does not support branch listing",
                 failed: "failed to list session branches",
               }[result.status],
             ),

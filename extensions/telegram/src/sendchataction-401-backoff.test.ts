@@ -78,29 +78,25 @@ describe("createTelegramSendChatActionHandler", () => {
     await first;
   });
 
-  it("keeps root-chat actions independent from another topic", async () => {
+  it("refreshes only the delivered scope's action", async () => {
     const pending = createDeferred<true>();
     const fn = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue(true);
-    const { send } = setup(fn);
+    const { handler, send } = setup(fn);
 
     const first = send(-100);
-    await send(-100, 2);
+    await Promise.all([send(-100, 2), send(-200)]);
 
-    expect(fn).toHaveBeenCalledTimes(2);
-    expect(fn).toHaveBeenNthCalledWith(1, -100, "typing", undefined);
     expect(fn).toHaveBeenNthCalledWith(2, -100, "typing", { message_thread_id: 2 });
+    handler.noteMessageDelivered(-100);
     pending.resolve(true);
     await first;
 
     now = 4999;
-    await send(-100);
-    await send(-100, 2);
-    expect(fn).toHaveBeenCalledTimes(2);
-
-    now = 5000;
-    await send(-100);
-    await send(-100, 2);
+    await Promise.all([send(-100), send(-100, 2), send(-200)]);
     expect(fn).toHaveBeenCalledTimes(4);
+    handler.noteMessageDelivered(-100, 2);
+    await send(-100, 2);
+    expect(fn).toHaveBeenCalledTimes(5);
   });
 
   it.each([

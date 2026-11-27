@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ensureContextEnginesInitialized } from "../context-engine/init.js";
 import { disposeContextEngineSources } from "../context-engine/registry.resources.js";
 import { resetContextEngineRuntimeQuarantineForTests } from "../context-engine/registry.test-support.js";
+import { writeFixtureJson } from "./loader-fixture-builders.test-support.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -56,15 +57,12 @@ module.exports = { id: ${JSON.stringify(params.id)}, register(api) {
   }
 } };`,
   });
-  fs.writeFileSync(
-    path.join(plugin.dir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: params.id,
-      kind: params.kind,
-      contextEngineIds: params.declaredEngineIds,
-      configSchema: EMPTY_PLUGIN_SCHEMA,
-    }),
-  );
+  writeFixtureJson(plugin.dir, "openclaw.plugin.json", {
+    id: params.id,
+    kind: params.kind,
+    contextEngineIds: params.declaredEngineIds,
+    configSchema: EMPTY_PLUGIN_SCHEMA,
+  });
   return plugin;
 }
 

@@ -8,8 +8,6 @@ import {
   type SessionPendingInputReceipt,
 } from "../../config/sessions/session-accessor.pending-inputs.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import * as admission from "../../infra/sqlite-worker-operation-admission.js";
-import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
@@ -42,15 +40,28 @@ async function fixture() {
     },
   });
   const receipts: SessionPendingInputReceipt[] = [];
-  const stage = async (runId: string, disposition?: "interrupted" | "cancelled") => {
+  const stage = async (
+    runId: string,
+    disposition?: "interrupted" | "cancelled",
+    authorId?: string,
+    content?: string,
+  ) => {
     const receipt = expectDefined(
       await stageSessionPendingInput(scope, {
         runId,
         message: {
           role: "user",
-          content: `Synthetic retained prompt ${runId}`,
+          content: content ?? `Synthetic retained prompt ${runId}`,
           timestamp: 1,
           idempotencyKey: `${runId}:user`,
+          ...(authorId
+            ? {
+                __openclaw: {
+                  requesterOrigin: { sessionKey: scope.sessionKey, operatorProfileId: authorId },
+                  participationRevoked: true,
+                },
+              }
+            : {}),
         },
         requestFingerprint: "e".repeat(64),
         assertCurrent: () => {},
@@ -59,7 +70,7 @@ async function fixture() {
     );
     receipts.push(receipt);
     if (disposition) {
-      receipt.finish(disposition);
+      receipt.finish(disposition, authorId ? "revoked" : "failed");
       await receipt.settled?.();
     }
     return receipt.inputId;
@@ -70,6 +81,7 @@ async function fixture() {
   const cancelled = await stage("cancelled", "cancelled");
   return {
     client,
+    stage,
     context,
     receipts,
     queued,
@@ -98,14 +110,14 @@ async function withDismissTest(run: (f: Awaited<ReturnType<typeof fixture>>) => 
     try {
       await run(f);
     } finally {
-      f.receipts.forEach((receipt) => receipt.finish("cancelled"));
+      f.receipts.forEach((receipt) => receipt.finish("cancelled", "failed"));
       await Promise.all(f.receipts.map(async (receipt) => receipt.settled?.()));
       await disposeSessionReadContexts();
     }
   });
 }
 
-it("tombstones retired inputs, returns their run ids, and keeps every row", () =>
+it("hides cancelled inputs and leaves legacy interrupted input inert", () =>
   withDismissTest(async (f) => {
     const [visible, originalHistory] = await chatRpc(f.context, f.client, "chat.history", {
       sessionKey: scope.sessionKey,
@@ -116,21 +128,17 @@ it("tombstones retired inputs, returns their run ids, and keeps every row", () =
         pendingInputs: { items: { id: string; state: string; message: Record<string, unknown> }[] };
       }
     ).pendingInputs.items;
-    for (const [id, state] of [
-      [f.interrupted, "interrupted"],
-      [f.cancelled, "cancelled"],
-    ] as const) {
-      const item = items.find((candidate) => candidate.id === id);
-      expect(item?.state).toBe(state);
-      expect(item?.message.display).toBeUndefined();
-      expect(JSON.stringify(item?.message.content)).toContain("Synthetic retained prompt");
-    }
+    expect(items.find((candidate) => candidate.id === f.interrupted)).toBeUndefined();
+    const item = items.find((candidate) => candidate.id === f.cancelled);
+    expect(item?.state).toBe("cancelled");
+    expect(item?.message.display).toBeUndefined();
+    expect(JSON.stringify(item?.message.content)).toContain("Synthetic retained prompt");
     const changed = vi.spyOn(sessionChangeEvent, "emitSessionsChanged");
-    expect(await f.dismiss([f.interrupted, f.cancelled, "gone-input"])).toEqual([
+    expect(await f.dismiss([f.cancelled, "gone-input"])).toEqual([
       true,
       {
-        dismissedIds: [f.interrupted, f.cancelled],
-        runIds: ["interrupted", "cancelled"],
+        dismissedIds: [f.cancelled],
+        runIds: ["cancelled"],
         missingIds: ["gone-input"],
       },
     ]);
@@ -141,27 +149,27 @@ it("tombstones retired inputs, returns their run ids, and keeps every row", () =
     });
     expect(await f.retained()).toEqual({
       [f.queued]: "queued",
-      [f.interrupted]: "cancelled:hidden",
       [f.cancelled]: "cancelled:hidden",
     });
     const [ok, history] = await chatRpc(f.context, f.client, "chat.history", {
       sessionKey: scope.sessionKey,
-      inputRunIds: ["interrupted"],
+      inputRunIds: ["cancelled"],
     });
     expect(ok).toBe(true);
     const page = history as {
       pendingInputs: { items: { id: string; message: Record<string, unknown> }[] };
       inputReceipts: unknown[];
     };
-    expect(page.inputReceipts).toEqual([
-      { runId: "interrupted", state: "pending", cancelled: true },
-    ]);
-    expect(page.pendingInputs.items.find((item) => item.id === f.interrupted)?.message).toEqual(
+    expect(page.inputReceipts).toEqual([{ runId: "cancelled", state: "pending", cancelled: true }]);
+    expect(
+      page.pendingInputs.items.find((pending) => pending.id === f.interrupted),
+    ).toBeUndefined();
+    expect(page.pendingInputs.items.find((pending) => pending.id === f.cancelled)?.message).toEqual(
       expect.objectContaining({ display: false, content: [] }),
     );
   }));
 
-it("refuses queued inputs with a structured error and emits no change", () =>
+it("refuses queued and legacy interrupted inputs with no change", () =>
   withDismissTest(async (f) => {
     const changed = vi.spyOn(sessionChangeEvent, "emitSessionsChanged");
     const before = await f.retained();
@@ -171,6 +179,14 @@ it("refuses queued inputs with a structured error and emits no change", () =>
       {
         code: "INVALID_REQUEST",
         details: { code: "PENDING_INPUT_NOT_RETIRED", inputIds: [f.queued] },
+      },
+    ]);
+    expect(await f.dismiss([f.interrupted])).toMatchObject([
+      false,
+      undefined,
+      {
+        code: "INVALID_REQUEST",
+        details: { code: "PENDING_INPUT_NOT_RETIRED", inputIds: [f.interrupted] },
       },
     ]);
     expect((await f.dismiss([f.cancelled], { sessionId: "replaced-session" }))[2]).toMatchObject({
@@ -198,21 +214,64 @@ it("requires session write authority at the registered RPC", () =>
     expect((await f.dismiss([f.cancelled]))[0]).toBe(true);
   }));
 
-it("refuses at the worker commit when session write access is revoked after admission", () =>
+it("retains revoked input for its author alone after session access is removed", () =>
   withDismissTest(async (f) => {
-    const changed = vi.spyOn(sessionChangeEvent, "emitSessionsChanged");
-    const before = await f.retained();
-    const admitted = probe.admission(admission, (request, grant, callback) => {
-      if (request.stage === "commit") {
-        f.client.connect.scopes = ["operator.read"];
-      }
-      return callback(request, grant);
+    const author = roleClient("none", "revoked-author");
+    const other = roleClient("none", "other-author");
+    const authorId = expectDefined(author.authenticatedUserProfile, "author").profileId;
+    const originalText = "Synthetic retained prompt private-queued-text".repeat(400);
+    const id = await f.stage("private-queued-text", "cancelled", authorId, originalText);
+    const own = (caller = author, inputIds?: string[]) =>
+      chatRpc(f.context, caller, "chat.pendingInputs.own", {
+        sessionKey: scope.sessionKey,
+        agentId: scope.agentId,
+        ...(inputIds ? { inputIds } : {}),
+      });
+    expect(
+      (await chatRpc(f.context, author, "chat.history", { sessionKey: scope.sessionKey }))[0],
+    ).toBe(false);
+    const response = await own();
+    const [ok, result] = response;
+    expect(ok, JSON.stringify(response)).toBe(true);
+    expect(result).toMatchObject({
+      sessionId: scope.sessionId,
+      pendingInputs: { total: 1, items: [{ id, state: "cancelled", endCause: "revoked" }] },
     });
-    try {
-      expect(await f.dismiss([f.interrupted, f.cancelled])).toMatchObject(forbidden);
-    } finally {
-      admitted.mockRestore();
-    }
+    expect(JSON.stringify(result)).toContain("Synthetic retained prompt private-queued-text");
+    expect(
+      await chatRpc(f.context, author, "chat.pendingInputs.own", {
+        sessionKey: scope.sessionKey,
+        inputId: id,
+      }),
+    ).toEqual([true, { text: originalText }]);
+    expect(
+      await chatRpc(f.context, other, "chat.pendingInputs.own", {
+        sessionKey: scope.sessionKey,
+        inputId: id,
+      }),
+    ).toEqual([true, { text: null }]);
+    expect(result).not.toHaveProperty("messages");
+    expect(result).not.toHaveProperty("sessionInfo");
+    expect(await own(other, [id])).toEqual([
+      true,
+      { pendingInputs: { items: [], total: 0, queuedCount: 0 } },
+    ]);
+    const [, shared] = await chatRpc(f.context, f.client, "chat.history", {
+      sessionKey: scope.sessionKey,
+    });
+    expect(JSON.stringify(shared)).not.toContain("private-queued-text");
+    expect(
+      await chatRpc(f.context, f.client, "chat.message.get", {
+        sessionKey: scope.sessionKey,
+        messageId: `pending:${id}`,
+      }),
+    ).toEqual([true, { ok: false, unavailableReason: "not_found" }]);
+    const changed = vi.spyOn(sessionChangeEvent, "emitSessionsChanged");
+    expect(await own(author, [id])).toEqual([
+      true,
+      { pendingInputs: { items: [], total: 0, queuedCount: 0 } },
+    ]);
     expect(changed).not.toHaveBeenCalled();
-    expect(await f.retained()).toEqual(before);
+    expect((await f.retained())[id]).toBe("cancelled:hidden");
+    expect(await own()).toEqual([true, { pendingInputs: { items: [], total: 0, queuedCount: 0 } }]);
   }));

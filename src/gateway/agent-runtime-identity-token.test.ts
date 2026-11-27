@@ -359,6 +359,7 @@ it.each(["run-1", "run-other"])(
       requesterProfileId: "profile-vito",
       requesterSenderIsOwner: false,
       completionOwnerSessionKey: "agent:main:discord:direct:alice",
+      createdIndependently: true,
       resolvedModel: { provider: "custom", model: "custom/model" },
       spawnModelAutoSelection: { model: "custom/custom/model", hasFallbackOrigin: true },
     };
@@ -505,6 +506,42 @@ it("carries a signed live native requester grant without claiming complete tool 
     await expect(createIdentity(params)).rejects.toThrow(
       "require tool-surface or authenticated-requester provenance",
     );
+  } finally {
+    grants.revokeCronCreatorAuthorityRunScope(scope);
+  }
+});
+
+it("round-trips scoped cron requester grants without promoting them to local authority", async () => {
+  const grants = await import("./cron-creator-authority-grant.js");
+  const run = operationalRun("run-scoped-requester");
+  const scope = grants.createCronCreatorAuthorityRunScope(
+    run.operationalRunInstance.runId,
+    { kind: "unknown" },
+    undefined,
+    undefined,
+    undefined,
+    true,
+  );
+  try {
+    const grant = grants.mintCronCreatorAuthorityGrant(
+      scope,
+      undefined,
+      undefined,
+      undefined,
+      "requester",
+    );
+    const params = runtimeParams({ cronCreatorAuthorityGrant: grant }, run);
+    const token = await api.mint(params);
+    const identity = await api.verify(token);
+    expect(identity).toMatchObject({ cronCreatorAuthorityGrant: grant });
+    expect(identity).not.toHaveProperty("cronToolsAllowCapture");
+    expect(grants.resolveCronCreatorAuthorityGrantProvenance(grant, scope.runId)).toEqual({
+      capturesRuntimeAuthority: false,
+      callerScopedCreation: true,
+    });
+    grants.revokeCronCreatorAuthorityRunScope(scope);
+    await expect(api.verify(token)).resolves.toBeUndefined();
+    await expect(api.mint(params)).rejects.toThrow("authenticated-requester provenance");
   } finally {
     grants.revokeCronCreatorAuthorityRunScope(scope);
   }

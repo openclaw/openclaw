@@ -18,7 +18,9 @@ import {
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
+import type { LegacyOpenClawIdMemberRoleImport } from "../openclaw-id/member-source-role-import.js";
 import { stagePlacementTurnClaimWorkerPublication } from "./placement-turn-authority.js";
 import {
   isPreparedReservationWithinCapacity,
@@ -72,13 +74,36 @@ registerOpenClawStateDatabaseLifecycleListener((event) => {
   }
 });
 
-export async function createWorkerEnvironmentStore(
+export function createWorkerEnvironmentStore(
   options: { database?: OpenClawStateDatabase; now?: () => number } = {},
 ) {
+  return createWorkerEnvironmentStoreOwner(options);
+}
+
+/** Import only affected sources, publishing through the same live inventory owner. */
+export async function migrateWorkerEnvironmentMemberSources(
+  context: OpenClawStateWorkerContext,
+  input: LegacyOpenClawIdMemberRoleImport,
+  assertCurrent: () => void,
+): Promise<void> {
+  const store = await createWorkerEnvironmentStoreOwner({ context, assertCurrent });
+  try {
+    await store.importLegacyMemberSources(input, assertCurrent);
+  } finally {
+    await store.close();
+  }
+}
+
+async function createWorkerEnvironmentStoreOwner(options: {
+  database?: OpenClawStateDatabase;
+  now?: () => number;
+  context?: OpenClawStateWorkerContext;
+  assertCurrent?: () => void;
+}) {
   const inCreationScope = AsyncLocalStorage.snapshot();
-  let context = captureOpenClawStateWorkerContext(
-    options.database ? { path: options.database.path } : {},
-  );
+  let context =
+    options.context ??
+    captureOpenClawStateWorkerContext(options.database ? { path: options.database.path } : {});
   const pathname = context.admission.databasePath;
   const now = options.now ?? Date.now;
   let owner = workerEnvironmentProjections.acquire(() => context.admission.identity);
@@ -95,6 +120,7 @@ export async function createWorkerEnvironmentStore(
       throw new WorkerEnvironmentInventoryClosedError();
     }
     context.admission.assertCurrent();
+    options.assertCurrent?.();
   };
   const read = <T>(operation: () => T): T => {
     assertActive();
@@ -103,7 +129,7 @@ export async function createWorkerEnvironmentStore(
   async function snapshot(ids?: readonly string[]) {
     const reply = await executeExistingOpenClawStateRead(
       { path: pathname },
-      { type: "workerEnvironments.snapshot", ids },
+      { type: "workerEnvironments.snapshot", input: { ids } },
     );
     assertActive();
     if (!reply) {
@@ -303,14 +329,16 @@ export async function createWorkerEnvironmentStore(
     },
   });
   try {
-    await mutate("workerEnvironments.initialize", {});
-    // First creation publishes its physical identity through the captured admission.
-    workerEnvironmentProjections.get(context.admission.identity);
-    // Hydration joins the inventory writer queue.
-    await owner.enqueue(async () => {
-      const facts = await snapshot();
-      owner.install(facts, owner.nextSequence(), false);
-    });
+    if (!options.context) {
+      await mutate("workerEnvironments.initialize", {});
+      // First creation publishes its physical identity through the captured admission.
+      workerEnvironmentProjections.get(context.admission.identity);
+      // Hydration joins the inventory writer queue.
+      await owner.enqueue(async () => {
+        const facts = await snapshot();
+        owner.install(facts, owner.nextSequence(), false);
+      });
+    }
   } catch (error) {
     await close();
     throw error;
@@ -441,8 +469,27 @@ export async function createWorkerEnvironmentStore(
         revocationSubscriptions.delete(unsubscribe);
       };
     },
+    importLegacyMemberSources: (
+      input: LegacyOpenClawIdMemberRoleImport,
+      assertCurrent: () => void,
+    ) => mutate("workerEnvironments.importLegacyMemberSources", { input }, assertCurrent),
     createIntent: (input: Input<"createIntent">, assertCurrent?: () => void) =>
       mutate("workerEnvironments.createIntent", { input }, assertCurrent),
+    recordResourceReceipt({ assertCurrent, ...input }: Input<"recordResourceReceipt">) {
+      return mutate("workerEnvironments.recordResourceReceipt", { input }, assertCurrent);
+    },
+    beginRetentionOperation({ assertCurrent, ...input }: Input<"beginRetentionOperation">) {
+      return mutate("workerEnvironments.beginRetentionOperation", { input }, assertCurrent);
+    },
+    recordRetentionObservation({ assertCurrent, ...input }: Input<"recordRetentionObservation">) {
+      return mutate("workerEnvironments.recordRetentionObservation", { input }, assertCurrent);
+    },
+    setRetentionRuntimeAdmission({
+      assertCurrent,
+      ...input
+    }: Input<"setRetentionRuntimeAdmission">) {
+      return mutate("workerEnvironments.setRetentionRuntimeAdmission", { input }, assertCurrent);
+    },
     ensureNodeEnrollment: (input: string) =>
       mutate("workerEnvironments.ensureNodeEnrollment", { input }),
     async revokeEnvironmentCredential(
@@ -497,6 +544,9 @@ export async function createWorkerEnvironmentStore(
     },
     ensurePreparedIntent({ assertCurrent, ...input }: Input<"ensurePreparedIntent">) {
       return mutate("workerEnvironments.ensurePreparedIntent", { input }, assertCurrent);
+    },
+    refreshPreparedProject({ assertCurrent, ...input }: Input<"refreshPreparedProject">) {
+      return mutate("workerEnvironments.refreshPreparedProject", { input }, assertCurrent);
     },
     requestPreparedDestroy({ assertCurrent, ...input }: Input<"requestPreparedDestroy">) {
       return mutate("workerEnvironments.requestPreparedDestroy", { input }, assertCurrent);

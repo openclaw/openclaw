@@ -10,15 +10,13 @@ import { collectProviderApiKeys } from "../src/agents/live-auth-keys.js";
 import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "../src/agents/live-test-helpers.js";
 import { resolveApiKeyForProviderCore } from "../src/agents/model-auth.js";
 import { loadConfig, type OpenClawConfig } from "../src/config/config.js";
-import {
-  DEFAULT_LIVE_IMAGE_MODELS,
-  resolveConfiguredLiveImageModels,
-} from "../src/image-generation/live-test-helpers.js";
+import { DEFAULT_LIVE_IMAGE_MODELS } from "../src/image-generation/live-test-helpers.js";
 import { isTruthyEnvValue } from "../src/infra/env.js";
 import { getShellEnvAppliedKeys } from "../src/infra/shell-env.js";
 import {
   parseLiveCsvFilter,
   parseProviderModelMap,
+  resolveConfiguredLiveProviderModels,
   resolveLiveAuthStore,
 } from "../src/media-generation/live-test-helpers.js";
 import { encodePngRgba, fillPixel } from "../src/media/png-encode.js";
@@ -236,7 +234,9 @@ describeLive("image generation live (provider sweep)", () => {
     "generates images for every configured image-generation variant with available auth",
     async () => {
       const cfg = withPluginsEnabled(loadConfig());
-      const configuredModels = resolveConfiguredLiveImageModels(cfg);
+      const configuredModels = resolveConfiguredLiveProviderModels(
+        cfg.agents?.defaults?.mediaModels?.image,
+      );
       const agentDir = resolveDefaultAgentDir(cfg);
       const attempted: string[] = [];
       const skipped: string[] = [];

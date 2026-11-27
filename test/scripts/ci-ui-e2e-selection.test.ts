@@ -81,7 +81,7 @@ it.each([
     changedPaths: edited ? [staleBuild] : ["ui/src/app/stale-chunk-reload.ts"],
     selectedTestTargets: [staleBuild, cron],
     targetFiles: [staleBuild, cron],
-    uiTestGroupsSource: `export { createUiTestShardGroups } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-node-test-plan.mts")).href)};`,
+    uiTestGroupsSource: `export { createUiTestShardGroups } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-ui-test-plan.mts")).href)};`,
     uiE2eSelectorSource: `
         export const resolveUiE2ePrTestSelection = () => ({
           mode: 'owners', files: ${JSON.stringify([staleBuild, cron])},
@@ -129,11 +129,25 @@ it.each([
   expect(files).toEqual(expected);
   const rows = JSON.parse(result.outputs.ui_e2e_matrix!) as { include: { task: string }[] };
   expect(rows.include.filter((row) => row.task === "control-ui")).toHaveLength(
-    full ? 6 : Math.min(6, Math.ceil(count / 30)),
+    full ? 9 : Math.min(9, Math.ceil(count / 30)),
   );
   expect(result.summary).toContain(`Mode: ${full ? "full" : "owners"}`);
   if (expected.length > 0) {
     expect(result.summary).toContain("fixture owner");
   }
   expect(result.summary).toContain(`Selected files: ${expected.length}`);
+});
+
+it("keeps native-plugin build changes scoped to their browser consumers", () => {
+  const selected = resolveUiE2ePrTestSelection(["src/cli/plugins-control-ui-build.ts"]);
+  expect(selected.mode).toBe("owners");
+  expect(selected.files).toEqual(
+    expect.arrayContaining([
+      "ui/src/e2e/plugin-inline-view.e2e.test.ts",
+      "ui/src/e2e/x-plugin.e2e.test.ts",
+      "ui/src/e2e/workboard-lazy-page.e2e.test.ts",
+      "ui/src/pages/workboard/workboard-routing.e2e.test.ts",
+    ]),
+  );
+  expect(selected.files).not.toContain("ui/src/e2e/about.e2e.test.ts");
 });

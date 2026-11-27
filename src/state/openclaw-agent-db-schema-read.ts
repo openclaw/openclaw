@@ -6,12 +6,17 @@ import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import {
   createNewerSqliteSchemaVersionError,
   readSqliteUserVersion,
+  readSqliteWriterAppVersion,
 } from "../infra/sqlite-user-version.js";
+import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import {
   AGENT_MEDIA_SCHEMA_VERSION,
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "./openclaw-agent-db-contract.js";
-import type { ExistingAgentSchemaMeta } from "./openclaw-agent-db-metadata.js";
+import {
+  readExistingAgentSchemaMeta,
+  type ExistingAgentSchemaMeta,
+} from "./openclaw-agent-db-metadata.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
 
 export { readExistingAgentSchemaMeta } from "./openclaw-agent-db-metadata.js";
@@ -32,13 +37,31 @@ export function assertSupportedAgentSchemaVersion(
   pathname: string,
   userVersion = readAgentDatabaseSchemaVersion(db),
 ): number {
-  if (userVersion > OPENCLAW_AGENT_SCHEMA_VERSION) {
-    throw createNewerSqliteSchemaVersionError(
+  // Writers stamp header and metadata atomically, with min_reader <= writer version.
+  // A supported header needs no floor read; canonical admission still validates metadata.
+  if (userVersion <= OPENCLAW_AGENT_SCHEMA_VERSION) {
+    return userVersion;
+  }
+  let minReader = userVersion;
+  try {
+    const metadata = readExistingAgentSchemaMeta(db);
+    minReader =
+      (isPostgresSqlConnection(db) ? getPostgresPhysicalFacts(db)?.minReader : undefined) ??
+      metadata?.minReader ??
+      Math.max(metadata?.schemaVersion ?? 0, userVersion);
+  } catch {
+    // A newer unreadable catalog cannot prove a lower reader floor.
+  }
+  if (minReader > OPENCLAW_AGENT_SCHEMA_VERSION) {
+    const error = createNewerSqliteSchemaVersionError(
       "OpenClaw agent database",
       pathname,
       userVersion,
       OPENCLAW_AGENT_SCHEMA_VERSION,
+      readSqliteWriterAppVersion(db),
     );
+    error.message += ` Minimum reader schema version is ${minReader}; this build supports ${OPENCLAW_AGENT_SCHEMA_VERSION}.`;
+    throw error;
   }
   return userVersion;
 }
@@ -74,12 +97,20 @@ export function assertCanonicalAgentPersistenceVersion(
       "This agent store lives in PostgreSQL; set database.engine to postgres and configure database.postgres.connection.",
     );
   }
+  assertSupportedAgentSchemaVersion(db, pathname, userVersion);
+  const metadata = readExistingAgentSchemaMeta(db);
+  if (metadata && metadata.schemaVersion !== userVersion) {
+    throw new SqliteSchemaMismatchError(
+      `OpenClaw agent database ${pathname} metadata schema version ${metadata.schemaVersion ?? "invalid"} does not match user version ${userVersion}. Run openclaw doctor --fix before using it.`,
+    );
+  }
   const isNewUnownedDatabase = userVersion === 0 && !hasAgentDatabaseApplicationSchema(db);
   if (userVersion < AGENT_MEDIA_SCHEMA_VERSION && !isNewUnownedDatabase) {
     throw new OpenClawAgentDatabaseMediaMigrationRequiredError(pathname, userVersion);
   }
   if (userVersion < OPENCLAW_AGENT_SCHEMA_VERSION && !isNewUnownedDatabase) {
-    throw new SqliteSchemaMismatchError(
+    throw new StartupMaintenanceRequiredError(
+      "state-migrations",
       `OpenClaw agent database ${pathname} uses schema version ${userVersion}; stop active agents and run openclaw doctor --fix to upgrade it to schema version ${OPENCLAW_AGENT_SCHEMA_VERSION} before using it.`,
     );
   }
@@ -123,7 +154,11 @@ export function assertCurrentAgentSchemaMetadata(
     );
   }
   assertExistingAgentSchemaOwner(metadata, agentId, pathname);
-  if (metadata.schemaVersion !== expectedVersion) {
+  if (
+    metadata.schemaVersion === null ||
+    metadata.schemaVersion < expectedVersion ||
+    (metadata.minReader ?? metadata.schemaVersion) > expectedVersion
+  ) {
     throw new SqliteSchemaMismatchError(
       `OpenClaw agent database ${pathname} metadata schema version ${metadata.schemaVersion ?? "invalid"} does not match ${expectedVersion}; run openclaw doctor --fix before using it.`,
     );

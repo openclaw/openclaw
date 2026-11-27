@@ -9,7 +9,7 @@ export interface FrvChildStatus extends Record<string, unknown> {
   key: string;
   plannedRunAttempt: number | null;
   runId: string;
-  status: "active" | "failed" | "missing" | "passed";
+  status: "active" | "failed" | "missing" | "passed" | "waived";
 }
 
 export interface FrvContinuationStatus {
@@ -69,14 +69,7 @@ export type FrvConcreteClient = FrvClient & {
 } & Required<
     Pick<
       FrvClient,
-      | "cancelRun"
-      | "rerunFailed"
-      | "rerunJob"
-      | "rerunParent"
-      | "rerunRun"
-      | "listRuns"
-      | "verify"
-      | "verifySeal"
+      "cancelRun" | "rerunJob" | "rerunParent" | "rerunRun" | "listRuns" | "verify" | "verifySeal"
     >
   >;
 
@@ -120,7 +113,7 @@ export function watchRelease(
 ): Promise<{ complete: boolean; statePath: string }>;
 export function inspectContinuation(
   plan: Record<string, unknown>,
-  client: Pick<FrvClient, "getAttemptJobs" | "getRun" | "repository">,
+  client: Pick<FrvClient, "getAttemptJobs" | "getRun" | "repository" | "getReleaseEvidenceClient">,
   options?: FrvReadOptions,
 ): Promise<FrvContinuationStatus>;
 export function createClient(
@@ -166,7 +159,19 @@ export function continueFailed(
   options?: Record<string, unknown>,
 ): Promise<{
   action: string;
+  continueCommand?: string;
   finalRunId?: string;
+  nextCommand?: string;
+  receipt?: {
+    acceptedRunAttempt: number;
+    child: string;
+    jobId: number;
+    jobName: string;
+    parentRunId: string;
+    runAttempt: number;
+    runId: string;
+    sourceRunAttempt: number;
+  };
   reruns?: Record<string, unknown>[];
   status: FrvContinuationStatus;
 }>;

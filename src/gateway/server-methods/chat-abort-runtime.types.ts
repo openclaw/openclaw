@@ -1,4 +1,5 @@
 import type { ErrorShape } from "../../../packages/gateway-protocol/src/index.js";
+import type { abortControlledSubagents } from "../../agents/subagents/cancel-descendants.js";
 import type { SessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import type { RpcSourceRef } from "../../sessions/session-controller.rpc-sources.js";
 import type {
@@ -7,7 +8,6 @@ import type {
 } from "../../sessions/session-controller.stop.js";
 import type { ChatAbortOps } from "../chat-abort.js";
 import type { ChatAbortRequester } from "./chat-abort-authorization.js";
-import type { abortControlledSubagents } from "./chat-abort-descendants.js";
 import type { ChatAbortOrigin, ChatAbortSessionSnapshot } from "./chat-aborted-partial.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -25,15 +25,18 @@ export type ChatSessionAbortParams = {
   defaultAgentId?: string;
   abortOrigin: ChatAbortOrigin;
   stopReason?: string;
+  userInitiated?: boolean;
   stopSource: SessionStopSource;
   hookContext?: SessionStopHookContext;
   controllerTargets?: readonly SessionTarget[];
   requester: ChatAbortRequester;
   assertCurrent?: () => void;
-  /** Prepare persisted request facts immediately before the synchronous cancellation effects. */
-  beforeAbort?: () => Promise<void>;
+  /** Explicit user Stop: announce the stopped runs through `notifySessionRunStopped`. */
+  announceRunStopped?: true;
   preserveSideRuns?: boolean;
   cascadeDescendants?: true;
+  /** Current session lifecycle owner; reporting only, never descendant selection. */
+  yieldedRequesterRunId?: string;
   /** Exact lifecycle owners may include hidden and side runs for this one session. */
   includeProtectedRuns?: boolean;
   /** Captures exact registrations before cancellation can remove them. */
@@ -49,4 +52,15 @@ export type ChatSessionAbortResult = {
   error?: ErrorShape;
   warning?: string;
   descendants?: Awaited<ReturnType<typeof abortControlledSubagents>>;
+};
+
+export type ChatAbortLifecycle = {
+  /** Internal composition may advance only after this exact run was cancelled. */
+  onExactRunAborted?: (runId: string) => void;
+  onDescendantsCancelled?: (
+    result: NonNullable<Awaited<ReturnType<typeof abortControlledSubagents>>>,
+  ) => void;
+  cascadeDescendants?: true;
+  yieldedRequesterRunId?: string;
+  hookContext?: SessionStopHookContext;
 };

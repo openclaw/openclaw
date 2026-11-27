@@ -21,7 +21,7 @@ import { ensureAuthProfileStoreAsync } from "./auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
   buildSourceModelFields,
-  isWritableProviderConfig,
+  findUnwritableProviderReason,
   mergeProviders,
   mergeWithExistingProviderSecrets,
   type ExistingProviderConfig,
@@ -222,11 +222,15 @@ type ModelsJsonPlan =
   | {
       action: "skip" | "noop";
       pluginCatalogWrites?: Record<string, string>;
+      /** Registry rejection reasons for providers omitted from this plan. */
+      skippedProviders?: string[];
     }
   | {
       action: "write";
       contents: string;
       pluginCatalogWrites?: Record<string, string>;
+      /** Registry rejection reasons for providers omitted from this plan. */
+      skippedProviders?: string[];
     };
 
 /** Resolves providers for models.json. */
@@ -315,15 +319,6 @@ function resolveProvidersForMode(params: {
   });
 }
 
-function filterWritableProviders(
-  providers: Record<string, ProviderConfig>,
-): Record<string, ProviderConfig> {
-  const next = Object.fromEntries(
-    Object.entries(providers).filter(([, provider]) => isWritableProviderConfig(provider)),
-  );
-  return Object.keys(next).length === Object.keys(providers).length ? providers : next;
-}
-
 /** Plans root and plugin-owned model catalog writes for the current runtime. */
 export async function planOpenClawModelsJson(params: {
   context: PreparedModelsConfigContext;
@@ -404,18 +399,21 @@ export async function planOpenClawModelsJson(params: {
   const finalizeProviders = (candidateProviders: Record<string, ProviderConfig>) => {
     const normalized =
       normalizeProviderCatalogModelsForConfig(candidateProviders) ?? candidateProviders;
-    return filterWritableProviders(
+    return (
       enforceSourceManagedProviderSecrets({
         providers: normalized,
         sourceConfigForSecrets: context.sourceConfigForSecrets,
         secretRefManagedProviders,
-      }) ?? normalized,
+      }) ?? normalized
     );
   };
   const explicitProviderIds = new Set(
     Object.keys(cfg.models?.providers ?? {}).map((providerId) => normalizeProviderId(providerId)),
   );
   const providersByOwner = finalizeProviders(mergedProviders);
+  // The model registry rejects a whole models.json for one invalid provider, so omit those.
+  const skippedProviders = new Set<string>();
+  const skippedRootProviderIds: string[] = [];
   const partitionMetadataSnapshot = context.pluginMetadataSnapshot;
   const splitRootProviders: Record<string, ProviderConfig> = {};
   const pluginProviders: Record<string, Record<string, ProviderConfig>> = {};
@@ -430,7 +428,21 @@ export async function planOpenClawModelsJson(params: {
       }) ??
       (explicitProviderIds.has(normalizedId)
         ? undefined
-        : discoveredProviderPluginIds.get(normalizedId));
+        : (discoveredProviderPluginIds.get(normalizedId) ??
+          // A generated CLI backend catalog stays with its plugin even when discovery skipped it.
+          resolvePluginModelCatalogOwnerPluginId({
+            providerId,
+            pluginMetadataSnapshot: partitionMetadataSnapshot,
+            includeCliBackends: true,
+          })));
+    const skipReason = findUnwritableProviderReason(providerId, provider);
+    if (skipReason) {
+      skippedProviders.add(skipReason);
+      if (!pluginId) {
+        skippedRootProviderIds.push(normalizedId);
+      }
+      continue;
+    }
     if (!pluginId) {
       splitRootProviders[providerId] = provider;
       continue;
@@ -451,6 +463,11 @@ export async function planOpenClawModelsJson(params: {
     providers: splitRootProviders,
     secretRefManagedProviders,
   });
+  // A skipped root entry replaces its stale file row, as a valid entry would. Entries only in
+  // the existing file are the user's data: a rewrite keeps them.
+  for (const providerId of skippedRootProviderIds) {
+    delete rootProviders[providerId];
+  }
   const nextContents = `${JSON.stringify(
     {
       providers: finalizeProviders(rootProviders),
@@ -460,12 +477,17 @@ export async function planOpenClawModelsJson(params: {
   )}\n`;
 
   if (params.existingRaw === nextContents && Object.keys(pluginCatalogWrites).length === 0) {
-    return { action: "noop", pluginCatalogWrites };
+    return {
+      action: "noop",
+      pluginCatalogWrites,
+      ...(skippedProviders.size > 0 ? { skippedProviders: [...skippedProviders] } : {}),
+    };
   }
 
   return {
     action: "write",
     contents: nextContents,
     pluginCatalogWrites,
+    skippedProviders: [...skippedProviders],
   };
 }

@@ -1,6 +1,6 @@
 import type { SessionsListResult } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
-import type { SessionListRefreshHost } from "./session-managed-list-refresh.ts";
+import type { SessionListRefreshHost } from "./session-refresh-types.ts";
 import { requestSessionList } from "./session-requests.ts";
 import type { createSessionRosterObservations } from "./session-roster-observations.ts";
 import type {

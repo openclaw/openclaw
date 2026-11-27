@@ -48,6 +48,8 @@ export type GatewayClient = Pick<
   | "pairedClientId"
   | "authenticatedUserId"
   | "authenticatedFactoryGitHubAccountId"
+  | "authenticatedGitHubAccountId"
+  | "authenticatedRepositoryCredentialSource"
   | "authenticatedUserIsTailscaleProvider"
   | "authenticatedGitHubIdentitySync"
   | "preparedSessionProfile"
@@ -72,6 +74,8 @@ export type GatewayClient = Pick<
     operatorRunAuthority?: AdmittedRunOperatorAuthority;
     /** Overrides persisted sender attribution without changing the authorizing client identity. */
     senderAttribution?: { id: string; name?: string; identity?: TranscriptSenderIdentity };
+    /** Display-only credit for a suggestion this client approved; never sender or authority. */
+    suggestedBy?: { id: string; name?: string };
     /** Trusted session creation provenance; never accepted from Gateway wire params. */
     sessionCreation?: TrustedSessionCreation;
     /** Trusted built-in agent tool caller; never accepted from Gateway wire params. */
@@ -80,7 +84,6 @@ export type GatewayClient = Pick<
     approvalRuntime?: boolean;
     /** Host-bound owner for one plugin approval request, without reviewer authority. */
     pluginApprovalRequestOwnerId?: string;
-    cronRunContinuation?: boolean;
     pluginRuntimeOwnerId?: string;
     /** Host-attested session provenance for a trusted official plugin node invocation. */
     nodeInvokeApprovalSessionKey?: string;

@@ -6,7 +6,7 @@ const logger = vi.hoisted(() => ({
 }));
 vi.mock("../logging/subsystem.js", () => ({ createSubsystemLogger: () => logger }));
 import { logDecisionEvaluation, logDecisionToolPrefilter } from "./diagnostics.js";
-import type { DecisionOutcome } from "./types.js";
+import type { DecisionOutcome } from "./host-outcomes.js";
 
 beforeEach(() => {
   logger.isEnabled.mockReset().mockReturnValue(false);

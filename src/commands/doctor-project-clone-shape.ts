@@ -1,147 +1,170 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { gitEnvironment } from "../agents/worktrees/git.js";
-import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { HealthFinding } from "../flows/health-checks.js";
-import { executeGitCommand } from "../infra/git-exec.js";
+import {
+  ProjectCheckoutBusyError,
+  withProjectCheckoutLifecycle,
+} from "../projects/project-checkout.js";
+import { ProjectCloneError, unshallowProjectCheckout } from "../projects/project-clone-runtime.js";
 import { listProjectRegistry } from "../projects/project-registry.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import type { OpenClawStateAsyncLeaseContext } from "../state/openclaw-state-lease.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { decideDoctorPendingFromLiveStores } from "./doctor-live-store-pending.js";
+import type { DoctorMaintenancePending } from "./doctor-maintenance-pending.js";
 
 const CHECK_ID = "core/doctor/project-clone-shape";
 
-function describeCloneConfigKey(key: string) {
-  if (!key.startsWith("remote.")) {
-    return { name: key, urlKey: false };
-  }
-  const fieldOffset = key.lastIndexOf(".");
-  const remote = key.slice("remote.".length, fieldOffset);
-  if (!/(:\/\/|::|@)/.test(remote)) {
-    return { name: key, urlKey: false };
-  }
-  // Git addresses include remote-helper and scp forms, not just WHATWG URLs.
-  // Preserve transport/scheme labels but conservatively mask through the final @.
-  const transport = /^(?:[^:/?#@]+::)+/.exec(remote)?.[0] ?? "";
-  let address = remote.slice(transport.length);
-  const userInfoEnd = address.lastIndexOf("@");
-  if (userInfoEnd >= 0) {
-    const schemeEnd = address.indexOf("://");
-    const prefixLength =
-      schemeEnd >= 0 && schemeEnd < userInfoEnd ? schemeEnd + 3 : address.startsWith("//") ? 2 : 0;
-    address = `${address.slice(0, prefixLength)}***@${address.slice(userInfoEnd + 1)}`;
-  }
-  address = address.split(/[?#]/, 1)[0] ?? "";
-  return { name: `remote.${transport}${address}${key.slice(fieldOffset)}`, urlKey: true };
+type CloneShapeOptions = { repair?: boolean; env?: NodeJS.ProcessEnv };
+
+async function isShallowProjectCheckout(repoRoot: string): Promise<boolean> {
+  return (await fs.readdir(path.join(repoRoot, ".git"))).includes("shallow");
 }
 
-async function readCloneGit(root: string, args: string[], optional = false): Promise<string> {
-  const result = await executeGitCommand(root, args, {
-    env: gitEnvironment({ ...process.env, GIT_NO_LAZY_FETCH: "1" }),
-    timeoutMs: 5_000,
-    maxOutputBytes: 64 * 1024,
-  });
-  if (
-    result.termination !== "exit" ||
-    result.stdoutTruncatedBytes ||
-    (result.code !== 0 && !(optional && result.code === 1))
-  ) {
-    throw new Error("clone inspection unavailable");
+async function listClonedProjects(cfg: OpenClawConfig, env: NodeJS.ProcessEnv) {
+  return (await listProjectRegistry(cfg, { env })).filter((project) => project.source === "cloned");
+}
+
+/**
+ * Read-only: whether repair would fetch history for a shallow cloned project. The project
+ * registry lives in the state database, so it decides only while a connection holds it.
+ */
+export async function checkProjectCloneShapePending(
+  cfg: OpenClawConfig,
+  options: CloneShapeOptions = {},
+): Promise<DoctorMaintenancePending> {
+  if (!options.repair) {
+    return "none";
   }
-  return result.stdout;
+  const env = options.env ?? process.env;
+  return decideDoctorPendingFromLiveStores([resolveOpenClawStateSqlitePath(env)], async () => {
+    for (const project of await listClonedProjects(cfg, env)) {
+      if (await isShallowProjectCheckout(project.repoRoot)) {
+        return "work";
+      }
+    }
+    return "none";
+  });
 }
 
 export async function collectProjectCloneShapeHealthFindings(
   cfg: OpenClawConfig,
+  options: CloneShapeOptions = {},
 ): Promise<readonly HealthFinding[]> {
+  const env = options.env ?? process.env;
   const findings: HealthFinding[] = [];
-  const warn = (finding: Omit<HealthFinding, "checkId" | "severity">) =>
+  const report = (finding: Omit<HealthFinding, "checkId">) =>
     findings.push({
       checkId: CHECK_ID,
-      severity: "warning",
-      category: "fix-now",
+      category: "recommended",
       docsUrl: "https://docs.openclaw.ai/cli/doctor/checks",
       ...finding,
     });
   let projects;
   try {
-    projects = (await listProjectRegistry(cfg)).filter((project) => project.source === "cloned");
+    projects = await listClonedProjects(cfg, env);
   } catch {
-    warn({
+    report({
+      severity: "warning",
+      category: "fix-now",
       message: "Skipped project clone inspection: the project registry is unreadable.",
       fixHint: "Restore access to the project registry and rerun openclaw doctor.",
     });
     return findings;
   }
   for (const project of projects) {
+    const label = `Project clone ${project.displayName} (${project.id})`;
+    let fetching = false;
     try {
-      const config = await readCloneGit(
-        project.repoRoot,
-        [
-          "config",
-          "--null",
-          "--name-only",
-          "--get-regexp",
-          "^remote\\..*\\.(promisor|partialclonefilter)$",
-        ],
-        true,
-      );
-      const shallow = (
-        await readCloneGit(project.repoRoot, ["rev-parse", "--is-shallow-repository"])
-      ).trim();
-      const extension = await readCloneGit(
-        project.repoRoot,
-        ["config", "--get", "extensions.partialclone"],
-        true,
-      );
-      const keys = [...new Set(config.split("\0").filter(Boolean))]
-        .toSorted()
-        .map(describeCloneConfigKey);
-      if (extension) {
-        keys.push(describeCloneConfigKey("extensions.partialclone"));
+      const inspect = async (lease?: OpenClawStateAsyncLeaseContext) => {
+        const gitDir = path.join(project.repoRoot, ".git");
+        if (!(await isShallowProjectCheckout(project.repoRoot))) {
+          return;
+        }
+        const packs = (await fs.readdir(path.join(gitDir, "objects", "pack"))).filter((name) =>
+          name.endsWith(".pack"),
+        ).length;
+        const followUp =
+          packs >= 1_000
+            ? ` ${packs} packs: ask the operator to run a separate bounded repack under the project checkout lifecycle lease; Doctor does not repack.`
+            : "";
+        if (lease) {
+          if (!project.originUrl) {
+            report({
+              severity: "warning",
+              path: project.repoRoot,
+              message: `${label}: repair skipped; the registry has no recorded repository URL. Restore the project registration before retrying.`,
+            });
+            return;
+          }
+          fetching = true;
+          await unshallowProjectCheckout(
+            { target: project.repoRoot, url: project.originUrl },
+            {
+              env,
+              timeoutMs: 30 * 60_000,
+              signal: lease.signal,
+              assertCurrent: () => lease.assertCurrent(),
+              startRun: async <T>(run: () => T): Promise<Awaited<T>> => {
+                await lease.assertOwned();
+                lease.assertCurrent();
+                return await run();
+              },
+            },
+          );
+          // A shallow origin can make --unshallow exit zero with incomplete history.
+          const stillShallow = (await fs.readdir(gitDir)).includes("shallow");
+          report({
+            severity: stillShallow ? "warning" : "info",
+            path: project.repoRoot,
+            message: stillShallow
+              ? `${label}: still shallow; origin may not have complete history. Restore access to a full-history origin and rerun openclaw doctor --fix.${followUp}`
+              : `${label}: unshallowed; blob filtering and existing objects retained.${followUp}`,
+          });
+        } else {
+          report({
+            severity: "warning",
+            path: project.repoRoot,
+            message: `${label}: shallow history can cause repeated downloads in partial clones.${followUp}`,
+            fixHint: "Run openclaw doctor --fix to fetch full history while retaining blob:none.",
+          });
+        }
+      };
+      if (options.repair) {
+        await withProjectCheckoutLifecycle(
+          project.repoRoot,
+          { context: captureOpenClawStateWorkerContext({ env }), waitMs: 0 },
+          inspect,
+        );
+      } else {
+        await inspect();
       }
-      if (shallow !== "true" && keys.length === 0) {
-        continue;
-      }
-      const unset = (key: ReturnType<typeof describeCloneConfigKey>) =>
-        key.urlKey
-          ? [
-              `# Before continuing, locate ${key.name} locally; the raw output may contain credentials:`,
-              "# git config --get-regexp '^remote\\..*\\.(promisor|partialclonefilter)$'",
-              "# Then run: git config --unset-all <the key shown by that command>",
-            ]
-          : [`git config --unset-all ${quoteCliArg(key.name)}`];
-      warn({
+    } catch (error) {
+      report({
+        severity: "warning",
+        category: "fix-now",
         path: project.repoRoot,
-        category: "recommended",
-        message: `Project clone ${project.displayName} (${project.id}): shallow=${shallow}; partial-clone keys: ${keys.map((key) => key.name).join(", ") || "none"}. Full clones are recommended for managed worktrees.`,
-        fixHint: [
-          "Manual repair only (POSIX shell); stop on any failed step:",
-          `cd ${quoteCliArg(project.repoRoot)}`,
-          ...keys.filter((key) => key.name.endsWith(".partialclonefilter")).flatMap(unset),
-          // Refetch consolidation must not overlap the explicit final repack.
-          `git fetch --no-auto-maintenance --refetch${shallow === "true" ? " --unshallow" : ""} origin`,
-          "git rev-list --objects --missing=print --all | grep '^?' | cut -c2- | git fetch --no-auto-maintenance origin --no-tags --no-write-fetch-head --recurse-submodules=no --stdin",
-          ...keys
-            .filter(
-              (key) => key.name.endsWith(".promisor") || key.name === "extensions.partialclone",
-            )
-            .flatMap(unset),
-          "git repack -a -d",
-          "Rerun openclaw doctor. If history or objects remain missing, recover them from the original repository.",
-        ].join("\n"),
-      });
-    } catch {
-      warn({
-        path: project.repoRoot,
-        message: `Skipped project clone ${project.displayName} (${project.id}): repository is missing, unreadable, or Git inspection did not complete.`,
-        fixHint:
-          "Check the clone path, permissions, and Git installation, then rerun openclaw doctor.",
+        message:
+          error instanceof ProjectCheckoutBusyError
+            ? `${label}: busy; skipped. Rerun openclaw doctor --fix when checkout work finishes.`
+            : fetching && error instanceof ProjectCloneError && error.failure === "auth_required"
+              ? `${label}: unshallow requires repository authentication. Doctor has no admitted Control UI/Gateway credential and does not prompt or use checkout credential helpers. Ask the operator to run an approved authenticated unshallow under the project checkout lifecycle lease.`
+              : fetching
+                ? `${label}: unshallow failed or timed out. Check origin access, network, and disk space, then rerun openclaw doctor --fix.`
+                : `${label}: skipped; repository is missing or unreadable. Check the clone path and permissions.`,
       });
     }
   }
   return findings;
 }
 
-export async function noteProjectCloneShape(cfg: OpenClawConfig): Promise<void> {
-  for (const finding of await collectProjectCloneShapeHealthFindings(cfg)) {
+export async function noteProjectCloneShape(
+  cfg: OpenClawConfig,
+  options: CloneShapeOptions = {},
+): Promise<void> {
+  for (const finding of await collectProjectCloneShapeHealthFindings(cfg, options)) {
     note(
       [finding.message, finding.path, finding.fixHint].filter(Boolean).join("\n"),
       "Project clones",

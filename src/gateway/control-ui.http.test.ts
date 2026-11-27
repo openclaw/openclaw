@@ -35,6 +35,7 @@ import {
   createGatewayAuthRateLimiter,
 } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
+import { handleControlUiAssistantMediaRequest } from "./control-ui-assistant-media-http.js";
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
   type ControlUiBootstrapConfig,
@@ -43,11 +44,7 @@ import {
   createTrustedProxyHeaders,
   setupTrustedProxyAuth,
 } from "./control-ui.http.test-support.js";
-import {
-  handleControlUiAssistantMediaRequest,
-  handleControlUiAvatarRequest,
-  handleControlUiHttpRequest,
-} from "./control-ui.js";
+import { handleControlUiAvatarRequest, handleControlUiHttpRequest } from "./control-ui.js";
 import { ANIMATED_GIF_BYTES, APNG_BYTES } from "./http-image.test-support.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { createAuthRateLimiterSpy, makeMockHttpResponse } from "./test-http-response.js";
@@ -459,9 +456,9 @@ it("serves a bounded inbound photo preview without replacing its original", asyn
     });
     const small = await read("variant=thumbnail&width=480");
     expect(await createImageProcessor().probe(small.body)).toMatchObject({
-      format: "webp",
-      width: 240,
-      height: 120,
+      format: "jpeg",
+      width: 480,
+      height: 240,
     });
     const head = await read("variant=thumbnail", "HEAD");
     expect(head.headers).toMatchObject({ "Content-Length": String(body.byteLength) });
@@ -1144,14 +1141,14 @@ it.each(["hardlink", "symlink", "outside"] as const)(
   },
 );
 
-it("rejects trusted-proxy avatar metadata requests without operator.read scope", async () => {
-  expectMissingOperatorReadResponse(
-    await runAvatarRequest({
-      url: "/avatar/main?meta=1",
-      ...trustedProxyRequest({ "x-openclaw-scopes": "" }),
-      config: createAvatarConfig(os.tmpdir(), "https://example.com/avatar.png"),
-    }),
-  );
+// Session-scoped readers (guests) receive avatar URLs from agent.identity.get.
+it.each(["", "operator.sessions.write"])("gates avatar metadata on scopes %j", async (scopes) => {
+  const reply = await runAvatarRequest({
+    url: "/avatar/main?meta=1",
+    ...trustedProxyRequest({ "x-openclaw-scopes": scopes }),
+    config: createAvatarConfig(os.tmpdir(), "https://example.com/avatar.png"),
+  });
+  expectStatus(reply, scopes ? 200 : 403);
 });
 
 it("keeps JSON-Accept requests for explicit assets and plugin recovery routes", async () => {

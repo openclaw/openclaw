@@ -19,4 +19,17 @@
 # OPENCLAW_DISABLE_GATEWAY_LOCAL_TERMINALS (#177855) controls Gateway-local terminals.
 # OPENCLAW_DEVICE_NAME_PREFIX was removed with unread Matrix device-health projections (#178345).
 # Retiring A2UI removes its four renderer build environment names.
-457
+# OPENCLAW_CONFIG_READONLY_NOTICE (#187015) lets the deployment explain where to edit Gateway configuration.
+# Ordinary Git updates now consume the existing, documented source-build declaration flag.
+# OPENCLAW_DEV_RELOAD_BUNDLED_PLUGINS (#187962) is the owner-approved launch-only bundled plugin development reload opt-in.
+# Approved Gmail child-only push and hook credential environment sources.
+# OPENCLAW_GATEWAY_RESTART_RESUME_SCOPE is an opaque supervisor-chosen token that ends restart resume at the supervisor's boundary.
+# OPENCLAW_LAUNCHER_IPC marks a Gateway started by the release launcher; OPENCLAW_RELEASE_LAUNCHER_FORWARDED stops a converted install's entry from forwarding twice.
+# OPENCLAW_NATIVE_APP_ROOT and OPENCLAW_NATIVE_STAGED_ROOT (#197437) are the Windows packaging launcher's native-redirect roots, pinned from Gateway startup for the managed GitHub credential child.
+# OPENCLAW_NODE_TRUSTED_WRITABLE_ANCESTORS declares the operator-selected trusted ancestors.
+# OPENCLAW_INTERNAL_WORKER_TMPDIR directs the confined worker to its private temporary directory.
+# OPENCLAW_NODE_WORKER_EXECUTION carries launcher-selected settings to its dedicated worker.
+# OPENCLAW_WORKER_TOOL_DATA supplies node-selected public data to local tools.
+# OPENCLAW_GATEWAY_REQUIRE_NAMESPACE_PROOF lets a supervisor require verified Linux namespace recovery.
+# OPENCLAW_NODE_OPTIONS_READY was removed with the warning-only CLI respawn.
+470

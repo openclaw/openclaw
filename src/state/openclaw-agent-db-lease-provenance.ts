@@ -4,11 +4,33 @@ import { hostname } from "node:os";
 import {
   createManagedHandoffBootIdentityReader,
   predatesCurrentBoot,
+  readWindowsBootIdentityAsync,
 } from "../infra/update-managed-service-handoff-boot.js";
 import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../shared/pid-alive.js";
 import { VERSION } from "../version.js";
 
 let boot: string | null | undefined;
+let windowsBootProbe: Promise<void> | undefined;
+
+function bootFingerprint(identity: string, namespace: string): string {
+  return [hostname(), identity, namespace, VERSION].join("\0");
+}
+
+/** Resolve the optional Windows proof outside listener publication and SQLite. */
+export function prepareAgentDatabaseLeaseProvenance(): Promise<void> | undefined {
+  if (process.platform !== "win32" || boot !== undefined) {
+    return undefined;
+  }
+  windowsBootProbe ??= (async () => {
+    try {
+      const identity = await readWindowsBootIdentityAsync(process.env);
+      boot = identity ? bootFingerprint(identity, "win32") : null;
+    } catch {
+      boot = null;
+    }
+  })();
+  return windowsBootProbe;
+}
 
 export function mayShareAgentDatabaseFile(left: string, right: string): boolean {
   if (left === right) {
@@ -67,15 +89,18 @@ export function createAgentDatabaseLeaseStaleReasonReader() {
 
 export function readAgentDatabaseLeaseProvenance(pathname: string): string | null {
   try {
-    if (boot === undefined) {
-      // procfs supplies both a boot identity and the namespace in which PID death is observed.
-      const bootId =
-        process.platform === "linux"
-          ? fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim()
-          : "";
-      boot = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(bootId)
-        ? [hostname(), bootId, fs.readlinkSync("/proc/self/ns/pid"), VERSION].join("\0")
-        : null;
+    if (boot === undefined && !windowsBootProbe) {
+      // Boot identity lasts for this process; failed OS probes must not repeat on every open.
+      boot = null;
+      if (["linux", "darwin", "win32"].includes(process.platform)) {
+        const currentBoot = createManagedHandoffBootIdentityReader(process.env)();
+        // Linux PID death is only evidence inside the same procfs namespace.
+        const namespace =
+          currentBoot.platform === "linux"
+            ? fs.readlinkSync("/proc/self/ns/pid")
+            : currentBoot.platform;
+        boot = bootFingerprint(currentBoot.identity, namespace);
+      }
     }
     if (!boot) {
       return null;
@@ -87,49 +112,4 @@ export function readAgentDatabaseLeaseProvenance(pathname: string): string | nul
   } catch {
     return null;
   }
-}
-
-function isSameBootAgentDatabaseLease(provenance: string | null, pathname: string): boolean {
-  return provenance !== null && provenance === readAgentDatabaseLeaseProvenance(pathname);
-}
-
-export function agentDatabaseLeaseProcessDeathRefusal(
-  row: {
-    opened_at: number;
-    owner_start_time: number | null;
-    path: string;
-    provenance: string | null;
-  },
-  pathname: string,
-  staleReason: AgentDatabaseLeaseStaleReason,
-): string | undefined {
-  if (staleReason !== "owner-pid-dead") {
-    return staleReason;
-  }
-  if (row.opened_at <= 0) {
-    return "predecessor-admission-incomplete";
-  }
-  if (row.owner_start_time === null) {
-    return "owner-start-time-missing";
-  }
-  if (row.path !== pathname) {
-    return "lease-path-mismatch";
-  }
-  if (row.provenance === null) {
-    return "legacy-provenance-missing";
-  }
-  return isSameBootAgentDatabaseLease(row.provenance, pathname)
-    ? undefined
-    : "host-boot-namespace-version-file-mismatch";
-}
-
-export function agentDatabaseAdmissionProvenanceRefusal(
-  provenance: string | null | undefined,
-  pathname: string,
-): string | undefined {
-  return provenance === undefined
-    ? "native-admission-required"
-    : isSameBootAgentDatabaseLease(provenance, pathname)
-      ? undefined
-      : "prepared-provenance-mismatch";
 }

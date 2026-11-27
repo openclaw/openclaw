@@ -1,5 +1,6 @@
 import type { RetiredAuthProfileCleanupPlan } from "../commands/doctor-auth-legacy-oauth.js";
 import type { probeGatewayMemoryStatus } from "../commands/doctor-gateway-health.js";
+import type { DoctorMaintenancePending } from "../commands/doctor-maintenance-pending.js";
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
 import type { DoctorConfigReferenceSource } from "../commands/doctor/shared/config-flow-steps.js";
 import type { ProviderRename } from "../commands/doctor/shared/provider-rename.js";
@@ -35,6 +36,8 @@ type DoctorConfigResult = {
   modelBillingRouteWarnings?: readonly string[];
   /** Successful retirement pass awaiting the config-write/no-change boundary. */
   modelRetirementRepairRan?: boolean;
+  retirementOnly?: boolean;
+  retirementOnlyBlockers?: readonly string[];
   sourceConfigValid?: boolean;
   sourceLastTouchedVersion?: string;
   skipPluginValidationOnWrite?: boolean;
@@ -62,6 +65,8 @@ type DoctorConfigResult = {
 };
 
 export type DoctorHealthFlowContext = {
+  /** Cleared when a retained owner discovers work requiring the full pass. */
+  retirementOnly?: boolean;
   runtime: RuntimeEnv;
   options: DoctorOptions;
   prompter: DoctorPrompter;
@@ -120,8 +125,22 @@ export type DoctorHealthContribution = {
   updateWork?: DoctorUpdateWork;
   healthChecks: readonly DoctorHealthCheck[];
   healthCheckIds: readonly string[];
+  /** Read-only work check traced under Gateway maintenance; without one the contribution has work. */
+  pending?: DoctorContributionPending;
   run: (ctx: DoctorHealthFlowContext) => Promise<void>;
 };
+
+/**
+ * "diagnostic-only" declares that `run` never writes under `--fix`, so it never has work;
+ * doctor-health-contributions.diagnostic-only.test.ts runs each declared contribution in
+ * repair mode and fails when one changes a store. A function is the owner's read-only check
+ * and must decide with the same predicate as `run`.
+ */
+type DoctorContributionPending =
+  | "diagnostic-only"
+  | ((
+      ctx: DoctorHealthFlowContext,
+    ) => DoctorMaintenancePending | Promise<DoctorMaintenancePending>);
 
 export type DoctorContributionHealthCheck = Omit<DoctorHealthCheck, "id" | "kind" | "source"> & {
   readonly id?: string;

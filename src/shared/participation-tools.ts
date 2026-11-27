@@ -1,0 +1,22 @@
+/** Tools an invited participant's turn gets when its role sets neither invitedTools nor invitedAlsoAllow. */
+export const DEFAULT_PARTICIPATION_TOOLS: readonly string[] = Object.freeze([
+  "read",
+  "write",
+  "edit",
+  "apply_patch",
+  "ls",
+  "exec",
+  "process",
+  "sessions_spawn",
+  "sessions_yield",
+  "github_publish",
+  "skills_search",
+  "skills_read",
+  "web_search",
+  "web_fetch",
+  "tool_search",
+  "tool_describe",
+  "dispatch_action",
+  "view_image",
+  "progress_card",
+]);

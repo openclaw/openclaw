@@ -1,22 +1,28 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { stat } from "node:fs/promises";
 import { getDatabaseProcessRole } from "../infra/database-engine/admission-scope.js";
+import { withStateDatabaseColdAdmissionAsync } from "../infra/gateway-state-owner-cold-admission.js";
 import { getPostgresPool } from "../infra/postgres-sync/pool.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
 import { acquireSqliteDatabaseAdmissionTurn } from "../infra/sqlite-database-admission-turn.js";
 import { resolveSqliteDatabaseFilePath } from "../infra/sqlite-database-admission.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
-import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
+import { assertDatabaseFileIdentity } from "../infra/sqlite-worker-identity.js";
 import {
   captureRetainedNativeWorkerSource,
   type RetainedNativeWorkerSource,
 } from "../infra/worker-native-lifecycle.js";
+import { DEFAULT_WORKER_PENDING_TASKS } from "../infra/worker-task-capacity.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
+import { getPluginExecutionFrame } from "../plugins/plugin-instance-invocation.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { isStartupConfigStateRead } from "./artifact-preserving-state-reads.js";
 import {
   registerOpenClawStateDatabaseAsyncResource,
   registerOpenClawStateDatabaseLifecycleListener,
 } from "./openclaw-state-db-cache.js";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
 import {
   closeReadResources,
   createStateReadPool,
@@ -166,9 +172,10 @@ function readPool(state: ReadRuntime, admitted: boolean, awaitedOnly: boolean) {
   if ((state.sealed && !admitted) || state.closing) {
     throw new WorkerTaskError("Shared-state readers are closing", "unavailable");
   }
-  // Long-lived hosts reuse their boot readers; one-shot inspection avoids a native supervisor.
+  // Explicit one-shot callers never inherit a retained pool from earlier ordinary reads.
+  const role = getDatabaseProcessRole();
   const retained =
-    !awaitedOnly || state.pool !== undefined || getDatabaseProcessRole() === "gateway";
+    role !== "cli-oneshot" && (!awaitedOnly || state.pool !== undefined || role === "gateway");
   const key = retained ? "pool" : "awaitedPool";
   if (!state[key]) {
     state[key] = createStateReadPool(state.workerUrl, retained ? state.nativeSource : undefined);
@@ -225,6 +232,7 @@ class StateReadSource {
 
   constructor(readonly state: ReadRuntime) {}
 
+  /** Adopts the producer's command; borrowed mutable inputs must be captured by that producer. */
   createTransport(
     command: OpenClawStateReadCommand,
     onChunk?: OpenClawStateReadOptions["onChunk"],
@@ -261,7 +269,6 @@ type ReadTask = ReturnType<ReadPool["runTask"]>;
 
 // Methods are shared; cancellation, command bytes, and failed cleanup remain per read.
 class StateReadTransport {
-  private readonly capturedCommand: OpenClawStateReadCommand;
   private readonly tasks = new Map<ReadTask, { retire: boolean }>();
   private closed = false;
   private closing: Promise<void> | undefined;
@@ -269,15 +276,12 @@ class StateReadTransport {
   private chunksDrained: (() => void) | undefined;
 
   constructor(
-    command: OpenClawStateReadCommand,
+    private readonly capturedCommand: OpenClawStateReadCommand,
     private readonly source: StateReadSource,
     private readonly onChunk?: OpenClawStateReadOptions["onChunk"],
     private readonly onChunkAsync?: OpenClawStateReadOptions["onChunkAsync"],
     private readonly awaitedOnly = false,
-  ) {
-    // Capture nested input before the read owner can yield during snapshot preparation.
-    this.capturedCommand = structuredClone(command);
-  }
+  ) {}
 
   private async closeTask(task: ReadTask): Promise<void> {
     await task.close(this.tasks.get(task)?.retire ? { retire: true } : undefined);
@@ -313,6 +317,7 @@ class StateReadTransport {
           environment: { ...context.environment },
           existingSchemaPath: context.existingSchemaPath,
           stateIntegrity: context.stateIntegrity,
+          liveStateReads: context.liveStateReads,
         },
         databasePath: context.admission.databasePath,
         location,
@@ -320,38 +325,66 @@ class StateReadTransport {
         expectedIdentity,
         snapshotRoot,
         postgresSnapshot,
-        command: { ...readCommand },
+        command: readCommand,
       };
       const pool = readPool(this.source.state, this.source.ownsAdmission(), this.awaitedOnly);
+      if (
+        getDatabaseProcessRole() === "gateway" &&
+        !getPluginExecutionFrame()?.canUseInteractiveStateReadCapacity
+      ) {
+        const { pendingTasks, maxWorkers } = pool.pool.getSnapshot();
+        // Leave two reads per worker for authenticated UI requests; the pool keeps its hard caps.
+        if (pendingTasks >= DEFAULT_WORKER_PENDING_TASKS - 2 * maxWorkers) {
+          throw new WorkerTaskError(
+            "worker task capacity reached (shared-state interactive reserve)",
+            "overloaded",
+          );
+        }
+      }
       // Maintenance reuses this reader; standalone inspection releases it before metadata loads.
       const retireAfterRead =
         !pool.retained && !context.maintenanceScope && readCommand.type !== "admit";
-      const task = pool.pool.runTask(
-        () => {
-          const physicalLocation = resolveSqliteDatabaseFilePath(location);
-          const requestForDispatch = () => {
-            authority.assertCurrent();
-            // Queue admission can outlive the captured file at this pathname.
-            if (expectedIdentity !== undefined) {
-              assertExistingDatabaseIdentity(physicalLocation, expectedIdentity);
-            }
-            return request;
-          };
-          const turn = acquireSqliteDatabaseAdmissionTurn(physicalLocation);
-          if (!turn) {
-            return requestForDispatch();
+      // A one-shot CLI keeps its reader isolate for later reads and releases only the native
+      // handles here; CLI cleanup closes the pool when the command ends.
+      const releaseInPlace = retireAfterRead && getDatabaseProcessRole() === "cli-oneshot";
+      const prepareDispatch = async () => {
+        const physicalLocation = resolveSqliteDatabaseFilePath(location);
+        try {
+          const turn = acquireSqliteDatabaseAdmissionTurn(physicalLocation, [], undefined, () =>
+            authority.assertCurrent(),
+          );
+          if (turn) {
+            releaseAdmission = await turn;
           }
-          return turn.then((release) => {
-            releaseAdmission = release;
-            try {
-              return requestForDispatch();
-            } catch (error) {
-              releaseAdmission();
-              releaseAdmission = undefined;
-              throw error;
-            }
-          });
-        },
+          authority.assertCurrent();
+          // Queue admission can outlive the captured file at this pathname.
+          if (expectedIdentity !== undefined) {
+            assertDatabaseFileIdentity(await stat(physicalLocation, { bigint: true }), {
+              key: expectedIdentity,
+            });
+            authority.assertCurrent();
+          }
+          return request;
+        } catch (error) {
+          releaseAdmission?.();
+          releaseAdmission = undefined;
+          throw error;
+        }
+      };
+      // The parallel startup config read can meet schema custody before the child sees its request.
+      const waitForAdmission = isStartupConfigStateRead();
+      const task = pool.pool.runTask(
+        waitForAdmission
+          ? () =>
+              withStateDatabaseColdAdmissionAsync(
+                {
+                  databasePath: context.admission.databasePath,
+                  busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+                  signal: authority.signal,
+                },
+                prepareDispatch,
+              )
+          : prepareDispatch,
         {
           signal: authority.signal,
           inputBytes: requestBytes(request),
@@ -395,7 +428,8 @@ class StateReadTransport {
         let outcome: OpenClawStateReadOutcome;
         try {
           const reply = await task.result;
-          cleanup.retire = retireAfterRead || Boolean(reply.nativeCleanupFailure);
+          cleanup.retire =
+            (retireAfterRead && !releaseInPlace) || Boolean(reply.nativeCleanupFailure);
           outcome = decodeOpenClawStateReadReply(reply);
         } catch (error) {
           outcome = { error };
@@ -404,6 +438,13 @@ class StateReadTransport {
         releaseAdmission = undefined;
         // Native closes and quarantine cleanup can require exit even when the domain read succeeds.
         cleanup.retire ||= "error" in outcome;
+        if (retireAfterRead && !("error" in outcome)) {
+          await this.closeTask(task);
+          if (!cleanup.retire) {
+            // Joined before the result returns: no SQLite handle outlives a successful read.
+            await closeReadResources(pool.pool);
+          }
+        }
         return outcome;
       })();
       return { task, result };

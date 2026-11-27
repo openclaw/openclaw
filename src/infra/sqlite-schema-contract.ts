@@ -4,6 +4,7 @@ import {
   readGeneratedSqliteFingerprint,
 } from "../state/postgres-schema.generated/sqlite-catalogs.js";
 import { executeWithCachedStatement } from "./kysely-sync-cache-state.js";
+import { isCompatibleAdditiveColumnDefinition } from "./sqlite-additive-column.js";
 import {
   getSqlitePinnedReadSnapshot,
   runSqliteSchemaReadSnapshotSync,
@@ -137,7 +138,6 @@ export function collectSqliteSchemaIssues(
         actualTable.definition,
         expectedTable.definition,
         compatibility,
-        !allowedMissingTables.has(tableName),
       ),
     );
     for (const issue of compareTablePragmaFacts(
@@ -626,7 +626,6 @@ function compareTableDefinitions(
   actual: SqliteTableDefinition | null,
   expected: SqliteTableDefinition | null,
   compatibility: SqliteSchemaCompatibility,
-  allowCompatibleAdditiveColumns: boolean,
 ): SqliteSchemaIssue[] {
   const issues: SqliteSchemaIssue[] = [];
   const add = (code: SqliteSchemaIssueCode, objectName: string) => {
@@ -641,14 +640,17 @@ function compareTableDefinitions(
   const allowedMissingColumns = new Set(compatibility.allowedMissingColumns ?? []);
   for (const [columnName, definition] of actual.columns) {
     if (!expected.columns.has(columnName)) {
+      const objectName = `${tableName}.${columnName}`;
+      const allowedDefinitions = compatibility.allowedColumnDefinitions?.[objectName] ?? [];
+      if (allowedDefinitions.some((allowed) => normalizeSqlWhitespace(allowed) === definition)) {
+        continue;
+      }
       if (
-        allowCompatibleAdditiveColumns &&
         compatibility.allowCompatibleAdditiveColumns &&
         isCompatibleAdditiveColumnDefinition(definition)
       ) {
         continue;
       }
-      const objectName = `${tableName}.${columnName}`;
       add("unexpected-column", objectName);
     }
   }
@@ -673,18 +675,6 @@ function compareTableDefinitions(
     add("table-constraint-drift", tableName);
   }
   return issues;
-}
-
-const SQLITE_STRICT_DATATYPES = new Set(["ANY", "BLOB", "INT", "INTEGER", "REAL", "TEXT"]);
-
-function isCompatibleAdditiveColumnDefinition(definition: string): boolean {
-  const name = readSqlToken(definition, 0);
-  const type = name ? readSqlToken(definition, name.end) : null;
-  return Boolean(
-    type?.keyword &&
-    SQLITE_STRICT_DATATYPES.has(type.keyword) &&
-    definition.slice(type.end).trim().length === 0,
-  );
 }
 
 function collectSqliteIndexContract(

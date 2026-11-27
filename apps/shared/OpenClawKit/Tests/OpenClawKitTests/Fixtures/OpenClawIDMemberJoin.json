@@ -1,0 +1,40 @@
+{
+  "source": "packages/openclaw-id-protocol (openclaw main at 2c8ffdcfd7af): invites.ts buildInviteLink, parseInviteFragment, deriveInviteProofKey, computeRedemptionProof; envelope.ts signStatement; verified with verifyInviteRedemption",
+  "now": 1793318400,
+  "claw_id": "0123456789abcdef0123456789abcdef",
+  "hostname": "team-k7x2q.crabd.me",
+  "account_id": "acct_bob",
+  "label": "Example Mac",
+  "keys": {
+    "device_seed_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+    "device_pub": "ed25519:d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737",
+    "device_fp": "fp:10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+    "peer_seed_hex": "2222222222222222222222222222222222222222222222222222222222222222",
+    "peer_key": "iroh:a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f0"
+  },
+  "invite": {
+    "secret_hex": "0707070707070707070707070707070707070707070707070707070707070707",
+    "invite_id": "00112233445566778899aabbccddeeff",
+    "root_fp": "fp:78507385d3954325c65cba1a10e2e4a09cc56fe20da6b0cc66c477be22a6b7b0",
+    "link": "https://team-k7x2q.crabd.me/join#i=00112233445566778899aabbccddeeff.BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc&r=78507385d3954325c65cba1a10e2e4a09cc56fe20da6b0cc66c477be22a6b7b0",
+    "proof_key_hex": "bd4df67c036ec03ec42afd5c3b0b5f8f7bca1947b83447116a47c05daa9a4a38",
+    "proof": "2c3b0485f7c2eaa409de80f5c70e8e928fd68274d4529b3ddb7fde61413b5f20"
+  },
+  "redemption": {
+    "v": 1,
+    "type": "InviteRedemption",
+    "body": {
+      "claw_id": "0123456789abcdef0123456789abcdef",
+      "invite_id": "00112233445566778899aabbccddeeff",
+      "account_id": "acct_bob",
+      "device_pub": "ed25519:d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737",
+      "peer_key": "iroh:a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f0",
+      "label": "Example Mac",
+      "proof": "2c3b0485f7c2eaa409de80f5c70e8e928fd68274d4529b3ddb7fde61413b5f20",
+      "requested_at": 1793318400
+    },
+    "signer": "ed25519:d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737",
+    "alg": "ed25519",
+    "sig": "y1c-2DFGM-HERgrF4QcgrTqLBBBJODQCYQlAqyislJRW1_ODuXe8rwYzaYrHMSIeuz0pFH1YCNH80PyhXk6nBA"
+  }
+}

@@ -49,7 +49,9 @@ async function startOwner(runtime?: OpenClawPluginApi["runtime"]) {
       runtimeSource,
       runtime,
       registerGatewayMethod: (method, handler) => {
-        fixture.handlers[method] = handler;
+        fixture.handlers[method] = async (opts) => {
+          await handler(opts);
+        };
       },
       registerRuntimeLifecycle: (lifecycle) => {
         if (lifecycle.dispose) {

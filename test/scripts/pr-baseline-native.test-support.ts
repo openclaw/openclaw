@@ -1,12 +1,32 @@
 import { spawnSync, type SpawnSyncOptionsWithBufferEncoding } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, delimiter } from "node:path";
-import { expect } from "vitest";
+import { afterAll, expect } from "vitest";
+import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { validReview } from "./pr-review-artifact-fixture.js";
 import { copyPrWrapperSources, linkPrWrapperDependencies } from "./pr-wrapper.test-support.js";
 
 const cliFlags = (values: Record<string, string>) => Object.entries(values).flat();
+
+export function reuseBaselineFixture<T extends object>(create: (root: string) => T) {
+  const dirs = useAutoCleanupTempDirTracker(afterAll);
+  const root = dirs.make("openclaw-pr-baseline-");
+  const pristine = dirs.make("openclaw-pr-baseline-pristine-");
+  let context: T;
+  return () => {
+    if (!context) {
+      context = create(root);
+      copyTreeCloseOnExec(root, pristine);
+    }
+    // Captured JavaScript state must stay read-only after setup. Registered
+    // worktrees and evidence bind absolute paths, so restore the whole private root.
+    rmSync(root, { recursive: true, force: true });
+    copyTreeCloseOnExec(pristine, root);
+    return context;
+  };
+}
 
 export function failRestore(root: string, env: NodeJS.ProcessEnv) {
   const realGit = spawnSync("sh", ["-c", "command -v git"], {
@@ -105,7 +125,13 @@ export function signBaselineRequest(
 
 // This fixture owns a real canonical wrapper, registered PR checkout, signing key,
 // local Git remote, and credential-free GitHub adapter. No owner entry is mocked.
-export function createBaselineFixture(root: string, productCount = 16) {
+export function createBaselineFixture(
+  root: string,
+  productCount = 16,
+  incomingSeverity: "IMPORTANT" | "BLOCKER" = "IMPORTANT",
+  seedRepository?: (repo: string) => void,
+  reviewMode: "correction" | "ready" | "incoming" = "correction",
+) {
   const repo = join(root, "repo");
   const home = join(root, "home");
   const bin = join(root, "bin");
@@ -172,6 +198,7 @@ export function createBaselineFixture(root: string, productCount = 16) {
   mkdirSync(join(repo, "docs"), { recursive: true });
   const product = Array.from({ length: productCount }, (_, i) => `docs/fix-${i}.md`);
   writeProduct(repo, product, "base\n");
+  seedRepository?.(repo);
   git(repo, "add", ".");
   git(repo, "commit", "-qm", "test: canonical fixture");
   const base = git(repo, "rev-parse", "HEAD");
@@ -195,6 +222,18 @@ const args = process.argv.slice(2);
 if (args[0] === 'auth') process.exit(1);
 if (args[0] === 'api' && args[1] === 'user') {
  console.log('HTTP/2.0 200 OK\\r\\n\\r\\n{"login":"fixture"}');
+} else if (args[0] === 'api' && args[1] === 'graphql') {
+ if (!args.some(arg => arg.startsWith('query=query('))) { console.error('Unexpected fixture GraphQL mutation'); process.exit(99); }
+ const live = path.join(root,'.local','merge-live.json');
+ const pullRequest = fs.existsSync(live) ? JSON.parse(fs.readFileSync(live,'utf8')) : {
+  id:'PR_fixture',number:42,url:'https://github.com/fixture/repo/pull/42',state:'OPEN',
+  headRefOid:git('rev-parse','topic'),baseRefName:'main',isDraft:false,mergeCommit:null,
+  autoMergeRequest:null,isInMergeQueue:false,isMergeQueueEnabled:false,
+  mergeable:'MERGEABLE',mergeStateStatus:'CLEAN'};
+ if (args.includes('--include')) process.stdout.write('HTTP/2.0 200 OK\\r\\n\\r\\n');
+ console.log(JSON.stringify({data:{repository:{id:'R_fixture',databaseId:1,
+  nameWithOwner:'fixture/repo',url:'https://github.com/fixture/repo',
+  ref:{target:{oid:git('rev-parse','main')}},pullRequest}}}));
 } else if (args.includes('repos/fixture/repo/pulls/42')) {
  const overrides = path.join(root,'.local','live.json');
  console.log(JSON.stringify({number:42,node_id:'PR_fixture',html_url:'https://github.com/fixture/repo/pull/42',state:'open',draft:false,
@@ -256,11 +295,15 @@ if (args[0] === 'api' && args[1] === 'user') {
   review.issueValidation.status = "valid";
   review.findings.push({
     id: "I1",
-    severity: "IMPORTANT",
+    severity: incomingSeverity,
     title: "Broken behavior",
     area: product[0]!,
     fix: "Repair behavior",
   });
+  if (reviewMode !== "correction") {
+    review.recommendation = "READY FOR /prepare-pr";
+    review.findings = [];
+  }
   writeLocal("review.json", JSON.stringify(review));
   const run = (command: string, args: string[] = [], extra: NodeJS.ProcessEnv = {}) =>
     spawnSync(join(repo, "scripts/pr"), [command, "42", ...args], {
@@ -273,9 +316,16 @@ if (args[0] === 'api' && args[1] === 'user') {
     expect(result.status, result.stdout + result.stderr).toBe(0);
     return result;
   };
-  pass("prepare-correction-init");
-  writeProduct(worktree, product, "corrected\n");
-  commit(worktree, "fix: fixture correction");
+  if (reviewMode === "incoming") {
+    writeLocal("review-context.env", `MERGE_BASE=${base}\n`);
+    pass("review-validate-artifacts");
+  } else {
+    pass(reviewMode === "ready" ? "prepare-init" : "prepare-correction-init");
+  }
+  if (reviewMode === "correction") {
+    writeProduct(worktree, product, "corrected\n");
+    commit(worktree, "fix: fixture correction");
+  }
   const approve = () => {
     pass("prepare-correction-review-init");
     const file = local("correction-review.json");
@@ -287,7 +337,9 @@ if (args[0] === 'api' && args[1] === 'user') {
       "Verified the corrected fixture behavior.";
     writeFileSync(file, JSON.stringify(candidateReview));
   };
-  approve();
+  if (reviewMode === "correction") {
+    approve();
+  }
   const advanceMain = (label: string, changed = product) => {
     writeProduct(repo, changed, `${label}\n`);
     commit(repo, `test: ${label}`);

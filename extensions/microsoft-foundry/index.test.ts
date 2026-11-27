@@ -27,7 +27,6 @@ import {
   COGNITIVE_SERVICES_RESOURCE,
   FOUNDRY_ANTHROPIC_SCOPE,
   buildFoundryAuthResult,
-  formatFoundryApiLabel,
   type FoundryProviderApi,
   isFoundryMaiImageModel,
   requiresFoundryMaxCompletionTokens,
@@ -225,7 +224,7 @@ function buildAuthResult(params: Pick<FoundryAuthParams, "modelId"> & Partial<Fo
 }
 
 function builtModel(params: Pick<FoundryAuthParams, "modelId"> & Partial<FoundryAuthParams>) {
-  return providerPatch(buildAuthResult(params)).models[0];
+  return providerPatch(buildAuthResult(params)).models?.[0];
 }
 
 function wrapStream(streamFn: StreamFn, model = makeModel()) {
@@ -624,12 +623,6 @@ describe("microsoft-foundry plugin", () => {
     expect(isFoundryMaiImageModel("MAI-Image-2.5-Flash")).toBe(true);
   });
 
-  it("labels all Foundry API surfaces for onboarding summaries", () => {
-    expect(formatFoundryApiLabel("openai-completions")).toBe("Chat Completions");
-    expect(formatFoundryApiLabel("openai-responses")).toBe("Responses");
-    expect(formatFoundryApiLabel("anthropic-messages")).toBe("Anthropic Messages");
-  });
-
   it.each`
     modelName               | api                     | reasoning | input                | contextWindow | maxTokens  | compat                                                                                                                                      | thinkingLevelMap
     ${"MAI-DS-R1"}          | ${"openai-completions"} | ${true}   | ${["text"]}          | ${163_840}    | ${163_840} | ${{ supportsReasoningEffort: false, maxTokensField: "max_tokens" }}                                                                         | ${undefined}
@@ -664,7 +657,7 @@ describe("microsoft-foundry plugin", () => {
     });
     expect(result.configPatch?.agents?.defaults).not.toHaveProperty("imageGenerationModel");
     expect(result.defaultModel).toBeUndefined();
-    expect(providerPatch(result).models[0]?.name).toBe("MAI-Image-2.5");
+    expect(providerPatch(result).models?.[0]?.name).toBe("MAI-Image-2.5");
   });
 
   it("does not reuse stale API-key model metadata when selecting a different deployment", async () => {
@@ -685,7 +678,7 @@ describe("microsoft-foundry plugin", () => {
       opts: { azureOpenaiApiKey: "test-api-key" },
       secretInputMode: "plaintext",
     } as never);
-    const model = result?.configPatch?.models?.providers?.["microsoft-foundry"]?.models[0];
+    const model = result?.configPatch?.models?.providers?.["microsoft-foundry"]?.models?.[0];
     expect(model).toMatchObject({
       id: "prod-gpt",
       name: "prod-gpt",
@@ -804,13 +797,13 @@ describe("microsoft-foundry plugin", () => {
       expect(provider[key]).toBeUndefined();
       expect(Object.hasOwn(provider, key)).toBe(true);
     }
-    expect(provider?.models.map((model) => [model.id, model.baseUrl])).toEqual([
+    expect(provider?.models?.map((model) => [model.id, model.baseUrl])).toEqual([
       ["deployment-gpt5", baseUrl],
       ["deployment-gpt4o", baseUrl],
       ["deployment-fable", `${endpoint}/anthropic`],
     ]);
     expect(result.defaultModel).toBe("microsoft-foundry/deployment-gpt5");
-    expect(provider.models[0]).toMatchObject({
+    expect(provider.models?.[0]).toMatchObject({
       input: ["text", "image"],
       compat: { supportsStore: false, maxTokensField: "max_completion_tokens" },
     });

@@ -6,6 +6,7 @@ import {
   installMockGateway,
   requireRecord,
   requireString,
+  openAiAuthor,
 } from "./chat-flow.test-support.ts";
 import { polledAttribute, polledCount, polledText } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
@@ -17,8 +18,8 @@ const finalText = "The lunar exhibit inventory is complete.";
 suite.define(() => {
   it.each([
     ["visible final answer", "inventory-final_answer", false],
-    ["folded tool result", "inventory-earlier", false],
-    ["deep tool result in standalone work", "inventory-earlier", true],
+    ["folded earlier assistant message", "inventory-earlier", false],
+    ["deep earlier message in standalone work", "inventory-earlier", true],
   ] as const)(
     "reveals the %s after replying through transcript search",
     async (_name, sourceId, deepWork) => {
@@ -28,9 +29,9 @@ suite.define(() => {
         const settledRunId = "museum-inventory-run";
         const earlierWork = deepWork
           ? Array.from({ length: 32 }, (_, index) => ({
-              role: index % 2 === 1 ? "assistant" : "toolResult",
-              ...(index % 2 === 1
-                ? {}
+              role: index % 2 === 0 ? "assistant" : "toolResult",
+              ...(index % 2 === 0
+                ? openAiAuthor
                 : { toolName: "read", toolCallId: `inventory-read-${index}` }),
               content: `Inspecting museum room ${index + 1}.`,
               timestamp: 1_800_000_000_001 + index,
@@ -54,10 +55,9 @@ suite.define(() => {
             },
             ...earlierWork,
             {
-              role: "toolResult",
-              toolName: "read",
-              toolCallId: "inventory-earlier-read",
+              role: "assistant",
               ...(!deepWork ? { runId: settledRunId } : {}),
+              ...openAiAuthor,
               content: earlierText,
               timestamp: 1_800_000_000_001 + earlierWork.length,
               __openclaw: { id: "inventory-earlier", seq: 2 + earlierWork.length },
@@ -67,6 +67,7 @@ suite.define(() => {
               phase: "final_answer",
               stopReason: "stop",
               ...(!deepWork ? { runId: settledRunId } : {}),
+              ...openAiAuthor,
               content: finalText,
               timestamp: 1_800_000_000_002 + earlierWork.length,
               __openclaw: { id: "inventory-final_answer", seq: 3 + earlierWork.length },
@@ -76,7 +77,7 @@ suite.define(() => {
         const pane = page.locator(".chat-pane-cache__pane--active");
         const source = pane.locator(`.chat-bubble[data-entry-id="${sourceId}"]`);
         const earlierMessage = pane.locator('.chat-bubble[data-entry-id="inventory-earlier"]');
-        const workToggle = pane.locator(".chat-work-group > button").last();
+        const workToggle = pane.locator(".chat-work-group button");
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await polledAttribute(workToggle, "aria-expanded").toBe("false");
         expect(await earlierMessage.count()).toBe(0);
@@ -87,13 +88,10 @@ suite.define(() => {
           /Mac|iPhone|iPad|iPod/.test(navigator.platform) ? "Meta+f" : "Control+f",
         );
         await page.keyboard.press(shortcut);
-        const search = pane.getByRole("textbox", { name: "Search messages", exact: true });
+        const search = pane.getByRole("textbox", { name: "Search loaded messages", exact: true });
         await search.fill(sourceText);
         await polledCount(pane.locator('.chat-bubble[data-entry-id="inventory-prompt"]')).toBe(0);
         await source.waitFor({ state: "visible" });
-        if (sourceId === "inventory-earlier") {
-          await source.locator(".chat-tool-msg-summary").click();
-        }
         await source.click({ button: "right" });
         await page
           .locator(".chat-reply-context-menu")
@@ -107,7 +105,7 @@ suite.define(() => {
         const params = requireRecord((await gateway.waitForRequest("chat.send")).params);
         expect(params).toMatchObject({ sessionKey, message: followup, replyToId: sourceId });
         await expect.poll(() => composer.inputValue()).toBe("");
-        await exactButton(pane, "Stop generating").waitFor({ state: "visible" });
+        await exactButton(pane, "Stop").waitFor({ state: "visible" });
         await gateway.emitChatFinal({
           sessionKey,
           runId: requireString(params.idempotencyKey, "reply run ID"),
@@ -117,11 +115,13 @@ suite.define(() => {
         await polledAttribute(workToggle, "aria-expanded").toBe("false");
         expect(await earlierMessage.count()).toBe(0);
         const preview = pane.locator(".chat-reply-attribution--inline");
+        await expect.poll(() => preview.getByRole("button").count()).toBe(1);
 
         await preview.getByRole("button").click();
-        await pane
-          .locator(`[data-entry-id="${sourceId}"].chat-bubble--reply-target`)
-          .waitFor({ state: "visible" });
+        await polledCount(
+          pane.locator(`[data-entry-id="${sourceId}"].chat-bubble--reply-target`),
+        ).toBe(1);
+        expect(await source.isVisible()).toBe(true);
         await expect
           .poll(() =>
             source.evaluate((element, isDeep) => {

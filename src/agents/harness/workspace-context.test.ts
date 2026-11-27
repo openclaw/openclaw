@@ -104,6 +104,32 @@ it("routes root memory before budgeting and keeps nested memory as context", asy
   expect(context.instructionSnapshot.files).toEqual([contextFile(instructions)]);
 });
 
+it.each(["full", "instructions-only"] as const)(
+  "keeps only root instructions in the projected %s snapshot",
+  async (scope) => {
+    const context = await prepare(
+      [
+        bootstrapFile("AGENTS.md", "Root operating rules."),
+        bootstrapFile("AGENTS.md", "Nested project rules.", "pkg/AGENTS.md"),
+      ],
+      {
+        scope,
+        projectPath: (filePath) => path.join("/sandbox", path.relative(workspaceDir, filePath)),
+      },
+    );
+    expect(context.instructionSnapshot.files).toEqual([
+      { path: path.join("/sandbox", "AGENTS.md"), content: "Root operating rules." },
+    ]);
+    expect(context.instructionSnapshot.instructions).toContain("Root operating rules.");
+    expect(context.instructionSnapshot.instructions).not.toContain("Nested project rules.");
+    expect(context.promptContextFiles).toEqual(
+      scope === "full"
+        ? [{ path: path.join("/sandbox", "pkg", "AGENTS.md"), content: "Nested project rules." }]
+        : [],
+    );
+  },
+);
+
 it("passes agent context to memory guidance without MEMORY.md", async () => {
   const promptBuilder = (context: {
     agentId?: string;

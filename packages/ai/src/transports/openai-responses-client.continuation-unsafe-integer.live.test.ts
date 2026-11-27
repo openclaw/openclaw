@@ -1,5 +1,6 @@
 import type { Context, Model } from "@openclaw/llm-core";
 import { afterEach, describe, expect, it } from "vitest";
+import { writerState } from "../provider-state.test-support.js";
 import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
@@ -23,6 +24,7 @@ async function run(messages: Context["messages"]) {
   const options = {
     apiKey,
     sessionId: "live-unsafe-integer-continuation",
+    ...writerState("live-unsafe-integer-continuation"),
     transport: "sse",
     reasoningEffort: "low",
     maxTokens: 256,

@@ -6,13 +6,17 @@ import type {
 import type { GuestWelcomeHandle } from "../../app/guest-welcome-handle.ts";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import type { ChatProviderReviewOwner } from "./chat-provider-review-controller.tsx";
-import { renderGuestWelcomeStatus } from "./components/chat-guest-welcome-status.tsx";
+import { renderGuestWelcomeStatus } from "./components/chat-guest-welcome.tsx";
 import { ChatLazyBoundary } from "./components/chat-lazy-boundary.tsx";
 import type { ChatRunError } from "./run-lifecycle.ts";
+import type { ParticipantApprovalNotice } from "./session-approval-projection.ts";
 import type { ProviderPolicyNotice } from "./tool-stream-contract.ts";
 import type { WorkspaceResultConflict } from "./workspace-conflict.ts";
 import "../../styles/chat/conversation-notices.css";
 
+const SessionApprovalNotice = lazy(() => import("./session-approval-notice.tsx"), {
+  export: "SessionApprovalNotice",
+});
 const ChatProviderReviewNotice = lazy(() => import("./chat-provider-review-controller.tsx"), {
   export: "ChatProviderReviewNotice",
 });
@@ -38,6 +42,7 @@ export type ChatViewNoticesProps = {
   diskSpace?: SessionPlacementDiskSpace;
   workerRuntimeInstall?: SessionPlacementWorkerRuntimeInstall;
   error?: string | null;
+  errorDetail?: unknown;
   onDismissError?: () => void;
 };
 
@@ -47,11 +52,13 @@ export type ChatComposerNoticesProps = ChatPlacementStartupNoticeProps & {
   connected?: boolean;
   messages: readonly unknown[];
   providerPolicyNotice?: ProviderPolicyNotice | null;
+  participantApproval?: ParticipantApprovalNotice | null;
   // Resolve after the first pane frame prepares the Solid owner's permission facts.
   readProviderReview?: () => ChatProviderReviewOwner | undefined;
   runError?: ChatRunError | null;
   onRefresh?: () => void;
   onDismissWorkspaceConflict?: () => void;
+  onDismissRunError?: () => void;
   workspaceConflict?: WorkspaceResultConflict | null;
 };
 
@@ -101,6 +108,13 @@ export function renderChatComposerNotices(props: ChatComposerNoticesProps) {
       </Show>
       <Show when={props.guestWelcome} keyed>
         {(owner) => renderGuestWelcomeStatus(owner)}
+      </Show>
+      <Show when={props.participantApproval}>
+        {(approval) => (
+          <ChatLazyBoundary>
+            <SessionApprovalNotice approval={approval()} />
+          </ChatLazyBoundary>
+        )}
       </Show>
     </>
   );

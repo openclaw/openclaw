@@ -2,7 +2,7 @@ import { readSessionTranscriptBoundedMessageTailPageFromProjection } from "../co
 import { withCurrentProjectionSnapshot } from "../config/sessions/session-accessor.sqlite-active-projection.js";
 import { preserveSessionEntryCacheAcrossWrite } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
-import { SessionTranscriptColdError } from "../config/sessions/session-cold-storage-state.js";
+import { SessionTranscriptColdError } from "../config/sessions/session-transcript-cold-error.js";
 import {
   isSessionTranscriptProjectionUnavailableError,
   SessionTranscriptStorageUnavailableError,
@@ -13,6 +13,7 @@ import type { OpenClawAgentDatabase } from "../state/openclaw-agent-db-contract.
 import { projectSessionDisplayMessage } from "./session-display-projection.js";
 import type { SessionRowTranscriptReadParams } from "./session-row-transcript-backfill.types.js";
 import {
+  EMPTY_SESSION_ROW_TRANSCRIPT_PROJECTION,
   projectSessionRowAssistantMessage,
   SESSION_ROW_TRANSCRIPT_PREVIEW_MAX_BYTES,
   SESSION_ROW_TRANSCRIPT_TERMINAL_MAX_BYTES,
@@ -45,8 +46,8 @@ export function backfillSessionRowTranscriptFieldsInDatabase(
               }).events[0]?.event
             : undefined;
         const fields: SessionRowTranscriptProjection = {
-          lastMessagePreview: null,
-          lastAssistantMessage: null,
+          ...EMPTY_SESSION_ROW_TRANSCRIPT_PROJECTION,
+          hasMessages: tail.totalMessages > 0,
           terminalModel: readSessionTranscriptTerminalModel(terminalEvent),
           indexedSeq: projection.state.indexedSeq < 0 ? null : projection.state.indexedSeq,
         };

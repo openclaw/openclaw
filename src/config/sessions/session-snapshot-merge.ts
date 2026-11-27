@@ -46,13 +46,6 @@ const MODEL_OVERRIDE_DEPENDENT_FIELDS = new Set<keyof SessionEntry>([
 
 const MODEL_OVERRIDE_CONFLICT_DEPENDENT_FIELDS = ["contextWindow", "thinkingLevel"] as const;
 
-const MAIN_SESSION_RECOVERY_TRANSACTION_FIELDS = [
-  "abortedLastRun",
-  "restartRecoveryRuns",
-  "restartRecoveryForceSafeTools",
-  "mainRestartRecovery",
-] as const satisfies ReadonlyArray<keyof SessionEntry>;
-
 function anySessionFieldChanged(
   before: SessionEntryRecord,
   after: SessionEntryRecord,
@@ -61,59 +54,9 @@ function anySessionFieldChanged(
   return fields.some((field) => !isDeepStrictEqual(before[field], after[field]));
 }
 
-function mainSessionRecoveryCycleChanged(before: SessionEntry, after: SessionEntry): boolean {
-  const beforeState = before.mainRestartRecovery;
-  const afterState = after.mainRestartRecovery;
-  return (
-    beforeState?.cycleId !== afterState?.cycleId ||
-    beforeState?.chargedAttempts !== afterState?.chargedAttempts ||
-    beforeState?.startedAttempt !== afterState?.startedAttempt ||
-    !isDeepStrictEqual(beforeState?.reservation, afterState?.reservation) ||
-    !isDeepStrictEqual(beforeState?.tombstone, afterState?.tombstone)
-  );
-}
-
-function mainSessionRecoveryTransactionChanged(before: SessionEntry, after: SessionEntry): boolean {
-  return (
-    before.abortedLastRun !== after.abortedLastRun ||
-    !isDeepStrictEqual(before.restartRecoveryRuns, after.restartRecoveryRuns) ||
-    before.restartRecoveryForceSafeTools !== after.restartRecoveryForceSafeTools ||
-    mainSessionRecoveryCycleChanged(before, after)
-  );
-}
-
-function mainSessionRecoveryOwnershipChanged(before: SessionEntry, after: SessionEntry): boolean {
-  return (
-    before.mainRestartRecovery?.revision !== after.mainRestartRecovery?.revision ||
-    !isDeepStrictEqual(
-      before.mainRestartRecovery?.foregroundClaims,
-      after.mainRestartRecovery?.foregroundClaims,
-    )
-  );
-}
-
-function restartRecoveryRunsOnlyConsumed(before: SessionEntry, after: SessionEntry): boolean {
-  const initialRuns = new Set(
-    (before.restartRecoveryRuns ?? []).map((run) => `${run.runId}\u0000${run.lifecycleGeneration}`),
-  );
-  return (after.restartRecoveryRuns ?? []).every((run) =>
-    initialRuns.has(`${run.runId}\u0000${run.lifecycleGeneration}`),
-  );
-}
-
-function isCanonicalMainSessionRecoveryClear(entry: SessionEntry): boolean {
-  return (
-    entry.abortedLastRun === false &&
-    entry.restartRecoveryRuns === undefined &&
-    entry.restartRecoveryForceSafeTools === undefined &&
-    entry.mainRestartRecovery === undefined
-  );
-}
-
 /** Projects run-local snapshot changes without restoring concurrently changed fields. */
 export function projectSessionSnapshotChanges(
   params: SessionSnapshotChanges & {
-    reassertAbortedLastRun?: boolean;
     reassertLiveModelSwitchPending?: boolean;
   },
 ): Partial<SessionEntry> {
@@ -189,55 +132,10 @@ export function projectSessionSnapshotChanges(
     patch.modelProvider = params.next.modelProvider;
   }
 
-  const mainRecoveryChanged = mainSessionRecoveryTransactionChanged(params.initial, params.next);
-  const mainRecoveryChangedConcurrently = mainSessionRecoveryTransactionChanged(
-    params.initial,
-    params.current,
-  );
-  const mainRecoveryOwnershipChangedConcurrently = mainSessionRecoveryOwnershipChanged(
-    params.initial,
-    params.current,
-  );
-  const initialForegroundClaims = params.initial.mainRestartRecovery?.foregroundClaims;
-  const currentForegroundClaims = params.current.mainRestartRecovery?.foregroundClaims;
-  if (
-    params.reassertAbortedLastRun &&
-    params.next.abortedLastRun === true &&
-    initialForegroundClaims &&
-    currentForegroundClaims &&
-    params.initial.mainRestartRecovery?.cycleId === params.current.mainRestartRecovery?.cycleId &&
-    initialForegroundClaims.lifecycleGeneration === currentForegroundClaims.lifecycleGeneration
-  ) {
-    // A terminal abort is authoritative even when true matches this owner's
-    // initial snapshot. Preserve the concurrently narrowed owner aggregate.
-    patch.abortedLastRun = true;
-  }
-  const currentOnlyConsumedLifecycleFences =
-    isCanonicalMainSessionRecoveryClear(params.next) &&
-    !mainRecoveryOwnershipChangedConcurrently &&
-    Boolean(initial.mainRestartRecovery && current.mainRestartRecovery) &&
-    !mainSessionRecoveryCycleChanged(initial, current) &&
-    params.initial.restartRecoveryForceSafeTools === params.current.restartRecoveryForceSafeTools &&
-    restartRecoveryRunsOnlyConsumed(params.initial, params.current);
-  if (
-    mainRecoveryChanged &&
-    !mainRecoveryOwnershipChangedConcurrently &&
-    (!mainRecoveryChangedConcurrently || currentOnlyConsumedLifecycleFences)
-  ) {
-    // Apply all four fields together. Concurrent ownership changes settle through
-    // their lifecycle/release owner, never through an older run-local snapshot.
-    for (const field of MAIN_SESSION_RECOVERY_TRANSACTION_FIELDS) {
-      patchRecord[field] = Object.hasOwn(params.next, field) ? next[field] : undefined;
-    }
-  }
-
   for (const field of fields) {
     if (
       field === "model" ||
       field === "modelProvider" ||
-      MAIN_SESSION_RECOVERY_TRANSACTION_FIELDS.includes(
-        field as (typeof MAIN_SESSION_RECOVERY_TRANSACTION_FIELDS)[number],
-      ) ||
       SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS.includes(
         field as (typeof SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS)[number],
       )

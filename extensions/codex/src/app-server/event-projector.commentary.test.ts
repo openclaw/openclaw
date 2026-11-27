@@ -1,3 +1,4 @@
+import { onAgentEvent as subscribeAgentEvents } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { finalMessage as finalItem } from "./event-projector.compact.test-support.js";
 import * as fixture from "./event-projector.compact.test-support.js";
 import {
@@ -515,6 +516,45 @@ describe("CodexAppServerEventProjector text and guardian projection", () => {
     expect(JSON.stringify(fixture.result(projector).messagesSnapshot)).not.toContain("Codex plan:");
   });
 
+  it("streams native reasoning items without channel callbacks before the turn finishes", async () => {
+    const listener = vi.fn();
+    const unsubscribe = subscribeAgentEvents(listener);
+    try {
+      const projector = await createProjector();
+      await fixture.notify(projector, "item/reasoning/summaryTextDelta", {
+        itemId: "reason-1",
+        summaryIndex: 0,
+        delta: "Checking",
+      });
+      expect(fixture.events(listener, "thinking")).toMatchObject([
+        { data: { itemId: "reason-1", text: "Checking", delta: "Checking" } },
+      ]);
+      const completed = { type: "reasoning", id: "reason-1", summary: ["Checked."], content: [] };
+      await fixture.complete(projector, completed);
+      await fixture.complete(projector, completed);
+      await fixture.start(projector, {
+        type: "reasoning",
+        id: "reason-2",
+        summary: ["Next check."],
+        content: [],
+      });
+      await fixture.complete(projector, {
+        type: "reasoning",
+        id: "reason-2",
+        summary: [],
+        content: [],
+      });
+      expect(fixture.events(listener, "thinking")).toMatchObject([
+        { data: { itemId: "reason-1", text: "Checking" } },
+        { data: { itemId: "reason-1", text: "Checked." } },
+        { data: { itemId: "reason-2", text: "Next check." } },
+        { data: { itemId: "reason-2", text: "" } },
+      ]);
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it("orders streamed reasoning sections and replaces them with authoritative completion", async () => {
     const onReasoningStream = vi.fn();
     const onReasoningEnd = vi.fn();
@@ -556,9 +596,26 @@ describe("CodexAppServerEventProjector text and guardian projection", () => {
     const text = "First summary\n\nSecond summary\n\nCompleted reasoning\n\nNext item";
     expect(onReasoningStream).toHaveBeenLastCalledWith({ text, isReasoningSnapshot: true });
     expect(onReasoningEnd).toHaveBeenCalledOnce();
-    expect(fixture.result(projector).messagesSnapshot).toContainEqual(
-      expect.objectContaining({ content: [{ type: "thinking", thinking: text }] }),
-    );
+    expect(
+      fixture
+        .result(projector)
+        .messagesSnapshot?.filter(
+          (message) =>
+            message.role === "assistant" &&
+            message.content.some((part) => part.type === "thinking"),
+        ),
+    ).toMatchObject([
+      {
+        content: [
+          { type: "thinking", thinking: "First summary\n\nSecond summary\n\nCompleted reasoning" },
+        ],
+        __openclaw: { mirrorIdentity: "turn-1:reasoning:reason-1" },
+      },
+      {
+        content: [{ type: "thinking", thinking: "Next item" }],
+        __openclaw: { mirrorIdentity: "turn-1:reasoning:reason-2" },
+      },
+    ]);
   });
 });
 

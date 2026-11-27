@@ -15,10 +15,13 @@ import { parse as parseYaml } from "yaml";
 import { isRecord as isJsonRecord } from "../packages/normalization-core/src/record-coerce.ts";
 import {
   decodePublicationDispatchEnvelope,
+  dispatchEnvelopeFromInputs,
   normalizePublicationIntent,
   normalizePublicationLaneInputs,
   publicationDispatchEnvelope,
   publicationIntentInputs,
+  validatePublicationVersionSelection,
+  type PublicationSelection,
 } from "./full-release-publication-contract.mjs";
 import {
   classifyReleaseGhTransportError,
@@ -49,10 +52,22 @@ import {
 import { execPlainGh } from "./lib/plain-gh.mjs";
 import { validateCandidateChangelog } from "./lib/release-candidate-changelog.mts";
 import { parseReleaseContextRef, resolveReleaseContextIdentity } from "./lib/release-context.mjs";
-import { resolveQualificationBaselines } from "./lib/release-upgrade-baseline.mjs";
+import {
+  resolveQualificationBaselines,
+  validateQualificationBaselines,
+} from "./lib/release-upgrade-baseline.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
+import { validateActiveExtendedStableLine } from "./openclaw-npm-extended-stable-release.mjs";
 import { validatePackageSourceRef } from "./package-source-preflight.mjs";
-import { buildQualificationAdmissionRequest } from "./release-qualification-admission.mjs";
+import {
+  validateCandidateActorPermissionWithGithub,
+  verifyCandidateProvenanceWithGithub,
+} from "./release-candidate-provenance.mjs";
+import {
+  buildQualificationAdmissionRequest,
+  revalidateQualificationAdmissionAuthority,
+  type QualificationAdmission,
+} from "./release-qualification-admission.mjs";
 
 export { dispatchInputsDigest } from "./lib/full-release-dispatch-request.mts";
 
@@ -94,6 +109,7 @@ const TRUSTED_WORKFLOW_TAG_PATTERN = /^release-publish\/([a-f0-9]{12})-[1-9][0-9
 const SHA_PATTERN = /^[a-f0-9]{40}$/u;
 const RERUN_GROUPS = new Set([
   "all",
+  "build-only",
   "ci",
   "plugin-prerelease",
   "install-smoke",
@@ -101,6 +117,7 @@ const RERUN_GROUPS = new Set([
   "windows-node",
   "live-e2e",
   "package",
+  "qualified-package",
   "qa-parity",
   "qa-live",
   "npm-telegram",
@@ -193,23 +210,31 @@ export function fullReleaseConcurrencyBranchPrefix(
 }
 
 function usage() {
-  console.error(`Usage: node scripts/full-release-validation-at-sha.mjs [--sha <target-sha>] [--target-ref <canonical-release-branch-or-tag>] [--workflow-sha <candidate-sha>] [--trusted-workflow-ref <candidate|main|release-publish-tag>] [--admission-workflow-sha <P-sha>] [--admission-workflow-ref <main|release-publish-tag>] [--request-file <path>] [--keep-branch] [--dry-run] [-- -f key=value ...]
+  console.error(`Usage: node scripts/full-release-validation-at-sha.mjs [--sha <target-sha>] [--target-ref <canonical-release-branch-or-tag>] [--workflow-sha <qualification-sha>] [--trusted-workflow-ref <candidate|main|release-publish-tag>] [--admission-workflow-sha <P-sha>] [--admission-workflow-ref <main|release-publish-tag>] [--pin-admission-workflow] [--request-file <path>] [--keep-branch] [--dry-run] [-- -f key=value ...]
        node scripts/full-release-validation-at-sha.mjs --reconcile-request <path>
        node scripts/full-release-validation-at-sha.mjs --resume-request <path>
 
-Candidate-owned qualification is the default: C=Q. Invoking it attests that the
-selected exact candidate and its qualification policy are reviewed. The existing
+Admitted candidate qualification is the default: Q defaults to C. Explicitly
+select --workflow-sha to freeze an independent canonical-repository Q, including
+off-main tooling. Invoking it
+attests that the exact candidate and selected qualification policy are reviewed. The existing
 prepare workflow at independently trusted P authenticates the complete request;
 then this same dispatch owner runs the candidate workflow graph at Q. P defaults
-to a pinned main revision, never the qualification harness. Missing C/Q or P
+to a verified main revision that may advance before dispatch, never the qualification harness.
+Pass --pin-admission-workflow with an exact P SHA to require that main remain unchanged;
+protected publication tags are always pinned. Missing C/Q or P
 contracts require a deliberate backport/tooling repair; there is no main fallback.
 Explicit main/protected qualification tooling retains the historical diagnostic
 route. Scheduled main qualification selects that route explicitly.
 
 Retains a private request artifact before remote mutations. An existing --request-file
 always performs read-only reconciliation. --reconcile-request refuses a missing file.
---resume-request continues only an admitted candidate request before any Q ref
-mutation; after a qualification POST it is observation-only, never a redispatch.
+--resume-request continues an admitted candidate request before its first Q workflow
+POST, reusing an exact existing Q ref after interrupted creation. After a
+qualification POST it is observation-only, never a redispatch.
+Fresh validation checks committed mock exports before dispatch. For diagnostics or
+historical candidates, --skip-local-mock-preflight logs and skips only this local check.
+Build-only and retained requests are unchanged.
 Retain the artifact until operator cleanup; its loss never proves non-execution.
 Frozen tooling must declare FULL_RELEASE_DISPATCH_WITNESS_CONTRACT=1 before a new request.
 Prints the frozen candidate/tooling, effective profile, group, and soak selection
@@ -231,7 +256,10 @@ A numeric correction branch also accepts the base package only when its
 published base tag resolves to the exact Validation SHA.
 The release profile defaults to beta for beta candidates and stable otherwise; pass
 -f release_profile=full for the broad advisory sweep. Focused retries must use
-one controller rerun_group; the removed release-checks aggregate and the direct
+one controller rerun_group. For explicitly human-approved fast-track preparation,
+use -f rerun_group=build-only to build and seal publication artifacts without
+running validation. This is not validated evidence and cannot publish without
+an exact fast-track request and npm-release environment approval. The removed release-checks aggregate and the direct
 child's manual qa aggregate are not accepted.`);
 }
 
@@ -242,6 +270,10 @@ function run(command: string, args: string[], options: CommandOptions = {}) {
   }
   const output = execFileSync(command, args, {
     encoding: "utf8",
+    env:
+      command === "git" && args[0] === "rev-parse"
+        ? { ...process.env, GIT_NO_LAZY_FETCH: "1" }
+        : process.env,
     maxBuffer: MAX_LOCAL_COMMAND_OUTPUT_BYTES,
     stdio: options.stdio ?? ["ignore", "pipe", "inherit"],
   });
@@ -255,6 +287,10 @@ function runStatus(command: string, args: string[], options: CommandOptions = {}
   }
   return spawnSync(command, args, {
     encoding: "utf8",
+    env:
+      command === "git" && args[0] === "rev-parse"
+        ? { ...process.env, GIT_NO_LAZY_FETCH: "1" }
+        : process.env,
     killSignal: "SIGKILL",
     stdio: options.stdio ?? ["ignore", "pipe", "inherit"],
     timeout: options.timeoutMs ?? GH_READ_TIMEOUT_MS,
@@ -417,7 +453,9 @@ export function parseArgs(argv: string[]) {
     reconcileRequest: "",
     resumeRequest: "",
     specifiedInputs: [] as string[],
+    pinAdmissionWorkflow: false,
     keepBranch: false,
+    skipLocalMockPreflight: false,
     dryRun: false,
     inputs,
   };
@@ -453,8 +491,16 @@ export function parseArgs(argv: string[]) {
       i += 1;
       continue;
     }
+    if (arg === "--pin-admission-workflow") {
+      args.pinAdmissionWorkflow = true;
+      continue;
+    }
     if (arg === "--keep-branch") {
       args.keepBranch = true;
+      continue;
+    }
+    if (arg === "--skip-local-mock-preflight") {
+      args.skipLocalMockPreflight = true;
       continue;
     }
     if (arg === "--dry-run") {
@@ -517,15 +563,33 @@ export function parseArgs(argv: string[]) {
   if (!RERUN_GROUPS.has(args.inputs.rerun_group)) {
     throw new Error(`rerun_group must be one of: ${[...RERUN_GROUPS].join(", ")}`);
   }
+  // Build-only admission rejects reused evidence; do not inherit the reuse default.
+  if (args.inputs.rerun_group === "build-only") {
+    if (args.specifiedInputs.includes("reuse_evidence") && args.inputs.reuse_evidence !== "false") {
+      throw new Error("rerun_group=build-only requires fresh qualification; omit reuse_evidence");
+    }
+    args.inputs.reuse_evidence = "false";
+  }
   if (Object.hasOwn(args.inputs, "ref")) {
     throw new Error("SHA-pinned release validation reserves the ref input for --sha");
   }
   if (Object.hasOwn(args.inputs, "expected_sha")) {
     throw new Error("SHA-pinned release validation reserves expected_sha for the resolved --sha");
   }
-  if (Object.hasOwn(args.inputs, "qualification_baselines_json")) {
+  if (
+    Object.hasOwn(args.inputs, "qualification_baselines_json") &&
+    args.trustedWorkflowRef !== "candidate"
+  ) {
+    throw new Error("Explicit qualification baselines require candidate admission");
+  }
+  if (
+    Object.hasOwn(args.inputs, "publication_artifact_source_json") &&
+    (args.trustedWorkflowRef !== "candidate" ||
+      args.inputs.rerun_group !== "all" ||
+      args.inputs.reuse_evidence !== "true")
+  ) {
     throw new Error(
-      "SHA-pinned qualification resolves its candidate-owned baselines before admission; qualification_baselines_json is reserved",
+      "Explicit publication artifacts require candidate admission, rerun_group=all, and reuse_evidence=true",
     );
   }
   if (Object.hasOwn(args.inputs, "trusted_workflow_json")) {
@@ -581,6 +645,9 @@ export function parseArgs(argv: string[]) {
   }
   if (args.admissionWorkflowRef !== "main" && !SHA_PATTERN.test(args.admissionWorkflowSha)) {
     throw new Error("Protected admission tooling requires its full --admission-workflow-sha");
+  }
+  if (args.pinAdmissionWorkflow && !SHA_PATTERN.test(args.admissionWorkflowSha)) {
+    throw new Error("--pin-admission-workflow requires a full --admission-workflow-sha");
   }
   return args;
 }
@@ -727,6 +794,87 @@ function preflightTargetShaFetch(targetSha: string) {
   }
 }
 
+type CandidateTrustReason = "main-ancestor" | "release-branch" | "release-tag";
+
+function candidateTrustReason(
+  targetSha: string,
+  targetContextRef: string,
+): CandidateTrustReason | undefined {
+  const canonicalBranch = (value: string) =>
+    /^release\/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$/u.test(value) ||
+    /^extended-stable\/[0-9]{4}\.[1-9][0-9]*\.33$/u.test(value);
+  if (targetContextRef !== targetSha) {
+    const context = parseReleaseContextRef(targetContextRef);
+    return context?.kind === "release tag"
+      ? "release-tag"
+      : context && canonicalBranch(context.ref)
+        ? "release-branch"
+        : undefined;
+  }
+  const comparison: unknown = JSON.parse(
+    runGh(["api", "-H", GH_NO_CACHE_HEADER, `repos/${REPOSITORY}/compare/${targetSha}...main`]),
+  );
+  if (
+    isJsonRecord(comparison) &&
+    (comparison.status === "ahead" || comparison.status === "identical")
+  ) {
+    return "main-ancestor";
+  }
+  const branchPages: unknown = JSON.parse(
+    runGh([
+      "api",
+      "--paginate",
+      "--slurp",
+      "-H",
+      GH_NO_CACHE_HEADER,
+      `repos/${REPOSITORY}/commits/${targetSha}/branches-where-head`,
+    ]),
+  );
+  const branches = Array.isArray(branchPages)
+    ? branchPages
+        .flatMap((page) => (Array.isArray(page) ? page : [page]))
+        .filter(isJsonRecord)
+        .map((branch) => stringValue(branch.name))
+        .filter(canonicalBranch)
+    : [];
+  if (branches.length === 1) {
+    return "release-branch";
+  }
+  const matchingTags = run("git", ["ls-remote", "--tags", "origin", "refs/tags/v*"])
+    .split("\n")
+    .flatMap((line) => {
+      const match = /^([a-f0-9]{40})\s+refs\/tags\/(v[^\s]+?)(?:\^\{\})?$/u.exec(line);
+      const contextRef = match?.[2];
+      if (!match || match[1] !== targetSha || !contextRef) {
+        return [];
+      }
+      const context = parseReleaseContextRef(contextRef);
+      return context?.kind === "release tag" ? [context.ref] : [];
+    });
+  if (matchingTags.length > 0) {
+    return "release-tag";
+  }
+  return undefined;
+}
+
+function preflightCandidateSigningProvenance(
+  targetSha: string,
+  targetContextRef: string,
+): string | undefined {
+  const trustReason = candidateTrustReason(targetSha, targetContextRef);
+  requireDispatch(trustReason, `Release candidate ${targetSha} is not trusted release provenance`);
+  const actor = verifyCandidateProvenanceWithGithub({
+    repository: REPOSITORY,
+    targetSha,
+    provenanceKind: trustReason,
+    request: (args: string[]) => JSON.parse(runGh(args)),
+  });
+  console.log(
+    `Release candidate provenance verified for ${targetSha}${actor ? ` (${actor})` : " (main-ancestor)"}`,
+  );
+  return actor;
+}
+
 // pnpm release:candidate applies these gates after validation finishes; check
 // them first so an unpublishable candidate never spends a validation run.
 // Extended-stable publication does not use that checklist.
@@ -743,12 +891,15 @@ function validatePublishCandidateChangelog(
     resolveReleaseContextIdentity(targetContextRef, targetVersion)?.releaseTag ??
     `v${targetVersion}`;
   try {
-    validateCandidateChangelog({
+    const checked = validateCandidateChangelog({
       rootDir: process.cwd(),
       repository: REPOSITORY,
       tag: releaseTag,
       targetSha,
     });
+    for (const diagnostic of checked.releaseNotesProvenance.diagnostics ?? []) {
+      console.warn("Changelog warning: " + diagnostic);
+    }
   } catch (error) {
     throw new Error(
       `Candidate ${targetSha} would fail the pnpm release:candidate changelog gates for ${releaseTag}: ${error instanceof Error ? error.message : String(error)}. Fix the release notes or contribution record on the release branch (its recorded target must be reachable from the candidate), then validate the new candidate SHA.`,
@@ -836,7 +987,7 @@ export function formatCandidateToolingLagWarning(
   changedAreas: string[],
 ) {
   return [
-    `WARNING: candidate-owned Q=C tooling ${candidateSha} is ${commitCount} non-merge commit(s) behind main ${mainSha}, with ${changedPathCount} net changed path(s). Main cannot repair this candidate harness; review and port applicable release fixes before dispatch.`,
+    `WARNING: frozen qualification Q ${candidateSha} is ${commitCount} non-merge commit(s) behind main ${mainSha}, with ${changedPathCount} net changed path(s). Moving main cannot repair this harness; explicitly select and admit any replacement Q before dispatch.`,
     ...(changedAreas.length > 0
       ? ["Largest changed areas (share of net changed paths):", ...changedAreas]
       : []),
@@ -856,50 +1007,57 @@ function warnCandidateToolingLag(candidateSha: string) {
     );
     return;
   }
-  const mainSha = resolveSha("origin/main");
-  if (candidateSha === mainSha) {
-    return;
-  }
-  const commitCount = Number(
-    run("git", [
-      "rev-list",
-      "--count",
-      "--right-only",
-      "--no-merges",
-      `${candidateSha}...${mainSha}`,
-    ]),
-  );
-  // Long-lived release branches can differ from main by tens of thousands of
-  // paths; --shortstat keeps the count bounded instead of buffering every name.
-  const changedPathCount = Number(
-    /^\s*(\d+) files? changed/u.exec(
-      run("git", ["diff", "--no-renames", "--shortstat", candidateSha, mainSha]),
-    )?.[1] ?? 0,
-  );
-  if (commitCount > 0 && changedPathCount > 0) {
-    const changedAreas = run("git", [
-      "diff",
-      "--no-renames",
-      "--dirstat=files,1",
-      candidateSha,
-      mainSha,
-    ])
-      .split(/\r?\n/u)
-      .map((line) => line.trim())
-      .filter(Boolean);
-    console.warn(
-      formatCandidateToolingLagWarning(
+  try {
+    const mainSha = resolveSha("origin/main");
+    if (candidateSha === mainSha) {
+      return;
+    }
+    const commitCount = Number(
+      run("git", [
+        "rev-list",
+        "--count",
+        "--right-only",
+        "--no-merges",
+        `${candidateSha}...${mainSha}`,
+      ]),
+    );
+    // Long-lived release branches can differ from main by tens of thousands of
+    // paths; --shortstat keeps the count bounded instead of buffering every name.
+    const changedPathCount = Number(
+      /^\s*(\d+) files? changed/u.exec(
+        run("git", ["diff", "--no-renames", "--shortstat", candidateSha, mainSha]),
+      )?.[1] ?? 0,
+    );
+    if (commitCount > 0 && changedPathCount > 0) {
+      const changedAreas = run("git", [
+        "diff",
+        "--no-renames",
+        "--dirstat=files,1",
         candidateSha,
         mainSha,
-        commitCount,
-        changedPathCount,
-        changedAreas,
-      ),
+      ])
+        .split(/\r?\n/u)
+        .map((line) => line.trim())
+        .filter(Boolean);
+      console.warn(
+        formatCandidateToolingLagWarning(
+          candidateSha,
+          mainSha,
+          commitCount,
+          changedPathCount,
+          changedAreas,
+        ),
+      );
+    }
+  } catch {
+    // Drift reporting is advisory; the independent qualification gates below remain fatal.
+    console.warn(
+      "WARNING: candidate tooling lag is unavailable because the Git comparison failed; continuing with the existing qualification checks.",
     );
   }
 }
 
-function assertAdmissionContract(admissionWorkflowSha: string) {
+function assertAdmissionContract(admissionWorkflowSha: string, preflightFirst: boolean) {
   const workflow = parseYaml(
     run("git", ["show", `${admissionWorkflowSha}:.github/workflows/${ADMISSION_WORKFLOW}`]),
   );
@@ -907,12 +1065,20 @@ function assertAdmissionContract(admissionWorkflowSha: string) {
     workflow?.env?.RELEASE_QUALIFICATION_ADMISSION_CONTRACT === "1",
     "Selected P lacks qualification admission; update P independently without changing C/Q",
   );
+  requireDispatch(
+    !preflightFirst || workflow?.env?.RELEASE_PREFLIGHT_FIRST_CONTRACT === "1",
+    `Admission SHA ${admissionWorkflowSha} does not support preflight_first; select a supporting P before dispatch.`,
+  );
 }
 
 // Main routinely advances between P selection and the admission POST. A newer
 // tip replaces P only when it is trusted main, descends from the selected P,
 // and still declares the admission contract.
-function verifyMainAdmissionAdvance(previousSha: string, currentSha: string) {
+function verifyMainAdmissionAdvance(
+  previousSha: string,
+  currentSha: string,
+  preflightFirst: boolean,
+) {
   requireDispatch(
     resolveTrustedWorkflowSha(currentSha, "main") === currentSha,
     `Main tip ${currentSha} did not resolve to itself`,
@@ -921,7 +1087,7 @@ function verifyMainAdmissionAdvance(previousSha: string, currentSha: string) {
     runStatus("git", ["merge-base", "--is-ancestor", previousSha, currentSha]).status === 0,
     `Main tip ${currentSha} does not descend from selected P ${previousSha}`,
   );
-  assertAdmissionContract(currentSha);
+  assertAdmissionContract(currentSha, preflightFirst);
 }
 
 function requireDispatch(condition: unknown, message: string): asserts condition {
@@ -960,18 +1126,35 @@ function resolveDispatchSelection(workflowSha: string, overrides: Record<string,
     publication_selection_json,
     extension_test_exclude_patterns_json,
     qualification_baselines_json,
+    publication_artifact_source_json,
+    preflight_first,
     known_flaky_jobs_json,
     ...wireOverrides
   } = overrides;
   const laneInputs =
-    extension_test_exclude_patterns_json === undefined && qualification_baselines_json === undefined
+    extension_test_exclude_patterns_json === undefined &&
+    qualification_baselines_json === undefined &&
+    publication_artifact_source_json === undefined &&
+    preflight_first !== "true"
       ? undefined
       : {
           ...(extension_test_exclude_patterns_json === undefined
             ? {}
             : { extension_test_exclude_patterns_json }),
           ...(qualification_baselines_json === undefined ? {} : { qualification_baselines_json }),
+          ...(publication_artifact_source_json === undefined
+            ? {}
+            : { publication_artifact_source_json }),
+          ...(preflight_first === "true" ? { preflight_first } : {}),
         };
+  requireDispatch(
+    preflight_first === undefined || ["true", "false"].includes(preflight_first),
+    "preflight_first must be true or false",
+  );
+  requireDispatch(
+    preflight_first !== "true" || workflow.env.FULL_RELEASE_PREFLIGHT_FIRST_CONTRACT === "1",
+    `Tooling SHA ${workflowSha} does not support preflight_first; no remote refs or run were created.`,
+  );
   requireDispatch(
     laneInputs === undefined || workflow.env.FULL_RELEASE_LANE_INPUTS_CONTRACT === "1",
     `Tooling SHA ${workflowSha} does not support packed lane inputs; no remote refs or run were created. Keep the frozen Tooling SHA.`,
@@ -1030,7 +1213,11 @@ function resolveDispatchSelection(workflowSha: string, overrides: Record<string,
     inputs[key] = value;
     wireInputs[key] = String(value);
   }
-  decodePublicationDispatchEnvelope(inputs.trusted_workflow_json);
+  if (preflight_first === "true") {
+    dispatchEnvelopeFromInputs(inputs);
+  } else {
+    decodePublicationDispatchEnvelope(inputs.trusted_workflow_json);
+  }
   return {
     inputs,
     wireInputs,
@@ -1149,17 +1336,14 @@ function readActiveConcurrencyRuns(request: DispatchRequest) {
       requireDispatch(
         isJsonRecord(value) &&
           Array.isArray(value.workflow_runs) &&
+          value.workflow_runs.length <= RUN_PAGE_SIZE &&
           Number.isSafeInteger(value.total_count) &&
           Number(value.total_count) >= 0 &&
           Number(value.total_count) <= RUN_PAGE_SIZE * MAX_RUN_PAGES,
         "Active run inventory is incomplete or exceeds its bound",
       );
       total ??= Number(value.total_count);
-      requireDispatch(
-        value.total_count === total &&
-          value.workflow_runs.length === Math.min(RUN_PAGE_SIZE, total - statusCount),
-        "Active run pagination changed or is incomplete",
-      );
+      const expectedPageSize = Math.min(RUN_PAGE_SIZE, total - statusCount);
       for (const item of value.workflow_runs) {
         requireDispatch(
           isJsonRecord(item) &&
@@ -1173,25 +1357,45 @@ function readActiveConcurrencyRuns(request: DispatchRequest) {
         statusCount += 1;
       }
       const next = response.headers.get("link")?.match(/<([^>]+)>;\s*rel="next"/u)?.[1];
+      if (next) {
+        const url = new URL(next);
+        requireDispatch(
+          url.origin === "https://api.github.com" &&
+            url.pathname === `/repos/${REPOSITORY}/actions/workflows/${request.workflowId}/runs` &&
+            url.searchParams.get("page") === String(page + 1) &&
+            url.searchParams.get("event") === "workflow_dispatch" &&
+            url.searchParams.get("status") === status &&
+            url.searchParams.get("per_page") === String(RUN_PAGE_SIZE),
+          "Active run pagination changed scope",
+        );
+      }
+      if (value.total_count !== total || value.workflow_runs.length !== expectedPageSize) {
+        // Only a well-formed page can be transient: restart every status after a count change.
+        return undefined;
+      }
       if (statusCount === total) {
         requireDispatch(!next, "Active run pagination is uncertain");
         break;
       }
       requireDispatch(next, "Active run inventory omitted its next page");
-      const url = new URL(next);
-      requireDispatch(
-        url.origin === "https://api.github.com" &&
-          url.pathname === `/repos/${REPOSITORY}/actions/workflows/${request.workflowId}/runs` &&
-          url.searchParams.get("page") === String(page + 1) &&
-          url.searchParams.get("event") === "workflow_dispatch" &&
-          url.searchParams.get("status") === status &&
-          url.searchParams.get("per_page") === String(RUN_PAGE_SIZE),
-        "Active run pagination changed scope",
-      );
     }
     requireDispatch(statusCount === total, "Active run inventory exceeded its page bound");
   }
   return runs;
+}
+
+function readStableActiveConcurrencyRuns(request: DispatchRequest) {
+  for (const delay of [0, 2_000, 4_000]) {
+    if (delay > 0) {
+      console.warn("Active run pagination changed or is incomplete; rescanning before dispatch.");
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delay);
+    }
+    const runs = readActiveConcurrencyRuns(request);
+    if (runs) {
+      return runs;
+    }
+  }
+  throw new Error("Active run pagination changed or is incomplete after three scans");
 }
 
 function assertNoActiveConcurrencyRun(request: DispatchRequest) {
@@ -1199,7 +1403,7 @@ function assertNoActiveConcurrencyRun(request: DispatchRequest) {
     inputs: request.inputs,
     effectiveSoak: request.effectiveSoak,
   });
-  const active = readActiveConcurrencyRuns(request).filter((workflowRun) =>
+  const active = readStableActiveConcurrencyRuns(request).filter((workflowRun) =>
     stringValue(workflowRun.head_branch).startsWith(branchPrefix),
   );
   for (const workflowRun of active) {
@@ -1438,6 +1642,28 @@ const qualificationDispatchClient = {
   verifyMainAdvance: verifyMainAdmissionAdvance,
 };
 
+function verifyCandidateTransportRef(request: DispatchRequest) {
+  const pinned: unknown = JSON.parse(
+    readGhApi(`repos/${REPOSITORY}/git/ref/heads/${request.workflowRef}`),
+  );
+  requireDispatch(
+    isJsonRecord(pinned) &&
+      pinned.ref === `refs/heads/${request.workflowRef}` &&
+      isJsonRecord(pinned.object) &&
+      pinned.object.type === "commit" &&
+      pinned.object.sha === request.workflowSha,
+    "Candidate qualification transport ref moved before dispatch",
+  );
+}
+
+function verifyPreparedTransport(record: DispatchRecord) {
+  requireDispatch(
+    readDispatchRuns(record.request).length === 0,
+    "Prepared qualification transport already has workflow runs; do not dispatch",
+  );
+  verifyCandidateTransportRef(record.request);
+}
+
 async function reopenDispatch(path: string, args: ReturnType<typeof parseArgs>, argv: string[]) {
   const record = readDispatchRecord(path);
   const request = record.request;
@@ -1450,6 +1676,7 @@ async function reopenDispatch(path: string, args: ReturnType<typeof parseArgs>, 
     retainedInputs = {
       ...retainedInputs,
       ...envelope.laneInputs,
+      preflight_first: envelope.laneInputs?.preflight_first ?? "false",
       validation_purpose: retainedIntent.validationPurpose,
       publication_selection_json: retainedIntent.publicationSelectionJson,
     };
@@ -1483,6 +1710,17 @@ async function reopenDispatch(path: string, args: ReturnType<typeof parseArgs>, 
       console.log(
         `admission=observed: https://github.com/${REPOSITORY}/actions/runs/${observed.run.id}`,
       );
+      if (record.refs.workflow === "uncertain") {
+        verifyPreparedTransport(record);
+        console.log(
+          "Verified existing qualification transport; resume will reuse it without another ref POST.",
+        );
+      } else {
+        requireDispatch(
+          record.refs.workflow === "intended",
+          "Prepared qualification ref state is not resumable",
+        );
+      }
       console.log(
         `Qualification has not dispatched. Continue the same retained request with --resume-request ${JSON.stringify(path)}`,
       );
@@ -1680,7 +1918,11 @@ function releaseDecisionAvailable(parentRunId: string, parentRunAttempt: number)
   }
 }
 
-function waitForWorkflowRun(parentRunId: string, workflowSha: string, record?: DispatchRecord) {
+function waitForWorkflowRun(
+  parentRunId: string,
+  workflowSha: string,
+  record?: DispatchRecord,
+): "success" | "pending" {
   let lastSummary = "";
   let consecutiveErrors = 0;
   const startedAt = Date.now();
@@ -1726,6 +1968,27 @@ function waitForWorkflowRun(parentRunId: string, workflowSha: string, record?: D
       }
       if (decision.state === "ready") {
         const releaseDecision = tryReadReleaseDecision(parentRunId, attempt, workflowSha);
+        if (
+          releaseDecision?.state === "blocked_diagnostics_running" &&
+          suite.status === "completed" &&
+          stringValue(suite.conclusion) &&
+          suite.conclusion !== "success"
+        ) {
+          throw new Error(
+            `Full Release Validation concluded ${stringValue(suite.conclusion).toLowerCase()}: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
+          );
+        }
+        if (
+          releaseDecision?.state === "blocked_diagnostics_running" &&
+          suite.status !== "completed"
+        ) {
+          console.log(formatReleaseStateOutcome(releaseDecision));
+          console.log(
+            `Full Release Validation remains active: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
+          );
+          console.log(`Continue with: pnpm frv watch --run ${parentRunId}`);
+          return "pending";
+        }
         if (releaseDecision && releaseDecisionStopsForeground(releaseDecision.state)) {
           throw new Error(
             `${formatReleaseStateOutcome(releaseDecision)}\nhttps://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
@@ -1740,7 +2003,7 @@ function waitForWorkflowRun(parentRunId: string, workflowSha: string, record?: D
     }
     if (suite?.status === "completed" && stringValue(suite.conclusion)) {
       if (suite.conclusion === "success") {
-        return suite;
+        return "success";
       }
       throw new Error(
         `Full Release Validation concluded ${stringValue(suite.conclusion, "unknown").toLowerCase()}: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
@@ -1785,6 +2048,7 @@ export function releaseEvidenceVerificationArgs(
   verifierSourceSha: string,
   verifierSourceFile: string,
   trustedWorkflowRef = "main",
+  buildOnly = false,
 ) {
   if (!/^[1-9][0-9]*$/u.test(String(parentRunId))) {
     throw new Error("parent run ID must be a positive decimal");
@@ -1799,7 +2063,7 @@ export function releaseEvidenceVerificationArgs(
     throw new Error("trusted workflow ref must be main or a protected release-publish tag");
   }
   return [
-    "--validate-run",
+    buildOnly ? "--verify-build-only" : "--validate-run",
     String(parentRunId),
     "--trusted-workflow-ref",
     trustedWorkflowRef,
@@ -1900,6 +2164,7 @@ function verifyReleaseEvidence(
   parentRunId: string,
   workflowSha: string,
   trustedWorkflowRef: string,
+  buildOnly = false,
 ) {
   const verifierWorktree = mkdtempSync(join(tmpdir(), "openclaw-release-verifier-"));
   try {
@@ -1910,15 +2175,32 @@ function verifyReleaseEvidence(
     const evidence: unknown = JSON.parse(
       run(process.execPath, [
         verifier,
-        ...releaseEvidenceVerificationArgs(parentRunId, workflowSha, verifier, trustedWorkflowRef),
+        ...releaseEvidenceVerificationArgs(
+          parentRunId,
+          workflowSha,
+          verifier,
+          trustedWorkflowRef,
+          buildOnly,
+        ),
       ]),
     );
-    if (
-      !isJsonRecord(evidence) ||
-      evidence.valid !== true ||
-      !isJsonRecord(evidence.current) ||
-      !isJsonRecord(evidence.root)
-    ) {
+    if (!isJsonRecord(evidence) || !isJsonRecord(evidence.current)) {
+      throw new Error(`Release evidence has invalid identity for run ${parentRunId}.`);
+    }
+    if (buildOnly) {
+      if (
+        evidence.prepared !== true ||
+        evidence.valid !== false ||
+        evidence.publicationAuthorized !== false
+      ) {
+        throw new Error(`Build-only preparation evidence is invalid for run ${parentRunId}.`);
+      }
+      console.log(
+        `Build-only preparation verified for run ${displayValue(evidence.current.runId)}. Validation was skipped; npm-release environment approval is still required before publishing.`,
+      );
+      return;
+    }
+    if (evidence.valid !== true || !isJsonRecord(evidence.root)) {
       throw new Error(`Full Release Validation evidence is invalid for run ${parentRunId}.`);
     }
     console.log(
@@ -1932,6 +2214,39 @@ function verifyReleaseEvidence(
   }
 }
 
+function preflightPublicationRoute(
+  targetVersion: string,
+  publicationSelection: PublicationSelection | null,
+) {
+  if (publicationSelection) {
+    validatePublicationVersionSelection(targetVersion, publicationSelection);
+    if (publicationSelection.route === "extended-stable") {
+      // This is planning evidence, not authority: an older line can still use the
+      // publisher's authenticated retired-line decision, checked again at effect.
+      try {
+        const file: unknown = JSON.parse(
+          runGh([
+            "api",
+            "-H",
+            GH_NO_CACHE_HEADER,
+            `repos/${REPOSITORY}/contents/package.json?ref=refs/heads/main`,
+          ]),
+        );
+        requireDispatch(
+          isJsonRecord(file) && typeof file.content === "string",
+          "Could not read protected main package version for publication preflight",
+        );
+        const mainPackage = JSON.parse(Buffer.from(file.content, "base64").toString("utf8"));
+        validateActiveExtendedStableLine(targetVersion, mainPackage.version);
+      } catch (error) {
+        console.warn(
+          `Publication route preflight: ${error instanceof Error ? error.message : String(error)} Qualification does not authorize publication; resolve the publisher policy or its explicit retired-line decision before publication.`,
+        );
+      }
+    }
+  }
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const args = parseArgs(argv);
@@ -1942,11 +2257,31 @@ async function main() {
       return;
     }
     requireDispatch(
-      retained.kind === CANDIDATE_REQUEST_KIND && retained.refs.workflow === "intended",
-      "Only a candidate request with no qualification ref mutation can resume; reconcile uncertain work read-only",
+      retained.kind === CANDIDATE_REQUEST_KIND &&
+        ["intended", "uncertain"].includes(retained.refs.workflow),
+      "Only a candidate request before its first qualification workflow POST can resume",
     );
+    const retainedIntent = decodePublicationDispatchEnvelope(
+      retained.request.inputs.trusted_workflow_json,
+    );
+    preflightPublicationRoute(retained.request.targetVersion, retainedIntent.publicationSelection);
     args.trustedWorkflowRef = "candidate";
     args.admissionWorkflowRef = retained.admission!.workflowRef;
+    if (retained.request.targetContextRef !== retained.request.targetSha) {
+      fetchTargetRef(retained.request.targetContextRef);
+      verifyTargetRef(
+        retained.request.targetContextRef,
+        retained.request.targetSha,
+        retained.request.targetVersion,
+      );
+    }
+    const candidateAuthorityActor =
+      retainedIntent.validationPurpose === "publish"
+        ? preflightCandidateSigningProvenance(
+            retained.request.targetSha,
+            retained.request.targetContextRef,
+          )
+        : undefined;
     await executeFrozenDispatch({
       args,
       record: retained,
@@ -1959,6 +2294,7 @@ async function main() {
         effectiveSoak: retained.request.effectiveSoak,
       },
       admissionWorkflowSha: retained.admission!.workflowSha,
+      candidateAuthorityActor,
     });
     return;
   }
@@ -1972,12 +2308,17 @@ async function main() {
   }
   requireDispatch(
     args.trustedWorkflowRef === "candidate" || args.inputs.validation_purpose !== "publish",
-    "Fresh publication qualification must use candidate-owned Q=C; explicit cross-revision tooling is diagnostic only. Reconcile historical requests by their retained file.",
+    "Fresh publication qualification must use admitted candidate qualification; explicit main/protected routes are diagnostic only. Reconcile historical requests by their retained file.",
   );
   const targetSha = resolveTargetSha(args.sha, args.targetRef);
   preflightTargetShaFetch(targetSha);
   const targetVersion = targetVersionForTarget(targetSha);
   const targetProfile = releaseProfileForVersion(targetVersion);
+  const publicationIntent = normalizePublicationIntent(
+    args.inputs.validation_purpose,
+    args.inputs.publication_selection_json,
+  );
+  preflightPublicationRoute(targetVersion, publicationIntent.publicationSelection);
   args.inputs.release_profile ??= targetProfile;
   args.inputs.allow_unreleased_changelog ??= args.targetRef ? "false" : "true";
   const targetContextRef = verifyTargetRef(args.targetRef, targetSha, targetVersion);
@@ -1985,10 +2326,9 @@ async function main() {
   const workflowSha = candidateOwned
     ? resolveSha(args.workflowSha || targetSha)
     : resolveTrustedWorkflowSha(args.workflowSha, args.trustedWorkflowRef);
-  requireDispatch(
-    !candidateOwned || workflowSha === targetSha,
-    "Candidate-owned qualification requires Q=C; backport qualification repairs into a new candidate",
-  );
+  // Candidate admission freezes the operator-selected Q without requiring main
+  // ancestry. P reads its immutable source from the canonical repository; the
+  // dispatch owner verifies the exact release-ci transport before execution.
   const trustedWorkflowHarness = assertTrustedWorkflowHarness(workflowSha);
   if (candidateOwned) {
     const workflow = parseYaml(run("git", ["show", `${workflowSha}:${TRUSTED_WORKFLOW_PATH}`]));
@@ -2001,12 +2341,25 @@ async function main() {
     ? resolveTrustedWorkflowSha(args.admissionWorkflowSha, args.admissionWorkflowRef)
     : undefined;
   if (admissionWorkflowSha) {
-    assertAdmissionContract(admissionWorkflowSha);
+    assertAdmissionContract(admissionWorkflowSha, args.inputs.preflight_first === "true");
+  }
+  if (args.inputs.rerun_group !== "build-only") {
+    if (args.skipLocalMockPreflight) {
+      console.warn(
+        `Skipping local mock-export preflight for ${targetSha} (--skip-local-mock-preflight)`,
+      );
+    } else {
+      const { checkFrozenMockExports } = await import("./check-test-mock-exports.mts");
+      requireDispatch(
+        checkFrozenMockExports(process.cwd(), targetSha) === 0,
+        `Local mock-export preflight failed for ${targetSha}; no workflow was dispatched. Fix the candidate or use --skip-local-mock-preflight to defer to hosted validation.`,
+      );
+    }
   }
   if (candidateOwned) {
     warnCandidateToolingLag(workflowSha);
     const baselinePolicy: unknown = JSON.parse(
-      run("git", ["show", `${workflowSha}:scripts/lib/upgrade-survivor-scenarios.json`]),
+      run("git", ["show", `${targetSha}:scripts/lib/upgrade-survivor-scenarios.json`]),
     );
     requireDispatch(
       isJsonRecord(baselinePolicy) &&
@@ -2022,15 +2375,31 @@ async function main() {
         publishedVersions.every((entry) => typeof entry === "string"),
       "npm did not return the published baseline version inventory",
     );
-    args.inputs.qualification_baselines_json = JSON.stringify(
-      resolveQualificationBaselines({
-        candidateVersion: targetVersion,
-        targetContextRef,
-        publishedVersions,
-        oldestSupportedVersion: baselinePolicy.oldestSupportedBaseline,
-      }),
+    const selectedBaselines =
+      args.inputs.qualification_baselines_json === undefined
+        ? resolveQualificationBaselines({
+            candidateVersion: targetVersion,
+            targetContextRef,
+            publishedVersions,
+            oldestSupportedVersion: baselinePolicy.oldestSupportedBaseline,
+          })
+        : validateQualificationBaselines(JSON.parse(args.inputs.qualification_baselines_json), {
+            candidateVersion: targetVersion,
+            targetContextRef,
+          });
+    requireDispatch(
+      selectedBaselines.upgradeSurvivorBaselines.every((spec: string) =>
+        publishedVersions.includes(spec.slice("openclaw@".length)),
+      ),
+      "Selected qualification baselines must be published stable predecessors",
     );
+    // Freeze explicit selections before admission, just like freshly resolved tuples.
+    args.inputs.qualification_baselines_json = JSON.stringify(selectedBaselines);
   }
+  const candidateAuthorityActor =
+    args.inputs.validation_purpose === "publish"
+      ? preflightCandidateSigningProvenance(targetSha, targetContextRef)
+      : undefined;
   // Read target blobs with trusted tooling before creating the workflow ref.
   validatePackageSourceRef(targetSha, {
     allowUnreleasedChangelog: args.inputs.allow_unreleased_changelog === "true",
@@ -2114,6 +2483,10 @@ async function main() {
           inputs: selection.wireInputs,
         }),
         workflowSha: admissionWorkflowSha,
+        workflowShaPolicy:
+          args.admissionWorkflowRef === "main" && !args.pinAdmissionWorkflow
+            ? "advance-with-main"
+            : "pinned",
         workflowRef: args.admissionWorkflowRef,
         workflowId: Number(metadata.id),
         phase: "prepared",
@@ -2160,6 +2533,7 @@ async function main() {
     workflowSha,
     branch,
     selection,
+    candidateAuthorityActor,
     admissionWorkflowSha,
   });
 }
@@ -2171,17 +2545,27 @@ async function executeFrozenDispatch(options: {
   workflowSha: string;
   branch: string;
   selection: ReturnType<typeof resolveDispatchSelection>;
+  candidateAuthorityActor?: string;
   admissionWorkflowSha?: string;
 }) {
-  const { args, requestPath, workflowSha, branch, admissionWorkflowSha } = options;
+  const { args, requestPath, workflowSha, branch, admissionWorkflowSha, candidateAuthorityActor } =
+    options;
   let { record, selection } = options;
   console.log(
     formatDispatchSelection(
-      record?.request ?? { targetSha: String(selection.inputs.ref), workflowSha, ...selection },
+      record?.request ?? {
+        targetSha: String(selection.inputs.ref),
+        workflowSha,
+        trustedWorkflowRef: args.trustedWorkflowRef,
+        ...selection,
+      },
     ),
   );
   const candidateOwned = args.trustedWorkflowRef === "candidate";
   const remoteBranchRef = `refs/heads/${branch}`;
+  // A prepared record has never attempted a workflow POST. An interrupted ref
+  // creation may already have succeeded; only reuse that exact immutable ref.
+  const reuseWorkflowRef = record?.refs.workflow === "uncertain";
   let parentRunId: string | undefined;
   let parentConclusion = "";
   let evidenceVerified = false;
@@ -2196,8 +2580,11 @@ async function executeFrozenDispatch(options: {
     if (record) {
       assertNoActiveConcurrencyRun(record.request);
     }
+    let authenticatedAdmission: QualificationAdmission | undefined;
     if (record?.admission) {
-      record = await qualifyAdmission(record, retain, qualificationDispatchClient);
+      const qualified = await qualifyAdmission(record, retain, qualificationDispatchClient);
+      record = qualified.record;
+      authenticatedAdmission = qualified.authenticated;
       selection = {
         inputs: record.request.inputs,
         wireInputs: record.request.wireInputs,
@@ -2205,7 +2592,7 @@ async function executeFrozenDispatch(options: {
       };
     } else if (candidateOwned && args.dryRun) {
       console.log(
-        `Admission P: ${args.admissionWorkflowRef} at ${admissionWorkflowSha}; reviewed C=Q request (dry run)`,
+        `Admission P: ${args.admissionWorkflowRef} at ${admissionWorkflowSha}; reviewed C/Q request (dry run)`,
       );
     }
     let payloadDirectory: string | undefined;
@@ -2224,23 +2611,40 @@ async function executeFrozenDispatch(options: {
         payloadPath = join(payloadDirectory, "dispatch.json");
         writeFileSync(payloadPath, payload, { flag: "wx", mode: 0o600 });
       }
-      if (record) {
-        retain({ ...record, refs: { workflow: "uncertain" } });
+      if (reuseWorkflowRef && record) {
+        // Recovery reads can outlive authority. Finish them before the live
+        // admission and signer checks, then re-read Q immediately before POST.
+        verifyPreparedTransport(record);
+        workflowRefCreated = true;
+        requireDispatch(authenticatedAdmission, "Authenticated qualification admission is missing");
+        revalidateQualificationAdmissionAuthority({
+          descriptor: record.admission!.descriptor,
+          admission: authenticatedAdmission,
+        });
       }
-      createTemporaryRef(remoteBranchRef, workflowSha, args.dryRun);
-      workflowRefCreated = true;
-      if (!args.dryRun && candidateOwned) {
-        const pinned: unknown = JSON.parse(
-          readGhApi(`repos/${REPOSITORY}/git/ref/heads/${branch}`),
-        );
-        requireDispatch(
-          isJsonRecord(pinned) &&
-            pinned.ref === remoteBranchRef &&
-            isJsonRecord(pinned.object) &&
-            pinned.object.type === "commit" &&
-            pinned.object.sha === workflowSha,
-          "Candidate qualification transport ref moved before dispatch",
-        );
+      if (
+        !args.dryRun &&
+        candidateOwned &&
+        candidateAuthorityActor &&
+        candidateAuthorityActor !== "web-flow"
+      ) {
+        validateCandidateActorPermissionWithGithub({
+          repository: REPOSITORY,
+          actor: candidateAuthorityActor,
+          request: (requestArgs: string[]) => JSON.parse(runGh(requestArgs)),
+        });
+      }
+      if (reuseWorkflowRef && record) {
+        verifyCandidateTransportRef(record.request);
+      } else {
+        if (record) {
+          retain({ ...record, refs: { workflow: "uncertain" } });
+        }
+        createTemporaryRef(remoteBranchRef, workflowSha, args.dryRun);
+        workflowRefCreated = true;
+        if (!args.dryRun && candidateOwned && record) {
+          verifyCandidateTransportRef(record.request);
+        }
       }
       if (record) {
         retain({ ...record, phase: "attempted", refs: { workflow: "created" } });
@@ -2312,15 +2716,17 @@ async function executeFrozenDispatch(options: {
     }
     if (parentRunId) {
       console.log(`Parent run: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`);
-      waitForWorkflowRun(parentRunId, workflowSha, record);
-      parentConclusion = "success";
-      verifyReleaseEvidence(
-        parentRunId,
-        // Admission may have advanced P with main before its POST.
-        record?.admission?.workflowSha ?? admissionWorkflowSha ?? workflowSha,
-        candidateOwned ? args.admissionWorkflowRef : args.trustedWorkflowRef,
-      );
-      evidenceVerified = true;
+      parentConclusion = waitForWorkflowRun(parentRunId, workflowSha, record);
+      if (parentConclusion === "success") {
+        verifyReleaseEvidence(
+          parentRunId,
+          // Admission may have advanced P with main before its POST.
+          record?.admission?.workflowSha ?? admissionWorkflowSha ?? workflowSha,
+          candidateOwned ? args.admissionWorkflowRef : args.trustedWorkflowRef,
+          args.inputs.rerun_group === "build-only",
+        );
+        evidenceVerified = true;
+      }
     }
   } catch (error) {
     operationError = error instanceof Error ? error : new Error(String(error));

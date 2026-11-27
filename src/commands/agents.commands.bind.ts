@@ -2,7 +2,7 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { listAgentIds, resolveAgentOperationAgentId } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { throwExpectedCliError } from "../cli/failure-output.js";
+import { throwExpectedCliError } from "../cli/expected-cli-error.js";
 import { isRouteBinding, listRouteBindings } from "../config/bindings.js";
 import { replaceConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";

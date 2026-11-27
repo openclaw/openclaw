@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { detectToolCallShapedText, isPlainTextToolCallAttempt } from "./attempt.js";
+import { detectToolCallShapedText, findPlainTextToolCallName } from "./attempt.js";
 
 const hasToolName = (name: string) => name === "write" || name === "read";
 const call = '{"name":"write","arguments":{"path":"proof.txt","content":"OK"}}';
@@ -10,30 +10,37 @@ const wrappedXml =
   "<tool_call><function=read><parameter=path>proof.txt</parameter></function></tool_call>";
 const react = 'Action: read\nAction Input: {"path":"proof.txt"}';
 const legacy = '[TOOL_CALL]{tool => "read", args => {"path":"proof.txt"}}[/TOOL_CALL]';
-const detects = (text: string) => isPlainTextToolCallAttempt(text, hasToolName);
 
 it.each([
-  call,
-  `{"function_call":${call}}`,
-  `{"functionCall":${call}}`,
-  '{"name":"write","parameters":{"path":"proof.txt","content":"OK"}}',
-  fenced,
-  `I'll call write now.\n${fenced}`,
-  `I'll create the file now.\n${fenced}`,
-  `[{"function":{"name":"read","arguments":"{}"}}]`,
-  '{"tool_calls":[{"function":{"name":"read","arguments":{}}}]}',
-  '{"tool_calls":[{"function":{"name":"unregistered","arguments":{}}},{"function":{"name":"write","arguments":{}}}]}',
-  `[{"tool_calls":[]},${call}]`,
-  '<invoke name="read"><parameter name="path">proof.txt</parameter></invoke>',
-  'read\n<invoke name="read"><parameter name="path">proof.txt</parameter></invoke>',
-  `<tool_call>${call}</tool_call>`,
-  "```xml\n<function=read><parameter=path>proof.txt</parameter></function>\n```",
-  wrappedXml,
-  "<function_call><function=read><parameter=path>proof.txt</parameter></function></function_call>",
-  react,
-  "Action: read\r\nAction Input: proof.txt",
-  legacy,
-])("recognizes a structured attempt: %s", (text) => expect(detects(text)).toBe(true));
+  [call, "write"],
+  [`{"function_call":${call}}`, "write"],
+  [`{"functionCall":${call}}`, "write"],
+  ['{"name":"write","parameters":{"path":"proof.txt","content":"OK"}}', "write"],
+  [fenced, "write"],
+  [`I'll call write now.\n${fenced}`, "write"],
+  [`I'll create the file now.\n${fenced}`, "write"],
+  [`[{"function":{"name":"read","arguments":"{}"}}]`, "read"],
+  ['{"tool_calls":[{"function":{"name":"read","arguments":{}}}]}', "read"],
+  [
+    '{"tool_calls":[{"function":{"name":"unregistered","arguments":{}}},{"function":{"name":"write","arguments":{}}}]}',
+    "write",
+  ],
+  [`[{"tool_calls":[]},${call}]`, "write"],
+  ['<invoke name="read"><parameter name="path">proof.txt</parameter></invoke>', "read"],
+  ['read\n<invoke name="read"><parameter name="path">proof.txt</parameter></invoke>', "read"],
+  [`<tool_call>${call}</tool_call>`, "write"],
+  ["```xml\n<function=read><parameter=path>proof.txt</parameter></function>\n```", "read"],
+  [wrappedXml, "read"],
+  [
+    "<function_call><function=read><parameter=path>proof.txt</parameter></function></function_call>",
+    "read",
+  ],
+  [react, "read"],
+  ["Action: read\r\nAction Input: proof.txt", "read"],
+  [legacy, "read"],
+])("recognizes a structured attempt: %s", (text, expected) =>
+  expect(findPlainTextToolCallName(text, hasToolName)).toBe(expected),
+);
 
 it.each([
   "I will call write to create the file.",
@@ -66,25 +73,29 @@ it.each([
   'Action: read\nAction Input: {"path":"proof.txt"}\nObservation: example result',
   '[TOOL_CALL]{tool => "read", args => {}}',
   '[TOOL_CALL]{tool => "read"}[/TOOL_CALL]',
-])("preserves prose, examples, and unknown tools: %s", (text) => expect(detects(text)).toBe(false));
+])("preserves prose, examples, and unknown tools: %s", (text) =>
+  expect(findPlainTextToolCallName(text, hasToolName)).toBeUndefined(),
+);
 
 it("uses only the current offered tool names", () => {
-  expect(isPlainTextToolCallAttempt(fenced, (name) => name === "read")).toBe(false);
+  expect(findPlainTextToolCallName(fenced, (name) => name === "read")).toBeUndefined();
 });
 
 it("keeps explanatory prefixes literal even with permissive name matching", () => {
   const matches = (name: string) => name === "write" || name.endsWith(".write");
-  expect(isPlainTextToolCallAttempt(`Example of functions.write\n${fenced}`, matches)).toBe(false);
+  expect(
+    findPlainTextToolCallName(`Example of functions.write\n${fenced}`, matches),
+  ).toBeUndefined();
 });
 
 it.each([
-  [`<TOOL_CALL>\n  ${call}  \n</tool_call>`, true],
-  [`<tool_calls> ${call} </tool_calls>`, true],
-  [`<tool_call>${call}</tool_calls>`, false],
-  [`write\r\n\`\`\`json\r\n${call}\r\n\`\`\``, true],
-  [`write\n~~~\n${call}\n\`\`\``, false],
+  [`<TOOL_CALL>\n  ${call}  \n</tool_call>`, "write"],
+  [`<tool_calls> ${call} </tool_calls>`, "write"],
+  [`<tool_call>${call}</tool_calls>`, undefined],
+  [`write\r\n\`\`\`json\r\n${call}\r\n\`\`\``, "write"],
+  [`write\n~~~\n${call}\n\`\`\``, undefined],
 ])("keeps wrapper and fence boundaries: %j", (text, expected) =>
-  expect(detects(text)).toBe(expected),
+  expect(findPlainTextToolCallName(text, hasToolName)).toBe(expected),
 );
 
 it("names the tool in a legacy bracketed call", () => {
@@ -99,10 +110,14 @@ it("names the tool in a legacy bracketed call", () => {
 it.each([
   [
     "a wrapper tag followed by blank characters",
-    () => detects(`<tool_call>${" \n".repeat(1_000)}x`),
-    false,
+    () => findPlainTextToolCallName(`<tool_call>${" \n".repeat(1_000)}x`, hasToolName),
+    undefined,
   ],
-  ["a fence-like line run", () => detects(`M${"\n~~~\n\u0000".repeat(12_000)}`), false],
+  [
+    "a fence-like line run",
+    () => findPlainTextToolCallName(`M${"\n~~~\n\u0000".repeat(12_000)}`, hasToolName),
+    undefined,
+  ],
   [
     "repeated legacy openers",
     () => detectToolCallShapedText(`{${'[TOOL_CALL]{TOOL=>"G"'.repeat(950)}a`),

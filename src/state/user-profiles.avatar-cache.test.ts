@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import * as stateReads from "./openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
@@ -45,7 +45,7 @@ it("retains absent avatars until committed email or avatar changes", async () =>
 it.each(["settled", "pending"] as const)(
   "evicts %s avatar bytes without losing warm reads or in-flight coalescing",
   async (phase) => {
-    const bytes = new Uint8Array(512 * 1024).fill(7);
+    const bytes = Buffer.alloc(512 * 1024, 7);
     const profiles = Array.from({ length: 33 }, (_, index) => {
       const profile = ensureProfileForEmail(`avatar-${index}@example.test`, options);
       upload(profile.id, bytes);
@@ -53,6 +53,12 @@ it.each(["settled", "pending"] as const)(
     });
     await hydrate();
     const load = async (index: number) => (await inspect(profiles[index]!.id)).loadBytes();
+    // Keep unrelated cold reads outside the held read's real-time budget.
+    for (let index = 0; index < 32; index++) {
+      if (index !== 1) {
+        await load(index);
+      }
+    }
     const retained = await inspect(profiles[1]!.id);
     const started = createDeferred();
     const release = createDeferred();
@@ -67,26 +73,33 @@ it.each(["settled", "pending"] as const)(
           })
         : undefined;
     const firstLoad = retained.loadBytes();
-    if (phase === "pending") {
-      await started.promise;
-    } else {
-      await firstLoad;
-    }
-    for (let index = 0; index < 32; index++) {
-      if (index !== 1) {
-        await load(index);
-      }
-    }
-    await load(0);
-    await load(32);
     try {
+      if (phase === "pending") {
+        await awaitGateBeforeSettlement(
+          started.promise,
+          firstLoad,
+          "Avatar read settled before hold",
+        );
+      } else {
+        await firstLoad;
+      }
+      for (let index = 0; index < 32; index++) {
+        if (index !== 1) {
+          await load(index);
+        }
+      }
+      await load(0);
+      await load(32);
       if (phase === "pending") {
         expect(retained.loadBytes()).toBe(firstLoad);
       }
     } finally {
       release.resolve();
-      await firstLoad;
-      heldRead?.mockRestore();
+      try {
+        await firstLoad;
+      } finally {
+        heldRead?.mockRestore();
+      }
     }
 
     const other = ensureProfileForEmail("other@example.test", options);
@@ -94,11 +107,11 @@ it.each(["settled", "pending"] as const)(
     const read = observeReads();
     const prepared = await inspect(profiles[0]!.id);
     expect(prepared.isCurrent()).toBe(true);
-    expect((await prepared.loadBytes())?.bytes).toEqual(bytes);
-    expect((await load(0))?.bytes).toEqual(bytes);
+    expect(bytes.equals((await prepared.loadBytes())?.bytes ?? Buffer.alloc(0)), "warm").toBe(true);
+    expect(bytes.equals((await load(0))?.bytes ?? Buffer.alloc(0)), "warm").toBe(true);
     expect(read).not.toHaveBeenCalled();
     // A retained reader must not keep an evicted payload outside the byte budget.
-    expect((await retained.loadBytes())?.bytes).toEqual(bytes);
+    expect(bytes.equals((await retained.loadBytes())?.bytes ?? Buffer.alloc(0)), "cold").toBe(true);
     expect(read).toHaveBeenCalledOnce();
   },
 );

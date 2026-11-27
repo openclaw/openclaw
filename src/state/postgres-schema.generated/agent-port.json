@@ -5,6 +5,10 @@
       "identities": []
     },
     {
+      "name": "agent_tool_usage",
+      "identities": []
+    },
+    {
       "name": "auth_profile_state",
       "identities": []
     },
@@ -118,6 +122,10 @@
       "identities": []
     },
     {
+      "name": "session_creation_operations",
+      "identities": []
+    },
+    {
       "name": "session_entry_snapshots",
       "identities": []
     },
@@ -169,6 +177,10 @@
     },
     {
       "name": "session_suggestions",
+      "identities": []
+    },
+    {
+      "name": "session_transcript_active_event_facts",
       "identities": []
     },
     {
@@ -434,73 +446,73 @@
       "name": "session_conversations_route_context_invalidate_after_update",
       "table": "session_conversations",
       "range": [
-        10172,
-        10555
+        10341,
+        10724
       ]
     },
     {
       "name": "session_entry_snapshots_after_delete",
       "table": "session_entry_snapshots",
       "range": [
-        2884,
-        3108
+        2912,
+        3136
       ]
     },
     {
       "name": "session_entry_snapshots_after_insert",
       "table": "session_entry_snapshots",
       "range": [
-        2262,
-        2486
+        2290,
+        2514
       ]
     },
     {
       "name": "session_entry_snapshots_after_update",
       "table": "session_entry_snapshots",
       "range": [
-        2488,
-        2882
+        2516,
+        2910
       ]
     },
     {
       "name": "session_transcript_fts_rows_after_delete",
       "table": "session_transcript_fts_rows",
       "range": [
-        32032,
-        32215
+        33546,
+        33729
       ]
     },
     {
       "name": "standing_intents_fts_after_delete",
       "table": "standing_intents",
       "range": [
-        29572,
-        29819
+        30650,
+        30897
       ]
     },
     {
       "name": "standing_intents_fts_after_insert",
       "table": "standing_intents",
       "range": [
-        29355,
-        29570
+        30433,
+        30648
       ]
     },
     {
       "name": "standing_intents_fts_after_update",
       "table": "standing_intents",
       "range": [
-        29821,
-        30197
+        30899,
+        31275
       ]
     }
   ],
   "preData": [
     0,
-    30229
+    31517
   ],
   "postData": [
-    30229,
-    45975
+    31517,
+    47874
   ]
 }

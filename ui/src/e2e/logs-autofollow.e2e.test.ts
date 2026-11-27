@@ -147,6 +147,58 @@ suite.define(() => {
     );
   });
 
+  it("turns auto-follow off when the reader scrolls up and back on at the end", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "logs.tail": {
+              sequence: [tail(logLines.length, logLines, true), tail(logLines.length, [])],
+            },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}logs`);
+        await page.locator(".log-row").first().waitFor();
+        const stream = page.locator(".log-stream");
+        const bottomGap = () =>
+          stream.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight);
+        const autoFollow = page.getByRole("switch", { name: "Auto-follow", exact: true });
+        await expect.poll(bottomGap).toBeLessThan(2);
+        await expect.poll(() => autoFollow.isChecked()).toBe(true);
+
+        await stream.hover();
+        await page.mouse.wheel(0, -400);
+        await expect.poll(() => autoFollow.isChecked()).toBe(false);
+        await expect.poll(bottomGap).toBeGreaterThan(100);
+        const readerTop = await stream.evaluate((element) => element.scrollTop);
+
+        const after = await gateway.deferNext("logs.tail");
+        await gateway.waitForRequest("logs.tail", { after });
+        await gateway.setMethodResponse("logs.tail", tail(logLines.length + 1, []));
+        await gateway.resolveDeferred(
+          "logs.tail",
+          tail(logLines.length + 1, [logLine(201, "warn")]),
+        );
+        await expect
+          .poll(() => page.locator(".log-row").first().getAttribute("aria-setsize"))
+          .toBe(String(logLines.length + 1));
+        expect(await stream.evaluate((element) => element.scrollTop)).toBe(readerTop);
+        expect(await autoFollow.isChecked()).toBe(false);
+
+        await page.mouse.wheel(0, 1_000_000);
+        await expect.poll(() => autoFollow.isChecked()).toBe(true);
+        await expect.poll(bottomGap).toBeLessThan(2);
+
+        await page.mouse.wheel(0, -400);
+        await expect.poll(() => autoFollow.isChecked()).toBe(false);
+        await autoFollow.click();
+        await expect.poll(() => autoFollow.isChecked()).toBe(true);
+        await expect.poll(bottomGap).toBeLessThan(2);
+      },
+    );
+  });
+
   it("keeps End anchored to the final wrapped row as log heights settle", async () => {
     await suite.withPage({ viewport }, async ({ page }) => {
       const lines = Array.from({ length: 130 }, (_, index) =>

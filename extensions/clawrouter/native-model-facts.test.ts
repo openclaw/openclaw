@@ -128,15 +128,55 @@ describe("ClawRouter native model facts", () => {
     clearLiveCatalogCacheForTests();
   });
 
+  it("sends Mistral's native completion fields through the router", async () => {
+    const catalog = await buildCatalog([
+      {
+        ...catalogProvider("mistral", "mistral-large-latest", ["llm.chat"]),
+        openaiCompatible: true,
+      },
+    ]);
+    const row = catalog.models[0];
+    if (!row || row.api !== "openai-completions") {
+      throw new Error("missing routed Mistral model");
+    }
+    const model: Model = {
+      ...row,
+      provider: "clawrouter",
+      api: row.api,
+      baseUrl: row.baseUrl ?? catalog.baseUrl,
+      input: ["text"],
+    };
+    const registered = await registerSingleProviderPlugin(plugin);
+    const wrapped = registered.wrapStreamFn?.({
+      provider: "clawrouter",
+      modelId: model.id,
+      streamFn: streamSimple,
+    });
+    if (!wrapped) {
+      throw new Error("missing ClawRouter stream wrapper");
+    }
+    const body = await captureRequestBody(() =>
+      wrapped(
+        model,
+        { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+        { apiKey: "fixture-key", maxTokens: 64 },
+      ),
+    );
+    expect(body).toMatchObject({ model: "mistral/mistral-large-latest", max_tokens: 64 });
+    expect(body).not.toHaveProperty("max_completion_tokens");
+    expect(body).not.toHaveProperty("store");
+  });
+
   it("gives routed OpenAI and Claude rows the native facts for the same upstream model", async () => {
+    const anthropic = catalogProvider("anthropic", "claude-opus-5-5", ...MESSAGES);
+    anthropic.models.push(...catalogProvider("anthropic", "claude-haiku-4-5", ...MESSAGES).models);
     const provider = await buildCatalog([
       catalogProvider("openai", "gpt-6.1-sol", ...RESPONSES, [], {
         supportedReasoningEfforts: ["low", "high"],
       }),
       catalogProvider("openai", "gpt-6-luna", ...RESPONSES),
       catalogProvider("openai", "gpt-5.5", ...RESPONSES),
-      catalogProvider("anthropic", "claude-opus-5-5", ...MESSAGES),
-      catalogProvider("anthropic", "claude-haiku-4-5", ...MESSAGES),
+      anthropic,
     ]);
     const routed = Object.fromEntries(
       provider.models.map((model) => [model.id, modelFacts(model)]),
@@ -199,12 +239,13 @@ describe("ClawRouter native model facts", () => {
       ["llm.stream"],
       [["/v1beta/models/${model}:streamGenerateContent", "google.generate_content"]],
     ];
+    const anthropic = catalogProvider("anthropic", "claude-opus-5-5", ...MESSAGES);
+    // Not in the bundled catalog: the developer is not inferred from the id or provider.
+    anthropic.models.push(...catalogProvider("anthropic", "claude-opus-6", ...MESSAGES).models);
     const provider = await buildCatalog([
-      catalogProvider("anthropic", "claude-opus-5-5", ...MESSAGES),
+      anthropic,
       catalogProvider("openai", "gpt-6.1-sol", ...RESPONSES),
       catalogProvider("google-gemini", "gemini-3.5-flash", ...google),
-      // Not in the bundled catalog: the developer is not inferred from the id or provider.
-      catalogProvider("anthropic", "claude-opus-6", ...MESSAGES),
       // Another wire API is another route contract, so it inherits no identity facts.
       catalogProvider("openai", "gpt-6-astra", ["llm.chat"]),
       catalogProvider("acme", "claude-opus-5-5", ...MESSAGES),
@@ -236,12 +277,11 @@ describe("ClawRouter native model facts", () => {
   it("resolves routed Claude models with the native image limits used for compression", async () => {
     // Runtime model resolution prefers this hook's model; image compression reads its mediaInput.
     const registered = await registerSingleProviderPlugin(plugin);
+    const anthropic = catalogProvider("anthropic", "claude-opus-5-5", ...MESSAGES);
+    anthropic.models.push(...catalogProvider("anthropic", "claude-haiku-4-5", ...MESSAGES).models);
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
       Response.json({
-        providers: [
-          catalogProvider("anthropic", "claude-opus-5-5", ...MESSAGES),
-          catalogProvider("anthropic", "claude-haiku-4-5", ...MESSAGES),
-        ],
+        providers: [anthropic],
       }),
     );
     onTestFinished(() => fetchMock.mockRestore());

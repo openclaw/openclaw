@@ -161,6 +161,7 @@ struct UsageCostDataTests {
         let dates = try CostUsageMenuDateParser(timeZone: #require(TimeZone(identifier: zone)))
         let iso = ISO8601DateFormatter()
         let now = try #require(iso.date(from: timestamp))
+        #expect(dates.requestParameters["agentScope"] == AnyHashable("all"))
         #expect(dates.requestParameters["mode"] == AnyHashable("specific"))
         #expect(dates.requestParameters["timeZone"] == AnyHashable(zone))
         #expect(dates.format(now) == day)

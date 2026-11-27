@@ -37,6 +37,7 @@ async function surface(mode: "sync" | "async", config: SurfaceParams["config"]) 
 it("keeps host-owned controls out of public attempt and tool inputs", () => {
   expectTypeOf<KeysIn<Attempts, "thinkingExplicit">>().toEqualTypeOf<never>();
   expectTypeOf<KeysIn<[Tools, AsyncTools], "requesterThinkingExplicit">>().toEqualTypeOf<never>();
+  expectTypeOf<KeysIn<[Tools, AsyncTools], "toolPolicyScope">>().toEqualTypeOf<never>();
   expectTypeOf<KeysIn<Attempts, "blindPrompt">>().toEqualTypeOf<never>();
   expectTypeOf<Pick<SurfaceParams, "trigger">>().toEqualTypeOf<{
     trigger?: Harness.AgentHarnessAttemptParamsV2["trigger"];
@@ -45,13 +46,11 @@ it("keeps host-owned controls out of public attempt and tool inputs", () => {
   type HostTest = Parameters<typeof createAgentHarnessHostCapabilitiesForTest>[0]["attempt"];
   type Inputs = [...Attempts, SurfaceParams, Tools, HostTools, HostTest];
   expectTypeOf<KeysIn<Inputs, PrivateControls>>().toEqualTypeOf<never>();
-  expectTypeOf<
-    KeysIn<[SurfaceParams], "forceCodeModeControls" | "preparedToolOverrideAllowlist">
-  >().toEqualTypeOf<never>();
+  expectTypeOf<KeysIn<[SurfaceParams], "preparedToolOverrideAllowlist">>().toEqualTypeOf<never>();
   expectTypeOf<Surface>().not.toHaveProperty("plan");
   type CompactOptions = NonNullable<Parameters<Surface["compactTools"]>[1]>;
   expectTypeOf<CompactOptions>().not.toHaveProperty("prepared");
-  type Hooks = "onProgressCardPlanSaved" | "authProfileStoreSource" | "onWebSearchConfiguration";
+  type Hooks = "onProgressCardPlanSaved" | "onWebSearchConfiguration";
   expectTypeOf<KeysIn<[Tools], Hooks>>().toEqualTypeOf<never>();
   expectTypeOf<AsyncTools>().not.toHaveProperty("onWebSearchConfiguration");
 });

@@ -5,7 +5,8 @@ import { getRefsFullClusterLcns } from "../../../test/helpers/refs.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { git } from "./git-fixture.test-support.js";
-import { IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
+import { IDLE_GC_MS } from "./retention.js";
+import { ManagedWorktreeService } from "./service.js";
 import {
   ageManagedWorktreeTemplates,
   useManagedWorktreeTestRepository,

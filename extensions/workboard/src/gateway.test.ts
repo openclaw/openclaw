@@ -67,36 +67,6 @@ function conflict(card: Record<string, unknown>) {
 }
 
 describe("workboard gateway methods", () => {
-  it.each([false, true])(
-    "refuses a Sessions board edit with transport current=%s",
-    async (current) => {
-      const message = current ? "operator scope revoked" : "Caller authority is no longer active.";
-      const authority = {
-        hasCurrentClientAuthority: () => current,
-        ...(current
-          ? {
-              sessionMutationAuthorization: {
-                assertCurrent: () => {
-                  throw new Error("operator scope revoked");
-                },
-              },
-            }
-          : {}),
-      };
-      const store = createWorkboardSqliteTestStore();
-      const sessionsBoard = await startEmptySessionsBoardService(store);
-      const board = await store.upsertBoard({ id: "sessions", kind: "sessions" });
-      const { invoke } = createGateway({ store, sessionsBoard });
-      const respond = await invoke(
-        "sessionsBoard.update",
-        { boardId: "sessions", patch: { scope: { includeArchived: true } } },
-        authority,
-      );
-      expect(respond).toHaveBeenCalledWith(false, undefined, { code: "workboard_error", message });
-      expect(await store.getSessionsBoard("sessions")).toEqual(board);
-    },
-  );
-
   it("rejects new client attachment bytes after disabling uploads without blocking agent output or reads", async () => {
     const { api, invoke, store } = createGateway();
     let config: OpenClawPluginApi["config"] = {};
@@ -288,6 +258,7 @@ describe("workboard gateway methods", () => {
       using readSpy = vi.spyOn(sessionsBoard, "read");
       for (const view of [
         {},
+        { agentId: "writer", includePeople: true },
         { involvingMe: true, includePeople: true },
         { involvingProfileId: "profile-one", includePeople: true },
         { involvingMe: false, includePeople: false },
@@ -331,6 +302,8 @@ describe("workboard gateway methods", () => {
         ),
         ...(
           [
+            [{ agentId: "" }, /view.agentId must be a non-empty string/],
+            [{ agentId: 123 }, /view.agentId must be a non-empty string/],
             [{ involvingMe: "true" }, /view.involvingMe must be a boolean/],
             [{ includePeople: 1 }, /view.includePeople must be a boolean/],
             [{ involvingProfileId: false }, /view.involvingProfileId must be a string/],
@@ -442,6 +415,9 @@ describe("workboard gateway methods", () => {
     expect(inheritedRespond.data?.card.metadata?.automation?.workspace).toBeUndefined();
   });
 
+  const invalidMetadata = { entryId: "probe" };
+  const metadataError = expect.stringContaining("Unsupported workboard metadata key(s): entryId");
+
   it.each([
     [
       "comment",
@@ -480,38 +456,32 @@ describe("workboard gateway methods", () => {
       },
     ],
     ["block", { reason: "blocked" }, { card: { status: "blocked" } }],
-  ] as const)("applies %s through the card RPC boundary", async (action, input, expected) => {
-    const { invoke } = createGateway();
-    const {
-      data: { card },
-    } = await invoke("cards.create", { title: "RPC target" });
-    if (["heartbeat", "complete", "block"].includes(action)) {
-      await invoke("cards.claim", { id: card.id, ownerId: "main" });
-    }
-    const target = action === "bulk" ? { ids: [card.id] } : { id: card.id };
-    const result = await invoke(`cards.${action}`, { ...target, ...input });
-    expect(result.ok).toBe(true);
-    expect(result.data).toMatchObject(expected);
-  });
-
-  it.each([
     [
       "comment",
       { body: "x".repeat(2001) },
-      "comment body must be 2000 characters or fewer (got 2001).",
+      { error: { message: "comment body must be 2000 characters or fewer (got 2001)." } },
     ],
     [
       "create",
       { title: "Check labels", labels: `valid, ${"x".repeat(41)}` },
-      "labels must be 40 characters or fewer.",
+      { error: { message: "labels must be 40 characters or fewer." } },
     ],
-  ] as const)("rejects invalid %s input through RPC", async (action, input, message) => {
+    ["create", { title: "Card", metadata: invalidMetadata }, { error: { message: metadataError } }],
+    ["update", { patch: { metadata: invalidMetadata } }, { error: { message: metadataError } }],
+  ] as const)("validates %s at the card RPC boundary", async (action, input, expected) => {
     const { invoke, store } = createGateway();
-    const card = await store.create({ title: "Invalid input target" });
-    const target = action === "comment" ? { id: card.id } : {};
+    const card = await store.create({ title: "RPC target" });
+    if (["heartbeat", "complete", "block"].includes(action)) {
+      await invoke("cards.claim", { id: card.id, ownerId: "main" });
+    }
+    const target =
+      action === "create" ? {} : action === "bulk" ? { ids: [card.id] } : { id: card.id };
     const result = await invoke(`cards.${action}`, { ...target, ...input });
-    expect(result.ok).toBe(false);
-    expect(result.error).toMatchObject({ message });
+    const rejected = "error" in expected;
+    expect(result.ok).toBe(!rejected);
+    expect(rejected ? result.error : result.data).toMatchObject(
+      rejected ? expected.error : expected,
+    );
   });
 
   it("returns an actionable exact-card admission failure", async () => {

@@ -1,26 +1,21 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show } from "solid-js";
-import type { AgentsListResult, SessionsListResult } from "../../../api/types.ts";
+import { For, Show } from "solid-js";
+import type { AgentsListResult } from "../../../api/types.ts";
 import { createBackgroundLayoutRef } from "../../../components/session-background-layout-context.tsx";
 import { AgentIdentityAvatar } from "../../../components/solid/identity-avatar.tsx";
-import { Kbd } from "../../../components/solid/kbd.tsx";
 import "../../../components/openclaw-mascot.tsx";
-import { registerCommandPaletteEnglish } from "../../../i18n/locales/en-command-palette.ts";
+import { registerChatWelcomeEnglish } from "../../../i18n/locales/en-chat-welcome.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
-import { i18nRevision, t } from "../../../lib/reactive/i18n.ts";
+import { t } from "../../../lib/reactive/i18n.ts";
+import type { UiSessionDefaultsHost } from "../../../lib/sessions/session-key.ts";
 import {
-  resolveUiSelectedGlobalAgentId,
-  type UiSessionDefaultsHost,
-} from "../../../lib/sessions/session-key.ts";
-import {
-  prepareWelcomeRecentSessions,
   resolveAssistantDisplayAvatar,
   resolveWelcomeSuggestionKeys,
   type WelcomeRecentSession,
   type WelcomeSuggestionAuth,
 } from "./chat-welcome.ts";
 
-registerCommandPaletteEnglish();
+registerChatWelcomeEnglish();
 
 export type ChatWelcomeIdentityProps = {
   currentAgentId?: string;
@@ -28,6 +23,8 @@ export type ChatWelcomeIdentityProps = {
   assistantName: string;
   assistantAvatar: string | null;
   assistantAvatarUrl?: string | null;
+  /** Undefined leaves bootstrap identity in control; null records a known absence. */
+  assistantAvatarSource?: string | null;
   sessionHost?: UiSessionDefaultsHost | null;
   /** Connected principal's grant; selects starter prompts it can act on. */
   operatorAuth?: WelcomeSuggestionAuth;
@@ -41,7 +38,7 @@ export type ChatWelcomeIdentityProps = {
 export type ChatWelcomeProps = {
   /** Existing agent picker, shown in the new-session welcome heading. */
   assistantNameControl?: JSX.Element;
-  /** Hero hint override; defaults to the chat slash-command hint. */
+  /** Hint owned by the new-session draft flow. */
   hint?: JSX.Element;
   /** Rendered between the hero and the recents (the new-session draft composer). */
   composer?: JSX.Element;
@@ -49,26 +46,14 @@ export type ChatWelcomeProps = {
   hideSecondaryContent?: boolean;
   /** Visually retire secondary content while the new-session draft is active. */
   fadeSecondaryContent?: boolean;
-  sessions?: SessionsListResult | null;
-  sessionKey?: string;
-} & ChatWelcomeIdentityProps;
+} & ChatWelcomeIdentityProps &
+  Pick<AgentsListResult["agents"][number], "description" | "recommendedPrompts">;
 
-/** The start-screen welcome block, shared by the empty chat and the new-session draft. */
+/** The new-session draft's welcome block. */
 export function ChatWelcome(
   props: ChatWelcomeProps & { preparedRecents?: readonly WelcomeRecentSession[] },
 ) {
   const welcomeRef = createBackgroundLayoutRef("welcome");
-  const recentSessions = createMemo(() => {
-    if (props.preparedRecents) {
-      return props.preparedRecents;
-    }
-    i18nRevision();
-    return prepareWelcomeRecentSessions(
-      props.sessions,
-      props.sessionKey,
-      resolveUiSelectedGlobalAgentId(props.sessionHost ?? {}),
-    );
-  });
   return (
     <Show
       when={!props.modelSetupRequired}
@@ -92,25 +77,23 @@ export function ChatWelcome(
           <span
             class="agent-chat__welcome-avatar"
             role="img"
-            aria-label={props.assistantName || "Assistant"}
+            aria-label={props.assistantName || t("chat.messages.agentName")}
           >
             <AgentIdentityAvatar agent={resolveAssistantDisplayAvatar(props)} />
           </span>
           <div class="agent-chat__welcome-identity-copy">
             <h2 class={props.assistantNameControl ? "sr-only" : undefined}>
-              {props.assistantName || "Assistant"}
+              {props.assistantName || t("chat.messages.agentName")}
             </h2>
             <Show when={props.assistantNameControl}>
               <div class="agent-chat__welcome-name">{props.assistantNameControl}</div>
             </Show>
-            <p class="agent-chat__hint">
-              {props.hint ?? (
-                <>
-                  {t("chat.welcome.hintBeforeShortcut")} <Kbd keys="/" />{" "}
-                  {t("chat.welcome.hintAfterShortcut")}
-                </>
-              )}
-            </p>
+            <Show when={props.description}>
+              {(description) => <p class="agent-chat__description muted">{description()}</p>}
+            </Show>
+            <Show when={props.hint}>
+              <p class="agent-chat__hint">{props.hint}</p>
+            </Show>
           </div>
         </div>
         {props.composer}
@@ -127,20 +110,26 @@ export function ChatWelcome(
           >
             <div class="agent-chat__welcome-secondary-inner">
               <Show
-                when={recentSessions().length > 0}
+                when={props.preparedRecents?.length}
                 fallback={
                   <div class="agent-chat__suggestions">
-                    <For each={resolveWelcomeSuggestionKeys(props.operatorAuth)}>
-                      {(key) => (
+                    <For
+                      each={
+                        props.recommendedPrompts?.length
+                          ? props.recommendedPrompts
+                          : resolveWelcomeSuggestionKeys(props.operatorAuth).map((key) => t(key))
+                      }
+                    >
+                      {(prompt) => (
                         <button
                           type="button"
                           class="agent-chat__suggestion"
                           onClick={() => {
-                            props.onDraftChange(t(key));
+                            props.onDraftChange(prompt);
                             props.onSend();
                           }}
                         >
-                          {t(key)}
+                          {prompt}
                         </button>
                       )}
                     </For>
@@ -149,7 +138,7 @@ export function ChatWelcome(
               >
                 <div class="agent-chat__recents">
                   <div class="agent-chat__recents-title">{t("chat.welcome.recentSessions")}</div>
-                  <For each={recentSessions()}>
+                  <For each={props.preparedRecents}>
                     {(row) => (
                       <button
                         type="button"

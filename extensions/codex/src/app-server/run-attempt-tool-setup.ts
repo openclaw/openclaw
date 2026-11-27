@@ -19,6 +19,7 @@ import {
   resolveCodexMessageToolProvider,
   shouldWarnCodexDynamicToolBuildStageSummary,
 } from "./dynamic-tool-build.js";
+import { resolveGatewayOnlySkillDirs } from "./dynamic-tool-content.js";
 import {
   filterCodexDynamicTools,
   resolveCodexDynamicToolsLoadingForRuntime,
@@ -274,11 +275,17 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         assertCurrent: connection.assertLegacyCurrent,
         startOptions: connection.appServer.start,
         authProfileId: connection.startupClientAuthProfileId,
+        authRequirement: connection.startupAuthRequirement,
         agentDir,
         config: params.config,
         timeoutMs: connection.appServer.requestTimeoutMs,
       }),
-    releaseClient: (client) => releaseCodexProbeClient(client, connection.attemptClientFactory),
+    releaseClient: (client) =>
+      releaseCodexProbeClient(
+        client,
+        connection.attemptClientFactory,
+        connection.callerOwnedAttemptClient,
+      ),
     assertCurrent: () => {
       runAbortController.signal.throwIfAborted();
       connection.assertCurrent();
@@ -364,6 +371,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       senderIsOwner: params.senderIsOwner,
       modelProvider: params.provider,
       modelId: params.modelId,
+      modelAuthProfileId: params.authProfileId,
       modelApi: params.model.api,
       modelContextWindowTokens: params.model.contextWindow,
       modelHasVision: params.model.input?.includes("image") ?? false,
@@ -416,6 +424,8 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       agentDir: policyContext.agentDir,
       cfg: params.config,
       manifestRegistry: bundleManifestRegistry,
+      metadata: params.preparedModelRuntime?.metadataSnapshot,
+      isTurnTainted: params.isTurnTainted,
       toolsAllow: params.toolsAllow,
       toolOverrides: codexMcpToolOverrides,
       autoApproveCodexAppServerApprovals: shouldAutoApproveCodexAppServerApprovals(
@@ -428,6 +438,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       params.requireWorkspaceOnly !== true && configuredMcpSurface
         ? await materializeStaticMcpToolsForHarnessRun({
             ...mcpOptions,
+            storeAdmission: params.hostCapabilities,
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
             agentId: sessionAgentId,
@@ -453,6 +464,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         ? undefined
         : await materializeRequesterScopedMcpToolsForHarnessRun({
             ...mcpOptions,
+            storeAdmission: params.hostCapabilities,
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
             // Requester servers cannot consume stored grants; Allow Always would re-prompt.
@@ -487,6 +499,13 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       contextWindowTokens: params.contextTokenBudget ?? params.model.contextWindow,
       workspaceDir: effectiveWorkspace,
       remoteWorkspaceRoot: connection.appServer.remoteWorkspaceRoot,
+      gatewayOnlySkillDirs: resolveGatewayOnlySkillDirs(
+        [
+          ...(runtimeParams.skillsSnapshot?.resolvedSkills ?? []),
+          ...(runtimeParams.skillsSnapshot?.discoverySkills ?? []),
+        ],
+        connection.appServer.remoteWorkspaceRoot,
+      ),
       remoteWorkspaceRequestTimeoutMs: connection.appServer.requestTimeoutMs,
       sessionId: params.sessionId,
       sessionKey: contextSessionKey,

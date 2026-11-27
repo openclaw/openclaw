@@ -106,6 +106,44 @@ export async function runGatewayPostReadyStartupMaintenance(params: {
       },
     ],
     [
+      // An earlier updater can leave this installation's pnpm launcher pointing at its
+      // removed stage while the Gateway runs the new version; heal it without a command.
+      "cli-launcher",
+      async () => {
+        const [
+          { resolveOpenClawPackageRootSync },
+          { repairPublishedPnpmLaunchers },
+          { repairLegacyGitReleaseLauncher },
+        ] = await Promise.all([
+          import("../infra/openclaw-root.js"),
+          import("../infra/update-launcher-repair.js"),
+          import("../update/repair-launcher.js"),
+        ]);
+        const root = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
+        params.signal.throwIfAborted();
+        if (!root) {
+          return;
+        }
+        const legacyLauncher = await repairLegacyGitReleaseLauncher({ root });
+        if (legacyLauncher) {
+          params.log.info(
+            `Repaired the legacy release launcher ${legacyLauncher}: status checks no longer count as Gateway starts.`,
+          );
+        }
+        const { repaired, failed } = await repairPublishedPnpmLaunchers({ root });
+        for (const repair of repaired) {
+          params.log.info(
+            `Repaired the openclaw launcher ${repair.file}: it still pointed at the removed update stage ${repair.stage}.`,
+          );
+        }
+        for (const { file, error } of failed) {
+          params.log.warn(
+            `The openclaw launcher ${file} still points at a removed update stage and could not be repaired: ${formatErrorMessageWithCode(error)}. Recreate it with pnpm add -g --allow-build=openclaw openclaw@<installed-version>.`,
+          );
+        }
+      },
+    ],
+    [
       "pairing",
       async () => {
         const { listLegacyPairingStoreFiles } = await import("../infra/pairing-files.js");
@@ -336,7 +374,20 @@ export async function loadGatewayStartupPluginRuntime(params: {
   startupTrace?: Pick<GatewayStartupTrace, "detail">;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
   resolveGatewayContext?: GatewayContextResolver;
+  signal?: AbortSignal;
 }) {
+  const { confirmPluginStateMigrationReadiness } =
+    await import("../plugins/plugin-state-migration-readiness.js");
+  try {
+    await confirmPluginStateMigrationReadiness({
+      config: params.activationSourceConfig ?? params.cfg,
+      env: process.env,
+      signal: params.signal ?? new AbortController().signal,
+      warn: (message) => params.log.warn(message),
+    });
+  } catch (error) {
+    params.log.warn(`Plugin data/settings readiness could not be confirmed: ${String(error)}`);
+  }
   // Keep server-plugin-bootstrap behind one lazy boundary; startup config tests can exercise
   // planning without importing plugin package runtimes.
   const beforeBootstrapImport = performance.now();

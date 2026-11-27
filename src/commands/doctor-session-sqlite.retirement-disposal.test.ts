@@ -189,7 +189,7 @@ it.each([
   async ({ platform, syncFailure, retires }) => {
     const { store, manifestPath, archivePath } = await createVerifiedRecoveryStore();
     const original = fs.readFileSync(archivePath);
-    const preview = inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
+    const preview = await inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
     const fsync = fs.fsyncSync;
     const failureCode = syncFailure === "EIO" ? "EIO" : platform === "win32" ? "EPERM" : "ENOTSUP";
     // Avoid foreign-platform ACL APIs while testing directory-sync policy.
@@ -240,7 +240,7 @@ it.each([
 it("refuses retirement while a peer maintenance operation holds the selected state", async () => {
   const { store, archivePath } = await createVerifiedRecoveryStore();
   const original = fs.readFileSync(archivePath);
-  const preview = inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
+  const preview = await inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
   const confirm = vi.fn(async () => true);
   await withDoctorSqliteMaintenanceLock({
     env: store.env,
@@ -285,12 +285,12 @@ it.each([
 
 it("retains complete recovery when durable transcript verification is short", async () => {
   const store = transcriptStore(message("root", "root"));
-  const snapshot = sqliteReaders.readOnlySqliteValidationSnapshot;
+  const snapshot = sqliteReaders.readSessionImportValidationSnapshot;
   let imported;
   {
-    using spy = vi.spyOn(sqliteReaders, "readOnlySqliteValidationSnapshot");
-    spy.mockImplementation((target) => {
-      const result = snapshot(target);
+    using spy = vi.spyOn(sqliteReaders, "readSessionImportValidationSnapshot");
+    spy.mockImplementation((target, env) => {
+      const result = snapshot(target, env);
       if (!result.ok) {
         return result;
       }
@@ -444,7 +444,7 @@ it("retires verified originals after remount while preserving current SQLite and
     process.platform === "linux" || process.platform === "darwin"
       ? readMainDatabasePosixLocks(sqlitePath)
       : undefined;
-  const preview = inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
+  const preview = await inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
   expect(artifact(preview, originalMove.archivePath)?.outcome).toBe("candidate");
   const cleanup = await retire(
     store,

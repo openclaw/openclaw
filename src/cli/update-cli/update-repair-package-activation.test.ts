@@ -25,13 +25,21 @@ import {
 } from "../../infra/package-update-publication.test-support.js";
 import { writePackageRoot } from "../../infra/package-update-steps.test-support.js";
 import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
-import { getUpdateRun } from "../../infra/update-run-ledger.js";
+import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
+import {
+  createUpdateRun,
+  getUpdateRun,
+  recordUpdateRunPhase,
+} from "../../infra/update-run-ledger.js";
 import { defaultRuntime } from "../../runtime.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { runRegisteredCli } from "../../test-utils/command-runner.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
+import { registerUpdateCli } from "../update-cli.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import {
   createInterruptedPackagePublication,
@@ -58,6 +66,7 @@ beforeEach(async () => {
   });
   await state.writeConfig({ plugins: { enabled: false } });
   vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
+  vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
   mocks.finalize.mockImplementation(async () => {
     assertNoPendingPackageActivation(await mocks.root());
   });
@@ -180,15 +189,103 @@ async function interruptedPublication(
 }
 
 describe.skipIf(process.platform === "win32")("public package repair of obsolete recovery", () => {
-  it.each(["publishing", "publication-complete"] as const)(
-    "settles a remounted %s journal through public repair",
-    async (phase) => {
+  it.each(["abandoned", "live ownership", "live sibling"] as const)(
+    "repairs historical hostnames independently before remounted journal recovery: %s",
+    async (scenario) => {
       const f = await prepareRemountedPublication(fixtures, fixtureRoot);
       mocks.root.mockResolvedValue(f.packageRoot);
-      if (phase === "publication-complete") {
+      const driver = readUpdateRunDriver();
+      expect(driver).toBeDefined();
+      const runs = ["previous-mac.invalid", "renamed-mac.invalid"].map((host) => {
+        const run = createUpdateRun({ trigger: "cli", origin: { driver: { ...driver!, host } } });
+        recordUpdateRunPhase(run.runId, "verifying");
+        return run.runId;
+      });
+      const ageMs = 14 * 24 * 60 * 60_000;
+      openOpenClawStateDatabase()
+        .db.prepare("UPDATE update_runs SET created_at_ms = ?, updated_at_ms = ?")
+        .run(Date.now() - ageMs, Date.now() - ageMs);
+      const repairCli = () =>
+        runRegisteredCli({
+          register: registerUpdateCli,
+          argv: ["update", "repair", "--json", "--yes"],
+        });
+      if (scenario === "live ownership") {
+        const journal = fs.readFileSync(f.journalPath);
+        await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+          await executor.enter(f.packageRoot);
+          await repairCli();
+        });
+        expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+        expect(defaultRuntime.error).toHaveBeenCalledWith(
+          expect.stringMatching(/wait.*owning host.*repair/iu),
+        );
+        expect(runs.map((id) => getUpdateRun(id)?.status)).toEqual(["running", "running"]);
+        expect(fs.readFileSync(f.journalPath)).toEqual(journal);
+        expect(mocks.finalize).not.toHaveBeenCalled();
+        return;
+      }
+      const sibling =
+        scenario === "live sibling"
+          ? createUpdateRun({ trigger: "cli", origin: { driver } })
+          : undefined;
+      await repairCli();
+      expect(runs.map((id) => getUpdateRun(id))).toEqual(
+        runs.map((runId) =>
+          expect.objectContaining({
+            runId,
+            status: "failed",
+            phase: "finished",
+            reason: "abandoned",
+            finishedAtMs: expect.any(Number),
+          }),
+        ),
+      );
+      for (const [index, id] of runs.entries()) {
+        expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining(id));
+        expect(defaultRuntime.error).toHaveBeenCalledWith(
+          expect.stringContaining(index ? "renamed-mac.invalid" : "previous-mac.invalid"),
+        );
+      }
+      if (sibling) {
+        expect(getUpdateRun(sibling.runId)?.status).toBe("running");
+        expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+        expect(fs.existsSync(f.anchor)).toBe(true);
+        expect(mocks.finalize).not.toHaveBeenCalled();
+        return;
+      }
+      expect(defaultRuntime.exit).not.toHaveBeenCalled();
+      expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
+      expect(fs.existsSync(f.anchor)).toBe(false);
+      expect(mocks.finalize).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([
+    "lost acknowledgement",
+    "manual replacement",
+    "published candidate",
+    "replaced published launcher",
+  ] as const)(
+    "repairs remounted custody without accepting a foreign launcher: %s",
+    async (scenario) => {
+      const published =
+        scenario === "published candidate" || scenario === "replaced published launcher";
+      const f = await prepareRemountedPublication(
+        fixtures,
+        fixtureRoot,
+        false,
+        "equal-symlinks",
+        "candidate",
+        published,
+      );
+      mocks.root.mockResolvedValue(f.packageRoot);
+      if (scenario === "manual replacement") {
         const db = new DatabaseSync(f.journalPath);
         try {
-          db.prepare("UPDATE package_activation SET phase = ?, intent_json = 'null'").run(phase);
+          db.prepare(
+            "UPDATE package_activation SET phase = 'publication-complete', intent_json = 'null'",
+          ).run();
         } finally {
           db.close();
         }
@@ -208,6 +305,25 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
         );
         await writePackageDistInventory(f.packageRoot);
       }
+      if (published) {
+        // The writer must publish a new inode; the fixture only remaps device numbers afterward.
+        expect(fs.lstatSync(f.launcher).ino.toString()).not.toBe(
+          f.historical.launchers[0]!.candidateIdentity.split(":")[1],
+        );
+      }
+      if (scenario === "replaced published launcher") {
+        const target = fs.readlinkSync(f.launcher);
+        fs.renameSync(f.launcher, `${f.launcher}.recorded`);
+        fs.symlinkSync(target, f.launcher);
+        const before = fs.readFileSync(f.journalPath);
+        await expect(repair()).rejects.toThrow(
+          "Package settlement inode or device mapping changed",
+        );
+        expect(fs.readFileSync(f.journalPath)).toEqual(before);
+        expect(fs.existsSync(`${f.anchor}.superseded-${f.operationId}`)).toBe(false);
+        expect(mocks.finalize).not.toHaveBeenCalled();
+        return;
+      }
       const installed = await createPackageIntegrityReader().tree(f.packageRoot);
       const previous = await createPackageIntegrityReader().tree(path.join(f.anchor, "previous"));
       await repair();
@@ -219,9 +335,9 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
         phase: "superseded",
         intent: {
           kind:
-            phase === "publishing"
-              ? "publication-settled-external-change"
-              : "superseded-by-manual-install",
+            scenario === "manual replacement"
+              ? "superseded-by-manual-install"
+              : "publication-settled-external-change",
           settled: true,
         },
         descriptor: f.historical,

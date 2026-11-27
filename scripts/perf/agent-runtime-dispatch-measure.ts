@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { Session, type HeapProfiler } from "node:inspector/promises";
+import { Session } from "node:inspector/promises";
 import { stripTypeScriptTypes } from "node:module";
 import { loadavg } from "node:os";
 import { resolve } from "node:path";
@@ -33,6 +33,7 @@ import {
 } from "../../src/process/gateway-work-admission.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../../src/shared/async-work-scope.js";
 import { createLazyPromiseLoader } from "../../src/shared/lazy-promise.js";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -135,9 +136,6 @@ function enter(index: number, run: () => Promise<void>): Promise<void> {
     ? emitter.run(run)
     : stores[index]!.run(index, () => enter(index + 1, run));
 }
-function allocated(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + allocated(child), 0);
-}
 const root = tryBeginGatewayRootWorkAdmission("synthetic-stream-benchmark");
 assert(root);
 const inspector = new Session();
@@ -185,7 +183,7 @@ try {
         digest,
         elapsedMs,
         cpuUsPerEvent: (used.user + used.system) / events,
-        allocatedBytesPerEvent: profile ? allocated(profile.head) / events : undefined,
+        allocatedBytesPerEvent: profile ? sumSampledHeapBytes(profile.head) / events : undefined,
         allocationSamples: profile?.samples.length,
         hostLoad: loadavg(),
       }),

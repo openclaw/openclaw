@@ -6,10 +6,8 @@ import { detectPackageManager } from "./detect-package-manager.js";
 import { isMissingPathError } from "./errno.js";
 import { createGitCommandError, executeGitCommand } from "./git-exec.js";
 import { readInstallOwner, type InstallOwner } from "./install-owner.js";
-import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
 import { readPackageName } from "./package-json.js";
 import { canAccess } from "./path-existence.js";
-import { compareValidSemver, normalizeLegacyDotBetaVersion } from "./semver.js";
 import {
   channelToNpmTag,
   DEV_BRANCH,
@@ -27,6 +25,7 @@ import { readBuiltRuntimeCommit, readGitRuntimeArtifactStatus } from "./update-g
 import { detectGlobalInstallManagerForRoot } from "./update-global.js";
 import type { UpdateInstallKind } from "./update-install-kind.js";
 import { updateInstallRootsMatch } from "./update-install-root.js";
+import { describeUnavailableMacosSystemGit } from "./update-macos-git.js";
 import { UPDATE_NETWORK_TIMEOUT_MS } from "./update-network-budget.js";
 import { createUpdatePreflightFailure } from "./update-preflight-details.js";
 import type { UpdateFetchFailure } from "./update-run-record.js";
@@ -265,12 +264,15 @@ async function resolveUpdateInstallOwnership(
       () => true,
       (error: unknown) => !isMissingPathError(error),
     ));
-  const result = probeGit
-    ? await runUpdateGitCommand(root, ["rev-parse", "--show-toplevel"], {
-        ...options,
-        timeoutMs: options.timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS,
-      })
-    : null;
+  const gitOptions = {
+    ...options,
+    cwd: root,
+    timeoutMs: options.timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS,
+  };
+  const result =
+    probeGit && !(await describeUnavailableMacosSystemGit(runCommandWithTimeout, gitOptions))
+      ? await runUpdateGitCommand(root, ["rev-parse", "--show-toplevel"], gitOptions)
+      : null;
   options.signal?.throwIfAborted();
   if (result?.termination === "timeout") {
     // An expired probe does not establish that this root is a package installation.
@@ -591,18 +593,6 @@ export async function resolveNpmChannelTag(
     fetchTag("latest"),
   ]);
   return selectNpmChannelVersion(channelStatus, latestStatus);
-}
-
-export function compareSemverStrings(a: string | null, b: string | null): number | null {
-  if (a && b) {
-    const openClawReleaseCmp = compareOpenClawReleaseVersions(a, b);
-    if (openClawReleaseCmp != null) {
-      return openClawReleaseCmp;
-    }
-  }
-  const normalizedA = a ? normalizeLegacyDotBetaVersion(a) : null;
-  const normalizedB = b ? normalizeLegacyDotBetaVersion(b) : null;
-  return normalizedA && normalizedB ? compareValidSemver(normalizedA, normalizedB) : null;
 }
 
 export async function checkUpdateStatus(params: {

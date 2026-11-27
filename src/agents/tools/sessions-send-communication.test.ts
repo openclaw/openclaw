@@ -7,6 +7,7 @@ import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.s
 import { runSessionRegistryMaintenanceForStore } from "../../config/sessions/session-registry-maintenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { bindInProcessSubagentResume } from "../../gateway/in-process-subagent-resume.js";
 import { readSessionSendDeliveryAdmission } from "../../gateway/session-send-delivery.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
@@ -28,12 +29,15 @@ const state = vi.hoisted(() => ({
   approve: vi.fn(),
   assertCaller: vi.fn(),
   task: undefined as unknown,
-  caller: { agentId: "main", sessionKey: "agent:main:source" },
+  caller: {
+    agentId: "main",
+    sessionKey: "agent:main:source",
+    operationalRunInstance: { runId: "source-run" },
+  },
 }));
 vi.mock("./gateway-caller-context.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./gateway-caller-context.js")>()),
   getGatewayToolCallerIdentity: () => state.caller,
-  captureGatewayToolCallerAssertion: () => state.assertCaller,
   resolveGatewayToolOperatorSelection: () => ({ assertCurrent: state.assertCaller }),
 }));
 vi.mock("./in-process-gateway.js", async (importOriginal) => ({
@@ -172,42 +176,28 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 describe("sessions_send communication boundary", () => {
-  it.each([false, true])(
-    "retains durable delivery identity for owned-task fallback=%s",
-    async (ownedTask) => {
-      const source = endpoint("source");
-      const target = ownedTask ? childOf(source) : endpoint("target");
-      if (ownedTask) {
-        state.task = {
-          runId: "task",
-          requesterSessionKey: source.sessionKey,
-          requesterAgentId: "main",
-        };
-      }
-      const input = operation(source, target);
-      const inputProvenance = {
-        kind: "inter_session" as const,
-        sourceTool: "sessions_send",
-        sourceSessionKey: input.source.sessionKey,
-      };
-      input.callGateway.mockImplementation(async () => {
-        const admitted = readSessionSendDeliveryAdmission({
-          agentId: "main",
-          sessionKey: input.target.sessionKey,
-          sessionId: "target",
-          runId: "saved-peer",
-        });
-        expect(admitted).toBeDefined();
-        expect(admitted!.delivery.source).not.toHaveProperty("lifecycleRevision");
-        expect(admitted!.delivery.target).not.toHaveProperty("lifecycleRevision");
+  it("retains durable delivery identity for peer input", async () => {
+    const input = operation(endpoint("source"), endpoint("target"));
+    const inputProvenance = {
+      kind: "inter_session" as const,
+      sourceTool: "sessions_send",
+      sourceSessionKey: input.source.sessionKey,
+    };
+    input.callGateway.mockImplementation(async () => {
+      const admitted = readSessionSendDeliveryAdmission({
+        agentId: "main",
+        sessionKey: input.target.sessionKey,
+        sessionId: "target",
+        runId: "saved-peer",
       });
-      using gate = await openGate({ ...input, inputProvenance });
-      await (ownedTask ? gate.callDurableGateway : gate.callGateway)(
-        agentRequest(input, { idempotencyKey: "saved-peer", inputProvenance }),
-      );
-      expect(input.callGateway).toHaveBeenCalledOnce();
-    },
-  );
+      expect(admitted).toBeDefined();
+      expect(admitted!.delivery.source).not.toHaveProperty("lifecycleRevision");
+      expect(admitted!.delivery.target).not.toHaveProperty("lifecycleRevision");
+    });
+    using gate = await openGate({ ...input, inputProvenance });
+    await gate.callGateway(agentRequest(input, { idempotencyKey: "saved-peer", inputProvenance }));
+    expect(input.callGateway).toHaveBeenCalledOnce();
+  });
 
   it.each([
     [undefined, undefined, false],
@@ -495,6 +485,47 @@ describe("sessions_send communication boundary", () => {
     }
   });
 
+  it("continues an owned task after its run advances and refuses once it is killed", async () => {
+    const source = endpoint("source");
+    const target = childOf(source);
+    const task = createSubagentRunRecord({
+      runId: "first-run",
+      childSessionKey: target.sessionKey,
+      requesterSessionKey: source.sessionKey,
+      requesterAgentId: "main",
+    });
+    state.task = task;
+    const input = operation(source, target);
+    using gate = await openGate(input);
+    expect(gate.ownedTask).toBe(true);
+    // An exec wake, yield or follow-up moves the task to a new run.
+    state.task = { ...task, runId: "woken-run", generation: (task.generation ?? 0) + 1 };
+    const request = bindInProcessSubagentResume(
+      agentRequest(input, { idempotencyKey: "successor", expectedExistingSessionId: "stale" }),
+      {
+        caller: state.caller,
+        childSessionKey: target.sessionKey,
+        childSessionId: "stale",
+        previousRunId: "woken-run",
+        taskRunId: task.taskRunId ?? task.runId,
+        generation: (task.generation ?? 0) + 1,
+        createdAt: task.createdAt,
+      },
+    );
+    await gate.callGateway(request);
+    expect(input.callGateway).toHaveBeenCalledOnce();
+    input.callGateway.mockClear();
+    state.task = { ...task, runId: "woken-run", killIntent: { requestedAt: 1, reason: "killed" } };
+    await expect(gate.callGateway(agentRequest(input))).rejects.toThrow("ended or was cancelled");
+    expect(input.callGateway).not.toHaveBeenCalled();
+  });
+  it("a retained send whose task ended is refused", async () => {
+    const input = { ...operation(), expectTask: true };
+    state.task = null;
+    await denied(input, "ended or was cancelled");
+    expect(state.approve).not.toHaveBeenCalled();
+  });
+
   it("only live exact owned tasks get the guidance exception", async () => {
     const source = endpoint("source", neverSend);
     const target = childOf(source, neverReceive);
@@ -507,7 +538,7 @@ describe("sessions_send communication boundary", () => {
       using gate = await openGate(operation(source, target));
       expect(gate.ownedTask).toBe(true);
       state.task = undefined;
-      expect(gate.assertCurrent).toThrow("authority changed");
+      expect(gate.assertCurrent).toThrow("ended or was cancelled");
     }
     await denied(operation(source, target), "disabled");
   });

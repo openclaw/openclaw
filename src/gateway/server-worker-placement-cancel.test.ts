@@ -75,18 +75,16 @@ it("preserves admitted work when cancellation authority is revoked before the ef
       { once: true },
     );
     const revoked = new Error("worker Stop authority revoked");
-    let current = true;
+    // The ingress check passes; authority is revoked before the cancellation effect checks it.
+    let checks = 0;
     const failure = await cancelGatewayWorkerSessionWork(context, {
       sessionId,
       sessionKeys: [sessionKey],
       agentId: "main",
       assertCurrent: () => {
-        if (!current) {
+        if (checks++ > 0) {
           throw revoked;
         }
-        queueMicrotask(() => {
-          current = false;
-        });
       },
     }).catch((error: unknown) => error);
     expect(owned.activeRunAbort.controller.signal.aborted).toBe(false);
@@ -257,14 +255,12 @@ it.each(["success", "setup-failed-write"] as const)(
         payload: { runId: "during-terminal-write", status: "timeout", summary: "aborted" },
       });
       if (outcome === "setup-failed-write") {
-        expect(owned.restartSafeAdmission).toBeUndefined();
         await handleChatSendSetupError({
           admission: owned,
           context,
           error: new Error("pre-ACK reply context failed"),
           respond: vi.fn(),
           session: { agentId: "main", clientRunId: runId, sessionKey: target.sessionKey },
-          terminalizeRestartSafeAdmission: vi.fn(async () => false),
         });
         expect(rpcSourceTesting.has(runId)).toBe(false);
         expect(reclaimEffectStarted).toBe(false);

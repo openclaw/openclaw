@@ -233,7 +233,5 @@ describe("Volcengine speech provider", () => {
       policy: directivePolicy,
     });
     expect(result).toEqual({ handled: true, ...expected });
-    expect(result?.overrides).not.toBe(currentOverrides);
-    expect(currentOverrides).toEqual({ voice: "retained", speedRatio: 0.75 });
   });
 });

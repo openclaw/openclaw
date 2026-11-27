@@ -1,5 +1,5 @@
 import type { Tool } from "@modelcontextprotocol/client";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createMcpJsonSchemaValidator } from "./mcp-json-schema-validator.js";
 import { normalizeMcpToolCatalog } from "./mcp-tool-metadata.js";
 
@@ -92,6 +92,35 @@ it.for([
   expect(normalized.metadata.validatorForCall(colliding[0]?.name.trim() ?? "")).toBeUndefined();
 });
 
+it("keeps unknown formats quiet across catalog loads without weakening known formats", () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const tools = [
+    tool("route", {
+      outputSchema: {
+        type: "object",
+        properties: {
+          duration: { type: "string", format: "google-duration" },
+          contact: { type: "string", format: "email" },
+        },
+      },
+    }),
+  ];
+  try {
+    for (let load = 0; load < 2; load++) {
+      const normalized = catalog(tools);
+      expect(normalized.tools.map((entry) => entry.name)).toEqual(["route"]);
+      const validate = normalized.metadata.validatorForCall("route")!;
+      expect(() => validate({ content: [], structuredContent: { duration: "12s" } })).not.toThrow();
+      expect(() => validate({ content: [], structuredContent: { contact: "invalid" } })).toThrow(
+        "Structured content does not match the tool's output schema",
+      );
+    }
+    expect(warn).not.toHaveBeenCalled();
+  } finally {
+    warn.mockRestore();
+  }
+});
+
 it("filters excluded tools before compiling their output schemas", () => {
   const normalized = catalog(
     [
@@ -106,4 +135,30 @@ it("filters excluded tools before compiling their output schemas", () => {
   expect(normalized.excludedTools.map((entry) => entry.name)).toEqual(["excluded", "task_only"]);
   expect(normalized.metadata.validatorForCall("healthy")).toBeTypeOf("function");
   expect(normalized.metadata.validatorForCall("excluded")).toBeUndefined();
+});
+
+it("compiles output schemas on first call, except shared $id resources (#199327)", () => {
+  const schemaValidator = createMcpJsonSchemaValidator();
+  const getValidator = vi.spyOn(schemaValidator, "getValidator");
+  const normalized = normalizeMcpToolCatalog(
+    [
+      tool("base", {
+        outputSchema: { $id: "https://example.test/base", type: "object", required: ["ok"] },
+      }),
+      tool("derived", {
+        outputSchema: { type: "object", allOf: [{ $ref: "https://example.test/base" }] },
+      }),
+      tool("unused", { outputSchema: { type: "object" } }),
+    ],
+    schemaValidator,
+  );
+  expect(getValidator).toHaveBeenCalledTimes(1);
+
+  const validate = normalized.metadata.validatorForCall("derived")!;
+  expect(normalized.metadata.validatorForCall("derived")).toBe(validate);
+  expect(getValidator).toHaveBeenCalledTimes(2);
+  expect(() => validate({ content: [], structuredContent: { ok: true } })).not.toThrow();
+  expect(() => validate({ content: [], structuredContent: {} })).toThrow(
+    "Structured content does not match the tool's output schema",
+  );
 });

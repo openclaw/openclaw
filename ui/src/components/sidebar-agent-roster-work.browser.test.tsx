@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { patchSettings } from "../app/settings.ts";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
 import {
   mountRoster,
@@ -43,6 +44,10 @@ async function mountViewport(pinnedAgentIds: string[] = []) {
           value={{
             element: () => viewport,
             content: () => undefined,
+            observeContent: () => () => {},
+            rowFloor: () => 32,
+            captureRowFloor: () => {},
+            registerWindow: () => () => {},
             readAnchor: () => undefined,
             captureAnchor() {},
             subscribeScroll: () => () => {},
@@ -143,4 +148,29 @@ it("restores focus when unpinning an agent outside the roster viewport", async (
     expect(document.activeElement).toBe(row);
     expect(pinned.isConnected).toBe(false);
   });
+});
+
+it("keeps one pinned row and the session body across roster and chip mode changes", async () => {
+  patchSettings({ gatewayUrl: "ws://gateway.test", sidebarAgentsMode: "roster" });
+  const { sidebar } = await mountRoster(roster);
+  await settleRoster(sidebar);
+  await waitForSolid(() => expect(sidebar.querySelector("[data-agent-group]")).not.toBeNull());
+  const body = sidebar.querySelector(".sidebar-shell__body");
+  expect(body).not.toBeNull();
+  const initialRoster = sidebar.querySelector("openclaw-sidebar-agent-roster");
+  sidebar.sidebarEntries = ["session:agent:main:pinned"];
+  const expectRows = () => {
+    expect(sidebar.querySelectorAll('[data-session-section="pinned"]')).toHaveLength(1);
+    expect(sidebar.querySelectorAll('[data-session-key="agent:main:pinned"]')).toHaveLength(1);
+  };
+  await settleRoster(sidebar);
+  await waitForSolid(expectRows);
+  for (const mode of ["chip", "roster", "chip", "roster"] as const) {
+    sidebar.sidebarAgentsMode = mode;
+    await settleRoster(sidebar);
+    await waitForSolid(expectRows);
+    expect(sidebar.querySelector(".sidebar-shell__body")).toBe(body);
+    expect(Boolean(sidebar.querySelector("openclaw-sidebar-agent-roster"))).toBe(mode === "roster");
+  }
+  expect(initialRoster?.isConnected).toBe(false);
 });

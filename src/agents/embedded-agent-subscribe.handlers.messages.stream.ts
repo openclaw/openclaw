@@ -11,12 +11,16 @@ import {
   splitTrailingDirective,
 } from "../auto-reply/reply/streaming-directives.js";
 import { readAutomationDisplayState } from "../infra/agent-run-registry.automation.js";
-import type { AssistantMessage } from "../llm/types.js";
+import type { AssistantHistoryMessage } from "../llm/types.js";
 import {
   parseAssistantTextSignature,
   readAssistantTextBlocksForPhase,
 } from "../shared/chat-message-content.js";
 import { toolCallXmlTextFilter } from "../shared/text/assistant-visible-text.js";
+import {
+  canReuseMarkdownOwnershipForAppend,
+  findCodeOwnership,
+} from "../shared/text/code-regions.js";
 import { downgradedToolCallTextFilter } from "../shared/text/downgraded-tool-call-text.js";
 import { createTextProjection, trimTextPreservingCode } from "../shared/text/text-projection.js";
 import {
@@ -122,7 +126,7 @@ export function resolveAssistantStreamContentIndex(value: unknown): number | und
 }
 
 export function resolveAssistantStreamBlockIndex(
-  message: AssistantMessage,
+  message: AssistantHistoryMessage,
   contentIndex: number | undefined,
   itemId: string | undefined,
 ): number | undefined {
@@ -142,11 +146,11 @@ export function resolveAssistantStreamBlockIndex(
   return index >= 0 ? index : undefined;
 }
 
-export function scopeAssistantMessageToStreamBlock(
-  message: AssistantMessage,
+export function scopeAssistantMessageToStreamBlock<T extends AssistantHistoryMessage>(
+  message: T,
   contentIndex: number | undefined,
   itemId: string | undefined,
-): AssistantMessage {
+): T {
   const index = resolveAssistantStreamBlockIndex(message, contentIndex, itemId);
   if (index === undefined || !Array.isArray(message.content)) {
     return message;
@@ -163,7 +167,7 @@ export function scopeAssistantMessageToStreamBlock(
 
 export function emitAssistantCommentaryStreamData(
   ctx: EmbeddedAgentSubscribeContext,
-  message: AssistantMessage,
+  message: AssistantHistoryMessage,
   finalMessage = false,
 ) {
   const isResponsesCommentary = isResponsesApiAssistantMessage(message);
@@ -302,7 +306,7 @@ export function resolveAssistantTextChunk(params: {
   if (content.startsWith(accumulatedText)) {
     return content.slice(accumulatedText.length);
   }
-  return accumulatedText.includes(content) ? "" : content;
+  return "";
 }
 
 export function createStreamingReplyResolver(): StreamingReplyResolver {
@@ -321,39 +325,58 @@ export function createStreamingReplyResolver(): StreamingReplyResolver {
   let settledDirectiveText = "";
   let settledDirectiveTail = false;
   // A removed inline directive can retroactively own surrounding whitespace, so a prefix that
-  // ever held a marker stays on the canonical parse.
+  // removed a marker stays on the canonical parse.
   let settledDirectiveMarked = false;
   // An invalid media reference rewrites its notice in place as the line grows, so those replies
   // keep the canonical parse.
   let settledDirectiveNotice = false;
+  // Canonical identity can extend only while Markdown ownership remains unchanged.
+  let literalMarkerSource: string | undefined;
+  let literalMarkerOwnership: Parameters<typeof canReuseMarkdownOwnershipForAppend>[2];
   return (params) => {
     let preparedRawText = params.next;
+    let ownershipDelta = params.appendDelta;
     if (params.rawDirectiveSource !== undefined) {
-      const appended = params.rawDirectiveDelta ?? params.rawDirectiveSource;
       // Directive parsing needs pre-trim coordinates, independently of the visible projection.
-      preparedRawText =
+      const projected =
         params.rawDirectiveDelta === undefined
-          ? rawProjection.replace(params.rawDirectiveSource).text
-          : rawProjection.append(params.rawDirectiveDelta, params.rawDirectiveSource).text;
-      if (params.rawDirectiveDelta === undefined) {
-        directiveCodePrefix = undefined;
-        hasDirectiveMarker = false;
-        previousChar = "";
-      }
+          ? rawProjection.replace(params.rawDirectiveSource)
+          : rawProjection.append(params.rawDirectiveDelta, params.rawDirectiveSource);
+      preparedRawText = projected.text;
+      ownershipDelta = projected.delta;
       // Untrimmed sources answer to their own trim owner, so the settled clean prefix does not
       // apply to them.
       settledDirectiveSource = undefined;
-      if ((previousChar + appended).includes("[[")) {
-        hasDirectiveMarker = true;
-        directiveCodePrefix = undefined;
-      }
-      if (appended) {
-        previousChar = appended.slice(-1);
-      }
     }
-    if (params.appendDelta === null) {
+    if (ownershipDelta === null) {
+      hasDirectiveMarker = false;
+      previousChar = "";
+    }
+    const appended = ownershipDelta ?? preparedRawText;
+    if ((previousChar + appended).includes("[[")) {
+      hasDirectiveMarker = true;
+      // A fresh marker is unproven until the canonical parse covers it.
+      literalMarkerSource = undefined;
+      directiveCodePrefix = undefined;
+    }
+    if (appended) {
+      previousChar = appended.slice(-1);
+    }
+    if (params.appendDelta === null || ownershipDelta === null) {
       directiveCodePrefix = undefined;
       settledDirectiveSource = undefined;
+      literalMarkerSource = undefined;
+    }
+    if (literalMarkerSource !== undefined) {
+      literalMarkerSource =
+        ownershipDelta !== null &&
+        canReuseMarkdownOwnershipForAppend(
+          literalMarkerSource,
+          ownershipDelta,
+          (literalMarkerOwnership ??= findCodeOwnership(literalMarkerSource)),
+        )
+          ? preparedRawText
+          : undefined;
     }
     if (!params.parsedStreamDirectives && params.evtType === "text_delta") {
       if (params.rawDirectiveSource?.length !== directiveCodePrefix?.checkedRawLength) {
@@ -383,7 +406,7 @@ export function createStreamingReplyResolver(): StreamingReplyResolver {
       params.parsedStreamDirectives.text === params.visibleDelta &&
       params.appendDelta !== null &&
       params.previousText === params.previousCleaned &&
-      (directiveCodePrefix || !hasDirectiveMarker)
+      (directiveCodePrefix || !hasDirectiveMarker || literalMarkerSource !== undefined)
     ) {
       // Visibility and trim owners already prepared this exact append.
       text = params.next;
@@ -400,7 +423,8 @@ export function createStreamingReplyResolver(): StreamingReplyResolver {
       text === undefined &&
       params.evtType !== "text_end" &&
       params.parsedStreamDirectives &&
-      params.parsedStreamDirectives.text === params.visibleDelta &&
+      hasDirectiveMarker &&
+      params.parsedStreamDirectives.text.trim() === params.visibleDelta.trim() &&
       params.appendDelta !== null &&
       params.previousCleaned &&
       params.previousText.length > params.previousCleaned.length &&
@@ -436,7 +460,7 @@ export function createStreamingReplyResolver(): StreamingReplyResolver {
       !hasReplyDirectiveMetadata(params.parsedStreamDirectives) &&
       settledDirectiveSource !== undefined &&
       !settledDirectiveTail &&
-      !settledDirectiveMarked &&
+      (!settledDirectiveMarked || literalMarkerSource !== undefined) &&
       !settledDirectiveNotice &&
       params.next.length === settledDirectiveSource.length + params.appendDelta.length &&
       params.next.endsWith(params.appendDelta) &&
@@ -485,6 +509,19 @@ export function createStreamingReplyResolver(): StreamingReplyResolver {
       settledDirectiveMarked =
         settledDirectiveSource !== undefined && preparedRawText.includes("[[");
       settledDirectiveNotice = Boolean(parsed.mediaFailures?.length);
+      // Identity proves every `[[...]]` in this prefix is literal prose, so later appends that the
+      // directive owner reports as plain text can extend it. A held tail, a stripped directive, a
+      // media notice, or reply metadata all mean the marker changed the text and the proof fails.
+      literalMarkerOwnership = undefined;
+      literalMarkerSource =
+        source.includes("[[") &&
+        parsed.text === source &&
+        !split?.tail &&
+        !parsed.mediaFailures?.length &&
+        !parsed.mediaUrls?.length &&
+        !hasReplyDirectiveMetadata(parsed)
+          ? source
+          : undefined;
       if (
         params.evtType !== "text_end" &&
         params.appendDelta !== null &&

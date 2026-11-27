@@ -1,6 +1,8 @@
+import type { SessionEntryDatabasePreparationReceipt } from "../config/sessions/session-accessor.entry-mutation.js";
 import type { SessionEntryCreationOperation } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
 import type { SessionExactEntriesWorkerResult } from "../config/sessions/session-entry-read.types.js";
+import type { SessionMember } from "../config/sessions/session-membership-facts.types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentDatabaseRegistryChange } from "../state/openclaw-agent-db-contract.js";
@@ -20,6 +22,7 @@ export type SessionSharingTarget = {
 export type PreparedSessionMutationFacts = {
   target: SessionSharingTarget | null;
   membership: ReadonlySet<string>;
+  memberAccess?: Readonly<Record<string, NonNullable<SessionMember["access"]>>>;
 };
 
 export type PreparedSessionSourceFacts = PreparedSessionMutationFacts & {
@@ -38,8 +41,10 @@ export type SessionFactsRequest = {
   sessionKey: string;
   agentId: string;
   followLifecycle?: boolean;
+  followTranscript?: boolean;
+  sessionAccessOnly?: boolean;
   preserveQualifiedAddress?: boolean;
-  storageReady?: Promise<void>;
+  storageReady?: Promise<void | { assertCurrent(): void }> | SessionEntryDatabasePreparationReceipt;
 };
 export type SessionFactsRead<Facts extends PreparedSessionMutationFacts> = {
   readonly storageTarget: Pick<GatewaySessionStoreTarget, "agentId" | "canonicalKey" | "storePath">;

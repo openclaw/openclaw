@@ -1,31 +1,37 @@
-import fs from "node:fs";
 import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
-import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
+import { realpathForExec } from "../infra/exec-command-resolution.js";
+import { resolveExecutableFromPathEnvAsync } from "../infra/executable-path.js";
 import type { NodeHostClient } from "./client.js";
 
-export function resolveExecutableTrustPathFromEnv(bin: string, pathEnv: string): string | null {
+export async function resolveExecutableTrustPathFromEnv(
+  bin: string,
+  pathEnv: string,
+): Promise<string | null> {
   if (bin.includes("/") || bin.includes("\\")) {
     return null;
   }
-  const resolvedPath = resolveExecutableFromPathEnv(bin, pathEnv);
+  const resolvedPath = await resolveExecutableFromPathEnvAsync(bin, pathEnv);
   if (!resolvedPath) {
     return null;
   }
   try {
-    return fs.realpathSync(resolvedPath);
+    return await realpathForExec(resolvedPath);
   } catch {
     return resolvedPath;
   }
 }
 
-function resolveSkillBinTrustEntries(bins: string[], pathEnv: string): SkillBinTrustEntry[] {
+async function resolveSkillBinTrustEntries(
+  bins: string[],
+  pathEnv: string,
+): Promise<SkillBinTrustEntry[]> {
   const trustEntries = new Map<string, SkillBinTrustEntry>();
   for (const raw of bins) {
     const name = raw.trim();
     if (!name) {
       continue;
     }
-    const resolvedPath = resolveExecutableTrustPathFromEnv(name, pathEnv);
+    const resolvedPath = await resolveExecutableTrustPathFromEnv(name, pathEnv);
     if (!resolvedPath) {
       continue;
     }
@@ -62,7 +68,7 @@ export class SkillBinsCache {
     try {
       const res = await this.client.request<{ bins: Array<unknown> }>("skills.bins", {});
       const bins = Array.isArray(res?.bins) ? res.bins.map((bin) => String(bin)) : [];
-      this.bins = resolveSkillBinTrustEntries(bins, this.pathEnv);
+      this.bins = await resolveSkillBinTrustEntries(bins, this.pathEnv);
       this.lastRefresh = Date.now();
     } catch {
       // Keep the previous inventory until the next refresh, including an empty first load.

@@ -10,6 +10,7 @@ import {
   listFirstHopSourceVersions as listSources,
   markFutureUpdateFixture as markFuture,
   packFirstHopUpdateFixture as packFirstHop,
+  packFuturePluginFixture as packFuturePlugin,
   packFutureUpdateFixture as packFuture,
   packUnsupportedAdmissionFixture as packWithoutAdmission,
   removeLegacyUpdateCompatChunks as removeBridges,
@@ -209,7 +210,11 @@ it.each(["member", "missing inventory"])("does not hide %s faults", async (fault
 
 it("packs distinct self-update targets without changing the candidate artifact", async () => {
   const root = tempDirs.make("openclaw-same-schema-fixtures-");
-  makePackageFixture({ root: path.join(root, "package") });
+  const admissionModule = "check-release-Fixture1.mjs";
+  makePackageFixture({
+    root: path.join(root, "package"),
+    distFiles: { [admissionModule]: "export {};\n" },
+  });
   const uiFiles = {
     "index.html": `<html data-openclaw-control-ui-build-id="old-build-${"a".repeat(64)}"><script src="./assets/startup.js"></script></html>`,
     "assets/startup.js": 'globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO = { buildId: "old-build" };',
@@ -250,7 +255,11 @@ it("packs distinct self-update targets without changing the candidate artifact",
         ...legacyChunks.map((name) => `dist/${name}`),
       );
     }
+    if (sequence === 2) {
+      changed.push("dist/postinstall-inventory.json", "dist/" + admissionModule);
+    }
     const members = tar("-tzf", output).toString().split("\n");
+    expect(members.includes("package/dist/" + admissionModule)).toBe(sequence !== 2);
     expect(receipt.members.changes).toEqual(
       changed
         .toSorted((left, right) => left.localeCompare(right))
@@ -398,6 +407,7 @@ process.stdout.write(JSON.stringify(version === "2026.9.2" ? { openclaw: packed 
   }
   const expectedChunkEnv = "OPENCLAW_UPDATE_FIRST_HOP_EXPECTED_MISSING_CHUNK=";
   for (const [index, args] of invocations.entries()) {
+    expect(args[args.indexOf("--cgroupns") + 1]).toBe("private");
     expect(args.find((arg) => arg.startsWith(expectedChunkEnv))).toBe(
       expectedChunkEnv + summary.sources[index].source.expectedMissingChunk,
     );
@@ -428,6 +438,33 @@ function transitionEvidence(root: string, ...args: string[]) {
   expect(result.status, result.stderr).toBe(0);
   return JSON.parse(result.stdout);
 }
+
+it.each([
+  { target: undefined, expected: "2026.11.6-first-hop.0" },
+  { target: "2026.11.7-first-hop.0", expected: "2026.11.7-first-hop.0" },
+])(
+  "stamps a future plugin with the core target it is served beside: $target",
+  ({ target, expected }) => {
+    // A plugin released with 2026.11.5 beside a core cut from a newer candidate.
+    const root = tempDirs.make("openclaw-future-plugin-");
+    writeJson(path.join(root, "package/package.json"), {
+      name: "@openclaw/zalo",
+      version: "2026.11.5",
+      openclaw: { build: { openclawVersion: "2026.11.5" } },
+    });
+    const output = path.join(root, "future.tgz");
+    const receipt = packFuturePlugin(archive(root), output, 0, "@openclaw/zalo", target);
+    const pkg = JSON.parse(member(output, "package.json").toString());
+    expect({ version: pkg.version, cohort: pkg.openclaw.build.openclawVersion }).toEqual({
+      version: expected,
+      cohort: expected,
+    });
+    expect(receipt.targetVersion).toBe(expected);
+    expect(() =>
+      packFuturePlugin(archive(root), path.join(root, "other.tgz"), 0, "@openclaw/other"),
+    ).toThrow("future plugin fixture requires @openclaw/other");
+  },
+);
 
 it("accepts applied content while schema publication is deferred", () => {
   const root = tempDirs.make("openclaw-external-transition-");

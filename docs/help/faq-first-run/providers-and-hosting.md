@@ -93,7 +93,7 @@ first-run failures see
 
   <Accordion title="Can I use Gemini CLI or Antigravity OAuth?">
     OpenClaw does not offer new Gemini CLI OAuth or Antigravity OAuth setup.
-    Connect Google with an AI Studio API key or Vertex AI instead.
+    Connect Google with a Gemini API key or Vertex AI instead.
 
     The optional `google-gemini-cli` runtime remains available for advanced
     setups using a supported Google API-key profile. Existing valid legacy

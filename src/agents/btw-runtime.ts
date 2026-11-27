@@ -6,7 +6,13 @@ import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { SessionEntry as StoredSessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ImageContent, Message, Model, TextContent } from "../llm/types.js";
+import {
+  buildAgentHookContextChannelFields,
+  buildAgentHookContextIdentityFields,
+} from "../plugins/hook-agent-context.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import { omitRecordedModelPrompt } from "../sessions/user-turn-transcript.message.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import {
   prepareSystemAgentRunAdmission,
@@ -17,12 +23,14 @@ import { createEmptyAuthProfileStore } from "./auth-profiles/runtime-snapshot-ow
 import { resolveSessionAuthSelection } from "./auth-profiles/session-override.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { reconcileAuthProfileQuotaBlocks } from "./auth-profiles/usage.js";
-import { buildBtwCliPrompt, buildBtwSystemPrompt } from "./btw-prompts.js";
-import { normalizeBtwContentBlocks } from "./btw-transcript.js";
+import { buildBtwCliPrompt, buildBtwQuestionPrompt, buildBtwSystemPrompt } from "./btw-prompts.js";
+import { normalizeBtwContentBlocks, readBtwTranscriptMessages } from "./btw-transcript.js";
 import { executePreparedCliRun } from "./cli-runner/execute.runtime.js";
+import { createCliModelRequestGate } from "./cli-runner/model-request-hook.js";
 import { prepareCliRunContext } from "./cli-runner/prepare.runtime.js";
 import { createNativeModelOwnedRuntimeModel } from "./defaults.js";
 import { resolveModelAsync } from "./embedded-agent-runner/model.js";
+import { getActiveEmbeddedRunSnapshot } from "./embedded-agent-runner/runs.js";
 import {
   preparePluginHarnessToolPolicies,
   resolvePluginHarnessPolicyToolsAllow,
@@ -33,7 +41,10 @@ import type {
   AgentHarnessSessionRuntimeOwnership,
   AgentHarnessSideQuestionParamsV2,
 } from "./harness/types.js";
-import type { ImageSanitizationLimits } from "./image-sanitization.js";
+import {
+  resolveImageSanitizationLimits,
+  type ImageSanitizationLimits,
+} from "./image-sanitization.js";
 import {
   ensureAuthProfileStoreAsync,
   ensureAuthProfileStoreWithoutExternalProfilesAsync,
@@ -150,10 +161,11 @@ async function sanitizeBtwUserMessage(params: {
   message: Extract<Message, { role: "user" }>;
   imageLimits: ImageSanitizationLimits;
 }): Promise<Extract<Message, { role: "user" }> | undefined> {
-  if (typeof params.message.content === "string") {
-    return params.message;
+  const message = omitRecordedModelPrompt(params.message);
+  if (typeof message.content === "string") {
+    return message;
   }
-  const blocks = normalizeBtwContentBlocks(params.message.content);
+  const blocks = normalizeBtwContentBlocks(message.content);
   if (!blocks) {
     return undefined;
   }
@@ -178,7 +190,7 @@ async function sanitizeBtwUserMessage(params: {
     return undefined;
   }
   return {
-    ...params.message,
+    ...message,
     content,
   };
 }
@@ -199,7 +211,96 @@ function sanitizeBtwAssistantMessage(
   return content.length > 0 ? { ...message, content } : undefined;
 }
 
-export async function toSimpleContextMessages(params: {
+export async function loadBtwSideQuestionContext(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  sessionFile: string;
+  sessionId: string;
+  sessionKey?: string;
+  storePath?: string;
+  sessionFork?: RunBtwSideQuestionParams["sessionFork"];
+  abortSignal?: AbortSignal;
+}) {
+  const activeRunSnapshot = getActiveEmbeddedRunSnapshot(params.sessionFile);
+  const imageLimits = resolveImageSanitizationLimits(params.cfg);
+  let messages: Message[] = [];
+  const inFlightPrompt = activeRunSnapshot?.inFlightPrompt;
+  if (!params.sessionFork) {
+    if (activeRunSnapshot?.messages?.length) {
+      messages = await toSimpleContextMessages({
+        messages: activeRunSnapshot.messages,
+        imageLimits,
+      });
+    }
+    if (messages.length === 0) {
+      messages = await toSimpleContextMessages({
+        messages: await readBtwTranscriptMessages({
+          agentId: params.agentId,
+          sessionFile: params.sessionFile,
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          storePath: params.storePath,
+          snapshotLeafId: activeRunSnapshot?.transcriptLeafId,
+        }),
+        imageLimits,
+      });
+    }
+  }
+  params.abortSignal?.throwIfAborted();
+  if (!params.sessionFork && messages.length === 0 && !inFlightPrompt?.trim()) {
+    throw new Error("No active session context.");
+  }
+  return { messages, inFlightPrompt, imageLimits };
+}
+
+export function createBtwNativeRequestGate(input: {
+  params: RunBtwSideQuestionParams;
+  agentId: string;
+  sessionId: string;
+  workspaceDir: string;
+  model: Model;
+  messages: Message[];
+  inFlightPrompt?: string;
+  assertCurrent: () => void;
+}) {
+  const { params } = input;
+  const hooks = getGlobalHookRunner();
+  const gate =
+    hooks &&
+    createCliModelRequestGate({
+      hookRunner: hooks,
+      hookContext: {
+        runId: params.authorityRunId,
+        agentId: input.agentId,
+        sessionId: input.sessionId,
+        sessionKey: params.sessionKey,
+        workspaceDir: input.workspaceDir,
+        modelProviderId: input.model.provider,
+        modelId: input.model.id,
+        ...buildAgentHookContextChannelFields(params),
+        ...buildAgentHookContextIdentityFields(params),
+      },
+      provider: input.model.provider,
+      model: input.model.id,
+      requestKind: "side_question",
+      messages: async () => [
+        ...input.messages,
+        {
+          role: "user",
+          content: buildBtwQuestionPrompt(params.question, input.inFlightPrompt),
+          timestamp: Date.now(),
+        },
+      ],
+    });
+  return async (request: Parameters<NonNullable<typeof gate>>[0]) => {
+    input.assertCurrent();
+    const result = gate ? await gate(request) : request;
+    input.assertCurrent();
+    return result;
+  };
+}
+
+async function toSimpleContextMessages(params: {
   messages: unknown[];
   imageLimits: ImageSanitizationLimits;
 }): Promise<Message[]> {
@@ -441,10 +542,16 @@ export type RunBtwSideQuestionParams = Omit<
   | "agentId"
   | "workspaceDir"
   | "toolsAllow"
+  | "toolCalls"
   | "authProfileId"
   | "authProfileIdSource"
 > & {
   agentId: string;
+  /**
+   * A tool-free session fork. Built-in runtime sessions run it here (`runSessionFork`); a
+   * harness with its own side-question fork (Codex) runs it with every tool call denied.
+   */
+  sessionFork?: () => Promise<{ text: string }>;
   assertCurrent?: () => void;
   operatorAuthority?: AdmittedRunOperatorAuthority;
   /** Background consumers collect usage without recording a user-facing reply. */
@@ -549,6 +656,34 @@ export async function runCliBtwSideQuestion(params: {
       messageProvider: params.messageProvider,
       currentChannelId: params.currentChannelId,
     });
+    const hookRunner = getGlobalHookRunner();
+    if (hookRunner) {
+      // The prompt carries the conversation as text, so it passes the CLI turn gate.
+      prepared.beforeModelRequest = createCliModelRequestGate({
+        hookRunner,
+        hookContext: {
+          runId,
+          agentId: params.sessionAgentId,
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
+          workspaceDir: params.workspaceDir,
+          modelProviderId: params.cliProvider,
+          modelId: params.model,
+          ...buildAgentHookContextChannelFields(params),
+        },
+        provider: params.cliProvider,
+        model: params.model,
+        requestKind: "side_question",
+        messages: async () => [
+          ...params.messages,
+          {
+            role: "user",
+            content: buildBtwQuestionPrompt(params.question, params.inFlightPrompt),
+            timestamp: Date.now(),
+          },
+        ],
+      });
+    }
     const output = await executePreparedCliRun(prepared);
     const text = output.text.trim();
     if (!text) {
@@ -573,9 +708,11 @@ export async function withBtwPreparedRuntime(
   return await runWithAsyncWorkResources(async (onAcquired, captureWorkContext) => {
     const lease = await acquirePublishedPreparedModelRuntime(input);
     onAcquired({ release: () => lease[Symbol.asyncDispose]() });
-    return withPluginRuntimeGenerationScope(lease.snapshot, () => {
-      captureWorkContext();
-      return run(lease.snapshot);
-    });
+    return lease.run(() =>
+      withPluginRuntimeGenerationScope(lease.snapshot, () => {
+        captureWorkContext();
+        return run(lease.snapshot);
+      }),
+    );
   });
 }

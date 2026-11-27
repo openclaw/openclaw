@@ -1,13 +1,21 @@
 import path from "node:path";
+import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import { readCodexSessionMeta } from "../session-catalog-provenance.js";
+import { CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS } from "./attempt-client-cleanup.js";
 import {
   resolveCodexAppServerHomeDir,
   resolveCodexAppServerLocalHomeDir,
   usesManagedCodexThreadUnloading,
 } from "./auth-start-options.js";
 import { assertCodexSessionRuntimeOwnership } from "./binding-connection.js";
-import { isCodexAppServerLiveThreadClaimed } from "./client-runtime.js";
+import {
+  isCodexAppServerLiveThreadClaimed,
+  isCodexAppServerLiveThreadProtected,
+  unsubscribeCodexAppServerLiveThread,
+} from "./client-runtime.js";
+import { CODEX_THREAD_UNLOAD_CONFIRMATION_TIMEOUT_MS } from "./client-thread-closure.js";
+import { getCodexInferenceThread } from "./inference-routing.js";
 import { assertCodexThreadAcceptsDirectInput } from "./protocol-validators.js";
 import { isJsonObject, type CodexThread } from "./protocol.js";
 import {
@@ -28,6 +36,7 @@ import {
 import { resumeExistingCodexThread } from "./thread-lifecycle-io.js";
 import {
   resolveCodexThreadAgentDir,
+  withCodexThreadWriteCurrent,
   type CodexThreadRequestContext,
 } from "./thread-lifecycle-preflight.js";
 import type {
@@ -176,6 +185,7 @@ export async function resumePendingCodexThread(
           withCurrent: params.authority?.withCurrent,
         });
       }
+      return true;
     },
   });
   if (!resumed) {
@@ -268,6 +278,15 @@ export async function prepareCodexThreadResume(
     // A failed read cannot authorize recovery after its physical or host owner closes.
     assertCurrent();
   }
+  // Reuse the lifecycle read so a missing unused thread reaches its recovery owner.
+  if (
+    params.inferenceRoute &&
+    binding.clientId === params.client.getInstanceId() &&
+    !getCodexInferenceThread(params.client, binding.threadId) &&
+    thread.status?.type !== "notLoaded"
+  ) {
+    throw new Error("Codex loaded thread has no owned inference route; reconnect before retrying");
+  }
   // Known supervision keeps its native home; manual adoption's stricter home and catalog
   // checks remain in preparePendingCodexThreadResume, before this common handoff.
   assertCodexSupervisionThreadLineage(binding, thread);
@@ -297,6 +316,16 @@ function isCodexThreadNonRunning(
   return status?.type === "idle" || status?.type === "notLoaded" || status?.type === "systemError";
 }
 
+// Allow for the bundled Codex idle delay. A remote server can retain the thread longer.
+const CODEX_REMOTE_THREAD_UNLOAD_DELAY_MS = 60_000;
+
+function remoteCodexRecoveryError(
+  userMessage: string,
+  cause?: unknown,
+): AgentHarnessPreflightError {
+  return new AgentHarnessPreflightError(userMessage, { userMessage, cause });
+}
+
 function observeCodexThreadConfiguration(
   params: CodexStartOrResumeThreadParams,
   thread: CodexThread,
@@ -308,6 +337,12 @@ function observeCodexThreadConfiguration(
     throw new CodexAdoptedThreadActiveError();
   }
   const settledSystemError = thread.status.type === "systemError";
+  const remoteSystemError = settledSystemError && params.appServer.start.transport === "websocket";
+  if (remoteSystemError && thread.ephemeral === true) {
+    throw remoteCodexRecoveryError(
+      "Codex cannot unload this in-memory thread without losing its history. Continue it on its current Codex client.",
+    );
+  }
   const managedThreadUnloading = usesManagedCodexThreadUnloading(params.appServer.start);
   let unloaded = thread.status.type === "notLoaded";
   let closed = false;
@@ -331,39 +366,126 @@ function observeCodexThreadConfiguration(
       onUnload?.();
     }
   });
+  // Unsubscribe acknowledges removal of our subscription. Teardown is asynchronous,
+  // including with a zero post-unsubscribe retention delay.
+  const waitForUnload = async (requireClosed = false) => {
+    assertCurrent();
+    // One budget covers teardown and a closing rejection; a replay cannot renew it.
+    const timeoutMs =
+      CODEX_THREAD_UNLOAD_CONFIRMATION_TIMEOUT_MS +
+      (remoteSystemError ? CODEX_REMOTE_THREAD_UNLOAD_DELAY_MS : 0);
+    timer ??= setTimeout(() => {
+      expired = true;
+      onUnload?.();
+    }, timeoutMs);
+    if (!(requireClosed ? closed : unloaded) && !expired) {
+      await new Promise<void>((resolve) => {
+        const finish = () => {
+          removeCloseHandler?.();
+          params.signal?.removeEventListener("abort", finish);
+          onUnload = undefined;
+          resolve();
+        };
+        const removeCloseHandler = remoteSystemError
+          ? params.client.addCloseHandler(finish)
+          : undefined;
+        onUnload = finish;
+        params.signal?.addEventListener("abort", finish, { once: true });
+        if (params.signal?.aborted) {
+          finish();
+        }
+      });
+    }
+    assertCurrent();
+    return (requireClosed ? closed : unloaded) && !expired;
+  };
+  const releaseFailedRemoteRuntime = async (releasedOnCurrentClient: boolean) => {
+    if (!remoteSystemError) {
+      return;
+    }
+    // External servers retain their process and idle policy across socket replacement.
+    // Guard writes on this connection without disturbing another subscriber or thread.
+    const assertReleaseCurrent = () => {
+      assertCurrent();
+      if (isCodexAppServerLiveThreadProtected(params.client, thread.id)) {
+        throw new CodexAdoptedThreadActiveError();
+      }
+    };
+    const options = {
+      signal: params.signal,
+      timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+      assertCurrent: assertReleaseCurrent,
+      withCurrent: params.authority?.withCurrent,
+    };
+    const readUnloaded = async () => {
+      const { thread: current } = await params.client.request(
+        "thread/read",
+        { threadId: thread.id, includeTurns: false },
+        options,
+      );
+      assertReleaseCurrent();
+      if (current.id !== thread.id) {
+        throw new Error("Codex returned another thread during remote unload");
+      }
+      assertCodexThreadAcceptsDirectInput(current);
+      if (current.status?.type === "active") {
+        throw new CodexAdoptedThreadActiveError();
+      }
+      if (!isCodexThreadNonRunning(current.status)) {
+        throw new Error("Codex returned an unknown thread status during remote unload");
+      }
+      return current.status.type === "notLoaded";
+    };
+    try {
+      if (!releasedOnCurrentClient) {
+        await unsubscribeCodexAppServerLiveThread(
+          params.client,
+          thread.id,
+          CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+          assertReleaseCurrent,
+          (write) => withCodexThreadWriteCurrent(params, write),
+        );
+        assertReleaseCurrent();
+      }
+      // The exact read covers missed notifications and verifies a closure receipt
+      // still describes the current native thread.
+      if (await readUnloaded()) {
+        unloaded = true;
+      } else {
+        await waitForUnload();
+        unloaded = await readUnloaded();
+      }
+    } catch (cause) {
+      assertReleaseCurrent();
+      if (cause instanceof AgentHarnessPreflightError) {
+        throw cause;
+      }
+      throw remoteCodexRecoveryError(
+        "Codex could not confirm release of the previous remote thread runtime. The saved thread is preserved. Reconnect before retrying.",
+        cause,
+      );
+    }
+    if (!unloaded) {
+      throw remoteCodexRecoveryError(
+        "Codex still retains the previous remote thread runtime. The saved thread is preserved. Close it in other Codex clients and retry after the app-server unloads it.",
+      );
+    }
+    // The resume response cannot prove that native applied all requested settings.
+    // End this failed-runtime attempt before acquiring a new subscription.
+    throw remoteCodexRecoveryError(
+      "Codex unloaded the failed remote runtime. Retry your message to continue the saved conversation.",
+    );
+  };
   return {
+    model: thread.model,
     modelProvider: thread.modelProvider,
     dispose: () => {
       clearTimeout(timer);
       dispose();
     },
     settledSystemError,
-    // Unsubscribe only acknowledges removal of our subscription. Native teardown
-    // is asynchronous, including with a zero post-unsubscribe retention delay.
-    waitForUnload: async (requireClosed = false) => {
-      assertCurrent();
-      // One budget covers teardown and a closing rejection; a replay cannot renew it.
-      timer ??= setTimeout(() => {
-        expired = true;
-        onUnload?.();
-      }, 2_000);
-      if (!(requireClosed ? closed : unloaded) && !expired) {
-        await new Promise<void>((resolve) => {
-          const finish = () => {
-            params.signal?.removeEventListener("abort", finish);
-            onUnload = undefined;
-            resolve();
-          };
-          onUnload = finish;
-          params.signal?.addEventListener("abort", finish, { once: true });
-          if (params.signal?.aborted) {
-            finish();
-          }
-        });
-      }
-      assertCurrent();
-      return (requireClosed ? closed : unloaded) && !expired;
-    },
+    releaseFailedRemoteRuntime,
+    waitForUnload,
     assertConfigured: () => {
       assertCurrent();
       // Native resume can acknowledge ignored overrides when another subscriber

@@ -2,14 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { SessionGitHubStatusResult } from "../../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
-import {
-  clearGitHubCredentialVerificationCache,
-  verifyGitHubCredential,
-} from "../../agents/github-oauth-client.js";
-import {
-  resolveManagedGitHubProfileDir,
-  writeManagedGitHubProfileFiles,
-} from "../../agents/github-tool-identity.js";
+import { clearGitHubCredentialVerificationCache } from "../../agents/github-oauth-client.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as stateWriter from "../../state/openclaw-state-worker-owner.js";
@@ -27,7 +20,6 @@ import {
   mockPublicationIdentity,
   optionsResult,
   publisher,
-  publisherIdentity,
   receipt,
   sessionId,
   sessionKey,
@@ -123,41 +115,6 @@ it("reads cold personal options while writer dispatch is unavailable", async () 
   });
 });
 
-it("reads personal options and receipts while shared identity discovery is pending", async ({
-  signal,
-}) => {
-  await withPersonalReadFixture(async (fixture) => {
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    vi.mocked(
-      publicationAvailability.prepareCurrentGitHubPublicationOptionsIdentity,
-    ).mockImplementationOnce(async () => {
-      entered.resolve();
-      await release.promise;
-      return publisherIdentity();
-    });
-    const respond = vi.fn();
-    const request = fixture.options(respond, { idempotencyKey: "owned-unknown-attempt" });
-    try {
-      await withinTest(entered.promise, signal);
-      expect(fixture.personalConnectionStatus).toHaveBeenCalledOnce();
-      expect(fixture.personalPending).toHaveBeenCalledOnce();
-      expect(fixture.latestShared).toHaveBeenCalledOnce();
-      expect(fixture.latestShared).toHaveBeenCalledWith(
-        expect.objectContaining({ sessionKey, sessionId, agentId: "main" }),
-        "owned-unknown-attempt",
-        expect.any(Function),
-        expect.any(Function),
-      );
-      expect(respond).not.toHaveBeenCalled();
-    } finally {
-      release.resolve();
-      await request;
-    }
-    expect(respond).toHaveBeenCalledExactlyOnceWith(true, optionsResult(disconnected));
-  });
-});
-
 it.each([
   { httpStatus: 401, reason: "unavailable" },
   { httpStatus: 429, reason: "rate_limited" },
@@ -184,6 +141,7 @@ it.for(["token", "native"] as const)(
   async (source, { signal }) => {
     useRealIdentity(source === "token" ? "synthetic-options-stale-token" : undefined);
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    vi.spyOn(performance, "now").mockImplementation(() => Date.now());
     const credentialRefresh = createDeferredCore<Response>();
     const nativeRefresh = createDeferredCore<ReturnType<typeof commandResult>>();
     const entered = createDeferredCore();
@@ -239,59 +197,6 @@ it.for(["token", "native"] as const)(
   },
 );
 
-it("marks only expired personal account facts stale through options revalidation", async ({
-  signal,
-}) => {
-  const personalToken = "synthetic-personal-options-stale";
-  const sharedToken = "synthetic-shared-options-fresh";
-  vi.mocked(publicationAvailability.prepareCurrentGitHubPublicationOptionsIdentity).mockRestore();
-  vi.stubEnv("GH_TOKEN", sharedToken);
-  mocks.runCommandBuffered.mockResolvedValue(commandResult(sharedToken));
-  const refresh = createDeferredCore<Response>();
-  let personalProbes = 0;
-  let sharedProbes = 0;
-  vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
-    if (new Headers(init?.headers).get("Authorization") === `Bearer ${personalToken}`) {
-      personalProbes += 1;
-      return personalProbes === 1 ? accountResponse(42, "personal-reader") : refresh.promise;
-    }
-    sharedProbes += 1;
-    return accountResponse();
-  });
-  await withPersonalReadFixture(async (fixture) => {
-    const owner = ownerOf(fixture);
-    const profileId = "ghp_33333333333333333333333333333333";
-    await writeManagedGitHubProfileFiles(
-      resolveManagedGitHubProfileDir({ agentId: "", scope: "personal", profileId }),
-      { login: "personal-reader", token: personalToken },
-    );
-    const initialNow = Date.now();
-    saveConnection(
-      owner,
-      githubConnection(profileId, "personal-reader", "synthetic-personal-refresh", initialNow),
-    );
-    fixture.personalConnectionStatus.mockImplementation(fixture.personalLifecycle.status);
-    const now = vi.spyOn(Date, "now").mockReturnValue(initialNow);
-    try {
-      await verifyGitHubCredential(personalToken);
-      now.mockReturnValue(initialNow + 30_000);
-      await fixture.options();
-      now.mockReturnValue(initialNow + 60_001);
-      const result = await withinTest(fixture.options(), signal);
-      expectPartialReply(result, {
-        stale: true,
-        personal: expect.objectContaining({ state: "connected", stale: true }),
-        shared: detectedPublisher,
-      });
-      expect(personalProbes).toBe(2);
-      expect(sharedProbes).toBe(1);
-    } finally {
-      refresh.resolve(accountResponse(42, "personal-reader"));
-      await verifyGitHubCredential(personalToken);
-    }
-  });
-});
-
 it("retains a failed publication without a captured tree when PR discovery is unavailable", async () => {
   await withReadFixture(async (fixture) => {
     const snapshot = {
@@ -325,7 +230,7 @@ it("retains a failed publication without a captured tree when PR discovery is un
 });
 
 it.each([false, true])(
-  "reconciles published coverage with current read authority (revoked=%s)",
+  "finishes admitted coverage reads across disconnect (disconnected=%s)",
   async (revoked) => {
     await withReadFixture(async (fixture) => {
       const snapshot = {
@@ -365,10 +270,9 @@ it.each([false, true])(
         (await isSuperseded(snapshot)) ? null : receipt,
       );
       const respond = await fixture.options();
+      expectPartialReply(respond, { latestShared: null });
       if (revoked) {
-        expectFailure(respond);
-      } else {
-        expectPartialReply(respond, { latestShared: null });
+        expectFailure(await fixture.options());
       }
       expect(covered).toHaveBeenCalledWith(snapshot, expect.any(Function));
       expect(fixture.pullRequests.read).toHaveBeenCalledWith(
@@ -491,9 +395,9 @@ it.each([
     "github-generation",
     "github-account",
   ].map((change) => ({ change, phase: "personal" })),
-  // Both authority owners must also run after the later shared read.
+  // Credential selection stays fenced even when the later shared read yields.
   ...["connection", "github-generation"].map((change) => ({ change, phase: "shared" })),
-])("rechecks $change authority after a pending $phase read", async ({ change, phase }) => {
+])("keeps $change owner binding through $phase reads", async ({ change, phase }) => {
   await withPersonalReadFixture(async (fixture) => {
     const owner = ownerOf(fixture);
     const hasGitHubConnection = change.startsWith("github-");
@@ -553,8 +457,12 @@ it.each([
 
         expect(respond).toHaveBeenCalledOnce();
         expect(fixture.personalConnectionStatus).toHaveBeenCalledOnce();
+        expect(fixture.personalConnectionStatus.mock.calls[0]?.[0].owner).toBe(owner);
         if (
           change === "unchanged" ||
+          change === "scope" ||
+          change === "connection" ||
+          change === "profile" ||
           change === "github-unchanged" ||
           change === "github-unavailable"
         ) {

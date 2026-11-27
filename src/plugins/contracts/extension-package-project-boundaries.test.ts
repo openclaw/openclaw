@@ -50,15 +50,18 @@ const MEMORY_HOST_SDK_EXPORTS = (
   .split(" ")
   .map((name) => `./${name}`);
 const MEMORY_CORE_BRIDGES = [
+  "embeddings-remote-client",
+  "embeddings-remote-provider",
   "embeddings.types",
   "error-utils",
   ..."agent auth config io kysely memory network paths session sqlite workspace"
     .split(" ")
     .map((name) => `openclaw-runtime-${name}`),
-  // Standalone transcript readers use narrow core read owners.
-  "session-entry-render",
-  "session-reset-recall-read.worker",
-  "session-transcript-corpus.worker",
+  // Per-call deadlines and standalone transcript readers use narrow core owners.
+  ...(
+    "search-deadline-control session-entry-render session-memory-authority " +
+    "session-reset-recall-read.worker session-transcript-corpus.worker session-transcript-stats-read"
+  ).split(" "),
 ].map((name) => `packages/memory-host-sdk/src/host/${name}.ts`);
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe JSON file shape.
@@ -169,6 +172,24 @@ describe("opt-in extension package boundaries", () => {
     ]);
   });
 
+  it("maps every public @openclaw/ai subpath to its declaration in the package boundary", () => {
+    // Plugin SDK sources import @openclaw/ai by package specifier (#204415). A public subpath
+    // without a boundary alias resolves to an error type inside every opt-in plugin.
+    const rootPaths = readJsonFile<TsConfigJson>("tsconfig.json").compilerOptions?.paths ?? {};
+    const boundaryPaths = readJsonFile<TsConfigJson>(PATHS_CONFIG).compilerOptions?.paths ?? {};
+    const publicAiAliases = Object.entries(rootPaths).filter(
+      ([specifier]) =>
+        (specifier === "@openclaw/ai" || specifier.startsWith("@openclaw/ai/")) &&
+        !specifier.startsWith("@openclaw/ai/internal/"),
+    );
+    expect(publicAiAliases.length).toBeGreaterThan(0);
+    for (const [specifier, [source]] of publicAiAliases) {
+      expect(boundaryPaths[specifier], specifier).toEqual([
+        `../packages/plugin-sdk/dist/${source!.replace(/^\.\//u, "").replace(/\.ts$/u, ".d.ts")}`,
+      ]);
+    }
+  });
+
   it("rejects package aliases that escape their declared declaration root", () => {
     for (const target of [
       "../dist/../src/gateway/auth.ts",
@@ -184,7 +205,11 @@ describe("opt-in extension package boundaries", () => {
       const tsconfig = readExtensionTsconfig(extensionName);
       expect(tsconfig.extends, extensionName).toBe("../tsconfig.package-boundary.base.json");
       expect(tsconfig.compilerOptions?.rootDir).toBeUndefined();
-      expect(tsconfig.include).toBeUndefined();
+      expect(tsconfig.include, extensionName).toEqual(
+        extensionName === "deep-research"
+          ? ["*.ts", "src/**/*.ts", "browser/**/*.ts", "browser/**/*.tsx"]
+          : undefined,
+      );
       expect(tsconfig.exclude).toBeUndefined();
       if (extensionName !== "xai") {
         expect(tsconfig.compilerOptions?.paths, extensionName).toBeUndefined();

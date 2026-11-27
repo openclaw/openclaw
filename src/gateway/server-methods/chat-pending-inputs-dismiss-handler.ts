@@ -83,6 +83,7 @@ export const chatPendingInputsDismissHandlers: GatewayRequestHandlers = {
           signal?.throwIfAborted();
           sessionAccessAuthority.assertCurrent();
         },
+        { profileId: client?.authenticatedUserProfile?.profileId ?? "" },
       );
       if (outcome.kind === "stale") {
         staleTarget();
@@ -94,7 +95,7 @@ export const chatPendingInputsDismissHandlers: GatewayRequestHandlers = {
           undefined,
           errorShape(
             ErrorCodes.INVALID_REQUEST,
-            "Only interrupted or cancelled pending inputs can be dismissed; queued and running inputs stay in place.",
+            "Only cancelled pending inputs can be dismissed; queued and running inputs stay in place.",
             {
               details: {
                 code: GatewayErrorDetailCodes.PENDING_INPUT_NOT_RETIRED,

@@ -3,6 +3,8 @@ import path from "node:path";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveMemorySlotDecision } from "./config-state.js";
+import { createPluginRecord } from "./loader-records.js";
+import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import { loadPluginManifest } from "./manifest.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 
@@ -49,6 +51,44 @@ const decision = (id: string, name: string, fields: Record<string, unknown> = {}
 const cli = { id: "anthropic", providers: ["anthropic"], cliBackends: ["claude-cli"] };
 
 describe("loadPluginManifest JSON5 tolerance", () => {
+  it.each([undefined, false, true, "true", null, 1, {}])(
+    "validates the generation overlap declaration: %j",
+    (generationOverlap) => {
+      const dir = roots.make("openclaw-manifest-overlap-");
+      fs.writeFileSync(
+        path.join(dir, "openclaw.plugin.json"),
+        JSON.stringify({ id: "generation-plugin", configSchema: {}, generationOverlap }),
+      );
+      const result = loadPluginManifest(dir, false);
+      if (generationOverlap === undefined || typeof generationOverlap === "boolean") {
+        expect(result.ok).toBe(true);
+        if (result.ok) {
+          expect(result.manifest.generationOverlap).toBe(generationOverlap);
+          const registry = loadPluginManifestRegistryCore({
+            candidates: [
+              {
+                idHint: "generation-plugin",
+                rootDir: dir,
+                origin: "global",
+                source: path.join(dir, "index.ts"),
+              },
+            ],
+          });
+          expect(registry.plugins).toHaveLength(1);
+          const manifest = registry.plugins[0]!;
+          expect(manifest.generationOverlap).toBe(generationOverlap);
+          const runtime = createPluginRecord({ ...manifest, enabled: true, configSchema: true });
+          expect(runtime.generationOverlap).toBe(generationOverlap);
+        }
+      } else {
+        expect(result).toMatchObject({
+          ok: false,
+          error: "plugin manifest generationOverlap must be a boolean",
+        });
+      }
+    },
+  );
+
   it.each([
     {
       ids: ["canonical-engine", " other-engine ", "canonical-engine"],

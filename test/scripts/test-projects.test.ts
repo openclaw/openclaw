@@ -9,18 +9,14 @@ import {
   readTestSelectorSourceFacts as readSourceFacts,
 } from "../../scripts/lib/test-selector-source-facts.mts";
 import { resolveDefaultVitestNoOutputTimeoutMs } from "../../scripts/lib/vitest-process-env.mts";
-import { resolveShardTimingKey } from "../../scripts/lib/vitest-shard-metadata.mts";
 import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mjs";
 import {
   applyDefaultVitestNoOutputTimeout,
-  applyFullExtensionsHeapBudget,
-  buildFullSuiteVitestRunPlans as planFullSuite,
   buildVitestRunPlans as planRuns,
   createVitestRunSpecs as runSpecs,
   findUnmatchedExplicitTestTargets as unmatchedTargets,
   hasImportGraphImpactOnTargets as impactsTargets,
   isTestFileTarget,
-  orderFullSuiteSpecsForParallelRun,
   parseTestProjectsArgs,
   resolveChangedTestTargetPlanForArgs as changedPlanForArgs,
   resolveChangedTestTargetPlan as changedPlan,
@@ -35,15 +31,11 @@ import {
   resolveRuntimeWorkerUrl,
 } from "../../src/infra/runtime-worker-url.js";
 import { withEnv } from "../../src/test-utils/env.js";
-import { listGitTrackedFiles, toRepoPath } from "../../src/test-utils/repo-files.js";
+import { toRepoPath } from "../../src/test-utils/repo-files.js";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
-import { listVitestConfigTestFiles } from "../vitest-projects-config.test-support.js";
 import { databaseWorkerCoreTestFiles } from "../vitest/vitest.database-worker-core-paths.mjs";
 import { databaseWorkerExtensionTestFiles } from "../vitest/vitest.extension-database-workers-paths.mjs";
-import {
-  gatewayDatabaseWorkerTestFiles,
-  isGatewayServerTestFile,
-} from "../vitest/vitest.gateway-server-paths.mjs";
+import { gatewayDatabaseWorkerTestFiles } from "../vitest/vitest.gateway-server-paths.mjs";
 import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 
 const repoPath = toRepoPath;
@@ -280,6 +272,35 @@ describe("scripts/test-projects changed-target routing", () => {
           configFile("tooling"),
         ]);
       },
+    );
+  });
+
+  it("keeps direct script consumers alongside conventional owners", () => {
+    withTinyGitRepo(
+      {
+        "scripts/e2e/lib/resource.mts": "export const value = 1;",
+        "test/scripts/resource.test.ts": 'import "../../scripts/e2e/lib/resource.mts";',
+        "test/scripts/rpc-walk.test.ts": 'import "../../scripts/e2e/lib/resource.mts";',
+        "test/scripts/rpc-walk.live.test.ts": 'import "../../scripts/e2e/lib/resource.mts";',
+        "test/scripts/unrelated.test.ts": "export {};",
+      },
+      (cwd) => {
+        const changed = ["scripts/e2e/lib/resource.mts"];
+        const targets = ["test/scripts/resource.test.ts", "test/scripts/rpc-walk.test.ts"];
+        expectChangedTargets(changed, targets, { cwd });
+        const plans = planRuns(["--changed=HEAD"], cwd, () => changed);
+        expect(plans.flatMap((plan) => plan.includePatterns ?? [])).toEqual(targets);
+      },
+    );
+  });
+
+  it("selects compiler planner unit and workflow consumers for planner changes", () => {
+    expectChangedTargets(
+      ["scripts/ci-check-plan.mts"],
+      testFiles(
+        "test/scripts",
+        "ci-check-plan ci-workflow-planning check-changed-compiler-delegation ci-scripts-only-lint",
+      ),
     );
   });
 
@@ -2024,7 +2045,7 @@ export const single = {
   );
 
   it("preflights targeted UI E2E specs with Playwright browser assets", () => {
-    const [spec] = runSpecs(["ui/src/pages/cron/run-transcript.e2e.test.ts"], {
+    const [spec] = runSpecs(["ui/src/pages/plugins/plugin-skills.e2e.test.ts"], {
       baseEnv: {},
     });
 
@@ -2749,6 +2770,7 @@ describe("test selector native source facts", () => {
         };
         for (const file of [
           "node-runtime-env.mjs",
+          "node-version.mjs",
           "runtime-process-scripts.generated.mjs",
           "scripts/lib/test-selector-source-facts.mts",
           "scripts/lib/test-selector-source-facts.worker.mts",
@@ -2830,232 +2852,6 @@ describe("test selector native source facts", () => {
       expect(result.status).toBe(1);
       expect(result.stdout).toBe("");
       expect(result.stderr).toContain("[test-selector-source-facts] FAILED (exit 1)");
-    });
-  });
-});
-
-describe("scripts/test-projects full-suite sharding", () => {
-  function expectChunkedFiles(
-    plans: ReturnType<typeof planFullSuite>,
-    files: string[],
-    limit: number,
-  ) {
-    expect(plans.every((plan) => plan.forwardedArgs.length <= limit)).toBe(true);
-    expect(plans.flatMap((plan) => plan.forwardedArgs).toSorted()).toEqual(
-      [...new Set(files)].toSorted(),
-    );
-  }
-
-  const fastTooling = {
-    config: configFile("tooling"),
-    includePatterns: ["test/scripts/run-with-env.test.ts"],
-  };
-  const slowTooling = {
-    ...fastTooling,
-    includePatterns: ["test/scripts/vitest-worker-artifacts.test.ts"],
-  };
-  const runtime = {
-    config: configFile("runtime-config"),
-    includePatterns: ["src/config/sessions/session-accessor.sqlite-archive.worker.test.ts"],
-  };
-  it.each([
-    [
-      "null whole-config selection",
-      fastTooling,
-      { config: configFile("gateway"), includePatterns: null },
-    ],
-    [
-      "empty whole-config selection",
-      fastTooling,
-      { config: configFile("gateway"), includePatterns: [] },
-    ],
-    ["expensive selected files", runtime, slowTooling],
-    [
-      "expanded chunks",
-      { ...runtime, includePatterns: null },
-      { ...slowTooling, includePatterns: null, timingTargets: slowTooling.includePatterns },
-    ],
-  ] as const)("prioritizes %s", (_name, cheaper, expensive) => {
-    expect(orderFullSuiteSpecsForParallelRun([cheaper, expensive])).toEqual([expensive, cheaper]);
-  });
-
-  it("uses observed selection timings without substituting a whole-config sample", () => {
-    const timings = new Map([
-      [fastTooling.config, 1_000_000],
-      [resolveShardTimingKey(fastTooling), 500],
-      [resolveShardTimingKey(slowTooling), 153_000],
-      [resolveShardTimingKey(runtime), 35_000],
-    ]);
-    expect(orderFullSuiteSpecsForParallelRun([fastTooling, slowTooling, runtime], timings)).toEqual(
-      [slowTooling, fastTooling, runtime],
-    );
-  });
-
-  it("raises the effective last aggregate extension heap override", () => {
-    const specs = applyFullExtensionsHeapBudget([
-      {
-        config: configFile("full-extensions"),
-        env: { NODE_OPTIONS: "--max-old-space-size=12288 --max_old_space_size=4096" },
-      },
-    ]);
-
-    expect(specs[0]?.env.NODE_OPTIONS).toBe("--max-old-space-size=12288 --max_old_space_size=8192");
-  });
-
-  it.each([false, true])("bounds full-suite CI processes for Testbox=%s", (testbox) => {
-    vi.stubEnv("CI", "1");
-    vi.stubEnv("GITHUB_ACTIONS", "");
-    vi.stubEnv("OPENCLAW_TESTBOX_REMOTE_RUN", testbox ? "1" : "");
-    vi.stubEnv("OPENCLAW_TEST_PROJECTS_LEAF_SHARDS", "");
-    vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", "");
-    try {
-      const plans = planFullSuite([], process.cwd());
-      const configs = plans.map((plan) => plan.config);
-
-      if (!testbox) {
-        expect(configs).toContain(configFile("full-agentic"));
-        expect(configs).toContain(configFile("full-extensions"));
-        expect(configs).not.toContain(configFile("gateway-server"));
-        expect(configs).not.toContain(configFile("extension-telegram"));
-        return;
-      }
-      expect(configs).not.toContain(configFile("full-agentic"));
-      expect(configs).not.toContain(configFile("full-extensions"));
-      expect(configs).toContain(configFile("agents-core"));
-      expect(configs).toContain(configFile("extension-telegram"));
-
-      const targetedPlans = (config: string) =>
-        plans.filter((plan) => plan.config === config && plan.forwardedArgs.length > 0);
-      expect(targetedPlans(configFile("agents-core"))).toHaveLength(6);
-      expect(
-        targetedPlans(configFile("agents-core")).flatMap((plan) => plan.forwardedArgs),
-      ).not.toContain("src/agents/agent-command-local.test.ts");
-      expect(configs.filter((config) => config === configFile("cli-process"))).toHaveLength(1);
-      const gatewayTargets = targetedPlans(configFile("gateway-server")).map(
-        (plan) => plan.forwardedArgs,
-      );
-      expect(gatewayTargets.every((files) => files.length > 0 && files.length <= 16)).toBe(true);
-      expect(gatewayTargets.flat()).toEqual(
-        listGitTrackedFiles({ pathspecs: "src/gateway" })
-          ?.filter(isGatewayServerTestFile)
-          .toSorted((a, b) => a.localeCompare(b)),
-      );
-    } finally {
-      vi.unstubAllEnvs();
-    }
-  });
-
-  it("expands untargeted local runs to leaf project configs by default", async () => {
-    const infraConfig = configFile("infra");
-    const infraFiles = await listVitestConfigTestFiles(infraConfig);
-    const toolingFiles = await listVitestConfigTestFiles(configFile("tooling"));
-    const uiFiles = await listVitestConfigTestFiles(configFile("ui"));
-    const gatewayFiles = await listVitestConfigTestFiles(configFile("gateway-database-workers"));
-    const extensionDatabaseFiles = await listVitestConfigTestFiles(
-      configFile("extension-database-workers"),
-    );
-    withEnv(
-      {
-        OPENCLAW_TEST_PROJECTS_LEAF_SHARDS: undefined,
-        OPENCLAW_TEST_PROJECTS_PARALLEL: undefined,
-        OPENCLAW_TEST_PROJECTS_SERIAL: undefined,
-        CI: undefined,
-        GITHUB_ACTIONS: undefined,
-        OPENCLAW_VITEST_MAX_WORKERS: undefined,
-        OPENCLAW_TEST_WORKERS: undefined,
-      },
-      () => {
-        const plans = planFullSuite([], process.cwd());
-        const configs = plans.map((plan) => plan.config);
-
-        expect(configs).toContain(configFile("gateway-server"));
-        expect(configs).toContain(configFile("extension-telegram"));
-        expect(configs).not.toContain(configFile("full-agentic"));
-        expect(configs).not.toContain(configFile("full-core-unit-fast"));
-
-        const targetedPlans = (config: string) =>
-          plans.filter((plan) => plan.config === config && plan.forwardedArgs.length > 0);
-        const unitFastPlans = targetedPlans(configFile("unit-fast"));
-        expect(unitFastPlans.length).toBeGreaterThan(1);
-        expect(unitFastPlans.every((plan) => plan.forwardedArgs.length <= 70)).toBe(true);
-        const unitSrcPlans = targetedPlans(configFile("unit-src"));
-        expect(unitSrcPlans.length).toBeGreaterThan(1);
-        expect(unitSrcPlans.every((plan) => plan.forwardedArgs.length <= 150)).toBe(true);
-        const toolingPlans = targetedPlans(configFile("tooling"));
-        expect(toolingPlans.length).toBeGreaterThan(1);
-        expect(toolingPlans).toHaveLength(Math.ceil(toolingFiles.length / 8));
-        expectChunkedFiles(toolingPlans, toolingFiles, 8);
-        const uiPlans = targetedPlans(configFile("ui"));
-        expect(uiPlans).toHaveLength(Math.ceil(uiFiles.length / 8));
-        expectChunkedFiles(uiPlans, uiFiles, 8);
-        const gatewayPlans = targetedPlans(configFile("gateway-database-workers"));
-        expect(gatewayPlans).toHaveLength(Math.ceil(gatewayFiles.length / 50));
-        expectChunkedFiles(gatewayPlans, gatewayFiles, 50);
-        const extensionDatabasePlans = targetedPlans(configFile("extension-database-workers"));
-        expectChunkedFiles(extensionDatabasePlans, extensionDatabaseFiles, 20);
-        expect(
-          extensionDatabasePlans
-            .filter((plan) =>
-              plan.forwardedArgs.some((file) => file.startsWith("extensions/telegram/")),
-            )
-            .every((plan) => plan.forwardedArgs.length === 1),
-        ).toBe(true);
-        const infraPlans = plans.filter((plan) => plan.config === infraConfig);
-        expect(infraPlans.length).toBeGreaterThan(1);
-        expect(
-          infraPlans.every(
-            (plan) => plan.forwardedArgs.length > 0 && plan.forwardedArgs.length <= 64,
-          ),
-        ).toBe(true);
-        expect(infraPlans.flatMap((plan) => plan.forwardedArgs).toSorted()).toEqual(
-          [...new Set(infraFiles)].toSorted(),
-        );
-        const toolingTargets = toolingPlans.flatMap((plan) => plan.forwardedArgs);
-        expect(toolingTargets.filter((file) => file.startsWith("test/fixtures/"))).toEqual([]);
-        expect(plans.flatMap((plan) => plan.forwardedArgs)).toEqual(
-          expect.arrayContaining(testFiles("test/scripts", "oxlint-boundary-guards ts-topology")),
-        );
-        for (const plan of plans.filter((entry) => entry.forwardedArgs.length > 0)) {
-          expect(plan.timingTargets).toEqual(plan.forwardedArgs);
-          expect(plan.includePatterns).toBeNull();
-        }
-      },
-    );
-  });
-
-  it("preserves one database invocation when Vitest owns suite-wide sharding", () => {
-    withEnv(
-      { CI: undefined, GITHUB_ACTIONS: undefined, OPENCLAW_TEST_PROJECTS_PARALLEL: undefined },
-      () => {
-        const plans = planFullSuite(["--shard=1/2"], process.cwd()).filter(
-          (plan) => plan.config === configFile("extension-database-workers"),
-        );
-        expect(plans).toHaveLength(1);
-        expect(plans[0]?.forwardedArgs).toContain("--shard=1/2");
-      },
-    );
-  });
-
-  it("keeps shared Vitest config helpers out of whole-config targets", () => {
-    const args = [configFile("shared")];
-
-    expect(unmatchedTargets(args, process.cwd())).toEqual([]);
-    expectRun(planRuns(args, process.cwd()), "tooling", {
-      includePatterns: ["test/vitest/**/*.test.ts"],
-    });
-
-    withTinyFileTree({ [configFile("helper")]: "export default {};\n" }, (cwd) => {
-      const helperArgs = [configFile("helper")];
-      expect(unmatchedTargets(helperArgs, cwd)).toEqual([
-        {
-          target: configFile("helper"),
-          reason: "target-matched-no-test-files",
-          includePattern: "test/vitest/**/*.test.ts",
-        },
-      ]);
-      expectRun(planRuns(helperArgs, cwd), "tooling", {
-        includePatterns: ["test/vitest/**/*.test.ts"],
-      });
     });
   });
 });

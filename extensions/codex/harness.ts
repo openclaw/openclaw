@@ -1,3 +1,4 @@
+import { resolveAgentHarnessRouteRejection } from "openclaw/plugin-sdk/agent-harness-registration";
 import type {
   AgentHarnessV2,
   AgentHarnessCompactParams,
@@ -14,10 +15,13 @@ import {
   CODEX_NATIVE_TOOL_REQUIREMENTS,
   CODEX_TOOL_POLICY_SAFE_DENY_NAMES,
 } from "./native-tool-policy.js";
+import { readCodexPluginConfig as readWorkerPluginConfig } from "./src/app-server/config-parsing.js";
+import { hasManagedCodexAppServerBinary } from "./src/app-server/managed-binary.js";
 import { readCodexRuntimeModelId } from "./src/app-server/model-runtime.js";
 import { sessionBindingIdentity } from "./src/app-server/session-binding-record.js";
 import type { CodexAppServerBindingStore } from "./src/app-server/session-binding.js";
 import { codexBuildSymbol } from "./src/build-state.js";
+import { resolveCodexWorkerAppServerCommand } from "./src/node-app-server-command.js";
 import type { CodexSessionCatalogControlFactory } from "./src/session-catalog-types.js";
 
 const loadUpstreamSessionFork = createLazyRuntimeModule(
@@ -75,7 +79,7 @@ const loadSessionBinding = createLazyRuntimeModule(
 
 // `codex` is legacy input only until Part 2 doctor migration rewrites stored refs.
 // New runtime identity uses the `openai` provider.
-const DEFAULT_CODEX_HARNESS_PROVIDER_IDS = new Set(["codex", "openai"]);
+const DEFAULT_CODEX_HARNESS_PROVIDER_IDS = ["codex", "openai"];
 
 /** Keep the shipped callback loadable on older hosts without inventing source authority. */
 function requireCodexCompactionCapabilities<T extends AgentHarnessCompactParams>(
@@ -136,11 +140,40 @@ export function createCodexAppServerAgentHarness(
 ): AgentHarnessV2 {
   const harnessRuntimeId = options?.id ?? "codex";
   const normalizedHarnessRuntimeId = harnessRuntimeId.trim().toLowerCase();
-  const providerIds = new Set(
-    [...(options?.providerIds ?? DEFAULT_CODEX_HARNESS_PROVIDER_IDS)].map((id) =>
-      id.trim().toLowerCase(),
+  const providerIds = [
+    ...new Set(
+      [...(options.providerIds ?? DEFAULT_CODEX_HARNESS_PROVIDER_IDS)].map((id) =>
+        id.trim().toLowerCase(),
+      ),
     ),
-  );
+  ];
+  // The replacement generation's config takes precedence over the published config.
+  const registrationAppServer = readWorkerPluginConfig(
+    options.pluginConfig ?? options.resolvePluginConfig?.(),
+  ).appServer;
+  const availability =
+    (registrationAppServer?.transport ?? "stdio") !== "stdio" ||
+    // Worker placement owns its binary; selection has no admitted placement yet.
+    registrationAppServer?.workerHostedCloud === true ||
+    Boolean(
+      registrationAppServer?.command?.trim() || process.env.OPENCLAW_CODEX_APP_SERVER_BIN?.trim(),
+    ) ||
+    hasManagedCodexAppServerBinary()
+      ? { supported: true as const, priority: 100 }
+      : {
+          supported: false as const,
+          reason:
+            "no native Codex app-server binary is available; install Codex or configure appServer.command for a native build",
+        };
+  const routeSupport = {
+    runtimeId: normalizedHarnessRuntimeId,
+    runtimeName: "Codex",
+    providerIds,
+    routeOptionalProviderIds: ["codex"],
+    unobservedModelProvider: normalizedHarnessRuntimeId === "codex" ? "openai" : undefined,
+    acceptsNativeCommand: options.providerIds === undefined,
+    availability,
+  };
   const sessionCatalogControlFactory = options.sessionCatalogControlFactory;
   const sessionRuntime = options.runtime;
   let modelCatalog:
@@ -155,7 +188,7 @@ export function createCodexAppServerAgentHarness(
     options.pluginConfig;
   const resolveIsolatedCompletionRuntime: NonNullable<
     AgentHarnessV2["resolveIsolatedCompletionRuntime"]
-  > = ({ authorizationOwner }) => (authorizationOwner === "host" ? "openclaw" : "self");
+  > = () => "self";
   const assertOwnershipCurrent = (params: { assertCurrent: () => void }) => {
     params.assertCurrent();
     if (disposed) {
@@ -177,11 +210,16 @@ export function createCodexAppServerAgentHarness(
   const harness: AgentHarnessV2 = {
     id: harnessRuntimeId,
     label: options?.label ?? "Codex agent harness",
-    autoSelection: { providerIds: [...providerIds] },
+    autoSelection: { providerIds },
+    routeSupport,
     cloudPlacement: {
       mode: "remote-exec",
       devicePlacement: {
-        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        requiredNodeCommands: [
+          registrationAppServer?.workerHostedCloud === true
+            ? resolveCodexWorkerAppServerCommand(process.env, true)
+            : "codex.exec-server.stdio.v1",
+        ],
         consumesWorkerSlot: false,
       },
     },
@@ -320,42 +358,11 @@ export function createCodexAppServerAgentHarness(
     },
     supports: (ctx) => {
       const unsupported = (reason: string) => ({ supported: false as const, reason });
-      const provider = ctx.provider.trim().toLowerCase();
-      if (!providerIds.has(provider)) {
-        return unsupported(`provider is not one of: ${[...providerIds].toSorted().join(", ")}`);
-      }
-      if (ctx.modelProvider?.requestTransportOverrides === "present") {
-        return {
-          supported: false,
-          reason: "Codex cannot reproduce authored request transport overrides",
-          fallbackRuntime: "openclaw",
-        };
+      const rejected = resolveAgentHarnessRouteRejection(ctx, routeSupport);
+      if (rejected) {
+        return rejected;
       }
       const preparedAuth = ctx.modelProvider?.preparedAuth;
-      const runtimePolicy = ctx.modelProvider?.runtimePolicy;
-      // Codex owns discovery and auth for new first-party models. Only trust that
-      // native account when no authored transport or host credential is involved.
-      const nativeAccountOwnsUnobservedModel =
-        provider === "openai" &&
-        ctx.requestedRuntime === "codex" &&
-        Boolean(ctx.modelId?.trim()) &&
-        (preparedAuth === undefined || preparedAuth.source === "harness") &&
-        preparedAuth?.mode === undefined &&
-        preparedAuth?.requirement === undefined &&
-        ctx.modelProvider?.api === undefined &&
-        ctx.modelProvider?.baseUrl === undefined &&
-        ctx.modelProvider?.azureApiVersion === undefined &&
-        ctx.modelProvider?.request === undefined;
-      if (runtimePolicy) {
-        const compatible = runtimePolicy.compatibleIds.some(
-          (id) => id.trim().toLowerCase() === normalizedHarnessRuntimeId,
-        );
-        if (!compatible) {
-          return unsupported("Codex cannot reproduce the prepared provider route");
-        }
-      } else if (ctx.modelProvider && provider !== "codex" && !nativeAccountOwnsUnobservedModel) {
-        return unsupported("provider route compatibility with Codex is not declared");
-      }
       if (preparedAuth?.requirement === "subscription") {
         const reproducibleSubscription =
           preparedAuth.source === "profile" &&
@@ -372,7 +379,7 @@ export function createCodexAppServerAgentHarness(
           return unsupported("Codex Platform auth requires a prepared API key");
         }
       }
-      return { supported: true, priority: 100 };
+      return availability;
     },
     runAttempt: async (params) => {
       // Keep app-server runtime code behind lazy imports so plugin discovery and
@@ -490,22 +497,31 @@ export function createCodexAppServerAgentHarness(
       return escalated;
     },
     runIsolatedCompletionV2: async (params) => {
+      const { resolveMergedModelProviderConfig } =
+        await import("openclaw/plugin-sdk/provider-catalog-shared");
       if (
-        resolveIsolatedCompletionRuntime({ authorizationOwner: params.authorization.owner }) ===
-        "openclaw"
+        resolveMergedModelProviderConfig(params.config, params.provider)?.auth === "native-command"
       ) {
-        const { runHostPreparedIsolatedCompletion } = await loadSimpleCompletionRuntime();
-        return runHostPreparedIsolatedCompletion(params);
+        throw new Error(
+          "Native command auth currently requires an ordinary Codex session, not isolated completion.",
+        );
       }
       const { runCodexIsolatedCompletion } = await loadIsolatedCompletion();
       const { readCodexPluginConfig } = await loadConfigParsing();
       return runCodexIsolatedCompletion(params, {
-        pluginConfig: readCodexPluginConfig(
-          options.resolvePluginConfig?.() ?? options.pluginConfig,
-        ),
+        pluginConfig: readCodexPluginConfig(resolveAttemptPluginConfig(params.config)),
       });
     },
     runIsolatedCompletion: async (params) => {
+      const { resolveMergedModelProviderConfig } =
+        await import("openclaw/plugin-sdk/provider-catalog-shared");
+      if (
+        resolveMergedModelProviderConfig(params.config, params.provider)?.auth === "native-command"
+      ) {
+        throw new Error(
+          "Native command auth currently requires an ordinary Codex session, not isolated completion.",
+        );
+      }
       const { runHostPreparedIsolatedCompletion } = await loadSimpleCompletionRuntime();
       // Keep the deprecated V1 contract on its exact host-prepared transport.
       // V2 owns native Codex auth and zero-tool attestation above.

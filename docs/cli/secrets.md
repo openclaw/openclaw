@@ -257,7 +257,7 @@ openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --json
 What `apply` may update:
 
 - `openclaw.json` (SecretRef targets + provider upserts/deletes)
-- auth profile store (provider-target scrubbing)
+- auth profile store (explicit targets and provider-target scrubbing of profiles with valid replacement refs)
 - legacy `auth.json` residues
 - `.env` files in the effective state and active-config directories, for known secret keys whose values were migrated
 

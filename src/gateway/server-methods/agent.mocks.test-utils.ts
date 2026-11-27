@@ -83,9 +83,25 @@ export function getAgentTestMocks() {
   return agentTestMocks;
 }
 
+/** Agent runs need a configured model; fixtures that name none get the test default. */
+function withAgentTestModel(cfg: OpenClawConfig): OpenClawConfig {
+  if (cfg.agents?.defaults?.model) {
+    return cfg;
+  }
+  const withModel = {
+    ...cfg,
+    agents: { ...cfg.agents, defaults: { ...cfg.agents?.defaults, model: "openai/gpt-6-astra" } },
+  };
+  if (cfg === mocks.loadConfigReturn) {
+    mocks.loadConfigReturn = withModel;
+  }
+  return withModel;
+}
+
 export function resolveAgentTestConfig(
-  cfg: OpenClawConfig = mocks.loadConfigReturn,
+  input: OpenClawConfig = mocks.loadConfigReturn,
 ): OpenClawConfig {
+  const cfg = withAgentTestModel(input);
   if (cfg.agents?.entries) {
     return cfg;
   }
@@ -294,6 +310,12 @@ vi.mock("../../agents/prepared-model-runtime.js", async (importOriginal) => {
         },
       },
       pluginGeneration,
+      run<T>(run: () => T): T {
+        if (!open) {
+          throw new Error("Prepared model runtime lease is closed");
+        }
+        return run();
+      },
       [Symbol.asyncDispose]: vi.fn(async () => {
         open = false;
       }),

@@ -1,25 +1,33 @@
 import type { MarkdownIt } from "markdown-it";
+import { lazyModule } from "solid-js";
 import { escapeHtml } from "../../../src/shared/html-escape.js";
 import { t } from "../i18n/index.ts";
 import { formatUiError, UserFacingError } from "../lib/format-error.ts";
-import { anchorFromNavigationEvent } from "../lib/navigation-click.ts";
+import { cancelLayout, scheduleLayout } from "../lib/layout-frame.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { showToast } from "../lib/toast.ts";
+import { isMarkdownBlockParked } from "./markdown-block-presentation.ts";
 import { copyMarkdownText } from "./markdown-copy.ts";
 import { createIconElement } from "./markdown-icon.ts";
+import { registerSessionTitleTarget } from "./markdown-link-display.ts";
 import { SESSION_TITLE_TARGET_SELECTOR } from "./session-progress-hovercard-target.ts";
-import { registerSessionTitleTarget } from "./session-title-target-registration.ts";
+
+const loadTableDialog = lazyModule(() => import("./markdown-table-dialog.ts"));
 
 const tableShellSelector = ".chat-text .markdown-table[data-table-interactions]";
 const tableViewportSelector = ".markdown-table__viewport";
 const enhancedTableShells = new WeakSet<HTMLElement>();
 const tableCopyStatuses = new WeakMap<HTMLElement, HTMLElement>();
 const tableOwnerStates = new WeakMap<HTMLElement, TableOwnerState>();
+// The DOM survives enhancer replacement and may have nested enhancement owners.
+const tableBounds = new WeakMap<HTMLElement, TableBounds>();
 
 type TableOwnerState = {
   release: () => void;
-  closeDialog?: () => void;
+  dialog?: { source: HTMLTableElement; close: () => void };
 };
+
+type TableBounds = { element: HTMLElement; viewport?: number; table?: number; offset: number };
 
 function tableInteractionsEnabled(env: unknown): boolean {
   return (
@@ -49,22 +57,49 @@ export function installMarkdownTables(markdownParser: MarkdownIt): void {
 
 export function markdownTableCopyText(table: HTMLTableElement): string {
   return [...table.rows]
-    .map((row) => [...row.cells].map((cell) => cell.textContent?.trim() ?? "").join("\t"))
+    .map((row) =>
+      [...row.cells]
+        .map((cell) => {
+          const walker = cell.ownerDocument.createTreeWalker(
+            cell,
+            NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
+          );
+          let text = "";
+          for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+            if (node.nodeType === Node.TEXT_NODE) {
+              text += node.textContent;
+            } else if (node.nodeName === "BR") {
+              text += "\n";
+            }
+          }
+          text = text.trim();
+          return /[\t\r\n"]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+        })
+        .join("\t"),
+    )
     .join("\n");
 }
 
-function syncTableOverflow(shell: HTMLElement): void {
-  const viewport = shell.querySelector<HTMLElement>(tableViewportSelector);
-  if (!viewport) {
-    return;
+function measureTableOverflow(shell: HTMLElement, bounds: TableBounds): (() => void) | undefined {
+  if (isMarkdownBlockParked(shell)) {
+    return undefined;
   }
-  const { scrollWidth, clientWidth, scrollLeft } = viewport;
-  const overflows = scrollWidth - clientWidth > 1;
-  shell.classList.toggle("markdown-table--can-scroll-left", overflows && scrollLeft > 1);
-  shell.classList.toggle(
-    "markdown-table--can-scroll-right",
-    overflows && scrollLeft + clientWidth < scrollWidth - 1,
-  );
+  if (bounds.viewport === undefined || bounds.table === undefined) {
+    return undefined;
+  }
+  const { viewport, table, offset } = bounds;
+  const overflows = table - viewport > 1;
+  const position =
+    overflows && getComputedStyle(bounds.element).direction === "rtl"
+      ? table - viewport + offset
+      : offset;
+  return () => {
+    shell.classList.toggle("markdown-table--can-scroll-left", overflows && position > 1);
+    shell.classList.toggle(
+      "markdown-table--can-scroll-right",
+      overflows && position + viewport < table - 1,
+    );
+  };
 }
 
 function enhanceTableShell(shell: HTMLElement): void {
@@ -92,19 +127,48 @@ export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
   let state = tableOwnerStates.get(owner);
   if (!state) {
     const observedNodes = new Set<HTMLElement>();
+    const pendingOverflow = new Map<HTMLElement, TableBounds>();
     const resizeObserver = new ResizeObserver((entries) => {
-      const shells = new Set(
-        entries.map((entry) => entry.target.closest<HTMLElement>(tableShellSelector)),
-      );
-      for (const shell of shells) {
-        if (shell) {
-          syncTableOverflow(shell);
+      // Earlier resize subscribers may have dirtied layout. Consume the delivered
+      // boxes instead of forcing another layout for scrollWidth/clientWidth.
+      for (const entry of entries) {
+        const shell = entry.target.closest<HTMLElement>(tableShellSelector);
+        if (!shell || isMarkdownBlockParked(shell)) {
+          continue;
         }
+        const viewport = entry.target.closest<HTMLElement>(tableViewportSelector)!;
+        const bounds = tableBounds.get(viewport) ?? { element: viewport, offset: 0 };
+        if (entry.target.matches(tableViewportSelector)) {
+          bounds.viewport = entry.contentRect.width;
+        } else {
+          bounds.table = entry.borderBoxSize[0]!.inlineSize;
+        }
+        tableBounds.set(viewport, bounds);
+        pendingOverflow.set(shell, bounds);
+      }
+      if (pendingOverflow.size) {
+        // Overflow chrome can affect layout; publish it after resize delivery.
+        scheduleLayout(pendingOverflow, () => {
+          const updates = [...pendingOverflow].map(([shell, bounds]) =>
+            owner.contains(shell) ? measureTableOverflow(shell, bounds) : undefined,
+          );
+          pendingOverflow.clear();
+          return () => updates.forEach((update) => update?.());
+        });
       }
     });
     const syncTables = (shells: Iterable<HTMLElement>) => {
       for (const shell of shells) {
         if (!owner.contains(shell)) {
+          continue;
+        }
+        if (isMarkdownBlockParked(shell)) {
+          for (const node of observedNodes) {
+            if (shell.contains(node)) {
+              observedNodes.delete(node);
+              resizeObserver.unobserve(node);
+            }
+          }
           continue;
         }
         enhanceTableShell(shell);
@@ -120,10 +184,24 @@ export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
     };
     const mutationObserver = new MutationObserver((records) => {
       const shells = new Set<HTMLElement>();
+      const collectShells = (node: HTMLElement) => {
+        if (node.matches(tableShellSelector)) {
+          shells.add(node);
+        }
+        // Syntax highlighting inserts many leaf spans, which cannot contain tables.
+        if (node.firstElementChild) {
+          for (const shell of node.querySelectorAll<HTMLElement>(tableShellSelector)) {
+            shells.add(shell);
+          }
+        }
+      };
       for (const record of records) {
         const target =
           record.target instanceof Element ? record.target : record.target.parentElement;
         const shell = target?.closest<HTMLElement>(tableShellSelector);
+        if (record.type === "attributes" && target instanceof HTMLElement) {
+          collectShells(target);
+        }
         // Icon/copy feedback belongs to the controls and cannot change the table's width.
         if (shell && (target === shell || target?.closest(tableViewportSelector))) {
           shells.add(shell);
@@ -132,16 +210,7 @@ export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
           if (!(node instanceof HTMLElement)) {
             continue;
           }
-          if (node.matches(tableShellSelector)) {
-            shells.add(node);
-          }
-          // Syntax highlighting inserts many leaf spans, which cannot contain tables.
-          if (!node.firstElementChild) {
-            continue;
-          }
-          for (const added of node.querySelectorAll<HTMLElement>(tableShellSelector)) {
-            shells.add(added);
-          }
+          collectShells(node);
         }
         for (const node of record.removedNodes) {
           if (!(node instanceof HTMLElement) || owner.contains(node)) {
@@ -159,6 +228,10 @@ export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
             }
           }
         }
+      }
+      // Reconciliation can move a table within the transcript in the same batch.
+      if (state?.dialog && !owner.contains(state.dialog.source)) {
+        state.dialog.close();
       }
       syncTables(shells);
     });
@@ -178,8 +251,11 @@ export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
           return;
         }
         const shell = viewport.closest<HTMLElement>(tableShellSelector);
-        if (shell) {
-          syncTableOverflow(shell);
+        const bounds = tableBounds.get(viewport);
+        if (shell && bounds) {
+          pendingOverflow.delete(shell);
+          bounds.offset = viewport.scrollLeft;
+          measureTableOverflow(shell, bounds)?.();
         }
       },
       { capture: true, passive: true },
@@ -189,11 +265,19 @@ export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
         stopScroll();
         mutationObserver.disconnect();
         resizeObserver.disconnect();
+        cancelLayout(pendingOverflow);
+        pendingOverflow.clear();
       },
     };
     tableOwnerStates.set(owner, state);
     syncTables(owner.querySelectorAll<HTMLElement>(tableShellSelector));
-    mutationObserver.observe(owner, { childList: true, subtree: true, characterData: true });
+    mutationObserver.observe(owner, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+      attributes: true,
+      attributeFilter: ["data-prepared-row", "data-preparing-row"],
+    });
   }
   return state;
 }
@@ -202,7 +286,7 @@ export function releaseMarkdownTables(owner: HTMLElement): void {
   const state = tableOwnerStates.get(owner);
   tableOwnerStates.delete(owner);
   state?.release();
-  state?.closeDialog?.();
+  state?.dialog?.close();
 }
 
 async function showTableDialog(
@@ -211,14 +295,14 @@ async function showTableDialog(
   owner: HTMLElement,
 ): Promise<void> {
   const state = tableOwnerStates.get(owner) ?? enhanceMarkdownTables(owner);
-  if (state.closeDialog) {
+  if (state.dialog) {
     return;
   }
   let dialog: HTMLElementTagNameMap["openclaw-modal-dialog"] | undefined;
   const stopListeners: Array<() => void> = [];
   const close = () => {
-    if (state.closeDialog === close) {
-      delete state.closeDialog;
+    if (state.dialog?.close === close) {
+      delete state.dialog;
     }
     for (const stop of stopListeners.splice(0)) {
       stop();
@@ -226,67 +310,27 @@ async function showTableDialog(
     dialog?.remove();
   };
   // Reserve through teardown before loading; reconnect cannot revive this request.
-  state.closeDialog = close;
+  state.dialog = { source: table, close };
   try {
+    let mountExpandedMarkdownTable: typeof import("./markdown-table-dialog.ts").mountExpandedMarkdownTable;
     try {
-      await import("./modal-dialog.tsx");
+      ({ mountExpandedMarkdownTable } = await loadTableDialog());
     } catch (cause) {
-      throw new UserFacingError(`${t("lazyView.errorTitle")}. ${t("lazyView.staleSubtitle")}`, {
+      throw new UserFacingError(`${t("lazyView.errorTitle")} ${t("lazyView.staleSubtitle")}`, {
         cause,
       });
     }
-    if (state.closeDialog !== close || !owner.isConnected || !trigger.isConnected) {
+    if (state.dialog?.close !== close || !owner.isConnected || !trigger.isConnected) {
       return;
     }
     dialog = document.createElement("openclaw-modal-dialog");
-    dialog.className = "markdown-table-modal";
-    dialog.label = t("common.expandedTable");
-    dialog.setReturnFocusTarget(trigger);
-    const dismissLink = (event: Event) => {
-      const anchor = anchorFromNavigationEvent(event);
-      if (
-        !anchor ||
-        (event instanceof KeyboardEvent && event.key !== "Enter" && event.key !== " ")
-      ) {
-        return;
-      }
-      // Listener microtasks can precede ancestor routing. Defer removal until
-      // routing and the browser's default href activation have finished.
-      setTimeout(() => {
-        if (
-          event.type === "click" ||
-          event.defaultPrevented ||
-          (event instanceof MouseEvent && event.button === 1 && anchor.hasAttribute("href"))
-        ) {
-          close();
-        }
-      }, 0);
-    };
-    stopListeners.push(listen(dialog, "modal-cancel", close));
-    const content = document.createElement("div");
-    content.className = "markdown-table-dialog chat-text";
-    content.dir = getComputedStyle(table).direction;
-    for (const event of ["click", "auxclick", "keydown"]) {
-      stopListeners.push(listen(content, event, dismissLink));
-    }
-    const dismiss = document.createElement("button");
-    dismiss.type = "button";
-    dismiss.className = "markdown-table-dialog__close";
-    dismiss.setAttribute("aria-label", t("common.closeTable"));
-    dismiss.autofocus = true;
-    dialog.initialFocus = () => dismiss;
-    stopListeners.push(listen(dismiss, "click", close));
-    dismiss.append(createIconElement("x", document));
-    content.append(dismiss, table.cloneNode(true));
-    dialog.append(content);
-    // Keep delegated file/session actions and modal teardown with their transcript.
-    owner.append(dialog);
+    const content = mountExpandedMarkdownTable(dialog, table, trigger, owner, close, stopListeners);
     // Cloned anchors need their own href lifetime before the source is decorated.
     for (const target of content.querySelectorAll<HTMLElement>(SESSION_TITLE_TARGET_SELECTOR)) {
       stopListeners.push(registerSessionTitleTarget(target, document.createElement("span")));
     }
   } catch (error) {
-    if (state.closeDialog === close && owner.isConnected && trigger.isConnected) {
+    if (state.dialog?.close === close && owner.isConnected && trigger.isConnected) {
       showToast({ message: formatUiError(error), severity: "error" });
     }
   } finally {

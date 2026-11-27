@@ -23,6 +23,7 @@ import { registerGoogleMeetCli } from "./src/cli.js";
 import { resolveGoogleMeetConfig } from "./src/config.js";
 import { normalizeMeetUrl } from "./src/meet-url.js";
 import { buildGoogleMeetPreflightReport, fetchGoogleMeetArtifacts } from "./src/meet.js";
+import { registerCalendarActionTests } from "./src/test-support/calendar-action.test-helpers.js";
 import {
   createTestMeetRealtimeAudioTransport,
   meetAudioBridge,
@@ -567,7 +568,6 @@ function createBrowserProxyHandler(options: {
   handleChromeStart?: boolean;
   navigateTo?: BrowserProxyTab;
   openedTargetId?: string | ((url: string | undefined) => string);
-  openedTitle?: string;
   tabs?: BrowserProxyTab[];
 }) {
   return async (params: { command: string; params?: unknown }) => {
@@ -588,7 +588,7 @@ function createBrowserProxyHandler(options: {
             : (options.openedTargetId ?? "tab-1");
         return browserProxyPayload({
           targetId,
-          title: options.openedTitle ?? "Meet",
+          title: "Meet",
           url: proxy.body?.url,
         });
       }
@@ -1236,7 +1236,10 @@ describe("google-meet plugin", () => {
 
   it("exports artifact bundles through the tool", async () => {
     stubMeetArtifactsApi();
-    const outputDir = path.join(createIsolatedTestDir("openclaw-google-meet-export-"), "bundle");
+    const outputDir = path.join(
+      createIsolatedTestDir("openclaw-google-meet-export-"),
+      process.platform === "win32" ? "bundle" : "bundle ",
+    );
     const result = await getMeetTool(setup()).execute("id", {
       action: "export",
       accessToken: "token",
@@ -1279,23 +1282,7 @@ describe("google-meet plugin", () => {
     });
   });
 
-  it.each(["latest", "calendar_events"] as const)(
-    "reports today's Meet calendar data through %s",
-    async (action) => {
-      stubMeetArtifactsApi();
-      const tool = getMeetTool(setup());
-      const request = { accessToken: "token", expiresAt: Date.now() + 120_000, today: true };
-      if (action === "latest") {
-        const result = await tool.execute("id", { action, ...request });
-        expect(result.details.calendarEvent?.meetingUri).toBe(MEET_URL);
-      } else {
-        const result = await tool.execute("id", { action, ...request });
-        expect(result.details.events).toHaveLength(1);
-        expect(result.details.events?.[0]?.selected).toBe(true);
-        expect(result.details.events?.[0]?.meetingUri).toBe(MEET_URL);
-      }
-    },
-  );
+  registerCalendarActionTests(() => getMeetTool(setup()));
 
   it("fails setup status when the configured Chrome node is not connected", async () => {
     const { tools } = setup(
@@ -1378,7 +1365,6 @@ describe("google-meet plugin", () => {
   function mockLocalMeetBrowserRequestWithTabState(options?: {
     reused?: boolean;
     tabUrlAfterJoin?: string;
-    leaveClicked?: boolean;
     nonFinalTranscriptGate?: Promise<void>;
     onNonFinalTranscriptRead?: () => void;
     shouldGateNonFinalTranscriptRead?: () => boolean;
@@ -1462,9 +1448,6 @@ describe("google-meet plugin", () => {
             const urlMatched = currentUrl?.includes("/abc-defg-hij") === true;
             if (!urlMatched) {
               return { result: JSON.stringify({ departed: true, urlMatched: false }) };
-            }
-            if (options?.leaveClicked === false) {
-              return { result: JSON.stringify({ departed: false, urlMatched: true }) };
             }
             leaveStep += 1;
             if (leaveStep === 1) {

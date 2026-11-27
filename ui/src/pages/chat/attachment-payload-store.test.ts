@@ -21,8 +21,8 @@ import {
 } from "./attachment-payload-store.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { AssistantAttachments } from "./components/chat-message-attachments-solid.tsx";
+import { projectMessageMedia } from "./components/chat-message-media-projection.ts";
 import { stubObjectUrls } from "./components/chat-message-media.test-helpers.ts";
-import { projectMessageMedia } from "./components/chat-message-media.ts";
 import { hydrateDurableComposerAttachments } from "./durable-composer-persistence.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
 import { prepareOutboxPayload } from "./outbox-payloads.ts";

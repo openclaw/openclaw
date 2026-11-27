@@ -256,10 +256,14 @@ Writers store both signals as trailing comments on the same `MEMORY.md` or
 - Keep the gateway on loopback. <!-- trigger: gateway setup, network safety --> <!-- importance: 9 -->
 ```
 
-Trigger phrases are comma- or semicolon-separated. Importance is an integer
-from 1 to 10. When either annotation is absent, the index keeps its column
-`NULL`, so older entries remain neutral and never become trigger candidates
-until a writer adds metadata.
+Trigger phrases are comma- or semicolon-separated. A trigger word matches a
+whole word of the message; a word containing CJK (Han, Hiragana, Katakana,
+or Hangul) matches anywhere in the message, because Chinese and Japanese do
+not separate words with spaces and Korean attaches particles to words.
+One-character words are ignored. Importance is an integer from 1 to 10. When
+either annotation is absent, the index keeps its column `NULL`, so older
+entries remain neutral and never become trigger candidates until a writer
+adds metadata.
 
 Auto-injection is restricted to the curated tier. Entries from `MEMORY.md`
 and `USER.md` qualify; daily notes and transcripts never auto-inject,
@@ -451,13 +455,17 @@ knobs that exist:
 
 | Concern                         | Where                                                           | Reference                                                     |
 | ------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------- |
-| Dreaming enable, cadence, model | `plugins.entries.memory-core.config.dreaming`                   | [Dreaming](/concepts/dreaming)                                |
+| Dreaming enable, cadence, model | `plugins.entries.<memory-slot-owner>.config.dreaming`           | [Dreaming](/concepts/dreaming)                                |
 | Session admission exclusions    | `plugins.entries.memory-core.config.memoryPolicy`               | [Provenance & deletion](/concepts/memory-provenance)          |
 | Search providers, hybrid tuning | `memory.search`                                                 | [Memory config](/reference/memory-config)                     |
 | Escalation lane mode, scope     | `plugins.entries.active-memory`                                 | [Active memory](/concepts/active-memory)                      |
 | Cross-conversation recall       | `agents.entries.<id>.memory.search.rememberAcrossConversations` | [Active memory](/concepts/active-memory)                      |
 | Flush behavior                  | `agents.defaults.compaction.memoryFlush`                        | [Memory overview](/concepts/memory)                           |
 | Memory plugin selection         | `plugins.slots.memory`                                          | [Builtin](/concepts/memory-builtin), [Plugins](/tools/plugin) |
+
+For managed Gateway sidecar dreaming, `<memory-slot-owner>` is the plugin selected
+by `plugins.slots.memory` (defaulting to `memory-core`). Memory CLI continues to
+read `plugins.entries.memory-core.config.dreaming` regardless of slot selection.
 
 ## Related
 

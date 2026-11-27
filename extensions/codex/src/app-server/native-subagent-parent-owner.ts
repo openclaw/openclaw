@@ -40,6 +40,7 @@ export type NativeParentRegistration = Pick<
     ParentOwner,
     | "requesterTurnRunId"
     | "requestCustody"
+    | "cancelChildProcesses"
     | "claimDirectChild"
     | "rejectPendingDirectChild"
     | "onDirectChildAccepted"
@@ -163,6 +164,7 @@ export async function registerNativeSubagentParent(
   const registrationSettled = createDeferred<void>();
   let owner: ParentOwner = {
     requestCustody: params.requestCustody,
+    cancelChildProcesses: params.cancelChildProcesses,
     requesterAgentId: params.agentId,
     requesterSessionKey: params.requesterSessionKey,
     requesterTurnRunId: params.requesterTurnRunId,
@@ -472,7 +474,7 @@ export function listNativePendingChildren(
     if (
       !parentThreadIds.has(child.parentThreadId) ||
       child.settledWithoutCompletion ||
-      child.nativeCompletionDelivered ||
+      child.completionDelivery?.isConsumed() ||
       (child.terminal && !child.pendingCompletion)
     ) {
       continue;

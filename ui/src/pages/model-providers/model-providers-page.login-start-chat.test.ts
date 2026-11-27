@@ -3,18 +3,142 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { ModelCatalogEntry, ModelCatalogResult } from "../../api/types.ts";
+import { loginOption } from "../../test-helpers/model-providers.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { loginHarness, openLogin } from "./model-providers-page.login.test-support.ts";
-import { appendPage, submitCredential, unmountPage } from "./model-providers-page.test-support.tsx";
+import {
+  appendPage,
+  createEmptyModelProvidersRouteData,
+  startSelectedLogin,
+  submitCredential,
+  unmountPage,
+} from "./model-providers-page.test-support.tsx";
+
+it.each([
+  { provider: "audit-provider", id: "audit-provider" },
+  { provider: "minimax-portal", id: "minimax" },
+  { provider: "minimax-portal", id: "minimax-portal" },
+])("opens $provider as $id before a sibling sharing its auth owner", async ({ provider, id }) => {
+  const { context } = loginHarness({
+    capabilities: [
+      {
+        provider: id,
+        apiKeySupported: true,
+        quickApiKeySetup: true,
+        loginOptions: [
+          loginOption(
+            "audit-team-login",
+            id === "minimax-portal" ? "minimax" : `${id}-team`,
+            "Audit Team API key",
+            "secret",
+            {
+              groupLabel: "A Shared Team",
+            },
+          ),
+          loginOption("audit-login", id, "Audit Provider API key", "secret", {
+            groupLabel: "Audit Provider",
+          }),
+        ],
+      },
+      { provider: "unrelated", apiKeySupported: true, quickApiKeySetup: true },
+    ],
+  });
+  const page = appendPage(context);
+  page.routeData = { ...createEmptyModelProvidersRouteData(context), connect: true, provider };
+  await waitForSolid(() =>
+    expect(page.querySelector(".model-provider-login h2")?.textContent).toContain("Audit Provider"),
+  );
+  expect(page.querySelector("[data-models-login-search]")).toBeNull();
+  expect(page.querySelector(".model-provider-login")?.textContent).toContain(
+    "Audit Provider API key",
+  );
+  expect(page.querySelector(".model-provider-login")?.textContent).not.toContain(
+    "Audit Team API key",
+  );
+  expect(page.querySelector(".model-provider-login")?.textContent).not.toContain("unrelated");
+  expect(context.runtimeConfig.patch).not.toHaveBeenCalled();
+});
+
+it("opens the plugin-owned sign-in and offers a chat model without changing the default", async () => {
+  const { context, request, answer } = loginHarness({
+    capabilities: [
+      {
+        provider: "example",
+        apiKeySupported: false,
+        quickApiKeySetup: false,
+        loginOptions: [
+          loginOption("other/oauth", "example", "Foreign account", "oauth", { pluginId: "other" }),
+          loginOption("fixture-plugin/login", "example", "Sign in with Example", "oauth", {
+            pluginId: "fixture-plugin",
+            groupLabel: "Example Cloud",
+          }),
+        ],
+      },
+      { provider: "alternate", apiKeySupported: true, quickApiKeySetup: true },
+    ],
+  });
+  const originalRequest = request.getMockImplementation()!;
+  request.mockImplementation(async (method, ...args) =>
+    method === "models.list"
+      ? ({
+          models: [
+            { provider: "alternate", id: "studio", name: "Other model", available: true },
+            { provider: "example", id: "retired", name: "Retired model", available: false },
+            { provider: "example", id: "flash", name: "Example Flash", available: true },
+          ],
+        } satisfies ModelCatalogResult)
+      : originalRequest(method, ...args),
+  );
+  const create = vi.fn(async () => null);
+  Object.assign(context, { sessions: { create, state: {} } });
+  const page = appendPage(context);
+  try {
+    page.routeData = {
+      ...createEmptyModelProvidersRouteData(context),
+      connect: true,
+      pluginId: "fixture-plugin",
+    };
+    await waitForSolid(() =>
+      expect(page.querySelector(".model-provider-login h2")?.textContent).toContain(
+        "Example Cloud",
+      ),
+    );
+    expect(page.querySelector(".model-provider-login")?.textContent).not.toContain(
+      "Foreign account",
+    );
+    await startSelectedLogin(page, "Sign in with Example");
+    await submitCredential(page);
+    answer.resolve({ done: true, status: "done" });
+    const action = () => page.querySelector<HTMLButtonElement>("[data-login-start-chat]");
+    await waitForSolid(() => expect(action()?.textContent).toBe("Choose a model"));
+    action()!.click();
+    await waitForSolid(() =>
+      expect(action()?.textContent).toBe("Start a new chat with Example Flash"),
+    );
+    expect(create).not.toHaveBeenCalled();
+    action()!.click();
+    await waitForSolid(() =>
+      expect(create).toHaveBeenCalledWith(
+        { agentId: "writer", model: "example/flash" },
+        { signal: expect.any(AbortSignal) },
+      ),
+    );
+    expect(context.runtimeConfig.patch).not.toHaveBeenCalled();
+  } finally {
+    unmountPage(page);
+  }
+});
 
 it.each([
   { recommended: false, delayed: false },
   { recommended: true, delayed: true },
   { recommended: false, delayed: false, verified: true },
   { recommended: true, delayed: false, cancel: true },
+  // The Gateway's own routing is not a choice: Start Chat must not pin it on the session.
+  { recommended: true, delayed: false, runtimeSource: "implicit" as const },
 ])(
-  "Start Chat offers the first available recommendation (recommended: $recommended, delayed: $delayed)",
-  async ({ recommended, delayed, verified, cancel }) => {
+  "Model choice defaults to the first available recommendation or model (recommended: $recommended, delayed: $delayed, runtime: $runtimeSource)",
+  async ({ recommended, delayed, verified, cancel, runtimeSource = "model" as const }) => {
     const { context, request, answer, publishEvent } = loginHarness();
     const originalRequest = request.getMockImplementation()!;
     let available = !delayed;
@@ -32,7 +156,7 @@ it.each([
             models: [
               model("best", { provider: "other", recommended: true, available: true }),
               model("old", { recommended: true, available: false }),
-              model("best", { agentRuntime: { id: "openclaw", source: "model" } }),
+              model("best", { agentRuntime: { id: "openclaw", source: runtimeSource } }),
               model("second"),
             ],
           } satisfies ModelCatalogResult)
@@ -61,46 +185,47 @@ it.each([
     });
     await waitForSolid(() =>
       expect(page.querySelector(".model-setup-wizard")?.textContent).toContain(
-        "Example API key is connected",
+        "Example API key connected",
       ),
     );
-    if (recommended || verified) {
-      if (delayed) {
-        await waitForSolid(() =>
-          expect(request).toHaveBeenCalledWith(
-            "models.list",
-            expect.objectContaining({ agentId: "writer" }),
-          ),
-        );
-        expect(startChat()).toBeNull();
-        available = true;
-        publishEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
-      }
+    if (delayed) {
       await waitForSolid(() =>
-        expect(startChat()?.textContent).toBe("Start a new chat with Example best"),
-      );
-      startChat()!.click();
-      await waitForSolid(() =>
-        expect(create).toHaveBeenCalledWith(
-          { agentId: "writer", model: "example/best", agentRuntime: "openclaw" },
-          { signal: expect.any(AbortSignal) },
+        expect(request).toHaveBeenCalledWith(
+          "models.list",
+          expect.objectContaining({ agentId: "writer" }),
         ),
       );
-      const button = startChat()!;
-      await waitForSolid(() => expect(button.disabled).toBe(true));
-      button.click();
-      expect(create).toHaveBeenCalledTimes(1);
-      if (!cancel) {
-        creation.resolve(null);
-        await waitForSolid(() => expect(button.disabled).toBe(false));
-        expect(startChat()).toBe(button);
-        expect(page.querySelector(".model-setup-wizard")?.textContent).toContain("Request failed");
-      }
-    } else {
-      await waitForSolid(() =>
-        expect(request.mock.calls.some(([method]) => method === "models.list")).toBe(true),
-      );
       expect(startChat()).toBeNull();
+      available = true;
+      publishEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
+    }
+    await waitForSolid(() => expect(startChat()?.textContent).toBe("Choose a model"));
+    startChat()!.click();
+    await waitForSolid(() =>
+      expect(startChat()?.textContent).toBe("Start a new chat with Example best"),
+    );
+    startChat()!.click();
+    await waitForSolid(() =>
+      expect(create).toHaveBeenCalledWith(
+        {
+          agentId: "writer",
+          model: "example/best",
+          ...(runtimeSource === "model" ? { agentRuntime: "openclaw" } : {}),
+        },
+        { signal: expect.any(AbortSignal) },
+      ),
+    );
+    const button = startChat()!;
+    await waitForSolid(() => expect(button.disabled).toBe(true));
+    button.click();
+    expect(create).toHaveBeenCalledTimes(1);
+    if (!cancel) {
+      creation.resolve(null);
+      await waitForSolid(() => expect(button.disabled).toBe(false));
+      expect(startChat()).toBe(button);
+      expect(page.querySelector(".model-setup-wizard")?.textContent).toContain(
+        "Couldn’t complete the request. Try again.",
+      );
     }
     expect(context.runtimeConfig.patch).not.toHaveBeenCalled();
     unmountPage(page);

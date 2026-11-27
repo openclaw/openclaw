@@ -1,4 +1,7 @@
-import { parseOperatorModelPolicyWildcardRef } from "../config/model-policy-ref.js";
+import {
+  modelPolicyWildcardMatches,
+  parseModelPolicyWildcardRef,
+} from "../config/model-policy-ref.js";
 import { runtimeConfigPublication } from "../config/runtime-config-publication.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -8,7 +11,7 @@ import {
   isDeeplyFrozenPlainData,
 } from "../shared/immutable-data.js";
 import { resolveConfiguredAgentId, resolveAmbientOwnerAgentId } from "./agent-scope-config.js";
-import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
+import { DEFAULT_PROVIDER } from "./defaults.js";
 import type { ModelManifestNormalizationContext, ModelRef } from "./model-ref-shared.js";
 import { normalizeProviderId } from "./model-ref-shared.js";
 import { resolveDefaultModelForAgent } from "./model-selection-config.js";
@@ -40,7 +43,7 @@ export function restoreOperatorModelPolicySnapshot(
 ): PreparedOperatorModelPolicy {
   const prepare = (refs: OperatorModelPolicySnapshot["allowed"]) => ({
     exact: new Set(refs.exact),
-    patterns: compileGlobPatterns({ raw: refs.wildcards, normalize: (raw) => raw }),
+    wildcards: refs.wildcards,
   });
   const captured = freezeJsonSnapshot(structuredClone(snapshot));
   const allowed = prepare(captured.allowed);
@@ -78,11 +81,12 @@ export function resolveOperatorModelDefault(
     cfg: OpenClawConfig;
     agentId?: string;
     policy: PreparedOperatorModelPolicy | undefined;
-    model: ModelRef;
+    /** The configured or selected model; undefined when none is configured. */
+    model: ModelRef | undefined;
     allows: (ref: ModelRef) => boolean;
   } & ModelManifestNormalizationContext,
 ): ModelRef | undefined {
-  if (!params.policy || params.policy.allows(params.model)) {
+  if (!params.policy || (params.model && params.policy.allows(params.model))) {
     return params.model;
   }
   const automatic = new Set(
@@ -160,11 +164,11 @@ function prepareAgentModels(
     allowPluginNormalization: false,
   };
   const primary = resolveDefaultModelForAgent(normalization);
-  const selection = { ...normalization, defaultProvider: primary.provider };
+  const selection = { ...normalization, defaultProvider: primary?.provider ?? DEFAULT_PROVIDER };
   const aliasIndex = buildModelAliasIndex(selection);
   const resolve = (raw: string) =>
     resolveModelRefFromString({ ...selection, raw, aliasIndex })?.ref;
-  const models = [primary];
+  const models = primary ? [primary] : [];
   for (const raw of resolveConfiguredModelFallbacks(params)) {
     const ref = resolve(raw);
     if (ref) {
@@ -180,7 +184,7 @@ function prepareRefs(refs: readonly string[], resolve: (raw: string) => ModelRef
   const exact = new Map<string, ModelRef>();
   const wildcards = new Set<string>();
   for (const raw of refs) {
-    const wildcard = parseOperatorModelPolicyWildcardRef(raw);
+    const wildcard = parseModelPolicyWildcardRef(raw);
     if (wildcard) {
       wildcards.add(wildcard.key);
     } else {
@@ -193,20 +197,20 @@ function prepareRefs(refs: readonly string[], resolve: (raw: string) => ModelRef
   return {
     exact,
     wildcards: [...wildcards].toSorted(),
-    patterns: compileGlobPatterns({ raw: [...wildcards], normalize: (raw) => raw }),
   };
 }
 
 function matches(
   prepared: {
     exact: ReadonlySet<string> | ReadonlyMap<string, ModelRef>;
-    patterns: ReturnType<typeof compileGlobPatterns>;
+    wildcards: readonly string[];
   },
   ref: ModelRef,
 ) {
+  const key = `${normalizeProviderId(ref.provider)}/${ref.model}`;
   return (
     prepared.exact.has(identity(ref)) ||
-    matchesAnyGlobPattern(`${normalizeProviderId(ref.provider)}/${ref.model}`, prepared.patterns)
+    prepared.wildcards.some((wildcard) => modelPolicyWildcardMatches(wildcard, key))
   );
 }
 
@@ -239,7 +243,6 @@ export function prepareOperatorModelPolicy(
       ? {
           exact: new Map(sourceModels.map((ref) => [identity(ref), ref])),
           wildcards: [],
-          patterns: [],
         }
       : prepareRefs(policy.allow, resolve);
   const denied = prepareRefs(policy.deny ?? [], resolve);
@@ -261,4 +264,21 @@ export function prepareOperatorModelPolicy(
     cached.byPolicy.set(policy, result);
   }
   return result;
+}
+
+export function intersectOperatorModelPolicy(
+  original: PreparedOperatorModelPolicy | undefined,
+  current: PreparedOperatorModelPolicy | undefined,
+): PreparedOperatorModelPolicy | undefined {
+  const membership = readOperatorModelPolicyMembership(original);
+  return original &&
+    current &&
+    original !== current &&
+    (membership === undefined || membership !== readOperatorModelPolicyMembership(current))
+    ? Object.freeze({
+        models: Object.freeze(current.models.filter(original.allows)),
+        allows: (ref: Parameters<typeof original.allows>[0]) =>
+          original.allows(ref) && current.allows(ref),
+      })
+    : (current ?? original);
 }

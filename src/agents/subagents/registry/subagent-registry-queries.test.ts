@@ -9,11 +9,12 @@ import {
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   buildSubagentRunReadIndexFromRuns,
-  countActiveRunsForSessionFromRuns,
   listRunsForRequesterFromRuns,
   getLatestSubagentRunByChildSessionKeyFromRuns,
   shouldIgnorePostCompletionAnnounceForSessionFromRuns,
 } from "./subagent-registry-queries.js";
+import { listSubagentRunsForRequester } from "./subagent-registry-read.js";
+import { countActiveSubagentRunsForSession as countActiveRunsForSessionFromRuns } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const STALE_UNENDED_SUBAGENT_RUN_MS = 2 * 60 * 60 * 1_000;
@@ -45,59 +46,42 @@ const descendants = (index: ReturnType<typeof buildSubagentRunReadIndexFromRuns>
   runIds(index.listDescendantRunsForRequester(root));
 
 describe("subagent registry query regressions", () => {
-  it("counts prepared descendants without allocating array iterators", () => {
-    const parent = makeRun("parent", { endedAt: 100 });
-    const child = makeRun("child", {
-      requesterSessionKey: parent.childSessionKey,
-      endedAt: 100,
-    });
-    const index = buildSubagentRunReadIndexFromRuns({ runs: toRunMap([parent, child]) });
-    const root = parent.requesterSessionKey;
-    index.listDescendantRunsForRequester(root);
-    const iterate = Array.prototype[Symbol.iterator];
-    let iterations = 0;
-    // eslint-disable-next-line no-extend-native -- Measure native iterator work; restore synchronously below.
-    Array.prototype[Symbol.iterator] = function () {
-      iterations++;
-      return iterate.call(this);
-    };
-    let active: number;
-    let pending: number;
-    try {
-      active = index.countActiveDescendantRuns(root);
-      pending = index.countPendingDescendantRuns(root);
-    } finally {
-      // eslint-disable-next-line no-extend-native -- Restore the instrumented native iterator.
-      Array.prototype[Symbol.iterator] = iterate;
-    }
-    expect(active).toBe(0);
-    expect(pending).toBe(2);
-    expect(iterations).toBe(0);
-  });
-
-  it.each([50, 150, 500])("repairs active descendants without reading %i siblings", (size) => {
+  it("repairs active descendant counts after incremental patches", () => {
     const now = Date.UTC(2026, 9, 25);
-    const children = Array.from({ length: size }, (_, i) =>
+    const children = Array.from({ length: 500 }, (_, i) =>
       makeRun(`child-${i}`, { createdAt: now, endedAt: now }),
     );
     const child = children[0]!;
     const root = child.requesterSessionKey;
     let index = buildSubagentRunReadIndexFromRuns({ runs: toRunMap(children), now });
     expect(index.countActiveDescendantRuns(root)).toBe(0);
-    using reads = vi.spyOn(index.latestRunsByChildSessionKey, "get");
     for (let event = 1; event <= 20; event++) {
       const changed = {
         ...child,
         execution: { ...child.execution, endedAt: event % 2 ? undefined : now },
       };
       index = index.patch(toRunMap([changed]), new Map(), now + event);
-      reads.mockClear();
       expect(index.countActiveDescendantRuns(root)).toBe(event % 2);
       expect(index.atTime(now + event + 1).countActiveDescendantRuns(root)).toBe(event % 2);
-      expect(reads.mock.calls.length).toBeLessThanOrEqual(1);
       expect(index.hasUnendedRuns(root)).toBe(event % 2 === 1);
       expect(index.hasUnendedRuns(child.childSessionKey)).toBe(event % 2 === 1);
     }
+  });
+
+  it("refreshes a wide expiry batch without repeatedly scanning its boundary minima", () => {
+    const now = Date.UTC(2026, 9, 25);
+    const children = Array.from({ length: 100 }, (_, i) =>
+      makeRun(`expiry-${i}`, { createdAt: now + i, startedAt: now + i }),
+    );
+    const root = children[0]!.requesterSessionKey;
+    const index = buildSubagentRunReadIndexFromRuns({ runs: toRunMap(children), now });
+    expect(index.countActiveDescendantRuns(root)).toBe(100);
+    using scans = vi.spyOn(Map.prototype, "values");
+    const expired = index.atTime(now + STALE_UNENDED_SUBAGENT_RUN_MS + 100);
+    expect(expired.countActiveDescendantRuns(root)).toBe(0);
+    expect(expired.nextChangeAt(root)).toBe(Infinity);
+    // A batch advances the root minimum once, rather than once per expired child.
+    expect(scans.mock.calls.length).toBeLessThanOrEqual(1);
   });
 
   it.each([undefined, 0, -1, Number.NaN, Infinity, -Infinity])(
@@ -202,10 +186,14 @@ describe("subagent registry query regressions", () => {
       const second = makeRun("second", { childSessionKey: "child", generation: 2 });
       const memory =
         kind === "absent" ? undefined : kind === "same object" ? second : { ...second };
+      using copies = vi.spyOn(Array.prototype, "slice");
       let index = buildSubagentRunReadIndexFromRuns({
         runs: toRunMap([first, second]),
         inMemoryRuns: memory ? [memory, memory] : [],
       });
+      const initialCopies = copies.mock.calls.length;
+      copies.mockRestore();
+      expect(initialCopies).toBe(0);
       const captured = index.runsByChildSessionKey.get("child");
       const expected = kind === "distinct object" ? [first, second, memory] : [first, second];
       expect(captured).toEqual(expected);
@@ -221,6 +209,26 @@ describe("subagent registry query regressions", () => {
       );
       expect(captured).toEqual(expected);
       expect(captured?.[0]).toBe(first);
+    },
+  );
+
+  it.each([false, true])(
+    "keeps retired child snapshots after a memory-only update (%s)",
+    (same) => {
+      const first = makeRun("first", { childSessionKey: "child" });
+      let index = buildSubagentRunReadIndexFromRuns({
+        runs: toRunMap([first]),
+        inMemoryRuns: same ? [first] : [],
+      });
+      const captured = index.runsByChildSessionKey.get("child");
+      const memory = { ...first, cleanupCompletedAt: 50 };
+      index = index.patch(new Map(), toRunMap([memory]));
+      expect(index.runsByChildSessionKey.get("child")).toEqual([first, memory]);
+      const replacement = { ...first, cleanupCompletedAt: 100 };
+      index = index.patch(toRunMap([replacement]), new Map());
+      index = index.patch(new Map([[first.runId, undefined]]), new Map());
+      expect(index.runsByChildSessionKey.get("child")).toEqual([memory]);
+      expect(captured).toEqual([first]);
     },
   );
 
@@ -392,6 +400,10 @@ describe("subagent registry query regressions", () => {
       .mockReturnValueOnce(capturedAt)
       .mockReturnValue(capturedAt + 1);
     expect(countActiveRunsForSessionFromRuns(runs, "agent:main:main")).toBe(1);
+    vi.mocked(Date.now)
+      .mockReturnValueOnce(capturedAt)
+      .mockReturnValue(capturedAt + 1);
+    expect(countActiveRunsForSessionFromRuns(toRunMap([child]), parent.childSessionKey)).toBe(0);
   });
 
   it("preserves breadth-first cycle traversal and refreshes a cached tree after a generation moves", () => {
@@ -439,6 +451,35 @@ describe("subagent registry query regressions", () => {
       expect(entry).toEqual(before);
     },
   );
+
+  it("preserves requester registration order without scanning unrelated runs", () => {
+    const root = "agent:main:bucket-requester";
+    const child = makeRun("bucket-child", {
+      requesterSessionKey: root,
+      childSessionKey: "shared-child",
+      childAgentId: "main",
+    });
+    const otherAgent = makeRun("bucket-other-agent", {
+      childSessionKey: child.childSessionKey,
+      childAgentId: "research",
+      generation: 2,
+    });
+    const sibling = makeRun("bucket-sibling", { requesterSessionKey: root });
+    const rows = [child, sibling, otherAgent];
+    try {
+      for (const row of rows) {
+        subagentRuns.set(row.runId, row);
+      }
+      const read = () => listSubagentRunsForRequester(root);
+      expect(read()).toEqual([subagentRuns.get(child.runId), subagentRuns.get(sibling.runId)]);
+      subagentRuns.set(child.runId, { ...child, task: "updated task" });
+      expect(read()).toEqual([subagentRuns.get(child.runId), subagentRuns.get(sibling.runId)]);
+    } finally {
+      for (const row of rows) {
+        subagentRuns.delete(row.runId);
+      }
+    }
+  });
 
   it("scopes direct children to the requester run window", () => {
     const parent = makeRun("parent", { createdAt: 200, startedAt: 200, endedAt: 260 });

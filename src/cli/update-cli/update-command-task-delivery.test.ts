@@ -98,7 +98,9 @@ function expectUnadmitted(f: ReturnType<typeof seededOrphans>) {
 it("keeps repairable task-delivery state unchanged during update preview", async () => {
   const f = seededOrphans();
   await expect(
-    admitUpdateCommandRun({ opts: { dryRun: true }, root: f.root }).then(() => "admitted"),
+    admitUpdateCommandRun({ env: process.env, opts: { dryRun: true }, root: f.root }).then(
+      () => "admitted",
+    ),
   ).rejects.toThrow(/repairable[\s\S]*openclaw doctor --fix/iu);
   expectUnadmitted(f);
   expect(recoveryDirectories(f.filename)).toEqual([]);
@@ -106,7 +108,7 @@ it("keeps repairable task-delivery state unchanged during update preview", async
 
 it("admits cascade-owned task-delivery orphans with preservation and a durable recovery record", async () => {
   const f = seededOrphans();
-  const run = await admitUpdateCommandRun({ opts: {}, root: f.root });
+  const run = await admitUpdateCommandRun({ env: process.env, opts: {}, root: f.root });
   const directories = recoveryDirectories(f.filename);
   expect(directories).toHaveLength(1);
   const directory = path.join(path.dirname(f.filename), directories[0]!);

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -21,6 +22,8 @@ type BuildPreparedModelCatalogSnapshot =
 type CreateStaticCatalogResolver =
   typeof import("./embedded-agent-runner/model.static-catalog.js").createBundledStaticCatalogModelResolver;
 type StaticCatalogResolver = ReturnType<CreateStaticCatalogResolver>;
+type PrepareStaticCatalog =
+  typeof import("./models-config.providers.implicit.js").prepareImplicitProviderStaticCatalog;
 
 const materializationChanges = vi.hoisted<{
   onChange?: (event: { agentDir?: string; affectsInheritedStores: boolean }) => void;
@@ -28,11 +31,14 @@ const materializationChanges = vi.hoisted<{
 const { makeEmptyPluginMetadataOwners } = await vi.hoisted(
   () => import("../plugins/plugin-metadata-empty.test-support.js"),
 );
+const { createIndexFixture } = await vi.hoisted(
+  () => import("../plugins/test-helpers/installed-plugin-index-fixture.js"),
+);
 const preparedModelRuntimeMocks = vi.hoisted(() => ({
   pluginMetadataSnapshot: {
     plugins: [],
     pluginIds: [],
-    index: { plugins: [] },
+    index: createIndexFixture({}),
     get registryIndex() {
       return this.index;
     },
@@ -82,7 +88,7 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
     modelsJsonContents: null,
     pluginCatalogs: [],
   })),
-  prepareStaticCatalog: vi.fn(async (..._args: unknown[]) => ({ entries: [] })),
+  prepareStaticCatalog: vi.fn<PrepareStaticCatalog>(async () => ({ entries: [] })),
   runPreparedModelCatalogWorker: vi.fn(
     async (_providerIds?: readonly string[]): Promise<ModelCatalogSnapshot> => ({
       entries: [],
@@ -161,11 +167,8 @@ vi.mock("./prepared-model-catalog-worker.js", async (importOriginal) => ({
   },
 }));
 
-vi.mock("./model-catalog.js", async () => ({
-  findModelCatalogEntry: (await import("./model-catalog-lookup.js")).findModelCatalogEntry,
-  loadManifestModelCatalog: (
-    await vi.importActual<typeof import("./model-catalog.js")>("./model-catalog.js")
-  ).loadManifestModelCatalog,
+vi.mock("./model-catalog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./model-catalog.js")>()),
   buildPreparedModelCatalogSnapshot: (...args: Parameters<BuildPreparedModelCatalogSnapshot>) =>
     preparedModelRuntimeMocks.buildPreparedModelCatalogSnapshot(...args),
 }));
@@ -388,15 +391,23 @@ vi.mock("./model-discovery-context.js", async (importOriginal) => {
   return { resolveModelWorkspaceDir, resolveModelPluginMetadataSnapshot: () => undefined };
 });
 
-vi.mock("./models-config.js", () => ({
-  ensureOpenClawModelsJson: (...args: unknown[]) =>
+// Lifecycle fixtures own persistence timing; real database admission is covered by Gateway tests.
+vi.mock("../state/openclaw-agent-execution.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/openclaw-agent-execution.js")>()),
+  prepareOpenClawAgentDatabaseExecution: async () => {},
+}));
+
+// mock-isolation: Lifecycle fixtures control model planning/publication timing and failures without initializing real persistence state.
+vi.mock("./models-config.core.js", () => ({
+  ensureOpenClawModelsJsonWithInput: (...args: unknown[]) =>
     preparedModelRuntimeMocks.ensureOpenClawModelsJson(...args),
-  planOpenClawModelsJsonSource: (...args: unknown[]) =>
+  planOpenClawModelsJsonSourceWithInput: (...args: unknown[]) =>
     preparedModelRuntimeMocks.planOpenClawModelsJsonSource(...args),
 }));
 
+// mock-isolation: lifecycle fixtures supply prepared catalog facts without loading provider discovery.
 vi.mock("./models-config.providers.implicit.js", () => ({
-  prepareImplicitProviderStaticCatalog: (...args: unknown[]) =>
+  prepareImplicitProviderStaticCatalog: (...args: Parameters<PrepareStaticCatalog>) =>
     preparedModelRuntimeMocks.prepareStaticCatalog(...args),
 }));
 
@@ -446,6 +457,28 @@ export function usePreparedModelRuntimeHarness(
   });
   return {
     mocks: preparedModelRuntimeMocks,
+    holdCatalogWrite(this: void) {
+      const started = createDeferred();
+      const result = createDeferred<Record<string, never>>();
+      const pending: Promise<unknown>[] = [];
+      const release = () => result.resolve({});
+      preparedModelRuntimeMocks.ensureOpenClawModelsJson.mockImplementationOnce(async () => {
+        started.resolve();
+        return await result.promise;
+      });
+      return {
+        started: started.promise,
+        release,
+        track<T>(promise: Promise<T>) {
+          pending.push(promise);
+          return promise;
+        },
+        async [Symbol.asyncDispose]() {
+          release();
+          await Promise.allSettled(pending);
+        },
+      };
+    },
     agentInput<Config extends OpenClawConfig>(agentId: string, config: Config) {
       return {
         agentId,

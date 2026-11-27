@@ -1,36 +1,58 @@
 // Defers scheduler startup until cron is touched by runtime or API handlers.
 import { DEFAULT_CRON_ENABLED } from "../config/cron-limits.js";
+import {
+  getGatewayServiceInstallation,
+  withGatewayServiceInstallation,
+} from "../infra/gateway-service-installation-context.js";
 import { captureSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";
 import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { createLazyPromiseLoader, createLazyRuntimeMethodBinder } from "../shared/lazy-runtime.js";
+import { measureGatewayCloseStep } from "./restart-trace.js";
 import type {
   GatewayCronServiceContract,
   GatewayCronExitWatcherHandoff,
   GatewayCronState,
 } from "./server-cron-contract.js";
 import type { buildGatewayCronService } from "./server-cron.js";
+import { expectSessionAutomationSource } from "./session-automation-index.js";
 
 /** Creates a cron state proxy that imports the real cron service on first use. */
 export function createLazyGatewayCronState(
   params: Parameters<typeof buildGatewayCronService>[0],
 ): GatewayCronState {
   const spawnBroker = getSpawnBroker();
+  const installationContext = { installation: getGatewayServiceInstallation() };
   const runWithReadOnlyWorkers = captureSqliteReadOnlyWorkerScope();
   const env = params.env ?? process.env;
   const storePath = params.storePath;
   const cronEnabled =
     env.OPENCLAW_SKIP_CRON !== "1" && (params.cfg.cron?.enabled ?? DEFAULT_CRON_ENABLED);
+  if (cronEnabled) {
+    // Session maintenance defers archiving until these jobs can protect their parents.
+    expectSessionAutomationSource();
+  }
   let loaded: GatewayCronState | null = null;
   let stopped = false;
+  let closed = false;
   let lifecycleGeneration = 0;
   let exitWatcherHandoff: GatewayCronExitWatcherHandoff | undefined;
   let exitWatcherHandoffStop: Promise<void> | undefined;
   let schedulingPaused = false;
+  const assertOpen = () => {
+    if (closed) {
+      throw new Error("Cron service is closed");
+    }
+  };
   const cronStateLoader = createLazyPromiseLoader(
     () =>
       import("./server-cron.js").then(({ buildGatewayCronService }) => {
+        assertOpen();
         loaded = runWithSpawnBroker(spawnBroker, () =>
-          runWithReadOnlyWorkers(() => buildGatewayCronService(params)),
+          runWithReadOnlyWorkers(() =>
+            withGatewayServiceInstallation(installationContext, () =>
+              buildGatewayCronService(params),
+            ),
+          ),
         );
         if (schedulingPaused) {
           loaded.cron.pauseScheduling();
@@ -41,6 +63,7 @@ export function createLazyGatewayCronState(
   );
 
   const load = async (): Promise<GatewayCronState> => {
+    assertOpen();
     if (loaded) {
       return loaded;
     }
@@ -48,8 +71,21 @@ export function createLazyGatewayCronState(
     // scheduler instance is built for a Gateway process.
     return await cronStateLoader.load();
   };
-  const bindCron = createLazyRuntimeMethodBinder(load);
-  const bindStartedCron = createLazyRuntimeMethodBinder(async () => {
+  // Installation facts belong to this service, including calls from detached transports.
+  // Do not capture request authority or the rest of the caller's async context.
+  const runWithInstallation = <T>(run: () => T): T =>
+    withGatewayServiceInstallation(installationContext, run);
+  const bindOwnedCron = (loadState: () => Promise<GatewayCronState>) => {
+    const bind = createLazyRuntimeMethodBinder(loadState);
+    return <TArgs extends unknown[], TResult>(
+      select: (state: GatewayCronState) => (...args: TArgs) => TResult,
+    ) => {
+      const method = bind(select);
+      return (...args: TArgs) => runWithInstallation(() => method(...args));
+    };
+  };
+  const bindCron = bindOwnedCron(load);
+  const bindStartedCron = bindOwnedCron(async () => {
     const resolved = await load();
     // Startup recovery must finish before a new receipt can become running.
     if (!stopped) {
@@ -58,27 +94,29 @@ export function createLazyGatewayCronState(
     return resolved;
   });
 
-  const stopResolvedCron = async (resolved: GatewayCronState): Promise<void> => {
-    if (exitWatcherHandoff) {
-      // A cancelled startup must join the exact prepared owner's drain, not
-      // prepare or stop another owner after its watchers have been adopted.
-      await (exitWatcherHandoffStop ??= exitWatcherHandoff.stopOwner());
-    } else if (resolved.cron.stopAndDrain) {
-      await resolved.cron.stopAndDrain();
-    } else {
-      resolved.cron.stop();
-      await resolved.stopStreamWatchers();
-    }
-  };
+  const stopResolvedCron = async (resolved: GatewayCronState): Promise<void> =>
+    runWithInstallation(async () => {
+      if (exitWatcherHandoff) {
+        // A cancelled startup must join the exact prepared owner's drain, not
+        // prepare or stop another owner after its watchers have been adopted.
+        await (exitWatcherHandoffStop ??= exitWatcherHandoff.stopOwner());
+      } else if (resolved.cron.stopAndDrain) {
+        await resolved.cron.stopAndDrain();
+      } else {
+        resolved.cron.stop();
+        await resolved.stopStreamWatchers();
+      }
+    });
 
   const stopLoadedCronAndDrain = async (handoff?: GatewayCronExitWatcherHandoff): Promise<void> => {
+    closed = true;
     stopped = true;
     lifecycleGeneration += 1;
     exitWatcherHandoff ??= handoff;
-    const loading = cronStateLoader.peek();
-    const resolved = loaded ?? (loading ? await loading : null);
+    // An import owns no scheduler resources; final close prevents its late construction.
+    const resolved = loaded;
     if (resolved) {
-      await stopResolvedCron(resolved);
+      await measureGatewayCloseStep("restart.close.cron-owner", () => stopResolvedCron(resolved));
     }
   };
 
@@ -87,14 +125,14 @@ export function createLazyGatewayCronState(
       stopped = false;
       const resolved = await load();
       if (!stopped) {
-        await resolved.cron.start();
+        await runWithInstallation(() => resolved.cron.start());
       }
     },
     stop() {
       stopped = true;
       lifecycleGeneration += 1;
       if (loaded) {
-        loaded.cron.stop();
+        runWithInstallation(() => loaded?.cron.stop());
         return;
       }
       const loading = cronStateLoader.peek();
@@ -106,7 +144,7 @@ export function createLazyGatewayCronState(
             if (!stopped) {
               return;
             }
-            resolved.cron.stop();
+            runWithInstallation(() => resolved.cron.stop());
           })
           .catch(() => {
             // Failed loading created no service to stop; its caller owns the error.
@@ -119,12 +157,12 @@ export function createLazyGatewayCronState(
     pauseScheduling() {
       schedulingPaused = true;
       if (loaded) {
-        loaded.cron.pauseScheduling();
+        runWithInstallation(() => loaded?.cron.pauseScheduling());
       }
     },
     resumeScheduling() {
       schedulingPaused = false;
-      loaded?.cron.resumeScheduling();
+      runWithInstallation(() => loaded?.cron.resumeScheduling());
     },
     getSuspensionBlockerCount() {
       return loaded?.cron.getSuspensionBlockerCount?.() ?? 0;
@@ -138,7 +176,10 @@ export function createLazyGatewayCronState(
     remove: bindCron((state) => state.cron.remove.bind(state.cron)),
     removeStaleJobFamily: bindCron((state) => state.cron.removeStaleJobFamily.bind(state.cron)),
     async removeAgentJobsTransactional(agentId, commit) {
-      return await (await load()).cron.removeAgentJobsTransactional(agentId, commit);
+      const current = await load();
+      return await runWithInstallation(() =>
+        current.cron.removeAgentJobsTransactional(agentId, commit),
+      );
     },
     quiesceJobs: bindCron((state) => state.cron.quiesceJobs.bind(state.cron)),
     run: bindStartedCron((state) => state.cron.run.bind(state.cron)),
@@ -164,7 +205,7 @@ export function createLazyGatewayCronState(
       options?.assertCurrent?.();
       const current = await load();
       options?.assertCurrent?.();
-      return await current.cron.readScratch(id, options);
+      return await runWithInstallation(() => current.cron.readScratch(id, options));
     },
     writeScratch: bindCron((state) => state.cron.writeScratch.bind(state.cron)),
     getDefaultAgentId() {
@@ -174,13 +215,18 @@ export function createLazyGatewayCronState(
       await load();
     },
     async wake(opts) {
+      if (closed) {
+        return { ok: false };
+      }
       if (!loaded) {
         // A wake should kick off lazy loading but cannot claim success before
         // cron exists and knows whether the target job is wakeable.
-        void load();
+        // Warm-up has no accepted wake; an awaited API call reports load failures.
+        void load().catch(() => {});
         return { ok: false };
       }
-      return loaded.cron.wake(opts);
+      const current = loaded;
+      return runWithInstallation(() => current.cron.wake(opts));
     },
   };
 
@@ -204,14 +250,17 @@ export function createLazyGatewayCronState(
       if (!defer) {
         throw new Error("Scheduled Hook wake admission is unavailable; restart the Gateway");
       }
-      return await defer({ ...opts, commitGuard });
+      return await runWithInstallation(() => defer({ ...opts, commitGuard }));
     },
     storePath,
     cronEnabled,
     prepareExitWatcherHandoff: async (): Promise<GatewayCronExitWatcherHandoff | undefined> => {
+      if (closed) {
+        return undefined;
+      }
       const loading = cronStateLoader.peek();
       const resolved = loaded ?? (loading ? await loading : null);
-      const handoff = await resolved?.prepareExitWatcherHandoff?.();
+      const handoff = await runWithInstallation(() => resolved?.prepareExitWatcherHandoff?.());
       if (!handoff) {
         return undefined;
       }
@@ -227,7 +276,7 @@ export function createLazyGatewayCronState(
     reconcileStreamWatchers: bindCron((state) => state.reconcileStreamWatchers.bind(state)),
     async stopStreamWatchers() {
       // Nothing to stop before the heavy cron service is built.
-      await loaded?.stopStreamWatchers();
+      await runWithInstallation(() => loaded?.stopStreamWatchers());
     },
   };
 }

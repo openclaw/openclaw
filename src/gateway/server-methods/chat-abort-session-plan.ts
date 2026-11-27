@@ -25,6 +25,10 @@ import {
   type SessionStopExecution,
 } from "../../sessions/session-controller.stop.js";
 import {
+  isExplicitRunStopSource,
+  notifySessionRunStopped,
+} from "../../sessions/session-run-stopped.js";
+import {
   waitForChatAbortAcknowledgment,
   waitForChatAbortTerminalPersistence,
 } from "../chat-abort-lifecycle-internal.js";
@@ -144,7 +148,8 @@ export function prepareChatSessionAbort(
   const hasUnauthorizedProtectedOwner =
     hasUnauthorizedProtectedActiveRuns || queuedPlan.hasUnauthorizedProtectedRuns;
   const hasUnauthorizedLifecycleOwner = isLifecycleAbort && hasUnauthorizedProtectedOwner;
-  const canRunLifecycleCleanup = !hasUnauthorizedOwner && !hasProtectedLifecycleRuns;
+  const canRunLifecycleCleanup =
+    !params.requester.participationOnly && !hasUnauthorizedOwner && !hasProtectedLifecycleRuns;
   // Keep ordinary chat.abort's admin worker behavior; only the injected broad
   // lifecycle path must preserve hidden or explicitly preserved Gateway runs.
   const canCancelWorkerSession = !isLifecycleAbort || !hasProtectedLifecycleRuns;
@@ -172,12 +177,14 @@ export function prepareChatSessionAbort(
       (input) =>
         input.target?.storeScope === storePath && matchesGateway(input) && includesSource(input),
     ),
-    operations: candidates.operations.filter(
-      (operation) =>
-        getSessionControllerEntryForOperation(operation).target?.storeScope === storePath &&
-        matchesGateway(operation) &&
-        (params.requiredSessionId === undefined || sessionKeys.includes(operation.key)),
-    ),
+    operations: params.requester.participationOnly
+      ? []
+      : candidates.operations.filter(
+          (operation) =>
+            getSessionControllerEntryForOperation(operation).target?.storeScope === storePath &&
+            matchesGateway(operation) &&
+            (params.requiredSessionId === undefined || sessionKeys.includes(operation.key)),
+        ),
     effects: canRunLifecycleCleanup
       ? candidates.effects.filter(
           (effect) =>
@@ -227,6 +234,20 @@ export function prepareChatSessionAbort(
       });
     }
   }
+
+  // Preview the identities this prepared Stop can cancel so an explicit-stop bridge can
+  // register suppression before the abort effect. The final result.runIds still records
+  // only what actually committed; these are the same selected identities.
+  const selectedRunIds = [
+    ...new Set([
+      ...capturedTargets.map(({ runId }) => runId),
+      ...[...controllerRuns.values()].map(({ runId }) => runId),
+      ...stopCapture.effects.flatMap((effect) => (effect.run?.runId ? [effect.run.runId] : [])),
+      ...(params.requester.isAdmin && canCancelWorkerSession
+        ? (workerCancellation?.runIds ?? [])
+        : []),
+    ]),
+  ];
 
   let workerCancellationPersistence: Promise<string[]> | undefined;
   let stopExecution: SessionStopExecution | undefined;
@@ -297,7 +318,11 @@ export function prepareChatSessionAbort(
             (adapter?.controlUiVisible === false ||
               (params.preserveSideRuns && adapter?.turnKind === "btw"))) ||
           !canRequesterAbortChatRun(
-            { ...getSessionControllerSourceIdentity(input), requester: adapter?.requester },
+            {
+              ...getSessionControllerSourceIdentity(input),
+              requester: adapter?.requester,
+              initiatingPersonalOperator: source?.adapter.initiatingPersonalOperator,
+            },
             params.requester,
           )
         ) {
@@ -361,16 +386,23 @@ export function prepareChatSessionAbort(
         }
       }
     };
-    const isCommandStop = ["channel-user", "client-session", "client-run"].includes(
-      params.stopSource,
-    );
+    const isCommandStop = isExplicitRunStopSource(params.stopSource);
     if (!params.hookContext && isCommandStop) {
       throw new Error(`Stop source ${params.stopSource} requires command hook context`);
+    }
+    // Accepted Stop with confirmed authority. The notification never precedes this gate, so a
+    // rejected Stop announces nothing.
+    if (params.announceRunStopped === true && isExplicitRunStopSource(params.stopSource)) {
+      notifySessionRunStopped({
+        source: params.stopSource,
+        sessions: [{ agentId: params.agentId, sessionKey: params.sessionKey }],
+        runIds: selectedRunIds,
+      });
     }
     const stopRequest = {
       capture: stopCapture,
       assertCurrent: params.assertCurrent,
-      reason: createChatAbortSignalReason(params.stopReason),
+      reason: createChatAbortSignalReason(params.stopReason, params.userInitiated),
       hookContext: params.hookContext,
       onCancelled,
       onEffectCancelled: (effect) => {
@@ -415,6 +447,7 @@ export function prepareChatSessionAbort(
     acceptsRequest,
     commands,
     sessionOrigin,
+    selectedRunIds,
     result,
     abort: abortAuthorizedRuns,
     async finish() {

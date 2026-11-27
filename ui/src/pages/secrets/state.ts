@@ -1,6 +1,7 @@
 import { ENV_SECRET_REF_ID_RE } from "../../../../src/config/types.secrets.js";
 import { isSensitiveEnvName } from "../../../../src/secrets/secret-env-name.js";
 import type { ApplicationContext } from "../../app/context.ts";
+import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
@@ -97,6 +98,18 @@ export class SecretsPageState {
 
   canCall(method: "secrets.store.list" | "secrets.store.set" | "secrets.store.delete") {
     return canCallGatewayMethod(this.context.gateway.snapshot, method, "operator.admin");
+  }
+
+  unavailableMessage() {
+    const snapshot = this.context.gateway.snapshot;
+    if (!snapshot.client || snapshot.phase !== "connected") {
+      return t("secretsStore.unavailableOffline");
+    }
+    return t(
+      hasOperatorAdminAccess(snapshot.hello?.auth ?? null)
+        ? "secretsStore.unavailableGateway"
+        : "secretsStore.unavailableAdmin",
+    );
   }
 
   ensureInitialData() {
@@ -281,8 +294,8 @@ export class SecretsPageState {
       !client ||
       !this.canCall("secrets.store.delete") ||
       !(await showConfirmDialog({
-        title: t("common.delete"),
-        message: t("secretsStore.confirmDelete", { name: entry.name }),
+        title: t("secretsStore.confirmDelete", { name: entry.name }),
+        message: t("secretsStore.confirmDeleteMessage"),
         confirmLabel: t("common.delete"),
         danger: true,
       }))

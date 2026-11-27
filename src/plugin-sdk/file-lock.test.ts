@@ -190,10 +190,10 @@ describe("acquireFileLock", () => {
     const opened: Awaited<ReturnType<typeof fs.open>>[] = [];
     vi.spyOn(fs, "open").mockImplementation(async (...args) => {
       const handle = await open(...args);
-      if (args[1] === "wx") {
+      vi.spyOn(handle, "writeFile").mockImplementation(async () => {
         opened.push(handle);
-        vi.spyOn(handle, "writeFile").mockRejectedValue(writeError);
-      }
+        throw writeError;
+      });
       return handle;
     });
 
@@ -207,6 +207,7 @@ describe("acquireFileLock", () => {
       await expect(handle.stat()).rejects.toMatchObject({ code: "EBADF" });
     }
     await missing(lockPath);
+    expect(await fs.readdir(tempDir)).toEqual([]);
   });
 
   it("reclaims a definitely stale retired lock sidecar", async () => {

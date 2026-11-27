@@ -9,17 +9,21 @@ import { prepareUpdateFailureReport } from "../../infra/update-failure-report-pr
 import { inspectUpdateRunAbandonment } from "../../infra/update-run-activity.js";
 import * as ledger from "../../infra/update-run-ledger.js";
 import { getUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
+import { isUpdateRepairRun } from "../../infra/update-run-record.js";
 import {
   ABANDONED_UPDATE_RUN_MS,
   UPDATE_RUN_HEARTBEAT_MS,
 } from "../../infra/update-run-timeouts.js";
-import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
+import { getLogger, resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { defaultRuntime } from "../../runtime.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import * as cliExit from "../one-shot-exit.js";
-import { withCliProcessScope } from "../runtime-cleanup-scope.js";
+import { withCliCommandCleanup, withCliProcessScope } from "../runtime-cleanup-scope.js";
+import { closeCliResources } from "../runtime-cleanup.js";
+import { exitAfterSignalExitBarriers, waitForCliSignalExit } from "../signal-exit-barrier.js";
 import { expectMessages } from "./update-boundary.test-support.js";
 import { resultFixture } from "./update-command-fixtures.test-support.js";
 import { UpdateFinalizationLifecycle } from "./update-finalization-lifecycle.js";
@@ -77,23 +81,194 @@ it("reports standalone repair as repairing before Doctor maintenance", () => {
     phase: "repairing",
     status: "running",
     target: { kind: "package", version: "2026.10.5" },
+    after: { version: "2026.10.5" },
+    steps: expect.arrayContaining([
+      expect.objectContaining({ step: "finalize:package-rollback-not-needed", status: "skipped" }),
+    ]),
   });
 });
 
+it.each([
+  ["failed", "none"],
+  ["succeeded", "none"],
+  ["failed", "observation"],
+  ["succeeded", "observation"],
+  ["failed", "receipt"],
+] as const)(
+  "links standalone repair only when the newest prior update %s (settlement: %s)",
+  (status, settlement) => {
+    const prior = ledger.createUpdateRun({
+      trigger: "cli",
+      target: { kind: "package", version: "2026.11.5" },
+    });
+    ledger.recordUpdateRunPhase(prior.runId, "staging");
+    ledger.recordUpdateRunPhase(prior.runId, "activating", {
+      step: {
+        step: "finalize:doctor",
+        status: "failed",
+        detail: "SQLite migration publication could not be verified: database is locked",
+      },
+    });
+    let latest = prior;
+    if (status === "succeeded") {
+      ledger.finishUpdateRun(prior.runId, { status: "failed", reason: "post-update-failed" });
+      vi.advanceTimersByTime(1);
+      latest = ledger.createUpdateRun({ trigger: "cli" });
+      ledger.recordUpdateRunPhase(latest.runId, "staging");
+      ledger.recordUpdateRunPhase(latest.runId, "activating");
+    }
+    if (settlement === "observation") {
+      ledger.recordUpdateRunStep(latest.runId, {
+        step: "reconcile:settle",
+        status: "completed",
+        endedAtMs: Date.now(),
+        detail: "Interrupted completion observed.",
+      });
+    }
+    ledger.finishUpdateRun(latest.runId, {
+      status,
+      reason: status === "failed" ? "post-update-failed" : undefined,
+    });
+    if (settlement === "receipt") {
+      vi.advanceTimersByTime(1);
+      ledger.createUpdateRun({
+        trigger: "cli",
+        settlement: { reason: "settled", detail: "Retained recovery settled." },
+      });
+    }
+
+    vi.advanceTimersByTime(1);
+    const lifecycle = new UpdateFinalizationLifecycle(false, undefined, () => {});
+    const repair = getUpdateRun(lifecycle.attachLedger(true))!;
+    const link = repair.steps.find((step) => step.step === "finalize:repaired-run");
+    if (status === "succeeded") {
+      expect(link).toBeUndefined();
+    } else {
+      expect(link).toMatchObject({
+        status: "completed",
+        endedAtMs: expect.any(Number),
+        detail: `Update ${prior.runId} to 2026.11.5 failed at activating: post-update-failed. finalize:doctor: SQLite migration publication could not be verified: database is locked`,
+      });
+    }
+  },
+);
+
+it.each([
+  ["skipped", 1, true],
+  ["failed", 1, true],
+  ["succeeded", 1, true],
+  ["skipped", 9, true],
+  ["failed", 1, false],
+] as const)(
+  "selects the repair retry's prior update after %s standalone repair (%i attempts, install kind recorded: %s)",
+  (status, attempts, recordInstallKind) => {
+    const prior = ledger.createUpdateRun({ trigger: "cli" });
+    ledger.finishUpdateRun(prior.runId, { status: "failed", reason: "post-update-failed" });
+
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      vi.advanceTimersByTime(1);
+      const lifecycle = new UpdateFinalizationLifecycle(false, undefined, () => {});
+      const runId = lifecycle.attachLedger(true);
+      if (recordInstallKind) {
+        lifecycle.recordInstallKind("package");
+      }
+      if (status === "failed") {
+        lifecycle.fail();
+      } else {
+        lifecycle.complete(0, status === "skipped" ? "Run openclaw update repair." : undefined);
+      }
+      expect.soft(isUpdateRepairRun(getUpdateRun(runId)!)).toBe(true);
+    }
+
+    vi.advanceTimersByTime(1);
+    const retry = new UpdateFinalizationLifecycle(false, undefined, () => {});
+    const repair = getUpdateRun(retry.attachLedger(true))!;
+    const link = repair.steps.find((step) => step.step === "finalize:repaired-run");
+    if (status === "succeeded") {
+      expect(link).toBeUndefined();
+    } else {
+      expect(link).toMatchObject({
+        status: "completed",
+        detail: `Update ${prior.runId} failed at requested: post-update-failed.`,
+      });
+    }
+  },
+);
+
 it("writes successful finalization progress to stderr and failures as errors", async () => {
+  const info = vi.spyOn(getLogger(), "info");
+  const warn = vi.spyOn(getLogger(), "warn");
+  const error = vi.spyOn(getLogger(), "error");
   const { lifecycle } = finalization(5_000, false, false);
   await lifecycle.run("doctor", async () => undefined);
-  expectMessages(stderrWrite, '"status":"in_progress"', '"status":"completed"');
+  expectMessages(stderrWrite, "finalize:doctor: in_progress", "finalize:doctor: completed");
+  expect(info).toHaveBeenCalledWith(
+    expect.objectContaining({ step: "finalize:doctor", status: "completed" }),
+    "[update finalize] finalize:doctor: completed",
+  );
   expect(defaultRuntime.error).not.toHaveBeenCalled();
-  lifecycle.recordWarnings(["A plugin update was deferred."]);
-  expectMessages(console.warn, '"step":"warning:finalize:doctor:0"');
+  const warning = "A plugin update was deferred. password=fixture-private-value";
+  lifecycle.recordWarnings([warning]);
+  expect(warn).toHaveBeenCalledWith(
+    expect.objectContaining({
+      step: "warning:finalize:doctor:0",
+      detail: warning,
+    }),
+    expect.stringContaining("A plugin update was deferred."),
+  );
+  expect(stderrWrite.mock.calls.flat().join("\n")).not.toContain("fixture-private-value");
   await expect(
     lifecycle.run("plugins", async () => {
       throw new Error("fixture failure");
     }),
   ).rejects.toThrow("fixture failure");
-  expectMessages(defaultRuntime.error, '"status":"failed"');
+  expect(error).toHaveBeenCalledWith(
+    expect.objectContaining({ step: "finalize:plugins", status: "failed" }),
+    expect.stringContaining("fixture failure"),
+  );
+  expectMessages(stderrWrite, "finalize:plugins: failed");
   lifecycle.fail();
+});
+
+it("summarizes parent-held plugin deferrals once while preserving actionable warnings and history", () => {
+  const info = vi.spyOn(getLogger(), "info");
+  const warn = vi.spyOn(getLogger(), "warn");
+  const { lifecycle, read } = finalization(5_000);
+  const deferred = ["alpha", "beta"].map(
+    (pluginId) =>
+      `Plugin "${pluginId}" data/settings upgrade is unfinished: Package convergence must wait until the updating parent releases its install records. Your existing data and settings have been kept. Let the current update or repair finish.`,
+  );
+  const security =
+    "core/doctor/security: WARNING: openclaw.json contains plaintext secret-bearing config fields.";
+  const unresolved =
+    'Plugin "gamma" data/settings upgrade is unfinished: The configured plugin package is missing or has not converged.';
+  const warnings = [...deferred, security, unresolved];
+
+  lifecycle.recordWarnings(warnings);
+  lifecycle.recordWarnings(warnings);
+
+  expect(info).toHaveBeenCalledExactlyOnceWith(
+    { count: 2 },
+    "[update finalize] 2 plugins will converge after the parent releases install records.",
+  );
+  expectMessages(stderrWrite, "2 plugins will converge after the parent releases install records.");
+  expect(warn.mock.calls.map(([step]) => step)).toEqual(
+    [security, unresolved, security, unresolved].map((detail) =>
+      expect.objectContaining({ detail }),
+    ),
+  );
+  expect(stderrWrite.mock.calls.flat().join("\n")).not.toContain("Package convergence must wait");
+  expect(
+    read()
+      .steps.filter(({ step }) => step.startsWith("warning:"))
+      .map(({ detail }) => detail),
+  ).toEqual(warnings);
+
+  lifecycle.recordWarnings([security, unresolved]);
+  expect(info).toHaveBeenCalledTimes(1);
+  expect(read().steps).toContainEqual(
+    expect.objectContaining({ step: "warning:finalize:doctor:3", status: "skipped" }),
+  );
 });
 
 it("preserves Doctor duration and section diagnostics in run history", () => {
@@ -137,7 +312,7 @@ it("records a nested Doctor refusal before reporting standalone finalization", a
     }),
   ).rejects.toThrow("Doctor result recording failed");
   lifecycle.fail();
-  expect(vi.mocked(defaultRuntime.error).mock.calls.flat().join("\n")).not.toContain(privatePath);
+  expect(stderrWrite.mock.calls.flat().join("\n")).not.toContain(privatePath);
   closeOpenClawStateDatabaseForTest();
   const run = read();
   expect(run).toMatchObject({
@@ -234,6 +409,80 @@ it("records the plugin failure reason without finishing an inherited run", async
   });
   ledger.finishUpdateRun(inherited.runId, { status: "failed", reason: "parent-failure" });
   expect(getUpdateRun(inherited.runId)?.reason).toBe("parent-failure");
+});
+
+it("records the accepted CLI stop cause after admitted plugin work settles", async () => {
+  const previousExitCode = process.exitCode;
+  const { lifecycle, read } = finalization(5_000);
+  const entered = createDeferredCore<AbortSignal>();
+  const settle = createDeferredCore();
+  const released = vi.fn(async () => {});
+  const running = withCliProcessScope(() =>
+    withCliCommandCleanup(false, async (cleanup) => {
+      const resources = cleanup!.pluginResources!;
+      resources.adopt({ release: released });
+      try {
+        await resources.run(() =>
+          lifecycle.run("plugins", async () => {
+            const signal = getAsyncWorkSignal()!;
+            expect(signal).toBeDefined();
+            entered.resolve(signal);
+            await settle.promise;
+            signal.throwIfAborted();
+          }),
+        );
+      } finally {
+        lifecycle.fail();
+        await closeCliResources(cleanup);
+        await resources.release();
+      }
+    }),
+  ).catch((error: unknown) => error);
+  try {
+    const signal = await Promise.race([
+      entered.promise,
+      running.then((error) => {
+        throw error;
+      }),
+    ]);
+    exitAfterSignalExitBarriers(7, "unhandled rejection");
+    exitAfterSignalExitBarriers(1, "uncaught exception");
+    expect(signal.reason).toMatchObject({
+      name: "AbortError",
+      code: 20,
+      message: "CLI stopping (unhandled rejection)",
+    });
+    expect(read().steps).toContainEqual(
+      expect.objectContaining({ step: "finalize:plugins", status: "in_progress" }),
+    );
+    expect(released).not.toHaveBeenCalled();
+    settle.resolve();
+    expect(await running).toBe(signal.reason);
+    await expect(waitForCliSignalExit()).resolves.toBe(7);
+    expect(released).toHaveBeenCalledOnce();
+    expect(read()).toMatchObject({
+      status: "failed",
+      steps: expect.arrayContaining([
+        expect.objectContaining({
+          step: "finalize:plugins",
+          status: "failed",
+          failureFacts: [
+            {
+              check: "plugins",
+              code: "20",
+              message: "CLI stopping (unhandled rejection)",
+            },
+            { check: "update", code: "update-failed" },
+          ],
+        }),
+      ]),
+    });
+  } finally {
+    settle.resolve();
+    await running;
+    await waitForCliSignalExit();
+    process.exitCode = previousExitCode;
+  }
 });
 
 it("records a returned failed outcome without requiring an exception", async () => {

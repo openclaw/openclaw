@@ -291,7 +291,7 @@ async function candidateInputs(ctx: ReleaseContext): Promise<Map<string, string>
     "normal",
     "--release-profile",
     "stable",
-    "--full-release-run",
+    "--full-release-validation-run-id",
     requireValue(state.validate.runId, "Full Release Validation run"),
     "--publish-workflow-ref",
     requireValue(state.validate.toolingTag, "tooling tag"),
@@ -416,7 +416,6 @@ export async function publish(ctx: ReleaseContext): Promise<void> {
         ctx.log("publish", command);
       }
     }
-    inputs.set("wait_for_clawhub", "false");
     // flip-github activates the release itself; keep Docker off the activation gate.
     inputs.delete("finalize_release_before_docker");
     const dispatched = await dispatchReleaseWorkflow(ctx, {

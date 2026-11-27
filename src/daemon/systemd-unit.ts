@@ -11,8 +11,12 @@ export function preserveSystemdUnitPolicy(
   generated: string,
   previous: string,
   keys: readonly string[] = [],
+  options: { preserveExecDelegation?: boolean } = {},
 ): string {
-  if (!keys.length) {
+  const policyKeys = options.preserveExecDelegation
+    ? [...keys, "Service.Delegate", "Service.DelegateSubgroup"]
+    : keys;
+  if (!policyKeys.length) {
     return generated;
   }
   const keyedLines = (content: string) => {
@@ -27,7 +31,9 @@ export function preserveSystemdUnitPolicy(
     });
   };
   const installed = keyedLines(previous);
-  const retained = new Map(keys.map((key) => [key, installed.filter((line) => line.key === key)]));
+  const retained = new Map(
+    policyKeys.map((key) => [key, installed.filter((line) => line.key === key)]),
+  );
   const copied = new Set<string>();
   return `${keyedLines(generated)
     .flatMap(({ line, key }) => {
@@ -36,6 +42,10 @@ export function preserveSystemdUnitPolicy(
         return [line];
       }
       if (!original.length) {
+        // Absence is the existing operator policy; updates cannot opt into delegation.
+        if (options.preserveExecDelegation && key.startsWith("Service.Delegate")) {
+          return [];
+        }
         throw new Error(`Custom systemd policy ${key} disappeared before publication.`);
       }
       if (copied.has(key)) {
@@ -65,12 +75,18 @@ export const SYSTEMD_FIXED_POLICY: Readonly<Record<string, string>> = {
   "Service.OOMPolicy": "continue",
   // Signal only the Gateway during drain; clean up children after it exits.
   "Service.KillMode": "mixed",
+  // systemd 254+ places the launcher in a leaf before it can spawn descendants.
+  "Service.Delegate": "yes",
+  "Service.DelegateSubgroup": "gateway",
   "Install.WantedBy": "default.target",
 };
 
-function renderFixedPolicy(section: string): string[] {
+function renderFixedPolicy(section: string, nodeService = false): string[] {
   return Object.entries(SYSTEMD_FIXED_POLICY)
-    .filter(([key]) => key.startsWith(`${section}.`))
+    .filter(
+      ([key]) =>
+        key.startsWith(`${section}.`) && !(nodeService && key.startsWith("Service.Delegate")),
+    )
     .map(([key, value]) => `${key.slice(section.length + 1)}=${value}`);
 }
 
@@ -101,7 +117,9 @@ export function refreshSystemdUnitPolicy(content: string): string {
       lines.push(`[${name}]`, ...renderFixedPolicy(name));
     }
   }
-  return `${lines.join("\n").trimEnd()}\n`;
+  return preserveSystemdUnitPolicy(`${lines.join("\n").trimEnd()}\n`, content, [], {
+    preserveExecDelegation: true,
+  });
 }
 
 function assertNoSystemdLineBreaks(value: string, label: string): void {
@@ -127,9 +145,11 @@ function renderEnvLines(env: Record<string, string | undefined> | undefined): st
   if (!env) {
     return [];
   }
-  // An explicit empty NODE_OPTIONS blocks inherited supervisor preload/heap flags.
+  // Explicit empty startup settings block inherited supervisor values.
   const entries = Object.entries(env).filter(
-    ([key, value]) => typeof value === "string" && (value.trim() || key === "NODE_OPTIONS"),
+    ([key, value]) =>
+      typeof value === "string" &&
+      (value.trim() || key === "NODE_OPTIONS" || key === "MALLOC_ARENA_MAX"),
   );
   return entries.map(([key, value]) => {
     const rawValue = value ?? "";
@@ -185,7 +205,7 @@ export function buildSystemdUnit({
     "",
     "[Service]",
     `ExecStart=${execStart}`,
-    ...renderFixedPolicy("Service"),
+    ...renderFixedPolicy("Service", environment?.OPENCLAW_SERVICE_KIND === "node"),
     workingDirLine,
     ...normalizeStringEntries(environmentFiles).map(
       (entry) => `EnvironmentFile=${renderSystemdEnvironmentFile(entry)}`,

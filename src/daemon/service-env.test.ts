@@ -127,8 +127,12 @@ describe("service PATH", () => {
 
 describe("service environment", () => {
   it("preserves config write protection without enabling Nix mode", () => {
-    const env = serviceEnv({ OPENCLAW_CONFIG_READONLY: "1" }, { platform: "linux" });
+    const env = serviceEnv(
+      { OPENCLAW_CONFIG_READONLY: "1", OPENCLAW_CONFIG_READONLY_NOTICE: "Edit the deployment." },
+      { platform: "linux" },
+    );
     expect([resolveIsConfigReadOnly(env), resolveIsNixMode(env)]).toEqual([true, false]);
+    expect(env.OPENCLAW_CONFIG_READONLY_NOTICE).toBe("Edit the deployment.");
   });
   it.each([
     ["TMPDIR", "/tmp/service/", "/tmp/service/"],
@@ -139,6 +143,25 @@ describe("service environment", () => {
     expect(serviceEnv({ OPENCLAW_PROFILE: "work", [key]: input }, { platform: "linux" })[key]).toBe(
       value,
     );
+  });
+  it("leaves TMPDIR unset on Linux when the installer has none", () => {
+    const env = serviceEnv({ OPENCLAW_PROFILE: "work" }, { platform: "linux" });
+    expect(env.TMPDIR).toBeUndefined();
+  });
+  it.each([" ", ""])("treats a blank Linux TMPDIR (%j) as unset", (value) => {
+    expect(serviceEnv({ TMPDIR: value }, { platform: "linux" }).TMPDIR).toBeUndefined();
+  });
+  it("keeps an explicit Linux TMPDIR", () => {
+    expect(serviceEnv({ TMPDIR: " /var/tmp " }, { platform: "linux" }).TMPDIR).toBe("/var/tmp");
+  });
+  it("keeps the macOS state-dir TMPDIR", () => {
+    const env = { HOME: "/Users/u", OPENCLAW_STATE_DIR: "/Users/u/.openclaw-work" };
+    expect(serviceEnv(env, { platform: "darwin" }).TMPDIR).toBe(
+      path.join("/Users/u/.openclaw-work", "tmp"),
+    );
+  });
+  it("keeps the host temporary root on Windows", () => {
+    expect(serviceEnv({ HOME: "C:\\Users\\u" }, { platform: "win32" }).TMPDIR).toBe(os.tmpdir());
   });
   it("preserves profile identity", () => {
     expect(serviceEnv({ OPENCLAW_PROFILE: "work" }, { platform: "darwin" })).toMatchObject({

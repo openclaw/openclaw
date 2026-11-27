@@ -18,6 +18,7 @@ export const placementAsyncDefaults = (read: () => readonly Placement[] = () => 
         .map((row) => [row.sessionId, row]),
     ),
   listAsync: async () => read(),
+  listSessionIdentitiesAsync: async () => read(),
   retireSessionPlacementAsync: vi.fn(async () => {}),
   pruneOrphanedWorkspaceReconciliations: async () => [],
   listWorkspaceReconciliationOwners: async () => [],

@@ -8,7 +8,7 @@ import {
 import OpenAI from "openai";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
-import { normalizeTranscriptJsonValue } from "../config/sessions/transcript-json.js";
+import { normalizeTranscriptJsonValue } from "../config/sessions/transcript-json-normalize.js";
 import { classifyAssistantFailoverReason } from "./embedded-agent-helpers/assistant-message-failures.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
@@ -25,9 +25,8 @@ describe("transport stream shared helpers", () => {
     ["makeAssistantMessageFixture", makeAssistantMessageFixture],
     ["makeAgentAssistantMessage", makeAgentAssistantMessage],
   ] as const)("%s owns usage across transcript and transport lifetimes", (_name, builder) => {
-    // An accepted request (it has a response id) that fails without usage stays unavailable.
     const buildMessage = (usage?: AssistantMessage["usage"]) =>
-      builder({ content: [], responseId: "resp_fixture", ...(usage ? { usage } : {}) });
+      builder({ content: [], ...(usage ? { usage } : {}) });
     const stored = buildMessage();
     normalizeTranscriptJsonValue({ message: stored }, "entry");
 

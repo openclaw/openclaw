@@ -1,6 +1,9 @@
 /** Registers typed feature operations on existing host-owned tools, commands, and actions. */
+import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { TSchema } from "typebox";
 import type { AgentToolUpdateCallback } from "../agents/runtime/index.js";
+import { compactToolInputHint } from "../agents/tool-schema-hints.js";
 import { jsonResult } from "../agents/tools/common.js";
 import type { OpenClawPluginGatewayEvents } from "../plugins/gateway-events.js";
 import {
@@ -96,9 +99,14 @@ function validateFeatureValue(
       .map((error) => error.text)
       .join("; ")
       .slice(0, 512);
+    const hint =
+      direction === "input" && isRecord(schema) && schema.type === "object"
+        ? compactToolInputHint(schema)
+        : "unknown";
+    const recovery = hint === "unknown" ? "" : `. Use top-level input fields: ${hint}`;
     throw new FeatureValidationError(
       code,
-      `Feature ${direction} does not match its schema: ${detail}`,
+      `Feature ${direction} does not match its schema: ${detail}${recovery}`,
     );
   }
   return value;
@@ -193,7 +201,13 @@ export function defineFeaturePlugin<C extends FeatureContract>(
               if (error instanceof FeatureValidationError) {
                 return { ok: false, error: error.message, code: error.code };
               }
-              throw error;
+              const message = String(asOptionalObjectRecord(error)?.message ?? error);
+              const errorMessage = truncateUtf16Safe(message, 2000);
+              return {
+                ok: false,
+                error: errorMessage.trim() ? errorMessage : "Feature operation failed",
+                code: "OPERATION_FAILED",
+              };
             }
           },
         });

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -9,6 +10,7 @@ import { drainAgentDatabaseResources } from "../state/openclaw-agent-db-resource
 import { prepareOpenClawStateDatabaseRemoval } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
+import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
 import {
   getPublishFileExclusiveFailureDetails,
   publishFileExclusive,
@@ -16,7 +18,9 @@ import {
 } from "./directory-durability.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
 import { ignoreMissingPath } from "./errno.js";
+import { formatErrorMessage } from "./errors.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 import {
   adoptPreparedLocation,
@@ -24,6 +28,8 @@ import {
 } from "./sqlite-readonly-location-cleanup.js";
 import { createSqliteSnapshotStagingDirectory } from "./sqlite-snapshot-staging.js";
 import { prepareVerifiedSqliteFile } from "./sqlite-snapshot.js";
+import { resolvePathJournalPolicy } from "./sqlite-wal-filesystem.js";
+import { enableSqliteWalJournalMode } from "./sqlite-wal.js";
 import {
   parseUpdateStateInspectionWorker,
   runUpdateStateInspectionWorker,
@@ -32,6 +38,8 @@ import { readUpdateDatabaseGenerationsIsolated } from "./update-candidate-state.
 import { readUpdateStateDatabaseSizes } from "./update-candidate-state.sizes.js";
 import type { UpdateDatabaseBackup } from "./update-database-backup.js";
 import type { UpdateDatabaseGenerations } from "./update-database-generations.js";
+import { writeDisplacedDatabaseReceipts } from "./update-displaced-database-receipt.js";
+import type { PluginCohortRecoveryBinding } from "./update-plugin-cohort-schema.js";
 
 async function existingFile(file: string) {
   try {
@@ -119,6 +127,29 @@ async function withDatabaseExclusion<T>(
   return outcome.value;
 }
 
+/**
+ * Converts one restored database image back to the journal mode its path
+ * resolves to. Snapshots are single DELETE-journal files by design; leaving a
+ * restored database in rollback-journal mode makes the next update's
+ * maintenance lease fail sqlite-busy against the updater's own readers and
+ * rolls the same failure forward on every retry. The client credential store
+ * is excluded by the caller: its exclusive custody design requires DELETE
+ * mode. Throws so per-file failures stay collectable by the restore owner.
+ */
+async function reestablishRestoredDatabaseJournalMode(databasePath: string): Promise<void> {
+  if (resolvePathJournalPolicy(databasePath) !== "wal") {
+    return;
+  }
+  // The caller retains database exclusion; reuse native admission and the WAL
+  // owner without starting long-lived checkpoint maintenance for this handle.
+  const database = openNodeSqliteDatabase(databasePath);
+  try {
+    enableSqliteWalJournalMode(database, 0, { databasePath });
+  } finally {
+    database.close();
+  }
+}
+
 /** The caller owns a settled failed candidate that has never admitted user work. */
 export async function restoreUpdateDatabaseBackup(params: {
   backup: UpdateDatabaseBackup;
@@ -126,6 +157,16 @@ export async function restoreUpdateDatabaseBackup(params: {
   env: NodeJS.ProcessEnv;
   assertCurrent: () => void;
   expectedGenerations?: UpdateDatabaseGenerations;
+  pluginCohortRecovery?: PluginCohortRecoveryBinding;
+  /** Fires before the first live database changes; a failure before it left them untouched. */
+  onLiveMutation?: () => void;
+  /**
+   * Receives recoverable journal-policy reconciliation failures after credential
+   * rebinding completes. The databases are restored either way, so callers report
+   * these separately from state restoration instead of failing the rollback or
+   * blocking Gateway restart.
+   */
+  onJournalReconciliationFailures?: (failures: readonly string[]) => void;
 }): Promise<string[] | null> {
   if (!/^[a-zA-Z0-9_-]{1,128}$/u.test(params.runId)) {
     throw new Error("Database rollback requires its original update run identity.");
@@ -202,8 +243,10 @@ export async function restoreUpdateDatabaseBackup(params: {
             pluginValidation: "core-only",
             shellEnvFallback: "defer",
           }).readConfigFileSnapshot();
+          params.onLiveMutation?.();
           const { preparePostgresRestore } = await import("../snapshot/database-backup.js");
-          const snapshotPath = `${entry.snapshotPath}.restored-${params.runId}`;
+          // Keep prior recovery preparations intact without occupying a retry's fresh target.
+          const snapshotPath = `${entry.snapshotPath}.restored-${params.runId}-${randomUUID()}`;
           const prepared = await preparePostgresRestore({
             directory: entry.exportDirectory,
             anchorPath: snapshotPath,
@@ -212,6 +255,8 @@ export async function restoreUpdateDatabaseBackup(params: {
             profile: "exact",
             assertCurrent: assertOwned,
             preserveUpdateHistory: entry.path === sharedPath,
+            pluginCohortRecovery:
+              entry.path === sharedPath ? params.pluginCohortRecovery : undefined,
             expectedSource: { storeId: entry.storeId, namespace: entry.namespace },
           });
           sources[sources.indexOf(entry)] = { ...entry, ...prepared, snapshotPath };
@@ -245,6 +290,7 @@ export async function restoreUpdateDatabaseBackup(params: {
                 currentPath: sharedPath,
                 targetPath,
                 stagingRoot,
+                pluginCohortRecovery: params.pluginCohortRecovery,
               },
             }),
             z.object({
@@ -257,6 +303,7 @@ export async function restoreUpdateDatabaseBackup(params: {
           sources[sources.indexOf(shared)] = { ...shared, ...prepared, snapshotPath: targetPath };
         }
         const moves: Array<{
+          databasePath: string;
           source: string;
           target: string;
           identity: NonNullable<Awaited<ReturnType<typeof existingFile>>>;
@@ -270,7 +317,7 @@ export async function restoreUpdateDatabaseBackup(params: {
             }
             const identity = await existingFile(source);
             if (identity) {
-              moves.push({ source, target, identity });
+              moves.push({ databasePath, source, target, identity });
             }
           }
         }
@@ -304,6 +351,11 @@ export async function restoreUpdateDatabaseBackup(params: {
           );
           assertOwned();
         }
+        // Cleanup may remove these files only after a later verified update, by this receipt.
+        // Bookkeeping never blocks a rollback: without a receipt the files stay protected.
+        await writeDisplacedDatabaseReceipts(params.runId, moves).catch(() => undefined);
+        assertOwned();
+        params.onLiveMutation?.();
         for (const move of moves) {
           assertOwned();
           try {
@@ -329,7 +381,37 @@ export async function restoreUpdateDatabaseBackup(params: {
           await output.publish();
           assertOwned();
         }
+        // Snapshot images are single DELETE-journal files by design, so restored
+        // databases come back in rollback-journal mode. Re-establish the journal
+        // mode each path resolves to while the exclusion window still keeps every
+        // other holder out; leaving DELETE behind makes the next update's
+        // maintenance lease fail sqlite-busy against the updater's own readers and
+        // rolls the same failure forward on every retry. The client credential
+        // store is excluded: its exclusive custody design requires DELETE mode.
+        // Journal reconciliation is recoverable: credential rebinding below always
+        // completes first, and failures surface through
+        // onJournalReconciliationFailures instead of failing the published
+        // restoration or blocking Gateway restart.
+        const credentialStorePath = resolvePathViaExistingAncestorSync(
+          resolveClientCredentialStorePath(params.env),
+        );
+        const journalModeFailures: string[] = [];
+        for (const entry of sources) {
+          assertOwned();
+          if (entry.path === credentialStorePath) {
+            continue;
+          }
+          try {
+            await reestablishRestoredDatabaseJournalMode(entry.path);
+          } catch (error) {
+            journalModeFailures.push(`${entry.path}: ${formatErrorMessage(error)}`);
+          }
+        }
         restoreClientCredentials?.();
+        assertOwned();
+        if (journalModeFailures.length > 0) {
+          params.onJournalReconciliationFailures?.(journalModeFailures);
+        }
         assertOwned();
         return displaced;
       },

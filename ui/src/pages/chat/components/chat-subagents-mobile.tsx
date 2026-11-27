@@ -1,20 +1,21 @@
 import type { JSX } from "@solidjs/web";
 import { For, Show } from "solid-js";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
-import { useScrollState } from "../../../components/solid/scroll-state.ts";
-import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import "./chat-subagents-mobile.css";
 import { SubagentDesktopAvatar } from "./chat-subagent-avatar.tsx";
+import "./chat-subagents-mobile.css";
+import { SubagentListName } from "./chat-subagent-list-name.tsx";
 import { MobileStop, type ChatSubagentMobileStop } from "./chat-subagent-mobile-header.tsx";
 import type { SubagentStopControl } from "./chat-subagents-presentation.ts";
 
-registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatSessionOptionalEnglish);
 
 export type ChatSubagentMobileItem = {
   key: string;
   title: string;
+  modelLabel?: string;
   status: "running" | "waiting" | "queued" | "finished" | "failed" | "stopped";
   statusLabel: string;
   /** The native elapsed-time element or formatted duration; no presenter timer. */
@@ -59,7 +60,6 @@ function MobileRow(props: {
   registerOpen: (key: string, button: HTMLButtonElement) => () => void;
 }) {
   const control = props.createStop(() => props.item.key);
-  const nameScrollState = useScrollState(true, false);
   const finished = () => ["finished", "failed", "stopped"].includes(props.item.status);
   return (
     <div
@@ -88,13 +88,27 @@ function MobileRow(props: {
           )}
         </span>
         <span class="chat-subagents-mobile__copy">
-          <strong ref={nameScrollState}>{props.item.title}</strong>
-          {!finished() && props.item.elapsed && (
+          <strong>
+            <SubagentListName name={props.item.title} />
+          </strong>
+          {((!finished() && props.item.elapsed) || props.item.modelLabel) && (
             <span class="chat-subagents-mobile__stats">
-              {props.item.status === "running" && (
-                <span>{t("chat.subagentsPanel.workingFor")}</span>
+              {!finished() && props.item.elapsed && (
+                <span>
+                  {props.item.status === "running" &&
+                    !props.item.modelLabel &&
+                    `${t("chat.subagentsPanel.workingFor")} `}
+                  {props.item.elapsed}
+                </span>
               )}
-              {props.item.elapsed}
+              {props.item.modelLabel && (
+                <>
+                  {!finished() && props.item.elapsed && <span aria-hidden="true">·</span>}
+                  <span class="chat-subagents__model" title={props.item.modelLabel}>
+                    {props.item.modelLabel}
+                  </span>
+                </>
+              )}
             </span>
           )}
         </span>

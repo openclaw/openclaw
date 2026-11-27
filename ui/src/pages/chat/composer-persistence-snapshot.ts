@@ -4,7 +4,7 @@ import {
   resolveUiConversationIdentity,
   hasUiSessionDefaults,
 } from "../../lib/sessions/session-key.ts";
-import { normalizeChatComposerDraft } from "./composer-draft.ts";
+import { chatAttachmentDraftSignature, normalizeChatComposerDraft } from "./composer-draft.ts";
 import {
   captureChatComposerOwner,
   isChatComposerOwnerCurrent,
@@ -12,7 +12,10 @@ import {
   type DurableChatComposerPersistenceState,
   type ChatComposerDraftSnapshot,
 } from "./composer-persistence-state.ts";
-import { captureDurableChatAttachments } from "./durable-composer-persistence.ts";
+import {
+  captureDurableChatAttachments,
+  durableComposerScopeIdentity,
+} from "./durable-composer-persistence.ts";
 
 export function captureChatComposerDraftSnapshot(
   state: DurableChatComposerPersistenceState,
@@ -20,12 +23,16 @@ export function captureChatComposerDraftSnapshot(
   draftRevision: number,
   expectedDraftRevision: number,
   previous?: ChatComposerDraftSnapshot | null,
+  restoredAttachmentVersion?: string,
 ): ChatComposerDraftSnapshot {
   // The client is mutable across hello: capture retained presentation provenance
   // before an old pane can stamp its input with the replacement account.
   const replaced =
     previous?.owner.recoveryScope &&
-    !isChatComposerOwnerCurrent({ ...state, connected: false }, previous.owner);
+    !isChatComposerOwnerCurrent(
+      { settings: state.settings, client: state.client, connected: false },
+      previous.owner,
+    );
   const durableScope = replaced ? (previous.durable?.scope ?? null) : candidateDurableScope;
   const scope = resolveUiConversationIdentity(state, state.sessionKey);
   const text = normalizeChatComposerDraft(state.chatMessage);
@@ -33,17 +40,27 @@ export function captureChatComposerDraftSnapshot(
   const replyTarget = state.chatReplyTarget ?? undefined;
   const mentions = readHumanMentions(state.chatMessage, state.chatMentions);
   const attachments = state.chatAttachments ?? [];
+  const writeId = `${draftRevision}:${Math.random().toString(36).slice(2)}`;
   const durable = durableScope
     ? {
         scope: durableScope,
         expectedRevision: expectedDraftRevision,
         revision: draftRevision,
+        attachmentVersion:
+          restoredAttachmentVersion ??
+          (previous?.durable &&
+          durableComposerScopeIdentity(previous.durable.scope) ===
+            durableComposerScopeIdentity(durableScope) &&
+          chatAttachmentDraftSignature("", previous.attachments) ===
+            chatAttachmentDraftSignature("", attachments)
+            ? (previous.durable.attachmentVersion ?? previous.durable.writeId)
+            : writeId),
         text,
         ...(mentions ? { mentions } : {}),
         ...(goalMode ? { goalMode } : {}),
         ...(replyTarget ? { replyTarget } : {}),
         storedAttachments: captureDurableChatAttachments(attachments),
-        writeId: `${draftRevision}:${Math.random().toString(36).slice(2)}`,
+        writeId,
       }
     : undefined;
   return {

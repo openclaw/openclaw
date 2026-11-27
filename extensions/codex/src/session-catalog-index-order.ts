@@ -75,7 +75,9 @@ export class CodexCatalogOrdering {
     if (!row.archived && session) {
       this.ordered.splice(this.positionOf(row), 0, {
         row,
-        searchText: (session.name ?? session.fallbackName ?? "").toLocaleLowerCase(),
+        searchText: (session.name ?? session.fallbackName ?? "")
+          .toLocaleLowerCase()
+          .normalize("NFC"),
       });
     }
   }

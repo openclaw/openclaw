@@ -11,10 +11,30 @@ import {
   reply,
   user,
 } from "./agent-loop.test-support.js";
+import { emitToolExecutionEnd } from "./agent-stream-response.js";
 import { type AssistantMessage, createAssistantMessageEventStream, type Context } from "./llm.js";
 import type { AgentEvent, StreamFn } from "./types.js";
 
 describe("agentLoop streaming updates", () => {
+  it("forwards the tool completion sink's pending promise and rejection", async () => {
+    const completion = createDeferred();
+    const failure = new Error("listener failed");
+    const toolCall = makeCall("read");
+    const emitted = emitToolExecutionEnd(
+      {
+        toolCall,
+        result: { content: [], details: {} },
+        isError: false,
+        executionStarted: true,
+      },
+      { assistantMessage: makeAssistantMessage([toolCall]), emit: () => completion.promise },
+    );
+    const rejected = expect(emitted).rejects.toBe(failure);
+    completion.reject(failure);
+    await rejected;
+    expect(emitted).toBe(completion.promise);
+  });
+
   it.each([false, true])(
     "rebuilds text-delta snapshots (explicit undefined partial: %s)",
     async (explicitPartial) => {

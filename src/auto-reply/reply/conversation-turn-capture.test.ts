@@ -685,6 +685,15 @@ describe("conversation turn capture", () => {
         ctx: inboundReply(setup, operationId),
       }),
     ).resolves.toBe(true);
+    expect(appendAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: setup.sessionId, sessionKey: setup.sessionKey }),
+      expect.objectContaining({
+        id: `conversation-turn-reply-${operationId}`,
+        customType: "openclaw.conversation-turn-reply",
+        appendMode: "side",
+      }),
+      expect.any(Function),
+    );
     const reply = await pending.wait();
     expect(reply).toMatchObject({ text: "ordinary reply" });
     expect(reply).not.toHaveProperty("transcriptArtifactId");
@@ -693,11 +702,6 @@ describe("conversation turn capture", () => {
       reply: { text: "ordinary reply" },
     });
     expect(appendAudit).toHaveBeenCalledOnce();
-    expect(appendAudit.mock.calls[0]?.[1]).toMatchObject({
-      customType: "openclaw.conversation-turn-reply",
-      appendMode: "side",
-      data: { turnId: operationId },
-    });
   });
 
   it("does not make an ordinary post-restart reply replayable inline", async () => {

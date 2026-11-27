@@ -46,6 +46,11 @@ export async function runCodexSettledTurnFinalization(
   }
   const { selection, data: historyItems } = finalizationContext;
   const hostAuthPlan = attempt.runtimePlan?.auth;
+  if (hostAuthPlan?.selectedAuthMode === "native-command") {
+    throw new Error(
+      "Native command auth cannot finalize through a separate host-authenticated turn; use the settled-tool fallback.",
+    );
+  }
   const authRequirement = hostAuthPlan?.modelRoute?.authRequirement;
   // Capture fixes binding/ordered-profile selection. Ordinary user-home sessions
   // intentionally authorize private side turns through the host plan instead.

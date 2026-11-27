@@ -65,7 +65,7 @@ export function resolveNodeIdFromCandidates(
     const compact = allowCompactDisplayName ? normalized.replace(/-/g, "") : undefined;
     let topMatchScore = 0;
     nodes.forEach((node) => {
-      const name = typeof node.displayName === "string" ? node.displayName : "";
+      const name = node.displayName ?? "";
       const nameNormalized = name ? normalizeNodeKey(name) : "";
       let score = 0;
       if (nameNormalized && nameNormalized === normalized) {

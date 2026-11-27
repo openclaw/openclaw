@@ -2,17 +2,186 @@ import fs from "node:fs";
 import asyncFs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
+import { useExecutorFixture } from "../cli/update-cli/update-command-executor.test-support.js";
+import { assertUpdateCommandRecoveryState } from "../cli/update-cli/update-command-recovery.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import { defaultPayload } from "./gateway-state-owner-record.js";
+import { acquireGatewayStateOwner } from "./gateway-state-owner.js";
+import { startSqliteCheckpointWriter } from "./sqlite-checkpoint-writer.test-support.js";
+import * as locations from "./sqlite-readonly-location.js";
+import { withSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker.js";
+import * as snapshots from "./sqlite-snapshot-source.js";
 import { createRetainedCheckpointFixture } from "./update-retained-checkpoint.test-support.js";
-import { createUpdateRun, getUpdateRun } from "./update-run-ledger.js";
+import { createRetainedUpdateRecovery } from "./update-retained-recovery.test-support.js";
+import { readUpdateRunDriver } from "./update-run-driver.js";
+import {
+  createUpdateRun,
+  getUpdateRun,
+  getUpdateRunWithReconciliationAsync,
+  reconcileAbandonedUpdateRunsAsync,
+} from "./update-run-ledger.js";
 import { assertUpdateRecoveryAdmission } from "./update-run-recovery-admission.js";
+import { recordUpdateRunPhaseAsync } from "./update-run-write.async.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+const executorFixture = useExecutorFixture("update-cohort-admission-", {
+  beforeCleanup: closeStateDatabaseForTest,
+});
 afterEach(() => closeOpenClawStateDatabaseForTest());
 afterEach(() => vi.restoreAllMocks());
 
-describe("package-only recovery admission", () => {
+describe("current update ownership and physical restore admission", () => {
+  it.each([false, true])(
+    "reconciles and records progress with a live writer (warm=%s)",
+    async (warm) => {
+      const { root } = executorFixture();
+      const env = { HOME: root, OPENCLAW_STATE_DIR: path.join(root, "profile") };
+      const driver = readUpdateRunDriver();
+      expect(driver).toBeDefined();
+      const run = createUpdateRun({ trigger: "cli", origin: { driver } }, { env });
+      if (warm) {
+        openOpenClawStateDatabase({ env });
+      } else {
+        closeOpenClawStateDatabaseForTest();
+      }
+      const databasePath = resolveOpenClawStateSqlitePath(env);
+      const copies = [
+        vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync"),
+        vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation"),
+        vi.spyOn(locations, "prepareSqliteReadOnlyLocationFromOwnedDatabase"),
+      ];
+      const owner = acquireGatewayStateOwner({
+        databasePath,
+        payload: { ...defaultPayload(databasePath), role: "gateway" },
+      });
+      try {
+        const writer = await startSqliteCheckpointWriter(databasePath);
+        try {
+          await withSqliteReadOnlyWorkerScope(async () => {
+            await writer.commit();
+            await expect(
+              reconcileAbandonedUpdateRunsAsync({ runIds: [run.runId] }, { env, snapshot: true }),
+            ).resolves.toEqual([]);
+            expect(
+              (await getUpdateRunWithReconciliationAsync(run.runId, { env, snapshot: true })).run,
+            ).toEqual(run);
+            await withUpdateCommandExecutor(run.runId, async (executor) => {
+              const fence = await executor.enter(root);
+              const patch = { before: { version: "captured" } };
+              let settlement: Promise<void> | undefined;
+              const pending = recordUpdateRunPhaseAsync(run.runId, "validating", patch, {
+                env,
+                requireNoRecovery: true,
+                pluginCohort: { runId: run.runId, fence },
+                retainSettlement: (settled) => {
+                  settlement = settled;
+                },
+              });
+              const retainedBeforeYield = settlement;
+              patch.before.version = "changed-after-admission";
+              await Promise.all([pending, retainedBeforeYield]);
+              expect(retainedBeforeYield).toBeDefined();
+            });
+            expect(
+              (await getUpdateRunWithReconciliationAsync(run.runId, { env, snapshot: true })).run,
+            ).toMatchObject({
+              phase: "validating",
+              before: { version: "captured" },
+            });
+            await writer.commit();
+            for (const copy of copies) {
+              expect(copy).not.toHaveBeenCalled();
+            }
+          });
+        } finally {
+          await writer.stop();
+        }
+      } finally {
+        owner.release();
+      }
+    },
+  );
+
+  it("continues only its paired intent under the same live executor and source", async () => {
+    const { root } = executorFixture();
+    const env = { HOME: root, OPENCLAW_STATE_DIR: path.join(root, "profile") };
+    const runId = randomUUID();
+    const continuation = await withUpdateCommandExecutor(runId, async (executor) => {
+      const fence = await executor.enter(root);
+      createUpdateRun({ runId, trigger: "cli" }, { env });
+      const runtime = {
+        root,
+        nodePath: process.execPath,
+        version: "2026.10.9",
+        buildId: "fixture",
+      };
+      // Synthetic retained storage; the executor and worker admission remain real.
+      const reservation = createRetainedUpdateRecovery(
+        { runId, from: runtime, to: runtime },
+        { env },
+      );
+      writeConfigMachineState(
+        "update.pluginCohort." + runId,
+        {
+          runId,
+          transactionId: reservation.transactionId,
+          revision: 0,
+          disposition: "pending",
+          installKey: root,
+          priorArtifacts: [],
+          artifacts: [],
+          publications: [],
+          settledPublications: 0,
+        },
+        { env },
+      );
+      const pluginCohort = { runId, fence };
+      expect(() =>
+        assertUpdateCommandRecoveryState({
+          run: { runId, env, executorFence: { assertCurrent() {} } },
+        }),
+      ).toThrow("admitted executor");
+      expect(() =>
+        assertUpdateCommandRecoveryState({
+          run: {
+            runId,
+            env: { ...env, OPENCLAW_CONFIG_PATH: path.join(root, "other.json") },
+            executorFence: fence,
+          },
+        }),
+      ).toThrow("unfinished recovery");
+      writeConfigMachineState("update.pluginCohort." + randomUUID(), { unrelated: true }, { env });
+      await expect(assertUpdateRecoveryAdmission({ env, pluginCohort })).resolves.toBeUndefined();
+      expect(() =>
+        assertUpdateCommandRecoveryState({ run: { runId, env, executorFence: fence } }),
+      ).not.toThrow();
+      await recordUpdateRunPhaseAsync(
+        runId,
+        "validating",
+        {},
+        {
+          env,
+          requireNoRecovery: true,
+          pluginCohort,
+        },
+      );
+      expect(getUpdateRun(runId, { env })?.phase).toBe("validating");
+      return pluginCohort;
+    });
+    await expect(
+      assertUpdateRecoveryAdmission({ env, pluginCohort: continuation }),
+    ).rejects.toThrow("no longer current");
+  });
+
   it("admits absent state without creating it", async () => {
     const root = path.join(dirs.make("update-admission-"), "absent");
     await assertUpdateRecoveryAdmission({ env: { OPENCLAW_STATE_DIR: root } });
@@ -25,6 +194,7 @@ describe("package-only recovery admission", () => {
       const f = createRetainedCheckpointFixture(dirs.make("update-admission-target-"));
       const replacement = path.join(dirs.make("update-admission-replacement-"), "absent");
       const before = fs.readFileSync(f.file);
+      fs.mkdirSync(path.join(path.dirname(f.file), ".openclaw-restore-fixture"));
       let changed = false;
       const lstat = asyncFs.lstat.bind(asyncFs);
       vi.spyOn(asyncFs, "lstat").mockImplementation(async (...args) => {
@@ -37,26 +207,18 @@ describe("package-only recovery admission", () => {
       });
       await expect(
         assertUpdateRecoveryAdmission(explicitPath ? { ...f.options, path: f.file } : f.options),
-      ).rejects.toMatchObject({
-        name: "UpdateRecoveryRequiredError",
-        record: { runId: f.run.runId },
-      });
+      ).rejects.toMatchObject({ name: "InterruptedStateRestoreError" });
       expect(changed).toBe(true);
       expect(fs.readFileSync(f.file).equals(before)).toBe(true);
       expect(fs.existsSync(replacement)).toBe(false);
     },
   );
 
-  it.each(["sealed", "unsealed", "displaced", "orphan beside canonical"] as const)(
+  it.each(["displaced", "orphan beside canonical"] as const)(
     "refuses %s checkpoint state without changing retained bytes",
     async (kind) => {
-      const f = createRetainedCheckpointFixture(
-        dirs.make("update-admission-"),
-        kind !== "unsealed",
-      );
-      if (kind === "displaced" || kind === "orphan beside canonical") {
-        f.displace();
-      }
+      const f = createRetainedCheckpointFixture(dirs.make("update-admission-"));
+      f.displace();
       const freshRun =
         kind === "orphan beside canonical"
           ? createUpdateRun({ trigger: "cli" }, f.options)
@@ -89,3 +251,4 @@ describe("package-only recovery admission", () => {
     },
   );
 });
+import { randomUUID } from "node:crypto";

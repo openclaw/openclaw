@@ -1,4 +1,5 @@
 import { findMarkdownLinkSourceSpans } from "../../packages/markdown-core/src/link-spans.js";
+import { decodeResponseBytes } from "../agents/tools/web-shared.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { applyTemplate } from "../auto-reply/templating.js";
@@ -44,7 +45,7 @@ async function fetchLinkContent(params: {
       throw new Error(`Link fetch failed with HTTP ${response.status}`);
     }
     const buffer = await readResponseWithLimit(response, CLI_OUTPUT_MAX_BUFFER);
-    const content = new TextDecoder().decode(buffer).trim();
+    const content = decodeResponseBytes(response, buffer).trim();
     if (!content) {
       return null;
     }

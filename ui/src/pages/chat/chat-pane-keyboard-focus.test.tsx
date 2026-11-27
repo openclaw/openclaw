@@ -88,14 +88,12 @@ it.each([
       client: createGatewayBrowserClientFixture({ request }),
     });
     vi.spyOn(pane.transcript, "isPositionSettled", "get").mockReturnValue(true);
-    state.chatHistoryPagination = { hasMore: true, nextOffset: 2 };
+    state.chatHistoryPagination = { hasMore: true, olderCursor: "older-keyboard", nextOffset: 2 };
     pane.historyAutoLoadBlocked = true;
     const { container } = mountSolid(() => (
       <div onKeyDown={(event) => pane.handleTranscriptHistoryIntent(event)}>{content()}</div>
     ));
     const thread = container.querySelector("div")!;
-    pane.historySentinel = thread.appendChild(document.createElement("div"));
-    pane.historySentinel.className = "chat-history-sentinel";
     vi.spyOn(pane.transcript, "scrollElement", "get").mockReturnValue(thread);
     onTestFinished(configureNativeKeyTarget(thread.firstElementChild!, fixture));
     thread.firstElementChild!.dispatchEvent(

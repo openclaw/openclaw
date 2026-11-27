@@ -2,7 +2,6 @@
 // oxfmt-ignore
 import { useSubagentControlFixture } from "../../agents/subagents/registry/subagent-control.test-support.js";
 import { beforeEach, expect, it, vi } from "vitest";
-import { markStartupOrphanedMainSessionsForRecovery } from "../../agents/main-session-recovery/main-session-restart-recovery-marking.js";
 import { killAllControlledSubagentRuns } from "../../agents/subagents/registry/subagent-control-kill.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { mutateSubagentRuns } from "../../agents/subagents/registry/subagent-registry-persistence.js";
@@ -86,12 +85,6 @@ async function expectRetiredParent() {
   expect(child()?.requesterSettleWake).toBeUndefined();
   expectCancelledSession(parent(), parentRunId);
   await fixture.settle();
-  expect(
-    await markStartupOrphanedMainSessionsForRecovery({
-      cfg: getRuntimeConfig(),
-      stateDir: fixture.stateDir,
-    }),
-  ).toMatchObject({ marked: 0 });
 }
 
 function killChildren(beforeKill?: () => boolean) {

@@ -3,6 +3,7 @@ import { createComponent, createSignal, flush } from "solid-js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
 import { normalizeApplicationContext } from "./application-context-fixtures.ts";
+import { trackSolidRoot } from "./solid-cleanup.ts";
 
 export {
   createApplicationGateway,
@@ -30,7 +31,7 @@ export function requestApplicationContext(
 export function createApplicationContextProvider(context: ApplicationContext) {
   const host = document.createElement("div");
   const [value, setValue] = createSignal(normalizeApplicationContext(context));
-  render(
+  const dispose = render(
     () =>
       createComponent(ApplicationProvider, {
         host,
@@ -40,6 +41,7 @@ export function createApplicationContextProvider(context: ApplicationContext) {
       }),
     document.createDocumentFragment(),
   );
+  trackSolidRoot(dispose);
   return Object.assign(host, {
     setContext: (next: ApplicationContext) => {
       setValue(normalizeApplicationContext(next));

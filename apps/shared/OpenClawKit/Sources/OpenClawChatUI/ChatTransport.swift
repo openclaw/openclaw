@@ -2,10 +2,22 @@ import Foundation
 import OpenClawKit
 import OpenClawProtocol
 
+enum OpenClawPersonalPinError: LocalizedError {
+    case unsupportedGateway, placementChanged
+
+    var errorDescription: String? {
+        switch self {
+        case .unsupportedGateway: String(localized: "Update the Gateway to change personal session pins.")
+        case .placementChanged: String(localized: "Pin placement changed. Refresh the list and retry.")
+        }
+    }
+}
+
 public enum OpenClawChatTransportEvent: Sendable {
     case health(ok: Bool)
     case tick
     case chatMetadataChanged(modelCatalogChanged: Bool = true, agentID: String? = nil)
+    case personalPinsChanged
     case modelSelectionChanged
     case sessionsChanged(OpenClawChatSessionsChangedEvent)
     case sessionObserver(SessionObserverDigest)
@@ -72,6 +84,13 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
     public let kind: String?
     public let text: String?
     public let swarmPhase: String?
+    // Decoded events are partial patches; constructed roster snapshots are authoritative.
+    private typealias SessionPayload = [String: AnyCodable]
+    private let sessionPayload: SessionPayload?
+    var sessionFields: Set<String>? {
+        self.sessionPayload.map { Set($0.keys) }
+    }
+
     let colorPresent: Bool
     let agentStatusPresent: Bool
     let observerDigestPresent: Bool
@@ -118,6 +137,7 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
         self.phase = phase
         self.runId = runId
         self.session = session
+        self.sessionPayload = nil
         self.updatedAt = updatedAt
         self.lastReadAt = lastReadAt
         self.color = colorPresent == true ? color : (color ?? session?.color)
@@ -143,7 +163,24 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.session = try container.decodeIfPresent(OpenClawChatSessionEntry.self, forKey: .session)
+        var session = try container.decodeIfPresent(OpenClawChatSessionEntry.self, forKey: .session)
+        var sessionPayload = try container.decodeIfPresent(SessionPayload.self, forKey: .session)
+        // The Gateway emits sidebar clearing receipts on the outer envelope. Carry their
+        // presence into the row patch so projection and replay do not restore stale values.
+        func overlay<T: Decodable>(
+            _ key: CodingKeys,
+            _ path: WritableKeyPath<OpenClawChatSessionEntry, T?>) throws
+        {
+            guard container.contains(key) else { return }
+            session?[keyPath: path] = try container.decodeIfPresent(T.self, forKey: key)
+            sessionPayload?[key.rawValue] = try container.decode(AnyCodable.self, forKey: key)
+        }
+        try overlay(.label, \.label)
+        try overlay(.icon, \.icon)
+        try overlay(.category, \.category)
+        try overlay(.snoozedUntil, \.snoozedUntil)
+        self.session = session
+        self.sessionPayload = sessionPayload
         let nested = try? container.nestedContainer(keyedBy: CodingKeys.self, forKey: .session)
 
         func decode<T: Decodable>(_ type: T.Type, forKey key: CodingKeys) throws -> T? {
@@ -200,7 +237,12 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
         try container.encodeIfPresent(self.reason, forKey: .reason)
         try container.encodeIfPresent(self.phase, forKey: .phase)
         try container.encodeIfPresent(self.runId, forKey: .runId)
-        try container.encodeIfPresent(self.session, forKey: .session)
+        if let sessionPayload = self.sessionPayload {
+            // Keep omitted fields and explicit nulls distinct across event replay.
+            try container.encode(sessionPayload, forKey: .session)
+        } else {
+            try container.encodeIfPresent(self.session, forKey: .session)
+        }
         try container.encodeIfPresent(self.updatedAt, forKey: .updatedAt)
         try container.encodeIfPresent(self.lastReadAt, forKey: .lastReadAt)
         if self.colorPresent {
@@ -223,6 +265,10 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case label
+        case icon
+        case category
+        case snoozedUntil
         case session
         case key
         case sessionKey
@@ -404,10 +450,12 @@ public struct OpenClawChatSessionMutationRouteLease: Sendable {
     public init(
         sessionTarget: @escaping @Sendable (String) -> OpenClawChatSessionTarget,
         unreadAckContract: Bool?,
+        allowPinWrites: Bool = true,
         receivesPatchReceipts: Bool = false,
         request: @escaping @Sendable (OpenClawChatGatewayRequest) async throws -> Data)
     {
         self.patchSessionImpl = { requested, id, unreadAt, label, category, color, pinned, archived, snooze, unread in
+            guard pinned == nil || allowPinWrites else { throw OpenClawPersonalPinError.unsupportedGateway }
             guard unread != false || unreadAckContract != nil else {
                 throw OpenClawChatTransportSendError.notDispatched
             }
@@ -802,6 +850,7 @@ public protocol OpenClawChatTransport: Sendable {
         worktreeBaseRef: String?) async throws -> OpenClawChatCreateSessionResponse
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload
+    func requestHistory(sessionKey: String, cursor: String) async throws -> OpenClawChatHistoryPayload
     /// Tri-state hello-catalog negotiation: true/false when the connected
     /// gateway's advertised method set answers, nil when no catalog is known
     /// (disconnected, pre-catalog gateway, or non-gateway transport).
@@ -941,6 +990,10 @@ public protocol OpenClawChatTransport: Sendable {
 }
 
 extension OpenClawChatTransport {
+    public func requestHistory(sessionKey: String, cursor _: String) async throws -> OpenClawChatHistoryPayload {
+        try await self.requestHistory(sessionKey: sessionKey)
+    }
+
     private static func unsupportedOperation(_ description: String) -> NSError {
         NSError(
             domain: "OpenClawChatTransport",

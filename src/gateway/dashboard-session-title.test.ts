@@ -129,6 +129,27 @@ describe("maybeGenerateDashboardSessionTitle", () => {
 
   afterEach(() => vi.useRealTimers());
 
+  it.each([
+    ["Plan the release", 0],
+    ["[Wed 2026-10-28 12:00 PDT] Plan the release", 0],
+    ["/topic Plan the release", 1],
+    ["[Wed 2026-10-28 12:00 PDT] /skill topic Plan the release", 1],
+  ] as const)(
+    "prepares skill commands only when needed for %s",
+    async (userMessage, preparations) => {
+      mocks.prepareSkills.mockResolvedValue([
+        { name: "topic", skillName: "topic", description: "Discuss a topic" },
+      ]);
+      await expect(
+        prepareDashboardSessionTitle({ cfg, agentId: "main", userMessage }),
+      ).resolves.toBe("Release Planning");
+      expect(mocks.prepareSkills).toHaveBeenCalledTimes(preparations);
+      expect(mocks.generate).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ userMessage: "Plan the release", utilityOnly: true }),
+      );
+    },
+  );
+
   it.each(Object.entries(INTERNAL_WAKE_TRANSCRIPT_PROMPTS))(
     "does not generate a title from a %s wake",
     async (_kind, userMessage) => {
@@ -338,6 +359,27 @@ describe("maybeGenerateDashboardSessionTitle", () => {
       expectCalls(1, mocks.patch, mocks.generate);
     },
   );
+
+  it("does not start another model call from a read overtaken by a successful title write", async () => {
+    const naming = pendingLabel();
+    const params = titleParams();
+    const first = maybeGenerateSessionTitle(params);
+    await naming.started;
+
+    const delayedRead = createDeferredCore<SessionEntry>();
+    mocks.load.mockReturnValueOnce(delayedRead.promise);
+    const duplicate = maybeGenerateSessionTitle(params);
+    try {
+      naming.resolve("Release Planning");
+      await expect(first).resolves.toBe(true);
+    } finally {
+      // The worker had read the unnamed row before the winning write committed.
+      delayedRead.resolve(baseEntry);
+      await duplicate;
+    }
+
+    expectCalls(1, mocks.generate, mocks.patch);
+  });
 
   it("retries a joined title write failure only once", async () => {
     const naming = pendingLabel(true);

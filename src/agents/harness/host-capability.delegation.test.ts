@@ -13,10 +13,10 @@ import * as support from "../../gateway/worker-environments/service.test-support
 import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
 import { PluginInstance } from "../../plugins/plugin-instance.js";
 import { closeOpenClawAgentDatabases } from "../../state/openclaw-agent-db-lifecycle.js";
-import type { ToolOutcomeObserver } from "../agent-tools.before-tool-call.types.js";
 import { wrapToolWithBeforeToolCallHook } from "../agent-tools.before-tool-call.wrapper.js";
 import { createCodingToolsGatewayCaller } from "../agent-tools.caller.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
+import type { ToolOutcomeObserver } from "../tool-outcome-observation.js";
 import {
   clearToolSearchCatalog,
   createToolSearchCatalogRef,

@@ -5,7 +5,7 @@ import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
-import type { SessionPatchResult } from "../../lib/sessions/index.ts";
+import type { SessionPatch, SessionPatchResult } from "../../lib/sessions/index.ts";
 import {
   parseAgentSessionKey,
   resolveUiSelectedSessionAgentId,
@@ -23,6 +23,7 @@ export async function confirmNativeRuntimePermissionRecovery(
     agentId?: string;
     expectedSessionId?: string;
     model?: string | null;
+    cyberAccessProgram?: SessionPatch["cyberAccessProgram"];
     signal?: AbortSignal;
     retriesMessage?: boolean;
     canDispatch: () => boolean;
@@ -80,6 +81,9 @@ export async function confirmNativeRuntimePermissionRecovery(
     {
       ...(options.model !== undefined
         ? { model: options.model, agentRuntime: restriction.runtimeId }
+        : {}),
+      ...(options.cyberAccessProgram !== undefined
+        ? { cyberAccessProgram: options.cyberAccessProgram }
         : {}),
       ...(!remembered ? { nativeRuntimeConsent: restriction.runtimeId } : {}),
       sandboxMode: "off",

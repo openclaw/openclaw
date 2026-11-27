@@ -22,6 +22,7 @@ import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
 import { cleanupTempDirs, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { assertFixtureProcessGroupStopped } from "./exited-descendant-reaper.test-support.js";
 import { createMainRefreshFixture } from "./pr-main-refresh.test-support.js";
+import type { validReview } from "./pr-review-artifact-fixture.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const setupSnapshots = useAutoCleanupTempDirTracker(afterAll);
@@ -377,6 +378,45 @@ process.exit(result.status ?? 1);
       ).toBe(false);
     },
   );
+
+  it.each(["ready", "correction"])("reuses admitted worktree entry for %s preparation", (mode) => {
+    const f = fixture();
+    const reviewPath = join(f.local, "review.json");
+    if (mode === "correction") {
+      const review = JSON.parse(readFileSync(reviewPath, "utf8")) as ReturnType<typeof validReview>;
+      review.recommendation = "NEEDS WORK";
+      review.findings = [
+        {
+          id: "F1",
+          severity: "IMPORTANT",
+          title: "Fixture defect",
+          area: "src/subject.ts",
+          fix: "Repair fixture",
+        },
+      ];
+      writeFileSync(reviewPath, JSON.stringify(review));
+    }
+    const incomingReview = readFileSync(reviewPath, "utf8");
+    const result = f.shell(
+      [
+        "eval \"$(declare -f enter_worktree | sed '1s/enter_worktree/observed_enter_worktree/')\"",
+        "entries=0",
+        'enter_worktree() { entries=$((entries + 1)); observed_enter_worktree "$@"; }',
+        `prepare_init 42 "" ${mode}`,
+        'printf "worktree-entries=%s\\n" "$entries"',
+      ].join("\n"),
+      { supervised: true },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("worktree-entries=1\n");
+    expect(f.git(f.worktree, "branch", "--show-current")).toBe("pr-42-prep");
+    expect(f.git(f.worktree, "rev-parse", "HEAD")).toBe(f.head);
+    expect(readFileSync(reviewPath, "utf8")).toBe(incomingReview);
+    expect(readFileSync(join(f.local, "prep-context.env"), "utf8")).toContain(
+      `PREP_REVIEW_MODE=${mode}\n`,
+    );
+    expect(f.events().filter((event) => event.kind === "main-fetch")).toHaveLength(1);
+  });
 
   it.each(["staged", "unstaged", "untracked", "unmerged"])(
     "refuses same-head preparation with %s foreign state",
@@ -925,6 +965,69 @@ ${readFileSync(gitShim, "utf8")}
     },
   );
 
+  it("rejects unsupported local-only Git before acquiring a merge commit", () => {
+    const f = fixture();
+    f.configure({ unsupportedNoLazy: true });
+    const before = f.events().length;
+    const result = f.shell(
+      `cd .worktrees/pr-42\nMERGE_REPO_URL=https://github.com/fixture/repo merge_outcome_require_commit ${f.main} main`,
+    );
+    // Even a present commit must not admit a Git that could hydrate the next missing object.
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("requires Git with --no-lazy-fetch support");
+    expect(
+      f
+        .events()
+        .slice(before)
+        .filter((event) => event.args?.some((arg) => arg === "cat-file" || arg === "fetch")),
+    ).toEqual([]);
+  });
+
+  it("fetches pinned authoritative commits as promisor packs without a promisor history walk", () => {
+    const f = createMainRefreshFixture(tempDirs.make("openclaw-pr-authoritative-filter-"), {
+      partialCloneFilter: "blob:none",
+    });
+    // Only the authoritative repository has this commit, so origin cannot satisfy the fetch.
+    const authority = join(f.root, "authority.git");
+    f.git(f.root, "clone", "--bare", f.origin, authority);
+    f.git(authority, "config", "uploadpack.allowFilter", "true");
+    const author = join(f.root, "author");
+    f.git(authority, "worktree", "add", "--detach", author, f.main);
+    f.git(author, "config", "user.name", "OpenClaw Test");
+    f.git(author, "config", "user.email", "test@example.invalid");
+    writeFileSync(join(author, "authoritative.txt"), "authoritative\n");
+    f.git(author, "add", "authoritative.txt");
+    f.git(author, "commit", "-qm", "test: authoritative main");
+    const commit = f.git(author, "rev-parse", "HEAD");
+    const blob = f.git(author, "rev-parse", "HEAD:authoritative.txt");
+    expect(() => f.git(f.origin, "cat-file", "-e", commit)).toThrow();
+    const url = "https://github.com/authority/repo";
+    f.git(f.canonical, "config", `url.${authority}.insteadOf`, url);
+
+    const commonConfig = join(f.canonical, ".git", "config");
+    const beforeConfig = readFileSync(commonConfig, "utf8");
+    const sharedFetchHead = join(f.canonical, ".git", "FETCH_HEAD");
+    writeFileSync(sharedFetchHead, "unrelated shared checkpoint\n");
+    const trace = join(f.root, "git-trace");
+    const result = f.shell(
+      `cd .worktrees/pr-42\nMERGE_REPO_URL=${url} GIT_TRACE=${trace} merge_outcome_require_commit ${commit} main`,
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+
+    expect(readFileSync(trace, "utf8")).not.toContain("--exclude-promisor-objects");
+    const objects = f.git(
+      f.canonical,
+      "cat-file",
+      "--batch-all-objects",
+      "--batch-check=%(objectname)",
+    );
+    expect(objects).toContain(commit);
+    expect(objects).not.toContain(blob);
+    expect(f.git(f.canonical, "rev-parse", "refs/remotes/origin/main")).toBe(f.main);
+    expect(readFileSync(sharedFetchHead, "utf8")).toBe("unrelated shared checkpoint\n");
+    expect(readFileSync(commonConfig, "utf8")).toBe(beforeConfig);
+  });
+
   it("records the selected baseline and candidate without losing fresh private main checkpoints", () => {
     const f = fixture();
     f.enableReviewTests();
@@ -980,7 +1083,7 @@ ${readFileSync(gitShim, "utf8")}
     (fault) => {
       const f = fixture();
       f.enableReviewTests();
-      expect(f.run("review-checkout-main").status).toBe(0);
+      expect(f.shell("review_checkout_main 42").status).toBe(0);
       const modePath = join(f.local, "review-mode.env");
       let mode = readFileSync(modePath, "utf8");
       if (fault === "missing" || fault === "inherited") {
@@ -1027,7 +1130,7 @@ ${readFileSync(gitShim, "utf8")}
     const f = fixture();
     f.enableReviewTests();
     if (mode === "main") {
-      expect(f.run("review-checkout-main").status).toBe(0);
+      expect(f.shell("review_checkout_main 42").status).toBe(0);
     }
     const metaPath = join(f.local, "pr-meta.env");
     let meta = readFileSync(metaPath, "utf8");
@@ -1078,7 +1181,7 @@ ${readFileSync(gitShim, "utf8")}
     const f = fixture();
     if (command === "review_tests") {
       f.enableReviewTests();
-      expect(f.run("review-checkout-main").status).toBe(0);
+      expect(f.shell("review_checkout_main 42").status).toBe(0);
     }
     const result = f.shell(`
 printf() {

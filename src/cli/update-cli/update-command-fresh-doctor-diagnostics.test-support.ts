@@ -1,22 +1,26 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi, type Mock } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import type { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { readTriageUpdateFailure } from "../../commands/triage-update.js";
 import { readReleasedTriageUpdateFailure } from "../../commands/triage-update.released-reader.test-support.js";
 import { UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV } from "../../infra/update-doctor-result.js";
 import { writeTriageUpdateFailure } from "../../infra/update-failure-report-artifact.js";
 import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
-import {
-  renderUpdateRunReport,
-  updateRunReportInputFromResult,
-} from "../../infra/update-run-report.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import type { CommandOptions } from "../../process/exec.js";
+import { defaultRuntime } from "../../runtime.js";
 import {
   completePostCorePluginUpdate,
   runUpdateFinalizationDoctorInFreshProcess,
 } from "./update-command-fresh-doctor.js";
+import { UpdateFinalizationOutput } from "./update-finalization-output.js";
 
 export function registerFreshDoctorDiagnosticTests({
   mocks,
@@ -31,6 +35,81 @@ export function registerFreshDoctorDiagnosticTests({
   tempDirs: ReturnType<typeof useAutoCleanupTempDirTracker>;
   updateOptions: Parameters<typeof completePostCorePluginUpdate>[0];
 }): void {
+  it.for(["pre-plugin", "post-plugin"] as const)(
+    "shows %s Doctor phases before settlement without losing captured diagnostics",
+    async (phase, { signal }) => {
+      setLoggerOverride({ consoleLevel: "info", consoleStyle: "compact" });
+      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      const ready = createDeferred();
+      const release = createDeferred();
+      const output = new UpdateFinalizationOutput();
+      const onDoctorStep = vi.fn();
+      const captured = {
+        stdout: "Captured Doctor stdout\n",
+        stderr: "Doctor: private fixture label\nDoctor: state schema\n",
+      };
+      mocks.command.mockImplementationOnce(async (_command, _args, options: CommandOptions) => {
+        options.onOutputChunk?.(Buffer.from(captured.stdout), "stdout");
+        options.onOutputChunk?.(Buffer.from(captured.stderr), "stderr");
+        ready.resolve();
+        await release.promise;
+        await fs.writeFile(
+          options.env![UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]!,
+          JSON.stringify({ status: "ok" }),
+        );
+        return captured;
+      });
+      const work = output.run(() =>
+        runUpdateFinalizationDoctorInFreshProcess({
+          ...updateOptions,
+          phase,
+          root: tempDirs.make("fresh-doctor-progress-"),
+          timeoutMs: undefined,
+          json: true,
+          onDoctorStep,
+        }),
+      );
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(ready.promise, work, "Doctor settled before its phase"),
+          signal,
+        );
+        expect(stderr.mock.calls.map(([chunk]) => String(chunk))).toEqual([
+          "Doctor: state schema\n",
+        ]);
+        expect(stdout).not.toHaveBeenCalled();
+        expect(defaultRuntime.error).not.toHaveBeenCalled();
+        expect(defaultRuntime.log).not.toHaveBeenCalled();
+        expect(onDoctorStep).not.toHaveBeenCalled();
+        expect(output.snapshot()).toMatchObject({
+          phase,
+          stdout: { excerpt: captured.stdout },
+          stderr: { excerpt: captured.stderr },
+        });
+        release.resolve();
+        await withinTest(work, signal);
+        expect(onDoctorStep).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ name: `${phase} doctor`, exitCode: 0 }),
+        );
+        // Terminal replay retains both diagnostic streams, including the live phase.
+        expect(vi.mocked(defaultRuntime.error).mock.calls).toEqual([
+          [captured.stdout.trimEnd()],
+          [captured.stderr.trimEnd()],
+        ]);
+        expect(defaultRuntime.log).not.toHaveBeenCalled();
+        expect(stdout).not.toHaveBeenCalled();
+      } finally {
+        release.resolve();
+        await work.catch(() => {});
+        output.close();
+        stderr.mockRestore();
+        stdout.mockRestore();
+        resetLogger();
+      }
+    },
+  );
+
   it.each(["info", "warning", "error"] as const)(
     "retains inline fallback %s findings without suppressing readiness errors",
     async (severity) => {
@@ -195,16 +274,13 @@ export function registerFreshDoctorDiagnosticTests({
         },
       ],
     };
-    const report = renderUpdateRunReport(updateRunReportInputFromResult(updateResult));
     const publicReport = await prepareUpdateFailureReport(
       { attemptId: "validator-missing-module", result: updateResult },
       { env: process.env, stateDir },
     );
-    for (const body of [report.markdown, publicReport.body]) {
-      expect(body).toContain("ERR_MODULE_NOT_FOUND");
-      expect(body).not.toContain(secret);
-      expect(body).not.toContain(root);
-    }
+    expect(publicReport.body).toContain("ERR_MODULE_NOT_FOUND");
+    expect(publicReport.body).not.toContain(secret);
+    expect(publicReport.body).not.toContain(root);
     const outputPath = await writeTriageUpdateFailure(
       { result: updateResult },
       { env: process.env, outputPath: path.join(root, "failure.json") },

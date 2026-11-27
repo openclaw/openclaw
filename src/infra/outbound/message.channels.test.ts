@@ -1,7 +1,15 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayProtocolRequestTimeoutError } from "../../../packages/gateway-client/src/protocol-request.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { notifyPairingApproved } from "../../channels/plugins/pairing.js";
 import type { ChannelOutboundAdapter, ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { pinRuntimePaths } from "../../config/paths.js";
+import { GatewayTransportError } from "../../gateway/transport-error.js";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../../plugins/hook-runner-global.js";
+import { addTestHook } from "../../plugins/hooks.test-helpers.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -24,9 +32,12 @@ function registerPlugin(
 }
 
 const callGatewayMock = vi.fn();
-vi.mock("../../gateway/call.js", () => ({
+// mock-isolation: Captures Gateway RPCs; the real transport-error guard classifies timeouts.
+vi.mock("../../gateway/call.js", async () => ({
   callGateway: (...args: unknown[]) => callGatewayMock(...args),
   callGatewayLeastPrivilege: (...args: unknown[]) => callGatewayMock(...args),
+  isGatewayTransportError: (await import("../../gateway/transport-error.js"))
+    .isGatewayTransportError,
   randomIdempotencyKey: () => "idem-1",
 }));
 
@@ -44,6 +55,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetGlobalHookRunner();
   setActivePluginRegistry(emptyRegistry);
 });
 
@@ -84,6 +96,73 @@ function sendDemoPoll(params: Partial<Parameters<typeof sendPoll>[0]> = {}) {
     ...params,
   });
 }
+
+it.each([
+  { gatewayOwnedDelivery: false, suppress: false },
+  { gatewayOwnedDelivery: true, suppress: false },
+  { gatewayOwnedDelivery: true, suppress: true },
+])(
+  "notifies an approved WhatsApp sender (Gateway owned: $gatewayOwnedDelivery, suppressed: $suppress)",
+  async ({ gatewayOwnedDelivery, suppress }) => {
+    const sendText = vi.fn(async () => ({ channel: "whatsapp", messageId: "approval-1" }));
+    const plugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({ id: "whatsapp" }),
+      pairing: { idLabel: "whatsappSenderId" },
+      outbound: { deliveryMode: "gateway", sendText },
+    };
+    const registry = createTestRegistry([{ pluginId: "whatsapp", source: "test", plugin }]);
+    if (suppress) {
+      addTestHook({
+        registry,
+        pluginId: "whatsapp",
+        hookName: "message_sending",
+        handler: () => ({ cancel: true }),
+      });
+    }
+    setActivePluginRegistry(registry);
+    initializeGlobalHookRunner(registry);
+    const stateDir = tempDirs.make("pairing-notification-");
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        pinRuntimePaths();
+        const notification = notifyPairingApproved({
+          channelId: "whatsapp",
+          id: "+15551234567",
+          cfg: {},
+          accountId: "work",
+          meta: { accountId: "work", name: "Private name", code: "SECRET12" },
+          gatewayOwnedDelivery,
+        });
+        if (suppress) {
+          await expect(notification).rejects.toThrow("notification was suppressed");
+          expect(sendText).not.toHaveBeenCalled();
+          expect(callGatewayMock).not.toHaveBeenCalled();
+          return;
+        }
+        await notification;
+        const expected = {
+          accountId: "work",
+          to: "+15551234567",
+          [gatewayOwnedDelivery ? "text" : "message"]:
+            "✅ OpenClaw access approved. Send a message to start chatting.",
+        };
+        if (gatewayOwnedDelivery) {
+          expect(sendText).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(expected));
+          expect(callGatewayMock).not.toHaveBeenCalled();
+        } else {
+          expect(gatewayCall()).toMatchObject({ method: "send", params: expected });
+          expect(callGatewayMock).toHaveBeenCalledOnce();
+          expect(sendText).not.toHaveBeenCalled();
+        }
+        expect(JSON.stringify([sendText.mock.calls, callGatewayMock.mock.calls])).not.toMatch(
+          /Private name|SECRET12/,
+        );
+      });
+    } finally {
+      pinRuntimePaths();
+    }
+  },
+);
 
 it("keeps ephemeral-authority sends out of recovery after revocation", async () => {
   const stateDir = tempDirs.make("openclaw-live-only-delivery-");
@@ -253,6 +332,84 @@ describe("sendPoll channel normalization", () => {
       expect(result.result).toMatchObject({ messageId: "owned-1" });
       expect(callGatewayMock).not.toHaveBeenCalled();
       expect(resolveAgentRuntimeIdentityToken).not.toHaveBeenCalled();
+    },
+  );
+
+  it("reattaches a send whose Gateway request timed out after dispatch", async () => {
+    setDemoPollRegistry({ deliveryMode: "gateway" });
+    const gateway: OutboundMessageGatewayOptionsInput = {
+      request: async () => {
+        throw new Error("unexpected unconfigured Gateway request");
+      },
+    };
+    const request = vi
+      .spyOn(gateway, "request")
+      // The upload outlives the caller's timer, but the Gateway keeps sending.
+      .mockRejectedValueOnce(
+        new GatewayProtocolRequestTimeoutError({
+          method: "send",
+          timeoutMs: 30_000,
+          requestSent: true,
+        }),
+      )
+      .mockResolvedValueOnce({ messageId: "late-media" });
+
+    const result = await sendMessage({
+      cfg: {},
+      to: "conversation:demo-target",
+      channel: "workspace-chat",
+      content: "photo",
+      idempotencyKey: "slow-upload",
+      gateway,
+    });
+
+    expect(result.result).toMatchObject({ messageId: "late-media" });
+    expect(request).toHaveBeenCalledTimes(2);
+    for (const attempt of [1, 2]) {
+      expect(request).toHaveBeenNthCalledWith(
+        attempt,
+        expect.objectContaining({
+          method: "send",
+          params: expect.objectContaining({ idempotencyKey: "slow-upload" }),
+        }),
+      );
+    }
+  });
+
+  it.each([true, false])(
+    "reattaches a transport-timed-out send only when it was dispatched (%s)",
+    async (requestDispatched) => {
+      setDemoPollRegistry({ deliveryMode: "gateway" });
+      const timeout = new GatewayTransportError({
+        kind: "timeout",
+        message: "gateway timeout after 30000ms",
+        connectionDetails: {
+          url: "ws://127.0.0.1:18789",
+          urlSource: "local loopback",
+          message: "",
+        },
+        requestDispatched,
+      });
+      callGatewayMock.mockRejectedValueOnce(timeout);
+      if (requestDispatched) {
+        callGatewayMock.mockResolvedValueOnce({ messageId: "late" });
+      }
+
+      const sending = sendMessage({
+        cfg: {},
+        to: "conversation:demo-target",
+        channel: "workspace-chat",
+        content: "photo",
+        idempotencyKey: "slow-upload",
+      });
+
+      // A send that never reached the Gateway cannot be joined; retrying would deliver anew.
+      if (requestDispatched) {
+        await expect(sending).resolves.toMatchObject({ result: { messageId: "late" } });
+      } else {
+        await expect(sending).rejects.toBe(timeout);
+      }
+      expect(callGatewayMock).toHaveBeenCalledTimes(requestDispatched ? 2 : 1);
     },
   );
 

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { AuditRunInspectResult } from "../../../packages/gateway-protocol/src/schema/audit-run.js";
 import type { AuditEvent } from "../../../packages/gateway-protocol/src/schema/audit.ts";
@@ -10,6 +10,7 @@ import type {
   CronJob,
   CronRunLogEntry,
 } from "../../../packages/gateway-protocol/src/schema/cron.types.js";
+import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../../../src/agents/agent-run-terminal-outcome.ts";
 import { escapeMarkdownText } from "../../../src/shared/text/escape-markdown.ts";
 import {
   createOpenClawTestInstance,
@@ -94,6 +95,7 @@ const suite = createControlUiE2eSuite({
     try {
       instance = await createOpenClawTestInstance({
         name: "quiet-automations",
+        entrypoint: ["dist/index.js"],
         ...(baselineRoot ? { cwd: baselineRoot } : {}),
         env: {
           OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
@@ -187,7 +189,12 @@ async function openAutomations(page: Page) {
     await details.locator(".session-automation-mobile__list-row").first().waitFor();
   }
 }
-async function screenshot(page: Page, name: string, required: string) {
+async function screenshot(
+  page: Page,
+  name: string,
+  required: string,
+  detail?: { target: Locator; viewport: { width: number; height: number } },
+) {
   const body = page.locator("body");
   const text = (await body.textContent()) ?? "";
   for (const secret of [
@@ -200,13 +207,15 @@ async function screenshot(page: Page, name: string, required: string) {
     expect(text).not.toContain(secret);
   }
   expect(new URL(page.url()).hash).toBe("");
-  const target = page
-    .locator(
-      '.chat-summary__automation, .session-automation-mobile__list-row, .chat-details-mobile-root__entry[data-details-destination="automation"]',
-    )
-    .filter({ hasText: required, visible: true })
-    .getByText(required, { exact: true })
-    .first();
+  const target =
+    detail?.target ??
+    page
+      .locator(
+        '.chat-summary__automation, .session-automation-mobile__list-row, .chat-details-mobile-root__entry[data-details-destination="automation"]',
+      )
+      .filter({ hasText: required, visible: true })
+      .getByText(required, { exact: true })
+      .first();
   if (!captureUiProof) {
     await waitForControlUiProofSurface(body, [target]);
     if ((page.viewportSize()?.width ?? 1440) < 560) {
@@ -216,7 +225,8 @@ async function screenshot(page: Page, name: string, required: string) {
   }
   const frame = await takeControlUiScreenshotFrame(page, body, [target], {
     animations: "disabled",
-    ...((page.viewportSize()?.width ?? 1440) < 560 ? { scrollTo: target } : {}),
+    ...(detail ? { viewport: detail.viewport } : {}),
+    ...(detail || (page.viewportSize()?.width ?? 1440) < 560 ? { scrollTo: target } : {}),
   });
   await fs.writeFile(path.join(artifacts, name + ".png"), frame.png);
   (proof.screenshots as string[]).push(name + ".png");
@@ -326,9 +336,7 @@ suite.define(() => {
                 limit: 100,
               });
               expect(startup.inFlightRun).toBeUndefined();
-              expect(
-                await pane.getByRole("button", { name: "Stop generating", exact: true }).count(),
-              ).toBe(0);
+              expect(await pane.getByRole("button", { name: "Stop", exact: true }).count()).toBe(0);
               expect(await pane.getByText(fixture.prompt, { exact: false }).count()).toBe(0);
             }
           } finally {
@@ -354,9 +362,66 @@ suite.define(() => {
         const first = await run("blocked");
         expect(first.status).toBe("ok");
         await pane.locator(".chat-bubble").getByText(fixture.blocked, { exact: true }).waitFor();
+        const inspectBlockedHistory = async () => {
+          // A second authenticated page leaves the chat's read/freshness assertions untouched.
+          const detailPage = await context.newPage();
+          try {
+            await pairControlUiPage(detailPage, cli);
+            await detailPage.goto(
+              new URL(`cron?job=${encodeURIComponent(id)}`, suite.server.baseUrl).href,
+            );
+            await waitForControlUiGatewayReady(detailPage);
+            const detail = detailPage.locator('.cron-page[data-view="detail"]');
+            const entries = detail.locator(".cron-run-entry");
+            await expect.poll(() => entries.count()).toBe(3);
+            const statuses = entries.locator(".cron-run-entry__status");
+            await expect
+              .poll(() => statuses.allTextContents())
+              .toEqual(
+                baselineRoot
+                  ? ["Completed", "Completed", "Completed"]
+                  : ["No change", "No change", "Blocked"],
+              );
+            const attention = detail.locator(".cron-failure-details");
+            if (baselineRoot) {
+              expect(await attention.count()).toBe(0);
+            } else {
+              await expect.poll(() => attention.textContent()).toContain(fixture.blocked);
+              expect(await attention.textContent()).toContain("Blocked");
+              expect(await detail.locator('[data-test-id="cron-review-failed-run"]').count()).toBe(
+                0,
+              );
+              expect(await entries.nth(0).textContent()).not.toContain(fixture.blocked);
+              expect(await entries.nth(1).textContent()).not.toContain(fixture.blocked);
+              expect(await entries.nth(2).getAttribute("data-tone")).toBe("muted");
+            }
+            proof.jobDetail = {
+              statuses: await statuses.allTextContents(),
+              attention: (await attention.count()) ? await attention.textContent() : null,
+              retainedBlockerVisible: (await attention.count()) > 0,
+            };
+            if (captureUiProof) {
+              for (const width of [400, 820, 1280]) {
+                const viewport = { width, height: 1000 };
+                await screenshot(detailPage, `job-detail-${width}`, fixture.name, {
+                  target: detail.locator(".cron-detail-header"),
+                  viewport,
+                });
+                await screenshot(detailPage, `job-history-${width}`, fixture.name, {
+                  target: entries.nth(2),
+                  viewport,
+                });
+              }
+            }
+            await save();
+          } finally {
+            await detailPage.close();
+          }
+        };
         if (baselineRoot) {
           await run("no_change");
           await run("no_change");
+          await inspectBlockedHistory();
           await screenshot(page, "desktop-blocked-after-quiet-checks", fixture.name);
           await closeChatDetails(page);
           await page.setViewportSize({ width: 390, height: 844 });
@@ -369,8 +434,9 @@ suite.define(() => {
           return;
         }
         expect(first.result).toMatchObject({ outcome: "blocked", summary: fixture.blocked });
-        await expect.poll(() => row.textContent()).toContain(fixture.blocked);
-        await expect.poll(() => row.textContent()).toContain("Checked");
+        // Automation rows stay limited to the name and schedule; results live in chat and history.
+        expect(await row.textContent()).not.toContain(fixture.blocked);
+        expect(await row.textContent()).not.toContain("Checked");
         await expect.poll(async () => (await session()).unread).toBe(false);
         const before = await session();
         expect(before.lastMessagePreview).toContain(fixture.blocked);
@@ -426,8 +492,7 @@ suite.define(() => {
           expect(await pane.getByText(fixture.prompt, { exact: false }).count()).toBe(0);
           expect(await pane.getByText(fixture.waiting, { exact: true }).count()).toBe(0);
         }
-        const checked = row.locator(".session-automation-result__checked time");
-        const checkedBeforeTrigger = await checked.getAttribute("datetime");
+        await inspectBlockedHistory();
         const beforeTrigger = await rpc<CronJob>("cron.get", { id });
         const providerRequestsBeforeTrigger = provider.requests();
         // Start the first occurrence soon while retaining the trigger's minimum cadence.
@@ -459,15 +524,10 @@ suite.define(() => {
         expect(afterTrigger.state.lastMeaningfulResult).toEqual(meaningful);
         expect(provider.requests()).toBe(providerRequestsBeforeTrigger);
         expect((await session()).updatedAt).toBe(before.updatedAt);
-        await expect
-          .poll(() => checked.getAttribute("datetime"))
-          .toBe(new Date(afterTrigger.state.lastTriggerEvalAtMs!).toISOString());
-        expect(await checked.getAttribute("datetime")).not.toBe(checkedBeforeTrigger);
         proof.triggerCheck = {
           evaluatedAtMs: afterTrigger.state.lastTriggerEvalAtMs,
           noModelRequest: true,
           lastPayloadRunUnchanged: true,
-          checkedAdvanced: true,
         };
         await rpc("cron.update", {
           id,
@@ -502,7 +562,7 @@ suite.define(() => {
               .filter({ hasText: fixture.name, visible: true })
               .textContent(),
           )
-          .toContain(fixture.blocked);
+          .not.toContain(fixture.blocked);
         await screenshot(page, "mobile-blocked-after-quiet-checks", fixture.name);
         await closeChatDetails(page);
         await page.setViewportSize({ width: 1440, height: 1000 });
@@ -512,16 +572,12 @@ suite.define(() => {
           expect(result.status).toBe("ok");
           expect(result.result).toMatchObject({ outcome, summary: fixture[outcome] });
           await pane.locator(".chat-bubble").getByText(fixture[outcome], { exact: true }).waitFor();
-          await expect.poll(() => row.textContent()).toContain(fixture[outcome]);
+          expect(await row.textContent()).not.toContain(fixture[outcome]);
         }
         const error = await run("error");
         expect(error.status).toBe("error");
         expect(error.error).toBe(`LLM request rejected: ${escapeMarkdownText(fixture.error)}`);
-        // Structured provider failures remain in run history and the check indicator, not announcements.
-        await expect
-          .poll(() => row.locator(".session-automation-result__error").textContent())
-          .toBe("Check failed");
-        await expect.poll(() => row.textContent()).toContain(fixture.done);
+        // Structured provider failures remain in run history, not announcements.
         expect((await rpc<CronJob>("cron.get", { id })).state.lastMeaningfulResult?.outcome).toBe(
           "done",
         );
@@ -550,7 +606,10 @@ suite.define(() => {
           await save();
           return audit.events.find((event) => event.action === "agent.run.finished");
         };
-        await expect.poll(terminalAuditRun).toBeDefined();
+        // Failed terminals retain the retry grace before entering the asynchronous audit writer.
+        await expect
+          .poll(terminalAuditRun, { timeout: AGENT_RUN_TERMINAL_RETRY_GRACE_MS + 15_000 })
+          .toBeDefined();
         const auditRun = (await terminalAuditRun())!;
         proof.stage = "inspect admitted agent identity";
         await save();
@@ -611,12 +670,14 @@ suite.define(() => {
           expect(real.run?.provider).toBe("openai");
           expect(real.run?.model).toBe("gpt-4.1-mini");
         }
-        // Reload independently reconstructs the status from persisted Gateway data.
+        // Reload reconstructs the conversation and automation from persisted Gateway data.
         await page.reload();
         await waitForControlUiGatewayReady(page);
         await pane.locator(".chat-bubble").getByText(fixture.done, { exact: true }).waitFor();
         await openAutomations(page);
-        await expect.poll(() => row.textContent()).toContain(fixture.done);
+        await expect.poll(() => row.textContent()).toContain(fixture.name);
+        await expect.poll(() => row.textContent()).toContain("Every 1 hour");
+        expect(await row.textContent()).not.toContain(fixture.done);
         proof.complete = true;
         proof.stage = "complete";
         await save();

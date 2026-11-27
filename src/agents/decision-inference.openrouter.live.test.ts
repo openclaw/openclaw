@@ -1,19 +1,20 @@
-import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { DecisionBatchV2, DecisionRuntimeV2 } from "../decisions/types-v2.js";
+import type { DecisionBatchV2 } from "../decisions/types-v2.js";
 import { encodePngRgba, fillPixel } from "../media/png-encode.js";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
-import {
-  createColdPluginFixture,
-  createColdPluginHermeticEnv,
-} from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  createDecisionConsumer,
+  decisionConfig,
+  decisionEnv,
+  decisionOptions,
+} from "./decision-inference.test-support.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 
 const live =
@@ -36,54 +37,33 @@ it.skipIf(!live).each(["typesafe/jev-1.13", "typesafe/jev-1.14"])(
   async (model) => {
     await withOpenClawTestState({ layout: "home" }, async (state) => {
       const consumerId = "openrouter-live-decision-consumer";
-      const consumerRoot = state.path("consumer");
-      const bundledPluginsDir = state.path("bundled");
-      fs.mkdirSync(consumerRoot);
-      fs.mkdirSync(bundledPluginsDir);
-      const fixture = createColdPluginFixture({ rootDir: consumerRoot, pluginId: consumerId });
       const traceKey = Symbol.for("openclaw.test.openrouter-live-decision");
-      const trace: { runtime?: DecisionRuntimeV2 } = {};
-      Reflect.set(globalThis, traceKey, trace);
-      fs.writeFileSync(
-        fixture.runtimeSource,
-        'module.exports={id:"openrouter-live-decision-consumer",register(api){globalThis[Symbol.for("openclaw.test.openrouter-live-decision")].runtime=api.runtime.decisions;}};',
-      );
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            model: "unrelated/not-configured",
-            decisionModel: `openrouter/${model}`,
-            workspace: state.workspaceDir,
-          },
+      const { consumerRoot, trace } = createDecisionConsumer(state.root, consumerId, traceKey);
+      const cfg: OpenClawConfig = decisionConfig(state.home, `openrouter/${model}`, {
+        load: {
+          paths: [
+            fileURLToPath(new URL("../../extensions/openrouter", import.meta.url)),
+            consumerRoot,
+          ],
         },
-        plugins: {
-          load: {
-            paths: [
-              fileURLToPath(new URL("../../extensions/openrouter", import.meta.url)),
-              consumerRoot,
-            ],
-          },
-          slots: { memory: "none" },
-          entries: {
-            openrouter: { enabled: true },
-            [consumerId]: {
-              enabled: true,
-              llm: {
-                allowedCompletionModels: ["openrouter/unrelated-fixture"],
-                allowAgentIdOverride: false,
-                allowModelOverride: false,
-                allowAuthProfileOverride: false,
-              },
+        entries: {
+          openrouter: { enabled: true },
+          [consumerId]: {
+            enabled: true,
+            llm: {
+              allowedCompletionModels: ["openrouter/unrelated-fixture"],
+              allowAgentIdOverride: false,
+              allowModelOverride: false,
+              allowAuthProfileOverride: false,
             },
           },
         },
-      };
+      });
       await withEnvAsync(
-        {
-          ...createColdPluginHermeticEnv(state.root, { bundledPluginsDir }),
+        decisionEnv(state.root, {
           ...state.envVars,
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        },
+        }),
         async () => {
           try {
             setRuntimeConfigSnapshot(cfg);
@@ -137,13 +117,13 @@ it.skipIf(!live).each(["typesafe/jev-1.13", "typesafe/jev-1.14"])(
                       },
                     },
                   };
-            const options = () => ({
-              agentId: "main",
-              purpose: "openrouter-native-live",
-              rubricVersion: "1",
-              timeoutMs: 30_000,
-              signal: new AbortController().signal,
-            });
+            const options = () =>
+              decisionOptions({
+                agentId: "main",
+                purpose: "openrouter-native-live",
+                rubricVersion: "1",
+                timeoutMs: 30_000,
+              });
             // The registered consumer supplies its identity. Its completion policy
             // denies before transport, as the companion hermetic test verifies.
             await expect(runtime.evaluateV2(batch, options())).rejects.toMatchObject({

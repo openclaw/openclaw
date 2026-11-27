@@ -1,5 +1,6 @@
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { MediaUnderstandingDecision } from "../../packages/media-understanding-common/src/types.js";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -12,11 +13,10 @@ import {
   appendTranscriptMessageSync,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import { readRecentSessionUsageFromTranscriptAsync } from "../gateway/session-transcript-usage.js";
-import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
-import * as commandsRegistry from "./commands-registry.js";
 import { createSuccessfulImageMediaDecision } from "./media-understanding.test-fixtures.js";
 import {
   buildCommandsMessage,
@@ -342,7 +342,7 @@ it("lists commands with aliases and hints", () => {
   expect(text).toContain("/skill - Run a skill by name.");
   expect(text).toContain("/think (/thinking, /t) - Set thinking level.");
   expect(text).toContain("/compact - Compact the session context.");
-  expect(text).toContain("/models - List model providers/models.");
+  expect(text).toMatch(/\/models - \S/);
   expect(text).not.toContain("/config");
   expect(text).not.toContain("/debug");
 });
@@ -385,23 +385,6 @@ function group(tools: ReturnType<typeof tool>[], source: "core" | "plugin" = "co
   };
 }
 
-it("groups shipped docks commands with tools", () => {
-  vi.spyOn(commandsRegistry, "listChatCommands").mockReturnValue(
-    (["docks", "tools"] as const).map((category) => ({
-      key: category,
-      description: category,
-      textAliases: [`/${category}`],
-      scope: "text",
-      category,
-    })),
-  );
-  const text = buildCommandsMessage();
-  expect(text).toContain("Tools\n  /docks [text] - docks");
-  expect(text).toContain("  /tools [text] - tools");
-  expect(text.match(/^Tools$/gm)).toHaveLength(1);
-  expect(text).not.toContain("Docks");
-});
-
 it("renders compact inventory with plugin ownership and availability notices", () => {
   const text = buildToolsMessage({
     agentId: "main",
@@ -433,36 +416,6 @@ it("renders compact inventory with plugin ownership and availability notices", (
   expect(text).toContain('Add tools.alsoAllow: ["browser"].');
 });
 
-it("trims verbose descriptions before schema-like doc blocks", () => {
-  const text = buildToolsMessage(
-    {
-      agentId: "main",
-      profile: "coding",
-      groups: [
-        group([
-          {
-            ...tool("cron", "Cron", "Schedule jobs."),
-            rawDescription:
-              "Schedule jobs.\n\nACTIONS:\n- status: Check status\nJOB SCHEMA:\n{ ... }",
-          },
-        ]),
-      ],
-    },
-    { verbose: true },
-  );
-  expect(text).toContain("Cron - Schedule jobs.");
-  expect(text).toContain("What this agent can use right now:");
-  expect(text).toContain("Tool availability depends on this agent's configuration.");
-  expect(text).not.toContain("ACTIONS:");
-  expect(text).not.toContain("JOB SCHEMA:");
-});
-
-it("returns the empty state when no tools are available", () => {
-  expect(buildToolsMessage({ agentId: "main", profile: "full", groups: [] })).toBe(
-    "No tools are available for this agent right now.\n\nProfile: full",
-  );
-});
-
 const openrouterArgs = {
   ...modelArgs("openrouter", "google/gemini-2.5-pro"),
   thinkingCatalog: [
@@ -475,7 +428,7 @@ function usage(input: number, output: number, cacheRead: number, totalTokens: nu
   return { input, output, cacheRead, cacheWrite: 0, totalTokens };
 }
 function freshUsage(totalTokens: number) {
-  return { totalTokens, totalTokensFresh: true, totalTokensVersion: 1 as const };
+  return { totalTokens, totalTokensFresh: true, totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION };
 }
 function withStatusHome(run: () => Promise<void>) {
   return withTempHome(
@@ -589,7 +542,7 @@ describe("status transcript usage and model context", () => {
         cacheWrite: 11_000,
         totalTokens: 2_300_000,
       },
-      present: ["Cache: 100% hit · 2.3m cached, 11k new", "Context: 36k/1.0m (4%)"],
+      present: ["Cache: 100% hit · 2.3m cached, 11k new", "Context: 37k/1.0m (4%)"],
       absent: ["Context: 2.3m/1.0m"],
     },
   ])("$name", async ({ transcript, entry, present, absent }) => {

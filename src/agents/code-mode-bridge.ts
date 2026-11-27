@@ -30,6 +30,7 @@ import { resolveSwarmConfig } from "./subagents/swarm/swarm-config.js";
 import { getToolContractFailureCode } from "./tool-contract-error.js";
 import { isTrustedToolInputError } from "./tool-input-error.js";
 import { formatToolExecutionGatedMessage, isToolExecutionAllowed } from "./tool-policy-shared.js";
+import { omitDescribedOutputSchema } from "./tool-search-catalog.js";
 import type { ToolSearchRuntime } from "./tool-search-runtime.js";
 import type { ToolSearchCatalogEntry, ToolSearchToolContext } from "./tool-search-types.js";
 import { ToolInputError } from "./tools/common.js";
@@ -185,24 +186,31 @@ function requireCodeModeSwarmEnabled(ctx: ToolSearchToolContext): void {
   }
 }
 
-/** Recognize explicit required intent only on the authorized core tool bindings. */
+/**
+ * Recognize required intent only on the authorized core tool bindings. A native
+ * ask_user question or secrets request waits for the human and is always required:
+ * parking it would let turn teardown cancel it.
+ */
 export function requiresCodeModeCompletion(
   requests: readonly PendingBridgeRequest[],
   catalogProjection: CodeModeCatalogProjection,
 ): boolean {
   return requests.some((request) => {
-    if (
-      request.method !== "callValue" ||
-      !isRecord(request.args[1]) ||
-      request.args[1].awaitResults !== true
-    ) {
+    if (request.method !== "callValue" || typeof request.args[0] !== "string") {
       return false;
     }
-    const binding =
-      typeof request.args[0] === "string"
-        ? catalogProjection.byCallableName.get(request.args[0])
-        : undefined;
-    return binding?.id === "openclaw:core:exec" || binding?.id === "openclaw:core:agents_wait";
+    const id = catalogProjection.byCallableName.get(request.args[0])?.id;
+    if (id === "openclaw:core:ask_user") {
+      return true;
+    }
+    const input = isRecord(request.args[1]) ? request.args[1] : undefined;
+    if (id === "openclaw:core:secrets") {
+      return input?.action === "request";
+    }
+    return (
+      input?.awaitResults === true &&
+      (id === "openclaw:core:exec" || id === "openclaw:core:agents_wait")
+    );
   });
 }
 
@@ -219,6 +227,7 @@ export async function runBridgeRequest(params: {
   sessionStore?: CodeModeSessionStoreAccess;
   remainingMs: number;
   completionRequired?: boolean;
+  onDeadline?: (deadlineAtMs: number) => void;
   ctx: ToolSearchToolContext;
   request: PendingBridgeRequest;
   signal?: AbortSignal;
@@ -263,18 +272,21 @@ export async function runBridgeRequest(params: {
             value = params.results.save(values[0], params.runtime.hasNetworkContent());
           }
         } else if (params.request.method === "resultLoad") {
-          const loaded = sessionStore
-            ? await sessionStore.load(values[0])
-            : params.results.load(values[0]);
+          if (!sessionStore) {
+            const loaded = params.results.load(values[0]);
+            if (loaded.networkContent) {
+              params.runtime.observeNetworkContent(params.parentToolCallId);
+            }
+            // The guest decodes its own copy; keep the stored JSON intact on the host.
+            params.reply.settleJson(true, loaded.json);
+            return;
+          }
+          const loaded = await sessionStore.load(values[0]);
           if (loaded.networkContent) {
             params.runtime.observeNetworkContent(params.parentToolCallId);
           }
           // Session values need an envelope to preserve missing/undefined across the JSON bridge.
-          value = sessionStore
-            ? loaded.value === undefined
-              ? {}
-              : { value: loaded.value }
-            : loaded.value;
+          value = loaded.value === undefined ? {} : { value: loaded.value };
         } else if (sessionStore) {
           await sessionStore.delete(values[0]);
         } else {
@@ -306,7 +318,8 @@ export async function runBridgeRequest(params: {
         const matches = await params.runtime.search(exactBinding?.id ?? exactMcpId ?? query, {
           limit: typeof options?.limit === "number" ? options.limit : undefined,
           allowedIds: catalogProjection.searchableIds,
-          parentToolCallId: params.parentToolCallId,
+          // Discovery returns lazy guest handles, not model-visible metadata.
+          // Their getters/serialization mark exposure; actual calls retain host provenance.
         });
         value = exactBinding
           ? [exactBinding.callableName]
@@ -341,10 +354,17 @@ export async function runBridgeRequest(params: {
           parentToolCallId: params.parentToolCallId,
         });
         const { id: _id, sourceName: _sourceName, mcp: _mcp, ...guestDescription } = described;
+        // The declaration renders output types from the schema; describe() returns the raw
+        // output schema only on explicit request because API.read already types the result.
         value =
           values[1] === "declaration"
             ? await createCodeModeToolApiFile(binding.callableName, guestDescription)
-            : { ...guestDescription, callableName: binding.callableName };
+            : {
+                ...(values[1] === "outputSchema"
+                  ? guestDescription
+                  : omitDescribedOutputSchema(guestDescription)),
+                callableName: binding.callableName,
+              };
         break;
       }
       case "callValue": {
@@ -479,7 +499,7 @@ export async function runBridgeRequest(params: {
         const called = await params.runtime.callExactId(
           binding.id,
           params.request.method === "skillsRead"
-            ? { name: values[0] }
+            ? { name: values[0], ...(values[1] === undefined ? {} : { relativePath: values[1] }) }
             : { query: values[0], ...(values[1] === undefined ? {} : { limit: values[1] }) },
           callOptions(),
         );
@@ -499,16 +519,17 @@ export async function runBridgeRequest(params: {
           );
         }
         if (params.request.method === "skillsRead") {
-          const { name, location, locationNote, content } = result.details;
+          const { name, location, locationNote, relativePath, content } = result.details;
           if (
             typeof name !== "string" ||
             typeof location !== "string" ||
             typeof content !== "string" ||
+            (relativePath !== undefined && typeof relativePath !== "string") ||
             (locationNote !== undefined && typeof locationNote !== "string")
           ) {
             throw new ToolInputError("Installed skill instructions are unavailable.");
           }
-          value = formatSkillInstructions({ name, location, locationNote, content });
+          value = formatSkillInstructions({ name, location, locationNote, relativePath, content });
         } else {
           value = result.details;
         }
@@ -519,7 +540,9 @@ export async function runBridgeRequest(params: {
         if (typeof delay !== "number" || !Number.isFinite(delay) || delay < 0) {
           throw new ToolInputError("setTimeout delay must be a non-negative finite number.");
         }
-        value = await sleep(resolveSafeTimeoutDelayMs(delay, { minMs: 0 }), null, {
+        const timeoutMs = resolveSafeTimeoutDelayMs(delay, { minMs: 0 });
+        params.onDeadline?.(Date.now() + timeoutMs);
+        value = await sleep(timeoutMs, null, {
           signal: params.signal,
         });
         break;

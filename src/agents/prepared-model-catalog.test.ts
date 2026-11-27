@@ -45,6 +45,7 @@ vi.mock("./prepared-model-runtime.js", async () => {
     await import("./prepared-model-runtime.errors.js");
   const lease = async (snapshot: Promise<unknown>, release = mocks.releaseSnapshot) => ({
     snapshot: await snapshot,
+    run: <T>(run: () => T): T => run(),
     [Symbol.asyncDispose]: release,
   });
   return {
@@ -74,6 +75,7 @@ vi.mock("./prepared-model-runtime.scoped-catalog.js", () => ({
   prepareScopedReadOnlyModelCatalog: mocks.prepareScopedCatalog,
 }));
 
+import { loadCommandArgMenuModelCatalog } from "../auto-reply/command-arg-menu-catalog.js";
 import { PreparedModelCatalogConfigReplacedError } from "./prepared-model-catalog.errors.js";
 import {
   getPublishedPreparedModelCatalogOwnerSnapshot as getPublishedOwner,
@@ -327,6 +329,54 @@ describe("prepared model catalog access", () => {
       }
     },
   );
+
+  it("serves native command menus from the published owner after a config republish", async () => {
+    const published = {
+      ...fullSnapshot,
+      config: { agents: { defaults: { model: "openai/published" } } },
+    };
+    mocks.getSnapshot.mockReturnValue(published);
+    mocks.prepareSnapshot.mockResolvedValue(published);
+    const cfg = { agents: { defaults: { model: "openai/current" } } };
+
+    // Exact readers still refuse a generation built from another config.
+    await expect(
+      loadCatalog({ config: cfg, agentId: "main", readOnly: true }),
+    ).rejects.toBeInstanceOf(PreparedModelCatalogConfigReplacedError);
+    await expect(loadCommandArgMenuModelCatalog({ cfg, agentId: "main" })).resolves.toEqual(
+      published.modelCatalog.entries,
+    );
+    expect(mocks.prepareSnapshot).toHaveBeenLastCalledWith(
+      expect.objectContaining({ agentId: "main", agentDir, config: cfg }),
+      { readPublished: true },
+    );
+    expect(mocks.activateSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("reads the published full inventory for picker menus after a config republish", async () => {
+    // A generation keeps discovered rows apart from its configured (manifest) catalog until a
+    // reader materializes them. After the runtime config is republished, the exact lookup no
+    // longer matches this generation, but it is still the published owner menus must read.
+    const configuredCatalog = catalog("configured", "Configured");
+    const discoveredCatalog = catalog("discovered", "Discovered");
+    bindFullCatalog(discoveredCatalog);
+    const published = {
+      ...fullSnapshot,
+      config: { agents: { defaults: { model: "openai/published" } } },
+      modelCatalog: configuredCatalog,
+      readFullModelCatalog: vi.fn(() => discoveredCatalog),
+      loadFullModelCatalog: vi.fn().mockRejectedValue(new Error("unrequested discovery")),
+    };
+    mocks.getSnapshot.mockReturnValue(published);
+    mocks.prepareSnapshot.mockResolvedValue(published);
+    const cfg = { agents: { defaults: { model: "openai/current" } } };
+
+    const owner = await loadPublishedOwner({ config: cfg, agentId: "main", readOnly: true });
+
+    expect(owner.modelCatalog).toBe(discoveredCatalog);
+    expect(published.loadFullModelCatalog).not.toHaveBeenCalled();
+    expect(mocks.activateSnapshot).not.toHaveBeenCalled();
+  });
 
   it("leases a full generation for a gateway preflight in a dynamic workspace", async () => {
     unpublished();
