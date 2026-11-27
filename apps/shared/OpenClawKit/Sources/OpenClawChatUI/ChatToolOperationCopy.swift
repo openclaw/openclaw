@@ -518,8 +518,8 @@ enum ChatToolOperationCopy {
             action = status == "timeout" ? "replyTimedOut" : "unconfirmed"
         } else if call.outcome == .succeeded {
             action = switch status {
-            case "ok", "no_reply": "sent"
-            case "accepted", "queued": status ?? "unconfirmed"
+            case "ok", "no_reply", "accepted": "sent"
+            case "queued": "queued"
             case "started" where (result["retained"] as? [String: Any])?["acceptance"] as? String == "not_accepted":
                 "deferred"
             default: "unconfirmed"
@@ -529,7 +529,7 @@ enum ChatToolOperationCopy {
         // deferred or unconfirmed send is not described as having reached the other session.
         if !showsReceipt {
             switch action {
-            case "accepted", "queued", "replyTimedOut": action = "sent"
+            case "queued", "replyTimedOut": action = "sent"
             case "deferred", "unconfirmed": action = "send"
             default: break
             }
