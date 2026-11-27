@@ -68,11 +68,8 @@ describe("shared-state disposal ownership", () => {
       // Vitest runs outside admission's host; register the host's real identity descriptor.
       const descriptor = fs.openSync(owner.path, "r");
       const registry = sqliteDatabaseAdmissionState.registry;
-      registry.retainDescriptorCustody(
-        owner.path,
-        descriptor,
-        fs.fstatSync(descriptor, { bigint: true }),
-      );
+      const opened = fs.fstatSync(descriptor, { bigint: true });
+      registry.retainDescriptorCustody(owner.path, descriptor, opened);
       await closeOpenClawStateDatabaseAsync();
       expect(owner.db.isOpen).toBe(false);
       expect(
@@ -87,7 +84,21 @@ describe("shared-state disposal ownership", () => {
 
       await expect(releaseOpenClawStateDatabaseCustody()).resolves.toBeUndefined();
       expect([...captureSqliteDatabaseDescriptorCustodyLocations()]).toEqual([]);
-      expect(() => fs.fstatSync(descriptor)).toThrow(expect.objectContaining({ code: "EBADF" }));
+      // Another worker may reuse the numeric descriptor as soon as it is closed.
+      const remaining = (() => {
+        try {
+          return fs.fstatSync(descriptor, { bigint: true });
+        } catch (error) {
+          expect(error).toMatchObject({ code: "EBADF" });
+          return undefined;
+        }
+      })();
+      if (remaining) {
+        expect({ dev: remaining.dev, ino: remaining.ino }).not.toEqual({
+          dev: opened.dev,
+          ino: opened.ino,
+        });
+      }
     },
   );
 
