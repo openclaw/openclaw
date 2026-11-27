@@ -4,7 +4,6 @@ import {
   estimateStringChars,
 } from "@openclaw/normalization-core/cjk-chars";
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import { getAiTransportHost } from "../host.js";
 import { convertMessages, hasToolCallHistory } from "../openai-completions-messages.js";
 import { measuredRequestPressure, type OpenAICompletionsOptions } from "../provider-options.js";
 import {
@@ -34,7 +33,11 @@ import {
   prepareOpenAITools,
   reconcileOpenAICompletionsToolChoice,
 } from "../providers/openai-tool-projection.js";
-import { normalizeOpenAIStrictToolParameters } from "../providers/openai-tool-schema.js";
+import {
+  normalizeOpenAIStrictToolParameters,
+  resolveOpenAIStrictToolSetting,
+  resolveOpenAIToolStrictFlag,
+} from "../providers/openai-tool-schema.js";
 import { withPreparedToolSchemaNormalization } from "../providers/tool-schema-normalization-cache.js";
 import { normalizeToolSchema } from "../providers/tool-schema-normalization.js";
 import { shortHash } from "../utils/hash.js";
@@ -57,10 +60,7 @@ import {
   flattenCompletionMessagesToStringContent,
   stripCompletionMessagesToRoleContent,
 } from "./openai-completions-string-content.js";
-import {
-  getCompat,
-  resolveOpenAIStrictToolFlagWithDiagnostics,
-} from "./openai-transport-params.js";
+import { getCompat } from "./openai-transport-params.js";
 import {
   log,
   resolvePromptCacheKey,
@@ -165,28 +165,22 @@ function convertTools(
   const prepared = mode === "managed" ? prepareOpenAITools(tools) : undefined;
   const projection = prepared?.projection ?? projectOpenAITools(tools);
   const convert = () => {
-    const strict =
+    const strictSetting =
       mode === "direct"
         ? compat.supportsStrictMode
           ? false
           : undefined
-        : resolveOpenAIStrictToolFlagWithDiagnostics(
-            projection,
-            getAiTransportHost().resolveOpenAIStrictToolSetting(model, {
-              transport: "stream",
-              supportsStrictMode: compat?.supportsStrictMode,
-            }),
-            {
-              transport: "completions",
-              model,
-            },
-          );
+        : resolveOpenAIStrictToolSetting(compat);
     return {
       projection,
       tools: sortTransportToolsByName(projection.tools).map((tool) => {
         const parameters = compat.requiresTypedUnionBranches
           ? normalizeToolSchema(tool.parameters, "moonshot")
           : tool.parameters;
+        const strict =
+          mode === "direct"
+            ? strictSetting
+            : resolveOpenAIToolStrictFlag(parameters, strictSetting);
         return prepareOpenAIFunctionTool(
           tool.name,
           tool.description,
