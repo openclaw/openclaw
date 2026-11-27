@@ -16,7 +16,6 @@ import {
   resolveUiConversationIdentity,
 } from "../../lib/sessions/session-key.ts";
 import { selectedGlobalEventAgentId } from "./chat-agent-id.ts";
-import { retireDeliveredQueuedUserTurn } from "./chat-delivery-retirement.runtime.ts";
 import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import {
@@ -27,7 +26,10 @@ import {
 import { clearPendingQueueItemsForRun, readDeliveredQueuedChatSendForRun } from "./chat-queue.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
-import { requiresChatInputConsumption } from "./chat-send-support.ts";
+import {
+  requiresChatInputConsumption,
+  retireDeliveredQueuedUserTurn,
+} from "./chat-send-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { refreshChatModelAuthStatus } from "./chat-state-refresh.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";

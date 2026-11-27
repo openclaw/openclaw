@@ -11,7 +11,6 @@ import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.t
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { retireDeliveredQueuedUserTurn } from "./chat-delivery-retirement.runtime.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { admitQueuedMessageForSession } from "./chat-outbox-admission.test-support.ts";
@@ -29,6 +28,7 @@ import {
   loadChatPendingInputs,
   readChatInputRunIds,
 } from "./chat-pending-inputs.ts";
+import { retireDeliveredQueuedUserTurn } from "./chat-send-support.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { renderChatView } from "./chat-view.test-helpers.ts";
