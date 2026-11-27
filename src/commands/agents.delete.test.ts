@@ -327,6 +327,40 @@ describe("agents delete command", () => {
     },
   );
 
+  it("forwards --permanent and warns about copies kept in Trash", async ({ state }) => {
+    await state.setup();
+    const workspace = path.join(state.stateDir, "workspace-ops");
+    gatewayMocks.callGateway.mockResolvedValue({
+      removedBindings: 0,
+      removed: [{ path: workspace, method: "trash", trashPath: "/trash/.fs-safe-trash-1/ws" }],
+      failed: [],
+    });
+    await removeAgent({ permanent: true });
+    expect(gatewayMocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agents.delete",
+        params: { agentId: "ops", deleteFiles: true, permanent: true },
+      }),
+    );
+    expect(runtime.error).toHaveBeenCalledWith(
+      `Warning: ${workspace} was moved to Trash (/trash/.fs-safe-trash-1/ws) but could not be erased; empty Trash to finish.`,
+    );
+  });
+
+  it("names the Trash location of each path the Gateway moved", async ({ state }) => {
+    await state.setup();
+    const workspace = path.join(state.stateDir, "workspace-ops");
+    gatewayMocks.callGateway.mockResolvedValue({
+      removedBindings: 0,
+      removed: [{ path: workspace, method: "trash", trashPath: "/trash/.fs-safe-trash-1/ws" }],
+      failed: [],
+    });
+    await removeAgent();
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringMatching(/^Moved to Trash: .*workspace-ops \(\/trash\/\.fs-safe-trash-1\/ws\)$/),
+    );
+  });
+
   it.for(["gateway", "remote JSON", "local"] as const)(
     "reports %s cleanup failure without undoing the committed deletion",
     async (mode, { state }) => {
@@ -478,7 +512,7 @@ describe("agents delete command", () => {
     expect((await fs.stat(sharedDatabasePath)).isFile()).toBe(true);
     expect(readJson()).toMatchObject({
       removed: expect.arrayContaining(
-        externalFiles.map((file) => ({ path: file, method: "trash" })),
+        externalFiles.map((file) => expect.objectContaining({ path: file, method: "trash" })),
       ),
     });
     expect(readJson()).not.toHaveProperty("purgeFailed");

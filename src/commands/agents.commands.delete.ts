@@ -61,15 +61,17 @@ import { isPathInside } from "../infra/path-guards.js";
 import { normalizeAgentIdStrict } from "../routing/session-key.js";
 import { defaultRuntime as runtime, writeRuntimeJson } from "../runtime.js";
 import { readAgentDeletionJournalAsync } from "../state/agent-deletion-journal.js";
+import { shortenHomePath } from "../utils.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { findAgentEntryIndex, listAgentEntries, pruneAgentConfig } from "./agents.config.js";
-import { moveToTrashResult } from "./cleanup-utils.js";
 import { requireValidConfigForWrite } from "./config-validation.js";
+import { moveToTrashResult } from "./trash-utils.js";
 
 type AgentsDeleteOptions = {
   id: string;
   force?: boolean;
+  permanent?: boolean;
   json?: boolean;
 };
 
@@ -174,7 +176,9 @@ export async function agentsDeleteCommand(opts: AgentsDeleteOptions) {
     }
     const prompter = createClackPrompter();
     const confirmed = await prompter.confirm({
-      message: `Delete agent "${agentId}" and prune workspace/state?`,
+      message: opts.permanent
+        ? `Permanently erase agent "${agentId}", its workspace, credentials, and transcripts? This cannot be undone.`
+        : `Delete agent "${agentId}" and prune workspace/state?`,
       initialValue: false,
     });
     if (!confirmed) {
@@ -221,6 +225,18 @@ export async function agentsDeleteCommand(opts: AgentsDeleteOptions) {
           `Warning: session-store purge failed for deleted agent "${agentId}"; source data was retained. Retry deletion after resolving the storage error.`,
         );
       }
+      const trashed = (cleanup.removed ?? []).filter((entry) => entry.method === "trash");
+      for (const entry of trashed) {
+        const location = entry.trashPath ? ` (${shortenHomePath(entry.trashPath)})` : "";
+        if (opts.permanent) {
+          runtime.error(
+            `Warning: ${entry.path} was moved to Trash${location} but could not be erased; empty Trash to finish.`,
+          );
+        } else if (extra?.transport === "gateway") {
+          // Offline deletion already logged each move as it happened.
+          runtime.log(`Moved to Trash: ${shortenHomePath(entry.path)}${location}`);
+        }
+      }
       for (const failure of cleanup.failed ?? []) {
         runtime.error(
           `Warning: path could not be moved to Trash: ${failure.reason}; remove it manually at ${failure.path}`,
@@ -237,7 +253,7 @@ export async function agentsDeleteCommand(opts: AgentsDeleteOptions) {
       config: cfg,
       expectUrl: url,
       method: "agents.delete",
-      params: { agentId, deleteFiles: true },
+      params: { agentId, deleteFiles: true, ...(opts.permanent ? { permanent: true } : {}) },
       mode: GATEWAY_CLIENT_MODES.CLI,
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       requiredMethods: ["agents.delete"],
@@ -367,7 +383,13 @@ export async function agentsDeleteCommand(opts: AgentsDeleteOptions) {
     const removed: AgentDeleteRemovedPath[] = [];
     const failed: AgentDeleteFailedPath[] = [];
     const removePath = async (pathname: string) => {
-      const outcome = await moveToTrashResult(pathname, quietRuntime, deletion.assertCurrentFinal);
+      const outcome = await moveToTrashResult(
+        pathname,
+        quietRuntime,
+        deletion.assertCurrentFinal,
+        undefined,
+        { permanent: opts.permanent === true },
+      );
       await deletion.assertCurrentAsync();
       if ("removed" in outcome) {
         removed.push(outcome.removed);

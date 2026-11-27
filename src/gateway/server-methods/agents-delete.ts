@@ -107,7 +107,12 @@ export async function deleteGatewayAgent(
   agentId: string,
   requestedDeleteFiles: boolean,
   context: GatewayRequestContext,
-  options: { recoveryOperationId?: string; writeOptions?: ConfigWriteOptions } = {},
+  // Restart recovery omits `permanent`: the choice is not journaled, so resumed cleanup uses Trash.
+  options: {
+    recoveryOperationId?: string;
+    writeOptions?: ConfigWriteOptions;
+    permanent?: boolean;
+  } = {},
 ): Promise<AgentsDeleteResult> {
   // Each attempt releases its lease; retain only the journal identity it actually acquired.
   const attemptOptions = { ...options };
@@ -159,9 +164,9 @@ async function deleteGatewayAgentAttempt(
   agentId: string,
   requestedDeleteFiles: boolean,
   context: GatewayRequestContext,
-  options: { recoveryOperationId?: string; writeOptions?: ConfigWriteOptions },
+  options: { recoveryOperationId?: string; writeOptions?: ConfigWriteOptions; permanent?: boolean },
 ): Promise<AgentsDeleteResult> {
-  const { recoveryOperationId, writeOptions } = options;
+  const { recoveryOperationId, writeOptions, permanent } = options;
   let releaseIngress: (() => void) | undefined;
   try {
     return await withAgentDeletion(agentId, async (begin) => {
@@ -569,7 +574,7 @@ async function deleteGatewayAgentAttempt(
             }
             const outcome = cleanupPath.preparationError
               ? cleanupFailure(cleanupPath.path, cleanupPath.preparationError)
-              : await removeAgentPath(cleanupPath, deletion);
+              : await removeAgentPath(cleanupPath, deletion, permanent === true);
             if ("removed" in outcome) {
               removed.push(outcome.removed);
               await markCleanupPathDone(cleanupPath);

@@ -2,7 +2,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { hasNodeErrorCode, isPathInside } from "@openclaw/fs-safe/path";
-import type { AgentsDeleteResult } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
@@ -17,8 +16,7 @@ import {
 import { removeCompletionRegistrations } from "../cli/completion-runtime.js";
 import { resolveGatewayLockDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { formatErrorMessage, isMissingPathError } from "../infra/errors.js";
-import { movePathToTrash } from "../infra/fs-safe.js";
+import { isMissingPathError } from "../infra/errors.js";
 import {
   acquireGatewayLock,
   GatewayLockError,
@@ -33,14 +31,11 @@ import type { RuntimeEnv } from "../runtime.js";
 import { prepareOpenClawStateDatabaseRemoval } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveHomeDir, shortenHomeInString, shortenHomePath } from "../utils.js";
+import { resolveMoveToTrashSourcePath } from "./trash-utils.js";
 
 type RemovalResult = {
   ok: boolean;
 };
-
-type AgentDeleteRemovedPath = NonNullable<AgentsDeleteResult["removed"]>[number];
-type AgentDeleteFailedPath = NonNullable<AgentsDeleteResult["failed"]>[number];
-type MoveToTrashResult = { removed: AgentDeleteRemovedPath } | { failed: AgentDeleteFailedPath };
 
 type CleanupResolvedPaths = {
   stateDir: string;
@@ -66,82 +61,6 @@ type StateRemovalOptions = {
 
 const STATE_CLEANUP_LOCK_TIMEOUT_MS = 250;
 const STATE_CLEANUP_LOCK_POLL_INTERVAL_MS = 25;
-
-function trashFailure(pathname: string, error: unknown, runtime: RuntimeEnv): MoveToTrashResult {
-  runtime.log(`Failed to move to Trash (manual delete): ${shortenHomePath(pathname)}`);
-  return { failed: { path: pathname, reason: formatErrorMessage(error) } };
-}
-
-export async function moveToTrashResult(
-  pathname: string,
-  runtime: RuntimeEnv,
-  assertCurrent?: () => void,
-  assertCurrentAsync?: () => Promise<void>,
-): Promise<MoveToTrashResult> {
-  if (!pathname) {
-    return { failed: { path: pathname, reason: "path is empty" } };
-  }
-  let isSymbolicLink: boolean;
-  try {
-    isSymbolicLink = (await fs.lstat(pathname)).isSymbolicLink();
-  } catch (error) {
-    return isMissingPathError(error)
-      ? { removed: { path: pathname, method: "missing" } }
-      : trashFailure(pathname, error, runtime);
-  }
-  try {
-    const targetPath = path.resolve(pathname);
-    const sourcePath = await resolveMoveToTrashSourcePath(targetPath);
-    // fs-safe resolves valid symlinks before allow-root checks; a broken link is handled lexically.
-    const allowedRoots = trashAllowedRoots(
-      [sourcePath],
-      isSymbolicLink ? await fs.realpath(sourcePath).catch(() => undefined) : undefined,
-    );
-    // Preparation can outlive its owner; revalidate immediately before Trash dispatch.
-    if (assertCurrentAsync) {
-      await assertCurrentAsync();
-    }
-    assertCurrent?.();
-    await movePathToTrash(sourcePath, { allowedRoots });
-    runtime.log(`Moved to Trash: ${shortenHomePath(pathname)}`);
-    return { removed: { path: pathname, method: "trash" } };
-  } catch (error) {
-    return trashFailure(pathname, error, runtime);
-  }
-}
-
-/** Moves a path to Trash when it exists, logging a manual-delete fallback on failure. */
-export async function moveToTrash(
-  pathname: string,
-  runtime: RuntimeEnv,
-  assertCurrent?: () => void,
-  assertCurrentAsync?: () => Promise<void>,
-): Promise<boolean> {
-  return (
-    "removed" in (await moveToTrashResult(pathname, runtime, assertCurrent, assertCurrentAsync))
-  );
-}
-
-/**
- * Allowed Trash roots for OpenClaw-owned paths: each declared path's own parent, plus the
- * resolved parent when the moved path is a symlink (fs-safe checks the link target, and
- * moving a link never touches the directory behind it). fs-safe's default roots (home + tmp)
- * alone refuse every path of a state dir on a volume such as `/data`.
- */
-export function trashAllowedRoots(
-  declaredPaths: readonly string[],
-  resolvedLinkPath?: string,
-): string[] {
-  const roots = declaredPaths.map((declaredPath) => path.dirname(declaredPath));
-  if (resolvedLinkPath !== undefined) {
-    roots.push(path.dirname(resolvedLinkPath));
-  }
-  return [...new Set(roots)];
-}
-
-async function resolveMoveToTrashSourcePath(targetPath: string): Promise<string> {
-  return path.join(await fs.realpath(path.dirname(targetPath)), path.basename(targetPath));
-}
 
 /** Determine which config, credential, and workspace paths cleanup should consider. */
 export function buildCleanupPlan(params: {

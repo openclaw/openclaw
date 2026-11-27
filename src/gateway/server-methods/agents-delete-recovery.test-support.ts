@@ -231,9 +231,9 @@ export function registerAgentDeleteDrainRecoveryTests(harness: AgentDeleteRecove
         const result = expectRespondOk(deletion.respond, { ok: true, failed: [] });
         expect(result.removed).toEqual(
           expect.arrayContaining([
-            { path: "/workspace/test-agent", method: "trash" },
-            { path: "/agents/test-agent", method: "trash" },
-            { path: "/transcripts/test-agent", method: "trash" },
+            expect.objectContaining({ path: "/workspace/test-agent", method: "trash" }),
+            expect.objectContaining({ path: "/agents/test-agent", method: "trash" }),
+            expect.objectContaining({ path: "/transcripts/test-agent", method: "trash" }),
           ]),
         );
         expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledOnce();
