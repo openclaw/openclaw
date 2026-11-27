@@ -796,6 +796,12 @@ export interface AnthropicMessagesCompat {
   supportsCacheControlOnTools?: boolean;
   /** Whether empty thinking signatures can be replayed as native thinking blocks. Default: false. */
   allowEmptySignature?: boolean;
+  /**
+   * Whether reported `input_tokens` already include `cache_read_input_tokens`
+   * (for example LM Studio). When true, usage parsing subtracts cache reads so
+   * `input` stays the uncached bucket. Default: false (Anthropic's disjoint buckets).
+   */
+  inputTokensIncludeCacheRead?: boolean;
 }
 
 /**
