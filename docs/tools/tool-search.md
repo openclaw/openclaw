@@ -261,7 +261,8 @@ catalog, without rerunning the hook or rewriting earlier conversation turns.
 
 ## MCP tool directory
 
-In `tools` mode, a small MCP inventory is declared directly. When the run's MCP
+In `tools` mode on the default OpenClaw runner, which pins each session's tool
+listing, a small MCP inventory is declared directly. When the run's MCP
 tools need at most 8,192 bytes of name, description, and input schema together,
 the first request of a prompt series lists them with their full schemas next to
 the controls, so the model calls them by name. The threshold is where direct
@@ -273,7 +274,9 @@ tool listing already sends, so the provider tool list stays byte-stable; a tool
 a server adds mid-series joins the directory below instead. A name another tool
 already uses stays deferred, as do the tools of a server that advertises
 instructions, which `tool_describe` returns. Configured `include`/`exclude`
-selectors keep their own split.
+selectors keep their own split. Runners that do not pin a session tool listing
+keep every MCP tool deferred, so their tool list never follows one run's MCP
+inventory.
 
 When the catalog contains deferred MCP tools, the system prompt's deferred-tool
 section ends with a directory of them. The `tool_search` definition never
