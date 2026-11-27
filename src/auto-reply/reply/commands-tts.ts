@@ -11,7 +11,6 @@ import {
 import { getSpeechProvider, listSpeechProviders } from "../../tts/provider-registry.js";
 import { updateTtsPrefsAsync } from "../../tts/tts-settings-write-worker.js";
 import {
-  fitTtsTextToLimit,
   getLastTtsAttempt,
   getTtsMaxLength,
   getTtsPersona,
@@ -95,17 +94,13 @@ async function updateTtsPreference(
   }
 }
 
-async function buildTtsAudioReply({
-  summarized = false,
-  ...params
-}: {
+async function buildTtsAudioReply(params: {
   text: string;
   cfg: Parameters<typeof textToSpeech>[0]["cfg"];
   channel: string;
   accountId?: string;
   prefsPath: string;
   agentId?: string;
-  summarized?: boolean;
 }): Promise<{ reply: ReplyPayload } | { error: CommandHandlerResult }> {
   const start = Date.now();
   const result = await textToSpeech(params);
@@ -114,7 +109,7 @@ async function buildTtsAudioReply({
     timestamp: Date.now(),
     success,
     textLength: params.text.length,
-    summarized,
+    summarized: false,
     persona: result.persona,
     attemptedProviders: result.attemptedProviders,
     attempts: result.attempts,
@@ -207,22 +202,19 @@ async function handleTtsLatestAction(
   if (params.sessionEntry.lastTtsReadLatestHash === hash) {
     return stopWithText("🔊 Latest assistant reply was already sent as audio.");
   }
-
-  const fitted = await fitTtsTextToLimit({
-    text: latestText,
-    maxLength: getTtsMaxLength(prefsPath),
-    summarize: isSummarizationEnabled(prefsPath),
-    cfg: params.cfg,
-    config: resolveTtsConfig(params.cfg, {
-      agentId: targetAgentId,
-      channelId: params.command.channel,
-      accountId,
-    }),
+  const { maxTextLength } = resolveTtsConfig(params.cfg, {
     agentId: targetAgentId,
+    channelId: params.command.channel,
+    accountId,
   });
+  if (latestText.length > maxTextLength) {
+    return stopWithText(
+      `🎤 The latest reply is ${latestText.length} characters, over the ${maxTextLength}-character limit for reading aloud. Ask for a short summary, then run /tts latest to hear it.`,
+    );
+  }
+
   const audio = await buildTtsAudioReply({
-    text: fitted.text,
-    summarized: fitted.summarized,
+    text: latestText,
     cfg: params.cfg,
     channel: params.command.channel,
     accountId,

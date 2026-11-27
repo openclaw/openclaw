@@ -47,5 +47,3 @@ export {
   type ResolvedTtsConfig,
   type TtsDirectiveOverrides,
 } from "./runtime-api.js";
-
-export { fitTtsTextToLimit } from "./tts-text-limit.js";
