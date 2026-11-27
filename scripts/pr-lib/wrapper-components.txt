@@ -2898,6 +2898,7 @@ src/sessions/input-provenance.ts
 src/sessions/model-overrides.ts
 src/sessions/nested-tool-activity.ts
 src/sessions/provider-review.ts
+src/sessions/sessions-send-failure-notice.ts
 src/sessions/transcript-anchor-page.ts
 src/sessions/transcript-display-position.ts
 src/sessions/transcript-record-visibility.ts
