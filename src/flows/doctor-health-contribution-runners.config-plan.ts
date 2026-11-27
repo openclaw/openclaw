@@ -80,9 +80,20 @@ export async function checkWriteConfigHealthPending(
   if (!cron) {
     return "none";
   }
-  const { hasCronCodexModelRefsAfterConfigWriteWork } =
-    await import("../commands/doctor/cron/legacy-repair.js");
-  return (await hasCronCodexModelRefsAfterConfigWriteWork(cron)) ? "work" : "none";
+  const [
+    { hasCronCodexModelRefsAfterConfigWriteWork },
+    { decideDoctorPendingFromLiveStores },
+    { resolveOpenClawStateSqlitePath },
+  ] = await Promise.all([
+    import("../commands/doctor/cron/legacy-repair.js"),
+    import("../commands/doctor-live-store-pending.js"),
+    import("../state/openclaw-state-db.paths.js"),
+  ]);
+  // Cron jobs live in the state database.
+  return decideDoctorPendingFromLiveStores(
+    [resolveOpenClawStateSqlitePath(ctx.env ?? process.env)],
+    async () => ((await hasCronCodexModelRefsAfterConfigWriteWork(cron)) ? "work" : "none"),
+  );
 }
 
 export function hasInitialConfigWrite(ctx: DoctorHealthFlowContext): boolean {

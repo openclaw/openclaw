@@ -197,18 +197,12 @@ export async function prepareSessionFork(params: {
   tools: readonly string[];
   model: { provider: string; model: string };
   workspaceDir: string;
+  /** The anchored turn's conversation facts, with the fork caller's owner flag. */
   requester?: SessionForkRequester;
-  /** The authenticated person who asked for the fork through the session, when known. */
-  caller?: string;
   runtimePluginToolGrant?: RuntimePluginToolGrant;
 }): Promise<{ workspaceDir: string } | undefined> {
-  // exec is not on the owner-only list: a fork runs it only on the owner's own turn and, when an
-  // authenticated person asked through the session, only when that person sent the turn.
-  if (
-    params.tools.includes("exec") &&
-    (params.requester?.senderIsOwner !== true ||
-      (params.caller !== undefined && params.requester.senderId !== params.caller))
-  ) {
+  // exec is not on the owner-only list: a fork runs it only for a caller with owner authority.
+  if (params.tools.includes("exec") && params.requester?.senderIsOwner !== true) {
     return undefined;
   }
   const { prepareConversationCapabilityProfile } =

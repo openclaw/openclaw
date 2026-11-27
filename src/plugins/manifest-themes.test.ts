@@ -1,12 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createThemeDefinitionFixture } from "../../test/helpers/theme-fixture.js";
 import { loadManifestThemeDefinitions } from "./manifest-theme-definitions.js";
 import { normalizeManifestThemes } from "./manifest-themes.js";
 import type { PluginDiagnostic, PluginManifestTheme } from "./manifest-types.js";
 import { loadPluginManifest } from "./manifest.js";
+import { readPluginCacheFile } from "./plugin-cache-files.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import {
   PLUGIN_ACTIVITY_ICON_MAX_BYTES,
@@ -82,6 +83,34 @@ function expectRejected(
 }
 
 describe("manifest theme metadata", () => {
+  it.each([
+    { themes: undefined, ok: true, decodes: 1 },
+    { themes: [], ok: true, decodes: 1 },
+    {
+      themes: [{ id: "plain", name: "Plain", description: "Palette", source: "plain.json" }],
+      ok: true,
+      decodes: 1,
+    },
+    { themes: [null], ok: false, decodes: 1 },
+    { themes: [declaration], ok: true, decodes: 2 },
+  ])("decodes manifest text $decodes time(s) for themes $themes", ({ themes, ok, decodes }) => {
+    const rootDir = tempDirs.make("openclaw-theme-manifest-");
+    const relativePath = "openclaw.plugin.json";
+    fs.writeFileSync(
+      path.join(rootDir, relativePath),
+      JSON.stringify({ id: "theme-pack", configSchema: {}, themes }),
+    );
+    withPluginCache(createPluginCache(), () => {
+      const file = readPluginCacheFile({ rootDir, relativePath, rejectHardlinks: true });
+      if (!file.ok) {
+        throw new Error("fixture manifest was unreadable");
+      }
+      const decode = vi.spyOn(file.contents, "toString");
+      expect(loadPluginManifest(rootDir).ok).toBe(ok);
+      expect(decode).toHaveBeenCalledTimes(decodes);
+    });
+  });
+
   it.each([null, []])("rejects non-record entries: %j", (entry) => {
     expect(normalizeManifestThemes([entry], "theme-pack")).toEqual({
       ok: false,

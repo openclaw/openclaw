@@ -11,7 +11,11 @@ import {
 } from "./subagent-registry-read-topology.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { isSameSubagentRun, latestSubagentRun } from "./subagent-run-generation.js";
+import {
+  isSameSubagentRun,
+  latestSubagentRun,
+  recordLatestSubagentRun,
+} from "./subagent-run-generation.js";
 import {
   getSubagentRunStaleAt,
   hasSubagentRunEnded,
@@ -157,6 +161,8 @@ export type SubagentRunReadIndex<T extends SubagentRunReadRecord = SubagentRunRe
 };
 
 export type LatestSubagentRunReadIndex<T extends SubagentRunReadRecord = SubagentRunRecord> = {
+  runsByChildSessionKey: ReadonlyMap<string, readonly T[]>;
+  latestRunsByChildSessionKey: ReadonlyMap<string, T>;
   getLatestSubagentRun: (childSessionKey: string, childAgentId?: string) => T | null;
 };
 
@@ -164,6 +170,7 @@ export function buildLatestSubagentRunReadIndexFromRuns<T extends SubagentRunRea
   runs: Map<string, T>,
 ): LatestSubagentRunReadIndex<T> {
   const runsByChildSessionKey = new Map<string, T[]>();
+  const latestRunsByChildSessionKey = new Map<string, T>();
   for (const entry of runs.values()) {
     const childSessionKey = entry.childSessionKey.trim();
     if (!childSessionKey) {
@@ -172,8 +179,11 @@ export function buildLatestSubagentRunReadIndexFromRuns<T extends SubagentRunRea
     const bucket = runsByChildSessionKey.get(childSessionKey) ?? [];
     bucket.push(entry);
     runsByChildSessionKey.set(childSessionKey, bucket);
+    recordLatestSubagentRun(latestRunsByChildSessionKey, childSessionKey, entry);
   }
   return {
+    runsByChildSessionKey,
+    latestRunsByChildSessionKey,
     getLatestSubagentRun: (childSessionKey, childAgentId) => {
       const key = childSessionKey.trim();
       return (
