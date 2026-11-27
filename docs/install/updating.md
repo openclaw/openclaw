@@ -87,15 +87,9 @@ This recovery repair is supplied by the candidate CLI; older updaters using
 
 For a Linux system service, run maintenance as the account in its `User=` setting
 with the service's existing `HOME`, `OPENCLAW_HOME`, `OPENCLAW_STATE_DIR`,
-`OPENCLAW_CONFIG_PATH`, and profile selectors. A plain `sudo openclaw update`
-uses root's selectors; it does not automatically adopt the service account.
-
-For an administrator-managed global npm package, replace the package with
-`sudo npm install -g openclaw@latest`, then restart the existing system unit with
-`sudo systemctl restart <unit>.service`. Use the installed unit's name and leave
-its service configuration and file ownership unchanged. Direct Gateway startup
-already migrates old configuration and database schemas in the selected state
-directory; no separate state copy or account adoption is needed.
+`OPENCLAW_CONFIG_PATH`, and profile selectors. When that account differs from
+the one running `openclaw update`, the update is refused before anything changes;
+see [Linux system service run by another account](#linux-system-service-run-by-another-account).
 
 App-owned packages declare their update owner in `openclaw-install-owner.json`
 at the package root. For `owner: "macos-app"`, update OpenClaw.app through its
@@ -134,6 +128,65 @@ Before upgrading, follow the [preflight checklist](/install/updating/rollback-an
 Before a significant update, [create a verified backup](#before-updating-create-a-verified-backup).
 Automatic config copies and migration recovery originals are not a full-state
 backup.
+
+## Linux system service run by another account
+
+A common Linux layout has an administrator-managed global npm package owned by
+root and a systemd system unit whose `User=` is a service account, with the
+service's state in that account's `HOME` or in the unit's `OPENCLAW_STATE_DIR`.
+`openclaw update` cannot back up and check that state for the service account:
+a plain `sudo openclaw update` would check root's own state, and
+`sudo env OPENCLAW_STATE_DIR=<service state> openclaw update` would write the
+service's state as root. So when the selected system unit runs the installation
+being updated as another account, the update is refused before the package is
+replaced. The package, the service state and the running Gateway are unchanged,
+and the refusal prints the commands below with the unit's name, account and
+selectors filled in. Single-account installs and system units that run as the
+updating account are not affected.
+
+If the refused run pointed `OPENCLAW_STATE_DIR` at the service's state, the
+installed updater still wrote its log and report there as root, and the service
+account's backup refuses directories it cannot read. Give those files back to the
+service account first; the refusal prints this command with the real path:
+
+```bash
+sudo find /var/lib/openclaw/.openclaw -xdev -user 0 -exec chown openclaw {} +
+```
+
+Update such an install by hand:
+
+1. Create a verified backup of the service state as the service account, with
+   the unit's `HOME`, `OPENCLAW_HOME`, `OPENCLAW_STATE_DIR`,
+   `OPENCLAW_CONFIG_PATH`, and profile selectors. Keep it until the updated
+   service is healthy.
+
+   ```bash
+   sudo -u openclaw env HOME=/var/lib/openclaw OPENCLAW_STATE_DIR=/var/lib/openclaw/.openclaw \
+     openclaw backup create --verify --output /var/lib/openclaw
+   ```
+
+2. Replace the package. On npm 11.15 and earlier, omit `--allow-scripts=openclaw`.
+
+   ```bash
+   sudo npm install -g openclaw@latest --allow-scripts=openclaw
+   ```
+
+3. Restart the existing unit, using its installed name, and leave its service
+   configuration and file ownership unchanged:
+
+   ```bash
+   sudo systemctl restart openclaw-gateway.service
+   ```
+
+4. Check the service as its account:
+   `sudo -u openclaw env HOME=/var/lib/openclaw OPENCLAW_STATE_DIR=/var/lib/openclaw/.openclaw openclaw gateway status --deep`.
+
+Gateway startup migrates configuration and database schemas in the selected state
+directory, so no separate state copy, Doctor run, or account adoption is needed.
+Do not run `openclaw doctor` or `openclaw update repair` as root against the
+service's state. Reinstalling the previous package alone does not undo a schema
+migration made by the new Gateway; to go back, restore the verified backup with
+it (see [Rollback and recovery](/install/updating/rollback-and-recovery)).
 
 ## Local packaged-code overrides
 
