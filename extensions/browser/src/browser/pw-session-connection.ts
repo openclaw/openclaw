@@ -1,12 +1,10 @@
 import { materializeErrorStack } from "openclaw/plugin-sdk/error-runtime";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import type { Browser, BrowserContext, Page } from "playwright-core";
-import { watchBrowserConnectionIdle } from "./browser-connection-holds.js";
 import { cdpNetworkLogs } from "./cdp-network-log.js";
 import { withManagedProxyForCdpUrl, withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
 import {
@@ -19,6 +17,7 @@ import {
   type CdpEndpointPin,
 } from "./cdp.helpers.js";
 import { getChromeWebSocketEndpoint } from "./chrome.js";
+import { isExtensionRelayCdpUrl } from "./config.js";
 import { resolveBrowserEngine } from "./engines/registry.js";
 import type { BrowserEngineId } from "./engines/types.js";
 import { BrowserTabNotFoundError } from "./errors.js";
@@ -27,10 +26,7 @@ import {
   connectRelayBrowser,
   closeRelayOperationConnection,
 } from "./extension-relay/owner-playwright.js";
-import {
-  getBorrowedRelayCdpAccess,
-  isExtensionRelayCdpUrl,
-} from "./extension-relay/relay-access.js";
+import { getBorrowedRelayCdpAccess } from "./extension-relay/relay-access.js";
 import { connectOverCdpTransport, UnresponsiveCdpTargetError } from "./pw-session-cdp-transport.js";
 import {
   blockedPageRefsByCdpUrl,
@@ -41,7 +37,6 @@ import {
   contextStates,
   observedContexts,
   PLAYWRIGHT_CONNECTION_CLOSE_TIMEOUT_MS,
-  USER_BROWSER_IDLE_RELEASE_MS,
   type ConnectedBrowser,
   type ContextState,
   type PlaywrightConnectionRetirement,
@@ -65,8 +60,6 @@ import {
 } from "./pw-session-webauthn.js";
 
 export { pageTargetInfo } from "./pw-session-page-target.js";
-
-const connectionLog = createSubsystemLogger("browser").child("playwright");
 
 export function hasCachedPlaywrightBrowserConnection(cdpUrl: string): boolean {
   return cachedByCdpUrl.has(normalizeCdpUrl(cdpUrl));
@@ -178,7 +171,6 @@ function takeCachedPlaywrightBrowserConnection(cdpUrl: string): ConnectedBrowser
   if (!cur) {
     return null;
   }
-  cur.stopIdleWatch?.();
   if (cur.onDisconnected) {
     cur.browser.off("disconnected", cur.onDisconnected);
   }
@@ -272,24 +264,6 @@ export function retirePlaywrightBrowserConnectionExact(opts: {
       );
     },
   };
-}
-
-/**
- * Close an unheld connection to the user's own browser; its next use reconnects.
- * The relay then detaches the debugger from every tab. Quarantined targets stay
- * blocked, and role refs survive through the target-keyed ref cache.
- */
-function releaseIdleUserBrowserConnection(normalized: string, connection: ConnectedBrowser): void {
-  if (cachedByCdpUrl.get(normalized) !== connection) {
-    return;
-  }
-  takeCachedPlaywrightBrowserConnection(normalized);
-  connectionLog.info(`released idle browser connection to ${stripCdpUrlCredentials(normalized)}`);
-  void closeTrackedPlaywrightConnection(connection).catch((err: unknown) => {
-    connectionLog.warn(
-      `idle browser connection close failed: ${redactCdpErrorText(formatErrorMessage(err))}`,
-    );
-  });
 }
 
 export function evictStalePlaywrightBrowserConnection(
@@ -402,8 +376,6 @@ export async function connectBrowser(
     return await connecting;
   }
 
-  // Owned and borrowed relays both drive the user's own signed-in browser.
-  const userBrowser = Boolean(relay) || isExtensionRelayCdpUrl(normalized);
   const connectWithRetry = async (): Promise<ConnectedBrowser> => {
     let lastErr: unknown;
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -457,8 +429,9 @@ export async function connectBrowser(
                 lookup,
                 resolveWebSocketUrl,
                 ...(engine ? { engine } : {}),
-                // Keep the user's color scheme and focus state.
-                ...(userBrowser ? { noDefaults: true } : {}),
+                // An owned relay drives the user's own browser; the discovered
+                // WebSocket URL drops the relay credential, so check the profile URL.
+                noDefaults: isExtensionRelayCdpUrl(normalized),
               });
             }),
           );
@@ -488,7 +461,6 @@ export async function connectBrowser(
           const current = cachedByCdpUrl.get(normalized);
           if (current?.browser === browser) {
             cachedByCdpUrl.delete(normalized);
-            current.stopIdleWatch?.();
           }
         };
         // Listen before the awaited setup below, so a browser lost meanwhile is not cached.
@@ -519,13 +491,6 @@ export async function connectBrowser(
         };
         if (connectingByCdpUrl.get(normalized) === pending) {
           cachedByCdpUrl.set(normalized, connected);
-          if (userBrowser) {
-            connected.stopIdleWatch = watchBrowserConnectionIdle(
-              normalized,
-              USER_BROWSER_IDLE_RELEASE_MS,
-              () => releaseIdleUserBrowserConnection(normalized, connected),
-            );
-          }
         }
         return connected;
       } catch (err) {

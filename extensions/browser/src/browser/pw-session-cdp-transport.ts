@@ -64,7 +64,7 @@ type CdpTransportOptions = {
   resolveWebSocketUrl?: () => Promise<string | undefined>;
   preparedTransport?: ConnectOverCDPTransport;
   engine?: BrowserEngineId;
-  /** Attach to a user's own browser without Playwright's default emulation overrides. */
+  /** Leave a user's own browser alone: no default color-scheme or focus emulation. */
   noDefaults?: boolean;
 };
 
@@ -362,7 +362,7 @@ export async function connectOverCdpTransport(
     });
     const browser = await getPlaywrightCore().chromium.connectOverCDP(transport, {
       timeout: opts.timeout,
-      ...(opts.noDefaults ? { noDefaults: true } : {}),
+      noDefaults: opts.noDefaults,
     });
     // Target-command state diagnoses only the cold attach. Stop retaining
     // traffic once Playwright owns a usable browser for the cached session.

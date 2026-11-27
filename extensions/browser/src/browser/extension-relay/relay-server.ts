@@ -39,7 +39,6 @@ import {
 import { RELAY_OWNER_PATH, relayOwnerResource } from "./owner-protocol.js";
 import { attachRelayOwner } from "./owner-server.js";
 import { handlePreAuthWebSocketUpgrade } from "./preauth-websocket-guard.js";
-import { registerOwnedRelayCdpPort } from "./relay-access.js";
 import { readExtensionRelayToken } from "./relay-auth.js";
 import { ExtensionRelayBridge } from "./relay-bridge.js";
 import {
@@ -579,7 +578,6 @@ export async function startExtensionRelayServer(params: {
     const address = server.address();
     return typeof address === "object" && address ? address.port : params.port;
   };
-  const unregisterCdpPort = registerOwnedRelayCdpPort(resolvedPort());
 
   return {
     ownership: "owned",
@@ -604,7 +602,6 @@ export async function startExtensionRelayServer(params: {
         }
         bridge.dispose();
         wss.close();
-        unregisterCdpPort();
         await new Promise<void>((resolve) => {
           server.close(() => resolve());
         });

@@ -5,6 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { chromium, type BrowserContext, type Page } from "playwright-core";
@@ -19,6 +23,7 @@ import { useNativeHostLaunchFixture } from "../src/browser/extension-install.tes
 import { getGatewayExtensionRelayModule } from "../src/browser/extension-relay.runtime.js";
 import { DEFAULT_UPLOAD_DIR } from "../src/browser/paths.js";
 import { getPageForTargetId } from "../src/browser/pw-session.js";
+import { runExtensionRelayDaemon } from "../src/browser/relay-daemon.js";
 import {
   createBrowserRouteDispatcher,
   type BrowserDispatchRequest,
@@ -26,7 +31,11 @@ import {
 } from "../src/browser/routes/dispatcher.js";
 import { createBrowserRouteContext } from "../src/browser/server-context.js";
 import { getFreePort } from "../src/browser/test-port.js";
-import { getBrowserControlState, stopBrowserControlService } from "../src/control-service.js";
+import {
+  getBrowserControlState,
+  startBrowserControlServiceFromConfig,
+  stopBrowserControlService,
+} from "../src/control-service.js";
 import { createBootstrapDiagnostic } from "./bootstrap-diagnostics.test-support.js";
 import { proveLabeledRefScreenshot } from "./labeled-screenshot.test-support.js";
 import chromeExtensionManifest from "./manifest.json" with { type: "json" };
@@ -805,4 +814,92 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
       },
     );
   }, 120_000);
+
+  it.each(["owned", "borrowed"] as const)(
+    "keeps the user's dark color scheme through the %s relay",
+    async (topology) => {
+      const root = await fs.realpath(
+        await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-extension-theme-")),
+      );
+      cleanups.push(async () => await fs.rm(root, { recursive: true, force: true }));
+      const stateDir = path.join(root, "state");
+      const token = relayTestKey(11);
+      await fs.mkdir(path.join(stateDir, "credentials"), { recursive: true, mode: 0o700 });
+      await fs.writeFile(
+        path.join(stateDir, "credentials", "browser-extension-relay.secret"),
+        `${token}\n`,
+        { mode: 0o600 },
+      );
+      const relayPort = await getFreePort();
+      const config = {
+        gateway: { auth: { mode: "token" as const, token: "theme-test" } },
+        browser: { profiles: { e2e: { driver: "extension" as const, cdpPort: relayPort } } },
+      };
+      setRuntimeConfigSnapshot(config, config);
+      cleanups.push(async () => clearRuntimeConfigSnapshot());
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        if (topology === "borrowed") {
+          const daemon = await runExtensionRelayDaemon({ port: relayPort });
+          cleanups.push(async () => {
+            daemon.stop();
+            await daemon.done;
+          });
+        }
+        const state = required(
+          await startBrowserControlServiceFromConfig(),
+          "Browser control did not start",
+        );
+        cleanups.push(stopBrowserControlService);
+        expect(state.extensionRelays?.get("e2e")?.ownership).toBe(topology);
+        state.resolved.ssrfPolicy = undefined;
+        // The user's system appearance is dark; the harness itself emulates nothing.
+        const context = await chromium.launchPersistentContext(path.join(root, "chromium"), {
+          channel: "chromium",
+          headless: true,
+          colorScheme: null,
+          ignoreDefaultArgs: ["--disable-extensions"],
+          args: ["--enable-unsafe-extension-debugging", "--force-dark-mode"],
+        });
+        cleanups.push(async () => await context.close());
+        const extensionDir = path.dirname(fileURLToPath(import.meta.url));
+        await loadUnpackedExtension(context, extensionDir);
+        const extensionPage = await context.newPage();
+        await extensionPage.goto(
+          `chrome-extension://${await waitForExtensionId(context, extensionDir)}/options.html`,
+        );
+        expect(
+          await sendExtensionMessage(extensionPage, {
+            type: "pair",
+            pairingString: `ws://127.0.0.1:${relayPort}/extension#${token}`,
+            accessMode: "all",
+          }),
+        ).toMatchObject({ ok: true });
+        const page = await context.newPage();
+        await page.goto(`data:text/html,${encodeURIComponent("<title>Theme probe</title>")}`);
+        const prefersDark = () =>
+          page.evaluate(() => matchMedia("(prefers-color-scheme: dark)").matches);
+        expect(await prefersDark()).toBe(true);
+        const dispatcher = createBrowserRouteDispatcher(
+          createBrowserRouteContext({ getState: () => state, refreshConfigFromDisk: false }),
+        );
+        const dispatch = (route: string, targetId?: string) =>
+          dispatcher.dispatch({ method: "GET", path: route, query: { profile: "e2e", targetId } });
+        let targetId: string | undefined;
+        await expect
+          .poll(
+            async () => {
+              targetId = responseTabs(await dispatch("/tabs"))?.find(
+                (tab) => tab.url === page.url(),
+              )?.targetId;
+              return targetId;
+            },
+            { timeout: 15_000 },
+          )
+          .toBeTruthy();
+        expectSuccess(await dispatch("/snapshot", targetId));
+        expect(await prefersDark()).toBe(true);
+      });
+    },
+    60_000,
+  );
 });

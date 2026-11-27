@@ -1,4 +1,3 @@
-import { holdBrowserConnection } from "./browser-connection-holds.js";
 import { writeExternalFileWithinOutputRoot } from "./output-files.js";
 import { DEFAULT_TRACE_DIR } from "./paths.js";
 import { ensureContextState, getPageForTargetId } from "./pw-session.js";
@@ -22,10 +21,6 @@ export async function traceStartViaPlaywright(opts: {
     sources: opts.sources ?? false,
   });
   ctxState.traceActive = true;
-  // Recording spans requests; an idle release would close the context and lose the trace.
-  const release = holdBrowserConnection(opts.cdpUrl);
-  ctxState.releaseTraceConnection = release;
-  context.once("close", release);
 }
 
 export async function traceStopViaPlaywright(opts: {
@@ -47,12 +42,6 @@ export async function traceStopViaPlaywright(opts: {
       // Playwright owns the recording lifecycle. Once stop succeeds, a later
       // fs-safe publication failure must not leave this context marked active.
       ctxState.traceActive = false;
-      const releaseConnection = ctxState.releaseTraceConnection;
-      ctxState.releaseTraceConnection = undefined;
-      if (releaseConnection) {
-        context.off("close", releaseConnection);
-        releaseConnection();
-      }
     },
   });
 }

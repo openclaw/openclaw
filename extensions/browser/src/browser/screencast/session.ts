@@ -1,6 +1,5 @@
 import type { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import type { CDPSession, Frame, Page } from "playwright-core";
-import { holdBrowserConnection } from "../browser-connection-holds.js";
 import { getPwAiModule } from "../pw-ai-module.js";
 import { clearBrowserScreencastTokens, type BrowserScreencastTokenParams } from "./tokens.js";
 
@@ -43,14 +42,11 @@ class BrowserScreencastSession {
   private metadata?: { url: string; title: string };
   private stopPromise?: Promise<void>;
   private readonly pending = new Set<Promise<void>>();
-  // Viewers outlive their setup request; an idle release would end the capture under them.
-  private readonly releaseConnection: () => void;
 
   constructor(
     readonly key: string,
     readonly params: BrowserScreencastTokenParams,
   ) {
-    this.releaseConnection = holdBrowserConnection(params.cdpUrl);
     params.lifecycleSignal.addEventListener("abort", this.onTargetClosed, { once: true });
   }
 
@@ -374,7 +370,6 @@ class BrowserScreencastSession {
     this.readyViewers.clear();
     // Publish the drain before closing sockets; their close callbacks may reenter.
     this.stopPromise = this.retireCapture().finally(() => {
-      this.releaseConnection();
       if (sessions.get(this.key) === this) {
         sessions.delete(this.key);
       }

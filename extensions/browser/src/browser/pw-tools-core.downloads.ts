@@ -301,7 +301,6 @@ export async function armDialogViaPlaywright(
   }
   armObservedDialogResponseOnPage({
     page,
-    cdpUrl: opts.cdpUrl,
     accept: opts.accept,
     timeoutMs: timeout,
     ...(opts.promptText !== undefined ? { promptText: opts.promptText } : {}),
