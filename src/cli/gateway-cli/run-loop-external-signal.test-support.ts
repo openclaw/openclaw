@@ -26,6 +26,28 @@ export function registerExternalRestartSignalTests(waitForLoopTurn: () => Promis
     },
   );
 
+  it("accepts another SIGUSR2 after scheduling a timed-out signal throws", async () => {
+    const intent = Promise.withResolvers<null>();
+    mocks.consumeGatewayRestartIntentPayload.mockReturnValueOnce(intent.promise);
+    mocks.consumeGatewayRestartAuthorization.mockReturnValue(false);
+    mocks.isGatewayRestartExternallyAllowed.mockReturnValue(true);
+    mocks.scheduleGatewayRestart.mockImplementationOnce(() => {
+      throw new Error("scheduler unavailable");
+    });
+    await mocks.withRunningGateway(({ captureSignal }) =>
+      withLifecycleClock(async () => {
+        const restart = captureSignal("SIGUSR2");
+        restart();
+        await vi.advanceTimersByTimeAsync(1_000);
+        intent.resolve(null);
+        restart();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(mocks.scheduleGatewayRestart).toHaveBeenCalledTimes(2);
+        expect(gatewayWorkAdmissionActual.isGatewayWorkAdmissionClosed()).toBe(false);
+      }),
+    );
+  });
+
   it.each([
     { allowed: false, publicationFails: false },
     { allowed: true, publicationFails: false },

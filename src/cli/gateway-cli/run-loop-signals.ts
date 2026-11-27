@@ -346,7 +346,11 @@ export function createGatewayRunSignals(params: {
         gatewayLog.warn(
           `Handling SIGUSR2 without stored restart intent: ${formatErrorMessage(error)}`,
         );
-        handleRestart(null, acceptedAtMs);
+        try {
+          handleRestart(null, acceptedAtMs);
+        } catch (err) {
+          restartSignalFailed(err, false);
+        }
       });
     } catch (err) {
       restartSignalFailed(err);
