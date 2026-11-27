@@ -38,6 +38,17 @@ sentence. The page stays the readable synthesis.
 - `valid_from`, `valid_until`, `expires_at` take UTC timestamps.
 - Creating a commitment schedules nothing.
 
+Optional claim fields, only when the source supports them:
+
+- `takeaway`: the one-line lesson or "so what", kept out of the body. Keyword
+  search does not index it.
+- `tags`: free-form labels, settable on claims as on pages.
+- `occurred_until`: inclusive end of an event that spans time; needs
+  `occurred_at`. Not `valid_until`, which removes a claim from active results.
+- `inferred_by: {agent, at, confidence}`: only on `agent_inference` claims.
+  `agent` names the extractor or model, `at` when it inferred (not in the
+  future), `confidence` an honest `high`, `medium` or `low`; omit it if unknown.
+
 ## Structure
 
 - Publish the source page and entity pages first.

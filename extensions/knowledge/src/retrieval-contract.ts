@@ -71,6 +71,7 @@ const hit = Type.Object({
   score: Type.Union([Type.Number(), Type.Null()]),
   attribution: text(1000),
   assertionOrigin: text(30),
+  inferredBy: Envelope.properties.inferred_by,
   evidence: Type.Array(locator, { maxItems: 3 }),
   evidenceTruncated: Type.Boolean(),
 });

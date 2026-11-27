@@ -297,6 +297,7 @@ function leanHit(hit: FullHit, withSnippet: boolean): LeanHit {
     ...inactive(r.lifecycle),
     ...(withSnippet ? { snippet: snippet(hit) } : {}),
     ...(hit.via ? { via: { id: hit.via.id, revision: hit.via.revision } } : {}),
+    ...(hit.inferredBy ? { inferredBy: hit.inferredBy } : {}),
   };
 }
 

@@ -1,7 +1,7 @@
 import { Type, type Static } from "typebox";
 import { ConnectionsInput, DirectedRow } from "./connections-contract.js";
 import { RecordInput, RecordOutput } from "./inspection-contract.js";
-import { Definition, Field, text } from "./model.js";
+import { Definition, Envelope, Field, text } from "./model.js";
 import { Receipt } from "./mutation-contract.js";
 import { PageBudget } from "./page-budget.js";
 import { RememberResult } from "./remember-contract.js";
@@ -166,6 +166,7 @@ export const LeanHit = Type.Object(
     lifecycle: Type.Optional(text(20)),
     snippet: Type.Optional(text(COMPACT_SNIPPET_CHARS)),
     via: Type.Optional(Via),
+    inferredBy: Envelope.properties.inferred_by,
   },
   { additionalProperties: false },
 );

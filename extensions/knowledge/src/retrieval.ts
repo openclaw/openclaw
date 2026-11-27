@@ -153,6 +153,7 @@ function hit(
     score,
     attribution: metadata.attribution ?? "",
     assertionOrigin: metadata.assertion_origin ?? "",
+    ...(metadata.inferred_by ? { inferredBy: metadata.inferred_by } : {}),
     evidence: (metadata.evidence ?? [])
       .slice(0, 3)
       .map(({ path, sha256, start_line, end_line }) =>

@@ -76,9 +76,14 @@ calendar day.
 `inferred_by` is only valid with `assertion_origin: agent_inference`. `agent`
 names the extractor or model (up to 100 characters), `at` is when it inferred
 the claim, and `confidence` is `high`, `medium`, or `low`. `agent` and `at` are
-required; `confidence` is optional. It records the inference's own provenance;
-the agent that saved the claim is still journaled separately (see Displayed
-author).
+required; `confidence` is optional. `at` must not be in the future (a few
+minutes of clock skew, or one day for a date-only value, is allowed).
+It records the inference's own provenance; the agent that saved the claim is
+still journaled separately (see Displayed author). `knowledge_grep` and lookup
+hits include `inferred_by`, so results can be filtered by extractor without
+opening each record.
+`takeaway` is shown and returned with the claim but is not indexed for keyword
+search.
 The span, takeaway, and inference rules are checked when a claim is written.
 Existing authored frontmatter that already uses these names is read as before.
 

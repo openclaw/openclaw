@@ -16,6 +16,7 @@ import {
   toolContext,
   useTestTempDirs,
 } from "./test-support.js";
+import { leanToolResults } from "./tool-results.js";
 
 const tempDirs = useTestTempDirs();
 
@@ -123,6 +124,13 @@ it("extracted claims keep takeaway, tags, event span and inference provenance", 
   });
   const tagged = await f.service.grep({ query: "option", tag: "story_angle" }, f.owner);
   expect(tagged.hits.map((hit: any) => hit.record.id)).toStrictEqual([receipt.id]);
+  // Grep hits carry inferred_by, so an agent can filter by extractor without opening records.
+  expect(tagged.hits[0].inferredBy).toStrictEqual(atom.inferred_by);
+  const agentGrep = await leanToolResults(f.service).grep(
+    { query: "option", tag: "story_angle" },
+    f.owner,
+  );
+  expect(agentGrep.hits[0]!.inferredBy).toStrictEqual(atom.inferred_by);
   const listed = await f.service.records_detail({ kind: "claim", includeCards: true }, f.owner);
   expect(Check(contract.operations.records_detail.output, listed)).toBeTruthy();
   expect(listed.records.find((r: any) => r.id === receipt.id).card.metadata).toMatchObject({
@@ -140,6 +148,13 @@ it("extracted claims keep takeaway, tags, event span and inference provenance", 
     { inferred_by: { agent: "x" } },
     { inferred_by: { at: "2026-10-01", confidence: "low" } },
     { inferred_by: { agent: "x", at: "2026-10-01", confidence: "certain" } },
+    { inferred_by: { agent: "x", at: new Date(Date.now() + 3_600_000).toISOString() } },
+    {
+      inferred_by: {
+        agent: "x",
+        at: new Date(Date.now() + 2 * 86_400_000).toISOString().slice(0, 10),
+      },
+    },
     { takeaway: " " },
   ]) {
     const input = f.claim({ ...atom, ...change });

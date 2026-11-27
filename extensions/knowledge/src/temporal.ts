@@ -74,6 +74,12 @@ export function assertClaimInput(
     (input.assertion_origin !== "agent_inference" || !validSourceDate(inference.at))
   ) {
     issues.push("inferred_by needs assertion_origin agent_inference and a real date");
+  } else if (
+    inference &&
+    // A date-only value may be the writer's local today, up to a day ahead of UTC.
+    Date.parse(inference.at) > Date.now() + (inference.at.length > 10 ? 5 * 60_000 : 86_400_000)
+  ) {
+    issues.push("inferred_by.at must not be in the future");
   }
   if (issues.length) {
     throw new Error(`Record validation failed: ${issues.join("; ")}`);
