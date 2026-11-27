@@ -521,6 +521,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/session-placement-admission.caller-scope.test.ts",
   "src/trajectory/runtime-store-writer.test.ts",
   "src/trajectory/runtime.test.ts",
+  "src/trajectory/export.snapshot.test.ts",
   "src/infra/outbound/bound-delivery-router.test.ts",
   "src/infra/outbound/current-conversation-bindings.worker.test.ts",
   "src/infra/outbound/current-conversation-bindings.test.ts",

@@ -25,8 +25,6 @@ export const runtimeProcessDeclarationEntries = {
     "extensions/codex/session-history-worker-entrypoint.ts",
 };
 export const vitestWorkerDeclarationEntries = {
-  "trajectory/export.snapshot-runtime.test-support":
-    "src/trajectory/export.snapshot-runtime.test-support.ts",
   "talk/client-voice-session-runtime.test-support":
     "src/talk/client-voice-session-runtime.test-support.ts",
   "infra/postgres-sync/locks-runtime.test-support":

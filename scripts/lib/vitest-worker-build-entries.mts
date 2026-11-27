@@ -103,7 +103,6 @@ import { groqSetupSdkEntrypoints } from "../../src/system-agent/setup-inference-
 import { clientVoiceEntryRuntimeEntrypoint } from "../../src/talk/client-voice-session-runtime.test-support.ts";
 import { templateProjectBuildEntrypoint } from "../../src/templates/project-runtime.test-support.ts";
 import { tempDirEntrypoint } from "../../src/test-helpers/temp-dir-runtime.test-support.ts";
-import { snapshotExportTestEntrypoint } from "../../src/trajectory/export.snapshot-runtime.test-support.ts";
 import { transcriptLibraryTimezoneEntrypoint } from "../../src/transcripts/library-timezone-runtime.test-support.ts";
 import { tuiPtyRuntimeEntrypoints } from "../../src/tui/tui-pty-runtime-test-support.ts";
 import { clackPrompterProcessEntrypoint } from "../../src/wizard/clack-prompter-process-runtime.test-support.ts";
@@ -301,7 +300,6 @@ export const vitestWorkerBuildEntries = {
   "legacy-config-binding-repair.runtime":
     "src/commands/doctor/shared/legacy-config-binding-repair.runtime.ts",
   ...createRuntimeProcessBuildEntries([
-    snapshotExportTestEntrypoint,
     ...runtimeProcessBuildEntrypoints,
     benchSessionHistoryEntrypoint,
     ...Object.values(diagnosticProfileEntrypoints),
