@@ -1,6 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { assert, afterEach, beforeEach, expect, it } from "vitest";
+import { assert, afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { readCronRunStateForTests } from "../cron/run-history.test-support.js";
+import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import * as cronNotifications from "./server-cron-notifications.js";
 import {
   addAgentTurnJob,
   createCronConfig,
@@ -54,19 +56,26 @@ it.each([
 );
 
 it("refuses a stored job whose explicit session belongs to another agent", async () => {
-  const job = await addAgentTurnJob(state, "mismatched-session", "hello", {
-    agentId: "main",
-    sessionTarget: "session:agent:ops:scheduled-report",
-  });
+  onTestFinished(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  const failureAlert = vi.spyOn(cronNotifications, "sendGatewayCronFailureAlert");
+  try {
+    const job = await addAgentTurnJob(state, "mismatched-session", "hello", {
+      agentId: "main",
+      sessionTarget: "session:agent:ops:scheduled-report",
+    });
 
-  await state.cron.run(job.id, "force");
+    await state.cron.run(job.id, "force");
 
-  expect(readCronRunStateForTests(job.id)).toMatchObject({
-    lastRunStatus: "error",
-    lastError: expect.stringMatching(/session target belongs to another agent/i),
-  });
-  expect(runCronSessionTurnMock).not.toHaveBeenCalled();
-  expect(runCronIsolatedAgentTurnMock).not.toHaveBeenCalled();
+    expect(readCronRunStateForTests(job.id)).toMatchObject({
+      lastRunStatus: "error",
+      lastError: expect.stringMatching(/session target belongs to another agent/i),
+    });
+    expect(runCronSessionTurnMock).not.toHaveBeenCalled();
+    expect(runCronIsolatedAgentTurnMock).not.toHaveBeenCalled();
+    expect(failureAlert).toHaveBeenCalledOnce();
+  } finally {
+    await Promise.allSettled(failureAlert.mock.results.map(({ value }) => value));
+  }
 });
 
 it.each(["current", "isolated"] as const)(

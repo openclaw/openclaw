@@ -101,6 +101,24 @@ aroundEach((runTest) =>
 );
 
 describe("prepared subagent publication ownership", () => {
+  it("excludes live rows that moved out of a selected retained child", async () => {
+    const retained = run();
+    persistRegistryFixture(runMap(retained));
+    subagentRuns.set(retained.runId, {
+      ...retained,
+      childSessionKey: "agent:main:subagent:moved",
+    });
+
+    const selected = await withSubagentRunReadSnapshot(
+      subagentRuns,
+      (snapshot) => ({ runIds: [...snapshot.keys()], sessionKeys: [] }),
+      (_selection, rows) => [...rows.values()],
+      { childSessionKeys: [childSessionKey] },
+    );
+
+    expect(selected).toEqual([]);
+  });
+
   it("hydrates the final live row once after merging retained payloads", async () => {
     const full = run();
     full.execution = { status: "terminal", endedAt: 200 };

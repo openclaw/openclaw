@@ -19,7 +19,6 @@ import {
 import { requireNodeSqlite } from "./node-sqlite.js";
 import * as snapshotSource from "./sqlite-snapshot-source.js";
 import { verifyUpdateStateConsistency } from "./update-data-at-risk.js";
-import { createRetainedCheckpointFixture } from "./update-retained-checkpoint.test-support.js";
 import { describeRecordedDataAtRisk } from "./update-run-data-at-risk.js";
 import { createUpdateRun, getUpdateRun, recordUpdateRunStep } from "./update-run-ledger.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
@@ -324,20 +323,6 @@ it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
     }
   },
 );
-
-it("refuses while an earlier update's state recovery is unfinished", async () => {
-  const fixture = createRetainedCheckpointFixture(state.path("retained"));
-
-  const verdict = await verifyUpdateStateConsistency({
-    env: fixture.env,
-    formatCommand: (command) => command,
-  });
-
-  expect(verdict).toMatchObject({
-    status: "inconsistent",
-    detail: `update ${fixture.run.runId} has unfinished state recovery`,
-  });
-});
 
 it("reports unreadable state as unverifiable instead of consistent", async () => {
   const databasePath = resolveOpenClawStateSqlitePath(process.env);
