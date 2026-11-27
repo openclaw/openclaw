@@ -33,8 +33,8 @@ A search without `mode` that no record matches on every word retries once with
 any word. Its response reports `queryMode: "any"`; agent results include
 `queryMode: "any"` whenever any-word matching ran. A replacement found through
 [superseded wording](#superseded-wording) counts as a match, so it prevents the
-retry. The shared memory provider's `memory_search` omits `mode`, so it gets the
-retry too.
+retry. With Knowledge selected, agents search with `knowledge_grep`. The shared
+Gateway API, `memory.search`, has no `mode` parameter and uses the same fallback.
 
 Queries accept 1–64 word tokens within 500 characters. Punctuation separates
 tokens; `OR`, `NOT`, column syntax, and quotes are not executed as FTS syntax.
