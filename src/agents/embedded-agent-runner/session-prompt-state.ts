@@ -253,13 +253,12 @@ function resolveSessionToolSurface(params: ToolSurfaceInput) {
   return { known, historyId };
 }
 
-/** Tool names the series' current pin sends; on-demand tools among them stay direct. */
+/** Tool names the series' current pin sends, or undefined before the series' first request. */
 export function readSessionPinnedToolNames(
   params: Omit<ToolSurfaceInput, "tools">,
-): ReadonlySet<string> {
-  return new Set(
-    resolveSessionToolSurface({ ...params, tools: [] }).known?.tools?.map((t) => t.name),
-  );
+): ReadonlySet<string> | undefined {
+  const pinned = resolveSessionToolSurface({ ...params, tools: [] }).known?.tools;
+  return pinned && new Set(pinned.map((tool) => tool.name));
 }
 
 /**

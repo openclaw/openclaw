@@ -1338,6 +1338,7 @@ src/infra/sqlite-reader-metrics.ts
 src/infra/sqlite-readonly-auth-schema.ts
 src/infra/sqlite-readonly-auth-transfer.ts
 src/infra/sqlite-readonly-location-cleanup.ts
+src/infra/sqlite-readonly-location.inspection.ts
 src/infra/sqlite-readonly-location.ts
 src/infra/sqlite-readonly-location.worker.ts
 src/infra/sqlite-readonly-native-resource.client.ts
