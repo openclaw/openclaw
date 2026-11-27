@@ -385,7 +385,7 @@ describe("openai transport stream", () => {
     expect(params.reasoning).toEqual({ effort, summary: "auto" });
   });
 
-  it("normalizes responses tool parameters while downgrading native strict:false", () => {
+  it("normalizes responses tool parameters and keeps an optional key nullable under strict", () => {
     const params = buildOpenAIResponsesParams(
       responsesModelFixture("gpt-5.4"),
       {
@@ -405,11 +405,12 @@ describe("openai transport stream", () => {
       undefined,
     ) as { tools?: Array<{ strict?: boolean; parameters?: Record<string, unknown> }> };
 
-    expect(params.tools?.[0]?.strict).toBe(false);
+    expect(params.tools?.[0]?.strict).toBe(true);
     expectRecordFields(params.tools?.[0]?.parameters, {
       type: "object",
-      properties: { path: { type: "string" } },
-      required: [],
+      properties: { path: { type: ["string", "null"] } },
+      required: ["path"],
+      additionalProperties: false,
     });
   });
 });
