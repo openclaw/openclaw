@@ -145,7 +145,7 @@ process.exit(result.status ?? 1);
     );
   });
 
-  it("removes failed staging and Git registration while preserving the stderr tail", async () => {
+  it("removes the failed Git worktree registration while preserving the stderr tail", async () => {
     const target = await repository(true);
     const staging = path.join(root, "staging");
     const result = await prepareGit({ ...target, staging, node, timeoutMs: 30_000 });
@@ -156,7 +156,6 @@ process.exit(result.status ?? 1);
     expect(result.reason).toBe("build-failed");
     expect(result.stderrTail).toContain("fixture build failed");
     expect(result.stderrTail.length).toBeLessThanOrEqual(8192);
-    await expect(fs.access(staging)).rejects.toMatchObject({ code: "ENOENT" });
     expect((await exec("git", ["-C", target.checkout, "worktree", "list"])).stdout).not.toContain(
       staging,
     );
@@ -181,6 +180,7 @@ process.exit(result.status ?? 1);
       });
       const { lastRun } = await getUpdateRunStatusAsync();
       expect(lastRun).toMatchObject({ status: "failed", reason: "build-failed" });
+      expect(await fs.readdir(path.join(root, "state", "git-install", "releases"))).toEqual([]);
       expect(lastRun?.steps.find(({ step }) => step === "prepare:install")).toMatchObject({
         status: "completed",
         endedAtMs: expect.any(Number),
@@ -416,7 +416,6 @@ if (args[0] === 'pack') {
         await expect(fs.stat(path.join(root, "dependencies-installed"))).rejects.toMatchObject({
           code: "ENOENT",
         });
-        await expect(fs.stat(staging)).rejects.toMatchObject({ code: "ENOENT" });
         return;
       }
       expect(result.ok).toBe(true);
@@ -792,6 +791,8 @@ if (process.argv[2] !== 'install') {
           return;
         }
         expect(outcome).toMatchObject({ status: "pending", target: { version: "2026.11.21" } });
+        const stage = preparedRun?.steps.find(({ step }) => step === "staging");
+        expect(stage?.detail).toBe(`.staging-${process.pid}-${run.runId}`);
         expect(preparedRun?.steps).toContainEqual(
           expect.objectContaining({ step: "candidate-release-check", status: "completed" }),
         );

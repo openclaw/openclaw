@@ -19,7 +19,10 @@ vi.mock("../shared/pid-alive.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../shared/pid-alive.js")>()),
   isPidDefinitelyDead: () => false,
 }));
-import { inspectOtherOpenClawProcesses } from "./openclaw-process-census.js";
+import {
+  inspectOtherOpenClawProcesses,
+  readReleaseProcessHolders,
+} from "./openclaw-process-census.js";
 
 const self = process.pid;
 const launcher = self + 1;
@@ -97,6 +100,19 @@ type HandoffCase = [
   result?: "matching" | "unverified",
   options?: HandoffOptions,
 ];
+it("does not let protected Windows processes hide a candidate's actual holder", () => {
+  const held = { directory: "C:/releases/held", runId: "held-run" };
+  const free = { directory: "C:/releases/free", runId: "free-run" };
+  windows.mockReturnValue([
+    processRow(self, "openclaw update"),
+    { pid: peer, accessDenied: true, cwd: held.directory },
+  ]);
+  expect(readReleaseProcessHolders([held, free])).toEqual({
+    [held.directory]: "held",
+    [free.directory]: "clear",
+  });
+});
+
 const identity = (parentPid: number, startIdentity = "300") => ({ parentPid, startIdentity });
 const reusedParent = [{ pid: peer + 10, ...identity(0, "400") }];
 const opaqueWorker = {

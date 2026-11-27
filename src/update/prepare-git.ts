@@ -244,7 +244,6 @@ export async function prepareGit(params: {
         killProcessTree: true,
       },
     ).catch(() => undefined);
-    await fs.rm(params.staging, { recursive: true, force: true });
     return { ok: false, reason, stderrTail: formatErrorMessage(error).slice(-8192) };
   } finally {
     await cleanupManager?.();

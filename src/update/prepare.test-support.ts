@@ -22,6 +22,8 @@ export async function executable(name: string, source: string) {
 
 beforeEach(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-prepare-"));
+  // The extensionless npm/pnpm fixtures use require, even when TMPDIR is inside an ESM checkout.
+  await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ type: "commonjs" }));
   bin = path.join(root, "bin");
   await fs.mkdir(bin);
   node = path.join(bin, "node");

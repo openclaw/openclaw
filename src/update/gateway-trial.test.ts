@@ -13,12 +13,17 @@ import type * as DoctorContributions from "../flows/doctor-health-contributions.
 import type * as UpdateNotices from "../gateway/update-run-notice.runtime.js";
 import * as watcherModule from "../gateway/update-run-watcher.js";
 import * as rootModule from "../infra/openclaw-root.js";
+import * as holders from "../infra/release-holder-inspection.js";
 import { createGatewayUpdateLifecycle } from "../infra/update-check-lifecycle.js";
 import type * as UpdateInstallStatus from "../infra/update-install-status.js";
 import { renderUpdateRunSummary } from "../infra/update-run-notice.js";
 import { getUpdateRunAsync } from "../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
-import { createUpdateRunAsync, recordUpdateRunStepAsync } from "../infra/update-run-write.async.js";
+import {
+  createUpdateRunAsync,
+  recordUpdateRunPhaseAsync,
+  recordUpdateRunStepAsync,
+} from "../infra/update-run-write.async.js";
 import type * as ProcessExec from "../process/exec.js";
 import type { SpawnResult } from "../process/exec.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -34,6 +39,9 @@ import { VERSION } from "../version.js";
 import { announceReady, settleRunFromTrial } from "./gateway-trial.js";
 import {
   acquireUpdateLock,
+  allocateStaging,
+  collectReleases,
+  publishStaging,
   createTrialPending,
   readTrial,
   readUpdateLock,
@@ -334,11 +342,6 @@ it.each(["dead", "same-pid", "own-live", "live"] as const)(
     });
     await once(owner, "spawn");
     try {
-      if (ownerState === "dead") {
-        const exited = once(owner, "exit");
-        owner.kill("SIGKILL");
-        await exited;
-      }
       await acquireUpdateLock({
         runId: run.runId,
         pid: ownerState === "same-pid" || ownerState === "own-live" ? process.pid : owner.pid!,
@@ -354,6 +357,28 @@ it.each(["dead", "same-pid", "own-live", "live"] as const)(
         );
       }
 
+      const interrupted = path.join(resolvePrefix(), "releases", run.runId);
+      if (ownerState === "dead") {
+        await recordUpdateRunPhaseAsync(
+          run.runId,
+          "staging",
+          {
+            step: {
+              step: "staging",
+              status: "in_progress",
+              detail: `.staging-${owner.pid}-${run.runId}`,
+            },
+          },
+          options,
+        );
+        const stage = await allocateStaging({ id: run.runId });
+        await fs.mkdir(stage.releaseRoot);
+        await fs.writeFile(path.join(stage.releaseRoot, "package.json"), '{"name":"openclaw"}');
+        await publishStaging(stage);
+        const exited = once(owner, "exit");
+        owner.kill("SIGKILL");
+        await exited;
+      }
       await announceReady(null);
 
       if (ownerState !== "dead") {
@@ -370,6 +395,16 @@ it.each(["dead", "same-pid", "own-live", "live"] as const)(
           reason: "interrupted",
         });
         expect(await readUpdateLock()).toBeNull();
+        const inspect = vi
+          .spyOn(holders, "inspectReleaseHolders")
+          .mockResolvedValue({ [interrupted]: "clear" });
+        expect((await collectReleases(resolvePrefix(), state)).removed).toEqual([interrupted]);
+        expect(inspect).toHaveBeenCalledWith([
+          {
+            runId: run.runId,
+            directory: interrupted,
+          },
+        ]);
       }
     } finally {
       if (owner.exitCode === null && owner.signalCode === null) {

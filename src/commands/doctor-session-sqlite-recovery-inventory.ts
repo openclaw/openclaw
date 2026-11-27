@@ -1,6 +1,7 @@
 /** Read-only recovery inventory and dependency classification; never deletion authority. */
 import fs from "node:fs";
 import path from "node:path";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { listAgentIds, resolveEffectiveAgentDir } from "../agents/agent-scope-config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { isMigrationArchiveArtifactName } from "../config/sessions/artifacts.js";
@@ -28,6 +29,9 @@ import {
   type SessionSqliteMigrationMove,
   type SessionSqliteMigrationTargetManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker-context.js";
+import { listUpdateRunsAsync } from "../infra/update-run-reader.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import {
   withArtifactPreservingStateReads,
   withOpenClawStateDatabaseReadSnapshot,
@@ -649,8 +653,11 @@ function readUpdateCleanupInventory(params: {
 
 /** Descriptive reads share their image; effect guards request current rows outside that image. */
 export async function collectUpdateCleanupInventoryAsync(
-  params: Parameters<typeof readUpdateCleanupInventory>[0] & { current?: true },
-) {
+  params: Parameters<typeof readUpdateCleanupInventory>[0] & {
+    current?: true;
+    includeReleaseCleanupWarning?: boolean;
+  },
+): Promise<ReturnType<typeof readUpdateCleanupInventory> & { lastReleaseCleanupWarning?: string }> {
   if (params.readHistory === false) {
     return readUpdateCleanupInventory(params);
   }
@@ -659,7 +666,32 @@ export async function collectUpdateCleanupInventoryAsync(
       withOpenClawStateDatabaseReadSnapshot(
         async () => {
           await getActiveOpenClawStateDatabaseReadSnapshotAsync({ env: params.env });
-          return readUpdateCleanupInventory(params);
+          const inventory = readUpdateCleanupInventory(params);
+          if (params.includeReleaseCleanupWarning && (!params.scan || params.scan.available())) {
+            // This receipt belongs to the last update, not today's inventory or removal plan.
+            try {
+              const [latest] = await listUpdateRunsAsync(
+                { limit: 1, excludeReason: "dry-run" },
+                { env: params.env },
+              );
+              const warning = latest?.steps.find(
+                (step) => step.step === "warning:release-cleanup" && step.status === "completed",
+              )?.detail;
+              if (warning) {
+                return {
+                  ...inventory,
+                  lastReleaseCleanupWarning: `Release cleanup at last update (historical, not included in totals): ${sanitizeTerminalText(redactSensitiveText(warning, { mode: "tools" }))}`,
+                };
+              }
+            } catch {
+              resolveSqliteInspectionSignal()?.throwIfAborted();
+              return {
+                ...inventory,
+                lastReleaseCleanupWarning: "Release cleanup at last update: history unavailable.",
+              };
+            }
+          }
+          return inventory;
         },
         { env: params.env },
       ),

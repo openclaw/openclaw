@@ -64,6 +64,7 @@ vi.mock("@openclaw/proc-safe/identity", () => ({ readProcessAncestry: ancestry }
 import {
   type HandoffReferences,
   inspectOtherOpenClawProcesses,
+  readReleaseProcessHolders,
 } from "./openclaw-process-census.js";
 
 const self = process.pid;
@@ -906,6 +907,23 @@ it("does not report the inspector's own descendants as handoff work", () => {
     ],
   );
   expectReferences([peer + 2], [peer + 3]);
+  // The same snapshot answers a different question for release removal. The child holds a
+  // release even though it is outside the handoff, and its unreadable child blocks clearance.
+  rows.delete(peer + 2);
+  rows.delete(peer + 3);
+  const candidates = [
+    { runId: "held-run", directory: "/tmp/retained runtime" },
+    { runId: "other-run", directory: "/tmp/other runtime" },
+  ];
+  expect(readReleaseProcessHolders(candidates)).toEqual({
+    "/tmp/retained runtime": "held",
+    "/tmp/other runtime": "unknown",
+  });
+  rows.delete(peer + 1);
+  expect(readReleaseProcessHolders(candidates)).toEqual({
+    "/tmp/retained runtime": "held",
+    "/tmp/other runtime": "clear",
+  });
 });
 
 it("reports shared-root work unless its whole ancestry began after the family deadline", () => {

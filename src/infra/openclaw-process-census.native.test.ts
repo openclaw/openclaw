@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { inspectOtherOpenClawProcesses } from "./openclaw-process-census.js";
+import { inspectReleaseHolders } from "./release-holder-inspection.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const orphans = new Set<number>();
@@ -239,6 +240,25 @@ setInterval(() => {}, 1e9);`,
     expect(pids.filter((pid) => released.has(pid))).toEqual([]);
   },
 );
+
+it("checks the cleanup worker's own process family for release holders", async () => {
+  const directory = fs.realpathSync(dirs.make("release-holder-"));
+  const child = spawn(process.execPath, ["-e", "process.stdin.resume()"], {
+    cwd: directory,
+    stdio: ["pipe", "ignore", "ignore"],
+  });
+  const closed = once(child, "close");
+  try {
+    await once(child, "spawn");
+    const observed = await inspectReleaseHolders([
+      { runId: "release-inspection-fixture", directory },
+    ]);
+    expect(["held", "unknown"]).toContain(observed[directory]);
+  } finally {
+    child.stdin.end();
+    await closed;
+  }
+});
 
 function childPids(pid: number): number[] {
   const result = spawnSync("/usr/bin/pgrep", ["-P", String(pid)], { encoding: "utf8" });

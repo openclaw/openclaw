@@ -1,36 +1,31 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { readProcessAncestry } from "@openclaw/proc-safe/identity";
 import {
   isBunRuntime,
   isNodeRuntime,
   resolveRuntimeScriptPosition,
 } from "../daemon/runtime-binary.js";
-import { readDarwinProcessCommand } from "../process/supervisor/darwin-process-command.js";
-import {
-  readProcessGroupMembers,
-  type ProcessCommand,
-} from "../process/supervisor/service-child-group-ownership.js";
+import type { ProcessCommand } from "../process/supervisor/service-child-group-ownership.js";
 import { parseWindowsNativeCommandLine } from "../process/windows-command-line.js";
 import { isPidDefinitelyDead, readLinuxProcessStat } from "../shared/pid-alive.js";
-import { escapeRegExp } from "../shared/regexp.js";
 import { isRosettaTranslatedProcess } from "../shared/rosetta-translation.js";
 import {
   getRootOptionAwareCommandPath,
   isUpdateCommandArgv,
   rewriteUpdateFlagArgv,
 } from "./cli-root-options.js";
-import { isContainerEnvironment } from "./container-environment.js";
 import {
   classifyOpenClawArgv,
   classifyOpenClawEntrypointPath,
   readProcessPackageIdentity,
-  readProcessWorkingDirectories,
   referencesRetainedArtifact,
 } from "./gateway-process-argv.js";
+import { readCensusSnapshot, censusReferencePatterns } from "./openclaw-process-census-snapshot.js";
+import type { ReleaseCandidate, ReleaseHolderResults } from "./release-holder-inspection.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
-import { readWindowsProcessCensus } from "./windows-process-census.js";
+import type { readWindowsProcessCensus } from "./windows-process-census.js";
 import { readWindowsUserSid } from "./windows-user-sid.js";
 
 const workerEntrypoints = Object.values(runtimeProcessEntrypoints).flatMap((entry) => [
@@ -364,13 +359,6 @@ type CensusResult = {
   warnings?: string[];
   error?: string;
 };
-type CensusProcess = {
-  pid: number;
-  ppid?: number;
-  state: string;
-  command?: { ppid: number } & ProcessCommand;
-};
-
 type WindowsCensusRow = ReturnType<typeof readWindowsProcessCensus>[number];
 
 /** Windows hides command lines across accounts like Darwin, whose unreadable foreign
@@ -457,6 +445,68 @@ function classifyWindowsHandoffAncestry(
   return "unknown";
 }
 
+/** A release is held by any process using it, even the inspecting Gateway's own child.
+ * Unlike handoff repair there are no family, launcher or shared-root exemptions. */
+export function readReleaseProcessHolders(candidates: ReleaseCandidate[]): ReleaseHolderResults {
+  const results: ReleaseHolderResults = {};
+  const inspectorUid = process.getuid?.();
+  let incomplete = false;
+  try {
+    const { windows, deadline, processes, nativeByPid, directories, byPid } =
+      readCensusSnapshot(true);
+    const { normalize, referencePattern } = censusReferencePatterns(windows);
+    const checks = candidates.map(({ directory, runId }) => ({
+      directory,
+      pattern: referencePattern([directory], runId),
+    }));
+    for (const { pid, command } of processes) {
+      if (Date.now() >= deadline) {
+        incomplete = true;
+        break;
+      }
+      const observation = nativeByPid.get(pid);
+      const argv = command && "argv" in command ? command.argv : undefined;
+      const cwd = directories.get(pid);
+      const texts = [
+        ...(argv ?? []),
+        observation?.commandLine ?? "",
+        observation?.executable ??
+          (command && "executable" in command ? command.executable : "") ??
+          "",
+        cwd ?? "",
+      ].map(normalize);
+      for (const { directory, pattern } of checks) {
+        if (texts.some((text) => pattern.test(text))) {
+          results[directory] = "held";
+        }
+      }
+      if (argv?.length && cwd) {
+        continue;
+      }
+      if (
+        isPidDefinitelyDead(pid) ||
+        (!windows && argv?.length === 0) ||
+        observation?.foreignOwner ||
+        observation?.accessDenied ||
+        command?.owner === "different" ||
+        (command?.uid !== undefined &&
+          inspectorUid !== undefined &&
+          command.uid !== inspectorUid) ||
+        isStandardSystemdLoginProcess(command, byPid.get(command?.ppid ?? 0)?.command, inspectorUid)
+      ) {
+        continue;
+      }
+      incomplete = true;
+    }
+  } catch {
+    incomplete = true;
+  }
+  for (const { directory } of candidates) {
+    results[directory] ??= incomplete ? "unknown" : "clear";
+  }
+  return results;
+}
+
 /** Default custody decisions stay conservative; reference inspection also reports partial evidence. */
 export function inspectOtherOpenClawProcesses(references: HandoffReferences): CensusResult;
 export function inspectOtherOpenClawProcesses(
@@ -473,49 +523,12 @@ export function inspectOtherOpenClawProcesses(
   const warnings: string[] = [];
   const result: CensusResult = { matchingPids: [], unverifiedPids: [] };
   try {
-    if (process.platform === "linux" && isContainerEnvironment()) {
-      throw new Error(
-        "Host process visibility cannot be established from this container. Run Doctor on the host after stopping OpenClaw containers that share its temporary directory.",
-      );
-    }
-    const windows = process.platform === "win32";
-    const deadline = Date.now() + (handoff ? 15_000 : 1_000);
-    const native = windows ? [...readWindowsProcessCensus(15_000)] : undefined;
-    const nativeByPid = new Map(native?.map((entry) => [entry.pid, entry]));
+    const { windows, deadline, nativeByPid, processes, byPid, current, directories } =
+      readCensusSnapshot(Boolean(handoff));
     const sameWindowsUser =
       windows &&
       handoff?.windowsUserSid !== undefined &&
       readWindowsUserSid() === handoff.windowsUserSid;
-    const processes: CensusProcess[] = native?.map(({ pid, parentPid, commandLine }) => {
-      const argv = commandLine ? parseWindowsNativeCommandLine(commandLine) : null;
-      return {
-        pid,
-        state: "",
-        command: argv?.length && parentPid !== undefined ? { ppid: parentPid, argv } : undefined,
-      };
-    }) ?? [
-      ...readProcessGroupMembers(handoff ? 15_000 : 1_000, {
-        // Handoff matches read argv and cwd only; a launcher needs an argv entrypoint,
-        // so the service marker cannot change the outcome. Skip that environment read.
-        readDarwinCommand: handoff
-          ? (pid, owner) => readDarwinProcessCommand(pid, owner, { serviceMarker: false })
-          : readDarwinProcessCommand,
-      }),
-    ];
-    const byPid = new Map(processes.map((entry) => [entry.pid, entry]));
-    const current = byPid.get(process.pid);
-    if (
-      !current ||
-      (!handoff &&
-        ((!current.command && process.platform !== "darwin") ||
-          (process.platform === "linux" &&
-            processes.some((entry) => entry.command && !("argv" in entry.command)))))
-    ) {
-      throw new Error("OpenClaw process census is incomplete.");
-    }
-    const directories = native
-      ? new Map(native.map(({ pid, cwd }) => [pid, cwd]))
-      : readProcessWorkingDirectories(processes.map(({ pid }) => pid));
     const launchers = new Set<number>();
     const updateInspector = !handoff && isUpdateCommandArgv(process.argv);
     const ancestors = new Set<number>([process.pid]);
@@ -562,31 +575,14 @@ export function inspectOtherOpenClawProcesses(
       child = parent;
       parentPid = parent.command.ppid;
     }
-    const normalize = (value: string) =>
-      windows
-        ? value
-            .replaceAll("\\", "/")
-            .replace(/\/{2,}\?\/UNC\//gi, "//")
-            .replace(/\/{2,}\?\//g, "")
-            .replace(/\/{2,}/g, "/")
-            .toLowerCase()
-        : value;
-    const literal = (value: string) => escapeRegExp(normalize(value));
-    const referencePattern = (values: readonly string[]) => {
-      const paths = values.flatMap((value) => [
-        value.replace(/[\\/]+$/, ""),
-        pathToFileURL(value, { windows }).href,
-      ]);
-      return new RegExp(
-        `(?:^|[^\\w-])(?:${handoff ? literal(handoff.runId) : "(?!)"}(?=$|[^\\w-])|(?:${paths.map(literal).join("|") || "(?!)"})(?=$|[/\\s"'\x60);,\\]]))`,
-      );
-    };
+    const { normalize, referencePattern } = censusReferencePatterns(windows);
     const artifactPaths = handoff?.artifactPaths ?? (runtimeDirectory ? [runtimeDirectory] : []);
-    const matches = referencePattern(artifactPaths);
+    const matches = referencePattern(artifactPaths, handoff?.runId);
     const rootKey = (value: string) => normalize(value.replace(/[\\/]+$/, ""));
     const sharedRoots = new Set(handoff?.sharedRoots?.map(rootKey));
     const runReferences = referencePattern(
       artifactPaths.filter((value) => !sharedRoots.has(rootKey(value))),
+      handoff?.runId,
     );
     const inspectorUid = process.getuid?.();
     // Positive start-ordered ancestry proves work is not the handoff family's:

@@ -3,14 +3,19 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir, resolveConfigPath } from "../config/paths.js";
 import { syncDirectoryIfSupported } from "../infra/directory-durability.js";
-import { hasErrnoCode } from "../infra/errno.js";
+import { hasErrnoCode, ignoreMissingPath } from "../infra/errno.js";
 import { servingGitReleaseSlot } from "../infra/git-release-paths.js";
-import { collectPackageReleases } from "../infra/package-release-retention.js";
+import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import {
+  collectPackageReleases,
+  PACKAGE_RELEASE_MIN_AGE_MS,
+} from "../infra/package-release-retention.js";
 import { readPackageReleaseSlotSync } from "../infra/package-release-slot-path.js";
 import {
   capturePackageReleaseSlot,
   switchPackageReleaseLink,
 } from "../infra/package-release-slot.js";
+import { isPidDefinitelyDeadAsync } from "../shared/pid-alive.js";
 
 export type ReleaseKind = "git" | "package";
 export type Trial = {
@@ -52,25 +57,28 @@ export async function hasReleaseUpdateOwner(
   );
 }
 
-function releaseRootOf(id: string, prefix = resolvePrefix()): string {
-  return path.join(prefix, "releases", id, "openclaw");
-}
-
 export async function allocateStaging(
   { kind = "git", id = randomUUID() }: { kind?: ReleaseKind; id?: string } = {},
   prefix = resolvePrefix(),
 ): Promise<Staging> {
-  const staging = path.join(prefix, "releases", `.staging-${id}`);
+  if (!/^[A-Za-z0-9][\w-]*$/u.test(id)) {
+    throw new Error("Invalid release ID");
+  }
+  const staging = path.join(prefix, "releases", `.staging-${process.pid}-${id}`);
   await fs.mkdir(path.dirname(staging), { recursive: true });
   await fs.mkdir(staging);
-  return { id, kind, path: staging, releaseRoot: releaseRootOf(`.staging-${id}`, prefix) };
+  return { id, kind, path: staging, releaseRoot: path.join(staging, "openclaw") };
 }
 
 export async function publishStaging(staging: Staging): Promise<string> {
   const destination = path.join(path.dirname(staging.path), staging.id);
+  const releaseRoot = path.join(destination, path.relative(staging.path, staging.releaseRoot));
   await fs.rename(staging.path, destination);
+  // Keep the owner pointed at its disposable tree even if directory sync fails after rename.
+  staging.path = destination;
+  staging.releaseRoot = releaseRoot;
   await syncDirectoryIfSupported(path.dirname(destination));
-  return path.join(destination, path.relative(staging.path, staging.releaseRoot));
+  return releaseRoot;
 }
 
 async function readJson<T>(file: string): Promise<T | null> {
@@ -225,11 +233,79 @@ export async function switchLink(target: string, prefix = resolvePrefix()): Prom
   });
 }
 
-export async function collectReleases(prefix = resolvePrefix()) {
+/** Called under the preparation lock, before allocation. A settled trial bounds the startup
+ * grace to the most recently deselected release instead of every build made in the past day. */
+export async function collectReleases(
+  prefix: string,
+  runningRoot: string,
+  env = process.env,
+  previousLock?: UpdateLock,
+) {
   const trial = await readTrial(prefix);
+  const actualPrefix = await fs.realpath(prefix);
+  const updater = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
+  // A Gateway that could not write its release lease still owns its loaded code. Do not
+  // shorten the old grace on the strength of a selected link alone.
+  const gateway =
+    trial?.v === 2
+      ? await (
+          await import("./installation-identity.js")
+        ).readUpdateGatewayRoot(env, updater ?? runningRoot)
+      : undefined;
+  if (gateway && !gateway.root) {
+    return {
+      removed: [],
+      warnings: [
+        "Release collection skipped; the live Gateway's installation could not be identified.",
+      ],
+    };
+  }
+  const expiredTrial =
+    trial?.v === 2 &&
+    trial.reported &&
+    ["committed", "rolled-back"].includes(trial.phase) &&
+    trial.outcome &&
+    Date.now() - trial.outcome.at >= PACKAGE_RELEASE_MIN_AGE_MS;
+  // First conversion may have rolled back to the external checkout rather than a release slot.
+  // Verify that the launcher really switched back before admitting the failed target alone.
+  const selectedRoot = await fs
+    .realpath(path.join(actualPrefix, "openclaw"))
+    .catch(ignoreMissingPath);
+  const legacyRoot = await fs
+    .realpath(path.join(actualPrefix, "lib", "node_modules", "openclaw"))
+    .catch(ignoreMissingPath);
+  const rolledBack =
+    trial?.v === 2 &&
+    trial.phase === "rolled-back" &&
+    trial.reported &&
+    selectedRoot &&
+    selectedRoot === (await fs.realpath(path.resolve(actualPrefix, trial.previous)))
+      ? { root: path.resolve(actualPrefix, trial.target), runId: trial.runId }
+      : undefined;
+  // A dead preparer can have renamed its exact run's tree before the first trial existed.
+  const interrupted =
+    previousLock && (await isPidDefinitelyDeadAsync(previousLock.pid))
+      ? previousLock.runId
+      : undefined;
   return collectPackageReleases({
-    prefix,
-    slot: path.join(prefix, "openclaw"),
-    keep: trial ? [trial.target, trial.previous].map((target) => path.resolve(prefix, target)) : [],
+    prefix: actualPrefix,
+    slot: servingGitReleaseSlot(actualPrefix),
+    keep: [
+      runningRoot,
+      ...(selectedRoot ? [selectedRoot] : []),
+      ...(previousLock && !interrupted
+        ? [path.join(actualPrefix, "releases", previousLock.runId)]
+        : []),
+      ...(updater ? [updater] : []),
+      ...(legacyRoot ? [legacyRoot] : []),
+      ...(gateway?.root ? [gateway.root] : []),
+      ...(trial && !expiredTrial
+        ? (rolledBack ? [trial.previous] : [trial.target, trial.previous]).map((target) =>
+            path.resolve(actualPrefix, target),
+          )
+        : []),
+    ],
+    resident: { knownTrial: trial?.v === 2, rolledBack, interrupted },
+    env,
   });
 }

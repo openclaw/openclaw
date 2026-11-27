@@ -118,6 +118,30 @@ export async function isNodeOnlyUpdateInstallation(
   );
 }
 
+/** Physical root of the live state owner. A known PID with no identifiable root is not absence. */
+export async function readUpdateGatewayRoot(env: NodeJS.ProcessEnv, selfRoot?: string) {
+  const owner = await readActiveGatewayLockIdentity({
+    env,
+    requireInspection: true,
+    timeoutMs: 10_000,
+  });
+  if (!owner) {
+    return undefined;
+  }
+  if (owner.pid === process.pid && selfRoot) {
+    return { pid: owner.pid, root: selfRoot };
+  }
+  const argv =
+    owner.pid === process.pid
+      ? process.argv
+      : readGatewayLockProcessCmdline(owner.pid, process.platform, 10_000, undefined, env);
+  const entry = classifyOpenClawArgv(argv ?? [], { requirePackageIdentity: true, pid: owner.pid });
+  return {
+    pid: owner.pid,
+    root: entry.kind === "openclaw" ? entry.packageIdentity?.root : undefined,
+  };
+}
+
 export async function checkUpdateInstallationSlot(
   root: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -141,25 +165,11 @@ export async function checkUpdateInstallationSlot(
     if (layout?.packageRootReal) {
       installedRoots.push(layout.packageRootReal);
     }
-    const owner = await readActiveGatewayLockIdentity({
-      env,
-      requireInspection: true,
-      timeoutMs: 10_000,
-    });
-    if (owner) {
-      const argv =
-        owner.pid === process.pid
-          ? process.argv
-          : readGatewayLockProcessCmdline(owner.pid, process.platform, 10_000, undefined, env);
-      const entry = classifyOpenClawArgv(argv ?? [], {
-        requirePackageIdentity: true,
-        pid: owner.pid,
-      });
-      if (entry.kind === "openclaw" && entry.packageIdentity?.root) {
-        installedRoots.push(entry.packageIdentity.root);
-      } else if (installedRoots.length === 0) {
-        throw new UnverifiedForegroundUpdateOwnerError(owner.pid);
-      }
+    const gateway = await readUpdateGatewayRoot(env);
+    if (gateway?.root) {
+      installedRoots.push(gateway.root);
+    } else if (gateway && installedRoots.length === 0) {
+      throw new UnverifiedForegroundUpdateOwnerError(gateway.pid);
     }
   }
   if (installedRoots.length === 0) {

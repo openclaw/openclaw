@@ -64,6 +64,7 @@ export async function updateCleanupCommand(options: {
   includeUnmanifested?: string[];
 }): Promise<void> {
   let report: RecoveryCleanupReport | undefined;
+  let lastReleaseCleanupWarning: string | undefined;
   try {
     const readConfig = options.includeUnmanifested?.length
       ? async () => {
@@ -80,18 +81,22 @@ export async function updateCleanupCommand(options: {
         }
       : readSourceConfigBestEffort;
     const cfg = await readConfig();
-    if (options.includeUnmanifested?.length) {
+    if (options.dryRun || options.includeUnmanifested?.length) {
       const inventory = await collectUpdateCleanupInventoryAsync({
         cfg,
         env: process.env,
         current: true,
+        includeReleaseCleanupWarning: options.dryRun,
       });
-      selectUnmanifestedRecovery({
-        inventory,
-        cfg,
-        env: process.env,
-        paths: options.includeUnmanifested,
-      });
+      lastReleaseCleanupWarning = inventory.lastReleaseCleanupWarning;
+      if (options.includeUnmanifested?.length) {
+        selectUnmanifestedRecovery({
+          inventory,
+          cfg,
+          env: process.env,
+          paths: options.includeUnmanifested,
+        });
+      }
       report = inventory.report;
     } else {
       report = await inspectSessionSqliteRecovery({ cfg, env: process.env });
@@ -140,9 +145,13 @@ export async function updateCleanupCommand(options: {
             : item,
         ),
         dryRun: options.dryRun === true,
+        ...(lastReleaseCleanupWarning ? { lastReleaseCleanupWarning } : {}),
       });
     } else {
       renderCleanup(report);
+      if (lastReleaseCleanupWarning) {
+        defaultRuntime.log(lastReleaseCleanupWarning);
+      }
     }
     if (report.status === "refused") {
       defaultRuntime.error(

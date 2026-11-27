@@ -93,6 +93,7 @@ export function applyUpdateRunStep(
       (step.step === "plugins" && step.status === "failed") ||
       (step.status === "skipped" && step.step === "warning:recovery-artifact-cleanup")) &&
     [
+      "warning:release-cleanup",
       "recovery-artifact-cleanup",
       "warning:recovery-artifact-cleanup",
       "diagnostic:recovery-artifact-cleanup",

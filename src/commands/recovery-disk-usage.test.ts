@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { expect, it, vi } from "vitest";
+import { updateCleanupCommand } from "../cli/update-cli/cleanup.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
 import { readMigrationArtifactIdentity } from "../infra/session-sqlite-migration-artifact.js";
 import {
@@ -18,8 +19,10 @@ import { UPDATE_CAPTURE_PRIVACY_MARKER } from "../infra/update-capture-privacy-m
 import {
   createUpdateRun,
   finishUpdateRun,
+  recordUpdateRunStep,
   recordUpdateRunVerification,
 } from "../infra/update-run-ledger.js";
+import { defaultRuntime } from "../runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
 import { collectRecoveryDiskUsage, formatRecoveryDiskUsage } from "./recovery-disk-usage.js";
@@ -49,6 +52,17 @@ it("reports logical bytes and distinct eligibility counts by kind through status
           },
           { env: state.env },
         );
+        if (now === 3_000) {
+          recordUpdateRunStep(
+            runId,
+            {
+              step: "warning:release-cleanup",
+              status: "completed",
+              detail: "Could not remove release A (41 logical bytes).",
+            },
+            { env: state.env },
+          );
+        }
         finishUpdateRun(runId, { status: "succeeded" }, { env: state.env });
         captures.push({ runId, bytes: now === 1_000 ? 11 : 13 });
       }
@@ -88,6 +102,18 @@ it("reports logical bytes and distinct eligibility counts by kind through status
     }).find(({ Item }) => Item === "Recovery copies (local)");
     expect(row?.Value).toContain(
       "60 logical bytes in 4 copies; 1 retirable, 1 protected, 2 unmanifested/orphan",
+    );
+    const warning =
+      "Release cleanup at last update (historical, not included in totals): Could not remove release A (41 logical bytes).";
+    expect(row?.Value).toContain(warning);
+    using json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    await updateCleanupCommand({ dryRun: true, json: true });
+    expect(json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lastReleaseCleanupWarning: warning,
+        totals: expect.objectContaining({ candidateBytes: 11 }),
+      }),
+      2,
     );
     expect(fs.readFileSync(original)).toEqual(Buffer.alloc(19));
   });
@@ -153,6 +179,19 @@ it("includes the same read-only recovery inventory in Doctor lint JSON", async (
     fs.mkdirSync(state.statePath("state"), { recursive: true });
     const original = state.statePath("state", "openclaw.sqlite.pre-startup-migration-old.bak");
     fs.writeFileSync(original, "original");
+    const { runId } = createUpdateRun({ trigger: "cli" }, { env: state.env });
+    recordUpdateRunStep(
+      runId,
+      {
+        step: "warning:release-cleanup",
+        status: "completed",
+        detail: "Release B: size unknown (permission denied).",
+      },
+      { env: state.env },
+    );
+    finishUpdateRun(runId, { status: "succeeded" }, { env: state.env });
+    using scanClock = vi.spyOn(performance, "now");
+    scanClock.mockReturnValue(0);
     const output: string[] = [];
     using stdout = vi.spyOn(process.stdout, "write");
     stdout.mockImplementation((chunk) => {
@@ -167,6 +206,9 @@ it("includes the same read-only recovery inventory in Doctor lint JSON", async (
     expect(result.recoveryCopies).toMatchObject({
       scope: "local",
       incomplete: false,
+      lastReleaseCleanupWarning: expect.stringContaining(
+        "Release B: size unknown (permission denied).",
+      ),
       total: { count: 1, logicalBytes: 8, unmanifestedOrOrphan: { count: 1, logicalBytes: 8 } },
     });
     expect(fs.readFileSync(original, "utf8")).toBe("original");

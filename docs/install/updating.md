@@ -491,6 +491,29 @@ At Gateway start, a preparation lock whose owner is dead or has the new Gateway'
 PID is released after its run is recorded as failed with reason `interrupted`.
 A live preparation owner in another process is left untouched.
 
+The installed resident updater collects old releases before it prepares another build,
+even if the update later fails or is already current. With a resident trial record,
+it keeps both sides of an active trial and gives the last deselected release up to
+one day for a starting process to acquire its lease. Serving links, the running
+Gateway and updater, leased releases, and builds named by open updates stay
+protected. It does not keep a day's worth of unreferenced builds. Without a
+resident trial record the older 24-hour grace still applies. Legacy npm release
+collection also retains that grace.
+
+Preparation owns its build until it publishes the pending trial. A failed attempt
+removes its tree, including a renamed release, without waiting for another update.
+After a killed preparer or a completed rollback, the next update checks for surviving
+processes before removing the abandoned stage or failed candidate. A published
+candidate keeps its run ID: later updates can still check its recorded outcome
+after the preparation lock is gone or another trial replaces it. The cleanup
+worker checks all abandoned candidates in one process census, including the
+Gateway's own children. A live holder or incomplete inspection keeps the tree.
+Stages from older preparers
+without owner information are left alone. Failed or unverified cleanup records
+the observed logical bytes in the run, not an estimate of physical space recoverable
+from shared files. This fix must be in the installed
+updater; a downloaded candidate cannot change its preparer's cleanup.
+
 Shipped in-place updaters leave their running code in an `openclaw-update-runtime-*`
 directory and promise that the next update removes it. On the release path, `openclaw update`
 runs Doctor's retained-runtime maintenance in its own process before the update starts, the

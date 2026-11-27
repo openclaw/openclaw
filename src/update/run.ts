@@ -19,6 +19,10 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { gitCommitPrefixesMatch, resolveLoadedCommitHash } from "../infra/git-commit.js";
 import { resolveNpmCommand } from "../infra/npm-command.js";
 import { compareSemverStrings } from "../infra/npm-registry-spec.js";
+import {
+  describeRetainedReleases,
+  discardReleaseTree,
+} from "../infra/package-release-retention.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { readBuiltGatewayBuildId } from "../infra/update-git-runtime.js";
 import { isPackageTargetAlreadyCurrent } from "../infra/update-global.js";
@@ -32,6 +36,7 @@ import {
   recordUpdateRunStepAsync,
 } from "../infra/update-run-write.async.js";
 import { SystemPackageOwnershipError } from "../infra/update-system-package-ownership.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { VERSION } from "../version.js";
 import { checkRelease } from "./check-release.js";
@@ -151,6 +156,29 @@ export async function prepareUpdate(params: {
     );
     return { status: "failed", reason, message };
   };
+  const cleanupWarnings: string[] = [];
+  const recordCleanup = async (warnings: string[]) => {
+    if (!warnings.length) {
+      return;
+    }
+    cleanupWarnings.push(...warnings);
+    // A full disk can also refuse the warning receipt. Keep the preparation result intact.
+    const detail = cleanupWarnings
+      .map((warning) =>
+        sliceUtf16Safe(warning, 0, Math.floor(UPDATE_RUN_TEXT_LIMIT / cleanupWarnings.length) - 1),
+      )
+      .join("\n");
+    const saved = await recordUpdateRunStepAsync(
+      params.runId,
+      { step: "warning:release-cleanup", status: "completed", detail, endedAtMs: Date.now() },
+      { env },
+    ).catch(() => undefined);
+    if (!saved) {
+      createSubsystemLogger("update").warn(
+        `Could not record release cleanup in update history: ${detail}`,
+      );
+    }
+  };
   let staging: Awaited<ReturnType<typeof allocateStaging>> | undefined;
   try {
     const lock = await acquireUpdateLock(
@@ -212,9 +240,17 @@ export async function prepareUpdate(params: {
         }
         throw error;
       }
-      // Releases left by an earlier update; never on the critical path.
-      void collectReleases(prefix).catch(() => undefined);
-      staging = await allocateStaging({ kind: install.kind }, prefix);
+      // Finish reclaiming disk space before allocating another built tree, even on a no-op check.
+      const collection = await collectReleases(
+        prefix,
+        params.runningRoot,
+        env,
+        lock.previous,
+      ).catch((error: unknown) => ({
+        warnings: [`Release collection skipped: ${formatErrorMessage(error)}`],
+      }));
+      await recordCleanup(collection.warnings);
+      staging = await allocateStaging({ kind: install.kind, id: params.runId }, prefix);
       let target;
       try {
         target = await resolveTarget({
@@ -236,6 +272,9 @@ export async function prepareUpdate(params: {
         params.runId,
         "staging",
         {
+          // Publication renames this directory. Keep its owner-bearing name in the run
+          // even after a Gateway settles the lock, without making it the activation driver.
+          step: { step: "staging", status: "in_progress", detail: path.basename(staging.path) },
           target: {
             kind: install.kind,
             version: target.version,
@@ -407,7 +446,6 @@ export async function prepareUpdate(params: {
         );
       }
       const releaseRoot = await publishStaging(staging);
-      staging = undefined;
       if (target.kind === "git") {
         // The worktree was registered at its staging path; record where it now lives.
         const repaired = await runCommandWithTimeout(
@@ -504,12 +542,31 @@ export async function prepareUpdate(params: {
         },
         prefix,
       );
+      staging = undefined; // The launcher now owns this tree.
       return { status: "pending", target: { version: prepared.version }, releaseRoot };
     } finally {
-      if (staging) {
-        await fs.rm(staging.path, { recursive: true, force: true }).catch(() => undefined);
+      try {
+        // A trial write can throw *after* its atomic rename; do not remove its published target.
+        if (staging) {
+          const { releaseRoot } = staging;
+          const trial = path.basename(staging.path) === staging.id ? await readTrial(prefix) : null;
+          if (
+            !trial ||
+            ![trial.target, trial.previous].some(
+              (root) => path.resolve(prefix, root) === releaseRoot,
+            )
+          ) {
+            const warning = await discardReleaseTree(staging.path);
+            if (warning) {
+              await recordCleanup([describeRetainedReleases([warning])]);
+            }
+          }
+        }
+      } catch (error) {
+        await recordCleanup([`Release cleanup skipped: ${formatErrorMessage(error)}`]);
+      } finally {
+        await releaseUpdateLock(prefix).catch(() => undefined);
       }
-      await releaseUpdateLock(prefix).catch(() => undefined);
     }
   } catch (error) {
     return await fail(

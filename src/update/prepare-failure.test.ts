@@ -12,7 +12,8 @@ import {
 import { VERSION } from "../version.js";
 import { node, repository, root } from "./prepare.test-support.js";
 import { prepareUpdate } from "./run.js";
-import { createTrialPending, readTrial } from "./store.js";
+import * as releaseStore from "./store.js";
+import { createTrialPending, readTrial, resolvePrefix } from "./store.js";
 
 it("records one failed terminal run when preparation lock acquisition throws", async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
@@ -50,6 +51,14 @@ it("does not publish a trial when preparation outcome bookkeeping throws", async
   try {
     openOpenClawStateDatabase({ env: process.env });
     const run = await createUpdateRunAsync({ trigger: "cli" });
+    // A failed prior removal is retried and measured, but cannot replace the update failure.
+    const held = path.join(resolvePrefix(), "releases", `.collecting-${run.runId}-deadbeef`);
+    await fs.mkdir(held, { recursive: true });
+    await fs.writeFile(path.join(held, "retained"), "abcd");
+    const rm = fs.rm.bind(fs);
+    vi.spyOn(fs, "rm").mockImplementation((file, opts) =>
+      file === held ? Promise.reject(new Error("file still busy")) : rm(file, opts),
+    );
     expect(
       await prepareUpdate({
         runId: run.runId,
@@ -64,6 +73,11 @@ it("does not publish a trial when preparation outcome bookkeeping throws", async
       phase: "finished",
       steps: expect.arrayContaining([
         expect.objectContaining({
+          step: "warning:release-cleanup",
+          status: "completed",
+          detail: expect.stringContaining("4 logical bytes"),
+        }),
+        expect.objectContaining({
           step: "outcome",
           status: "failed",
           detail: expect.stringContaining("preparation outcome bookkeeping failed"),
@@ -71,6 +85,39 @@ it("does not publish a trial when preparation outcome bookkeeping throws", async
       ]),
     });
     expect(await readTrial()).toBeNull();
+    expect(
+      (await fs.readdir(path.join(resolvePrefix(), "releases"))).filter(
+        (id) => !id.startsWith("."),
+      ),
+    ).toEqual([]);
+  } finally {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+  }
+});
+
+it("keeps the preparation verdict when the cleanup warning cannot be recorded", async () => {
+  vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+  const { checkout } = await repository(false, ">=999", true);
+  vi.spyOn(releaseStore, "collectReleases").mockResolvedValue({
+    removed: [],
+    warnings: ["4 logical bytes retained"],
+  });
+  vi.spyOn(updateWrites, "recordUpdateRunStepAsync").mockRejectedValueOnce(
+    new Error("warning write failed"),
+  );
+  try {
+    openOpenClawStateDatabase({ env: process.env });
+    const run = await createUpdateRunAsync({ trigger: "cli" });
+    expect(
+      await prepareUpdate({
+        runId: run.runId,
+        runningRoot: checkout,
+        runningVersion: VERSION,
+        channel: "dev",
+        node,
+      }),
+    ).toMatchObject({ status: "failed", reason: "node-engine-mismatch" });
   } finally {
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();

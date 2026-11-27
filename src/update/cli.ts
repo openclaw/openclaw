@@ -20,6 +20,7 @@ import { GatewayClientRequestError } from "../gateway/client.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { compareSemverStrings } from "../infra/npm-registry-spec.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
+import { acquirePackageReleaseLease } from "../infra/package-release-lease.js";
 import { resolveEffectiveUpdateChannel, type UpdateChannel } from "../infra/update-channels.js";
 import { resolveStartupInstallStatus } from "../infra/update-install-status.js";
 import { renderUpdateRunSummary } from "../infra/update-run-notice.js";
@@ -213,6 +214,21 @@ async function delegateInstalledPackageUpdate(
 }
 
 export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<void> {
+  // A detached CLI can still be following restart after its preparation lock is gone.
+  const loadedRoot = await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url });
+  const release = acquirePackageReleaseLease(loadedRoot ?? opts.runningRoot, resolvePrefix());
+  try {
+    return await runReleaseUpdateClient(opts);
+  } finally {
+    try {
+      release();
+    } catch {
+      // Stale leases expire when this process exits; preserve the actual update verdict.
+    }
+  }
+}
+
+async function runReleaseUpdateClient(opts: ReleaseUpdateOptions): Promise<void> {
   const startedAt = Date.now();
   if (await delegateInstalledPackageUpdate(opts)) {
     return;

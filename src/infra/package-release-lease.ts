@@ -7,6 +7,7 @@ import {
   PACKAGE_RELEASES_DIR,
   packageReleasePrefixOfRoot,
   resolvePackageReleaseSlotForRootSync,
+  readPackageReleaseSlotSync,
 } from "./package-release-slot-path.js";
 
 /** Lease files name `<pid>-<process start>` under `releases/.leases/<release id>/`. */
@@ -49,10 +50,27 @@ export function readPackageReleaseLeases(
  * A process that keeps loading files from its release holds it. The returned
  * function releases the lease; a lease left by a dead process is ignored.
  */
-export function acquirePackageReleaseLease(runningRoot: string): () => void {
-  const releasePrefix = packageReleasePrefixOfRoot(fsSync.realpathSync.native(runningRoot));
+export function acquirePackageReleaseLease(
+  runningRoot: string,
+  residentPrefix?: string,
+): () => void {
+  const physicalRoot = fsSync.realpathSync.native(runningRoot);
+  const releasePrefix = packageReleasePrefixOfRoot(physicalRoot);
   // Only a release that a package link has selected; other `releases/` trees have their own owners.
-  if (!releasePrefix || !resolvePackageReleaseSlotForRootSync(runningRoot)) {
+  if (!releasePrefix) {
+    return () => {};
+  }
+  // A CLI running from a deselected release can still lease it when the resident owner
+  // has a verified slot for this same physical store and package layout.
+  const slot = residentPrefix
+    ? readPackageReleaseSlotSync(
+        path.join(residentPrefix, path.relative(releasePrefix, physicalRoot)),
+      )
+    : null;
+  if (
+    slot?.prefix !== path.dirname(path.dirname(releasePrefix)) &&
+    !resolvePackageReleaseSlotForRootSync(runningRoot)
+  ) {
     return () => {};
   }
   const releasesDir = path.dirname(releasePrefix);

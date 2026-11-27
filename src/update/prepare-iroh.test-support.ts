@@ -153,7 +153,7 @@ export function registerIrohPreparationTests() {
       reason: "build:iroh-failed",
       stderrTail: expect.stringContaining(detail),
     });
-    await expect(fs.access(target.staging)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.access(target.release)).rejects.toMatchObject({ code: "ENOENT" });
     expect((await exec("git", ["-C", target.checkout, "worktree", "list"])).stdout).not.toContain(
       target.staging,
     );

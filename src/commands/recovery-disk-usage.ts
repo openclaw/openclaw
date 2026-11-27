@@ -31,6 +31,7 @@ export async function collectRecoveryDiskUsage(params: {
   const scan = new RecoveryInventoryScan();
   const byKind = { updateCaptures: group(), doctorCaptures: group(), migrationOriginals: group() };
   const total = group();
+  let lastReleaseCleanupWarning: string | undefined;
   let artifacts: RecoveryCleanupArtifact[] = [];
   try {
     const database = resolveDatabasePath({ env: params.env });
@@ -43,8 +44,14 @@ export async function collectRecoveryDiskUsage(params: {
     if (!readHistory) {
       scan.reasons.add("eligibility-not-verified");
     }
-    artifacts = (await collectUpdateCleanupInventoryAsync({ ...params, scan, readHistory })).report
-      .artifacts;
+    const inventory = await collectUpdateCleanupInventoryAsync({
+      ...params,
+      scan,
+      readHistory,
+      includeReleaseCleanupWarning: true,
+    });
+    artifacts = inventory.report.artifacts;
+    lastReleaseCleanupWarning = inventory.lastReleaseCleanupWarning;
   } catch {
     resolveSqliteInspectionSignal()?.throwIfAborted();
     scan.reasons.add("inventory-unavailable");
@@ -85,6 +92,7 @@ export async function collectRecoveryDiskUsage(params: {
     incompleteReasons: [...scan.reasons],
     total,
     byKind,
+    ...(lastReleaseCleanupWarning ? { lastReleaseCleanupWarning } : {}),
   };
 }
 
@@ -96,6 +104,7 @@ export function formatRecoveryDiskUsage(usage: RecoveryDiskUsage): string {
   return [
     `${usage.incomplete ? "Incomplete estimate (observed bytes only; eligibility may be unverified): " : ""}${counts(usage.total)}`,
     ...Object.entries(usage.byKind).map(([kind, value]) => `${kind}: ${counts(value)}`),
+    ...(usage.lastReleaseCleanupWarning ? [usage.lastReleaseCleanupWarning] : []),
     "Inspect: openclaw update cleanup --dry-run. Logical bytes are not physical space reclaimed.",
   ].join("\n");
 }
