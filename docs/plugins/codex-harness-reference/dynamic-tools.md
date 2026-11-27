@@ -118,8 +118,8 @@ delegate selected host capabilities, set `plugins.entries.codex.config.nativeChi
 Use the exposed tool name, not the Codex discovery prefix (`openclaw.`).
 In this example `research` is an OpenClaw-projected MCP server. An empty or
 absent `allow` grants nothing; `deny` takes precedence. A wildcard also matches
-future tools added under that name pattern. Prefer exact names when you need
-to review each new capability individually.
+future eligible tools added under that name pattern. Prefer exact names when
+you need to review each new capability individually.
 
 These calls use **OpenClaw host authority**. A child's native Codex sandbox and
 approval settings do not confine them. Host-side availability, tool and action
@@ -142,6 +142,34 @@ names, ownership where known, selection decisions and unmatched patterns.
 This is a snapshot of the parent bridge, not a promise of later availability:
 calls still require an owned, active child and an eligible host binding.
 The preview does not invoke tools.
+
+### Eligible host tools
+
+The following is the complete list of core tools you can grant to a direct
+native child. A core tool is a tool ID in OpenClaw's built-in registry, even
+if a plugin implements it. The tool must also be available to the parent
+through the OpenClaw bridge.
+
+- Files: `ls`, `read`, `write`, `edit`, `apply_patch`.
+- Skills and memory: `skills_read`, `skills_search`, `memory_search`, `memory_get`.
+- Web: `web_search`, `web_fetch`, `x_search`.
+- Documents and images: `pdf`, `view_image`.
+
+All other core tools, including new ones, remain unsupported until OpenClaw
+adds child support for them. Neither an exact allow entry nor `allow: ["*"]`
+overrides this limit.
+
+For example, you can grant `view_image`, but not `image_generate`,
+`video_generate`, or `music_generate`. In a chat session, these generators can
+start a background job that sends the finished media to the conversation later.
+A grant selects a whole tool, not individual actions. It cannot grant generation
+separately from delivery.
+
+Non-core tools can qualify when OpenClaw identifies their owning plugin or MCP
+server. OpenClaw excludes tools it recognizes as channel messaging tools.
+There is no fixed list of eligible plugin tools: use the catalog preview above
+to see which tools your parent session can delegate. Eligibility alone never
+grants access.
 
 ## Protected conversation continuity
 
