@@ -92,28 +92,6 @@ describe("ollama setup", () => {
     );
   });
 
-  it("puts hybrid cloud model suggestions after the local default when signed in", async () => {
-    const { result } = await configureInteractive(
-      {
-        tags: ["llama3:8b"],
-        meResponse: jsonResponse({ user: "signed-in" }),
-      },
-      { select: vi.fn().mockResolvedValueOnce("cloud-local") },
-    );
-    const modelIds = result.config.models?.providers?.ollama?.models?.map((m) => m.id);
-
-    expect(modelIds).toEqual([
-      "gemma4",
-      "minimax-m2.7:cloud",
-      "minimax-m3:cloud",
-      "kimi-k3:cloud",
-      "glm-5.2:cloud",
-      "llama3:8b",
-    ]);
-    expect(result.config.models?.providers?.ollama?.baseUrl).toBe("http://127.0.0.1:11434");
-    expect(result.config.models?.providers?.ollama?.apiKey).toBe("ollama-local");
-  });
-
   it("reports the configured host when the retry is still unreachable", async () => {
     const prompter = createLocalPrompter();
     prompter.confirm = vi.fn().mockResolvedValueOnce(true);

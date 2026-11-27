@@ -370,7 +370,7 @@ describe("managed worktrees Workboard-owner product proof", () => {
       });
       expect(removed).toMatchObject({
         id: activeRecord?.id,
-        snapshotRef: `refs/openclaw/snapshots/${activeRecord?.id}`,
+        snapshotRef: `refs/openclaw/snapshots/clean-v1/${activeRecord?.id}`,
         removedAt: expect.any(Number),
         runEndCleanup: {
           outcome: "removed-lossless",

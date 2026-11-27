@@ -9,11 +9,12 @@ import UIKit
 @MainActor
 struct ChatCodeBlockView: View {
     let block: ChatCodeBlock
+    var bodyScale: CGFloat = 1
 
     var body: some View {
         #if os(iOS) || os(macOS)
         if self.block.language == "mermaid", self.block.isComplete {
-            ChatMermaidBlockView(source: self.block.code)
+            ChatMermaidBlockView(source: self.block.code, bodyScale: self.bodyScale)
         } else {
             self.codeBody
         }
@@ -38,9 +39,9 @@ struct ChatCodeBlockView: View {
             .foregroundStyle(.secondary)
             ScrollView(.horizontal, showsIndicators: false) {
                 Text(self.attributedCode)
-                    .font(OpenClawChatTypography.mono(size: 13, relativeTo: .footnote))
+                    .font(OpenClawChatTypography.mono(size: 13 * self.bodyScale, relativeTo: .footnote))
                     .foregroundStyle(OpenClawChatTheme.assistantText)
-                    .lineSpacing(2)
+                    .lineSpacing(2 * self.bodyScale)
                     .textSelection(.enabled)
             }
         }
@@ -69,7 +70,15 @@ struct ChatMathBlockView: View {
     let block: ChatMathBlock
     let textColor: Color
 
-    @ScaledMetric(relativeTo: .body) private var fontSize: CGFloat = OpenClawChatTypography.bodySize
+    let bodyScale: CGFloat
+    @ScaledMetric private var fontSize: CGFloat
+
+    init(block: ChatMathBlock, textColor: Color, bodyScale: CGFloat = 1) {
+        self.block = block
+        self.textColor = textColor
+        self.bodyScale = bodyScale
+        self._fontSize = ScaledMetric(wrappedValue: OpenClawChatTypography.bodySize * bodyScale, relativeTo: .body)
+    }
 
     var body: some View {
         if self.block.isComplete,
@@ -91,7 +100,7 @@ struct ChatMathBlockView: View {
             ChatCodeBlockView(block: ChatCodeBlock(
                 language: nil,
                 code: self.block.latex,
-                isComplete: false))
+                isComplete: false), bodyScale: self.bodyScale)
         }
     }
 }
@@ -224,7 +233,11 @@ struct ChatMarkdownTableView: View {
     }
 
     private var tableGrid: some View {
-        Grid(alignment: .topLeading, horizontalSpacing: Self.columnSpacing, verticalSpacing: 7) {
+        Grid(
+            alignment: .topLeading,
+            horizontalSpacing: Self.columnSpacing,
+            verticalSpacing: 7 * self.typography.bodyScale)
+        {
             GridRow {
                 ForEach(self.table.header.indices, id: \.self) { column in
                     // One cell per column carries the GFM alignment.
@@ -281,14 +294,14 @@ struct ChatMarkdownListView: View {
     var isStreaming = false
 
     var body: some View {
-        Grid(alignment: .topLeading, horizontalSpacing: 8, verticalSpacing: 7) {
+        Grid(alignment: .topLeading, horizontalSpacing: 8, verticalSpacing: 7 * self.typography.bodyScale) {
             ForEach(self.list.items.indices, id: \.self) { index in
                 GridRow(alignment: .top) {
                     self.marker(for: self.list.items[index], at: index)
                         .frame(minWidth: 18, alignment: .trailing)
                         .padding(.top, 1)
 
-                    VStack(alignment: .leading, spacing: 7) {
+                    VStack(alignment: .leading, spacing: 7 * self.typography.bodyScale) {
                         if self.list.items[index].content.isEmpty {
                             Text(verbatim: " ")
                                 .font(self.typography.proseFont)
@@ -353,7 +366,7 @@ struct ChatMarkdownListView: View {
                 self.markdownRenderer(markdown)
             }
         case let .code(code):
-            ChatCodeBlockView(block: code)
+            ChatCodeBlockView(block: code, bodyScale: self.typography.bodyScale)
         case let .list(list):
             self.nestedListView(list)
         }

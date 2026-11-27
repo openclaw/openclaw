@@ -341,7 +341,7 @@ const WORK: Record<ScribeId, string> = {
   granola:
     'Follow "Learn from Granola" in the "Scribe runs" section of the knowledge-meeting-ingest skill, for the Granola meetings in the settings.',
   memory:
-    'Follow "Learn from Memory" in the "Scribe runs" section of the knowledge-ingest skill, for the Memory files in the settings. Never change Memory files.',
+    'Follow "Learn from Memory" in the "Scribe runs" section of the knowledge-ingest skill, for the Memory files in the settings. Use knowledge_memory_import_progress to check their current hashes before reading them and save progress after each file. Never change Memory files.',
   slack:
     'Follow "Learn from Slack" in the "Scribe runs" section of the knowledge-source-ingest skill, for the Slack channels in the settings. Never post, react or change anything in Slack.',
 };
@@ -470,9 +470,12 @@ export function setupPrompt(setup: ScribeSetup) {
     `${PURPOSE[scribe.id]} The ${scribe.skill} skill does the work.`,
     "",
     "Settings:",
-    ...["Runs once, now, in this turn. Nothing is scheduled.", ...workSettings(setup)].map(
-      (line) => `- ${line}`,
-    ),
+    ...[
+      scribe.id === "memory"
+        ? "Runs once. Gateway restart recovery continues eligible turns. Nothing is scheduled."
+        : "Runs once, now, in this turn. Nothing is scheduled.",
+      ...workSettings(setup),
+    ].map((line) => `- ${line}`),
     "",
     "Steps:",
     ...numbered([

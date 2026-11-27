@@ -55,13 +55,12 @@ describe("scribes catalog", () => {
     expect(runMessage, "no JSON in the run message").not.toMatch(/[{}]|```json|SCRIBE_RESULT/);
   });
 
-  it("writes a once prompt that does the work in this turn, and defaults the review to weekly", () => {
+  it("keeps the default conversation scope and selected Memory sources", () => {
     const once = scribeSetup("conversations", "once", defaultOptions("conversations"), "UTC");
     expect(once.options).toEqual({ scope: "active", since: "30d" });
     const memory = setupPrompt(
       scribeSetup("memory", "once", { sources: ["memory-md", "dreams"] }, "UTC"),
     );
-    expect(memory).toContain("- Runs once, now, in this turn. Nothing is scheduled.");
     expect(memory).toContain("- Memory files: MEMORY.md and the Dreaming diary (DREAMS.md).");
     expect(memory).toContain("`Scribe status: done — <one sentence with counts");
     expect(memory).not.toMatch(/Run message|automations tool/);

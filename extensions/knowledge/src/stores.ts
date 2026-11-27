@@ -1,6 +1,7 @@
 import path from "node:path";
 import { listAgentIds, tryResolveDefaultAgentId } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import {
   maintenancePrincipal,
   pinPrincipal,
@@ -81,10 +82,17 @@ export class Stores {
   agents(): string[] {
     return listAgentIds(this.hostConfig());
   }
-  /** The configured default agent, or undefined when several agents are
-   * configured without one (operators must then choose an agent explicitly). */
+  /** Operators must choose an agent when the roster has no default. */
   defaultAgent(): string | undefined {
-    return tryResolveDefaultAgentId(this.hostConfig());
+    const config = this.hostConfig();
+    const systemAgent = config.agents?.defaults?.systemAgent?.agentId;
+    if (config.agents?.ownership === "explicit" && systemAgent?.trim()) {
+      const agentId = normalizeAgentId(systemAgent);
+      if (listAgentIds(config).includes(agentId)) {
+        return agentId;
+      }
+    }
+    return tryResolveDefaultAgentId(config);
   }
   /** The membership Knowledge enforces: the registry's reconciled section. */
   membership(): Membership {

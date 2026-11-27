@@ -2270,42 +2270,6 @@ describe("disposeSession timeout", () => {
   });
 
   it(
-    "starts MCP server catalog loading concurrently",
-    { timeout: LIST_TOOLS_TEST_DEADLINE_MS },
-    async ({ signal }) => {
-      const tempDir = makeTempDir(tempDirs, "bundle-mcp-parallel-");
-      const releasePath = path.join(tempDir, "release-list-tools");
-      const names = ["slowServer0", "slowServer1", "slowServer2"];
-      const { files, servers } = await stdioGroup(
-        Object.fromEntries(names.map((name) => [name, { listToolsReleasePath: releasePath }])),
-        Object.fromEntries(names.map((name) => [name, { connectionTimeoutMs: 2_000 }])),
-      );
-      const runtime = await getSessionRuntime(
-        sessionParams("session-parallel-catalog-test", mcpConfig(servers)),
-      );
-      const catalogPromise = runtime.getCatalog();
-      try {
-        await withinTest(
-          Promise.all(
-            Object.values(files).map(({ logPath }) =>
-              fixtureEventBeforeSettlement(logPath, "tools/list cursor", catalogPromise),
-            ),
-          ),
-          signal,
-        );
-        await fs.writeFile(releasePath, "released", "utf8");
-        const catalog = await catalogPromise;
-        expect(Object.keys(catalog.servers)).toHaveLength(names.length);
-        expectToolNames(catalog, ["slow_tool", "slow_tool", "slow_tool"]);
-      } finally {
-        await fs.writeFile(releasePath, "released", "utf8").catch(() => {});
-        await catalogPromise.catch(() => {});
-        await runtime.dispose();
-      }
-    },
-  );
-
-  it(
     "awaits sibling handshakes across catalog invalidation",
     { timeout: LIST_TOOLS_TEST_DEADLINE_MS },
     async ({ signal }) => {

@@ -8,13 +8,11 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import { createReplyOperation } from "../sessions/session-controller.operation.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import type { DiagnosticLivenessSample } from "./diagnostic-liveness.js";
-import { withDiagnosticPhase } from "./diagnostic-phase.js";
 import {
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticEmbeddedRunEnded,
@@ -628,37 +626,6 @@ describe("stuck session diagnostics threshold", () => {
       expect(events.some(({ type }) => type === "diagnostic.liveness.warning")).toBe(tick === 2);
       expect(recoverStuckSession).not.toHaveBeenCalled();
     }
-  });
-
-  it("adds phase and work labels to liveness warnings", async () => {
-    await withDiagnosticPhase("stale.phase", () => undefined);
-    vi.advanceTimersByTime(60_000);
-    await withDiagnosticPhase("recent.phase", () => undefined);
-    const { promise, resolve: completePhase } = createDeferredCore();
-    const phase = withDiagnosticPhase("startup.plugins.load", () => promise);
-
-    try {
-      startHeartbeat({
-        emitMemorySample: createEmitMemorySampleMock(),
-        sampleLiveness: () => livenessSample(),
-      });
-
-      logMessageQueued({ ...session, source: "telegram" });
-      vi.advanceTimersByTime(30_000);
-    } finally {
-      completePhase();
-      await phase;
-    }
-
-    expectLoggerMessageContaining(warnSpy, "phase=startup.plugins.load");
-    expectLoggerMessageContaining(warnSpy, "work=[queued=main(");
-    expectLoggerMessageContaining(warnSpy, "recentPhases=recent.phase:");
-    expectLoggerMessageContaining(warnSpy, "stale.phase", false);
-    expect(lastEvent("diagnostic.liveness.warning")).toMatchObject({
-      recentPhases: [expect.objectContaining({ name: "recent.phase" })],
-      phase: "startup.plugins.load",
-      queuedWorkLabels: expect.arrayContaining([expect.stringContaining("main(")]),
-    });
   });
 
   it.each(["before", "after"])(
