@@ -34,8 +34,12 @@ it.each([
   mkdirSync(local("bin"));
   fixture(
     ".ci-harness/.github/actions/setup-playwright-webkit/action.yml",
-    readFileSync(".github/actions/setup-playwright-webkit/action.yml", "utf8"),
+    readFileSync(".github/actions/setup-playwright-webkit/action.yml", "utf8").replaceAll(
+      "/etc/apt/",
+      local("apt") + path.sep,
+    ),
   );
+  fixture("apt/sources.list.d/ubuntu.sources", "Types: deb\n");
   symlinkSync(path.resolve("node_modules"), local("node_modules"), "junction");
   for (const file of [suite, sibling]) {
     fixture(file, 'throw new Error("Discovery must not execute test bodies");\n');
@@ -86,6 +90,7 @@ export default { test: {
         VITEST_SHARD_COUNT: "2",
         UI_BROWSER_INSTALLS: local("installs"),
         UI_BROWSER_ARGS: local("args"),
+        RUNNER_TEMP: root,
       },
     });
     expect(result, result.stdout + result.stderr).toMatchObject({ status: 0, stderr: "" });
@@ -109,11 +114,12 @@ export default { test: {
 });
 
 it.each([
-  ["hosted recovery", "apt-mirrors.txt", 0],
-  ["hosted fallback failure", "apt-mirrors.txt", 43],
-  ["provider recovery", "blacksmith-ubuntu-mirrors.txt", 0],
-  ["provider fallback failure", "blacksmith-ubuntu-mirrors.txt", 43],
-] as const)("installs FRV WebKit through frozen Q: %s", (_scenario, mirrorFile, fallbackExit) => {
+  ["hosted recovery", "apt-mirrors.txt", 0, 124],
+  ["hosted fallback failure", "apt-mirrors.txt", 43, 124],
+  ["provider recovery", "blacksmith-ubuntu-mirrors.txt", 0, 124],
+  ["provider fallback failure", "blacksmith-ubuntu-mirrors.txt", 43, 124],
+  ["Ubuntu repository failure", "apt-mirrors.txt", 0, 100],
+] as const)("installs FRV WebKit through frozen Q: %s", (_, mirrorFile, fallbackExit, initial) => {
   const root = tempDirs.make("openclaw-frv-webkit-");
   const local = (file: string) => path.join(root, file);
   const steps = workflow.readWorkflow(".github/workflows/openclaw-repo-e2e-reusable.yml").jobs.test
@@ -153,6 +159,8 @@ it.each([
   }
   mkdirSync(local("bin"));
   mkdirSync(local("apt/apt.conf.d"), { recursive: true });
+  mkdirSync(local("apt/sources.list.d"));
+  writeFileSync(local("apt/sources.list.d/ubuntu.sources"), "Types: deb\n");
   mkdirSync(local("ui"));
   const mirrors = "https://slow.invalid/ubuntu\thigh\nhttps://fallback.invalid/ubuntu\tlow\n";
   const inactiveMirrors = "https://inactive.invalid/ubuntu\nhttps://unused.invalid/ubuntu\n";
@@ -165,7 +173,13 @@ it.each([
     ["sudo", '[ "$1" = -n ]; shift; export ROOT_PHASE=1; exec "$@"'],
     [
       "apt-get",
-      'printf "%s\\n" "mirror+file:$CASE_ROOT/apt/$MIRROR_FILE/" "https://packages.invalid/" "mirror+file:$CASE_ROOT/apt/$MIRROR_FILE/"',
+      [
+        'sources="$CASE_ROOT/apt/apt.conf.d/99openclaw-webkit-sources"',
+        // A third-party image repository rejects updates unless APT selects only Ubuntu.
+        'grep -Fq "Dir::Etc::sourcelist \\"$CASE_ROOT/apt/sources.list.d/ubuntu.sources\\";" "$sources" &&',
+        'grep -Fq "Dir::Etc::sourceparts \\"$RUNNER_TEMP/openclaw-webkit-apt-sourceparts-disabled\\";" "$sources" || { echo "403 unrelated image repository" >&2; exit 100; }',
+        '[ "$1" != indextargets ] || printf "%s\\n" "mirror+file:$CASE_ROOT/apt/$MIRROR_FILE/" "https://packages.invalid/" "mirror+file:$CASE_ROOT/apt/$MIRROR_FILE/"',
+      ].join("\n"),
     ],
     [
       "timeout",
@@ -185,10 +199,11 @@ it.each([
     'first=$(head -n1 "$CASE_ROOT/apt/$MIRROR_FILE" | cut -f1)',
     'case "$*" in',
     '  "install-deps webkit")',
+    "    apt-get update",
     '    if [[ -f "$config" ]]; then',
     '      grep -q \'APT::Get::Download-Only "true";\' "$config"',
     '      echo "download $DEADLINE $first" >> "$CASE_ROOT/events"',
-    '      [[ "$first" != *slow.invalid* ]] || exit 124',
+    '      [[ "$first" != *slow.invalid* ]] || exit "$FIRST_EXIT"',
     '      exit "$FALLBACK_EXIT"',
     "    fi",
     '    [[ -z "${DEADLINE:-}" ]]',
@@ -213,16 +228,20 @@ it.each([
         CASE_ROOT: root,
         MIRROR_FILE: mirrorFile,
         FALLBACK_EXIT: String(fallbackExit),
+        FIRST_EXIT: String(initial),
+        RUNNER_TEMP: root,
       },
     },
   );
-  expect(result.status, result.stdout + result.stderr).toBe(fallbackExit);
+  const expectedExit = initial === 124 ? fallbackExit : initial;
+  expect(result.status, result.stdout + result.stderr).toBe(expectedExit);
   expect(readFileSync(local("events"), "utf8")).toBe(
     "download 120s https://slow.invalid/ubuntu\n" +
-      "download 300s https://fallback.invalid/ubuntu\n" +
-      (fallbackExit === 0 ? "install https://fallback.invalid/ubuntu\nbrowser\n" : ""),
+      (initial === 124 ? "download 300s https://fallback.invalid/ubuntu\n" : "") +
+      (expectedExit === 0 ? "install https://fallback.invalid/ubuntu\nbrowser\n" : ""),
   );
   expect(readFileSync(local(`apt/${mirrorFile}`), "utf8")).toBe(mirrors);
   expect(readFileSync(local(`apt/${inactiveFile}`), "utf8")).toBe(inactiveMirrors);
   expect(existsSync(local("apt/apt.conf.d/99openclaw-webkit-download-only"))).toBe(false);
+  expect(existsSync(local("apt/apt.conf.d/99openclaw-webkit-sources"))).toBe(false);
 });

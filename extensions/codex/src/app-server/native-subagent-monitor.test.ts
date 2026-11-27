@@ -718,15 +718,15 @@ describe("CodexNativeSubagentMonitor", () => {
     );
     await client.notify(nativeCompletionNotification({ turnId: "parent-turn" }));
 
-    await vi.waitFor(() =>
+    await vi.waitFor(() => {
       expect(client.request).toHaveBeenCalledExactlyOnceWith(
         "thread/unsubscribe",
         { threadId: "child-thread" },
         { timeoutMs: 5_000 },
-      ),
-    );
+      );
+      expect(isCodexAppServerLiveThreadClaimed(client as never, "child-thread")).toBe(false);
+    });
     expect(oldestRelease).toHaveBeenCalledExactlyOnceWith("thread-oldest", undefined, undefined);
-    expect(isCodexAppServerLiveThreadClaimed(client as never, "child-thread")).toBe(false);
     await expect(
       consumeCodexAppServerLiveThread(client as never, "child-thread"),
     ).resolves.toBeUndefined();

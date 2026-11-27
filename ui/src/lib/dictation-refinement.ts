@@ -1,4 +1,6 @@
 /** Local-only punctuation. Offsets are half-open UTF-16 ranges in the raw revision. */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+
 export type DictationPunctuationMode = "verbatim" | "automatic" | "explicit";
 
 export type DictationPunctuationPolicy = Readonly<{
@@ -8,7 +10,7 @@ export type DictationPunctuationPolicy = Readonly<{
   fragment?: boolean;
 }>;
 
-export type DictationProtectedSpan = Readonly<{ start: number; end: number }>;
+type DictationProtectedSpan = Readonly<{ start: number; end: number }>;
 
 export type DictationRefinementRequest = Readonly<{
   schemaVersion: 1;
@@ -18,7 +20,6 @@ export type DictationRefinementRequest = Readonly<{
   rawTranscript: string;
   isFinal: boolean;
   policy: DictationPunctuationPolicy;
-  protectedSpans?: readonly DictationProtectedSpan[];
   /** Only a caller-authorized, bounded snapshot; absence is not an empty field. */
   context?: Readonly<{ left: string; right: string }>;
   mixedLocale?: boolean;
@@ -43,7 +44,6 @@ export type DictationRefinementReason =
   | "invalid-request"
   | "incomplete-transcript"
   | "input-too-large"
-  | "invalid-protected-span"
   | "invalid-candidate"
   | "revision-mismatch"
   | "invalid-edit-map"
@@ -78,7 +78,6 @@ type Candidate = {
 const MAX_TRANSCRIPT_BYTES = 32 * 1024;
 const MAX_CONTEXT_BYTES = 8 * 1024;
 const MAX_EDITS = 128;
-const MAX_PROTECTED_SPANS = 256;
 const encoder = new TextEncoder();
 let graphemes: Intl.Segmenter | undefined;
 let words: Intl.Segmenter | undefined;
@@ -122,10 +121,6 @@ function rawResult(
     reasons: [reason],
     effectiveLocale: effectiveLocale(request),
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function withinBytes(text: string, limit: number): boolean {
@@ -214,31 +209,8 @@ function touchesProtected(
 
 type Protection = { spans: DictationProtectedSpan[]; openLiteral: boolean };
 
-function protectedRanges(
-  request: DictationRefinementRequest,
-  boundaries: Set<number>,
-): Protection | undefined {
-  const explicit = request.protectedSpans ?? [];
-  if (!Array.isArray(explicit) || explicit.length > MAX_PROTECTED_SPANS) {
-    return undefined;
-  }
+function protectedRanges(text: string, boundaries: Set<number>): Protection {
   const spans: DictationProtectedSpan[] = [];
-  for (const span of explicit) {
-    if (
-      !isRecord(span) ||
-      typeof span.start !== "number" ||
-      typeof span.end !== "number" ||
-      !Number.isInteger(span.start) ||
-      !Number.isInteger(span.end) ||
-      span.start >= span.end ||
-      !boundaries.has(span.start) ||
-      !boundaries.has(span.end)
-    ) {
-      return undefined;
-    }
-    spans.push({ start: span.start, end: span.end });
-  }
-  const text = request.rawTranscript;
   const protect = (start: number, end: number) => {
     let protectedStart = start;
     let protectedEnd = end;
@@ -404,10 +376,6 @@ function prepare(request: DictationRefinementRequest): Plan | DictationRefinemen
     return invalid;
   }
   const boundaries = graphemeBoundaries(request.rawTranscript);
-  const protection = protectedRanges(request, boundaries);
-  if (!protection) {
-    return "invalid-protected-span";
-  }
   if (request.policy.mode === "verbatim") {
     return "verbatim";
   }
@@ -424,7 +392,7 @@ function prepare(request: DictationRefinementRequest): Plan | DictationRefinemen
     return "explicit-disabled";
   }
   const raw = request.rawTranscript;
-  const { spans, openLiteral } = protection;
+  const { spans, openLiteral } = protectedRanges(raw, boundaries);
   const edits = request.policy.mode === "explicit" ? explicitEdits(raw, spans) : [];
   if (!edits) {
     return "ambiguous-command";

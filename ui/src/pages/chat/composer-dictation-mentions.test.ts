@@ -67,7 +67,7 @@ function mentionHarness(
       draft,
       getDraft: () => draft,
       getMentions: () => mentions,
-      onDraftChange: (value, selected) => {
+      onDraftChange: (value: string, selected?: readonly HumanMention[]) => {
         draft = value;
         mentions = selected ?? [];
       },

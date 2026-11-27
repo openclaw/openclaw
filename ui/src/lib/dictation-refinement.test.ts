@@ -220,21 +220,16 @@ describe("local dictation punctuation policy", () => {
     const result = refineDictation(request("e\u0301clair for 👩‍💻"));
     expect(result.text).toBe("E\u0301clair for 👩‍💻");
     expect(result.edits).toEqual([{ start: 0, end: 2, text: "E\u0301", reason: "sentence-case" }]);
-    const protectedInput = request("e\u0301clair arrives", {
-      protectedSpans: [{ start: 0, end: 7 }],
-    });
-    expect(refineDictation(protectedInput).text).toBe("e\u0301clair arrives.");
   });
 
-  it("does not mutate a frozen request or its policy, context, and protected spans", () => {
+  it("does not mutate a frozen request, policy, or context", () => {
     const input = Object.freeze(
       request("openclaw arrives", {
         policy: Object.freeze({ mode: "automatic", locale: "en-US", explicitEnabled: false }),
         context: Object.freeze({ left: "", right: "" }),
-        protectedSpans: Object.freeze([Object.freeze({ start: 0, end: 8 })]),
       }),
     );
-    expect(refineDictation(input).text).toBe("openclaw arrives.");
+    expect(refineDictation(input).text).toBe("Openclaw arrives.");
     expect(input.rawTranscript).toBe("openclaw arrives");
   });
 });
@@ -327,24 +322,6 @@ describe("bounded source-map validation", () => {
         ]),
       ),
     ).toMatchObject({ text: contraction.rawTranscript, reasons: ["protected-text"] });
-  });
-
-  it("rejects protected edits and malformed protected boundaries even without optional producers", () => {
-    const source = request("hello world", { protectedSpans: [{ start: 0, end: 5 }] });
-    expect(
-      validateDictationEdits(source, candidate(source, "Hello world", [edits[0]])),
-    ).toMatchObject({ text: source.rawTranscript, reasons: ["protected-text"] });
-    for (const span of [
-      { start: 0, end: 1 },
-      { start: 0, end: 20 },
-      { start: 2, end: 2 },
-    ]) {
-      expect(refineDictation(request("e\u0301clair", { protectedSpans: [span] }))).toMatchObject({
-        text: "e\u0301clair",
-        edits: [],
-        reasons: ["invalid-protected-span"],
-      });
-    }
   });
 
   it("bounds work by UTF-8 bytes and declines incomplete or malformed recognition", () => {

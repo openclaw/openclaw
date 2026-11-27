@@ -6,6 +6,7 @@ import ai.openclaw.app.chat.ChatTranscriptCache
 import ai.openclaw.app.gateway.DeviceAuthPayload
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GATEWAY_CONNECT_TIMEOUT_MS
 import ai.openclaw.app.gateway.GatewayConnectOptions
 import ai.openclaw.app.gateway.GatewayEndpoint
@@ -387,11 +388,11 @@ class GatewayBootstrapAuthTest {
     val runtime = createTestRuntime(RuntimeEnvironment.getApplication())
     val session = readField<GatewaySession>(runtime, "operatorSession")
     val onDisconnected = readField<(String) -> Unit>(session, "onDisconnected")
-    val onConnectFailure = readField<(GatewaySession.ErrorShape, Boolean) -> Unit>(session, "onConnectFailure")
+    val onConnectFailure = readField<(ErrorShape, Boolean) -> Unit>(session, "onConnectFailure")
 
     onDisconnected("Gateway error: unauthorized")
     onConnectFailure(
-      GatewaySession.ErrorShape(
+      ErrorShape(
         code = "UNAUTHORIZED",
         message = "unauthorized",
         details =
@@ -425,7 +426,7 @@ class GatewayBootstrapAuthTest {
     val runtime = createTestRuntime(RuntimeEnvironment.getApplication())
     val session = readField<GatewaySession>(runtime, "operatorSession")
     val onDisconnected = readField<(String) -> Unit>(session, "onDisconnected")
-    val onConnectFailure = readField<(GatewaySession.ErrorShape, Boolean) -> Unit>(session, "onConnectFailure")
+    val onConnectFailure = readField<(ErrorShape, Boolean) -> Unit>(session, "onConnectFailure")
     val failure =
       ai.openclaw.app.gateway
         .gatewayNetworkConnectError(timedOut = true)
@@ -448,11 +449,11 @@ class GatewayBootstrapAuthTest {
     val runtime = createTestRuntime(RuntimeEnvironment.getApplication())
     val session = readField<GatewaySession>(runtime, "nodeSession")
     val onDisconnected = readField<(String) -> Unit>(session, "onDisconnected")
-    val onConnectFailure = readField<(GatewaySession.ErrorShape, Boolean) -> Unit>(session, "onConnectFailure")
+    val onConnectFailure = readField<(ErrorShape, Boolean) -> Unit>(session, "onConnectFailure")
 
     onDisconnected("Gateway error: pairing required")
     onConnectFailure(
-      GatewaySession.ErrorShape(
+      ErrorShape(
         code = "NOT_PAIRED",
         message = "pairing required",
         details =

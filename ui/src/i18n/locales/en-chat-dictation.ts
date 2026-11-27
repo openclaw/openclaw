@@ -51,8 +51,6 @@ const enChatDictation = {
         limitations: {
           "draft-changed":
             "The draft or destination changed. Automatic insertion is blocked; your current draft is unchanged.",
-          "source-revoked":
-            "Permission for the source was revoked. This result cannot be reused; record again with the current permissions.",
           "transcript-incomplete":
             "The provider did not return a complete final transcript. Recoverable text is shown for reference; record again before inserting.",
         },
@@ -84,7 +82,6 @@ const enChatDictation = {
           "invalid-request": "The punctuation request was not valid.",
           "incomplete-transcript": "The transcript is not final.",
           "input-too-large": "The text exceeds the local processing limit.",
-          "invalid-protected-span": "A protected text range could not be validated.",
           "invalid-candidate": "The proposed result could not be validated.",
           "revision-mismatch": "The proposed result belongs to an older recording revision.",
           "invalid-edit-map": "The proposed changes could not be mapped safely to the original.",

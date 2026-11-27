@@ -12,6 +12,8 @@ import type {
 } from "./agent-bundle-mcp-types.js";
 import type { bindMcpClientElicitation } from "./mcp-client-elicitation.runtime.js";
 import type { McpServerConnectionResolved } from "./mcp-connection-resolver.js";
+import { McpOAuthDiagnosticError } from "./mcp-oauth-identity.js";
+import { McpStartupBackoffError } from "./mcp-startup-backoff.js";
 import type { McpToolCatalogMetadata } from "./mcp-tool-metadata.js";
 import type { createNativeMcpClientBridge } from "./native-mcp-runtime-client.js";
 
@@ -29,12 +31,34 @@ export type McpServerBackoffState = {
 export function projectBundleMcpCatalogFailure(
   catalog: McpToolCatalog | undefined,
   diagnostic: McpToolCatalogDiagnostic,
+  error?: unknown,
 ): McpToolCatalog {
+  const promptMessage =
+    error instanceof McpStartupBackoffError || error instanceof McpOAuthDiagnosticError
+      ? error.promptMessage
+      : undefined;
   return {
     ...(catalog ?? { version: 1, servers: {}, tools: [] }),
     generatedAt: Date.now(),
-    diagnostics: [diagnostic],
+    diagnostics: [{ ...diagnostic, ...(promptMessage ? { promptMessage } : {}) }],
   };
+}
+
+/** Reuse known server metadata when a live catalog needs an immediate retry. */
+export function projectBundleMcpCatalogRetry(
+  catalog: McpToolCatalog | undefined,
+  serverName: string,
+  message: string,
+): McpToolCatalog | undefined {
+  const server = catalog?.servers[serverName];
+  return server
+    ? projectBundleMcpCatalogFailure(catalog, {
+        serverName,
+        safeServerName: server.safeServerName ?? serverName,
+        launchSummary: server.launchSummary,
+        message,
+      })
+    : undefined;
 }
 
 export class SessionMcpRuntimeCapacityError extends Error {

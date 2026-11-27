@@ -67,17 +67,22 @@ export function prepareCommandOrder(
     case "pluginState.observe":
       return { ready: capturePluginStateMutationSettlement(coordinationKey, [command.input]) };
     case "pluginState.appendJournal":
-      return beginPluginStateMutation(coordinationKey, [
-        { pluginId: command.input.pluginId, namespace: command.input.cursorNamespace },
-        { pluginId: command.input.pluginId, namespace: command.input.journalNamespace },
-      ]);
+      return beginPluginStateMutation(
+        coordinationKey,
+        [
+          { pluginId: command.input.pluginId, namespace: command.input.cursorNamespace },
+          { pluginId: command.input.pluginId, namespace: command.input.journalNamespace },
+        ],
+        "command",
+      );
     case "pluginState.moveEntries":
-      return beginPluginStateMutation(coordinationKey, [
-        command.input,
-        { ...command.input, namespace: command.input.sourceNamespace },
-      ]);
+      return beginPluginStateMutation(
+        coordinationKey,
+        [command.input, { ...command.input, namespace: command.input.sourceNamespace }],
+        "command",
+      );
     default:
-      return beginPluginStateMutation(coordinationKey, [command.input]);
+      return beginPluginStateMutation(coordinationKey, [command.input], "command");
   }
 }
 

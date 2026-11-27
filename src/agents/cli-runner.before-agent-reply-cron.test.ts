@@ -521,6 +521,29 @@ describe("runCliAgent before_agent_reply seam", () => {
     expect(authSuccessMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["claude-cli", "cron", true, "Not logged in · Please run /login", true],
+    ["claude-cli", "user", true, "Not logged in · Please run /login", false],
+    ["claude-cli", "cron", undefined, "Not logged in · Please run /login", false],
+    ["codex-cli", "cron", true, "Not logged in · Please run /login", false],
+    ["claude-cli", "cron", true, "API key is invalid", true],
+    ["claude-cli", "cron", true, "the external service is not logged in", false],
+  ] as const)(
+    "adds Gateway login guidance only for native-only scheduled Claude failures (%s, %s, %s, %s)",
+    async (provider, trigger, nativeAuthOnly, message, hasHint) => {
+      const error = new Error(message);
+      executeMock.mockRejectedValueOnce(error);
+
+      await expect(runCliAgent({ provider, trigger, nativeAuthOnly })).rejects.toMatchObject({
+        message: hasHint
+          ? `${message}. Log in to Claude on the Gateway host with \`claude /login\` as the OS user running the Gateway, then retry this job.`
+          : message,
+        ...(hasHint ? { reason: "auth", status: 401 } : {}),
+      });
+      expect(error.message).toBe(message);
+    },
+  );
+
   it("does not settle selected-profile health for a pre-provider timeout", async () => {
     const error = new FailoverError("pre-provider timeout", {
       reason: "timeout",

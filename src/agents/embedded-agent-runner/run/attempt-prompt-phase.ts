@@ -20,6 +20,7 @@ import type { CompactionRequestBudget } from "../../sessions/compaction/preparat
 import { createCompactionRequestBudget } from "../../sessions/compaction/request-budget.js";
 import { SAFETY_MARGIN } from "../../sessions/context-token-pressure.js";
 import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
+import { clearsTurnScopedSystemUpdates } from "../../transcript-policy.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { log } from "../logger.js";
 import {
@@ -239,6 +240,10 @@ export async function runEmbeddedAttemptPromptPhase(
       },
       appendOnlyRuntimeContext,
       inHistorySystemUpdates,
+      clearsTurnScopedSystemUpdates: clearsTurnScopedSystemUpdates(
+        { inHistorySystemUpdates },
+        attempt.model.api,
+      ),
       ...(boundaryTimezone ? { boundaryTimezone } : {}),
       includeBoundaryTimestamp,
       isRawModelRun,
@@ -493,6 +498,7 @@ export async function runEmbeddedAttemptPromptPhase(
                 config: attempt.config,
                 contextTokenBudget: promptContext.contextTokenBudget,
                 reserveTokens,
+                maxOutputTokens: resolveMaxTokensParam(effectiveExtraParams),
                 runId: attempt.runId,
                 isToolBoundarySafe: () => preparedStreamRuntime.isToolBoundarySafe?.() ?? false,
                 timeoutMs: input.sessionLock.compactionTimeoutMs,

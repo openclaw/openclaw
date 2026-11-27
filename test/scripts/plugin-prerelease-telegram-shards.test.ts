@@ -15,12 +15,10 @@ import { codexExtensionTestRoots } from "../vitest/vitest.extension-codex-paths.
 import { createExtensionVitestConfig } from "../vitest/vitest.extension-config.ts";
 import { createExtensionDatabaseWorkersVitestConfig } from "../vitest/vitest.extension-database-workers.config.ts";
 import { createExtensionTelegramVitestConfig } from "../vitest/vitest.extension-telegram.config.ts";
+import { readWorkflow, requiredWorkflowStep } from "./ci-workflow.test-support.js";
 import {
   createPrereleaseFixtures,
-  findStep,
   parseExtensionMatrix,
-  parseManifestOutputs,
-  readWorkflow,
 } from "./plugin-prerelease.test-support.js";
 
 const fixtures = createPrereleaseFixtures();
@@ -59,7 +57,7 @@ function runPluginPrereleaseManifest(cwd = process.cwd(), fullReleaseValidation 
   );
   expect(result.status, result.stderr).toBe(0);
   return {
-    include: parseExtensionMatrix(parseManifestOutputs(output).plugin_prerelease_extension_matrix),
+    include: parseExtensionMatrix(output.plugin_prerelease_extension_matrix),
   };
 }
 
@@ -155,9 +153,9 @@ export const collectBundledPluginSources=()=>[{dirName:'source-only',manifestPat
   });
 
   it("keeps dedicated Telegram and Codex file shards inside the existing aggregate job contract", () => {
-    const workflow = readWorkflow();
+    const workflow = readWorkflow(".github/workflows/plugin-prerelease.yml");
     const extensionJob = workflow.jobs["plugin-prerelease-extension-shard"];
-    const runStep = findStep(extensionJob, "Run extension shard");
+    const runStep = requiredWorkflowStep(extensionJob.steps, "Run extension shard");
     const suite = workflow.jobs["plugin-prerelease-suite"];
     const matrix = runPluginPrereleaseManifest();
     const genericRows = matrix.include.filter((row) => row.task === "extensions-batch");
@@ -268,7 +266,7 @@ export const collectBundledPluginSources=()=>[{dirName:'source-only',manifestPat
       OPENCLAW_EXTENSION_TASK: "${{ matrix.task }}",
       OPENCLAW_EXTENSION_VITEST_CONFIG: "${{ matrix.vitest_config }}",
     });
-    const buildStep = findStep(extensionJob, "Build extension test runtime");
+    const buildStep = requiredWorkflowStep(extensionJob.steps, "Build extension test runtime");
     expect(buildStep).toMatchObject({
       if: "matrix.pretest_build_mode != null",
       run: "pnpm build qaRuntime",
@@ -287,7 +285,7 @@ export const collectBundledPluginSources=()=>[{dirName:'source-only',manifestPat
       "--retry",
     );
     expect(suite.needs).toContain("plugin-prerelease-extension-shard");
-    expect(findStep(suite, "Verify plugin prerelease suite").run).toContain(
+    expect(requiredWorkflowStep(suite.steps, "Verify plugin prerelease suite").run).toContain(
       'check_required "plugin-prerelease-extensions" "$RUN_EXTENSIONS" "$EXTENSIONS_RESULT"',
     );
   });

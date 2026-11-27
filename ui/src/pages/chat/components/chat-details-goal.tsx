@@ -12,6 +12,7 @@ import type { SessionGoal } from "../../../api/types.ts";
 import { withPromiseModalHost } from "../../../components/promise-modal-host.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
+import { registerChatGoalsOptionalEnglish } from "../../../i18n/locales/en-chat-goals-optional.ts";
 import type {
   ChatGoalAction,
   ChatGoalDraft,
@@ -19,7 +20,7 @@ import type {
 } from "../../../lib/chat/chat-types.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import "../../../styles/chat/details-goal.css";
 import {
   ChatGoalActions,
@@ -28,6 +29,8 @@ import {
   ChatGoalRecoveryAction,
   ChatGoalRecoveryMessage,
 } from "./chat-composer-goal.tsx";
+
+registerEnglishCatalog(registerChatGoalsOptionalEnglish);
 
 export type ChatDetailsGoalProps = {
   goal?: SessionGoal;

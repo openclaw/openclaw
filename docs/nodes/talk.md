@@ -34,12 +34,12 @@ transcription provider, ordinary Talk, assistant replies, or native-app dictatio
 | Automatic | For explicitly selected English (United States), capitalize an unprotected opening at the beginning of a field and add a missing final period when the authorized right context is empty. It does not infer internal sentence boundaries or questions. |
 | Explicit  | Interpret the documented spoken mark grammar only when **Allow spoken punctuation commands in Explicit mode** is also enabled.                                                                                                                         |
 
-Select **Punctuation language** explicitly. An unset or unsupported locale preserves
-the original text. The current rule set supports `en-US`; it does not establish
-support for other languages or Latin-script code switching. Non-Latin text and
-explicitly marked mixed-language requests preserve the original. If surrounding
-text is unavailable or unauthorized, the original is retained. **Keep as a
-fragment** suppresses automatic sentence casing and a sentence ending.
+For Automatic or Explicit changes, select **Punctuation language** explicitly.
+An unset or unsupported locale preserves the original text. The current rules
+support `en-US` and leave transcripts containing non-Latin letters unchanged.
+They do not detect code switching between Latin-script languages. If the
+composer cannot provide surrounding draft text, the original is retained.
+**Keep as a fragment** suppresses automatic sentence casing and a sentence ending.
 
 Explicit mode recognizes `insert comma`, `insert colon`, and `insert semicolon`
 within a phrase, followed by a final `insert period`, `insert full stop`,
@@ -64,8 +64,7 @@ Editing the draft, replacing its destination, starting another capture, or
 canceling revokes the old result's insertion authority. Text recognized before a
 draft change remains available for review; later provider events cannot overwrite
 that recovery snapshot. An incomplete transcript is labeled and cannot be inserted
-as a final result. Revoking a source also revokes its original-text fallback;
-the preview is redacted instead of offering an unauthorized copy.
+as a final result.
 
 **Undo dictation insertion** is tied to the known local insertion transaction.
 It is available only while that target and its post-insertion revision remain
@@ -89,9 +88,9 @@ The validator replays the bounded source map and checks lexical coverage;
 unsupported or malformed changes retain the eligible original.
 
 Processing is bounded to 32 KiB of UTF-8 transcript, 8 KiB of authorized context,
-256 supplied protected spans, and 128 edits. Inputs over these limits keep the
-original with a limitation. Recognition still requires its configured provider;
-local punctuation does not imply offline speech recognition.
+and 128 edits. Inputs over these limits keep the original with a limitation.
+Recognition still requires its configured provider; local punctuation does not
+imply offline speech recognition.
 
 Only the versioned punctuation preference is saved through the existing browser
 settings owner. Invalid values and unknown versions disable refinement and show

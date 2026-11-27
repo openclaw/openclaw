@@ -1977,8 +1977,8 @@ describe("gateway server chat", () => {
           }
           return {};
         });
-        const { createAgentTurnService } = await import("./agent-turn/agent-turn-service.js");
-        const service = createAgentTurnService({ context, isWebchatConnect: () => true });
+        const { prepareExactAgentTurnWait } = await import("./agent-turn/agent-wait.js");
+        const waitForRun = () => prepareExactAgentTurnWait(context, { runId, timeoutMs: 0 }).wait();
         const chatEvents = () =>
           broadcast.mock.calls.flatMap(([event, payload]) =>
             event === "chat" && (payload as { runId?: string }).runId === runId ? [payload] : [],
@@ -2003,7 +2003,7 @@ describe("gateway server chat", () => {
           expect(context.dedupe.get(`chat:${runId}`)).toMatchObject(
             chatResult(true, { status: "accepted" }),
           );
-          await expect(service.waitForTurn({ runId, timeoutMs: 0 })).resolves.toMatchObject({
+          await expect(waitForRun()).resolves.toMatchObject({
             result: { runId, status: "pending", timeoutPhase: "queue", providerStarted: false },
           });
           expect(isRpcSourceQueued(rpcSourceTesting.get(runId))).toBe(true);
@@ -2073,7 +2073,7 @@ describe("gateway server chat", () => {
                   }),
             }),
           ]);
-          await expect(service.waitForTurn({ runId, timeoutMs: 0 })).resolves.toMatchObject({
+          await expect(waitForRun()).resolves.toMatchObject({
             result: {
               runId,
               status: settlement === "dropped" ? "error" : "ok",

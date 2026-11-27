@@ -7,6 +7,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
+import { createWebPushCapability } from "../../app/web-push.ts";
 import type { LobsterPetProps } from "../../components/lobster-pet-contract.ts";
 import { t } from "../../i18n/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
@@ -98,7 +99,16 @@ async function mountSessionDraft(
           defaultId: "main",
           mainKey: "main",
           scope: "per-sender",
-          agents,
+          // Dictation tests submit, so they need a placement policy and a model to send with.
+          ...(dictationClient
+            ? {
+                agents: agents.map((agent) => ({
+                  ...agent,
+                  model: { primary: "openai/initial-model" },
+                })),
+                sessionPlacement: {},
+              }
+            : { agents }),
         };
       }
       if (method === "models.list") {
@@ -117,7 +127,11 @@ async function mountSessionDraft(
   });
   const context = createSessionContext(client);
   const lifetime = new AbortController();
+  // A clicked Send may offer notifications, which reads the web push capability.
+  const webPush = createWebPushCapability(context.gateway);
+  onTestFinished(() => webPush.dispose());
   Object.assign(context, {
+    webPush,
     lifecycleAbortSignal: lifetime.signal,
     router: createRouter<RouteId, ApplicationContext>({
       routes: [{ id: "new-session", path: "/new", component: () => ({}) }],
@@ -158,7 +172,7 @@ async function mountSessionDraft(
   );
   const pet = () => page.querySelector<HTMLElement & LobsterPetProps>("openclaw-lobster-pet");
   await waitForSolid(() => expect(pet()).not.toBeNull());
-  const describe = async (next: GatewaySessionRow) => {
+  const describeRow = async (next: GatewaySessionRow) => {
     described = next;
     const observation = context.sessions.observeRow({ key: next.key, agentId: "main" }, () => {});
     try {
@@ -171,7 +185,7 @@ async function mountSessionDraft(
       observation.dispose();
     }
   };
-  return { context, page, recent, pin, describe, defaults, pet };
+  return { context, page, recent, pin, describeRow, defaults, pet };
 }
 
 it("retains the welcome agent selector across draft publications and removes it for catalog targets", async () => {
@@ -204,14 +218,14 @@ it("retains the welcome agent selector across draft publications and removes it 
 });
 
 it("keeps pin detail enrichment out of composer preparation while live recents update", async () => {
-  const { context, page, recent, pin, describe } = await mountSessionDraft();
+  const { context, page, recent, pin, describeRow } = await mountSessionDraft();
   const input = page.querySelector<HTMLTextAreaElement>("textarea")!;
   input.value = "Keep this unsent draft";
   input.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true }));
   await page.updateComplete;
   const prepare = vi.spyOn(NewSessionPageOwner.prototype, "composerOptions");
   // This is the production pin path: full-row read, captured reconciliation, and global publication.
-  await describe({ ...pin, rowMode: undefined, thinkingLevel: "high" });
+  await describeRow({ ...pin, rowMode: undefined, thinkingLevel: "high" });
   expect(
     context.sessions.state.result?.sessions.find((row) => row.key === pin.key)?.thinkingLevel,
   ).toBe("high");
@@ -232,11 +246,11 @@ it("keeps pin detail enrichment out of composer preparation while live recents u
 });
 
 it("keeps default models, group loading, and run presentation live", async () => {
-  const { context, page, recent, pin, describe, defaults, pet } = await mountSessionDraft();
+  const { context, page, recent, pin, describeRow, defaults, pet } = await mountSessionDraft();
   const currentDefaults = context.sessions.state.result!.defaults;
   currentDefaults.model = "changed-model";
   // Preserve the defaults object's identity while a new row receipt publishes the owner.
-  await describe({ ...pin, rowMode: undefined, thinkingLevel: "low" });
+  await describeRow({ ...pin, rowMode: undefined, thinkingLevel: "low" });
   await waitForSolid(() =>
     expect(page.querySelector("[data-chat-model-select]")?.textContent).toContain("Changed model"),
   );
@@ -291,13 +305,19 @@ describe("new session pending dictation review", () => {
         }
         return {};
       });
-      const previous = loadSettings().dictationRefinement;
-      patchSettings({
-        dictationRefinement:
-          resolution === "off"
-            ? undefined
-            : { version: 1, mode: "automatic", locale: "en-US", explicitEnabled: false },
-      });
+      // The mounted page reads preferences for its own gateway, not the page default.
+      const gatewayUrl = "ws://example.test";
+      const previous = loadSettings(gatewayUrl).dictationRefinement;
+      patchSettings(
+        {
+          gatewayUrl,
+          dictationRefinement:
+            resolution === "off"
+              ? undefined
+              : { version: 1, mode: "automatic", locale: "en-US", explicitEnabled: false },
+        },
+        { selectGateway: false },
+      );
       const options = vi.spyOn(NewSessionPageOwner.prototype, "composerOptions");
       const prepare = vi.spyOn(DirectDictationControl.prototype, "prepare");
       const start = vi.spyOn(ComposerDictationSession.prototype, "start");
@@ -325,8 +345,7 @@ describe("new session pending dictation review", () => {
         expect(owner.dictation.dictation?.requiresReview).toBe(resolution !== "off");
         page.querySelector<HTMLButtonElement>(".chat-send-btn--dictating")!.click();
         expect(finish).toHaveBeenCalledOnce();
-        const send = () =>
-          page.querySelector<HTMLButtonElement>(".new-session-page__start-submit");
+        const send = () => page.querySelector<HTMLButtonElement>(".new-session-page__start-submit");
         const expectSubmissionBlocked = async () => {
           await waitForSolid(() => expect(send()?.disabled).toBe(true));
           for (const ctrlKey of [false, true]) {
@@ -379,7 +398,7 @@ describe("new session pending dictation review", () => {
         send()!.click();
         await waitForSolid(() => expect(writes).toEqual(["sessions.create"]));
       } finally {
-        patchSettings({ dictationRefinement: previous });
+        patchSettings({ gatewayUrl, dictationRefinement: previous }, { selectGateway: false });
       }
     },
   );

@@ -66,10 +66,12 @@ export function realtimeModelPicker(page: HTMLElement): SelectPicker | null {
   );
 }
 
+export function realtimeVoiceSelect(page: HTMLElement) {
+  return page.querySelector<HTMLSelectElement>(`select[aria-label="${t("talkPage.voice.title")}"]`);
+}
+
 export function readVoiceOptions(page: HTMLElement): string[] {
-  return [...page.querySelectorAll("select option")].map(
-    (option) => option.getAttribute("value") ?? "",
-  );
+  return [...(realtimeVoiceSelect(page)?.options ?? [])].map((option) => option.value);
 }
 
 export function setTalkRealtimeConfig(page: TalkPageElement, realtime: Record<string, unknown>) {
@@ -105,7 +107,7 @@ export function mountTalkPage(context: ApplicationContext, initialConfig: Record
   });
   const [config, setConfig] = createSignal(initialConfig);
   document.body.append(page);
-  const provider = createSolidApplicationContextProvider(context);
+  const provider = createSolidApplicationContextProvider(completeConfigContext(context));
   const retired = new Promise<void>(() => {});
   const view = mountSolid(
     () => <TalkSettingsPage configObject={config()} presentationRetired={() => retired} />,

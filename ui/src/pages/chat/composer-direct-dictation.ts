@@ -1,7 +1,7 @@
 import { roleScopesAllow } from "../../../../src/shared/operator-scope-compat.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { resolveDictationRefinementPreference } from "../../app/settings-contract.ts";
-import { loadSettings, patchSettings } from "../../app/settings.ts";
+import { loadLiveUiPreferences, patchSettings } from "../../app/settings.ts";
 import {
   focusComposerInput,
   replaceComposerDraft,
@@ -226,7 +226,7 @@ export class DirectDictationControl extends EventTarget {
     this.devicePicker.syncCatalog(client, connected, this.options.getSessionKey?.());
     const enabled = this.options.canCommit();
     const refinement = resolveDictationRefinementPreference({
-      saved: loadSettings().dictationRefinement,
+      saved: loadLiveUiPreferences().dictationRefinement,
     });
     const dictationOptions = {
       client,

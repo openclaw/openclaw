@@ -201,7 +201,11 @@ export function acquireGatewayStateOwner(params: {
       params.databasePath,
       undefined,
       describeGatewayLockHolder(held.payload, pathname, "live"),
-      { pid: held.payload.pid, role: held.payload.role },
+      {
+        pid: held.payload.pid,
+        role: held.payload.role,
+        stateOwnerKind: held.payload.stateOwnerKind,
+      },
     );
   }
   const payload = params.payload

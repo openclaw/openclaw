@@ -331,7 +331,12 @@ export function persistSessionToken(gatewayUrl: string, token: string) {
 // are replayed over recovery reads, so saving one profile cannot revert a sibling's edits.
 let settingsFallback: SettingsStorageFallback | null = null;
 
-type LivePreferenceOwner = { gatewayUrl: () => string; refresh: () => void };
+type LivePreferenceOwner = {
+  gatewayUrl: () => string;
+  refresh: () => void;
+  /** The mounted runtime's current preferences, kept in step with every local write. */
+  read?: () => UiPreferences;
+};
 let livePreferenceOwner: LivePreferenceOwner | null = null;
 
 /** Bind local writes to the mounted runtime, never its credentials. */
@@ -354,6 +359,14 @@ export function bindUiPreferences(owner: LivePreferenceOwner): () => void {
 export function loadSettings(gatewayUrl = livePreferenceOwner?.gatewayUrl()): UiSettings {
   const preferences = loadUiPreferences(gatewayUrl);
   return { ...preferences, token: loadSessionToken(preferences.gatewayUrl) };
+}
+
+/**
+ * Same preference scope as loadSettings, without touching session-scoped credentials.
+ * A mounted runtime answers from memory, so render paths never read storage.
+ */
+export function loadLiveUiPreferences(): UiPreferences {
+  return livePreferenceOwner?.read?.() ?? loadUiPreferences(livePreferenceOwner?.gatewayUrl());
 }
 
 export function loadUiPreferences(

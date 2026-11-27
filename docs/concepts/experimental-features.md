@@ -92,7 +92,7 @@ index**, or set the Boolean in config:
 
 The default is **off**; only explicit `true` enables it. The embedded OpenClaw
 runtime ranks the [Code Mode index](/tools/code-mode), the
-[Tool Search deferred-schema directory](/tools/tool-search), and the
+[Tool Search deferred tool directory](/tools/tool-search), and the
 [MCP tool directory](/tools/tool-search#mcp-tool-directory), including MCP
 servers installed as plugins. Codex-native surfaces
 are not ranked, and Claude CLI runs keep Claude's native `ToolSearch`. The lab

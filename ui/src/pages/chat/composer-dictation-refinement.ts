@@ -1,7 +1,6 @@
 import { focusComposerInput, type ComposerDraftTransaction } from "../../lib/composer-input.ts";
 import type {
   refineDictation,
-  DictationProtectedSpan,
   DictationPunctuationPolicy,
   DictationRefinementRequest,
   DictationRefinementResult,
@@ -14,19 +13,15 @@ type RefinementTarget = {
   start: number;
   end: number;
 };
-type RefinementLimitation = "draft-changed" | "source-revoked" | "transcript-incomplete";
+type RefinementLimitation = "draft-changed" | "transcript-incomplete";
 type RefinementPlan = {
   captureId: string;
   generation: number;
   target: RefinementTarget | undefined;
   policy: Readonly<DictationPunctuationPolicy>;
   context?: { left: string; right: string };
-  protectedSpans?: readonly DictationProtectedSpan[];
-  // A supplied context/vocabulary owner can revoke its snapshot, including raw
-  // recognition influenced by that snapshot. No permission is inferred from text.
-  provenance?: { revision: string; isEligible: () => boolean };
   recognized?: { text: string; isFinal: boolean; transcriptRevision: number };
-  retired?: "draft-changed" | "source-revoked";
+  retired?: "draft-changed";
 };
 type DictationReview = {
   plan: RefinementPlan;
@@ -43,9 +38,6 @@ type DictationReview = {
 export type ComposerDictationRefinementOptions = {
   refinement?: {
     policy: Readonly<DictationPunctuationPolicy>;
-    protectedSpans?: readonly DictationProtectedSpan[];
-    context?: { left: string; right: string };
-    provenance?: RefinementPlan["provenance"];
   };
   // Kept separate from the preference: disabling it affects the next capture,
   // while this reader still fences an already prepared, unsent result.
@@ -131,7 +123,7 @@ export class ComposerDictationRefinement {
     plan.recognized = recognized;
   }
 
-  /** Sample target/source changes synchronously, not only when a view reads review. */
+  /** Sample draft target changes synchronously, not only when a view reads review. */
   update(recognized?: RecognizedTranscript): RefinementPlan | undefined {
     const plan = this.refinementPlan;
     const previousRetirement = plan?.retired;
@@ -184,12 +176,9 @@ export class ComposerDictationRefinement {
       review.isFinal,
       review.delivery === "not-attempted",
     );
-    const revoked = limitation === "source-revoked";
     return {
-      rawText: revoked ? "" : review.rawText,
-      result: revoked
-        ? { ...review.result, status: "unavailable" as const, text: "", edits: [] }
-        : review.result,
+      rawText: review.rawText,
+      result: review.result,
       policy: review.plan.policy,
       revision: review.revision,
       selected: review.selected,
@@ -359,20 +348,15 @@ export class ComposerDictationRefinement {
     }
     const target = this.readRefinementTarget();
     const context =
-      refinement.context ??
-      (target && target.value.length <= 8192
+      target && target.value.length <= 8192
         ? { left: target.value.slice(0, target.start), right: target.value.slice(target.end) }
-        : undefined);
+        : undefined;
     return {
       captureId: `dictation-${generation}`,
       generation,
       target: target ? { ...target } : undefined,
       policy: Object.freeze({ ...refinement.policy }),
-      ...(context ? { context: { ...context } } : {}),
-      ...(refinement.protectedSpans
-        ? { protectedSpans: refinement.protectedSpans.map((span) => ({ ...span })) }
-        : {}),
-      ...(refinement.provenance ? { provenance: { ...refinement.provenance } } : {}),
+      ...(context ? { context } : {}),
     };
   }
 
@@ -389,15 +373,6 @@ export class ComposerDictationRefinement {
     isFinal: boolean,
     verifyTarget = true,
   ): RefinementLimitation | undefined {
-    if (plan.provenance) {
-      try {
-        if (!plan.provenance.isEligible()) {
-          plan.retired = "source-revoked";
-        }
-      } catch {
-        plan.retired = "source-revoked";
-      }
-    }
     if (!plan.retired && verifyTarget) {
       const current = this.readRefinementTarget();
       if (
@@ -441,7 +416,7 @@ export class ComposerDictationRefinement {
       !this.disposed &&
       this.options.enabled &&
       !this.options.realtimeTalkActive &&
-      !this.refinementLimitation(review.plan, true, false) &&
+      !review.plan.retired &&
       current &&
       current.target === undo.target.target &&
       current.revision === undo.target.revision &&
@@ -477,7 +452,6 @@ export class ComposerDictationRefinement {
       isFinal,
       policy: plan.policy,
       ...(plan.context ? { context: plan.context } : {}),
-      ...(plan.protectedSpans ? { protectedSpans: plan.protectedSpans } : {}),
     };
     let result: DictationRefinementResult;
     try {
@@ -520,7 +494,7 @@ export class ComposerDictationRefinement {
       return;
     }
     // Keep only the text already recognized before retirement. Late finals do
-    // not replace this recovery, and a revoked source offers no raw fallback.
+    // not replace this recovery.
     const result: DictationRefinementResult = {
       schemaVersion: 1,
       captureId: plan.captureId,

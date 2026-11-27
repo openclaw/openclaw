@@ -31,7 +31,6 @@ import { createFollowupRunner } from "./followup-runner.js";
 import * as followupExecution from "./followup-turn-execution.js";
 import * as followupAdmission from "./reply-agent-turn-preparation.js";
 import { incrementCompactionCount } from "./session-updates.js";
-import { createMockTypingController } from "./test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const turnUsage = Object.freeze({ input: 120, output: 8 });
@@ -151,7 +150,6 @@ it("delivers an accepted rejected followup through its source", async () => {
     await withAccountingProvider(() =>
       createFollowupRunner({
         defaultModel: diagnostic.model,
-        typing: createMockTypingController(),
         typingMode: "never",
       })(turn.queued),
     );

@@ -727,7 +727,9 @@ describe("dictation preview admission", () => {
       expect(composer.dictation?.requiresReview).toBe(mode !== "off");
       emit({ type: "partial", text: "unfinished dictated words" });
       await waitForSolid(() =>
-        expect(view.textarea().value).toBe(`${before ? `${before} ` : ""}unfinished dictated words`),
+        expect(view.textarea().value).toBe(
+          `${before ? `${before} ` : ""}unfinished dictated words`,
+        ),
       );
       expect(view.textarea().readOnly).toBe(true);
       view
@@ -744,9 +746,11 @@ describe("dictation preview admission", () => {
       } else {
         const finished = composer.dictation!.finishActive();
         await waitForSolid(() => expect(view.textarea().readOnly).toBe(false));
-        view.textarea().dispatchEvent(
-          new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
-        );
+        view
+          .textarea()
+          .dispatchEvent(
+            new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+          );
         flush();
         expect(composer.presentation.queuedSubmit).toBeNull();
         expect(state.chatMessage).toBe(before);
@@ -785,9 +789,11 @@ describe("dictation preview admission", () => {
         });
         view.textarea().dispatchEvent(newline);
         expect(newline.defaultPrevented).toBe(false);
-        view.textarea().dispatchEvent(
-          new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
-        );
+        view
+          .textarea()
+          .dispatchEvent(
+            new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+          );
         send()!.click();
         expect(onSend).not.toHaveBeenCalled();
         expect(composer.presentation.queuedSubmit).toBeNull();
@@ -797,9 +803,11 @@ describe("dictation preview admission", () => {
         await waitForSolid(() =>
           expect(view.query<HTMLButtonElement>(".chat-send-btn--stop")?.disabled).toBe(false),
         );
-        view.textarea().dispatchEvent(
-          new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
-        );
+        view
+          .textarea()
+          .dispatchEvent(
+            new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+          );
         await waitForSolid(() => expect(send()?.disabled).toBe(false));
         expect(composer.dictation?.review).toBeNull();
         expect(onAbort).not.toHaveBeenCalled();
