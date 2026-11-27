@@ -9,6 +9,7 @@ import {
   recordUpdateRunVerificationAsync,
 } from "../infra/update-run-write.async.js";
 import { redactSensitiveText } from "../logging/redact.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
@@ -22,6 +23,8 @@ import {
   writeTrial,
   type Trial,
 } from "./store.js";
+
+const log = createSubsystemLogger("gateway/update-run");
 
 /** Every ready boot converges installed plugins without holding core readiness open. */
 export function schedulePluginMaintenance(): void {
@@ -122,6 +125,8 @@ export function schedulePluginMaintenance(): void {
         (!lastRun.after.buildId || lastRun.after.buildId === resolveRuntimeServiceBuildId())
       ) {
         await recordUpdateRunStepAsync(lastRun.runId, step);
+      } else if (step.status === "failed" && step.detail) {
+        log.warn(step.detail);
       }
     }, getAsyncWorkSignal()),
   );

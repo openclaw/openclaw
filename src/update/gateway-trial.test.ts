@@ -421,7 +421,7 @@ it.each(["pending", "trial", "restoring"] as const)(
   },
 );
 
-it("keeps post-update inspections when result notice preparation fails", async () => {
+it("keeps boot plugin maintenance and inspections when result notice preparation fails", async () => {
   const state = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trial-notice-"));
   directories.push(state);
   vi.stubEnv("OPENCLAW_STATE_DIR", state);
@@ -442,11 +442,12 @@ it("keeps post-update inspections when result notice preparation fails", async (
     createdAt: Date.now(),
     outcome: { status: "succeeded", at: Date.now() },
   });
-  await expect(announceReady(null)).rejects.toThrow("notice preparation failed");
+  await bootReady();
   await Promise.all(backgroundWork);
   expect(await getUpdateRunAsync(run.runId)).toMatchObject({
     status: "succeeded",
     steps: expect.arrayContaining([
+      expect.objectContaining({ step: "plugins", status: "completed" }),
       expect.objectContaining({ step: "post-activation doctor inspections", status: "completed" }),
     ]),
   });
