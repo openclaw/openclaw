@@ -4,13 +4,18 @@ import { isMainThread } from "node:worker_threads";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   cleanupPluginLoaderFixturesForTest,
+  EMPTY_PLUGIN_SCHEMA,
   makePluginLoaderTempDir,
   resetPluginLoaderTestStateForTest,
 } from "../../plugins/loader.test-fixtures.js";
 import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
 import { withPluginGenerationSourceCustody } from "../../plugins/plugin-generation-source-lookup.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
-import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import {
+  rebasePluginMetadataSnapshotManifestRegistry,
+  resolvePluginMetadataSnapshot,
+  restorePluginMetadataSnapshot,
+} from "../../plugins/plugin-metadata-snapshot.js";
 import * as setupModule from "../../plugins/plugin-setup-module.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -315,6 +320,36 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       expectMarkers(setupMarker, fullMarker);
     },
   );
+
+  it("keeps explicitly supplied metadata inventories separate for the same config", () => {
+    const { cfg, list } = externalFixture({ setupEntry: false, manifestChannelConfig: true });
+    const original = resolvePluginMetadataSnapshot({ config: cfg });
+    const replacement = restorePluginMetadataSnapshot(
+      rebasePluginMetadataSnapshotManifestRegistry(original, {
+        ...original.manifestRegistry,
+        plugins: original.plugins.map((record) => ({
+          ...record,
+          channelConfigs: {
+            ...record.channelConfigs,
+            "external-chat": {
+              ...record.channelConfigs?.["external-chat"],
+              schema: EMPTY_PLUGIN_SCHEMA,
+              label: "Replacement inventory",
+            },
+          },
+        })),
+      }),
+    );
+    const labels = [original, replacement, original].map(
+      (metadataSnapshot) => findPlugin(list({ metadataSnapshot }))?.meta.label,
+    );
+
+    expect(labels).toEqual([
+      "External Chat Manifest",
+      "Replacement inventory",
+      "External Chat Manifest",
+    ]);
+  });
 
   it("reuses manifest adapters while account settings and channel policy stay live", () => {
     const { cfg, list, pluginDir, setupMarker, fullMarker } = externalFixture({

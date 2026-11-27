@@ -431,6 +431,7 @@ describe("Team Reports scheduler lifecycle", () => {
       start: false,
       schedule: { intradayEveryHours: 4 },
     });
+    await scheduler.start();
     const firstCollection = blockCollection(github);
     await scheduler.generate();
     expect((await scheduler.health()).lastRun).toBeUndefined();
