@@ -4,7 +4,6 @@ import type {
   DispatchReplyWithBufferedBlockDispatcher as CoreBufferedDispatcher,
   DispatchReplyWithDispatcher as CoreDispatcher,
 } from "../auto-reply/reply/provider-dispatcher.types.js";
-import { isRestartResumeEntryOutOfScope } from "../config/sessions/session-restart-resume-scope.js";
 import {
   dispatchReplyWithBufferedBlockDispatcher as dispatchBuffered,
   dispatchReplyWithDispatcher as dispatch,
@@ -36,22 +35,9 @@ export async function hasReplyRestartResume(
     return false;
   }
   try {
-    const { readSessionEntryReadOnlyInWorker } =
-      await import("../config/sessions/session-entry-read-runtime.js");
-    const entry = await readSessionEntryReadOnlyInWorker({
-      agentId: target.agentId,
-      sessionKey: target.sessionKey,
-      storePath: target.storePath,
-      readConsistency: "latest",
-      hydrateSkillPromptRefs: false,
-    });
-    const marker = entry?.resumeAfterRestart;
-    return (
-      entry?.sessionId === target.sessionId &&
-      marker !== undefined &&
-      !isRestartResumeEntryOutOfScope(entry) &&
-      (marker.sourceRunId === undefined || marker.sourceRunId === runId)
-    );
+    const { hasSessionRestartResume } =
+      await import("../config/sessions/session-restart-recovery.js");
+    return await hasSessionRestartResume(target, runId);
   } catch {
     // An unreadable marker cannot establish recovery custody.
     return false;
