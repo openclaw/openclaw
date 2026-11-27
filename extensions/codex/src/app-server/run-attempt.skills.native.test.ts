@@ -689,8 +689,9 @@ describe("native Codex skill delivery", () => {
       expect(bodies).toHaveLength(RELAY_TOOL_CALLS + 1);
       for (const [index, body] of bodies.entries()) {
         // Stable context sits once in cached developer input; per-turn context stays request-local.
-        expect(String(body.instructions)).toContain(turnMarker);
-        expect(String(body.instructions)).not.toContain(skillMarker);
+        const instructions = typeof body.instructions === "string" ? body.instructions : "";
+        expect(instructions).toContain(turnMarker);
+        expect(instructions).not.toContain(skillMarker);
         expect(developerMessageText(body).split(skillMarker)).toHaveLength(2);
         expect(JSON.stringify(body.input)).not.toContain(turnMarker);
         const previous = bodies[index - 1]?.input;
