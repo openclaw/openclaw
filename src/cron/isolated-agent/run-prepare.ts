@@ -12,6 +12,7 @@ import { resolveSessionStableReplyMode } from "../../auto-reply/reply/session-st
 import { selectLiveRuntimeConfig } from "../../config/runtime-snapshot.js";
 import { resolveSessionModelOverrideSource } from "../../config/sessions/model-override-provenance.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
@@ -20,6 +21,7 @@ import {
 } from "../../sessions/agent-harness-session-key.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
+import { captureSessionControllerSettlement } from "../../sessions/session-controller.lifecycle.js";
 import { settleCurrentReadPreparations } from "../../shared/current-read-authority.js";
 import { resolveCronSkillsSnapshot } from "../../skills/runtime/cron-snapshot.js";
 import {
@@ -30,6 +32,7 @@ import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { cronExecutionActor } from "../human-owner.js";
 import { resolveCronRuntimeSessionEntry } from "../inference-binding.js";
 import { CronSessionLifecycleClaimError } from "../run-authority.js";
+import { removeCronRunContinuationSessionIfIdle } from "../run-continuation-cleanup.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import type { CronWorkspaceLease } from "../run-workspace.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
@@ -109,7 +112,8 @@ export async function prepareCronRunContext(
   if (!resolved.ok) {
     return resolved;
   }
-  await using _ = resolved.resources;
+  await using resources = resolved.resources;
+  await using runtimeResources = new AsyncDisposableStack();
   const prepareSession = () =>
     withCronSessionPreparation(resolved.admission, async (signal) => {
       const prepared = await resolved.prepare(signal);
@@ -120,8 +124,27 @@ export async function prepareCronRunContext(
       if (!runPrepared) {
         return { ...prepared, completed: undefined };
       }
-      // Execution retains its selected runtime; close preparation's borrowed dispatch scope.
-      await resolved.resources.disposeAsync();
+      const preparedRuntimeLease = runtimeResources.use(prepared.context.preparedModelRuntimeLease);
+      if (prepared.context.runContinuationSession) {
+        // Native deletion drains the turn owner; release admission before cleanup and its runtime.
+        runtimeResources.defer(async () => {
+          try {
+            prepared.context.sessionPreparationEffect.release();
+            await captureSessionControllerSettlement({
+              target: prepared.context.sessionPreparationEffect.target,
+            });
+            await withPluginRuntimeGenerationScope(preparedRuntimeLease.snapshot, () =>
+              removeCronRunContinuationSessionIfIdle(prepared.context.runSessionKey),
+            );
+          } catch (error) {
+            logWarn(
+              `[cron:${params.input.job.id}] Failed to remove unused run continuation: ${String(error)}`,
+            );
+          }
+        });
+      }
+      // Close preparation's borrowed dispatch scope before executing the selected runtime.
+      await resources.disposeAsync();
       // Materialize the prepared incarnation for inference and its own finalization effects.
       return await withSessionTurn(
         {
