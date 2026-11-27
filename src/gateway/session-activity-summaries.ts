@@ -325,13 +325,6 @@ export function createSessionActivitySummaries(deps: {
         assertCurrent: () => assertCurrentOwner(state, ref),
       });
       authority = recapAuthority;
-      // The owner's role gates all work (no transcript read, "updating" or timer);
-      // execution's fallback runner still picks the allowed model from this chain.
-      const { operatorAuthority, utilityDisabled } = await recapAuthority.prepare();
-      if (utilityDisabled) {
-        publish(state, "unavailable");
-        return;
-      }
       const source = await readActivitySummarySource({
         scope: { ...scope(state), sessionId: state.sessionId },
         previous: readSessionActivitySummary(state.entry),
@@ -355,12 +348,20 @@ export function createSessionActivitySummaries(deps: {
         publish(state, "current");
         return;
       }
-      publish(state, "updating");
       let text = previous?.text ?? "";
       if (text.endsWith(OMISSION_NOTICE)) {
         text = text.slice(0, -OMISSION_NOTICE.length).trimEnd();
       }
-      if (notes.length || (restyle && text)) {
+      const work = notes.length > 0 || Boolean(restyle && text);
+      // The owner's role gates model work before "updating" or a timer; execution's
+      // fallback runner still picks the allowed model from this run's chain.
+      const { operatorAuthority, roleRefusesUtility } = work ? await recapAuthority.prepare() : {};
+      if (roleRefusesUtility) {
+        publish(state, "unavailable");
+        return;
+      }
+      publish(state, "updating");
+      if (work) {
         const controller = new AbortController();
         state.controller = controller;
         const timer = setTimeout(

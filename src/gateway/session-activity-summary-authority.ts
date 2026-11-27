@@ -1,8 +1,5 @@
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
-import {
-  resolveUtilityModelSelectionForAgent,
-  type UtilityModelDisabledReason,
-} from "../agents/utility-model.js";
+import { resolveUtilityModelSelectionForAgent } from "../agents/utility-model.js";
 import { sessionPersonalProfileId } from "../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -40,12 +37,13 @@ export function createActivitySummaryAuthority({
     operatorOwned: Boolean(profileId),
     assertCurrent: assertOwnerCurrent,
     /**
-     * The owner's run authority, and whether their role leaves a runnable utility
-     * model. A refusal is a state for the caller to publish, never a retry.
+     * The owner's run authority, and whether their role refuses every utility
+     * model. A refusal is a state for the caller to publish, never a retry; other
+     * disabled reasons stay with the caller's role-blind selection.
      */
     async prepare(this: void): Promise<{
       operatorAuthority?: AdmittedRunOperatorAuthority;
-      utilityDisabled?: UtilityModelDisabledReason;
+      roleRefusesUtility?: true;
     }> {
       assertOwnerCurrent();
       if (!profileId) {
@@ -100,7 +98,9 @@ export function createActivitySummaryAuthority({
       });
       return {
         operatorAuthority: authority,
-        ...("disabled" in utility ? { utilityDisabled: utility.disabled } : {}),
+        ...("disabled" in utility && utility.disabled === "role-policy"
+          ? { roleRefusesUtility: true as const }
+          : {}),
       };
     },
     // The recap owner joins preparation and completion before releasing this lease.

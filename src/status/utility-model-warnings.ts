@@ -18,8 +18,8 @@ import {
   resolveModelRefFromString,
 } from "../agents/model-selection-shared.js";
 import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
+import { selectUtilityModel } from "../agents/utility-model-selection.js";
 import { readUtilityModelSetting } from "../agents/utility-model-setting.js";
-import { resolveUtilityModelSelectionForAgent } from "../agents/utility-model.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../config/types.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
@@ -84,7 +84,7 @@ export function collectUtilityModelWarnings(
         if (agents !== "*" && !agents.includes(agentId)) {
           continue;
         }
-        const selection = resolveUtilityModelSelectionForAgent({
+        const selection = selectUtilityModel({
           cfg: config,
           agentId,
           metadataSnapshot: metadata,
