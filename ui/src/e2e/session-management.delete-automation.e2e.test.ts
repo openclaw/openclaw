@@ -65,6 +65,9 @@ suite.define(() => {
           } else {
             await ui.button(row, "Open session menu", false).click();
           }
+          await page
+            .getByRole("menu", { name: "Actions for Backup maintenance", exact: true })
+            .waitFor();
           await ui.menuItem(page, "Advanced").click();
           await support.activateSelfRemovingControl(
             ui.menuItem(page.locator("openclaw-session-menu"), "Delete…"),
