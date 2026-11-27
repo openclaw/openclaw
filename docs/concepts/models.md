@@ -660,6 +660,16 @@ values. A self-hosted mirror can be selected with an HTTPS
 
 Custom providers configured under `models.providers` are written into `models.json` under the agent directory (default `~/.openclaw/agents/<agentId>/agent/models.json`). Provider-plugin catalogs are stored separately as generated plugin-owned catalog shards and load automatically. This file is merged with config by default. Set `models.mode: "replace"` to use only your configured providers.
 
+When OpenClaw writes `models.json` and the provider-plugin catalogs, it omits a
+configured or discovered provider that the models registry cannot load. For
+example, it omits a provider whose models have no `api` at provider or model
+level when no provider plugin supplies one. The other providers still load.
+OpenClaw logs one warning that names the provider and the missing field each
+time these catalogs change. Set `models.providers.<id>.api` to load the
+provider again. A provider that you added only to `models.json` stays in the
+file. If the registry cannot load it, the registry reports the error for the
+whole file until you fix that entry.
+
 In the default `merge` mode, configured model rows are combined with eligible
 provider discovery. They supply metadata and request overrides for matching
 models; they do not limit discovery to the saved IDs. Older provider model

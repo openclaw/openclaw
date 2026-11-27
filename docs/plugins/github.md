@@ -43,10 +43,11 @@ native item previews nor the generic page-preview fallback fetches them.
 A PR or issue URL inside a login redirect query does not make the login link
 previewable.
 
-Each reader tab has its own Back and Forward history. Opening the same URL
-selects its existing tab. Links inside the reader navigate the current tab;
-the **+** button starts another tab. Up to ten tabs stay in memory. Closing the
-page discards the documents and history. The reader follows the session panel’s
+A link to an item that already has a tab selects that tab. Links to other
+supported items inside the reader open in their own tab, and **+** (or
+**Link reader** in the Chat side panel's **+** menu) starts an empty tab where
+you can enter a URL. Up to ten tabs stay in memory, and closing the page
+discards them. The reader follows the session panel’s
 responsive layout; on a phone it can sit below chat or expand with the panel.
 
 The reader shows the title and description first, while checks and discussion
@@ -67,9 +68,9 @@ inspect individual results grouped by state and open their source logs.
 Pending, failed, passed, skipped, empty, and unavailable results remain distinct;
 a partial response never implies that all checks passed, and reports how many
 runs were not shown when the total is known. These results describe CI, not approval or merge readiness.
-Use **Refresh** to fetch the current PR and its checks again. The previous
-document stays readable while refreshing, with previous results labeled until
-replaced. A changed head never inherits checks or diffs from the old head.
+Use **Refresh** in the document header to fetch the current PR and its checks again. The previous
+document stays readable while the refresh icon spins, and reloading sections
+label their previous results until replaced. A changed head never inherits checks or diffs from the old head.
 Retryable section failures stay beside the affected content; access or identity
 failures clear the document.
 
@@ -217,7 +218,7 @@ hovercard, and GitHub links open externally.
 - **Refresh** requests the current item again. Rate limits, deleted items, and
   unavailable services show their specific explanation in the reader and hovercards,
   including GitHub's retry delay when available. Cached preview details stay visible
-  with the failure notice. Use the reader's **Retry** action or **Open on GitHub**;
+  with the failure notice. Use the reader's **Retry** or **Refresh** action, or **Open on GitHub**;
   the server's API quota is separate from your signed-in browser session.
 
 ## Plugin author integration

@@ -53,6 +53,8 @@ OpenClaw ID token startup / `6978b40e9d38`: D1 duplicate startup-wait case, −1
 
 Scheduled source / `3dbbeef49fa6`: C duplicate `expectCurrent` helper, −4 test-support lines; all 14 cases and seven calls remain. The existing recovery helper preserves assertion order and callback semantics. Boat baseline/candidate passed 14/14; the same policy-recheck fault failed both admitted member/owner cases with either helper. Production bytes restored; targeted format/lint/types and independent preservation review passed. Broad scan results belong to the PR; no production change or runtime savings claimed.
 
+Node Gateway fixture / [192820](https://github.com/openclaw/openclaw/pull/192820). A rejected port claim used to leave the test state active. With the claim inside the fixture's cleanup scope, the rejection control observes one state cleanup and receives the original error before Gateway startup.
+
 ## Frozen source census
 
 Census 7c99ae1dd417: owner / support / caller / history / static routing; bounded transitive dependencies. Closed = source-only.
@@ -132,6 +134,7 @@ Standalone, non-additive counts; source-only unless local qualification is separ
 
 ## Unresolved obligations and limits
 
+- [192862](https://github.com/openclaw/openclaw/pull/192862) closes the native skills fixture when the model catalog write fails. The prior native suite covered three cases. The setup failure check preserved the original error and verified that the listener closed.
 - Qualify C / D at actual owners; preserve independent wire / identity / authority / lifecycle / platform / work-count keepers.
 - Transfer Android loading / blank-auth, persisted outbox keys / epochs, terminal projection and native PCM / decoder / reader rows before consolidation; retain typed host-error precedence / active-run settlement.
 - Keep CodeMode warmed worker-leg deadline / interruption separate from cancellation-table host-error precedence and settlement.

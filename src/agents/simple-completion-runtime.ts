@@ -532,10 +532,9 @@ type SimpleCompletionAcquisitionParams = Omit<
   "agentId" | "modelRef" | "useUtilityModel" | "useAsyncModelResolution"
 > & { agentId?: string; profileFailover?: boolean };
 
-type SimpleCompletionRequestResolver = (manifestPlugins?: PluginMetadataSnapshot) => {
-  selection: Omit<AgentSimpleCompletionSelection, "agentDir">;
-  shorthandModelId?: string;
-} | null;
+type SimpleCompletionRequestResolver = (
+  manifestPlugins?: PluginMetadataSnapshot,
+) => ReturnType<typeof resolveSimpleCompletionSelectionRequest>;
 
 /**
  * Captures metadata before the caller selects the model to materialize.

@@ -8,6 +8,7 @@ import {
   runBundledHealthFindingNote,
   runCoreHealthFindingNote,
 } from "./doctor-health-contribution-core.js";
+import { checkWriteConfigHealthPending } from "./doctor-health-contribution-runners.config-plan.js";
 import {
   collectWriteConfigHealthFindings,
   runWriteConfigHealth,
@@ -606,6 +607,7 @@ export function resolveFinalDoctorHealthContributions(params: {
         defaultEnabled: false,
         detect: collectWriteConfigHealthFindings,
       },
+      pending: (ctx) => checkWriteConfigHealthPending(ctx),
       async run(ctx) {
         await runWriteConfigHealth(ctx);
       },
