@@ -50,3 +50,13 @@ We've been using the general transient-turn approach in our Discord deployments 
 **We were ahead of upstream on this architectural principle in August. We have working solutions to share again today.**
 
 If upstream chooses not to adopt them, that's fine. We will continue benefiting from and developing them ourselves. We're sharing this work because the wider OpenClaw community could benefit too.
+
+## Our manifesto: human-level intelligence and memory on a 32k context window
+
+Our ambition is to build an OpenClaw agent capable of human-level conversational intelligence, useful long-term memory and sound judgment within a 32,768-token context window, running on consumer hardware.
+
+Why should an intelligent agent need hundreds of thousands of tokens of continuously replayed history merely to hold a coherent conversation? Humans do not keep every past interaction in their immediate working memory. They retain what matters, recall relevant information when needed and discard irrelevant detail. An effective agent should aspire to the same principles: durable memory, selective retrieval, compact current context and stable model state.
+
+A larger context window is a useful capability, not a substitute for good context engineering. Our goal is to make smaller models genuinely useful, make larger models more efficient and make capable agents accessible without requiring expensive infrastructure or constantly expanding inference budgets.
+
+32k is our engineering target, not a claim that human-level intelligence or memory has already been achieved.
