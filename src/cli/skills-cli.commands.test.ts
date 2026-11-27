@@ -518,9 +518,8 @@ describe("skills cli commands", () => {
         database.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
       }
       const before = await fs.readFile(databasePath);
-      const { readBestEffortConfig } = await vi.importActual<typeof import("../config/config.js")>(
-        "../config/config.js",
-      );
+      const { readBestEffortConfig } =
+        await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
       mocks.bestEffortConfig.mockImplementation(readBestEffortConfig);
       mocks.gateway.mockResolvedValue({ ...mocks.report, workspaceDir: "/gateway/inventory" });
 
