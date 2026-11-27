@@ -33,7 +33,10 @@ import { trackSqliteDatabaseAdmissionWorker } from "./sqlite-database-admission.
 import type { WorkerRetirementReason } from "./worker-cpu.js";
 import { receiveWorkerMemoryPort, setTrackedWorkerHostedEndpoints } from "./worker-cpu.js";
 import { registerHostedMemoryPredicates } from "./worker-memory-budget.js";
-import { createRetainedNativeWorker } from "./worker-native-lifecycle.js";
+import {
+  captureRetainedNativeWorkerSource,
+  createRetainedNativeWorker,
+} from "./worker-native-lifecycle.js";
 
 const hostedEntrypoints = {
   "sqlite-store": runtimeProcessEntrypoints.sqliteStore,
@@ -142,6 +145,15 @@ export function isHostedWorkerEndpoint(worker: unknown): worker is HostedWorkerE
   return worker instanceof HostedWorkerEndpoint;
 }
 
+async function stopSharedWorkerHostEndpoints(): Promise<void> {
+  await Promise.all(
+    [...(state.host?.endpoints.values() ?? [])].map((endpoint) => {
+      endpoint.retiring("shutdown");
+      return endpoint.terminate();
+    }),
+  );
+}
+
 class SharedWorkerHost {
   /** Supervised, so synchronous callers can observe its exit through service(). */
   readonly worker: RetainedNativeWorker;
@@ -155,6 +167,12 @@ class SharedWorkerHost {
     const { port1, port2 } = new MessageChannel();
     this.control = port1;
     const url = resolveRuntimeProcessEntrypointUrl("sharedWorkerHost");
+    // Plain task pools own no native close of their own; terminal close of the host's native
+    // source stops their endpoints, so the host joins before the source checks for live workers.
+    captureRetainedNativeWorkerSource({ runtimeGeneration: undefined }).retain(
+      state,
+      stopSharedWorkerHostEndpoints,
+    );
     this.worker = createRetainedNativeWorker(url, {
       env: resolveNodeCompileCacheEnv(),
       execArgv: resolveRuntimeWorkerThreadExecArgv(url),
