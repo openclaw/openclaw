@@ -90,6 +90,24 @@ describe("Template draft human authority", () => {
     expect(reply[1]).toEqual({ status: "expired" });
   });
 
+  it("stops a sign-in poll when its connection ends", async () => {
+    const workspace = tempDirs.make("template-sign-in-");
+    using _ = vi
+      .spyOn(sessionAuthorization, "resolveSessionMutationAuthorizationAsync")
+      .mockImplementationOnce(async (request) => {
+        request.assertInvocationCurrent?.();
+        request.client!.invalidated = true;
+        return { error: null };
+      });
+    const reply = await requestDraft("signIn", workspace, {
+      action: "poll",
+      sourceSessionKey: "agent:research:template",
+      draftId: "12345678-1234-4234-8234-123456789abc",
+      requestId: "12345678-1234-4234-8234-123456789abc",
+    });
+    expect(reply[0]).toBe(false);
+  });
+
   it("registers draft methods only for administrators", () => {
     for (const method of Object.keys(templatesDraftsHandlers)) {
       expect(coreGatewayHandlers[method]).toBeDefined();
