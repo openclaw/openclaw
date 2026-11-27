@@ -243,17 +243,15 @@ export async function repairCronInferenceBindingsForDoctor(
         if (!row || !job.definition) {
           throw new Error(`Cannot migrate cron inference account for ${job.id}.`);
         }
-        const { inferenceBinding, ownerTransferPending, ...original } = job.definition;
+        const {
+          inferenceBinding,
+          ownerTransferPending: _ownerTransferPending,
+          ...original
+        } = job.definition;
         const previous = rowToCronJob(row, original);
         const next = paused ? null : rowToCronJob(row, definition);
-        if (previous) {
-          if (inferenceBinding !== undefined) {
-            Object.assign(previous, { inferenceBinding });
-          }
-          if (ownerTransferPending !== undefined) {
-            Object.assign(previous, { ownerTransferPending });
-          }
-        }
+        const legacy = { inferenceBinding };
+        const previousDefinition = previous && { ...previous, ...legacy };
         const source = previous?.operatorSource;
         // An exact account conversion keeps the original authenticated source
         // bound to its definition without reviving an already stale capture.
@@ -261,7 +259,7 @@ export async function repairCronInferenceBindingsForDoctor(
           source &&
           previous &&
           next &&
-          source.executionRevision === resolveCronOperatorExecutionRevision(previous)
+          source.executionRevision === resolveCronOperatorExecutionRevision(previous, legacy)
         ) {
           next.operatorSource = {
             ...source,
@@ -269,12 +267,13 @@ export async function repairCronInferenceBindingsForDoctor(
           };
         }
         const validProjection =
-          previous &&
+          previousDefinition &&
           next &&
-          row.grant_definition_revision === resolveCronJobGrantDefinitionRevision(previous) &&
+          row.grant_definition_revision ===
+            resolveCronJobGrantDefinitionRevision(previousDefinition) &&
           row.grant_definition_updated_at === row.updated_at;
         if (
-          previous &&
+          previousDefinition &&
           next &&
           validProjection &&
           typeof row.grant_definition_generation === "number" &&
@@ -282,7 +281,7 @@ export async function repairCronInferenceBindingsForDoctor(
         ) {
           migrateCronInferenceStandingGrantReferences(
             db,
-            previous,
+            previousDefinition,
             next,
             row.grant_definition_generation,
           );

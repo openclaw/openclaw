@@ -116,7 +116,8 @@ export function migrateCronInferenceStandingGrantReferences(
   const unchanged = { ...next, payload: previous.payload };
   const source = previous.operatorSource;
   if (
-    source?.executionRevision === resolveCronOperatorExecutionRevision(previous) &&
+    source?.executionRevision ===
+      resolveCronOperatorExecutionRevision(original, { inferenceBinding }) &&
     isDeepStrictEqual(next.operatorSource, {
       ...source,
       executionRevision: resolveCronOperatorExecutionRevision(next),
@@ -135,7 +136,7 @@ export function migrateCronInferenceStandingGrantReferences(
   ) {
     throw new Error("Cron inference migration must preserve the entire approved job definition.");
   }
-  migrateCronStandingGrantReferences(db, previous, next, generation);
+  migrateCronStandingGrantReferences(db, original, next, generation, { inferenceBinding });
 }
 
 /** A live import may change only the already captured member's explicit role representation. */
@@ -160,6 +161,7 @@ function migrateCronStandingGrantReferences(
   previous: CronStoredJob,
   next: CronStoredJob,
   generation: number,
+  legacy?: { inferenceBinding: unknown },
 ): void {
   if (!tableExists(db, STANDING_GRANT_TABLE) || !tableExists(db, STANDING_GRANT_GENERATION_TABLE)) {
     return;
@@ -173,7 +175,7 @@ function migrateCronStandingGrantReferences(
       .updateTable(STANDING_GRANT_TABLE)
       .set({ job_config_revision: resolveCronJobConfigRevision(next) })
       .where("cron_job_id", "=", previous.id)
-      .where("job_config_revision", "=", resolveCronJobConfigRevision(previous))
+      .where("job_config_revision", "=", resolveCronJobConfigRevision(previous, legacy))
       .where("revoked_at_ms", "is", null)
       .where((eb) => eb.or([eb("expires_at_ms", "is", null), eb("expires_at_ms", ">", Date.now())]))
       .where(

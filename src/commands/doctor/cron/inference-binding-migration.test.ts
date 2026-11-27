@@ -5,10 +5,13 @@ import { captureAuthProfileAuthorization } from "../../../agents/auth-profiles/a
 import { persistAuthProfileBatch } from "../../../agents/auth-profiles/upsert-with-lock.js";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { hashCronJobDefinition } from "../../../cron/definition-hash.js";
+import { resolveCronOperatorExecutionRevision } from "../../../cron/service/jobs-tool-policy.js";
 import { loadCronJobsStore, saveCronJobsStore } from "../../../cron/store.js";
 import { getCronStoreKysely } from "../../../cron/store/schema.js";
 import type { CronStoredJob } from "../../../cron/types.js";
 import { runLegacyCronHealth } from "../../../flows/doctor-health-contribution-runners.state.js";
+import { legacyMemberSnapshot } from "../../../gateway/openclaw-id/member-source-role-import.test-support.js";
 import { executeSqliteQuerySync } from "../../../infra/kysely-sync.js";
 import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
@@ -53,6 +56,13 @@ it("backs up captured accounts, converts exact routes, and pauses mismatches wit
       source: "auto",
     };
     authorization.dispose();
+    const source = {
+      version: 1,
+      kind: "gateway",
+      agentId: "main",
+      sourceRunId: "legacy-run",
+      snapshot: legacyMemberSnapshot(),
+    } as const;
     const storePath = state.statePath("cron", "jobs.json");
     const job = (id: string, model?: string): CronStoredJob => ({
       id,
@@ -84,6 +94,12 @@ it("backs up captured accounts, converts exact routes, and pauses mismatches wit
     const original = await inspectCronJobsForDoctor({ env: process.env });
     runOpenClawStateWriteTransaction(({ db }) => {
       for (const row of original.jobs.filter(({ id }) => id !== "unbound")) {
+        const { state: _state, ...executionDefinition } = row.definition!;
+        const executionRevision = hashCronJobDefinition({
+          ...executionDefinition,
+          inferenceBinding: binding,
+        });
+        const { enabled: _enabled, ...grantDefinition } = executionDefinition;
         executeSqliteQuerySync(
           db,
           getCronStoreKysely(db)
@@ -93,7 +109,16 @@ it("backs up captured accounts, converts exact routes, and pauses mismatches wit
                 ...row.definition,
                 inferenceBinding:
                   row.id === "revoked" ? { ...binding, authorizationId: "a".repeat(64) } : binding,
+                ...(row.id === "inherit" ? { operatorSource: { source, executionRevision } } : {}),
               }),
+              ...(row.id === "explicit"
+                ? {
+                    grant_definition_revision: hashCronJobDefinition({
+                      ...grantDefinition,
+                      inferenceBinding: binding,
+                    }),
+                  }
+                : {}),
             })
             .where("store_key", "=", row.storeKey)
             .where("job_id", "=", row.id),
@@ -118,7 +143,6 @@ it("backs up captured accounts, converts exact routes, and pauses mismatches wit
     } finally {
       notes.mockRestore();
     }
-    expect((await loadCronJobsStore(storePath)).jobs).toHaveLength(4);
     const result = { changes };
     expect(result.changes).toEqual(
       expect.arrayContaining([
@@ -142,9 +166,14 @@ it("backs up captured accounts, converts exact routes, and pauses mismatches wit
       expect(migrated).not.toHaveProperty("inferenceBinding");
       expect(migrated.state.lastRunAtMs).toBe(123);
     }
-    expect(saved.find(({ id }) => id === "inherit")).toMatchObject({
+    const inherited = saved.find(({ id }) => id === "inherit")!;
+    expect(inherited).toMatchObject({
       enabled: true,
       payload: { model: "openai/gpt-4.1@openai:reports", modelRuntime: "openclaw" },
+    });
+    expect(inherited.operatorSource).toEqual({
+      source,
+      executionRevision: resolveCronOperatorExecutionRevision(inherited),
     });
     expect(saved.find(({ id }) => id === "revoked")).toMatchObject({ enabled: false });
     const repaired = await inspectCronJobsForDoctor({ env: process.env });
