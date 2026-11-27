@@ -250,6 +250,7 @@ export async function startGatewayCoreRuntime(input: {
     >
   >();
   const approvalSessionEvents = createOperatorApprovalSessionEventRuntime({
+    getSessionRowProjection: runtime.getSessionRowProjection,
     clients,
     sessionMessageSubscribers,
     broadcastToConnIds,

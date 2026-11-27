@@ -268,63 +268,65 @@ function patchAttributes(
 
 /** Owns sanitized Markdown DOM, independently of the framework driving updates. */
 export class MarkdownDomReconciler {
-  private readonly range: DomRange;
-  private fragments: Fragment[] = [];
-  private tail?: Fragment;
-  private messageKey?: string;
-  private source = "";
-  private stableHtml = "";
-  private previewText?: { node: Text; original: string; path: RenderedNode[] };
-  private connected = true;
-  private readonly mediaSlots = new Map<
-    number,
-    { element: HTMLElement; root?: MarkdownMediaRoot }
-  >();
-  private usedSlots = new Set<number>();
+  readonly #range: DomRange;
+  #fragments: Fragment[] = [];
+  #tail?: Fragment;
+  #messageKey?: string;
+  #source = "";
+  #stableHtml = "";
+  #previewText?: { node: Text; original: string; path: RenderedNode[] };
+  #connected = true;
+  readonly #mediaSlots = new Map<number, { element: HTMLElement; root?: MarkdownMediaRoot }>();
+  #usedSlots = new Set<number>();
+
+  readonly #registerSessionTitle?: MarkdownSessionTitleRegistration;
+  readonly #sessionTitleSelector: string;
 
   constructor(
     container: ParentNode,
-    private readonly registerSessionTitle?: MarkdownSessionTitleRegistration,
-    private readonly sessionTitleSelector = SESSION_TITLE_TARGET_SELECTOR,
+    registerSessionTitle?: MarkdownSessionTitleRegistration,
+    sessionTitleSelector = SESSION_TITLE_TARGET_SELECTOR,
   ) {
-    this.range = createRange(container);
+    this.#registerSessionTitle = registerSessionTitle;
+    this.#sessionTitleSelector = sessionTitleSelector;
+    this.#range = createRange(container);
   }
 
   setConnected(connected: boolean): void {
-    this.connected = connected;
-    for (const slot of this.mediaSlots.values()) {
+    this.#connected = connected;
+    for (const slot of this.#mediaSlots.values()) {
       slot.root?.setConnected(connected);
     }
   }
 
   canPreview(messageKey: string, source: string): boolean {
     if (
-      messageKey !== this.messageKey ||
-      source.length <= this.source.length ||
-      !source.startsWith(this.source) ||
-      !this.tail
+      messageKey !== this.#messageKey ||
+      source.length <= this.#source.length ||
+      !source.startsWith(this.#source) ||
+      !this.#tail
     ) {
       return false;
     }
     // Keep inline delimiters canonical: transient syntax can wrap, then shrink again.
     if (
-      /[\n\r<>&`*_~[\]()!\\|]/u.test(source.slice(this.source.length)) ||
+      /[\n\r<>&`*_~[\]()!\\|]/u.test(source.slice(this.#source.length)) ||
       /[\uE000-\uF8FF]/u.test(source)
     ) {
       return false;
     }
-    if (this.previewText) {
+    if (this.#previewText) {
       return true;
     }
-    const preview = this.findPreviewText(this.tail.children);
+    const preview = this.#findPreviewText(this.#tail.children);
     // A closed emphasis/link/code leaf cannot own text following its closing delimiter.
-    return Boolean(preview && this.source.endsWith(preview.node.data));
+    return Boolean(preview && this.#source.endsWith(preview.node.data));
   }
 
-  private findPreviewPath(nodes: RenderedNode[]): RenderedNode[] | undefined {
+  #findPreviewPath(nodes: RenderedNode[]): RenderedNode[] | undefined {
     for (let i = nodes.length - 1; i >= 0; i--) {
       const node = nodes[i]!;
-      const nested = this.findPreviewPath(node.children);
+      const nested = this.#findPreviewPath(node.children);
       if (nested) {
         return [node, ...nested];
       }
@@ -338,8 +340,8 @@ export class MarkdownDomReconciler {
     return undefined;
   }
 
-  private findPreviewText(nodes: RenderedNode[]) {
-    const path = this.findPreviewPath(nodes);
+  #findPreviewText(nodes: RenderedNode[]) {
+    const path = this.#findPreviewPath(nodes);
     const range = path?.at(-1);
     const text = range?.start.nextSibling;
     return text instanceof Text && text.nextSibling === range?.end
@@ -349,24 +351,24 @@ export class MarkdownDomReconciler {
 
   /** Show safe text now; formatting still owns the canonical tree and the next update. */
   preview(source: string): void {
-    if (!this.previewText) {
-      const preview = this.findPreviewText(this.tail!.children)!;
-      this.previewText = { ...preview, original: preview.node.data };
+    if (!this.#previewText) {
+      const preview = this.#findPreviewText(this.#tail!.children)!;
+      this.#previewText = { ...preview, original: preview.node.data };
     }
-    const text = this.previewText.original + source.slice(this.source.length);
-    if (this.previewText.node.data !== text) {
-      this.previewText.node.data = text;
+    const text = this.#previewText.original + source.slice(this.#source.length);
+    if (this.#previewText.node.data !== text) {
+      this.#previewText.node.data = text;
     }
   }
 
-  private clearPreview(): void {
-    if (this.previewText) {
+  #clearPreview(): void {
+    if (this.#previewText) {
       // Reconcile from the visible text, without dirtying layout by restoring old bytes first.
-      for (const node of this.previewText.path) {
+      for (const node of this.#previewText.path) {
         node.canonical = undefined;
       }
-      this.tail!.parsedHtml = undefined;
-      this.previewText = undefined;
+      this.#tail!.parsedHtml = undefined;
+      this.#previewText = undefined;
     }
   }
 
@@ -377,26 +379,28 @@ export class MarkdownDomReconciler {
     [stableContent, tailContent]: readonly [MarkdownContent, MarkdownContent],
     media?: MarkdownDomMedia,
   ): void {
-    this.clearPreview();
+    this.#clearPreview();
     const stableHtml = markdownContentHtml(stableContent);
     const tailHtml = markdownContentHtml(tailContent);
-    if (this.messageKey !== messageKey) {
-      this.releaseMedia();
+    if (this.#messageKey !== messageKey) {
+      this.#releaseMedia();
     }
     if (
-      this.messageKey !== messageKey ||
-      !source.startsWith(this.source) ||
-      (stableHtml !== this.stableHtml && !stableHtml.startsWith(this.stableHtml))
+      this.#messageKey !== messageKey ||
+      !source.startsWith(this.#source) ||
+      (stableHtml !== this.#stableHtml && !stableHtml.startsWith(this.#stableHtml))
     ) {
-      this.reset();
+      this.#reset();
     }
-    if (stableHtml.length > this.stableHtml.length) {
-      const completed = this.stableHtml ? stableHtml.slice(this.stableHtml.length) : stableContent;
-      if (this.tail) {
+    if (stableHtml.length > this.#stableHtml.length) {
+      const completed = this.#stableHtml
+        ? stableHtml.slice(this.#stableHtml.length)
+        : stableContent;
+      if (this.#tail) {
         // Promotion retains the same DOM owner and its reader state.
-        const previous = this.tail;
+        const previous = this.#tail;
         previous.html = completed;
-        this.tail = undefined;
+        this.#tail = undefined;
         if (tailHtml) {
           // A cold live runtime first renders the whole reply in one island.
           // Split its completed prefix without retiring the still-growing nodes.
@@ -404,86 +408,86 @@ export class MarkdownDomReconciler {
             completed,
             media?.prefix ?? "",
             previous.incremental,
-            this.registerSessionTitle ? this.sessionTitleSelector : undefined,
+            this.#registerSessionTitle ? this.#sessionTitleSelector : undefined,
           );
           const remaining = previous.children.splice(completedNodes.length);
           if (remaining.length) {
-            this.tail = this.createFragment(tailContent, true);
-            this.tail.children = remaining;
+            this.#tail = this.#createFragment(tailContent, true);
+            this.#tail.children = remaining;
             const parent = previous.end.parentNode!;
-            parent.insertBefore(this.tail.start, remaining[0]!.start);
-            parent.insertBefore(previous.end, this.tail.start);
+            parent.insertBefore(this.#tail.start, remaining[0]!.start);
+            parent.insertBefore(previous.end, this.#tail.start);
             for (const [index, node] of remaining.entries()) {
               if (typeof node.key === "number") {
                 node.key = index;
               }
             }
-            this.fragments.push(this.tail);
+            this.#fragments.push(this.#tail);
           }
         }
       } else {
-        this.fragments.push(this.createFragment(completed, false));
+        this.#fragments.push(this.#createFragment(completed, false));
       }
     }
     if (tailHtml) {
-      if (this.tail) {
-        this.tail.html = tailContent;
+      if (this.#tail) {
+        this.#tail.html = tailContent;
       } else {
-        this.tail = this.createFragment(tailContent, true);
-        this.fragments.push(this.tail);
+        this.#tail = this.#createFragment(tailContent, true);
+        this.#fragments.push(this.#tail);
       }
-    } else if (this.tail) {
-      releaseSessionTitles(this.tail);
-      removeRange(this.tail);
-      this.fragments.pop();
-      this.tail = undefined;
+    } else if (this.#tail) {
+      releaseSessionTitles(this.#tail);
+      removeRange(this.#tail);
+      this.#fragments.pop();
+      this.#tail = undefined;
     }
-    this.messageKey = messageKey;
-    this.source = source;
-    this.stableHtml = stableHtml;
-    this.renderFragments(media);
+    this.#messageKey = messageKey;
+    this.#source = source;
+    this.#stableHtml = stableHtml;
+    this.#renderFragments(media);
   }
 
   /** A standalone fragment uses the same canonical-tree and media ownership. */
   updateHtml(html: MarkdownContent, media?: MarkdownDomMedia, incremental = false): void {
-    this.clearPreview();
-    let fragment = this.fragments[0];
+    this.#clearPreview();
+    let fragment = this.#fragments[0];
     if (!fragment || fragment.incremental !== incremental) {
-      this.reset();
-      fragment = this.createFragment(html, incremental);
-      this.fragments.push(fragment);
+      this.#reset();
+      fragment = this.#createFragment(html, incremental);
+      this.#fragments.push(fragment);
     }
     fragment.html = html;
-    this.renderFragments(media);
+    this.#renderFragments(media);
   }
 
   dispose(): void {
-    this.releaseMedia();
-    this.reset();
-    removeRange(this.range);
+    this.#releaseMedia();
+    this.#reset();
+    removeRange(this.#range);
   }
 
-  private reset(): void {
-    this.clearPreview();
-    for (const fragment of this.fragments) {
+  #reset(): void {
+    this.#clearPreview();
+    for (const fragment of this.#fragments) {
       releaseSessionTitles(fragment);
     }
-    clearRange(this.range);
-    this.fragments = [];
-    this.tail = undefined;
-    this.stableHtml = "";
+    clearRange(this.#range);
+    this.#fragments = [];
+    this.#tail = undefined;
+    this.#stableHtml = "";
   }
 
-  private releaseMedia(): void {
-    for (const slot of this.mediaSlots.values()) {
+  #releaseMedia(): void {
+    for (const slot of this.#mediaSlots.values()) {
       slot.root?.dispose();
     }
-    this.mediaSlots.clear();
+    this.#mediaSlots.clear();
   }
 
-  private createFragment(html: MarkdownContent, incremental: boolean): Fragment {
+  #createFragment(html: MarkdownContent, incremental: boolean): Fragment {
     return {
-      ...createRange(this.range.end.parentNode!, this.range.end),
+      ...createRange(this.#range.end.parentNode!, this.#range.end),
       html,
       prefix: "",
       incremental,
@@ -492,10 +496,10 @@ export class MarkdownDomReconciler {
     };
   }
 
-  private renderFragments(media?: MarkdownDomMedia): void {
-    this.usedSlots = new Set();
+  #renderFragments(media?: MarkdownDomMedia): void {
+    this.#usedSlots = new Set();
     const prefix = media?.prefix ?? "";
-    for (const fragment of this.fragments) {
+    for (const fragment of this.#fragments) {
       // Retain the inputs separately so completed fragments need no combined key.
       // Media policy still refreshes on every update.
       if (fragment.prefix !== prefix || fragment.parsedHtml !== fragment.html) {
@@ -503,24 +507,24 @@ export class MarkdownDomReconciler {
           fragment.html,
           prefix,
           fragment.incremental,
-          this.registerSessionTitle ? this.sessionTitleSelector : undefined,
+          this.#registerSessionTitle ? this.#sessionTitleSelector : undefined,
         );
         fragment.prefix = prefix;
         fragment.parsedHtml = fragment.html;
       } else if (!media) {
         continue;
       }
-      fragment.children = this.reconcile(fragment, fragment.children, fragment.canonical, media);
+      fragment.children = this.#reconcile(fragment, fragment.children, fragment.canonical, media);
     }
-    for (const [index, slot] of this.mediaSlots) {
-      if (!this.usedSlots.has(index)) {
+    for (const [index, slot] of this.#mediaSlots) {
+      if (!this.#usedSlots.has(index)) {
         slot.root?.dispose();
-        this.mediaSlots.delete(index);
+        this.#mediaSlots.delete(index);
       }
     }
   }
 
-  private reconcile(
+  #reconcile(
     range: DomRange,
     previous: RenderedNode[],
     canonical: CanonicalNode[],
@@ -541,7 +545,7 @@ export class MarkdownDomReconciler {
         cursor = node.start;
       }
       moveRange(node, cursor);
-      this.updateNode(node, source, media);
+      this.#updateNode(node, source, media);
       cursor = node.end.nextSibling!;
       return node;
     });
@@ -552,19 +556,19 @@ export class MarkdownDomReconciler {
     return next;
   }
 
-  private updateNode(node: RenderedNode, source: CanonicalNode, media?: MarkdownDomMedia): void {
+  #updateNode(node: RenderedNode, source: CanonicalNode, media?: MarkdownDomMedia): void {
     if (source.slot !== undefined) {
       const index = source.slot;
-      let slot = this.mediaSlots.get(index);
+      let slot = this.#mediaSlots.get(index);
       if (!slot) {
         slot = { element: document.createElement("div") };
-        this.mediaSlots.set(index, slot);
+        this.#mediaSlots.set(index, slot);
       }
       const root = media?.render(index, slot.element);
       if (root) {
         slot.root = root;
-        root.setConnected(this.connected);
-        this.usedSlots.add(index);
+        root.setConnected(this.#connected);
+        this.#usedSlots.add(index);
       }
       if (node.start.nextSibling !== slot.element || !root) {
         clearRenderedRange(node);
@@ -610,7 +614,7 @@ export class MarkdownDomReconciler {
       }
       patchAttributes(node.element, node.attributes, source.attributes!);
       node.attributes = source.attributes!;
-      node.children = this.reconcile(node.content!, node.children, source.children, media);
+      node.children = this.#reconcile(node.content!, node.children, source.children, media);
       node.tag = source.tag;
     } else {
       clearRenderedRange(node);
@@ -630,13 +634,13 @@ export class MarkdownDomReconciler {
             .replaceAll("\r", "&#13;");
           content = template.content;
         }
-        const registerSessionTitle = this.registerSessionTitle;
+        const registerSessionTitle = this.#registerSessionTitle;
         const targets = registerSessionTitle
           ? [
-              ...(content instanceof HTMLElement && content.matches(this.sessionTitleSelector)
+              ...(content instanceof HTMLElement && content.matches(this.#sessionTitleSelector)
                 ? [content]
                 : []),
-              ...content.querySelectorAll<HTMLElement>(this.sessionTitleSelector),
+              ...content.querySelectorAll<HTMLElement>(this.#sessionTitleSelector),
             ]
           : [];
         node.end.before(content);

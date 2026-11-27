@@ -2,7 +2,7 @@ import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest"
 import { createDeferred } from "../../test/helpers/promise.js";
 import { captureExecRequestOwners, withExecRequestTurn } from "../infra/exec-request-context.js";
 import type { ManagedRun, RunExit, SpawnInput } from "../process/supervisor/types.js";
-import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
+import { createTestOperatorAuthority } from "./admitted-run-context.test-support.js";
 import { captureExecRequestCancellation } from "./bash-process-control.js";
 import { readBackgroundProcesses } from "./bash-process-observation.js";
 import type { ProcessSession } from "./bash-process-registry.js";
@@ -38,9 +38,16 @@ vi.mock("../auto-reply/reply/session-event-handoff.js", () => ({
     agentId,
     sessionKey,
     sessionId: sessionKey,
+    storePath: "/synthetic/sessions.json",
     generation: "test",
   }),
   enqueueSessionEventForHost: enqueueSessionEventMock,
+}));
+// mock-isolation: Owed-result storage has its own owner suite; these destinations have no store.
+vi.mock("../sessions/owed.js", () => ({
+  owe: async () => {},
+  readPendingOwed: async () => undefined,
+  withhold: async () => {},
 }));
 vi.mock(import("../infra/system-events.js"), async (importOriginal) => ({
   ...(await importOriginal()),
@@ -87,11 +94,10 @@ function createExecOperatorSource(profileId = "exec-guest") {
   const controller = new AbortController();
   const release = vi.fn();
   const retain = vi.fn(() => release);
-  const authority = createAdmittedRunOperatorAuthority({
+  const authority = createTestOperatorAuthority({
     profileId,
     scopes: ["operator.write"],
     signal: controller.signal,
-    assertCurrent: () => controller.signal.throwIfAborted(),
     retain,
   });
   return { controller, authority, retain, release };
@@ -372,31 +378,84 @@ it.each([
 
 const descendantCleanupFailure = "service child cleanup did not complete before its hard deadline";
 
+const unconfirmedCleanupNote = expect.stringContaining("OpenClaw could not confirm");
+
+// A stopped tree can outlive the cleanup deadline (e.g. a process outside it holds its output).
+// The host join may fail with the same expiry, succeed (only the output stayed open), or be absent.
+it.each(["rejects", "succeeds", "absent"] as const)(
+  "keeps the timeout as the result when cleanup then expires (extinction join %s)",
+  async (extinctionJoin) => {
+    const expired = new Error(descendantCleanupFailure);
+    queueRun(undefined, "@1\n", (input) => ({
+      wait: async () => {
+        input.onCancel?.("overall-timeout");
+        throw expired;
+      },
+      ...(extinctionJoin === "absent"
+        ? {}
+        : {
+            waitForExtinction: async () => {
+              if (extinctionJoin === "rejects") {
+                throw expired;
+              }
+            },
+          }),
+    }));
+    const cleanupScope = createAgentCleanupScope();
+    await cleanupScope.run(async () => {
+      const run = await runTestExecProcess({ command: "sleep 60", timeoutSec: 5 });
+      const outcome = await run.promise;
+      assert(outcome.status === "failed");
+      expect(outcome).toMatchObject({ failureKind: "overall-timeout", timedOut: true });
+      expect(outcome.reason).toMatch(/^@1\n\nCommand timed out after 5 seconds\./);
+      const [beforeFailure, ...afterFailure] = outcome.reason.split(descendantCleanupFailure);
+      expect(beforeFailure).toContain("Command timed out");
+      expect(afterFailure).toHaveLength(1);
+    });
+    expect(cleanupScope.outcome).toBe("uncertain");
+  },
+);
+
 it.each([
-  { exitCode: 0, status: "completed", reported: "@1\n\nOpenClaw could not confirm" },
+  // A foreground result reports the note as a warning; the output stays the command's own.
+  { exitCode: 0, status: "completed", backgrounded: false, aggregated: "@1" },
   {
     exitCode: 3,
     status: "completed",
-    reported: "(Command exited with code 3)\n\nOpenClaw could not confirm",
+    backgrounded: false,
+    aggregated: "@1\n\n(Command exited with code 3)",
   },
-  { exitCode: 127, status: "failed", reported: descendantCleanupFailure },
+  // A backgrounded command returned its result already; its log and follow-up carry the note.
+  { exitCode: 0, status: "completed", backgrounded: true, aggregated: unconfirmedCleanupNote },
+  {
+    exitCode: 127,
+    status: "failed",
+    backgrounded: false,
+    aggregated: expect.stringContaining(descendantCleanupFailure),
+  },
 ])(
-  "keeps the observed exit when descendant cleanup is unconfirmed (exitCode=$exitCode)",
-  async ({ exitCode, status, reported }) => {
+  "keeps the observed exit when descendant cleanup is unconfirmed (exitCode=$exitCode, backgrounded=$backgrounded)",
+  async ({ exitCode, status, backgrounded, aggregated }) => {
     const cleanupScope = createAgentCleanupScope();
+    const settled = createDeferred();
     queueRun(async () => createRunExit({ exitCode }), "@1\n", {
       waitForExtinction: async () => {
+        await settled.promise;
         throw new Error(descendantCleanupFailure);
       },
     });
+    const warnings: string[] = [];
     await cleanupScope.run(async () => {
-      const run = await runTestExecProcess({ command: "tmux new -d" });
-      await expect(run.promise).resolves.toMatchObject({
-        status,
-        exitCode,
-        aggregated: expect.stringContaining(reported),
-      });
+      const run = await runTestExecProcess({ command: "tmux new -d", warnings });
+      if (backgrounded) {
+        markBackgrounded(run.session);
+      }
+      settled.resolve();
+      await expect(run.promise).resolves.toMatchObject({ status, exitCode, aggregated });
+      const warned = status === "completed" && !backgrounded;
+      expect(warnings).toEqual(warned ? [unconfirmedCleanupNote] : []);
       expect(run.session.aggregated).toContain("@1");
+      expect(run.session.aggregated.includes("OpenClaw could not confirm")).toBe(backgrounded);
       expect(run.session.cleanupUncertain || run.session.finalizationFailed).toBe(true);
     });
     expect(cleanupScope.outcome).toBe("uncertain");
@@ -580,7 +639,7 @@ describe("operator source lifetime", () => {
     const guest = await withGatewayToolCallerIdentity(
       {
         ...caller(source, "agent:main:retained-exec"),
-        receiptAuthority: () => !turn.signal.aborted,
+        receiptAuthority: () => turn.signal.throwIfAborted(),
       },
       () => runTestExecProcess({ command: "retained-source-command", startupSignal: turn.signal }),
     );
@@ -600,7 +659,7 @@ describe("operator source lifetime", () => {
       expect(guest.session).toMatchObject({ finalizing: true, exited: false });
       expect(source.release).not.toHaveBeenCalled();
 
-      expect(() => source.authority.assertCurrent()).toThrow("original invitation revoked");
+      expect(source.authority.signal?.aborted).toBe(true);
       expect(staff.session.exited).toBe(false);
       cleanup.release();
       await expect(guest.promise).resolves.toMatchObject({

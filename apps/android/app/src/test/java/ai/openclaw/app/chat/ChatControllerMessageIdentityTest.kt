@@ -2,6 +2,7 @@ package ai.openclaw.app.chat
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -26,6 +27,38 @@ class ChatControllerMessageIdentityTest {
   }
 
   private val json = Json { ignoreUnknownKeys = true }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun completedRecapAnchorSurvivesReturningToTheSameEntry() =
+    runTest {
+      val key = "agent:main:conversation-a"
+
+      fun completedHistory(entryId: String) =
+        """{"sessionInfo":{"key":"$key","status":"done","endedAt":1000},
+           "messages":[{"role":"assistant","content":"Done","timestamp":1000,"__openclaw":{"id":"$entryId"}}]}"""
+      var history = """{"messages":[],"inFlightRun":{"runId":"run-1"}}"""
+      val controller = createScriptedChatController { respond("chat.history") { history } }
+      controller.switchSession(key)
+      runCurrent()
+      history = completedHistory("entry-1")
+      controller.handleGatewayEvent("chat", chatTerminalPayload(key, "run-1", seq = 1, assistantText = "Done"))
+      runCurrent()
+      val settled = requireNotNull(controller.transcriptAnchor.value?.completedNewestItemId)
+
+      history = """{"messages":[]}"""
+      controller.switchSession("agent:main:conversation-b")
+      runCurrent()
+      history = completedHistory("entry-1")
+      controller.switchSession(key)
+      runCurrent()
+      assertEquals(settled, controller.transcriptAnchor.value?.newestItemId)
+
+      history = completedHistory("entry-2")
+      controller.refresh()
+      runCurrent()
+      assertNotEquals(settled, requireNotNull(controller.transcriptAnchor.value?.newestItemId))
+    }
 
   @Test
   fun parseChatMessageContentsReadsGatewayStringContent() {

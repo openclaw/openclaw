@@ -30,6 +30,7 @@ import { importRetiredStateSource } from "../../../infra/state-migrations.retire
 import { listRetiredCronStateFiles } from "../../../infra/state-migrations.retired-cron-files.js";
 import { listExistingRetiredStateFiles } from "../../../infra/state-migrations.retired-files.js";
 import { backupLegacyStateSource } from "../../../infra/state-migrations.source-backup.js";
+import { prepareProviderModelPolicySurfaces } from "../../../plugins/provider-model-routes.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { captureOpenClawStateReadContext } from "../../../state/openclaw-state-worker-context.js";
 import { shortenHomePath } from "../../../utils.js";
@@ -200,6 +201,7 @@ export async function applyLegacyCronStoreRepair(params: {
   recoverQuarantinedScheduleJobs?: boolean;
 }): Promise<LegacyCronRepairResult> {
   await assertCronStateSchemaSupportedAsync();
+  await prepareProviderModelPolicySurfaces();
   const { state } = params;
   const changes: string[] = [];
   const warnings: string[] = [];
@@ -262,8 +264,6 @@ export async function applyLegacyCronStoreRepair(params: {
       (job) =>
         `Cron trigger script for ${job} uses legacy Code Mode APIs that cannot be safely converted; inspect the automation and update its trigger script manually to use direct tool calls.`,
     ),
-  );
-  warnings.push(
     ...normalized.unsupportedDeliveryModeJobs.map(
       (job) =>
         `Cron job ${job} has an unsupported delivery mode. Review its intended delivery and set mode to "none", "announce", or "webhook"; Doctor cannot infer the intended route.`,
@@ -380,7 +380,9 @@ export async function applyLegacyCronStoreRepair(params: {
               assertRowsUnchanged: assertSnapshotCurrent,
             },
           );
-          changes.push(`Saved pre-repair cron backup: ${backup.backupPath}`);
+          if (backup.backupPath) {
+            changes.push(`Saved pre-repair cron backup: ${backup.backupPath}`);
+          }
           warnings.push(...backup.warnings);
         }
         await saveCronJobsStore(state.storePath, store, {

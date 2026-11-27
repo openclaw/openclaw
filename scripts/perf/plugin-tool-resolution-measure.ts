@@ -15,6 +15,7 @@ import { loadavg } from "node:os";
 import path from "node:path";
 import { constants, PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 
 const [mode = "timing", rawIterations = "3000"] = process.argv.slice(2);
@@ -163,12 +164,7 @@ try {
   const memoryBefore = process.memoryUsage();
   const hostLoadBefore = loadavg();
   if (mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   } else {
     observer.observe({ entryTypes: ["gc"] });
   }

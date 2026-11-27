@@ -130,12 +130,19 @@ async function readPersistedJobs(): Promise<StoredJob[]> {
   return (await loadCronStore(storePath)).jobs as unknown as StoredJob[];
 }
 
-it("writes the recorded automation owner through the backed-up Doctor repair", async () => {
+it.each([true, false])("persists legacy owners (enabled: %s)", async (enabled) => {
   const createdActor = { type: "human", source: "profile", id: "profile-creator" };
   const payload = { kind: "agentTurn", message: "Morning brief", toolsAllow: ["message"] };
-  await writeCronStore([
-    createCurrentCronJob({ id: "legacy-owner", createdActor, payload }),
-    createCurrentCronJob({ id: "transferred", createdActor, ownerProfileId: "profile-recipient" }),
+  const runtimeAuthority = {
+    version: 1,
+    runtimeId: "codex",
+    namespace: "codex.apps",
+    payload: { apps: [{ id: "calendar" }] },
+  };
+  const retained = { createdActor, payload, enabled, runtimeAuthority };
+  await writeCurrentCronStore([
+    createCurrentCronJob({ ...retained, id: "legacy-owner" }),
+    createCurrentCronJob({ ...retained, id: "transferred", ownerProfileId: "profile-recipient" }),
     createCurrentCronJob({
       id: "incomplete-attribution",
       createdActor: { ...createdActor, id: "" },
@@ -145,22 +152,23 @@ it("writes the recorded automation owner through the backed-up Doctor repair", a
 
   await repairCronStore();
 
-  const { configJobs } = await loadCronJobsStoreWithConfigJobs(storePath);
-  expect(configJobs).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({ id: "legacy-owner", ownerProfileId: "profile-creator", payload }),
-      expect.objectContaining({ id: "transferred", ownerProfileId: "profile-recipient" }),
-      expect.objectContaining({ id: "incomplete-attribution", enabled: false, payload }),
-    ]),
+  const { configJobs, store } = await loadCronJobsStoreWithConfigJobs(storePath);
+  expect(configJobs).toContainEqual(
+    expect.objectContaining({ id: "incomplete-attribution", enabled: false, payload }),
   );
-  expect(noteMock).toHaveBeenCalledWith(
-    expect.stringContaining("Saved pre-repair cron backup"),
-    "Doctor changes",
-  );
-  expect(noteMock).toHaveBeenCalledWith(
-    expect.stringContaining("Paused automation incomplete-attribution"),
-    "Doctor warnings",
-  );
+  for (const [id, ownerProfileId] of [
+    ["legacy-owner", "profile-creator"],
+    ["transferred", "profile-recipient"],
+  ]) {
+    expect(configJobs.find((job) => job.id === id)).toMatchObject({
+      ownerProfileId,
+      payload,
+      enabled,
+    });
+    expect(store.jobs.find((job) => job.id === id)).toMatchObject({ runtimeAuthority });
+  }
+  expectNoteContaining("Saved pre-repair cron backup", "Doctor changes");
+  expectNoteContaining("Paused automation incomplete-attribution", "Doctor warnings");
   const repeat = makePrompter();
   await repairCronStore(repeat);
   expect(repeat.confirm).not.toHaveBeenCalled();

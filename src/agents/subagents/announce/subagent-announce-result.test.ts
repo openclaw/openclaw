@@ -10,10 +10,10 @@ import { textAssistant } from "../../test-helpers/sparse-transcript.test-support
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { copySubagentRunRuntimeOwner } from "../registry/subagent-run-generation.js";
 import {
-  testing,
   readChildCompletionFindings as prepareFindings,
   readSubagentRunAnnounceResult as prepareResult,
-} from "./subagent-announce-output.test-support.js";
+} from "./subagent-announce-output.js";
+import { outputTesting as testing } from "./subagent-announce-overrides.test-support.js";
 
 describe("exact-run announcement results", () => {
   const published = new Map<string, SubagentRunRecord>();

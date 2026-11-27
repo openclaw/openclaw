@@ -139,21 +139,12 @@ export async function ensureSandboxContainer<T>(
 
   // Independent agent runs can converge on one container resource. Serialize the
   // full lifecycle so followers re-read state after create, start, or replace.
-  const assertCurrent = () => {
-    params.operatorAuthority?.assertCurrent();
-    params.assertCurrent?.();
-  };
   return await withSandboxContainerLifecycle(
     containerName,
     params.cfg.scope === "shared" ? undefined : params.operatorAuthority,
     (source) => {
       phases[Symbol.dispose]();
-      return ensureSandboxContainerLifecycle(
-        { ...params, assertCurrent },
-        containerName,
-        source,
-        prepare,
-      );
+      return ensureSandboxContainerLifecycle(params, containerName, source, prepare);
     },
   );
 }

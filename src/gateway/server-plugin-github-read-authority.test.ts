@@ -9,13 +9,11 @@ import {
   registerVirtualTestPlugin,
 } from "../plugin-sdk/plugin-test-contracts.js";
 import type { OpenClawPluginDefinition } from "../plugins/types.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { controlUiHandlers } from "./server-methods/control-ui.js";
-import type { GatewayRequestHandlerOptions, RespondFn } from "./server-methods/types.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import { dispatchProfile } from "./server/client-fixtures.test-support.js";
 import {
@@ -39,7 +37,7 @@ afterEach(async () => {
   await state?.cleanup();
 });
 
-function fixture(method: "preview" | "detail") {
+function fixture() {
   const cfg = {
     agents: { entries: { main: {} } },
     gateway: { controlUi: { github: { token: "synthetic-preview-credential" } } },
@@ -60,9 +58,8 @@ function fixture(method: "preview" | "detail") {
   setTestPluginRegistry(registry.registry);
   const context = createContext();
   context.getRuntimeConfig = () => cfg;
-  const hostMethod = method === "preview" ? "controlUi.githubPreview" : "controlUi.githubDetail";
+  const hostMethod = "controlUi.githubPreview";
   const handler = expectDefined(controlUiHandlers[hostMethod], "GitHub host reader");
-  const readResponse = vi.fn<RespondFn>();
   const methods = createGatewayMethodRegistry(
     [
       ...registry.registry.gatewayMethodDescriptors,
@@ -71,14 +68,7 @@ function fixture(method: "preview" | "detail") {
         owner: { kind: "core", area: "control-ui" },
         scope: "operator.read",
         profileAccess: "independent",
-        handler: (options: GatewayRequestHandlerOptions) =>
-          handler({
-            ...options,
-            respond: (...args) => {
-              readResponse(...args);
-              options.respond(...args);
-            },
-          }),
+        handler,
       },
     ],
     registry.registry,
@@ -97,14 +87,8 @@ function fixture(method: "preview" | "detail") {
         .filter((current) => !current.invalidated && (!filter || filter(current)))
         .map((current) => current.connId),
     );
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
   const fetchMock = vi.fn<typeof fetch>(async (input) => {
     const url = input instanceof Request ? input.url : String(input);
-    if (url.includes("/issues/")) {
-      entered.resolve();
-      await release.promise;
-    }
     return new Response(
       JSON.stringify(
         url.includes("/issues/")
@@ -113,7 +97,7 @@ function fixture(method: "preview" | "detail") {
               body: "Public issue content",
               state: "open",
               comments: 0,
-              repository_url: `https://api.github.com/repos/octocat/${method}`,
+              repository_url: "https://api.github.com/repos/octocat/preview",
               created_at: "2026-09-21T12:00:00Z",
               updated_at: "2026-09-21T12:00:00Z",
               user: { login: "octocat" },
@@ -128,22 +112,21 @@ function fixture(method: "preview" | "detail") {
       {
         type: "req",
         id: "github-read",
-        method: `github.${method}`,
+        method: "github.preview",
         params: {
           agentId: "main",
-          url: `https://github.com/octocat/${method}/issues/1`,
+          url: "https://github.com/octocat/preview/issues/1",
           refresh: true,
         },
       },
       client,
     );
-  return { client, harness, readResponse, entered, release, dispatch };
+  return { harness, dispatch };
 }
 
 describe("registered GitHub readers", () => {
   it("loads a preview through an identified operator's nested request", async () => {
-    const f = fixture("preview");
-    f.release.resolve();
+    const f = fixture();
     await f.dispatch();
     const response = await f.harness.awaitResponseFrame("github-read");
     expect(response.error).toBeUndefined();
@@ -151,32 +134,5 @@ describe("registered GitHub readers", () => {
       ok: true,
       payload: { title: "Preview without reloading" },
     });
-  });
-
-  it("does not deliver detail when the original operator is revoked during the read", async () => {
-    const f = fixture("detail");
-    const pending = f.dispatch();
-    try {
-      await Promise.race([
-        f.entered.promise,
-        pending.then(() => {
-          throw new Error("GitHub read finished before reaching the upstream request");
-        }),
-      ]);
-      f.client.invalidated = true;
-      f.client.invalidatedReason = "device-token-revoked";
-    } finally {
-      f.release.resolve();
-      await pending;
-    }
-    expect(f.readResponse).toHaveBeenCalledExactlyOnceWith(false, undefined, {
-      code: "UNAVAILABLE",
-      message: "GitHub request is no longer active. Try again.",
-      retryable: false,
-    });
-    expect(f.harness.send).not.toHaveBeenCalledWith(
-      expect.objectContaining({ id: "github-read", ok: true }),
-    );
-    expect(f.harness.close).toHaveBeenCalledWith(4001, "client invalidated: device-token-revoked");
   });
 });

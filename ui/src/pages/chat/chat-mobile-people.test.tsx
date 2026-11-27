@@ -26,10 +26,7 @@ afterEach(resetMentionComposerFixture);
 
 const labels: ChatMobilePeopleBodyProps["labels"] = {
   people: "People",
-  viewingNow: "Viewing now",
-  creator: "Creator",
   owner: "Owner",
-  participants: "Participants",
   mention: "Mention",
   mentionPerson: (name) => "Mention " + name,
   morePeople: (count) => count + " more people",
@@ -129,19 +126,17 @@ it("projects native identities and mentions through the People body without send
     </>
   ));
   expect(view.queryByRole("region", { name: "Creator" })).toBeNull();
-  expect(view.getByRole("region", { name: "Owner" }).textContent).toContain("Avery");
-  expect(view.getByRole("region", { name: "Participants" }).querySelectorAll("li")).toHaveLength(2);
+  expect(view.getAllByText("Owner")).toHaveLength(1);
+  expect(view.container.querySelectorAll(".chat-mobile-people__row")).toHaveLength(3);
+  expect(view.queryByText("Viewing now")).toBeNull();
   expect(view.getByText("3 more people")).toBeDefined();
-  expect(view.getByRole("heading", { name: "Participants" }).textContent).toBe("Participants");
   expect(view.queryByText("Elsewhere")).toBeNull();
   const trigger = view.getByRole("button", { name: "Open people" });
   trigger.click();
   expect(open).toHaveBeenCalledExactlyOnceWith(trigger);
   const textarea = composer.container.querySelector<HTMLTextAreaElement>("textarea")!;
   textarea.setSelectionRange(7, 11);
-  const participantMention = view
-    .getByRole("region", { name: "Participants" })
-    .querySelector<HTMLButtonElement>('button[aria-label="Mention Alex Rivera"]')!;
+  const participantMention = view.getByRole("button", { name: "Mention Alex Rivera" });
   expect(view.queryByRole("button", { name: "Mention Alex Remote" })).toBeNull();
   participantMention.click();
   composer.refresh();
@@ -221,4 +216,47 @@ it("shows only concurrent viewers in the header, never a lone creator or visitor
   expect(project([viewers[1]!, { ...viewers[0]!, watchedSessions: ["elsewhere"] }]).header).toEqual(
     [],
   );
+});
+
+it("includes quiet members in mobile People without making them live viewers", () => {
+  const owner = human("owner", "Owner Person");
+  const identities = [
+    human("speaker", "Speaker"),
+    human("quiet-one", "Quiet One"),
+    human("quiet-two", "Quiet Two"),
+  ];
+  const session = {
+    owner: { actor: owner },
+    createdActor: owner,
+    participants: [identities[0]!],
+    participantCount: 1,
+  };
+  const sharing = {
+    sessionKey: "agent:main:chat",
+    role: "owner" as const,
+    allowedVisibilities: [],
+    members: identities.map(({ id }) => ({ identityId: id, addedAt: 1 })),
+    identities,
+  };
+  const input = {
+    session,
+    sessionKey: sharing.sessionKey,
+    sharing,
+    viewers: [],
+    mentionableUsers: [],
+  };
+  const projected = projectChatMobilePeople(input);
+  expect(projected.participants.map(({ label }) => label)).toEqual([
+    "Speaker",
+    "Quiet One",
+    "Quiet Two",
+  ]);
+  expect(projected.owner?.label).toBe("Owner Person");
+  expect(projected.viewers).toEqual([]);
+  expect(projected.header).toEqual([]);
+  sharing.members = sharing.members.filter(({ identityId }) => identityId !== "quiet-two");
+  expect(projectChatMobilePeople(input).participants.map(({ label }) => label)).toEqual([
+    "Speaker",
+    "Quiet One",
+  ]);
 });

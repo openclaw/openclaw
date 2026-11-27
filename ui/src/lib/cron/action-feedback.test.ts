@@ -54,7 +54,7 @@ const outcomes = [
   ["stopped", "The scheduler is stopped.", false, "cronError"],
   [
     "invalid-spec",
-    "Couldn’t start this automation. Check its schedule and instructions.",
+    "OpenClaw couldn’t start this automation with its saved settings.",
     true,
     "cronError",
   ],

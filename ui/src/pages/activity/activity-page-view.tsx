@@ -127,6 +127,7 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
                     sessionRoute()?.filters.personId ??
                     null,
                 }}
+                searchInputValue={new URLSearchParams(location()?.search).get("q") ?? ""}
                 presenceViewers={presence()}
                 presentationRevision={pageRevision() + presentationTime()}
                 result={state().sessionActivity.result}

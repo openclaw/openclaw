@@ -3,7 +3,10 @@ import type { CronJob, CronRunStatus } from "../api/types.ts";
 type CronJobLastRunStatus = CronRunStatus | "unknown";
 type CronStatusJob = {
   enabled: boolean;
-  state?: Pick<CronJob["state"], "lastRunStatus" | "lastStatus" | "runningAtMs" | "autoDisabled">;
+  state?: Pick<
+    CronJob["state"],
+    "lastRunStatus" | "lastStatus" | "runningAtMs" | "autoDisabled" | "lastMeaningfulResult"
+  >;
 };
 
 export function resolveCronJobLastRunStatus(
@@ -20,15 +23,20 @@ export function isCronJobRunning(job: Pick<CronStatusJob, "state">): boolean {
   return typeof runningAtMs === "number" && Number.isFinite(runningAtMs);
 }
 
-// "Failed cron" surfaces (cron page, sidebar attention chips) track current
-// actionability, so a failure only counts while the job is still enabled —
-// with one exception: auto-disabled jobs are the ESCALATED failure state, not
-// an operator pause, so hiding them would drop the problem from every failure
-// surface exactly when it became permanent. Operator-paused jobs keep their
-// historical `lastRunStatus: "error"` for detail views without being flagged.
-export function isCronJobActiveFailure(job: CronStatusJob): boolean {
+// Quiet checks retain the last meaningful result; they do not resolve a blocker.
+// Operator pauses suppress attention, but automatic shutdown remains actionable.
+export function resolveCronJobAttention(
+  job: CronStatusJob,
+): "error" | "blocked" | "needs_attention" | undefined {
   if (job.state?.autoDisabled) {
-    return true;
+    return "error";
   }
-  return job.enabled && resolveCronJobLastRunStatus(job) === "error";
+  if (!job.enabled) {
+    return undefined;
+  }
+  if (resolveCronJobLastRunStatus(job) === "error") {
+    return "error";
+  }
+  const outcome = job.state?.lastMeaningfulResult?.outcome;
+  return outcome === "blocked" || outcome === "needs_attention" ? outcome : undefined;
 }

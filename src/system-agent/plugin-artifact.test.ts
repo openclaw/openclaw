@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
-import { Header } from "tar";
+import { Header } from "tar/raw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { packToArchive } from "../plugins/test-helpers/archive-fixtures.js";
 import {

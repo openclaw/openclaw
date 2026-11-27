@@ -19,7 +19,6 @@ import {
   isSubagentSessionKey,
   isToolResultError,
   resolveEmbeddedAttemptToolConstructionPlan,
-  resolveModelAuthModeAsync,
   sanitizeToolResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -346,14 +345,6 @@ async function buildOpenClawCodingToolsOptions(
     modelApi: model?.api,
     modelContextWindowTokens: a.contextTokenBudget ?? model?.contextWindow,
     delegationCapability: a.delegationCapability,
-    modelAuthMode: await resolveModelAuthModeAsync(
-      input.modelProvider,
-      a.config,
-      a.toolAuthProfileStore ?? a.authProfileStore,
-      {
-        workspaceDir,
-      },
-    ),
     modelHasVision,
     requireExplicitMessageTarget:
       a.requireExplicitMessageTarget ?? isSubagentSessionKey(liveSessionKey),
@@ -509,7 +500,11 @@ function convertOpenClawToolToSdkTool(
 
   return {
     description: sourceTool.description,
-    defer: sourceTool.catalogMode === "direct-only" ? "never" : undefined,
+    // Copilot has no on-demand promotion; on-demand tools keep their direct contract here.
+    defer:
+      sourceTool.catalogMode === "direct-only" || sourceTool.catalogMode === "on-demand"
+        ? "never"
+        : undefined,
     handler: (args, invocation) =>
       scheduleToolExecution(sourceTool.executionMode, () => executeOnce(args, invocation)),
     name: sourceTool.name,

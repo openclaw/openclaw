@@ -118,8 +118,10 @@ export async function inspectCliGatewayServiceInstallation(
     const ownCommand = await readOwnGatewayServiceCommand(env);
     const command =
       ownCommand ?? (await readGatewayServiceCommand(env, { inspectStateIdentity: true }));
-    const root = await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url });
     const layout = await summarizeGatewayServiceLayout(command);
+    const root = layout?.packageRootReal
+      ? await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url })
+      : null;
     const drift = root ? await inspectGatewayServiceInstallationDrift(layout, root) : undefined;
     if (
       !drift?.serviceVersion ||

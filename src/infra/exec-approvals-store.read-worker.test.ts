@@ -25,7 +25,6 @@ import { commitExecAuthorizationLocked } from "./exec-approvals-authorization.js
 import { prepareCronExecHostPolicyUse } from "./exec-approvals-cron-policy.js";
 import { currentPolicyExec } from "./exec-approvals-current-policy.test-support.js";
 import { loadMcpToolGrants } from "./exec-approvals-mcp.js";
-import { execApprovalsPublication } from "./exec-approvals-publication.js";
 import { writeExecApprovalsConfigRow } from "./exec-approvals-sqlite.js";
 import {
   loadExecApprovalsReadOnlyAsync,
@@ -121,9 +120,7 @@ it("commits unchanged authorization without main-thread SQLite and keeps its cap
     db: source.db,
     file: { version: 1, defaults: { security: "deny" } },
   });
-  sql.queries.length = 0;
-  expect(assertCurrent).toThrow("Exec approval changed before execution");
-  expect(sql.queries).toEqual([]);
+  expect(assertCurrent).not.toThrow();
   expect(fs.existsSync(foreign.databasePath)).toBe(false);
 });
 
@@ -158,24 +155,11 @@ it("settles batched usage commits in order while isolating refused authorization
     result.status === "fulfilled" ? [result.value] : [],
   );
   guards.forEach((guard) => expect(guard).not.toThrow());
-  let checkedPendingPolicy = false;
-  const release = execApprovalsPublication.subscribeFacts((change) => {
-    if (change.kind === "pending") {
-      checkedPendingPolicy = true;
-      guards.forEach((guard) => expect(guard).toThrow("changing before execution"));
-    }
+  await updateExecApprovals({
+    update: { kind: "replace", file: { version: 1, defaults: { security: "deny" } } },
   });
-  try {
-    await updateExecApprovals({
-      update: { kind: "replace", file: { version: 1, defaults: { security: "deny" } } },
-    });
-  } finally {
-    release();
-  }
-  expect(checkedPendingPolicy).toBe(true);
-  const reads = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-  guards.forEach((guard) => expect(guard).toThrow("Exec approval changed before execution"));
-  expect(reads.queries).toEqual([]);
+  // The commit checked policy once; a later write does not refuse the admitted launch.
+  guards.forEach((guard) => expect(guard).not.toThrow());
 });
 
 it("keeps independent authorization scopes isolated after settlement", async () => {
@@ -289,7 +273,7 @@ it("reuses prepared policy until a native or worker policy write", async () => {
   expect((await loadExecApprovalsReadOnlyAsync({ env })).defaults?.security).toBe("deny");
 });
 
-it("shares immutable current policy while refusing pending writes and replacing committed facts", async () => {
+it("keeps a prepared policy read on its admitted policy after a later policy write", async () => {
   const { env } = fixture(true);
   await updateExecApprovals({
     update: {
@@ -319,30 +303,14 @@ it("shares immutable current policy while refusing pending writes and replacing 
   expect(() => {
     initial.agents!.main!.mcpTools![0]!.tool = "changed";
   }).toThrow(TypeError);
-  let pendingChecked = false;
-  const release = execApprovalsPublication.subscribeFacts((change) => {
-    if (change.kind === "pending") {
-      pendingChecked = true;
-      expect(matchCurrent).toThrow("changing before execution");
-    }
+  await updateExecApprovals({
+    update: { kind: "replace", file: { version: 1, defaults: { security: "deny" } } },
   });
-  try {
-    await updateExecApprovals({
-      update: { kind: "replace", file: { version: 1, defaults: { security: "deny" } } },
-    });
-  } finally {
-    release();
-  }
-  expect(pendingChecked).toBe(true);
-  const denied = readCurrent();
-  expect(denied).not.toBe(initial);
-  expect(readCurrent()).toBe(denied);
-  expect(denied.defaults?.security).toBe("deny");
-  expect(matchCurrent()).toBeNull();
-  expect(() => {
-    denied.defaults!.security = "full";
-  }).toThrow(TypeError);
-  expect(initial.agents?.main?.mcpTools).toEqual([grant]);
+  // A started request finishes on the policy it was admitted with; the next one reads the write.
+  expect(readCurrent()).toBe(initial);
+  expect(matchCurrent()?.id).toBe("tool");
+  const next = await prepareExecApprovalsCurrentRead(captureOpenClawStateWorkerContext({ env }));
+  expect(next().defaults?.security).toBe("deny");
 });
 
 it("joins an admitted policy read before its disposable source is released", async () => {

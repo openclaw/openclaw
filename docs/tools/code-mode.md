@@ -9,7 +9,7 @@ read_when:
   - You are looking for the Code Mode page that matches your task
 ---
 
-Code mode is an experimental OpenClaw agent-runtime feature. When
+Code Mode is an OpenClaw agent-runtime feature. When
 enabled, the model no longer sees every enabled tool schema. Instead, it sees
 `exec`, `wait`, and any direct-only tool whose structured result cannot cross
 the JSON-only guest bridge. The model writes a small JavaScript
@@ -21,8 +21,9 @@ plain JavaScript without type annotations.
 When `tools.codeMode` is absent, OpenClaw uses the `"auto"` tier and engages
 Code Mode only for models marked as preferred Code Mode performers. An authored
 object without `enabled` remains off, as do `false` and `{ enabled: false }`.
-Agent and model overrides take precedence. Use **Settings → Agents & Tools →
-Labs → Code Mode** to choose the global setting.
+Agent and model overrides take precedence. Use **Settings → Agents →
+Agent defaults → Tools → Code Mode** to choose Auto or Off globally. This
+does not force Code Mode on for models outside the evaluated Auto tier.
 </Note>
 
 This page documents OpenClaw Code Mode, not Codex Code Mode. The two features
@@ -73,8 +74,13 @@ or apply to Codex-native Code Mode.
 ## What it does
 
 - The model-visible tool list becomes `exec`, `wait`, plus any direct-only tool
-  such as `computer` or the native-vision `view_image` loader whose image result
-  cannot survive the guest bridge.
+  such as the native-vision `view_image` loader whose image result cannot survive
+  the guest bridge.
+- On-demand tools such as `computer` stay out of that list until the model looks
+  one up with `describe()` or calls it; it then loads as a top-level tool and
+  stays direct for the prompt series. Guest code that calls one gets an error
+  saying to call it directly as a top-level tool. See
+  [On-demand tools](/tools/tool-search#on-demand-tools).
 - `exec` evaluates model-generated JavaScript in the selected executor's worker
   thread.
 - Every catalog-eligible enabled non-MCP tool (OpenClaw core, plugin, client) is

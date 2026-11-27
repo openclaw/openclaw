@@ -49,6 +49,7 @@ import workerThreads, { MessagePort } from "node:worker_threads";
 import { transformSync } from "esbuild";
 import type { SqliteWorkerOperationAdmission } from "../../src/infra/sqlite-worker-operation-admission.js";
 import type { DomainScope } from "../../src/state/openclaw-state-worker-store.types.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -654,12 +655,7 @@ try {
       }
       const startAllocation = async () => {
         if (values.allocation) {
-          inspector.connect();
-          await inspector.post("HeapProfiler.startSampling", {
-            samplingInterval: 32768,
-            includeObjectsCollectedByMajorGC: true,
-            includeObjectsCollectedByMinorGC: true,
-          });
+          await startCollectedHeapSampling(inspector, 32768);
         }
       };
       if (!values.quiesce) {

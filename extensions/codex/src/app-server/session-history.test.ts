@@ -22,7 +22,6 @@ import { runOpenClawAgentWriteAdmission } from "openclaw/plugin-sdk/sqlite-runti
 import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeUserMessage } from "../../../test-support/message-fixtures.test-support.js";
-import { projectContextEngineAssemblyForCodex } from "./context-engine-projection.js";
 import { readCodexNativeHistory } from "./session-history-read.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
 import { setupSessionHistoryFixtures, settledFixture } from "./session-history.test-support.js";
@@ -818,97 +817,33 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
 });
 
 it.each([false, true])(
-  "bounds prepared Codex history without truncating native evidence (incognito=%s)",
+  "prepares all Codex history since the boundary past the old budget cut (incognito=%s)",
   async (incognito) => {
     const fixture = await writeSqliteSession({
       incognito,
       ...(incognito ? { sessionKey: "agent:main:dashboard:incognito-Bounded-MiXeD" } : {}),
     });
     const source = await SessionManager.openAsync(fixture.sessionTarget);
-    for (let index = 0; index < 30; index += 1) {
+    // 1.3 MB: past eight bytes per token of the default 128k budget, far below compaction.
+    for (let index = 0; index < 40; index += 1) {
       await source.appendMessageAsync(
-        makeUserMessage(`old-${index}:` + "x".repeat(2048), index + 3),
+        makeUserMessage(`old-${index}:` + "x".repeat(32_768), index + 3),
       );
     }
-    await source.appendMessageAsync({ role: "user", content: "latest question", timestamp: 40 });
+    await source.appendMessageAsync({ role: "user", content: "latest question", timestamp: 50 });
     const target = {
       sessionFile: fixture.marker,
       sessionId: fixture.sessionTarget.sessionId,
       sessionKey: fixture.sessionKey,
       sessionTarget: fixture.sessionTarget,
     };
-    const prepared = await readCodexMirroredSessionHistoryMessages(
-      target,
-      undefined,
-      undefined,
-      128,
-    );
-    expect(prepared).toMatchObject([{ role: "user", content: "latest question" }]);
-    const native = await SessionManager.readSessionContextAsync(fixture.sessionTarget, (messages) =>
-      Array.from(messages),
-    );
-    expect(native).toHaveLength(33);
-    expect(native?.[2]).toMatchObject({ content: "old-0:" + "x".repeat(2048) });
-    await source.appendMessageAsync(makeUserMessage("oversized latest:" + "x".repeat(2048), 41));
-    await expect(
-      readCodexMirroredSessionHistoryMessages(target, undefined, undefined, 128),
-    ).rejects.toThrow(/session's context limit/);
-    expect(
-      await SessionManager.readSessionContextAsync(fixture.sessionTarget, (messages) =>
-        Array.from(messages),
-      ),
-    ).toHaveLength(34);
+    const first = await readCodexMirroredSessionHistoryMessages(target);
+    expect(first).toHaveLength(43);
+    expect(first?.[2]).toMatchObject({ content: "old-0:" + "x".repeat(32_768) });
+    // The next attempt rereads the same history plus its new turn: the prefix does not move.
+    await source.appendMessageAsync({ role: "user", content: "next question", timestamp: 51 });
+    const second = await readCodexMirroredSessionHistoryMessages(target);
+    expect(second?.slice(0, first!.length)).toEqual(first);
+    expect(second).toHaveLength(44);
   },
 );
-
-it("prepares an oversized mirrored tool frame without losing the incoming request or native evidence", async () => {
-  const fixture = await writeSqliteSession();
-  const { settledMessages } = settledFixture();
-  const oversized = "completed-tool-evidence:" + "x".repeat(32_768);
-  for (const message of settledMessages) {
-    if (message.role === "toolResult") {
-      message.content = [{ type: "text", text: oversized }];
-    }
-    await appendSessionTranscriptMessageByIdentity({ ...fixture.sessionTarget, message });
-  }
-  const nativeBefore = readCodexSessionContext(fixture.sessionTarget, (messages) =>
-    JSON.stringify(Array.from(messages)),
-  );
-  const prepared = await readCodexMirroredSessionHistoryMessages(
-    {
-      sessionFile: fixture.marker,
-      sessionId: fixture.sessionTarget.sessionId,
-      sessionKey: fixture.sessionKey,
-      sessionTarget: fixture.sessionTarget,
-    },
-    undefined,
-    undefined,
-    512,
-  );
-  expect(prepared).toMatchObject([
-    { role: "user", content: "sqlite prompt" },
-    { role: "assistant", content: "sqlite answer" },
-    { role: "user", content: "Send the synthetic update." },
-    { role: "assistant", content: [{ type: "toolCall", id: "sent", name: "message" }] },
-    {
-      role: "toolResult",
-      toolCallId: "sent",
-      content: [{ type: "text", text: expect.stringMatching(/omitted.*\d+ bytes/u) }],
-    },
-  ]);
-  const currentRequest = "Newest request: report the earlier operation without repeating it.";
-  const projection = await projectContextEngineAssemblyForCodex({
-    assembledMessages: prepared ?? [],
-    prompt: currentRequest,
-    toolPayloadMode: "preserve",
-  });
-  expect(projection.promptText).toContain("Send the synthetic update.");
-  expect(projection.promptText).toContain("body omitted");
-  expect(projection.promptText.endsWith(currentRequest)).toBe(true);
-  expect(
-    readCodexSessionContext(fixture.sessionTarget, (messages) =>
-      JSON.stringify(Array.from(messages)),
-    ),
-  ).toBe(nativeBefore);
-  expect(nativeBefore).toContain(oversized);
-});

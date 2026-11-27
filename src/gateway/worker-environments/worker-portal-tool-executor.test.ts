@@ -343,7 +343,7 @@ it.each([
   ["epoch", "Worker source environment changed"],
   ["placement", "Worker source session placement changed"],
   ["SSH", "move the session back to the gateway with sessions.move"],
-  ["tool", "Worker session tool authority changed"],
+  ["tool", "Worker turn ended or lacks this tool"],
 ] as const)(
   "rejects invalid %s authority before preparing a carrier",
   async (boundary, message) => {

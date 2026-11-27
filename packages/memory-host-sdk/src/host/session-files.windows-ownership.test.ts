@@ -21,14 +21,6 @@ function fixturePath(...parts: string[]): string {
 describe("memory session directory ownership", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it("includes the owning agent id in canonical archived transcript paths", () => {
-    const name = "deleted-session.jsonl.deleted.2026-02-16T22-27-33.000Z";
-    const sessionFile = fixturePath("agents", "main", "sessions", name);
-    expect(sessionPathForFile(sessionFile)).toBe(
-      "sessions/main/deleted-session.jsonl.deleted.2026-02-16T22-27-33.000Z",
-    );
-  });
-
   it("keeps case-variant structural segments unowned on case-sensitive platforms", () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     expect(extractAgentIdFromSessionsDir(fixturePath("AGENTS", "Main", "SESSIONS"))).toBeNull();

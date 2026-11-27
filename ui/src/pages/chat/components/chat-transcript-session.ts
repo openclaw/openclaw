@@ -60,6 +60,13 @@ export type TranscriptHeader = {
   height: number;
 };
 
+export type TranscriptSearchProjection = { query: string; empty: boolean } | null;
+
+export type TranscriptProjectionSource = {
+  messages: readonly unknown[];
+  search: TranscriptSearchProjection;
+};
+
 export type ChatTranscriptSession = {
   readonly layout: Pick<TranscriptLayoutOwner, "viewportResizePending" | "configureRows" | "ready">;
   readonly entryAnimations: ChatMessageEntryAnimations;
@@ -76,7 +83,6 @@ export type ChatTranscriptSession = {
     renderRow: (row: TranscriptRow<T>) => TranscriptContent,
     announcement: TranscriptAnnouncement | null,
     announce: boolean,
-    overlay?: JSX.Element,
     header?: TranscriptHeader | null,
     presented?: PresentationValue,
     applicationContext?: ApplicationContext,
@@ -84,6 +90,7 @@ export type ChatTranscriptSession = {
   syncMessageRows(
     messageRowKeysById: ReadonlyMap<string, string>,
     messageRowsByKey: ReadonlyMap<string, string>,
+    source?: TranscriptProjectionSource,
   ): void;
   /** Returns the sampled loaded message at or preceding the viewport midpoint. */
   activeMessageId(messageIds: readonly string[]): string | null;
@@ -98,7 +105,6 @@ export type TranscriptRenderSnapshot<T> = {
   renderRow: (row: TranscriptRow<T>) => TranscriptContent;
   announcement: TranscriptAnnouncement | null;
   announce: boolean;
-  overlay: JSX.Element;
   header: TranscriptHeader | null;
   messageRows: ReadonlyMap<string, string>;
   renderKeyRows: ReadonlyMap<string, string>;

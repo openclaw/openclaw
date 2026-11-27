@@ -1,3 +1,4 @@
+import { QUESTION_COMPOSER_REPLACEMENT } from "../../../../src/shared/question-composer-replacement.js";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import type { ChatProjection, TurnInsertionBounds } from "./chat-thread-items.ts";
 import { createTranscriptMemo } from "./components/chat-transcript-memo.ts";
@@ -17,7 +18,9 @@ export function projectResolvedQuestionPrompts(
   resolveBounds: (runId: string) => TurnInsertionBounds | undefined,
 ): ChatProjection[] {
   return (prompts ?? []).flatMap((prompt) =>
-    prompt.status === "pending"
+    prompt.status === "pending" ||
+    prompt.resolvedBy === "plain-text" ||
+    prompt.resolvedBy === QUESTION_COMPOSER_REPLACEMENT
       ? []
       : [
           {

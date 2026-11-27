@@ -4,6 +4,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { finishCapabilityOperation } from "../plugins/capability-provider-acquisition.js";
 import { assertSpeechRuntimeAvailable } from "./runtime-availability.js";
 import { normalizeSpeechText } from "./speech-text.js";
+import { resolveTtsSynthesisTarget } from "./tts-delivery.js";
 import type {
   SpeechSynthesisStreamResult,
   TtsStreamResult,
@@ -14,7 +15,7 @@ import {
   acquireTtsRequest,
   throwTtsProjectionError,
 } from "./tts-synthesis-support.js";
-import { resolveTtsSynthesisTarget, type synthesizeSpeech } from "./tts-synthesis.js";
+import type { synthesizeSpeech } from "./tts-synthesis.js";
 
 type SpeechSynthesisParams = Parameters<typeof synthesizeSpeech>[0];
 

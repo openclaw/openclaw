@@ -179,7 +179,8 @@ async function openWorkshop(
   });
   await page.goto(`${suite.server.baseUrl}skills/workshop`);
   await waitForControlUiRoute(page, { pathname: "/skills/workshop", routeId: "skill-workshop" });
-  await page.locator(".sw-row").filter({ hasText: skillName }).waitFor();
+  // Drafts of one skill can fill the opening view with several rows of that name.
+  await page.locator(".sw-row").filter({ hasText: skillName }).first().waitFor();
   return gateway;
 }
 
@@ -258,12 +259,21 @@ suite.define(() => {
   it("routes to the library, shows retained versus pruned change actions and metadata diffs, and writes learning mode", async () => {
     await suite.withPage({}, async ({ page }) => {
       const gateway = await openWorkshop(page);
-      const liveRow = page.locator(".sw-row").filter({ hasText: skillName });
-      expect(await liveRow.textContent()).toContain("7 uses");
-      await liveRow.locator(".sw-row__main").click();
+      // Changes and no drafts: the start page opens on History; the library is Learned skills.
+      expect(
+        await page
+          .getByRole("button", { name: "History", exact: true })
+          .getAttribute("aria-pressed"),
+      ).toBe("true");
+      expect(
+        await page
+          .locator(".sw-history-list")
+          .getByRole("button", { name: "Undo", exact: true })
+          .count(),
+      ).toBe(0);
       await page
-        .locator(".sw-tabs")
-        .getByRole("button", { name: /History/ })
+        .locator(".sw-history-list")
+        .getByRole("button", { name: new RegExp(skillName) })
         .click();
       const retained = page
         .locator(".sw-timeline__item")
@@ -282,7 +292,7 @@ suite.define(() => {
       });
       await retained.getByRole("button", { name: "Compare", exact: true }).click();
       await expect
-        .poll(() => page.locator(".sw-detail__desc").textContent())
+        .poll(() => page.locator(".plugin-catalog-detail__summary").textContent())
         .toBe("Old deployment procedure");
       expect(await page.locator(".sw-diff__line--remove").textContent()).toContain(
         "description: Old deployment procedure",
@@ -290,6 +300,12 @@ suite.define(() => {
       expect(await page.locator(".sw-diff__line--add").textContent()).toContain(
         "description: Current deployment procedure",
       );
+      // Learning mode sits behind the start page's gear.
+      await page
+        .locator(".plugins-settings-breadcrumb")
+        .getByRole("link", { name: "Skill workshop", exact: true })
+        .click();
+      await page.getByRole("button", { name: "Skill Workshop learning mode", exact: true }).click();
       await page.getByRole("button", { name: "Off", exact: true }).click();
       const patch = await gateway.waitForRequest("config.patch");
       expect(patch.params).toMatchObject({
@@ -299,10 +315,102 @@ suite.define(() => {
         baseHash: "workshop-contract-config",
         note: "Disable Skill Workshop learning",
       });
+      await page.keyboard.press("Escape");
+      // Back on the start page, browse both filters in Learned skills.
+      await page.getByRole("button", { name: /^Learned skills/ }).click();
+      expect(
+        await page.locator(".sw-grid .sw-row").filter({ hasText: skillName }).textContent(),
+      ).toContain("7 uses");
       await page.getByRole("button", { name: /^Archived/ }).click();
       await page.locator(".sw-row").filter({ hasText: archivedName }).waitFor();
       expect(await page.locator(".sw-row").filter({ hasText: skillName }).count()).toBe(0);
     });
+  });
+
+  it("contains the inline new-skill preview and keeps its last instruction reachable", async () => {
+    await suite.withPage(
+      { colorScheme: "light", viewport: { width: 1440, height: 900 } },
+      async ({ page }) => {
+        const newName = "prepare-release-notes";
+        const draftId = newName + "-1a2b3c4d";
+        const steps = [
+          "Read the release brief and group changes by the outcome users will notice.",
+          "Check merged changes against their final descriptions. Include only work that is in the release.",
+          "Put required actions before optional improvements. Say who needs to act and by when.",
+          "Describe fixes in terms of the problem users saw. Leave out internal implementation details.",
+          "Keep examples short, and check that each example matches what users see in the product today.",
+          "Verify every link against the release branch. Replace references that point to outdated instructions.",
+          "Ask the release owner to review any remaining uncertainty before publishing.",
+          "Check that headings describe the changes beneath them and that the most important change leads each section.",
+          "Read the notes once without the release brief. Add missing context wherever an instruction would otherwise be ambiguous.",
+          "Check the supported upgrade paths. Include a migration or rollback link only where a reader needs it.",
+          "Verify the release number and the date in the heading against the release owner’s checklist.",
+          "Double-check that any quoted error or UI label matches the software exactly.",
+          "Share the draft with the release owner for review before publishing it.",
+          "Save the approved notes with the release checklist.",
+        ];
+        await openWorkshop(page, ["operator.admin"], {
+          "skills.workshop.list": {
+            ...list,
+            mode: "propose",
+            drafts: [
+              {
+                id: skillName + "-1a2b3c4d",
+                skillName,
+                summary: "Check the rollback plan before starting a deployment.",
+                createdAtMs: timestamp - 1000,
+              },
+              {
+                id: draftId,
+                skillName: newName,
+                summary: "Turn a release brief and merged changes into user-facing notes.",
+                createdAtMs: timestamp,
+              },
+            ],
+          },
+          "skills.workshop.read": {
+            cases: [
+              {
+                match: { draftId },
+                response: {
+                  name: newName,
+                  filePath: "SKILL.md",
+                  files: ["SKILL.md"],
+                  content:
+                    "# Prepare release notes\n\n" +
+                    steps.map((step, index) => `${index + 1}. ${step}`).join("\n\n"),
+                },
+              },
+              ...methodResponses["skills.workshop.read"].cases,
+            ],
+          },
+          "skills.workshop.applyDraft": { changes: [] },
+        });
+        const row = page.locator(".sw-row--draft").filter({ hasText: newName });
+        await row.getByRole("heading", { name: "Prepare release notes" }).waitFor();
+        expect(await row.getByText("You can archive it later.", { exact: true }).count()).toBe(0);
+        const preview = row.getByRole("group", { name: "Draft preview" });
+        await row.locator(".sw-row__main").focus();
+        await page.keyboard.press("Tab");
+        await expect
+          .poll(() => preview.evaluate((element) => element === document.activeElement))
+          .toBe(true);
+        await page.keyboard.press("End");
+        await expect
+          .poll(() =>
+            preview.evaluate((element) => {
+              const bounds = element.getBoundingClientRect();
+              const lastStep = element.querySelector("li:last-child")!.getBoundingClientRect();
+              return (
+                element.scrollTop > 0 &&
+                lastStep.top >= bounds.top &&
+                lastStep.bottom <= bounds.bottom
+              );
+            }),
+          )
+          .toBe(true);
+      },
+    );
   });
 
   it("reviews waiting drafts as a diff against the live skill and applies or discards them", async () => {
@@ -340,26 +448,25 @@ suite.define(() => {
         "skills.workshop.applyDraft": { changes: [] },
         "skills.workshop.discardDraft": { changes: [] },
       });
-      await page.getByRole("button", { name: /^Drafts/ }).click();
+      // Drafts wait, so the start page opens on them.
+      expect(await page.getByRole("button", { name: /^Drafts/ }).getAttribute("aria-pressed")).toBe(
+        "true",
+      );
       const first = page.locator(".sw-row").filter({ hasText: "Check the rollback first" });
       await first.locator(".sw-row__main").click();
       await expect
         .poll(() => page.locator(".sw-diff__line--add").allTextContents())
         .toContainEqual(expect.stringContaining("Check the rollback first."));
       expect(await page.locator(".sw-diff__key--remove").textContent()).toBe("Live skill");
-      await page.getByRole("button", { name: "Apply", exact: true }).click();
+      await first.getByRole("button", { name: "Apply", exact: true }).click();
       expect((await gateway.waitForRequest("skills.workshop.applyDraft")).params).toEqual({
         agentId: "main",
         name: skillName,
         draftId: "deploy-staging-1a2b3c4d",
       });
-      await page.getByRole("button", { name: /^Drafts/ }).click();
-      await page
-        .locator(".sw-row")
-        .filter({ hasText: "Unused idea" })
-        .locator(".sw-row__main")
-        .click();
-      await page.getByRole("button", { name: "Discard", exact: true }).click();
+      // The queue stays open on the next draft.
+      const unused = page.locator(".sw-row").filter({ hasText: "Unused idea" });
+      await unused.getByRole("button", { name: "Discard", exact: true }).click();
       expect((await gateway.waitForRequest("skills.workshop.discardDraft")).params).toEqual({
         agentId: "main",
         name: skillName,
@@ -393,12 +500,19 @@ suite.define(() => {
       expect(await workshop.getByRole("button", { name: /^(Archive|Restore|Undo)$/ }).count()).toBe(
         0,
       );
+      await page
+        .locator(".plugins-settings-breadcrumb")
+        .getByRole("link", { name: "Skill workshop", exact: true })
+        .click();
+      await page.getByRole("button", { name: "Skill Workshop learning mode", exact: true }).click();
       expect(await workshop.getByRole("button", { name: "Off", exact: true }).isDisabled()).toBe(
         true,
       );
       expect(await workshop.getByRole("button", { name: "Auto", exact: true }).isDisabled()).toBe(
         true,
       );
+      await page.keyboard.press("Escape");
+      await page.getByRole("button", { name: /^Learned skills/ }).click();
       await page.getByRole("button", { name: /^Active/ }).click();
       await page.locator(".sw-row__main").filter({ hasText: skillName }).click();
       await page

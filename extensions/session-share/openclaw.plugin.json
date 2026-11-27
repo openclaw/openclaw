@@ -12,11 +12,11 @@
     },
     "share.involvingProfileId": {
       "label": "Involving Person",
-      "help": "Optional exact source-local profile ID (including merge aliases). Narrows the required shared groups to canonical owners or profile participants. Mentions alone, names, and logins do not match."
+      "help": "Exact source-local profile ID (including merge aliases), optional for node sharing and required for Gateway publication. Narrows the shared groups to canonical owners or profile participants. Mentions alone, names, and logins do not match."
     },
     "share.gateway": {
       "label": "Serve Gateway Session Reads",
-      "help": "Allow explicitly granted paired devices to read selected groups AND the canonical person with the closed publication-read scope."
+      "help": "Allow explicitly granted paired devices to read selected groups AND the configured canonical person with the closed publication-read scope. Request relationship filters can only narrow that selection."
     },
     "gateways": {
       "label": "Outbound Gateway Sources",
@@ -33,6 +33,8 @@
       "label": "Paired Node Attribution",
       "help": "Optional display attribution keyed by paired node id. Attribution never grants session access."
     },
+    "nodes.*.controlUiOrigin": {"label": "Source Control UI Origin", "help": "Optional HTTP(S) origin for Open original, such as https://team.example.com. No credentials, path, query, or fragment. Opens a separate authenticated connection to the source."},
+    "nodes.*.controlUiBasePath": {"label": "Source Control UI Base Path", "help": "Optional source path prefix for Open original, such as /openclaw. Defaults to root. Receiver-owned; never inferred from this Gateway or source session rows. No query, fragment, whitespace, or dot segments."},
     "nodes.*.owner": {
       "label": "Default Owner",
       "help": "Local display owner for unattributed sessions: github:<login> or profile:<profileId>."
@@ -150,6 +152,8 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
+            "controlUiOrigin": {"type": "string", "minLength": 1, "maxLength": 2048, "pattern": "^https?://[^\\s/@?#\\\\]+/?$"},
+            "controlUiBasePath": {"type": "string", "maxLength": 2048, "pattern": "^(?:/(?!/)[^\\s?#\\\\]*)?$"},
             "owner": { "type": "string", "pattern": "^(github|profile):[^\\s:]+$", "maxLength": 512 },
             "linkGitHubIdentities": { "type": "boolean", "default": false }
           }

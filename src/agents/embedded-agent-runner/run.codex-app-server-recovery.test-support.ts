@@ -250,7 +250,9 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
         if (owner === "active") {
           await run;
         } else {
-          await expect(run).rejects.toThrow("admitted run authority is no longer active");
+          await expect(run).rejects.toThrow(
+            "This agent run is no longer active. Start a new turn to retry.",
+          );
         }
         expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(owner === "active" ? 2 : 1);
         expect(freezeAbort).not.toHaveBeenCalled();

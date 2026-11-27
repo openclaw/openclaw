@@ -283,8 +283,9 @@ async function runGatewayUpdateCheckOwned(
     installStatus: StartupInstallStatus,
     channel: "stable" | "beta" | "dev",
     tag: string,
-    // Revalidates live state after the idle wait, immediately before the update run is created.
-    admit?: () => Promise<boolean>,
+    // An owed-step retry gates new campaigns on its own cooldown and revalidates live state
+    // after the idle wait, immediately before the update run is created.
+    retry?: { canStart: () => boolean; admit: () => Promise<boolean> },
   ) => {
     const { root, status } = installStatus;
     const canApply = () => {
@@ -309,7 +310,8 @@ async function runGatewayUpdateCheckOwned(
       target,
       canStart: () =>
         canApply() &&
-        (!cfg.update?.auto?.schedule || autoScheduleWindow(cfg, Date.now()) !== undefined),
+        (!cfg.update?.auto?.schedule || autoScheduleWindow(cfg, Date.now()) !== undefined) &&
+        (retry?.canStart() ?? true),
       inspect: params.activeWorkInspectors,
       onChange: (campaign) => {
         const current = getUpdateSchedule();
@@ -347,7 +349,7 @@ async function runGatewayUpdateCheckOwned(
       apply: ({ forced, target: admittedTarget }) =>
         lifecycle.run(async () => {
           // Ending the campaign here settles only this campaign; a newer one keeps its target.
-          if (admit && !(await admit())) {
+          if (retry && !(await retry.admit())) {
             params.log.info("update campaign ended before applying: nothing left to retry");
             return "failed";
           }
@@ -696,7 +698,6 @@ async function runGatewayUpdateCheckOwned(
         : undefined;
     const retryOwed =
       retryChannel !== undefined &&
-      !(recentAttempt && state.autoLastAttemptVersion === VERSION) &&
       Boolean(
         detectRespawnSupervisor(process.env, process.platform, {
           includeLinuxOpenClawGatewayServiceMarker: true,
@@ -711,16 +712,24 @@ async function runGatewayUpdateCheckOwned(
       // No target is published: nothing newer is available.
       const { target: _target, ...current } = getUpdateSchedule() ?? initialSchedule;
       setSchedule(current);
-      if (!updateCampaign.getState()) {
+      // The cooldown counts elapsed time from the automatic update that installed this version;
+      // a cron window says only when a campaign may start, and the previous one can be minutes old.
+      const cooldownEndsAtMs =
+        state.autoLastAttemptVersion === VERSION &&
+        lastAttemptAt !== null &&
+        Number.isFinite(lastAttemptAt)
+          ? lastAttemptAt + ONE_HOUR_MS
+          : undefined;
+      const announced = updateCampaign.getState() !== undefined;
+      // An announced retry keeps its campaign, including a hold, across later checks; the ledger
+      // ends it once the handed-off run, a manual update, or a repair takes the row.
+      announceUpdate({ kind: "package", version: VERSION }, installStatus, retryChannel, tag, {
+        canStart: () => cooldownEndsAtMs === undefined || Date.now() >= cooldownEndsAtMs,
+        admit: readOwedPluginRetry,
+      });
+      if (!announced && updateCampaign.getState()) {
         params.log.info("automatic update will retry owed plugin steps", { version: VERSION, tag });
       }
-      announceUpdate(
-        { kind: "package", version: VERSION },
-        installStatus,
-        retryChannel,
-        tag,
-        readOwedPluginRetry,
-      );
     } else {
       retireUpdateTarget(getUpdateSchedule() ?? initialSchedule, updateCampaign, params);
     }

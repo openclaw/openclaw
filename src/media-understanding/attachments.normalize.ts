@@ -1,7 +1,6 @@
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "@openclaw/fs-safe/advanced";
 import type { MediaKind } from "@openclaw/media-core/constants";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { RuntimeMsgContext as MsgContext } from "../auto-reply/templating.js";
 import { normalizeMediaFacts, resolveMediaFactKind } from "../media/media-facts.js";
 import type { MediaAttachment } from "./types.js";
 
@@ -27,8 +26,10 @@ export function normalizeAttachmentPath(raw?: string | null): string | undefined
 }
 
 /** Converts ordered media facts into indexed attachment records. */
-export function normalizeAttachments(ctx: MsgContext): MediaAttachment[] {
-  return normalizeMediaFacts(ctx.media)
+export function normalizeAttachments(
+  media: Parameters<typeof normalizeMediaFacts>[0],
+): MediaAttachment[] {
+  return normalizeMediaFacts(media)
     .map((fact, index) => {
       const attachment: MediaAttachment = {
         path: fact.path,

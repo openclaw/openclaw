@@ -1,10 +1,10 @@
-import { ChildProcess, type SpawnOptions } from "node:child_process";
+import type { SpawnOptions } from "node:child_process";
+import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { expectDefined } from "@openclaw/normalization-core";
-import { PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH } from "../../../scripts/lib/package-lifecycle-marker.mjs";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { runtimeProcessScriptEntrypoints } from "../../infra/runtime-process-manifest.js";
 import type { UpdateAdmissionContext } from "../../infra/update-admission-contract.js";
@@ -29,9 +29,6 @@ export function createCandidateAdmissionFixtures(f: CandidateAdmissionFixture) {
   const prepareCandidateAdmissionFixture = async (params: {
     marker: boolean;
     verdict: UpdateAdmissionVerdict;
-    exitCode?: number;
-    pendingLifecycle?: boolean;
-    nodeEngine?: string;
   }) => {
     const { pkgRoot, nodeModules } = await f.setupInstalledPackageRoot(
       f.createCaseDir("candidate-admission"),
@@ -75,7 +72,7 @@ export function createCandidateAdmissionFixtures(f: CandidateAdmissionFixture) {
       await writeJsonFixture(path.join(stage, "package.json"), {
         name: "openclaw",
         version: "9999.0.0",
-        engines: { node: params.nodeEngine ?? ">=22.19.0" },
+        engines: { node: ">=22.19.0" },
         openclaw: {
           ...(params.marker ? { updateAdmissionProtocol: 1 } : {}),
           schemaVersions: {
@@ -84,9 +81,6 @@ export function createCandidateAdmissionFixtures(f: CandidateAdmissionFixture) {
           },
         },
       });
-      if (params.pendingLifecycle) {
-        await fs.writeFile(path.join(stage, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH), "pending\n");
-      }
       return undefined;
     });
     f.mockCurrentProcessFreshDoctor({ packageRoot: pkgRoot });
@@ -104,10 +98,11 @@ export function createCandidateAdmissionFixtures(f: CandidateAdmissionFixture) {
       databaseExistsAtAdmission.push(
         fsSync.existsSync(resolveOpenClawStateSqlitePath(options.env)),
       );
-      const child = new ChildProcess();
-      child.stdout = new PassThrough();
-      child.stderr = new PassThrough();
-      const exitCode = params.exitCode ?? (params.verdict.verdict === "admit" ? 0 : 3);
+      const child = Object.assign(new EventEmitter(), {
+        stdout: new PassThrough(),
+        stderr: new PassThrough(),
+      });
+      const exitCode = params.verdict.verdict === "admit" ? 0 : 3;
       queueMicrotask(() => {
         child.stdout?.emit("data", JSON.stringify(params.verdict));
         child.emit("exit", exitCode);
@@ -118,27 +113,17 @@ export function createCandidateAdmissionFixtures(f: CandidateAdmissionFixture) {
     return { pkgRoot, stages, contexts, events, databaseExistsAtAdmission };
   };
 
-  const candidateAdmissionVerdict = (
-    check?: "config" | "database-schema" | "node-runtime",
-  ): UpdateAdmissionVerdict => ({
+  const candidateAdmissionVerdict = (): UpdateAdmissionVerdict => ({
     protocol: 1,
-    verdict: check ? "refuse" : "admit",
-    reasons: check
-      ? [
-          {
-            code: check === "config" ? "invalid-config" : `${check}-preflight`,
-            message: `Candidate refused ${check}.`,
-            nextAction: `Resolve the candidate's ${check} finding.`,
-          },
-        ]
-      : [],
+    verdict: "admit",
+    reasons: [],
     warnings: [],
     facts: {
       candidateVersion: "9999.0.0",
       installedVersion: "1.0.0",
       checks: ["config", "database-schema", "node-runtime", "plugin-availability"].map((name) => ({
         name,
-        status: name === check ? "refuse" : "ok",
+        status: "ok",
       })),
     },
   });

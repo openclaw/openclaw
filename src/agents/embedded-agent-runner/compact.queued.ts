@@ -132,11 +132,7 @@ export async function compactQueuedEmbeddedAgentSession(
     const assertHostActive = options.assertActive;
     const host = {
       ...options,
-      assertActive: composeSessionSourceAssertion([
-        assertHostActive,
-        sourceAuthority.assertActive,
-        sourceAuthority.operatorAuthority?.assertCurrent,
-      ]),
+      assertActive: composeSessionSourceAssertion([assertHostActive, sourceAuthority.assertActive]),
     };
     const signals = [input.abortSignal, sourceAuthority.operatorAuthority?.signal].filter(
       (signal): signal is AbortSignal => signal !== undefined,
@@ -312,6 +308,7 @@ async function compactEmbeddedAgentSessionImpl(
     // Run them before generic model preparation so subscription-only CLI sessions do
     // not incorrectly require an OpenClaw model API credential.
     const nativeCliResult = await compactNativeCliSession({
+      sourceAuthority: host.sourceAuthority,
       runtime: runtimeSelection.selectedHarnessRuntime,
       replyOperation: host.replyOperation,
       compactParams: {

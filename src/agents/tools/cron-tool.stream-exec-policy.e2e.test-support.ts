@@ -18,14 +18,15 @@ import type { AgentWaitResult } from "../run-wait.types.js";
 import { AUTOMATIONS_TOOL_NAME } from "./automations-tool-name.js";
 
 export async function createHostStreamApprovalProvider() {
-  let pendingJob: Record<string, unknown> | undefined;
+  const pendingCalls: Record<string, unknown>[] = [];
   const fixture = await reserveTestPortListener({
     offsets: [0],
     createListener: () =>
       createServer((request, response) => {
         void (async () => {
           const body: unknown = JSON.parse(await readRequestText(request));
-          if (pendingJob) {
+          const call = pendingCalls.shift();
+          if (call) {
             if (
               !isRecord(body) ||
               !Array.isArray(body.tools) ||
@@ -33,9 +34,7 @@ export async function createHostStreamApprovalProvider() {
             ) {
               throw new Error("The creator's model request did not expose automations");
             }
-            const job = pendingJob;
-            pendingJob = undefined;
-            writeToolCall(response, AUTOMATIONS_TOOL_NAME, { action: "add", job });
+            writeToolCall(response, AUTOMATIONS_TOOL_NAME, call);
           } else {
             writeOpenAiResponsesText(response, {
               text: "Watcher request finished.",
@@ -52,8 +51,8 @@ export async function createHostStreamApprovalProvider() {
       "stream-authority",
     ),
     propose(job: Record<string, unknown>) {
-      expect(pendingJob).toBeUndefined();
-      pendingJob = job;
+      expect(pendingCalls).toHaveLength(0);
+      pendingCalls.push({ action: "plan", names: [job.name] }, { action: "add", job });
     },
     async [Symbol.asyncDispose]() {
       fixture.listener.closeAllConnections();

@@ -54,6 +54,13 @@ import {
   type SetupProviderAuthMethod,
 } from "./setup-provider-method.js";
 
+// CLI setup stays off the Gateway runtime graph; only Gateway setup loads node access.
+async function loadGatewayProviderAuthNodes(surface: "cli" | "gateway") {
+  return surface === "gateway"
+    ? (await import("../gateway/server-plugins.js")).createProviderAuthNodes()
+    : undefined;
+}
+
 function assertUtilitySeparation(ctx: StageContext, modelTarget: "utility" | undefined): void {
   if (modelTarget !== "utility") {
     return;
@@ -530,6 +537,7 @@ export async function stageProviderAuthCandidate(
         signal: params.signal,
         assertCurrent: () => throwIfSetupInferenceCancelled(params),
         isRemote: params.isRemoteProviderAuth ?? params.surface === "gateway",
+        nodes: await loadGatewayProviderAuthNodes(params.surface),
         beforePersistentEffect: ctx.beforePersistentEffect,
       },
       async (prepared, provider) => {
@@ -604,6 +612,7 @@ export async function stageProviderAuthCandidate(
             signal: params.signal,
             assertCurrent: () => throwIfSetupInferenceCancelled(params),
             isRemote: params.isRemoteProviderAuth ?? params.surface === "gateway",
+            nodes: await loadGatewayProviderAuthNodes(params.surface),
             ...(!interactive
               ? {
                   secretInputMode: "plaintext" as const,

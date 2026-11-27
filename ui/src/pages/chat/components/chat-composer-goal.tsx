@@ -9,23 +9,12 @@ import {
 import type { SessionGoal } from "../../../api/types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
-import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
 import { registerChatGoalsEnglish } from "../../../i18n/locales/en-chat-goals.ts";
 import type { ChatGoalAction, ChatGoalRecovery } from "../../../lib/chat/chat-types.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { readVisibleTime } from "../../../lib/reactive/visible-clock.ts";
 
 registerEnglishCatalog(registerChatGoalsEnglish);
-
-export function GoalIcon() {
-  return (
-    <StrokeIcon aria-hidden="true">
-      <path d="M12 13V2l8 4-8 4" />
-      <path d="M20.561 10.222a9 9 0 1 1-12.55-5.29" />
-      <path d="M8.002 9.997a5 5 0 1 0 8.9 2.02" />
-    </StrokeIcon>
-  );
-}
 
 const goalStatusIcons = {
   paused: "pauseFilled",
@@ -196,7 +185,7 @@ function GoalCard(props: Omit<ChatGoalProps, "goal"> & { goal: SessionGoal }) {
           {props.resumeRecovery?.pending ? (
             <span class="session-run-spinner" />
           ) : props.goal.status === "active" ? (
-            <GoalIcon />
+            <Icon name="target" />
           ) : (
             <Icon name={goalStatusIcons[props.goal.status]} />
           )}

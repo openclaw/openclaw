@@ -127,6 +127,8 @@ it("updates rendered facts from accepted catalog, auth, and notified mutable own
   const page = appendPage(context);
   await waitForProviders(page);
   await drainPageUpdates(page);
+  page.querySelector<HTMLButtonElement>("[data-models-more-settings]")!.click();
+  await page.updateComplete;
   const primary = modelPicker(page, "primary").querySelector(".picker-select__trigger")!;
   expect(primary.textContent).toContain("First model");
 
@@ -173,6 +175,7 @@ it("filters providers while typing without rebuilding the provider presentation"
   const page = appendPage(context);
   await waitForProviders(page);
   publishRouteData(page, createApiKeyProviderData());
+  page.routeData = { ...page.routeData!, provider: "openai" };
   await page.updateComplete;
   const search = page.querySelector<HTMLInputElement>(".model-providers__search input")!;
   const presentation = vi.spyOn(providerData, "buildModelProviderPresentation");
@@ -211,7 +214,7 @@ it.each(["settle", "retire"] as const)(
     const page = createPage(context);
     try {
       await vi.waitFor(() => expect(router.getState().matches[0]?.data).toBeDefined());
-      page.routeData = router.getState().matches[0]!.data;
+      page.routeData = { ...router.getState().matches[0]!.data!, provider: "openai" };
       mountPage(page);
       await waitForSolid(() => {
         expect(page.querySelector('[data-provider-id="openai"]')).not.toBeNull();

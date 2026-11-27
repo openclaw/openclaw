@@ -24,7 +24,7 @@ import {
 const logger = createSubsystemLogger("discord/voice");
 const STOP_GRACE_MS = 2_000;
 
-/** A received frame owns cloned PCM; its credit remains held until the consumer settles. */
+/** A received frame owns transferred PCM; its credit remains held until the consumer settles. */
 export class DiscordAudioCapture extends Readable {
   physicalFinalized = false;
 

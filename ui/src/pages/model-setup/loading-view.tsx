@@ -41,6 +41,14 @@ function renderLoadingSection(
   );
 }
 
+/** The detected-model slot while discovery runs, sized like one candidate row. */
+export function renderModelSetupCandidatesLoading(status?: string) {
+  return renderLoadingSection(t("modelSetup.candidates.title"), {
+    className: "model-setup__loading-section--candidates",
+    status,
+  });
+}
+
 export function renderModelSetupLoading(modelConfigured: boolean) {
   return (
     <div
@@ -57,10 +65,7 @@ export function renderModelSetupLoading(modelConfigured: boolean) {
             })
           : undefined}
         {renderNativeModelSetupLoading()}
-        {renderLoadingSection(t("modelSetup.candidates.title"), {
-          className: "model-setup__loading-section--candidates",
-          status: modelConfigured ? undefined : t("modelSetup.loading"),
-        })}
+        {renderModelSetupCandidatesLoading(modelConfigured ? undefined : t("modelSetup.loading"))}
         {renderLoadingSection(t("modelSetup.prepare.title"), {
           intro: t("modelSetup.prepare.intro"),
           rows: 2,

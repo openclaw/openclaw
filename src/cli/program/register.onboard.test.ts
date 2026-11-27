@@ -270,10 +270,15 @@ describe("setup routing", () => {
             }
           }
         });
-        const output = execFileSync("/bin/bash", ["-ic", "openclaw qr 'literal argument'"], {
-          env: { ...env, OPENCLAW_PROFILE: "operator" },
-          encoding: "utf8",
-        });
+        // Source the installed PATH without loading host-wide shell startup files.
+        const output = execFileSync(
+          "/bin/bash",
+          ["--noprofile", "--norc", "-c", ". \"$HOME/.bashrc\"; openclaw qr 'literal argument'"],
+          {
+            env: { ...env, OPENCLAW_PROFILE: "operator" },
+            encoding: "utf8",
+          },
+        );
         expect(output.trimEnd().split("\n")).toEqual([
           home,
           env.OPENCLAW_HOME ?? "",

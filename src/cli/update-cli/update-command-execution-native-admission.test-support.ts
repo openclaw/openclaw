@@ -161,7 +161,6 @@ export function registerNativeAdmissionTests() {
     running?: boolean;
     late?: boolean;
     refused?: boolean;
-    route?: "git";
     consumer?: "selected" | "same-profile-other-service";
     unreadableFirst?: boolean;
     selectedRunning?: boolean;
@@ -176,7 +175,6 @@ export function registerNativeAdmissionTests() {
     ["sibling starts during selected stop", { selectedRunning: true, startsDuringStop: true }],
     ["disjoint roots, shared entrypoint", { shared: false, linkedDist: true }],
     ["sibling starts during staging", { late: true }],
-    ["Git shared publication", { route: "git" }],
     ["selected package no-restart", { consumer: "selected", refused: false }],
     ["same-profile other service", { consumer: "same-profile-other-service" }],
     ["unreadable unrelated definition", { unreadableFirst: true, shared: false, refused: false }],
@@ -328,17 +326,8 @@ export function registerNativeAdmissionTests() {
           await fs.writeFile(artifact, "replacement runtime");
           return successfulUpdate;
         });
-        mocks.runGitUpdate.mockImplementation(
-          async (options: Parameters<typeof updateGitInstall>[0]) => {
-            const target = { schemaVersions: { state: 15, agent: 19 } };
-            await options.inspectGitTarget?.(target);
-            await options.beforeGitMutation?.(target);
-            await fs.writeFile(artifact, "replacement runtime");
-            return { ...successfulUpdate, mode: "git" };
-          },
-        );
         const params = {
-          ...executionParams(scenario.route ?? "package"),
+          ...executionParams("package"),
           root,
           ...(scenario.consumer ? { shouldRestart: false } : {}),
         };

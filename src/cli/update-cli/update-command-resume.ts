@@ -9,7 +9,6 @@ import {
   readControlPlaneUpdateSentinelMeta,
 } from "../../infra/update-control-plane-sentinel.js";
 import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
-import { writeUpdateRunReportArtifact } from "../../infra/update-failure-report-artifact.js";
 import {
   resolveUpdateInstallRoot,
   updateInstallRootsMatch,
@@ -487,19 +486,6 @@ async function resumePostCoreUpdateInternal(
         warnings: collectPostCorePluginAdvisories(pluginUpdate),
         doctorLint: pluginUpdate.doctorLint,
       });
-      if (!parentOwnsCompletion && pluginUpdate.doctorLint) {
-        const reportPath = await writeUpdateRunReportArtifact({
-          result,
-          detached: true,
-          report: {
-            markdown:
-              "Post-plugin Doctor diagnostics; update completion is pending with the parent updater.",
-          },
-        });
-        defaultRuntime.error(
-          `Post-plugin Doctor report (update completion pending): ${reportPath}`,
-        );
-      }
     } catch (error) {
       defaultRuntime.error(
         `Post-core update evidence could not be saved: ${formatErrorMessage(error)} Update completion may require Doctor verification.`,
@@ -580,6 +566,10 @@ export async function convergePostCoreUpdatePlugins(params: {
         workTimeoutMs: parseUpdateTimeoutMs(params.opts.timeout) ?? null,
         pluginInstallRecords,
         assertCurrent,
+        // An unchanged core copies its originals once plugins changed, before records publish.
+        ...(params.opts.run?.captureOriginal
+          ? { beforeRecordPublication: params.opts.run.captureOriginal }
+          : {}),
         // Shipped post-core markers predate cohort capture. A real retained pair
         // still selects its owner; only the originating outer caller requires one.
         ...(params.opts.run?.executorFence &&
