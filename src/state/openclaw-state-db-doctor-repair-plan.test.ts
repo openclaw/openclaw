@@ -3,14 +3,20 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { OLDER_OPERATOR_APPROVAL_SCHEMA_SQL } from "../gateway/operator-approval-store.older-reader.test-support.js";
 import { resolveClientCredentialStorePath } from "../infra/client-credential-paths.js";
 import { corruptSqliteIndexKey } from "../infra/sqlite-index-corruption.test-support.js";
 import * as snapshotStaging from "../infra/sqlite-snapshot-staging.js";
+import {
+  original as historicalOriginal,
+  preparation as historicalPreparation,
+} from "./openclaw-historical-imports.test-support.js";
 import { seedOpenClawDatabaseQuarantine } from "./openclaw-quarantine-store.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { createDanglingSkillWorkshopReviewIndex } from "./openclaw-state-db-corruption.test-support.js";
 import { planOpenClawStateDatabaseDoctorRepair } from "./openclaw-state-db-doctor-repair-plan.js";
 import { repairStateSchemaAsync } from "./openclaw-state-db-repair.js";
+import { ensureRepositoryGitHubPublicationSchema } from "./openclaw-state-db-schema-additive.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -490,6 +496,71 @@ describe("each condition the doctor repair acts on", () => {
     expectConditionDrivesRepair({
       condition: "operator-approval-refs",
       create: ({ gateway }) => gateway.exec("DROP INDEX idx_operator_approvals_resolution_ref"),
+    }));
+
+  it("audit-and-approval-schema: operator approvals in the two-kind legacy layout", () =>
+    expectConditionDrivesRepair({
+      condition: "audit-and-approval-schema",
+      create: ({ gateway }) => {
+        gateway.exec("DROP TABLE operator_approvals");
+        gateway.exec(
+          OLDER_OPERATOR_APPROVAL_SCHEMA_SQL.replace(
+            "'exec', 'plugin', 'system-agent'",
+            "'exec', 'plugin'",
+          ),
+        );
+      },
+      verify: ({ databasePath }) =>
+        expect(
+          dumpContent(databasePath).schema.find(({ name }) => name === "operator_approvals")?.sql,
+        ).toContain("'system-agent'"),
+    }));
+
+  it("publication-drafts: a publication table without its draft column", () =>
+    expectConditionDrivesRepair({
+      condition: "publication-drafts",
+      create: ({ gateway }) => {
+        ensureRepositoryGitHubPublicationSchema(gateway);
+        gateway.exec("ALTER TABLE github_repository_publication_requests DROP COLUMN draft");
+      },
+    }));
+
+  it("historical-image-snapshots: a reserve snapshot with a retired image project", () =>
+    expectConditionDrivesRepair({
+      condition: "historical-image-snapshots",
+      create: ({ gateway }) =>
+        gateway
+          .prepare(
+            "INSERT INTO worker_environments " +
+              "(environment_id,provider_id,profile_id,profile_snapshot_json,provision_operation_id,lease_id," +
+              "preparation_key,preparation_purpose,preparation_demand_at_ms,preparation_expires_at_ms," +
+              "preparation_consumed_at_ms,state,owner_epoch,attached_session_ids_json," +
+              "created_at_ms,updated_at_ms,state_changed_at_ms,destroy_requested_at_ms) " +
+              "VALUES ('image-env', 'synthetic','profile',?,'op','lease',?,'reserve',1000,2000,1500,'destroyed',7,'[]',1,2,2,2)",
+          )
+          .run(historicalOriginal, historicalPreparation.key),
+      verify: ({ databasePath }) =>
+        expect(
+          JSON.parse(
+            String(dumpContent(databasePath).rows.worker_environments?.[0]?.profile_snapshot_json),
+          ),
+        ).toHaveProperty("historicalProfileSnapshotJson", historicalOriginal),
+    }));
+
+  it("legacy-cron-run-logs: a retired cron run log table", () =>
+    expectConditionDrivesRepair({
+      condition: "legacy-cron-run-logs",
+      create: ({ gateway }) =>
+        gateway.exec(`CREATE TABLE cron_run_logs (
+          store_key TEXT NOT NULL, job_id TEXT NOT NULL, seq INTEGER NOT NULL,
+          ts INTEGER NOT NULL, entry_json TEXT NOT NULL, created_at INTEGER NOT NULL,
+          PRIMARY KEY (store_key, job_id, seq)
+        );
+        CREATE INDEX idx_cron_run_logs_store_ts ON cron_run_logs(store_key, ts DESC, seq DESC);`),
+      verify: ({ databasePath }) =>
+        expect(dumpContent(databasePath).schema.map(({ name }) => name)).not.toContain(
+          "cron_run_logs",
+        ),
     }));
 
   it("canonical-indexes: a canonical index with a changed definition", () =>
