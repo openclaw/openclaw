@@ -4,7 +4,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { assertUpdateDoctorConfigInputHash } from "../infra/update-doctor-result.js";
+import { assertUpdateDoctorConfigInputHash } from "../infra/update-doctor-config-capture.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import {

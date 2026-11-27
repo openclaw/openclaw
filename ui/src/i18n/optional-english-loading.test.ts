@@ -12,8 +12,11 @@ it("loads inspector-only context copy with the panel while keeping the breakdown
   const details = en.chat.sessionDetails;
   await manager.setLocale("de");
 
+  expect(manager.t("chat.sessionDetails.environment")).toBe("chat.sessionDetails.environment");
+
   await import("../pages/chat/components/chat-context-breakdown.tsx");
 
+  expect(manager.t("chat.sessionDetails.environment")).toBe("Environment");
   expect(manager.t("chat.sessionDetails.context")).toBe("Kontext");
   expect(manager.t("chat.sessionDetails.contextMessages")).toBe("Messages & other");
   expect(manager.t("chat.sessionDetails.contextFiles")).toBe("Workspace files");
@@ -142,7 +145,10 @@ it.each([false, true])(
     const { registerChatSessionEnglish } = await import("./locales/en-chat-session.ts");
     const { registerChatSessionOptionalEnglish } =
       await import("./locales/en-chat-session-optional.ts");
+    registerChatSessionEnglish();
     await manager.setLocale("de");
+    expect(manager.t("chat.sessionDetails.title")).toBe("Details");
+    expect(manager.t("chat.sessionDetails.environment")).toBe("chat.sessionDetails.environment");
     const registrars = [registerChatDetailsEnglish, registerChatSessionOptionalEnglish];
     const ordered = optionalFirst ? registrars.toReversed() : registrars;
     registerEnglishCatalog(ordered[0]!);
@@ -536,28 +542,6 @@ it("keeps a cold roster metadata failure readable before its view catalog loads"
     stop();
     sessions.dispose();
   }
-});
-
-it("loads Details copy through its lazy view while preserving the active locale and namespace", async () => {
-  const { en, manager } = await loadI18n({
-    common: { health: "Gesundheit" },
-    chat: { sessionDetails: { context: "Kontext" } },
-  });
-  const details = en.chat.sessionDetails;
-  const { registerEnglishCatalog } = await import("../lib/reactive/i18n.ts");
-  const { registerChatSessionEnglish } = await import("./locales/en-chat-session.ts");
-  registerEnglishCatalog(registerChatSessionEnglish);
-  await manager.setLocale("de");
-  expect(manager.t("chat.sessionDetails.title")).toBe("Details");
-  expect(manager.t("chat.sessionDetails.environment")).toBe("chat.sessionDetails.environment");
-
-  await import("../pages/chat/components/chat-context-breakdown.tsx");
-
-  expect(manager.t("chat.sessionDetails.environment")).toBe("Environment");
-  expect(manager.t("chat.sessionDetails.context")).toBe("Kontext");
-  expect(manager.t("common.health")).toBe("Gesundheit");
-  expect(manager.getLocale()).toBe("de");
-  expect(en.chat.sessionDetails).toBe(details);
 });
 
 it("loads optional English copy at each view boundary while keeping shared labels eager", async () => {

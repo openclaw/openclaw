@@ -53,6 +53,12 @@ import { adoptStartedChatRun, reconcileChatRunLifecycle } from "./run-lifecycle.
 import { resetToolStream } from "./tool-stream-state.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";
 
+// The transport already depends on the drain. Outbox wakeups load them through one entry.
+export {
+  flushStoredChatOutbox,
+  resumeStoredChatOutboxes,
+  scheduleStoredChatOutboxDrain,
+} from "./chat-outbox-drain.ts";
 export { chatOutboxDrainDependencies } from "./chat-send-delivery.ts";
 
 export async function sendPreparedChatQueueItem(

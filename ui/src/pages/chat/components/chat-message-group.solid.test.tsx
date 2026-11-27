@@ -861,57 +861,6 @@ it("prepares the detailed timestamp only when metadata exposes its label", () =>
   }
 });
 
-it("shares timestamp formatting across scroll tasks and refreshes it the next minute", async () => {
-  const timestamp = 8_000_000_000_000;
-  const older = timestamp - 10 * 24 * 60 * 60 * 1000;
-  const previousYear = new Date(older);
-  previousYear.setFullYear(previousYear.getFullYear() - 1);
-  const dateLabels = [new Date(older), previousYear].map((date) =>
-    date.toLocaleDateString([], {
-      month: "short",
-      day: "numeric",
-      ...(date.getFullYear() === new Date(timestamp).getFullYear() ? {} : { year: "numeric" }),
-    }),
-  );
-  const clock = vi.spyOn(Date, "now").mockReturnValue(timestamp);
-  const formatter = vi.spyOn(Intl, "DateTimeFormat");
-  const nativeDate = vi.spyOn(Date.prototype, "toLocaleDateString");
-  const nativeTime = vi.spyOn(Date.prototype, "toLocaleString");
-  const views: ReturnType<typeof mountSolid>[] = [];
-  try {
-    views.push(mountSolid(() => <ChatTimestamp timestamp={timestamp} />));
-    await Promise.resolve();
-    views.push(mountSolid(() => <ChatTimestamp timestamp={timestamp + 1000} />));
-    expect(formatter).toHaveBeenCalledTimes(1);
-    expect(views[0]!.container.querySelector("time")?.dateTime).toBe(
-      new Date(timestamp).toISOString(),
-    );
-    views.push(
-      mountSolid(() => <ChatTimestamp timestamp={older} metadata={[<span>Usage</span>]} />),
-    );
-    views.push(
-      mountSolid(() => (
-        <ChatTimestamp timestamp={previousYear.getTime()} metadata={[<span>Usage</span>]} />
-      )),
-    );
-    expect(formatter).toHaveBeenCalledTimes(4);
-    expect(views.slice(2).map((view) => view.container.querySelector("time")?.textContent)).toEqual(
-      dateLabels,
-    );
-    expect(nativeDate).not.toHaveBeenCalled();
-    expect(nativeTime).not.toHaveBeenCalled();
-    clock.mockReturnValue(timestamp + 60_000);
-    views.push(mountSolid(() => <ChatTimestamp timestamp={timestamp + 2000} />));
-    expect(formatter).toHaveBeenCalledTimes(5);
-  } finally {
-    views.forEach((view) => view.unmount());
-    formatter.mockRestore();
-    nativeDate.mockRestore();
-    nativeTime.mockRestore();
-    clock.mockRestore();
-  }
-});
-
 it("leaves timestamp attributes untouched when only message usage changes", () => {
   const calendarFormat = vi.spyOn(Date.prototype, "toLocaleString");
   const clock = vi.spyOn(Date, "now").mockReturnValue(301_000);

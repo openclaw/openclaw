@@ -7,6 +7,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import { createDeferred, nextEventLoopTurn, withinTest } from "../../test/helpers/promise.js";
 import { waitForFast } from "../../test/helpers/vitest-wait.js";
+import { formatCliJsonFailure } from "../cli/failure-output.js";
 import {
   buildMinimalGatewayHelloOkPayload,
   closeMinimalGatewayServer,
@@ -178,9 +179,15 @@ export function registerReleaseUpdateGatewayTests(context: () => GatewayTestCont
     },
   );
 
-  it.for(["acknowledgement", "status", "poll delay"] as const)(
-    "keeps the overall Gateway update budget during %s",
-    async (scenario, { signal }) => {
+  it.for([
+    { scenario: "acknowledgement", json: true },
+    { scenario: "status", json: true },
+    { scenario: "poll delay", json: true },
+    { scenario: "first status", json: true },
+    { scenario: "first status", json: false },
+  ] as const)(
+    "keeps the overall Gateway update budget during $scenario (json=$json)",
+    async ({ scenario, json }, { signal }) => {
       const heldClosed = createDeferred();
       let held: WireRequest | undefined;
       let statusRequests = 0;
@@ -207,10 +214,12 @@ export function registerReleaseUpdateGatewayTests(context: () => GatewayTestCont
           },
         },
         async (peer) => {
+          const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+          const errorOutput = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
           running = { ...peer.output, status: "running", phase: "staging", finishedAtMs: null };
           vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
           const deadline = Date.now() + 5_000;
-          const settled = Promise.allSettled([peer.update({ timeoutMs: 5_000 })]);
+          const settled = Promise.allSettled([peer.update({ json, timeoutMs: 5_000 })]);
           try {
             // Only an actual wire receipt proves that the held request was dispatched.
             await waitForFast(
@@ -249,9 +258,21 @@ export function registerReleaseUpdateGatewayTests(context: () => GatewayTestCont
             if (scenario === "acknowledgement") {
               expect(error).toBeInstanceOf(Error);
               expect(String(error)).toMatch(/did not finish|timeout/i);
+              expect(formatCliJsonFailure(error)).not.toHaveProperty("runId");
             } else {
               expect(outcome).toEqual({ status: "fulfilled", value: undefined });
-              expect(peer.json).toEqual([running]);
+              if (scenario === "first status") {
+                if (json) {
+                  expect(peer.json).toEqual([{ status: "unknown", runId: peer.runId }]);
+                } else {
+                  expect(log).toHaveBeenCalledWith(`Update run: ${peer.runId}`);
+                  expect(errorOutput).toHaveBeenCalledWith(
+                    expect.stringContaining("openclaw update status"),
+                  );
+                }
+              } else {
+                expect(peer.json).toEqual([running]);
+              }
               expect(process.exitCode).toBe(1);
             }
             expect(peer.requests).toEqual([
@@ -283,24 +304,35 @@ export function registerReleaseUpdateGatewayTests(context: () => GatewayTestCont
     },
   );
 
-  it.for(["remaining", "expired"] as const)(
-    "keeps the original deadline when capability consent has %s budget",
+  it.for(["remaining", "expired", "acknowledged"] as const)(
+    "keeps the capability consent deadline and receipt (%s)",
     async (scenario, { signal }) => {
       let updates = 0;
       let status: WireRequest | undefined;
       let retry: WireRequest | undefined;
+      let retryStatus: WireRequest | undefined;
+      const retryRunId = "run-consent";
       const statusClosed = createDeferred();
+      const retryStatusClosed = createDeferred();
       await withWireGateway(
         {
           supportsConsent: () => updates > 0,
           handleRequest: (request) => {
             if (request.method === "update.run" && ++updates === 2) {
               retry = request;
+              if (scenario === "acknowledged") {
+                sendMinimalGatewayResponse(request.ws, request.id, { ok: true, runId: retryRunId });
+              }
               return true;
             }
             if (request.method === "update.runs.get") {
-              status = request;
-              request.ws.once("close", () => statusClosed.resolve());
+              if (updates === 2) {
+                retryStatus = request;
+                request.ws.once("close", () => retryStatusClosed.resolve());
+              } else {
+                status = request;
+                request.ws.once("close", () => statusClosed.resolve());
+              }
               return true;
             }
             return false;
@@ -318,7 +350,11 @@ export function registerReleaseUpdateGatewayTests(context: () => GatewayTestCont
             }
           });
           const settled = Promise.allSettled([
-            peer.update({ json: false, acceptCapabilities: true, timeoutMs: 5_000 }),
+            peer.update({
+              json: scenario === "acknowledged",
+              acceptCapabilities: true,
+              timeoutMs: 5_000,
+            }),
           ]);
           try {
             await waitForFast(() => expect(status).toBeDefined());
@@ -328,7 +364,7 @@ export function registerReleaseUpdateGatewayTests(context: () => GatewayTestCont
             peer.releaseCustody();
             sendMinimalGatewayResponse(status!.ws, status!.id, { run: peer.output });
             await withinTest(statusClosed.promise, signal);
-            if (scenario === "remaining") {
+            if (scenario !== "expired") {
               await waitForFast(() => expect(retry).toBeDefined());
               expect(retry?.params).toEqual(
                 expect.objectContaining({
@@ -338,18 +374,30 @@ export function registerReleaseUpdateGatewayTests(context: () => GatewayTestCont
               );
               expect(retry?.params?.timeoutMs).toBeGreaterThan(0);
               expect(retry?.params?.timeoutMs).toBeLessThanOrEqual(2_500);
+              if (scenario === "acknowledged") {
+                await waitForFast(() => expect(retryStatus).toBeDefined());
+                expect(retryStatus?.params?.runId).toBe(retryRunId);
+              }
               await vi.advanceTimersByTimeAsync(Math.max(0, deadline - Date.now()));
             }
             const [outcome] = await withinTest(settled, signal);
-            const error = outcome.status === "rejected" ? outcome.reason : undefined;
-            expect(String(error)).toContain("Capability consent could not be confirmed");
-            expect(String(error)).toContain("openclaw update status` before retrying");
+            if (scenario === "acknowledged") {
+              expect(outcome).toEqual({ status: "fulfilled", value: undefined });
+              expect(peer.json).toEqual([{ status: "unknown", runId: retryRunId }]);
+              expect(process.exitCode).toBe(1);
+              await withinTest(retryStatusClosed.promise, signal);
+            } else {
+              const error = outcome.status === "rejected" ? outcome.reason : undefined;
+              expect(String(error)).toContain("Capability consent could not be confirmed");
+              expect(String(error)).toContain("openclaw update status` before retrying");
+            }
             expect(peer.requests).toEqual([
               "update.run",
               "update.runs.get",
-              ...(scenario === "remaining" ? ["update.run"] : []),
+              ...(scenario !== "expired" ? ["update.run"] : []),
+              ...(scenario === "acknowledged" ? ["update.runs.get"] : []),
             ]);
-            expect(peer.tokenReads()).toBe(scenario === "remaining" ? 2 : 1);
+            expect(peer.tokenReads()).toBe(scenario === "expired" ? 1 : 2);
             expect(context().createRun).not.toHaveBeenCalled();
             expect(context().prepared).toEqual([]);
           } finally {
@@ -359,9 +407,58 @@ export function registerReleaseUpdateGatewayTests(context: () => GatewayTestCont
             if (retry?.ws.readyState === WebSocket.OPEN) {
               sendMinimalGatewayResponse(retry.ws, retry.id, { ok: true, runId: peer.runId });
             }
+            if (retryStatus?.ws.readyState === WebSocket.OPEN) {
+              sendMinimalGatewayResponse(retryStatus.ws, retryStatus.id, {
+                run: { ...peer.output, runId: retryRunId },
+              });
+            }
             await vi.advanceTimersByTimeAsync(30_000);
             await settled;
           }
+        },
+      );
+    },
+  );
+
+  it.for([true, false])(
+    "retains the acknowledged run after a fatal status error (json=%s)",
+    async (json) => {
+      await withWireGateway(
+        {
+          handleRequest: (request) => {
+            if (request.method !== "update.runs.get") {
+              return false;
+            }
+            request.ws.send(
+              JSON.stringify({
+                type: "res",
+                id: request.id,
+                ok: false,
+                error: { code: "INVALID_REQUEST", message: "Status lookup refused" },
+              }),
+            );
+            return true;
+          },
+        },
+        async (peer) => {
+          const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+          const [outcome] = await Promise.allSettled([peer.update({ json })]);
+          const error = outcome.status === "rejected" ? outcome.reason : undefined;
+          expect(error).toMatchObject({ gatewayCode: "INVALID_REQUEST" });
+          expect(String(error)).toContain("Status lookup refused");
+          if (json) {
+            expect(formatCliJsonFailure(error)).toMatchObject({
+              ok: false,
+              runId: peer.runId,
+              origin: "gateway",
+            });
+            expect(peer.json).toEqual([]);
+          } else {
+            expect(log).toHaveBeenCalledWith(`Update run: ${peer.runId}`);
+          }
+          expect(peer.requests).toEqual(["update.run", "update.runs.get"]);
+          expect(context().createRun).not.toHaveBeenCalled();
+          expect(context().prepared).toEqual([]);
         },
       );
     },
