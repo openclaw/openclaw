@@ -11,6 +11,7 @@ import { hashCronJobDefinition } from "../../../cron/definition-hash.js";
 import { resolveCronOperatorExecutionRevision } from "../../../cron/service/jobs-tool-policy.js";
 import { isCronOperatorSourceParent } from "../../../cron/session-target.js";
 import { rowToCronJob } from "../../../cron/store/row-codec.js";
+import { cronJobUsesToolRuntime } from "../../../cron/tools-allow.js";
 import { decodeGatewayOperatorRecoverySource } from "../../../gateway/operator-run-recovery-source.codec.js";
 
 export function isLegacyMainAutomation(raw: Record<string, unknown>): boolean {
@@ -50,12 +51,17 @@ export function migrateMainAutomation(raw: Record<string, unknown>, cfg: OpenCla
         ? "The owning agent could not be resolved. Choose the conversation before enabling this automation."
         : undefined;
   if (systemEvent) {
+    const usesTriggerToolRuntime = cronJobUsesToolRuntime({
+      trigger: { script: asNullableRecord(raw.trigger)?.script },
+    });
     raw.payload = {
       kind: "agentTurn",
       message:
         prompt ?? "No reminder text was saved. Replace this prompt before enabling the automation.",
       ...(payload.toolsAllow !== undefined ? { toolsAllow: payload.toolsAllow } : {}),
-      ...(payload.toolsAllowIsDefault !== undefined ? { toolsAllowIsDefault: false } : {}),
+      ...(payload.toolsAllowIsDefault !== undefined
+        ? { toolsAllowIsDefault: payload.toolsAllowIsDefault === true && usesTriggerToolRuntime }
+        : {}),
     };
   } else if (payload?.kind === "agentTurn" && !prompt) {
     payload.message = "No task text was saved. Replace this prompt before enabling the automation.";

@@ -309,6 +309,7 @@ export function applyJobPatch(
     assertCanonicalCronDeliveryMode(patch.delivery ?? job.delivery);
   }
   const previouslyUsedToolRuntime = cronJobUsesToolRuntime(job);
+  const previouslyHadTrigger = job.trigger !== undefined;
   const explicitlyClearsToolsAllow = patch.payload?.toolsAllow === null;
   const previousScheduleKind = job.schedule.kind;
   if (patch.ownerProfileId !== undefined) {
@@ -405,6 +406,7 @@ export function applyJobPatch(
   reconcileToolsAllowAuthority({
     job,
     previouslyUsedToolRuntime,
+    previouslyHadTrigger,
     explicitlyMutatesToolsAllow:
       patch.payload !== undefined && Object.hasOwn(patch.payload, "toolsAllow"),
     scheduledToolPolicy: opts?.scheduledToolPolicy,
@@ -483,6 +485,7 @@ export function applyDeclarativeJobSpec(
     assertCanonicalCronDeliveryMode(input.delivery ?? job.delivery);
   }
   const previouslyUsedToolRuntime = cronJobUsesToolRuntime(job);
+  const previouslyHadTrigger = job.trigger !== undefined;
   const explicitlyDeclaresToolsAllow = input.payload.toolsAllow !== undefined;
   const previousToolsAllow = job.payload.toolsAllow;
   const previousToolsAllowIsDefault = job.payload.toolsAllowIsDefault;
@@ -546,6 +549,7 @@ export function applyDeclarativeJobSpec(
   reconcileToolsAllowAuthority({
     job,
     previouslyUsedToolRuntime,
+    previouslyHadTrigger,
     explicitlyMutatesToolsAllow: explicitlyDeclaresToolsAllow,
     scheduledToolPolicy: opts.scheduledToolPolicy,
     toolsAllowProvenance: opts.toolsAllowProvenance,

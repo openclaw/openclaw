@@ -716,6 +716,71 @@ it.each(["per-sender", "global"] as const)(
 );
 
 it(
+  "preserves stored runtime authority when converting a triggered main-session reminder",
+  withState(async (fixture) => {
+    const storePath = fixture.statePath("cron", "jobs.json");
+    const authority = {
+      version: 1 as const,
+      runtimeId: "codex",
+      namespace: "codex.apps",
+      payload: { apps: [{ id: "calendar" }] },
+    };
+    const saved = job("triggered-reminder", {
+      agentId: "main",
+      trigger: { script: "json({ fire: false });" },
+      payload: {
+        kind: "agentTurn",
+        message: "Check the calendar.",
+        toolsAllow: ["read"],
+        toolsAllowIsDefault: true,
+      },
+      scheduledToolPolicy: { version: 1, mode: "trusted" },
+      runtimeAuthority: authority,
+    });
+    await saveJobs(storePath, saved);
+    const db = openOpenClawStateDatabase().db;
+    const storeKey = cronStoreKey(storePath);
+    db.prepare(
+      "UPDATE cron_jobs SET job_json = json_set(job_json, '$.sessionTarget', 'main', '$.payload', json(?)), payload_kind = 'systemEvent' WHERE store_key = ? AND job_id = ?",
+    ).run(
+      JSON.stringify({
+        kind: "systemEvent",
+        text: "Check the calendar.",
+        toolsAllow: ["read"],
+        toolsAllowIsDefault: true,
+      }),
+      storeKey,
+      saved.id,
+    );
+    const readAuthority = () =>
+      db
+        .prepare(
+          "SELECT authority_json, authority_input_fingerprint, recovery_required FROM cron_job_runtime_authorities WHERE store_key = ? AND job_id = ?",
+        )
+        .get(storeKey, saved.id);
+    const before = readAuthority();
+    expect(before).toMatchObject({
+      authority_json: JSON.stringify(authority),
+      recovery_required: 0,
+    });
+
+    await repair(storePath);
+
+    expect(readAuthority()).toEqual(before);
+    expect(await readJobs(storePath)).toMatchObject([
+      {
+        id: saved.id,
+        enabled: true,
+        trigger: saved.trigger,
+        sessionTarget: "session:agent:main:main",
+        payload: saved.payload,
+        runtimeAuthority: authority,
+      },
+    ]);
+  }),
+);
+
+it(
   "rebinds a matching saved permission without reviving a stale source",
   withState(async (fixture) => {
     const storePath = fixture.statePath("cron", "jobs.json");

@@ -3,8 +3,9 @@ import { describe, expect, it } from "vitest";
 import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
 import { makeCronJob } from "../delivery.test-helpers.js";
 import { projectCronJobThroughStorageCodec } from "../store/row-codec.js";
+import { resolveCronRunToolsAllow } from "../tools-allow.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
-import { applyJobPatch, createJob } from "./jobs.js";
+import { applyDeclarativeJobSpec, applyJobPatch, createJob } from "./jobs.js";
 
 function makeJob(overrides: Partial<CronJob> = {}): CronJob {
   return makeCronJob({
@@ -30,6 +31,34 @@ const clearedFailureDestination = {
   mode: undefined,
 };
 const failureDefaults = { channel: "slack", to: "C123", accountId: "bot-b" };
+
+it.each(["patch", "declaration"] as const)(
+  "keeps a finite tool cap when a %s removes the trigger",
+  (edit) => {
+    const job = makeJob({
+      sessionTarget: "session:agent:main:main",
+      trigger: { script: "json({ fire: false });" },
+      payload: {
+        kind: "agentTurn",
+        message: "check",
+        toolsAllow: ["read"],
+        toolsAllowIsDefault: true,
+      },
+      scheduledToolPolicy: { version: 1, mode: "trusted" },
+      delivery: { mode: "none" },
+    });
+    if (edit === "patch") {
+      applyJobPatch(job, { trigger: null });
+    } else {
+      applyDeclarativeJobSpec(
+        job,
+        { ...job, trigger: undefined, payload: { kind: "agentTurn", message: "check" } },
+        { enabledExplicit: false, nowMs: job.updatedAtMs },
+      );
+    }
+    expect(resolveCronRunToolsAllow(job)).toEqual(["read"]);
+  },
+);
 
 describe("applyJobPatch schedule retention", () => {
   it.each([undefined, false] as const)(

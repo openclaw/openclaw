@@ -450,11 +450,22 @@ export function reconcileRuntimeAuthority(params: {
 export function reconcileToolsAllowAuthority(params: {
   job: CronStoredJob;
   previouslyUsedToolRuntime: boolean;
+  previouslyHadTrigger?: boolean;
   explicitlyMutatesToolsAllow: boolean;
   scheduledToolPolicy?: CronScheduledToolPolicy | null;
   toolsAllowProvenance?: CronToolsAllowProvenance;
   toolsAllowExecTarget?: CronToolsAllowExecTarget;
 }): void {
+  const { job } = params;
+  if (
+    params.previouslyHadTrigger &&
+    !job.trigger &&
+    job.payload.kind === "agentTurn" &&
+    job.payload.toolsAllowIsDefault === true
+  ) {
+    // A condition's saved tool cap stays explicit when the condition is removed.
+    job.payload.toolsAllowIsDefault = false;
+  }
   reconcileScheduledToolPolicy(params);
   reconcileToolsAllowProvenance(params);
   reconcileToolsAllowExecTarget(params);
