@@ -2,9 +2,7 @@ import assert from "node:assert/strict";
 import { AsyncResource } from "node:async_hooks";
 import { request } from "node:http";
 import path from "node:path";
-import type { AgentHarnessCompletionCustody } from "openclaw/plugin-sdk/agent-harness-completion";
 import { nativeHookRelayTesting } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { registerNativeHookRelayForBundledRuntime } from "openclaw/plugin-sdk/native-hook-relay-runtime";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { captureSessionEntryCurrentCheckAsync } from "openclaw/plugin-sdk/session-binding-runtime";
@@ -16,22 +14,11 @@ import {
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createNativeSubagentSessionAuthority } from "./native-subagent-assignment-store.js";
+import { registerNativeSubagentDisconnectCases } from "./native-subagent-disconnect.test-support.js";
 import {
   createCodexNativeSubagentHistoryOwner,
   type CodexNativeSubagentHistoryOwner,
 } from "./native-subagent-history-owner.js";
-import {
-  agentMessage,
-  collabItem,
-  CodexNativeSubagentMonitor,
-  createClient,
-  createNativeModelSourceFixture,
-  createRuntime,
-  createCompletionScope,
-  directSpawnItem,
-  notifyChildStarted,
-  threadRead,
-} from "./native-subagent-monitor.test-support.js";
 import type { CodexNativeSubagentPendingAssignment as Assignment } from "./native-subagent-pending-assignments.js";
 import type { CodexNativeSubagentSubmission as Submission } from "./native-subagent-submission.js";
 import { scopeCodexRunBindingStore } from "./session-binding-scope.js";
@@ -181,6 +168,18 @@ async function fixture(initialReceipt?: Submission) {
     readSubmissions: submissionStore.read,
   };
 }
+
+const disconnectFixture = {
+  binding,
+  consumeSubmission,
+  fixture,
+  identity,
+  makeAssignment,
+  receipt,
+  recordSubmission,
+};
+
+export type NativeSubagentDisconnectFixture = typeof disconnectFixture;
 
 describe("native subagent submission receipts in the binding store", () => {
   it("persists an authenticated HTTP receipt after its startup binding lease closes", async () => {
@@ -378,189 +377,7 @@ describe("native subagent submission receipts in the binding store", () => {
     },
   );
 
-  it.each(["receipt", "assignment"] as const)(
-    "Stop preserves recovery across a rejected %s acknowledgement and consumes it on retry",
-    async (rejectedOwner) => {
-      const f = await fixture();
-      const { owner, assertCurrent, reopen } = f;
-      const stopReceipt = { ...receipt, predecessorRunId: "codex-thread:child-thread" };
-      const { childThreadId, submissionId, predecessorNativeTurnId, parentTurnId, callId } =
-        stopReceipt;
-      const assignment = makeAssignment(owner, { submission: stopReceipt });
-      const assignmentRecorded = createDeferred<boolean>();
-      const receiptRecorded = createDeferred<boolean>();
-      let reject = false;
-      const { assignmentStore, submissionStore } = f;
-      const mutate = f.store.mutate.bind(f.store);
-      vi.spyOn(f.store, "mutate").mockImplementation((caller, mutation, ...guards) => {
-        if (
-          reject &&
-          mutation.kind ===
-            (rejectedOwner === "receipt" ? consumeSubmission : "consume-native-subagent-assignment")
-        ) {
-          return Promise.resolve(false);
-        }
-        const recorded = mutate(caller, mutation, ...guards);
-        if (mutation.kind === recordSubmission) {
-          receiptRecorded.resolve(recorded);
-        } else if (
-          mutation.kind === "record-native-subagent-assignment" &&
-          mutation.assignment.runId === assignment.runId &&
-          !mutation.assignment.submission
-        ) {
-          assignmentRecorded.resolve(recorded);
-        }
-        return recorded;
-      });
-      const client = createClient();
-      const parentItem = (item: Parameters<typeof client.item>[0]) =>
-        client.item(item, parentTurnId, binding.threadId);
-      const activeTurn = (turnId: string) =>
-        threadRead({ turnId, status: "inProgress", threadStatus: "active" });
-      client.setThreadRead(childThreadId, activeTurn(predecessorNativeTurnId));
-      const runtime = createRuntime();
-      const custody: AgentHarnessCompletionCustody = {
-        signal: new AbortController().signal,
-        isCurrent: () => true,
-        retain: () => custody,
-        settleExecution() {},
-        release() {},
-      };
-      runtime.captureAgentHarnessCompletionCustody.mockResolvedValue(custody);
-      const interrupt = vi.fn(async (threadId: string, turnId: string, guard: () => void) => {
-        guard();
-        expect([threadId, turnId]).toEqual([childThreadId, submissionId]);
-        await client.completeTurn({ turnId: submissionId, status: "interrupted" });
-        return true;
-      });
-      const monitor = new CodexNativeSubagentMonitor(client.client, runtime, {
-        interruptChildAndWait: interrupt,
-      });
-      const requestCustody = Object.freeze({});
-      const modelSource = createNativeModelSourceFixture(["test-model"]);
-      const cleanup = vi.fn(async (_threadId: string, _turnId: string, guard: () => void) =>
-        guard(),
-      );
-      const parent = await monitor.registerParent({
-        parentThreadId: binding.threadId,
-        requesterSessionKey: identity.sessionKey,
-        requesterTurnRunId: "parent-run",
-        requestCustody,
-        agentId: identity.agentId,
-        historyOwner: owner,
-        completionScope: createCompletionScope(identity.sessionKey),
-        modelSource,
-        configurationQualification: {
-          assertCurrent: modelSource.assertCurrent,
-          hasProvider: (provider) => provider === "test-provider",
-        },
-        claimDirectChild: () => () => {},
-        cancelChildProcesses: cleanup,
-        assignmentStore,
-        submissionStore,
-      });
-      const stop = () =>
-        monitor.withDescendantCancellation(
-          {
-            parentThreadId: binding.threadId,
-            agentId: identity.agentId,
-            sessionKey: identity.sessionKey,
-            sessionId: identity.sessionId,
-            lifecycleRevision: owner.lifecycleRevision,
-            acceptsRequest: (acceptedCustody) => acceptedCustody === requestCustody,
-            assertCurrent,
-          },
-          (cancel) => cancel(),
-        );
-      try {
-        await parent.ready;
-        parent.bindTurn(parentTurnId);
-        await notifyChildStarted(client);
-        await parentItem(directSpawnItem("v1", binding.threadId, childThreadId));
-        await client.startTurn(predecessorNativeTurnId);
-        await client.finishTurn(
-          predecessorNativeTurnId,
-          agentMessage("a-final", "A result", "final_answer"),
-        );
-        await parentItem(
-          collabItem("wait", [childThreadId], {
-            id: "wait-a",
-            senderThreadId: binding.threadId,
-            agentsStates: {
-              [childThreadId]: { status: "completed", message: "A result" },
-            },
-          }),
-        );
-        const predecessor = threadRead({
-          turnId: predecessorNativeTurnId,
-          result: "A result",
-          resultPhase: "final_answer",
-          threadStatus: "notLoaded",
-        });
-        predecessor.thread.modelProvider = "test-provider";
-        client.setThreadRead(childThreadId, predecessor);
-        await monitor.prepareModelInput({
-          threadId: binding.threadId,
-          turnId: parentTurnId,
-          itemId: callId,
-          target: childThreadId,
-          readQualification: () => undefined,
-          assertCurrent,
-        });
-        const history = activeTurn(submissionId);
-        assert(history.thread.turns && predecessor.thread.turns);
-        history.thread.turns.unshift(...predecessor.thread.turns);
-        history.thread.modelProvider = "test-provider";
-        client.setThreadRead(childThreadId, history);
-        await parentItem(
-          collabItem("sendInput", [childThreadId], {
-            id: callId,
-            senderThreadId: binding.threadId,
-          }),
-        );
-        await client.sendInputOutput({
-          parentThreadId: binding.threadId,
-          turnId: parentTurnId,
-          callId,
-          submissionId,
-        });
-        await client.startTurn(submissionId);
-        expect(await assignmentRecorded.promise).toBe(true);
-        expect(await receiptRecorded.promise).toBe(true);
-        const expectSaved = async (assignments: Assignment[], receipts: Submission[]) => {
-          expect(await assignmentStore.read()).toEqual(assignments);
-          expect(await submissionStore.read()).toEqual(receipts);
-        };
-        await expectSaved([assignment], [stopReceipt]);
-        reject = true;
-        const failed = await stop();
-        expect(failed.killed).toBe(0);
-        expect(failed.errors).toEqual([
-          new Error(
-            rejectedOwner === "receipt"
-              ? "Cancelled native follow-up receipt was not acknowledged."
-              : "Native assignment was not acknowledged.",
-          ),
-        ]);
-        await reopen();
-        await expectSaved([assignment], rejectedOwner === "receipt" ? [stopReceipt] : []);
-        reject = false;
-        const retried = await stop();
-        expect([retried.killed, retried.errors]).toEqual([1, undefined]);
-        expect(interrupt).toHaveBeenCalledOnce();
-        expect(cleanup.mock.calls.map(([threadId, turnId]) => [threadId, turnId])).toEqual([
-          [childThreadId, submissionId],
-          [childThreadId, submissionId],
-        ]);
-        await reopen();
-        await expectSaved([], []);
-        expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
-      } finally {
-        await parent.unregister();
-        await monitor.dispose();
-      }
-    },
-  );
+  registerNativeSubagentDisconnectCases(disconnectFixture);
 
   it("refuses receipt persistence after the captured parent lifecycle changes", async () => {
     const { root, owner, mutate, readSubmissions } = await fixture();

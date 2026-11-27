@@ -139,6 +139,10 @@ export async function finalizeCodexAttempt(
       // The original transcript fence excludes steering accepted during this turn.
       steeringMessages: params.pluginRuntimeRefreshPending?.() ? steeringMessages : undefined,
     });
+    if (appServer.start.transport === "websocket" && resourceState.turnRoute?.signal.aborted) {
+      // Native work can continue beyond the last observed event.
+      result.replayMetadata = { hadPotentialSideEffects: true, replaySafe: false };
+    }
     if (steeringMessages?.length) {
       // Keep the result identity that carries host-issued TTS delivery provenance.
       // Historical send receipts remain available for side-effect accounting.

@@ -1,5 +1,6 @@
 import {
   asFiniteNumber,
+  asOptionalRecord,
   normalizeOptionalString,
   readStringField as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -19,7 +20,9 @@ import type {
   RecoveredCompletion,
   ThreadRecovery,
 } from "./native-subagent-monitor-types.js";
-import type { CodexTurn, JsonObject } from "./protocol.js";
+import { readCodexNativeSubagentNotification } from "./native-subagent-notification.js";
+import type { CodexNativeSubagentSubmission } from "./native-subagent-submission.js";
+import type { CodexThread, CodexTurn, JsonObject } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
 
 const THREAD_READ_TIMEOUT_MS = 30_000;
@@ -53,6 +56,17 @@ export class CodexNativeSubagentHistoryRecovery {
     return response.thread.id === threadId && Boolean(readThreadParentThreadId(response.thread));
   }
 
+  async readLatestTurn(threadId: string): Promise<CodexTurn | undefined> {
+    const page = await this.client
+      .request(
+        "thread/turns/list",
+        { threadId, limit: 1, sortDirection: "desc", itemsView: "full" },
+        { timeoutMs: THREAD_READ_TIMEOUT_MS },
+      )
+      .catch(() => undefined);
+    return page?.data?.length === 1 ? page.data[0] : undefined;
+  }
+
   async read(
     assignment: NativeSubagentAssignment,
     options: {
@@ -60,6 +74,7 @@ export class CodexNativeSubagentHistoryRecovery {
       predecessorNativeTurnId?: string;
       initialAssignment?: boolean;
       recordedCompletion?: RecoveredCompletion;
+      readParentTurn?: () => Promise<CodexTurn | undefined>;
     },
   ): Promise<ThreadRecovery> {
     const { childThreadId } = assignment;
@@ -166,16 +181,8 @@ export class CodexNativeSubagentHistoryRecovery {
     ) {
       // The pinned protocol's paged history distinguishes the failed current
       // turn from earlier persisted results.
-      const turnsResponse = await this.client
-        .request(
-          "thread/turns/list",
-          { threadId: childThreadId, limit: 1, sortDirection: "desc", itemsView: "full" },
-          { timeoutMs: THREAD_READ_TIMEOUT_MS },
-        )
-        .catch(() => undefined);
-      const data =
-        isJsonObject(turnsResponse) && Array.isArray(turnsResponse.data) ? turnsResponse.data : [];
-      const latestTurn = isJsonObject(data[0]) ? data[0] : undefined;
+      const latest = await this.readLatestTurn(childThreadId);
+      const latestTurn = isJsonObject(latest) ? latest : undefined;
       const latestTurnId = readString(latestTurn, "id");
       if (latestTurnId && pendingTurnIds.has(latestTurnId)) {
         observedPendingTurns.push({ turnId: latestTurnId, state: readNativeTurnState(latestTurn) });
@@ -221,8 +228,27 @@ export class CodexNativeSubagentHistoryRecovery {
       recovery.resumable = false;
       threadState = "other";
     }
+    const parentThreadId = readThreadParentThreadId(thread);
+    let waitReceipt: ThreadRecovery["waitReceipt"];
+    if (
+      options.readParentTurn &&
+      parentThreadId &&
+      !recordedCompletion &&
+      !this.knownChildren.has(childThreadId) &&
+      recovery.nativeTurnId &&
+      recovery.completion?.statusLabel === "task_complete"
+    ) {
+      waitReceipt = await initialWaitReceipt(
+        options.readParentTurn,
+        parentThreadId,
+        response.thread,
+        recovery.nativeTurnId,
+        recovery.completion,
+      );
+    }
     return {
-      parentThreadId: readThreadParentThreadId(thread),
+      parentThreadId,
+      waitReceipt,
       agentPath: normalizeOptionalString(readString(readThreadSpawnSource(thread), "agent_path")),
       nativeTurnId: recovery.nativeTurnId,
       nativeTurnState: recovery.nativeTurnState,
@@ -233,6 +259,142 @@ export class CodexNativeSubagentHistoryRecovery {
       threadState,
     };
   }
+}
+
+// A disconnected peer has no thread subscription. Only history of the exact
+// promoted successor can justify waiting for it or admitting its final answer.
+export function readDetachedSuccessor(
+  thread: CodexThread,
+  parentThreadId: string,
+  receipt: CodexNativeSubagentSubmission,
+  includeTurns: boolean,
+): "active" | "idle" | "reread" | RecoveredCompletion | undefined {
+  const spawn = readThreadSpawnSource(thread);
+  const status = thread.status?.type;
+  if (
+    thread.id !== receipt.childThreadId ||
+    thread.parentThreadId !== parentThreadId ||
+    (spawn && spawn.parent_thread_id !== parentThreadId) ||
+    thread.forkedFromId ||
+    (status !== "idle" && status !== "notLoaded" && status !== "active")
+  ) {
+    return;
+  }
+  if (!includeTurns) {
+    return status === "active" ? "active" : "idle";
+  }
+  const turn = findCodexNativeSuccessorTurn(
+    thread.turns ?? [],
+    receipt.predecessorNativeTurnId,
+    receipt.submissionId,
+  );
+  if (
+    !turn ||
+    turn !== thread.turns?.at(-1) ||
+    (turn.threadId !== undefined && turn.threadId !== thread.id) ||
+    turn.error != null
+  ) {
+    return;
+  }
+  if (status === "active" && turn.status === "inProgress" && turn.completedAt == null) {
+    return "active";
+  }
+  // Codex can observe idle after loading history and mark the unfinished
+  // snapshot interrupted. Only a fresh, completed successor can be delivered.
+  if (status !== "active" && turn.status === "interrupted" && turn.completedAt == null) {
+    return "reread";
+  }
+  if (
+    turn.status !== "completed" ||
+    !Number.isSafeInteger(turn.completedAt) ||
+    !turn.completedAt ||
+    turn.completedAt < (turn.startedAt ?? 0) ||
+    !isJsonObject(turn)
+  ) {
+    return;
+  }
+  const completion = readTurnCompletion(turn, thread.id);
+  if (completion?.statusLabel !== "task_complete") {
+    return;
+  }
+  // A saved completion can also precede the live status change.
+  return status === "active" ? "reread" : completion;
+}
+
+// V1 records the returned states but no child turn ID. A new spawn followed by
+// its wait in the same turn can only name the sole, non-forked child result.
+export async function initialWaitReceipt(
+  readParent: () => Promise<CodexTurn | undefined>,
+  threadId: string,
+  thread: CodexThread,
+  childTurnId: string,
+  { childThreadId, result }: RecoveredCompletion,
+  spawnId?: string,
+): Promise<ThreadRecovery["waitReceipt"]> {
+  const child = thread.turns?.length === 1 ? thread.turns[0] : undefined;
+  if (
+    thread.id !== childThreadId ||
+    readThreadParentThreadId(thread) !== threadId ||
+    thread.forkedFromId ||
+    (thread.status?.type !== "idle" && thread.status?.type !== "notLoaded") ||
+    child?.id !== childTurnId ||
+    child.status !== "completed" ||
+    child.error ||
+    (child.threadId && child.threadId !== childThreadId) ||
+    typeof child.startedAt !== "number" ||
+    typeof child.completedAt !== "number" ||
+    child.completedAt < child.startedAt ||
+    readLastAgentMessage(child) !== result
+  ) {
+    return;
+  }
+  const parent = await readParent();
+  if (
+    !parent?.id ||
+    parent.status !== "completed" ||
+    parent.error ||
+    typeof parent.startedAt !== "number" ||
+    typeof parent.completedAt !== "number" ||
+    parent.startedAt > child.startedAt ||
+    parent.completedAt < child.completedAt ||
+    (parent.threadId && parent.threadId !== threadId) ||
+    !Array.isArray(parent.items)
+  ) {
+    return;
+  }
+  const calls = parent.items.filter(
+    (item) =>
+      item?.type === "collabAgentToolCall" &&
+      Array.isArray(item.receiverThreadIds) &&
+      item.receiverThreadIds.includes(childThreadId),
+  );
+  const [spawn, wait] = calls;
+  if (
+    calls.length !== 2 ||
+    spawn?.tool !== "spawnAgent" ||
+    wait?.tool !== "wait" ||
+    !spawn.id ||
+    (spawnId !== undefined && spawn.id !== spawnId) ||
+    !wait.id ||
+    spawn.id === wait.id ||
+    calls.some(
+      (call) =>
+        call.senderThreadId !== threadId ||
+        call.status !== "completed" ||
+        !Array.isArray(call.receiverThreadIds) ||
+        call.receiverThreadIds.length !== 1,
+    ) ||
+    !isJsonObject(wait) ||
+    !isJsonObject(wait.agentsStates) ||
+    asOptionalRecord(wait.agentsStates[childThreadId])?.status !== "completed" ||
+    !readLastAgentMessage(parent, parent.items.indexOf(wait))
+  ) {
+    return;
+  }
+  return readCodexNativeSubagentNotification({
+    method: "item/completed",
+    params: { threadId, item: wait },
+  }).receipts.find((receipt) => receipt.agentPath === childThreadId && receipt.result === result);
 }
 
 function readTurnRecovery(
@@ -328,10 +490,10 @@ export function readTurnCompletion(
   return undefined;
 }
 
-function readLastAgentMessage(turn: JsonObject): string | undefined {
+export function readLastAgentMessage(turn: JsonObject | CodexTurn, after = -1): string | undefined {
   const items = Array.isArray(turn.items) ? turn.items : [];
   let legacyResult: string | undefined;
-  for (let index = items.length - 1; index >= 0; index -= 1) {
+  for (let index = items.length - 1; index > after; index -= 1) {
     const item = items[index];
     if (!isJsonObject(item)) {
       continue;

@@ -409,6 +409,45 @@ describe("native pending assignment inventory through registered monitor admissi
   );
 
   it.each([false, true])(
+    "recovers foreground wait delivery after monitor loss only for a unique child turn (reused: %s)",
+    async (reused) => {
+      const f = await detachedAssignment();
+      const client = createClient();
+      const result = "Native result";
+      const history = finalHistory("child-turn", result, { completedAt: 103 });
+      const first = history.thread.turns?.[0];
+      assert(first);
+      first.startedAt = 100;
+      if (reused) {
+        history.thread.turns?.push({ ...first, id: "another-turn" });
+      }
+      client.setThreadRead("child-thread", history);
+      client.setThreadTurns("parent-thread", {
+        data: [
+          {
+            id: "parent-turn",
+            status: "completed",
+            startedAt: 99,
+            completedAt: 104,
+            items: [
+              collabItem("spawnAgent", ["child-thread"], { id: "spawn" }),
+              collabItem("wait", ["child-thread"], {
+                id: "wait",
+                agentsStates: { "child-thread": { status: "completed", message: result } },
+              }),
+              agentMessage("final", "Done"),
+            ],
+          },
+        ],
+        nextCursor: null,
+      });
+      await f.settle(client);
+      expect(await f.assignments()).toEqual([]);
+      expect(f.deliver).toHaveBeenCalledTimes(reused ? 1 : 0);
+    },
+  );
+
+  it.each([false, true])(
     "does not infer fork provenance from the current parent history (observed turn: %s)",
     async (observeTurn) => {
       const f = await detachedAssignment(observeTurn);

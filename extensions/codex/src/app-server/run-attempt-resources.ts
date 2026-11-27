@@ -413,7 +413,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       return false;
     }
     // Expired settlement cannot start optional retention or queue a row read.
-    if (state.nativeSettlementExpired) {
+    if (state.nativeSettlementExpired || client.getCloseError()) {
       return false;
     }
     const retained = await bindingStore.withLease(bindingIdentity, async () => {
