@@ -1,4 +1,4 @@
-import type { Envelope } from "./model.js";
+import type { ClaimFields, Envelope } from "./model.js";
 
 /** Source dates retain their precision; instants must carry an explicit offset. */
 export function validSourceDate(value: string): boolean {
@@ -54,7 +54,7 @@ export function temporalProblems(m: Envelope): string[] {
  * frontmatter that already uses these names stays valid on read, as before they existed.
  */
 export function assertClaimInput(
-  input: Pick<Envelope, "occurred_at" | "occurred_until" | "inferred_by" | "assertion_origin">,
+  input: Pick<Envelope, "occurred_at" | "assertion_origin"> & ClaimFields,
 ): void {
   const { occurred_at: from, occurred_until: until, inferred_by: inference } = input;
   const issues: string[] = [];

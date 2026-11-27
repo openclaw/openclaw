@@ -131,6 +131,15 @@ it("extracted claims keep takeaway, tags, event span and inference provenance", 
     f.owner,
   );
   expect(agentGrep.hits[0]!.inferredBy).toStrictEqual(atom.inferred_by);
+  // The agent can read back what it wrote.
+  const agentRead = await leanToolResults(f.service).record({ id: receipt.id }, f.owner);
+  expect(agentRead.record).toMatchObject({
+    date: atom.occurred_at,
+    dateUntil: atom.occurred_until,
+    takeaway: atom.takeaway,
+    inferredBy: atom.inferred_by,
+    tags: atom.tags,
+  });
   const listed = await f.service.records_detail({ kind: "claim", includeCards: true }, f.owner);
   expect(Check(contract.operations.records_detail.output, listed)).toBeTruthy();
   expect(listed.records.find((r: any) => r.id === receipt.id).card.metadata).toMatchObject({
@@ -163,20 +172,43 @@ it("extracted claims keep takeaway, tags, event span and inference provenance", 
   }
 });
 
-it("authored page frontmatter using the claim field names stays valid and saveable", async () => {
+it("authored frontmatter using the claim field names, in any shape, stays valid and saveable", async () => {
   const f = await foundation();
   const page = (await f.service.record_detail({ id: f.pages.project.id }, f.owner)).record!;
   const file = path.join(f.root, "private", page.path);
   const raw = await readFile(file, "utf8");
   await writeFile(
     file,
-    raw.replace(/^---\n/, '---\ntakeaway: "Ship small"\noccurred_until: "2026-09-23"\n'),
+    raw.replace(/^---\n/, '---\ntakeaway: [a]\noccurred_until: ""\ninferred_by: my-script\n'),
   );
-  const read = (await f.service.record_detail({ id: page.id, includeMetadata: true }, f.owner))
-    .record!;
-  expect([read.valid, read.metadata!.takeaway]).toStrictEqual([true, "Ship small"]);
+  const detail = await f.service.record_detail({ id: page.id, includeMetadata: true }, f.owner);
+  expect(Check(contract.operations.record_detail.output, detail)).toBeTruthy();
+  const read = detail.record!;
+  expect([read.valid, read.metadata!.takeaway, read.metadata!.inferred_by]).toStrictEqual([
+    true,
+    ["a"],
+    "my-script",
+  ]);
+  const listed = await f.service.records_detail({ kind: "page" }, f.owner);
+  expect(listed.records.map((r: any) => r.id)).toContain(page.id);
   const saved = await f.service.save_page(edit(read, { title: "Renamed project" }), f.owner);
   expect(saved.state).toBe("published");
+  expect(await readFile(file, "utf8")).toContain("inferred_by: my-script");
+
+  // An authored claim with off-shape values keeps loading; its card shows only the
+  // well-formed fields.
+  const receipt = await f.service.create_claim(f.claim({ takeaway: "Kept" }), f.owner);
+  const claim = (await f.service.record_detail({ id: receipt.id }, f.owner)).record!;
+  const claimFile = path.join(f.root, "private", claim.path);
+  await writeFile(
+    claimFile,
+    (await readFile(claimFile, "utf8")).replace(/^---\n/, "---\ninferred_by: [x]\n"),
+  );
+  const cards = await f.service.records_detail({ kind: "claim", includeCards: true }, f.owner);
+  expect(Check(contract.operations.records_detail.output, cards)).toBeTruthy();
+  const card = cards.records.find((r: any) => r.id === receipt.id).card;
+  expect(card.metadata.takeaway).toBe("Kept");
+  expect(card.metadata).not.toHaveProperty("inferred_by");
 });
 
 it("all claim kinds roundtrip; contradictions and uncertain attribution are not merged", async () => {

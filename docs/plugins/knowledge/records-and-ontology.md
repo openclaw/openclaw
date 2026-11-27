@@ -85,7 +85,9 @@ opening each record.
 `takeaway` is shown and returned with the claim but is not indexed for keyword
 search.
 The span, takeaway, and inference rules are checked when a claim is written.
-Existing authored frontmatter that already uses these names is read as before.
+Existing authored frontmatter that already uses these names, in any shape, is
+read and saved as before; a value that does not match the claim field's shape
+stays in the file but is not shown or returned as that field.
 
 Validity and expiry accept UTC timestamps. Unknown values must be omitted, not
 empty strings. Expired, not-yet-valid, and ended assertions leave

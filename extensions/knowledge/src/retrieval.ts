@@ -12,7 +12,7 @@ import { Check } from "typebox/value";
 import { observeLifecycleGuards } from "./lifecycle.js";
 import { SEARCH_HIGHLIGHT_MAX_BYTES } from "./limits.js";
 import { effectiveRecord, mergeRedirects, referenceIds } from "./merge.js";
-import type { LoadedRecord } from "./model.js";
+import { claimFields, type LoadedRecord } from "./model.js";
 import { expandTypes } from "./ontology.js";
 import { queryFreshness } from "./query-freshness.js";
 import {
@@ -137,6 +137,7 @@ function hit(
   const bodyStart = r.raw.length - r.body.length;
   const line = (offset: number) => r.raw.slice(0, bodyStart + offset).split("\n").length;
   const { metadata, body: _body, raw: _raw, hash, ...record } = r;
+  const { inferred_by: inferredBy } = claimFields(metadata);
   return {
     record,
     citation: { id: r.id, path: r.path, revision: r.revision, hash },
@@ -153,7 +154,7 @@ function hit(
     score,
     attribution: metadata.attribution ?? "",
     assertionOrigin: metadata.assertion_origin ?? "",
-    ...(metadata.inferred_by ? { inferredBy: metadata.inferred_by } : {}),
+    ...(inferredBy ? { inferredBy } : {}),
     evidence: (metadata.evidence ?? [])
       .slice(0, 3)
       .map(({ path, sha256, start_line, end_line }) =>

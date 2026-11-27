@@ -223,25 +223,6 @@ export const Envelope = Type.Object(
       ]),
     ),
     occurred_at: Type.Optional(sourceDate),
-    /** Inclusive end of the claimed event's span; requires occurred_at. */
-    occurred_until: Type.Optional(sourceDate),
-    /** The lesson or "so what" of a claim, separate from the assertion text in the body. */
-    takeaway: Type.Optional(
-      Type.String({ minLength: 1, maxLength: 1000, pattern: "^(?=.*\\S)[\\s\\S]+$" }),
-    ),
-    /** Which extractor or agent produced an agent_inference claim, when, and how sure it was. */
-    inferred_by: Type.Optional(
-      Type.Object(
-        {
-          agent: Type.String({ minLength: 1, maxLength: 100, pattern: "^(?=.*\\S)[^\\r\\n]+$" }),
-          at: sourceDate,
-          confidence: Type.Optional(
-            Type.Union([Type.Literal("high"), Type.Literal("medium"), Type.Literal("low")]),
-          ),
-        },
-        { additionalProperties: false },
-      ),
-    ),
     valid_from: Type.Optional(timestamp),
     valid_until: Type.Optional(timestamp),
     expires_at: Type.Optional(timestamp),
@@ -262,6 +243,47 @@ export const Envelope = Type.Object(
   { additionalProperties: true },
 );
 export type Envelope = Static<typeof Envelope>;
+
+/**
+ * Claim fields added after authored vaults existed. They are strict on claim writes
+ * but stay out of Envelope, so a hand-written record that already uses one of these
+ * names with another shape keeps loading as unknown frontmatter.
+ */
+export const ClaimFields = Type.Object({
+  /** Inclusive end of the claimed event's span; requires occurred_at. */
+  occurred_until: Type.Optional(sourceDate),
+  /** The lesson or "so what" of a claim, separate from the assertion text in the body. */
+  takeaway: Type.Optional(
+    Type.String({ minLength: 1, maxLength: 1000, pattern: "^(?=.*\\S)[\\s\\S]+$" }),
+  ),
+  /** Which extractor or agent produced an agent_inference claim, when, and how sure it was. */
+  inferred_by: Type.Optional(
+    Type.Object(
+      {
+        agent: Type.String({ minLength: 1, maxLength: 100, pattern: "^(?=.*\\S)[^\\r\\n]+$" }),
+        at: sourceDate,
+        confidence: Type.Optional(
+          Type.Union([Type.Literal("high"), Type.Literal("medium"), Type.Literal("low")]),
+        ),
+      },
+      { additionalProperties: false },
+    ),
+  ),
+});
+export type ClaimFields = Static<typeof ClaimFields>;
+
+/** The well-formed claim fields of a record; any other authored value is left unread. */
+export function claimFields(metadata: Record<string, unknown>): ClaimFields {
+  const { occurred_until, takeaway, inferred_by } = metadata;
+  const { properties: p } = ClaimFields;
+  return {
+    ...(occurred_until !== undefined && Check(p.occurred_until, occurred_until)
+      ? { occurred_until }
+      : {}),
+    ...(takeaway !== undefined && Check(p.takeaway, takeaway) ? { takeaway } : {}),
+    ...(inferred_by !== undefined && Check(p.inferred_by, inferred_by) ? { inferred_by } : {}),
+  };
+}
 
 export const Field = Type.Object(
   {

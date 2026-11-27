@@ -7,6 +7,7 @@ import type { ReconcileEvidenceOutput } from "./evidence-reconciliation-contract
 import { hashPrefix } from "./hash-fence.js";
 import type { SourceCheckOutput, VerifyOutput } from "./ingestion-contract.js";
 import type { OntologyOutput, RecordOutput } from "./inspection-contract.js";
+import { claimFields } from "./model.js";
 import type { Receipt } from "./mutation-contract.js";
 import type { RememberOutput } from "./remember-contract.js";
 import type { FullHit, LookupOutput, SearchOutput } from "./retrieval-contract.js";
@@ -121,6 +122,7 @@ function leanRecord(
   // Only an occurrence date: when Knowledge recorded a claim is not when it happened.
   const date = claim ? (m.occurred_at ?? r.occurredAt) : undefined;
   const confidence = m.attribution_confidence;
+  const extra = claim ? claimFields(m) : {};
   const lean: LeanRecordOutput = {
     record: {
       id: r.id,
@@ -129,8 +131,11 @@ function leanRecord(
       ...inactive(r.lifecycle),
       ...(claim ? { claimKind: r.claimKind ?? r.type } : { title: r.title, type: r.type }),
       ...(date ? { date } : {}),
+      ...(extra.occurred_until ? { dateUntil: extra.occurred_until } : {}),
       ...(m.due_at ? { dueAt: m.due_at } : {}),
       ...(r.owner ? { owner: ref(r.owner) } : {}),
+      ...(extra.takeaway ? { takeaway: extra.takeaway } : {}),
+      ...(extra.inferred_by ? { inferredBy: extra.inferred_by } : {}),
       ...(r.kind === "relationship" && r.from && r.to ? { from: r.from, to: r.to } : {}),
       ...(m.aliases?.length ? { aliases: m.aliases } : {}),
       ...(m.tags?.length ? { tags: m.tags } : {}),

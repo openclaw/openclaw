@@ -1,5 +1,5 @@
 import { Type, type Static } from "typebox";
-import { text, Evidence, Envelope, Field, Definition } from "./model.js";
+import { text, ClaimFields, Evidence, Envelope, Field, Definition } from "./model.js";
 
 const optionalBool = () => Type.Optional(Type.Boolean());
 const offset = Type.Optional(Type.Integer({ minimum: 0 }));
@@ -55,9 +55,9 @@ export const ClaimCard = Type.Object(
         owner: Envelope.properties.owner,
         due_at: Envelope.properties.due_at,
         occurred_at: Envelope.properties.occurred_at,
-        occurred_until: Envelope.properties.occurred_until,
-        takeaway: Envelope.properties.takeaway,
-        inferred_by: Envelope.properties.inferred_by,
+        occurred_until: ClaimFields.properties.occurred_until,
+        takeaway: ClaimFields.properties.takeaway,
+        inferred_by: ClaimFields.properties.inferred_by,
         source_event: Envelope.properties.source_event,
         supersedes: Envelope.properties.supersedes,
         continuity: Envelope.properties.continuity,
@@ -75,9 +75,9 @@ export const CompactMetadata = Type.Object(
     owner: Envelope.properties.owner,
     due_at: Envelope.properties.due_at,
     occurred_at: Envelope.properties.occurred_at,
-    occurred_until: Envelope.properties.occurred_until,
-    takeaway: Envelope.properties.takeaway,
-    inferred_by: Envelope.properties.inferred_by,
+    occurred_until: ClaimFields.properties.occurred_until,
+    takeaway: ClaimFields.properties.takeaway,
+    inferred_by: ClaimFields.properties.inferred_by,
     source_page: Envelope.properties.source_page,
     source_event: Envelope.properties.source_event,
     entities: Envelope.properties.entities,

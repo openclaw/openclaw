@@ -73,7 +73,8 @@ See [Records and ontology](/plugins/knowledge/records-and-ontology).
 
 `knowledge_record({id})` returns the ID, revision, full hash, and lifecycle when
 not active. Pages add title, type, aliases, tags, dependencies, non-empty domain
-fields, and the body; claims add kind, occurrence date, due date, owner, linked pages,
+fields, and the body; claims add kind, occurrence date and span end
+(`dateUntil`), due date, owner, takeaway, tags, `inferredBy`, linked pages,
 source, attribution, the saver's subject hint, and text. Validation issues,
 partial identity, supersession, and merge redirects appear when present.
 

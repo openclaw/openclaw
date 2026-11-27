@@ -1,7 +1,17 @@
 import { Type, type Static } from "typebox";
 import { ExpectedHash } from "./hash-fence.js";
 import { BODY_INPUT_MAX_CHARS } from "./limits.js";
-import { text, name, Evidence, Envelope, id, strings, RecordAnnotations, Recall } from "./model.js";
+import {
+  text,
+  name,
+  ClaimFields,
+  Evidence,
+  Envelope,
+  id,
+  strings,
+  RecordAnnotations,
+  Recall,
+} from "./model.js";
 import { PageBudget } from "./page-budget.js";
 export const requestId = Type.String({
   pattern: "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
@@ -82,12 +92,12 @@ const CreateClaim = Type.Object(
     entities: Envelope.properties.entities,
     subject_hint: Envelope.properties.subject_hint,
     occurred_at: Envelope.properties.occurred_at,
-    occurred_until: Envelope.properties.occurred_until,
+    occurred_until: ClaimFields.properties.occurred_until,
     owner: Envelope.properties.owner,
     due_at: Envelope.properties.due_at,
-    takeaway: Envelope.properties.takeaway,
+    takeaway: ClaimFields.properties.takeaway,
     tags: Envelope.properties.tags,
-    inferred_by: Envelope.properties.inferred_by,
+    inferred_by: ClaimFields.properties.inferred_by,
   },
   { additionalProperties: false },
 );
