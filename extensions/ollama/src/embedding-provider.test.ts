@@ -2,6 +2,7 @@ import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createOllamaEmbeddingProvider } from "./embedding-provider.js";
+import { lazyOllamaMemoryEmbeddingProviderAdapter } from "./embedding-registration.js";
 import { ollamaMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 
 const { fetchConfiguredLocalOriginWithSsrFGuardMock } = vi.hoisted(() => ({
@@ -184,6 +185,58 @@ describe("ollama embedding provider", () => {
     );
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expectEmbeddingFetch(`${LOCAL_HOST}/api/embed`, {}, ["a", "bb", "ccc"]);
+  });
+
+  it("sends inline media as Ollama image and audio items beside text items", async () => {
+    mockEmbeddingResponse([
+      [1, 0],
+      [0, 1],
+      [1, 1],
+    ]);
+    const { provider } = await createEmbeddingProvider({ model: "embeddinggemma-2" });
+    const media = (mimeType: string, data: string) => ({
+      text: "label",
+      parts: [
+        { type: "text" as const, text: "Image file: a" },
+        { type: "inline-data" as const, mimeType, data },
+      ],
+    });
+    await provider.embedBatch(["note", media("image/png", "cG5n"), media("audio/wav", "d2F2")]);
+    expectEmbeddingFetch(
+      `${LOCAL_HOST}/api/embed`,
+      {},
+      ["note", { text: "Image file: a", image: "cG5n" }, { text: "Image file: a", audio: "d2F2" }],
+      "embeddinggemma-2",
+    );
+  });
+
+  it("names media Ollama cannot decode without the retryable status", async () => {
+    const body = JSON.stringify({ error: "Failed to load image or audio file" });
+    mockEmbeddingResponse(new Response(body, { status: 500 }));
+    const { provider } = await createEmbeddingProvider({ model: "embeddinggemma-2" });
+    await expect(
+      provider.embed({
+        text: "x",
+        parts: [{ type: "inline-data", mimeType: "audio/mp4", data: "bTRh" }],
+      }),
+    ).rejects.toMatchObject({
+      code: "EMBEDDING_MEDIA_UNSUPPORTED",
+      message: `Ollama could not decode this media file for embeddings: ${body}`,
+    });
+  });
+
+  it.each([
+    ["embeddinggemma-2", ["image", "audio"]],
+    ["ollama/embeddinggemma-2:740m-q8_0", ["image", "audio"]],
+    ["embeddinggemma-2:latest", ["image", "audio"]],
+    ["embeddinggemma-2:440m-q8_0-text-vision", ["image"]],
+    ["embeddinggemma-2:570m", ["audio"]],
+    ["embeddinggemma-2:270m", []],
+    ["embeddinggemma-2:300m", []],
+    ["embeddinggemma:300m", []],
+    ["nomic-embed-text", []],
+  ] as const)("declares %s media as %j", (model, expected) => {
+    expect(lazyOllamaMemoryEmbeddingProviderAdapter.mediaModalities?.({ model })).toEqual(expected);
   });
 
   it("reports actionable embed errors for a missing model", async () => {

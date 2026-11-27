@@ -674,9 +674,12 @@ does not mean its edited contents were imported. Unsafe source paths and failed 
 
 ---
 
-## Multimodal memory (Gemini)
+<a id="multimodal-memory-gemini" />
 
-Index images and audio alongside Markdown using Gemini Embedding 2:
+## Multimodal memory
+
+Index images and audio alongside Markdown with an embedding model that embeds
+them, such as Gemini Embedding 2:
 
 | Key                       | Type       | Default    | Description                            |
 | ------------------------- | ---------- | ---------- | -------------------------------------- |
@@ -685,10 +688,23 @@ Index images and audio alongside Markdown using Gemini Embedding 2:
 | `multimodal.maxFileBytes` | `number`   | `10485760` | Max file size for indexing (10 MiB)    |
 
 <Note>
-Only applies to files in `extraPaths`. Default memory roots stay Markdown-only. Requires `gemini-embedding-2` (the legacy preview identifier is also accepted). `fallback` must be `"none"`.
+Only applies to files in `extraPaths`. Default memory roots stay Markdown-only. `fallback` must be `"none"`.
 </Note>
 
-Supported formats: `.jpg`, `.jpeg`, `.png` (images); `.mp3`, `.wav` (audio).
+Each embedding provider declares which media its models embed. Memory indexes
+the modalities you enable that the model supports and skips the rest:
+`openclaw memory status` shows them under **Skipped media**. Today
+`gemini-embedding-2` (and its legacy preview identifier) embeds images and audio
+in the cloud. EmbeddingGemma 2 embeds them locally through Ollama
+([tags](/providers/ollama/advanced#memory-embeddings)) and
+[oMLX](/providers/omlx#images-and-audio). Other providers index
+text only until their plugin declares media support.
+
+Supported formats: `.jpg`, `.jpeg`, `.png`, `.webp`, `.gif`, `.heic`, `.heif`
+(images); `.mp3`, `.wav`, `.ogg`, `.opus`, `.m4a`, `.m2a`, `.aac`, `.flac`
+(audio). The provider may reject formats it does not accept. Memory skips a
+file the provider rejects as too large or reports it cannot decode, logs a
+warning, and indexes the rest; other rejections fail the sync.
 
 ---
 

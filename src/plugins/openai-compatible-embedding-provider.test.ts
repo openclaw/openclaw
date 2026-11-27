@@ -536,6 +536,102 @@ it("coerces structured text inputs and rejects inline data", async () => {
   ).rejects.toThrow("only support text embedding inputs");
 });
 
+const image = { type: "inline-data", mimeType: "image/png", data: "AA==" } as const;
+const audio = { type: "inline-data", mimeType: "audio/wav", data: "UklG" } as const;
+const labeled = (part: typeof image | typeof audio) => ({
+  text: "label",
+  parts: [{ type: "text" as const, text: "File: a" }, part],
+});
+
+it("sends declared media as llama.cpp content inputs and keeps text batches plain", async () => {
+  const bodies: Record<string, unknown>[] = [];
+  const { provider } = await embeddingFixture(
+    {
+      respond: ({ body }) => {
+        bodies.push(body);
+        return vectors(...(body.input as unknown[]).map(() => [1, 0]));
+      },
+    },
+    { mediaFormat: "content" },
+  );
+
+  await provider.embedBatch(["a", { text: "b" }]);
+  await provider.embedBatch(["note", labeled(image), labeled(audio)]);
+
+  expect(bodies.map((body) => body.input)).toEqual([
+    ["a", "b"],
+    [
+      "note",
+      {
+        content: [
+          { type: "text", text: "File: a" },
+          { type: "image_url", image_url: { url: "data:image/png;base64,AA==" } },
+        ],
+      },
+      {
+        content: [
+          { type: "text", text: "File: a" },
+          { type: "input_audio", input_audio: { data: "UklG", format: "wav" } },
+        ],
+      },
+    ],
+  ]);
+});
+
+it("sends declared media as oMLX items", async () => {
+  const { provider } = await embeddingFixture(
+    {
+      respond: ({ body }) => {
+        expect(body.input).toBeUndefined();
+        expect(body.items).toEqual([
+          { text: "note" },
+          { text: "File: a", image: "data:image/png;base64,AA==" },
+        ]);
+        return vectors([1, 0], [0, 1]);
+      },
+    },
+    { mediaFormat: "items" },
+  );
+
+  await expect(provider.embedBatch(["note", labeled(image)])).resolves.toHaveLength(2);
+});
+
+it.each([
+  ["content", 500, "Failed to load image or audio file"],
+  [
+    "items",
+    400,
+    "Embedding model 'eg2' does not support audio inputs (enable embedding_audio_enabled)",
+  ],
+  ["items", 400, "Incorrect image source. Must be a valid URL or a base64 encoded string."],
+] as const)(
+  "marks %s media the runtime rejects with %i as unsupported",
+  async (mediaFormat, status, message) => {
+    const { provider } = await embeddingFixture(
+      { status, respond: () => ({ error: { message } }) },
+      { mediaFormat },
+    );
+
+    await expect(provider.embed(labeled(audio))).rejects.toMatchObject({
+      code: "EMBEDDING_MEDIA_UNSUPPORTED",
+    });
+    await expect(provider.embed("text")).rejects.not.toMatchObject({
+      code: "EMBEDDING_MEDIA_UNSUPPORTED",
+    });
+  },
+);
+
+it("keeps a generic oMLX server failure distinct from a file it cannot decode", async () => {
+  const { provider } = await embeddingFixture(
+    { status: 500, respond: () => ({ error: { message: "Internal Server Error" } }) },
+    { mediaFormat: "items" },
+  );
+  await expect(provider.embed(labeled(audio))).rejects.toMatchObject({
+    status: 500,
+    message: expect.stringContaining("Internal Server Error"),
+  });
+});
+
 it("reports missing required config with actionable keys", async () => {
   await expect(providerAt("   ")).rejects.toThrow("remote.baseUrl");
   await expect(providerAt("http://127.0.0.1:11434/v1", { model: "   " })).rejects.toThrow(

@@ -225,6 +225,23 @@ describe("memory embedding policy", () => {
     expect(waits.reduce((total, delayMs) => total + delayMs, 0)).toBe(8000);
   });
 
+  it("does not retry media the provider cannot decode, even with a 500 in its body", async () => {
+    const mediaError = Object.assign(
+      new Error('unsupported media: {"error":{"code":500,"message":"Failed to load image"}}'),
+      { code: "EMBEDDING_MEDIA_UNSUPPORTED" },
+    );
+    const run = vi.fn(async () => {
+      throw mediaError;
+    });
+    const waitForRetry = vi.fn(async () => {});
+
+    await expect(runMemoryEmbeddingRetryLoop({ profile: "index", run, waitForRetry })).rejects.toBe(
+      mediaError,
+    );
+    expect(run).toHaveBeenCalledOnce();
+    expect(waitForRetry).not.toHaveBeenCalled();
+  });
+
   it.each([
     { errorCode: "quota_exceeded" },
     { code: "insufficient_quota" },

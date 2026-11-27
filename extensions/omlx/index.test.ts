@@ -141,6 +141,27 @@ describe("oMLX registered embedding provider", () => {
     });
   });
 
+  it("declares EmbeddingGemma 2 media and sends it as oMLX items", async () => {
+    vi.stubEnv("OMLX_API_KEY", undefined);
+    const adapter = embeddingAdapter();
+    expect(
+      ["omlx/embeddinggemma-2", "embeddinggemma-2-4bit", "bge-m3", "embeddinggemma-300m"].map(
+        (model) => adapter.mediaModalities?.({ model }),
+      ),
+    ).toEqual([["image", "audio"], ["image", "audio"], [], []]);
+    const { requests } = embeddingFetch([
+      { index: 0, embedding: [1, 0] },
+      { index: 1, embedding: [0, 1] },
+    ]);
+    const result = await adapter.create({ config: {}, model: "omlx/embeddinggemma-2" });
+    const image = { type: "inline-data", mimeType: "image/png", data: "AA==" } as const;
+    await result.provider?.embedBatch(["note", { text: "a.png", parts: [image] }]);
+    await expect(requests[0]?.json()).resolves.toEqual({
+      model: "embeddinggemma-2",
+      items: [{ text: "note" }, { image: "data:image/png;base64,AA==" }],
+    });
+  });
+
   it.each([
     connectionCase("configured keyless", { apiKey: "omlx-local" }, undefined, [null, null, null]),
     connectionCase(

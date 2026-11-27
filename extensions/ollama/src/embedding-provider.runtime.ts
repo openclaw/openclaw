@@ -1,10 +1,12 @@
 import {
   EMBEDDING_DEADLINE_CONTROL,
   type AcquireConfiguredProviderLocalService,
+  type EmbeddingInput,
   type EmbeddingProvider,
   type EmbeddingProviderCallOptions,
 } from "openclaw/plugin-sdk/embedding-providers";
 import {
+  hasNonTextEmbeddingParts,
   sanitizeAndNormalizeEmbedding,
   type RemoteEmbeddingClient,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
@@ -91,6 +93,41 @@ function normalizeOllamaEmbedding(vec: unknown[], outputDimensionality?: number)
     throw new Error("Ollama embed response contains a non-number embedding value");
   }
   return sanitizeAndNormalizeEmbedding(selected);
+}
+
+type OllamaEmbedMedia = { text?: string; image?: string; audio?: string };
+type OllamaEmbedItem = string | OllamaEmbedMedia;
+
+/** /api/embed takes media as one object per input with base64 `image` and `audio`. */
+function toOllamaEmbedItem(input: EmbeddingInput): OllamaEmbedItem {
+  if (typeof input === "string") {
+    return input;
+  }
+  if (!input.parts || !hasNonTextEmbeddingParts(input)) {
+    return input.text;
+  }
+  const item: OllamaEmbedMedia = {};
+  const text = input.parts.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("");
+  if (text) {
+    item.text = text;
+  }
+  for (const part of input.parts) {
+    if (part.type !== "inline-data") {
+      continue;
+    }
+    const kind = part.mimeType.startsWith("image/")
+      ? "image"
+      : part.mimeType.startsWith("audio/")
+        ? "audio"
+        : undefined;
+    if (!kind || item[kind] !== undefined) {
+      throw new Error(
+        `Ollama embeddings accept one image and one audio part per input, not ${part.mimeType}.`,
+      );
+    }
+    item[kind] = part.data;
+  }
+  return item;
 }
 
 function normalizeEmbeddingModel(model: string, providerId?: string): string {
@@ -304,7 +341,7 @@ export async function createOllamaEmbeddingProvider(
   const embedUrl = `${client.baseUrl.replace(/\/$/, "")}/api/embed`;
 
   const embedMany = async (
-    input: string | string[],
+    input: string | OllamaEmbedItem[],
     callOptions?: EmbeddingProviderCallOptions,
   ): Promise<number[][]> => {
     const signal = callOptions?.signal;
@@ -352,6 +389,17 @@ export async function createOllamaEmbeddingProvider(
             response.status === 404 && /model.*not found/i.test(detail)
               ? ` Run \`ollama pull ${client.model}\` on the configured Ollama host.`
               : "";
+          if (
+            response.status === 500 &&
+            Array.isArray(input) &&
+            input.some((item) => typeof item !== "string") &&
+            /failed to load image or audio file/i.test(detail)
+          ) {
+            throw Object.assign(
+              new Error(`Ollama could not decode this media file for embeddings: ${detail}`),
+              { code: "EMBEDDING_MEDIA_UNSUPPORTED" },
+            );
+          }
           throw new Error(`Ollama embed HTTP ${response.status}: ${detail}${recovery}`);
         }
         json = await readProviderJsonObjectResponse(response, "Ollama embed response");
@@ -405,20 +453,23 @@ export async function createOllamaEmbeddingProvider(
     id: "ollama",
     model: client.model,
     embed: async (input, optionsValue) => {
-      const text = typeof input === "string" ? input : input.text;
-      return optionsValue?.inputType === "query"
-        ? await embedQuery(text, optionsValue)
-        : ((await embedMany([text], optionsValue))[0] ?? []);
+      if (optionsValue?.inputType === "query") {
+        return await embedQuery(typeof input === "string" ? input : input.text, optionsValue);
+      }
+      return (await embedMany([toOllamaEmbedItem(input)], optionsValue))[0] ?? [];
     },
     embedBatch: async (inputs, optionsLocal) => {
-      const texts = inputs.map((input) => (typeof input === "string" ? input : input.text));
-      if (texts.length === 0) {
+      if (inputs.length === 0) {
         return [];
       }
       if (optionsLocal?.inputType === "query") {
-        return await Promise.all(texts.map((text) => embedQuery(text, optionsLocal)));
+        return await Promise.all(
+          inputs.map((input) =>
+            embedQuery(typeof input === "string" ? input : input.text, optionsLocal),
+          ),
+        );
       }
-      return await embedMany(texts, optionsLocal);
+      return await embedMany(inputs.map(toOllamaEmbedItem), optionsLocal);
     },
   };
 

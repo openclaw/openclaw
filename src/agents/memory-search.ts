@@ -218,19 +218,44 @@ function produceMemorySearchConfig(cfg: OpenClawConfig, agentId: string) {
         },
       }
     : undefined;
-  const model = overrides?.model ?? defaults?.model ?? primaryAdapter?.defaultModel ?? "";
   const inputType = overrides?.inputType?.trim() || defaults?.inputType?.trim() || undefined;
   const queryInputType =
     overrides?.queryInputType?.trim() || defaults?.queryInputType?.trim() || undefined;
   const documentInputType =
     overrides?.documentInputType?.trim() || defaults?.documentInputType?.trim() || undefined;
   const outputDimensionality = overrides?.outputDimensionality ?? defaults?.outputDimensionality;
-  const multimodal = normalizeMemoryMultimodalSettings({
+  const model = overrides?.model ?? defaults?.model ?? primaryAdapter?.defaultModel ?? "";
+  const configuredMultimodal = normalizeMemoryMultimodalSettings({
     enabled: overrides?.multimodal?.enabled ?? defaults?.multimodal?.enabled,
     modalities: overrides?.multimodal?.modalities ?? defaults?.multimodal?.modalities,
     maxFileBytes: overrides?.multimodal?.maxFileBytes ?? defaults?.multimodal?.maxFileBytes,
   });
-  const resolved = {
+  const configuredMediaActive = isMemoryMultimodalEnabled(configuredMultimodal);
+  if (configuredMediaActive && fallback !== "none") {
+    throw new Error(
+      'memory.search.multimodal does not support memory.search.fallback. Set fallback to "none".',
+    );
+  }
+  // Index only the media the model embeds. An adapter not yet registered keeps the
+  // configured modalities, as before this check moved from rejecting to skipping.
+  const supportedMedia =
+    configuredMediaActive &&
+    primaryAdapter &&
+    (primaryAdapter.mediaModalities?.({ model }) ??
+      (primaryAdapter.supportsMultimodalEmbeddings?.({ model }) ? ["image", "audio"] : []));
+  const skippedModalities = supportedMedia
+    ? configuredMultimodal.modalities.filter((modality) => !supportedMedia.includes(modality))
+    : [];
+  const multimodal = skippedModalities.length
+    ? {
+        ...configuredMultimodal,
+        modalities: configuredMultimodal.modalities.filter(
+          (modality) => !skippedModalities.includes(modality),
+        ),
+        skippedModalities,
+      }
+    : configuredMultimodal;
+  return {
     ...indexConfig,
     multimodal,
     provider,
@@ -263,24 +288,6 @@ function produceMemorySearchConfig(cfg: OpenClawConfig, agentId: string) {
       maxEntries: DEFAULT_CACHE_MAX_ENTRIES,
     },
   };
-  const multimodalActive = isMemoryMultimodalEnabled(resolved.multimodal);
-  // Custom provider ids can map to a memory adapter through models.providers.<id>.api.
-  // Reuse the same config-aware adapter for defaults and multimodal validation.
-  if (
-    multimodalActive &&
-    primaryAdapter &&
-    !(primaryAdapter.supportsMultimodalEmbeddings?.({ model: resolved.model }) ?? false)
-  ) {
-    throw new Error(
-      "memory.search.multimodal requires a provider adapter that supports multimodal embeddings for the configured model.",
-    );
-  }
-  if (multimodalActive && resolved.fallback !== "none") {
-    throw new Error(
-      'memory.search.multimodal does not support memory.search.fallback. Set fallback to "none".',
-    );
-  }
-  return resolved;
 }
 
 export function resolveMemorySearchConfig(

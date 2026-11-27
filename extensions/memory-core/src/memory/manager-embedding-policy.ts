@@ -15,6 +15,7 @@ import {
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isUnsupportedEmbeddingMediaError } from "./manager-embedding-errors.js";
 import type { MemoryEmbeddingBatchConfig } from "./manager-sync-base.js";
 
 export function resolveMemoryIndexConcurrency(
@@ -223,7 +224,7 @@ function resolveMemoryEmbeddingRetryBudget(
   profile: (typeof MEMORY_EMBEDDING_RETRY_PROFILES)[MemoryEmbeddingRetryProfileName],
   error: unknown,
 ): MemoryEmbeddingRetryBudget | undefined {
-  if (isInvalidEmbeddingResponse(error)) {
+  if (isInvalidEmbeddingResponse(error) || isUnsupportedEmbeddingMediaError(error)) {
     return undefined;
   }
   const fields = asOptionalRecord(error);
