@@ -3,6 +3,91 @@ import Vision
 import XCTest
 
 extension OpenClawSnapshotUITests {
+    /// The accessibility label is unabridged even when the toolbar only draws an ellipsis.
+    /// Read the pixels between the leading and trailing controls, on their center line.
+    private func assertCompactHeaderRenders(
+        _ name: String,
+        in app: XCUIApplication,
+        beside leading: XCUIElement,
+        attachment: String) throws
+    {
+        let left = leading.frame, right = app.buttons["Chat actions"].firstMatch.frame
+        let row = CGRect(x: left.maxX, y: left.minY, width: right.minX - left.maxX, height: left.height)
+        XCTAssertGreaterThan(row.width, 0)
+        // The app's geometry updates before the system finishes its rotation animation.
+        let deadline = Date.now.addingTimeInterval(4)
+        repeat {
+            let screenshot = XCUIScreen.main.screenshot()
+            let image = UIGraphicsImageRenderer(size: row.size).image { _ in
+                screenshot.image.draw(in: CGRect(origin: CGPoint(x: -row.minX, y: -row.minY), size: app.frame.size))
+            }
+            let recognize = VNRecognizeTextRequest()
+            recognize.recognitionLevel = .accurate
+            try VNImageRequestHandler(cgImage: XCTUnwrap(image.cgImage)).perform([recognize])
+            let lines = (recognize.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+            let visible = lines.contains { $0.contains(name) }
+            if visible || Date.now >= deadline {
+                let frame = XCTAttachment(screenshot: screenshot)
+                frame.name = attachment
+                frame.lifetime = .keepAlways
+                self.add(frame)
+                XCTAssertTrue(visible, "Expected one visible line for \(name); rendered: \(lines)")
+                return
+            }
+        } while true
+    }
+
+    func testLandscapeNormalHeaderShowsNameBesideAvatar() throws {
+        guard #available(iOS 27.1, *) else { throw XCTSkip("Requires the compact chat toolbar") }
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .phone, "Compact landscape chat")
+        XCUIDevice.shared.orientation = .portrait
+        defer { XCUIDevice.shared.orientation = .portrait }
+        self.launchApp(for: Self.chatScreenshotTarget, additionalArguments: ["--openclaw-chat-switch-fixture"])
+        let app = try XCTUnwrap(self.app)
+        XCTAssertTrue(self.agentIdentity(in: app).waitForExistence(timeout: 6))
+        let identity = self.agentIdentity(in: app)
+        for orientation in [UIDeviceOrientation.landscapeLeft, .landscapeRight] {
+            XCUIDevice.shared.orientation = orientation
+            XCTAssertGreaterThan(app.frame.width, app.frame.height)
+            let sidebar = app.buttons["RootTabs.Sidebar.Show"]
+            XCTAssertTrue(sidebar.waitForExistence(timeout: 5))
+            try self.assertCompactHeaderRenders(
+                "Molty", in: app, beside: sidebar, attachment: "main-title-\(orientation.rawValue)")
+            XCTAssertEqual(identity.frame.midX, app.frame.midX, accuracy: 2)
+            XCTAssertEqual(identity.frame.midY, sidebar.frame.midY, accuracy: 2)
+        }
+    }
+
+    func testLandscapeLongProjectChatTitleFitsBetweenControls() throws {
+        guard #available(iOS 27.1, *) else { throw XCTSkip("Requires the compact chat toolbar") }
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .phone, "Compact landscape chat")
+        XCUIDevice.shared.orientation = .portrait
+        defer { XCUIDevice.shared.orientation = .portrait }
+        self.launchApp(for: Self.chatScreenshotTarget, additionalArguments: [
+            "--openclaw-chat-switch-fixture", "--openclaw-long-project-title-fixture",
+        ])
+        let app = try XCTUnwrap(self.app)
+        try self.openSidebarWithSlowEdgeDrag()
+        let regular = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Launch plan")).firstMatch
+        XCTAssertTrue(regular.waitForExistence(timeout: 5))
+        regular.tap()
+        XCTAssertTrue(app.staticTexts["OPENCLAW_SWITCH_B_LATEST"].waitForExistence(timeout: 5))
+        let identity = self.agentIdentity(in: app)
+        XCTAssertTrue(identity.label.contains("Fieldnotes"))
+        for orientation in [UIDeviceOrientation.landscapeLeft, .landscapeRight] {
+            XCUIDevice.shared.orientation = orientation
+            XCTAssertGreaterThan(app.frame.width, app.frame.height)
+            let leading = app.buttons["RootTabs.Sidebar.Show"]
+            XCTAssertTrue(leading.waitForExistence(timeout: 5))
+            let trailing = app.buttons["Chat actions"]
+            try self.assertCompactHeaderRenders(
+                "Launch plan", in: app, beside: leading, attachment: "project-title-\(orientation.rawValue)")
+            XCTAssertGreaterThan(identity.frame.minX, leading.frame.maxX)
+            XCTAssertLessThan(identity.frame.maxX, trailing.frame.minX)
+            XCTAssertEqual(identity.frame.midX, (leading.frame.maxX + trailing.frame.minX) / 2, accuracy: 5)
+        }
+    }
+
     func testNewChatFromSidebarFocusesDraft() throws {
         try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .phone, "Phone drawer")
         self.launchApp(for: Self.chatScreenshotTarget, appearance: "light", additionalArguments: [
@@ -794,6 +879,26 @@ extension OpenClawSnapshotUITests {
         XCTAssertLessThanOrEqual(latest.frame.maxY, composer.frame.minY)
         self.assertElementHasRenderedContent(latest, named: "final reply after collapsing work again")
         self.attachScreenshot(named: "completed-work-collapsed-again")
+    }
+
+    func testLandscapeTranscriptScrollsBeneathComposer() throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .phone, "Compact landscape chat")
+        XCUIDevice.shared.orientation = .landscapeLeft
+        defer { XCUIDevice.shared.orientation = .portrait }
+        self.launchApp(for: Self.chatScreenshotTarget, additionalArguments: ["--openclaw-chat-switch-fixture"])
+        let app = try XCTUnwrap(self.app)
+        let latest = app.staticTexts["OPENCLAW_SWITCH_A_LATEST"]
+        XCTAssertTrue(latest.waitForExistence(timeout: 8))
+        let transcript = try self.chatTranscript(in: app)
+        let composer = app.otherElements["chat-composer-surface"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 3))
+        XCTAssertGreaterThan(app.frame.width, app.frame.height)
+        transcript.swipeDown(velocity: .slow)
+        let capture = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        capture.name = "landscape-composer-edge"
+        capture.lifetime = .keepAlways
+        self.add(capture)
+        XCTAssertGreaterThan(transcript.frame.maxY, composer.frame.midY)
     }
 
     func testIPadTranscriptStaysInsideComposerColumn() throws {

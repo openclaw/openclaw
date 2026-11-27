@@ -917,7 +917,7 @@ private actor LocalFixtureChatStore {
         var sessions = [entry]
         if ScreenshotFixtureMode.chatSwitchEnabled {
             sessions[0].displayName = "Release checklist"
-            sessions.append(OpenClawChatSessionEntry(
+            var launchPlan = OpenClawChatSessionEntry(
                 key: ScreenshotFixtureMode.chatSwitchSecondSessionKey,
                 kind: "chat",
                 displayName: "Launch plan",
@@ -926,7 +926,14 @@ private actor LocalFixtureChatStore {
                 sessionId: "\(self.fixture.sessionIDPrefix)-launch-plan",
                 modelProvider: self.fixture.modelProvider,
                 model: self.modelID,
-                contextTokens: 128_000))
+                contextTokens: 128_000)
+            if ProcessInfo.processInfo.arguments.contains("--openclaw-long-project-title-fixture") {
+                launchPlan
+                    .displayName = "Launch plan for a field recording trip across the coast, including tide tables, " +
+                    "microphone tests, backup locations and recording notes for the return journey"
+                launchPlan.spawnedCwd = "/projects/Fieldnotes"
+            }
+            sessions.append(launchPlan)
         }
         return OpenClawChatSessionsListResponse(
             ts: Date().timeIntervalSince1970 * 1000,
