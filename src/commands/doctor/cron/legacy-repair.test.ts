@@ -17,7 +17,7 @@ import {
 import { cronStoreKey } from "../../../cron/store/key.js";
 import { makeCronStreamSandboxTarget } from "../../../cron/stream-sandbox.test-support.js";
 import { resolveCronRunToolsAllow } from "../../../cron/tools-allow.js";
-import type { CronJob } from "../../../cron/types.js";
+import type { CronJob, CronStoredJob } from "../../../cron/types.js";
 import { buildUpdateRehearsalPathEnv } from "../../../infra/update-rehearsal-paths.js";
 import { withInstalledOfficialProviderCustody } from "../../../plugins/provider-policy-custody.test-support.js";
 import {
@@ -725,18 +725,20 @@ it(
       namespace: "codex.apps",
       payload: { apps: [{ id: "calendar" }] },
     };
-    const saved = job("triggered-reminder", {
-      agentId: "main",
-      trigger: { script: "json({ fire: false });" },
-      payload: {
-        kind: "agentTurn",
-        message: "Check the calendar.",
-        toolsAllow: ["read"],
-        toolsAllowIsDefault: true,
-      },
-      scheduledToolPolicy: { version: 1, mode: "trusted" },
+    const saved: CronStoredJob = {
+      ...job("triggered-reminder", {
+        agentId: "main",
+        trigger: { script: "json({ fire: false });" },
+        payload: {
+          kind: "agentTurn",
+          message: "Check the calendar.",
+          toolsAllow: ["read"],
+          toolsAllowIsDefault: true,
+        },
+        scheduledToolPolicy: { version: 1, mode: "trusted" },
+      }),
       runtimeAuthority: authority,
-    });
+    };
     await saveJobs(storePath, saved);
     const db = openOpenClawStateDatabase().db;
     const storeKey = cronStoreKey(storePath);
