@@ -477,7 +477,9 @@ exec '${process.execPath}' "$@"
     "refuses changed incoming %s authority",
     (fault) => {
       const f = incomingFixture();
-      if (fault === "review mode") f.writeLocal("review-mode.env", "REVIEW_MODE=main\n");
+      if (fault === "review mode") {
+        f.writeLocal("review-mode.env", "REVIEW_MODE=main\n");
+      }
       if (fault === "review head") {
         f.writeLocal(
           "pr-meta.env",
@@ -488,7 +490,9 @@ exec '${process.execPath}' "$@"
         unlinkSync(f.local("review-context.env"));
         symlinkSync(f.local("review-mode.env"), f.local("review-context.env"));
       }
-      if (fault === "hosted head") f.git(f.repo, "update-ref", "refs/heads/topic", f.source);
+      if (fault === "hosted head") {
+        f.git(f.repo, "update-ref", "refs/heads/topic", f.source);
+      }
       const result = f.run("prepare-workflow-successor", f.args);
       expect(result.status, result.stdout + result.stderr).not.toBe(0);
       expect(f.git(f.repo, "rev-parse", bindingRef)).toBe(f.binding);
