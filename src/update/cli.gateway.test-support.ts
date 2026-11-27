@@ -355,6 +355,7 @@ export function registerReleaseUpdateGatewayTests(context: () => GatewayTestCont
           },
         },
         async (peer) => {
+          peer.output.origin.nextAction = "Run `openclaw update --accept-capabilities`.";
           vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
           const deadline = Date.now() + 5_000;
           vi.spyOn(defaultRuntime, "log").mockImplementation((line) => {
@@ -404,6 +405,7 @@ export function registerReleaseUpdateGatewayTests(context: () => GatewayTestCont
             await waitForFast(() => expect(outcome).toBeDefined(), { timeout: 100 });
             await settled;
             expect(String(outcome?.error)).toContain("Capability consent could not be confirmed");
+            expect(String(outcome?.error)).toContain("openclaw update status` before retrying");
             expect(peer.requests).toEqual([
               "update.run",
               "update.runs.get",

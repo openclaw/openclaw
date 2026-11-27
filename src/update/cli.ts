@@ -467,7 +467,7 @@ async function requestGatewayUpdate(
     ? {
         ...deadline,
         expired: new Error(
-          `Capability consent could not be confirmed before the update timeout. ${consentRetry.origin.nextAction ?? "Run `openclaw update status` before retrying `openclaw update --accept-capabilities`."}`,
+          `Capability consent could not be confirmed before the update timeout. Run \`openclaw update status\` before retrying. ${consentRetry.origin.nextAction ?? "Run `openclaw update --accept-capabilities` to retry."}`,
         ),
       }
     : deadline;
