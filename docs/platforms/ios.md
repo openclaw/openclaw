@@ -40,7 +40,7 @@ The app requires iOS 26.2 or iPadOS 26.2 or later.
 - Preserves Markdown paragraph breaks, including before lists and while responses are streaming.
 - Renders completed Mermaid code fences as inline diagrams, with source/copy controls and a full-screen zoomable preview. Diagram rendering uses bundled assets and works offline.
 - Long-press a message and choose **Select Text** to select and copy any span in a native text view; code fences show a copy button that copies the raw code.
-- **Settings** opens a native sheet over the current screen. **Advanced** opens the Dashboard settings with full Gateway access.
+- **Settings** in the sidebar opens native app settings. **Advanced** opens the Dashboard settings with full Gateway access.
 - Speaks assistant messages on demand: long-press a message in Chat and choose **Listen**. The app plays supported Gateway `tts.speak` clips with the configured TTS provider and falls back to on-device speech when Gateway audio is unavailable or unplayable. Playback stops on session switch or backgrounding.
 
 ## Chat text size
@@ -71,21 +71,20 @@ and Gateway permissions are unchanged.
 
 ## Settings
 
-Open **Settings** in the sidebar to adjust this iPhone or iPad. Closing the sheet
-returns to the same screen and sidebar. Appearance, notification setup, Voice &
-Talk, permissions, accessories, and keeping the screen awake are available
-without a Dashboard connection. **Sidebar** edits the same pinned pages as
-**More**.
+Open **Settings** in the sidebar to adjust this iPhone or iPad. **Appearance**,
+**Voice & Talk**, **Permissions**, **Accessories**, and **Keep screen awake**
+are available without a Dashboard connection. To choose which pages to pin,
+open **Sidebar** in Settings or tap the edit button next to **Pages** in the
+sidebar.
 
-**Chat** has the device's display and follow-up preferences. Model and thinking
-effort stay in the composer. **Skills** lists skills for the active agent, and
-**Plugins** lists what is installed. Enabling and disabling uses the Gateway's
-existing permissions. **Advanced** opens the Dashboard settings when the current
-connection has full access.
+**Storage** shows the size of the local chat cache. **Clear Cache** removes
+saved copies of conversations from this device without deleting messages on
+the Gateway or clearing local drafts.
 
-**Gateway** lists saved connections. **Add Gateway** opens the scanner and also
-lets you paste a setup code. Choose **Connection details** for manual connection
-and advanced options.
+**Advanced** opens the Dashboard settings when the current connection has
+full access (`operator.admin`). In the **OpenClaw** section, tap the Gateway
+name or **Connection** to manage saved Gateways. **Connection details** has
+manual and advanced connection options.
 The sidebar footer also provides Gateway access: **Add Gateway** when none are
 saved, a direct connection-settings button when one is saved, and a quick picker
 when multiple Gateways are saved. The picker keeps saved Gateways available even
@@ -107,8 +106,9 @@ review page, while native exec and plugin approvals keep their existing actions.
 
 The Gateway must serve Dashboard pages that support the companion iOS app.
 If a loaded Settings page does not report that support, a native banner asks you
-to update the Gateway. **Open Gateway** opens the native connection screen;
-Gateway setup and the native Settings sheet remain available without Dashboard support.
+to update the Gateway. **Open Gateway settings** opens the native connection
+screen. Gateway setup and native Settings remain available without Dashboard
+support.
 
 Embedded Dashboard pages request native signatures instead of receiving the
 app's private device key or a stored device grant in their startup script. The
@@ -135,10 +135,10 @@ at startup. Share messages include only an instruction explicitly supplied for
 that share. These changes do not remove the Gateway's `talk.speechLocale` option.
 
 **Accessories** opens Apple Watch and ESP setup. **About** includes build
-information and third-party licenses. **Diagnostics** is also available in
-**Gateway**. Gateway administration such as Channels, providers, Talk
-configuration, and credential management remains in the Dashboard under
-**Advanced**.
+information, **Diagnostics**, and third-party licenses. **Diagnostics** is
+also available on the Gateway connection screen. Channels (`/settings/channels`), Skills
+(`/skills`), providers, Talk configuration, and credential management remain
+in the Dashboard. **Advanced** opens the Dashboard settings.
 
 The sidebar opens these Gateway pages in the embedded Dashboard without web
 navigation chrome:
@@ -323,8 +323,8 @@ the pinned renderer dependencies are available.
 
 On first launch the app walks through a short pairing explainer, then Gateway
 setup. It does not present an aggregate permissions page. Optional access is
-requested when you use the related feature, or from **Settings → Permissions**. A permission request presents the
-native iOS authorization prompt. You can
+requested when you use the related feature, or from **Settings → Permissions**.
+A permission request presents the native iOS authorization prompt. You can
 change granted access later in the iOS Settings app.
 
 1. Start an authenticated Gateway with a route your phone can reach. Tailscale
