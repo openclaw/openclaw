@@ -71,7 +71,7 @@ That is a more fundamental context-management problem: not merely whether existi
 
 ## In summary: we have solutions, not just suggestions
 
-We were right about separating durable model state from transient per-turn information in August. Today's independent results reinforce that principle and extend it to context growth itself.
+We were right about separating durable model state from transient per-turn information in August. Today's experimental results and live Discord usage reinforce that principle and extend it to context growth itself.
 
 We've been using the general transient-turn approach in our Discord deployments for months, with approximately threefold improvement in usage efficiency reported from our operational experience. This is not a controlled benchmark of the two November changes.
 
