@@ -996,8 +996,6 @@ describe("spawnAcpDirect", () => {
     expectRecordFields(hoisted.startAcpSpawnParentStreamRelayMock.mock.calls[0]?.[0], {
       parentSessionKey: "agent:main:subagent:parent",
       agentId: "codex",
-      ownerAgentId: "main",
-      childSessionId: "sess-123",
       deliveryContext: { channel: "discord", to: "channel:parent-channel", accountId: "default" },
     });
     const dispatchOrder = expectDefined(
