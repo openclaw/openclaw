@@ -53,7 +53,6 @@ import {
   type OpenClawStateDatabaseOptions,
   type StateWriteTransactionOptions,
 } from "./openclaw-state-db-contract.js";
-import { planOpenClawStateDatabaseDoctorRepair } from "./openclaw-state-db-doctor-repair-plan.js";
 import {
   repairDoctorStateSchema,
   repairDoctorStateSchemaAsync,
@@ -190,13 +189,13 @@ export async function prepareOpenClawStateDatabaseSchema(
   try {
     // Doctor repairs unless its read-only plan proves every condition the repair acts on
     // has nothing to do; an undecidable plan repairs, as before (#155446).
+    // Only Doctor loads its plan; ordinary preparation keeps this module's import closure.
     let needsRepair =
       mode === "doctor" &&
       (
-        await planOpenClawStateDatabaseDoctorRepair({
-          env,
-          integrityCheck: options.integrityCheck,
-        })
+        await (
+          await import("./openclaw-state-db-doctor-repair-plan.js")
+        ).planOpenClawStateDatabaseDoctorRepair({ env, integrityCheck: options.integrityCheck })
       ).decision !== "none";
     if (mode === "doctor" && !needsRepair) {
       return { changes: [], warnings: [] };
