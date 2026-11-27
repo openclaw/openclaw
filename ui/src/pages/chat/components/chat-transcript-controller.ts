@@ -64,8 +64,8 @@ export function createChatTranscript(
     get isProgrammaticScroll(): boolean {
       return sessionVirtualizer?.isProgrammaticScroll ?? false;
     },
-    get hasRows(): boolean {
-      return (sessionVirtualizer?.layout.rows.length ?? 0) > 0;
+    get hasMessageRows(): boolean {
+      return sessionVirtualizer?.hasMessageRows ?? false;
     },
     get isPositionSettled(): boolean {
       return sessionVirtualizer?.isPositionSettled ?? false;

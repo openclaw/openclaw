@@ -137,7 +137,7 @@ it.each([
     });
     await loadChatHistory(state, { startup: true, deferBranches: true });
     expect(request.mock.calls[0]?.[1]).toMatchObject({ limit: 24 });
-    vi.spyOn(pane.transcript, "hasRows", "get").mockReturnValue(true);
+    vi.spyOn(pane.transcript, "hasMessageRows", "get").mockReturnValue(true);
     request.mockClear();
   } else {
     state.chatHistoryPagination = { ...pagination };

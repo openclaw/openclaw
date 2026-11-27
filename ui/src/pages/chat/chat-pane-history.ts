@@ -215,13 +215,13 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
       // One page may fill a short boot window; further paging and the
       // prefetch margin belong to reader intent, even if it stays short.
       if (
+        this.historyViewportFillAttempted ||
+        root.clientHeight <= 0 ||
+        root.scrollHeight > root.clientHeight ||
         (!catalogSession &&
           this.state.settings?.compactSessionOpening &&
           chatHistoryRequests(this.state).compactOpeningSessionKey === this.state.sessionKey &&
-          this.transcript.hasRows) ||
-        this.historyViewportFillAttempted ||
-        root.clientHeight <= 0 ||
-        root.scrollHeight > root.clientHeight
+          this.transcript.hasMessageRows)
       ) {
         return;
       }

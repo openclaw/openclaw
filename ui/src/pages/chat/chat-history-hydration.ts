@@ -93,12 +93,13 @@ export async function hydrateChatHistory(
   state.resetChatInputHistoryNavigation?.();
   state.chatLoading = true;
   let compactPageRequested = false;
+  let compactRestoredCursor: string | undefined;
   const request = (cursor?: string) => {
     const initialHistory = requests.initialHistory;
     delete requests.initialHistory;
     const openingReceipt =
       method === "chat.startup" && initialHistory?.isCurrent() ? initialHistory : undefined;
-    // A full page already covers a cache restored while its subscription was pending.
+    // A full page can cover a cache restored while its subscription was pending.
     // Keep the exact request check: changed input-run receipts still need a fresh read.
     const matchesOpening = (compactOpening: boolean) =>
       openingReceipt !== undefined &&
@@ -120,6 +121,7 @@ export async function hydrateChatHistory(
       ? undefined
       : cursor;
     compactPageRequested = compactOpening && requestedCursor === undefined;
+    compactRestoredCursor = compactOpening && compactReceipt ? cursor : undefined;
     const historyState = readChatHistoryState(state, requestedCursor);
     const key = `${requestKeyPrefix}${requestedCursor === undefined ? "page" : `cursor:${requestedCursor}`}${JSON.stringify(historyState?.stateRevision ?? null)}`;
     const load = requests.historyLoad;
@@ -198,6 +200,22 @@ export async function hydrateChatHistory(
     let response = await request(readChatHistoryCursor(state));
     if (!isCurrent()) {
       return undefined;
+    }
+    if (
+      compactRestoredCursor !== undefined &&
+      state.chatMessages.length &&
+      !isHistoryCursor(response)
+    ) {
+      const { compactOpeningOverlapsSavedHistory } = await import("./chat-history-held-gap.ts");
+      if (!isCurrent()) {
+        return undefined;
+      }
+      if (!compactOpeningOverlapsSavedHistory(state, response)) {
+        response = await request(compactRestoredCursor);
+        if (!isCurrent()) {
+          return undefined;
+        }
+      }
     }
     const cursorReset = isHistoryCursor(response) && response.kind === "reset";
     if (cursorReset) {

@@ -28,9 +28,9 @@ import {
   reconcileChatRunLifecycle,
 } from "./run-lifecycle.ts";
 import {
+  applyChatCacheSnapshot,
   cacheChatSessionSnapshot,
   readChatMessagesFromCache,
-  setChatHistoryCursor,
   type ChatMessageCache,
 } from "./session-message-cache.ts";
 
@@ -114,25 +114,70 @@ it("preserves prepared quiet activity through older pages and prefetched snapsho
   expect(result).not.toHaveProperty("activity");
 });
 
-it.each([false, true])(
-  "reuses the startup receipt during browser history restore (compact %s)",
-  async (compactSessionOpening) => {
-    const initialHistory = {
-      messages: [message("assistant", "Already in the startup receipt")],
+it.each([
+  { compact: false, openingStart: 100 },
+  { compact: true, openingStart: 100 },
+  { compact: true, openingStart: 101 },
+  { compact: true, openingStart: 107 },
+])(
+  "reuses the startup receipt during browser history restore (compact $compact, opening starts at $openingStart)",
+  async ({ compact, openingStart }) => {
+    const entries = (start: number, end: number) =>
+      Array.from({ length: end - start + 1 }, (_, index) => {
+        const seq = start + index;
+        return message("assistant", `History entry ${seq}`, {
+          id: `history-${seq}`,
+          seq,
+          transcriptPosition: { source: "history", rawSeq: seq },
+        });
+      });
+    const end = openingStart + 23;
+    const row = {
+      key: "agent:main:warm",
+      kind: "direct" as const,
       sessionId: "warm-session",
+      activeLeafEntryId: `history-${end}`,
+      updatedAt: 1,
+    };
+    const initialHistory = {
+      messages: entries(openingStart, end),
+      sessionInfo: row,
+      sessionId: row.sessionId,
+      hasMore: true,
+      olderCursor: "older-than-opening",
+      nextOffset: 24,
+      totalMessages: end,
     };
     const state = Object.assign(createState(initialHistory), { sessionKey: "agent:main:warm" });
-    Object.assign(state.settings, { compactSessionOpening });
+    Object.assign(state.settings, { compactSessionOpening: compact });
     const response = createDeferred<Awaited<ReturnType<typeof state.sessions.subscribeMessages>>>();
     const subscription = vi
       .spyOn(state.sessions, "subscribeMessages")
       .mockReturnValue(response.promise);
-    const request = vi.spyOn(state.client!, "request").mockResolvedValue(initialHistory);
+    const request = vi.spyOn(state.client!, "request").mockResolvedValue({
+      kind: "delta",
+      deltaCursor: "advanced-history-cursor",
+      messages: entries(101, end).map((entry, index) => ({
+        message: entry,
+        messageId: `history-${101 + index}`,
+        messageSeq: 101 + index,
+      })),
+      sessionInfo: row,
+    });
     const ready = syncSelectedSessionMessageSubscription(state, { initialHistory: true });
 
-    state.currentSessionId = initialHistory.sessionId;
-    state.chatMessages = [message("assistant", "From the restored snapshot")];
-    setChatHistoryCursor(state, "restored-history-cursor");
+    applyChatCacheSnapshot(state, {
+      sessionId: initialHistory.sessionId,
+      messages: entries(99, 100),
+      displayedLeafEntryId: "history-100",
+      pagination: {
+        hasMore: true,
+        olderCursor: "older-than-held",
+        totalMessages: 100,
+        nextOffset: 2,
+      },
+      deltaCursor: "restored-history-cursor",
+    });
     const opening = loadChatHistory(state, { startup: true, deferBranches: true });
     response.resolve({
       key: state.sessionKey,
@@ -141,11 +186,14 @@ it.each([false, true])(
     });
 
     await ready;
-    await expect(opening).resolves.toMatchObject({ messages: initialHistory.messages });
-    expect(subscription.mock.calls[0]?.[1]?.initialHistory?.limit).toBe(
-      compactSessionOpening ? 24 : 80,
+    await opening;
+    expect(subscription.mock.calls[0]?.[1]?.initialHistory?.limit).toBe(compact ? 24 : 80);
+    expect(request.mock.calls.map(([method, params]) => ({ method, params }))).toMatchObject(
+      openingStart === 100
+        ? []
+        : [{ method: "chat.startup", params: { cursor: "restored-history-cursor", limit: 80 } }],
     );
-    expect(request.mock.calls.filter(([method]) => method === "chat.startup")).toEqual([]);
+    expect(state.chatMessages).toEqual(entries(99, end));
   },
 );
 
