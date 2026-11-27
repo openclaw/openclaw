@@ -262,22 +262,18 @@ export function registerMemoryWikiGatewayMethods(params: {
     const searchBackend = readEnumParam(requestParams, "backend", WIKI_SEARCH_BACKENDS);
     const searchCorpus = readEnumParam(requestParams, "corpus", WIKI_SEARCH_CORPORA);
     const mode = readEnumParam(requestParams, "mode", WIKI_SEARCH_MODES);
-    try {
-      return await searchMemoryWiki({
-        memoryContext,
-        config,
-        appConfig,
-        ...(agentId ? { agentId } : {}),
-        query,
-        maxResults,
-        searchBackend,
-        searchCorpus,
-        mode,
-      });
-    } finally {
-      // After the search: a cold read owner activates through the vault queue.
-      params.refreshSources(config, appConfig);
-    }
+    // Refresh after the search: a cold read owner activates through the vault queue.
+    return await searchMemoryWiki({
+      memoryContext,
+      config,
+      appConfig,
+      ...(agentId ? { agentId } : {}),
+      query,
+      maxResults,
+      searchBackend,
+      searchCorpus,
+      mode,
+    }).finally(() => params.refreshSources(config, appConfig));
   });
 
   registerResultMethod("wiki.apply", WRITE_SCOPE, async (requestParams) => {

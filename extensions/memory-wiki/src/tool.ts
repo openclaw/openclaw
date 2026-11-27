@@ -178,29 +178,25 @@ export function createWikiSearchTool(
                 appConfig,
                 signal: memoryContext.signal ?? signal,
               });
-              signal.throwIfAborted();
             }
-            try {
-              const results = await searchMemoryWiki({
-                config,
-                appConfig,
-                ...memoryContext,
-                signal,
-                ...(memoryContext.memoryContext
-                  ? { memoryContext: { ...memoryContext.memoryContext, signal } }
-                  : {}),
-                query: params.query,
-                maxResults: params.maxResults,
-                ...(params.backend ? { searchBackend: params.backend } : {}),
-                ...(params.corpus ? { searchCorpus: params.corpus } : {}),
-                ...(params.mode ? { mode: params.mode } : {}),
-              });
-              signal.throwIfAborted();
-              return textResult(renderWikiSearchResults(results), { results });
-            } finally {
-              // After the search: a cold read owner activates through the vault queue.
-              memoryContext.refreshSources?.();
-            }
+            signal.throwIfAborted();
+            // Refresh after the search: a cold read owner activates through the vault queue.
+            const results = await searchMemoryWiki({
+              config,
+              appConfig,
+              ...memoryContext,
+              signal,
+              ...(memoryContext.memoryContext
+                ? { memoryContext: { ...memoryContext.memoryContext, signal } }
+                : {}),
+              query: params.query,
+              maxResults: params.maxResults,
+              ...(params.backend ? { searchBackend: params.backend } : {}),
+              ...(params.corpus ? { searchCorpus: params.corpus } : {}),
+              ...(params.mode ? { mode: params.mode } : {}),
+            }).finally(() => memoryContext.refreshSources?.());
+            signal.throwIfAborted();
+            return textResult(renderWikiSearchResults(results), { results });
           },
           signal,
           (abortedSignal) =>
