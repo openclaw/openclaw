@@ -9,12 +9,45 @@ import {
 } from "../projects/project-checkout.js";
 import { ProjectCloneError, unshallowProjectCheckout } from "../projects/project-clone-runtime.js";
 import { listProjectRegistry } from "../projects/project-registry.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { OpenClawStateAsyncLeaseContext } from "../state/openclaw-state-lease.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { decideDoctorPendingFromLiveStores } from "./doctor-live-store-pending.js";
+import type { DoctorMaintenancePending } from "./doctor-maintenance-pending.js";
 
 const CHECK_ID = "core/doctor/project-clone-shape";
 
 type CloneShapeOptions = { repair?: boolean; env?: NodeJS.ProcessEnv };
+
+async function isShallowProjectCheckout(repoRoot: string): Promise<boolean> {
+  return (await fs.readdir(path.join(repoRoot, ".git"))).includes("shallow");
+}
+
+async function listClonedProjects(cfg: OpenClawConfig, env: NodeJS.ProcessEnv) {
+  return (await listProjectRegistry(cfg, { env })).filter((project) => project.source === "cloned");
+}
+
+/**
+ * Read-only: whether repair would fetch history for a shallow cloned project. The project
+ * registry lives in the state database, so it decides only while a connection holds it.
+ */
+export async function checkProjectCloneShapePending(
+  cfg: OpenClawConfig,
+  options: CloneShapeOptions = {},
+): Promise<DoctorMaintenancePending> {
+  if (!options.repair) {
+    return "none";
+  }
+  const env = options.env ?? process.env;
+  return decideDoctorPendingFromLiveStores([resolveOpenClawStateSqlitePath(env)], async () => {
+    for (const project of await listClonedProjects(cfg, env)) {
+      if (await isShallowProjectCheckout(project.repoRoot)) {
+        return "work";
+      }
+    }
+    return "none";
+  });
+}
 
 export async function collectProjectCloneShapeHealthFindings(
   cfg: OpenClawConfig,
@@ -31,9 +64,7 @@ export async function collectProjectCloneShapeHealthFindings(
     });
   let projects;
   try {
-    projects = (await listProjectRegistry(cfg, { env })).filter(
-      (project) => project.source === "cloned",
-    );
+    projects = await listClonedProjects(cfg, env);
   } catch {
     report({
       severity: "warning",
@@ -49,7 +80,7 @@ export async function collectProjectCloneShapeHealthFindings(
     try {
       const inspect = async (lease?: OpenClawStateAsyncLeaseContext) => {
         const gitDir = path.join(project.repoRoot, ".git");
-        if (!(await fs.readdir(gitDir)).includes("shallow")) {
+        if (!(await isShallowProjectCheckout(project.repoRoot))) {
           return;
         }
         const packs = (await fs.readdir(path.join(gitDir, "objects", "pack"))).filter((name) =>

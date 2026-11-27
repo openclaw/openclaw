@@ -54,6 +54,41 @@ suite.define(() => {
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
     }));
 
+  it.each(["owner", "member"] as const)(
+    "shows Restore to a non-admin %s only when they started the conversation",
+    (sharingRole) =>
+      suite.withPage({}, async ({ page }) => {
+        const removed = { ...session, sharingRole, worktreeState: "removed-snapshot" };
+        const gateway = await installMockGateway(page, {
+          sessionKey: session.key,
+          sessions: [removed],
+          operatorScopes: ["operator.read", "operator.sessions.write"],
+          methodResponses: {
+            "chat.startup": { sessionId: session.sessionId, sessionInfo: removed, messages: [] },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        const warning = page.locator(".agent-chat__workspace-removed");
+        await warning.waitFor();
+        await writeFile(
+          path.join(suite.artifactDir, `restore-${sharingRole}.png`),
+          await warning.screenshot(),
+        );
+        const button = warning.getByRole("button", { name: "Restore workspace", exact: true });
+        if (sharingRole === "member") {
+          expect(await button.count()).toBe(0);
+          expect(await warning.textContent()).toContain(
+            "Ask an administrator to restore this workspace, or start a new conversation.",
+          );
+          return;
+        }
+        await button.click();
+        expect((await gateway.waitForRequest("worktrees.restore")).params).toEqual({
+          id: session.worktree.id,
+        });
+      }),
+  );
+
   it.each(["snapshot", "fresh"] as const)(
     "requires explicit %s restoration before sending",
     (restore) =>

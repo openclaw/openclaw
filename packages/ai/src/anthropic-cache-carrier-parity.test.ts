@@ -430,7 +430,6 @@ it.each(["provider", "transport"] as const)(
         ];
       }
       expect(JSON.stringify(marked)).toBe(JSON.stringify(expectedMarked));
-      expect(marked[2]).toBe(first[2]);
       const changed = messages.map((message, index) =>
         index === 3
           ? freezeJsonSnapshot(makeTextToolResult("b", "read", "changed", false, 3))
@@ -441,9 +440,6 @@ it.each(["provider", "transport"] as const)(
       );
       const again = await request();
       expect(JSON.stringify(again)).toBe(golden);
-      for (let index = 0; index < first.length - 1; index++) {
-        expect(again[index]).toBe(first[index]);
-      }
       tail.content = "edited tail";
       expect(JSON.stringify(await request())).toBe(
         golden.replace('"content":"current"', '"content":"edited tail"'),
@@ -492,7 +488,6 @@ it("separates active tool-turn thinking and prepared suffix projections", async 
     expect(inactive[1]?.content).toEqual([
       { type: "tool_use", id: "read", name: "read", input: {} },
     ]);
-    expect((await request({ messages }))[1]).toBe(active[1]);
     const suffix = {
       messages: [freezeJsonSnapshot(makeTextToolResult("read:0", "read", "suffix", false, 4))],
     };

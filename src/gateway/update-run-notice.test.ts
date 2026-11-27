@@ -86,17 +86,22 @@ describe("host-owned update notices", () => {
     const notify = await createUpdateRunNotifier(initial, () => ({}), {});
     expect(await notify(finished, "finished")).toEqual({ delivered: true, owned: true });
     const headline =
-      status === "failed" ? "⚠️ OpenClaw couldn't finish updating." : "✅ OpenClaw updated.";
+      status === "succeeded"
+        ? "✅ OpenClaw updated."
+        : phase === "repairing"
+          ? "⚠️ OpenClaw repair failed: restart-unhealthy."
+          : "⚠️ OpenClaw couldn't finish updating.";
+    const operation = phase === "repairing" ? "Repair" : "Update";
     expect(await messages()).toMatchObject([
       assistantMessage(
         status === "failed"
           ? [
               headline,
               ...(recovered ? ["The previous version (2026.10.4) is still serving."] : []),
-              `Update failed ${description} (restart-unhealthy).`,
+              `${operation} failed ${description} (restart-unhealthy). Failing check update (restart-unhealthy) Failed step: ${phase}.`,
               `Next: ${advice}`,
             ].join("\n")
-          : `${headline}\nFor details, open Settings → Updates in the OpenClaw app or run \`openclaw update status\` in your terminal.`,
+          : `${headline}\nNext: ${advice}`,
       ),
     ]);
     expect(getUpdateRun(initial.runId)).toMatchObject({

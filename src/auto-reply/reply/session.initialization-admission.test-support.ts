@@ -32,10 +32,12 @@ import {
 import { getReplyOperationSessionReader } from "../../sessions/session-controller.session-reader.js";
 import { getSessionControllerEntryForOperation } from "../../sessions/session-controller.state.js";
 import { waitForReplyRunSuccessorAdmission } from "../../sessions/session-controller.wait.js";
+import { captureSelfSnooze } from "../../sessions/session-self-snooze.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
 import { prepareReplyAgentTurn } from "./reply-agent-turn-preparation.js";
 import { admitReplyTurn, runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission.js";
+import { resolveReplySessionInitializationOptions } from "./session-initialization-admission.js";
 import * as resetCleanup from "./session-reset-cleanup.js";
 import {
   initSessionState,
@@ -108,6 +110,53 @@ export function registerSessionInitializationAdmissionTests({
       updatedAt: Date.now(),
       sessionStartedAt: Date.now(),
     });
+  it.each(["queued", "committed", "channel"] as const)(
+    "doesn't count %s input again at dispatch or promotion",
+    async (kind) => {
+      const scope = await makeScope("self-snooze-input-order");
+      const target = { ...scope, sessionId: "ordered-input" };
+      await seed(scope, target.sessionId, "original-revision");
+      const initializeInput = (recorder?: ReturnType<typeof createUserTurnTranscriptRecorder>) =>
+        initSessionState({
+          ...resolveReplySessionInitializationOptions({ userTurnTranscriptRecorder: recorder }),
+          cfg: { session: { store: scope.storePath } },
+          ctx: telegramTurn(scope.sessionKey, "Follow up", "test-user"),
+        });
+      const first = captureSelfSnooze(target);
+      const channel = kind === "channel";
+      try {
+        if (channel) {
+          await initializeInput();
+        }
+        const recorder = createUserTurnTranscriptRecorder({
+          target: { ...target, sessionEntry: undefined },
+          input: { text: "Follow up", idempotencyKey: kind },
+          inputAlreadyAccepted: channel,
+        });
+        if (kind === "queued") {
+          expect(await recorder.stageApproved!({ runId: kind, assertCurrent() {} })).toBe(true);
+        } else if (!channel) {
+          expect(await recorder.persistApproved()).toBeDefined();
+        }
+        expect(first.current()).toBe(false);
+        const newer = captureSelfSnooze(target);
+        try {
+          if (!channel) {
+            await initializeInput(recorder);
+          } else {
+            expect(await recorder.stageApproved!({ runId: kind, assertCurrent() {} })).toBe(true);
+          }
+          expect(await recorder.persistApproved()).toBeDefined();
+          expect(newer.current()).toBe(true);
+        } finally {
+          recorder.releasePendingInput?.();
+          newer.release();
+        }
+      } finally {
+        first.release();
+      }
+    },
+  );
   it("blocks secondary reply initialization until its canonical Template admission completes", async () => {
     const scope = await makeScope("template-secondary-admission");
     const canonicalKey = "agent:main:main";

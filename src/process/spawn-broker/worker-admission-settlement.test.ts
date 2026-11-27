@@ -71,10 +71,15 @@ it.each(["spawn", "spawn-execa"] as const)(
       if (!receive) {
         throw new Error("The worker did not register its message entrypoint");
       }
-      // Keep loader scheduling real; bootstrap and admission own the clock checked below.
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const ready = Promise.withResolvers<void>();
+      boundary.send.mockImplementation(async (message) => {
+        if (message.type === "ready") {
+          ready.resolve();
+        }
+      });
       receive({ type: "bootstrap" });
-      await setImmediate();
+      await ready.promise;
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       expect(boundary.send).toHaveBeenCalledWith({ type: "ready", pid: process.pid }, undefined);
       // Reservations reject on the next microtask. Synchronous delivery fills
       // the real admission count without invoking either native launch path.

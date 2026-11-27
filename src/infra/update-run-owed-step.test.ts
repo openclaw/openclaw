@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as state from "../state/openclaw-state-db.js";
 import * as ledger from "./update-run-ledger.js";
-import { renderUpdateRunReport } from "./update-run-report.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
@@ -11,11 +10,6 @@ afterEach(async () => {
   state.closeOpenClawStateDatabaseForTest();
 });
 
-const SHELL_RETRY =
-  "Retried by the next `openclaw update`; run `openclaw update repair` to retry it now.";
-const SERVICE_RETRY =
-  "Settled when `openclaw update` next refreshes the service definition; `openclaw update repair` rechecks it.";
-
 function privateLedger() {
   const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-update-owed-") } };
   const start = () => ledger.createUpdateRun({ trigger: "cli" }, options).runId;
@@ -23,18 +17,14 @@ function privateLedger() {
     ledger.finishUpdateRun(runId, { status }, options);
   const owe = (runId: string, id: "shell-completion" | "service-definition", reason: string) =>
     ledger.recordUpdateRunOwedStep(runId, id, reason, options);
-  const owedLines = (runId: string) =>
-    renderUpdateRunReport(ledger.getUpdateRun(runId, options)!).lines.filter((line) =>
-      line.includes(" is owed: "),
-    );
-  return { options, start, finish, owe, owedLines };
+  return { options, start, finish, owe };
 }
 
 describe("update run owed steps", () => {
   it.each(["running", "succeeded", "skipped"] as const)(
-    "records, reports and settles an owed step on a %s run",
+    "records and settles an owed step on a %s run",
     (status) => {
-      const { options, start, finish, owe, owedLines } = privateLedger();
+      const { options, start, finish, owe } = privateLedger();
       const runId = start();
       if (status !== "running") {
         finish(runId, status);
@@ -51,20 +41,19 @@ describe("update run owed steps", () => {
         expect.objectContaining({ status: "skipped", detail: "EACCES: permission denied." }),
       );
       expect(recorded.status).toBe(status);
-      expect(owedLines(runId)).toEqual([
-        `Warning: Shell completion refresh is owed: EACCES: permission denied. ${SHELL_RETRY}`,
-      ]);
 
       expect(ledger.settleUpdateRunOwedStep(runId, "shell-completion", options)).toBe(true);
 
       expect(ledger.readOwedUpdateSteps(options)).toEqual([]);
-      expect(owedLines(runId)).toEqual([]);
+      expect(ledger.getUpdateRun(runId, options)?.steps).toContainEqual(
+        expect.objectContaining({ step: "finalize:owed:shell-completion", status: "completed" }),
+      );
       expect(ledger.settleUpdateRunOwedStep(runId, "shell-completion", options)).toBe(false);
     },
   );
 
   it("owes nothing on a failed update and leaves other finished history immutable", () => {
-    const { options, start, finish, owe, owedLines } = privateLedger();
+    const { options, start, finish, owe } = privateLedger();
     const failed = start();
     owe(failed, "shell-completion", "recorded before the update failed");
     finish(failed, "failed");
@@ -81,7 +70,6 @@ describe("update run owed steps", () => {
     );
 
     expect(ledger.readOwedUpdateSteps(options)).toEqual([]);
-    expect(owedLines(failed)).toEqual([]);
     expect(ledger.getUpdateRun(succeeded, options)).toEqual(before);
   });
 
@@ -123,21 +111,15 @@ describe("update run owed steps", () => {
   });
 
   it("keeps an owed step and its reason through step and byte compaction", () => {
-    const { options, start, owe, owedLines } = privateLedger();
+    const { options, start, owe } = privateLedger();
     const runId = start();
     const warning = `Failed to reconcile gateway service: ${"x".repeat(300)}. ${"y".repeat(400)}`;
     const record = (step: string, detail: string) =>
       ledger.recordUpdateRunStep(runId, { step, status: "completed", detail }, options);
     owe(runId, "service-definition", warning);
     record("warning:managed-service-reconciliation", warning);
-    // A long reason is bounded; the original warning repeats it and is reported once.
+    // A long reason is bounded before storage and survives compaction.
     const reason = warning.slice(0, 500);
-    const line = `Warning: Gateway service definition refresh is owed: ${reason}. ${SERVICE_RETRY}`;
-    expect(
-      renderUpdateRunReport(ledger.getUpdateRun(runId, options)!).lines.filter((entry) =>
-        entry.includes("Failed to reconcile"),
-      ),
-    ).toEqual([line]);
 
     for (let index = 0; index < 200; index += 1) {
       record(`${index < 160 ? "warning" : "finalize"}:noise:${index}`, "🦞".repeat(250));
@@ -147,6 +129,12 @@ describe("update run owed steps", () => {
     expect(ledger.readOwedUpdateSteps(options)).toEqual([
       { id: "service-definition", runId, reason },
     ]);
-    expect(owedLines(runId)).toEqual([line]);
+    expect(ledger.getUpdateRun(runId, options)?.steps).toContainEqual(
+      expect.objectContaining({
+        step: "finalize:owed:service-definition",
+        status: "skipped",
+        detail: reason,
+      }),
+    );
   });
 });

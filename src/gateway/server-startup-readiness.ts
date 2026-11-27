@@ -1,25 +1,35 @@
+import type { PreparedReadinessChecker } from "./health/types.js";
 import type { GatewayStartupTrace } from "./server-startup-trace.js";
-import type { PreparedReadinessChecker } from "./server/readiness.js";
+import { announceGatewayInstallationReady } from "./stale-install.js";
 
 type GatewayReadinessLog = {
   log: { info: (message: string) => void };
   getReadiness: PreparedReadinessChecker;
   isClosing?: () => boolean;
+  startupTrace?: GatewayStartupTrace;
 };
 
 export async function logGatewayReady(
   params: GatewayReadinessLog,
-  message = "gateway ready",
+  updateCanary = false,
 ): Promise<void> {
+  if (params.isClosing?.()) {
+    return;
+  }
+  if (!updateCanary) {
+    await announceGatewayInstallationReady(params.getReadiness);
+  }
   const prepared = await params.getReadiness.prepare();
   if (!params.isClosing?.() && prepared.publish().ready) {
-    params.log.info(message);
+    params.startupTrace?.mark("ready");
+    params.log.info(
+      updateCanary ? "candidate gateway ready; autonomous sidecars suppressed" : "gateway ready",
+    );
   }
 }
 
 export async function logGatewaySidecarsReady(
   params: GatewayReadinessLog & {
-    startupTrace?: GatewayStartupTrace;
     loadedPluginCount: number;
     postReadySidecarCount: number;
   },

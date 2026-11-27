@@ -1,6 +1,6 @@
 package ai.openclaw.app.node
 
-import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.InvokeResult
 import ai.openclaw.app.protocol.OpenClawCalendarCommand
 import ai.openclaw.app.protocol.OpenClawCallLogCommand
 import ai.openclaw.app.protocol.OpenClawCameraCommand
@@ -49,13 +49,13 @@ class InvokeDispatcher(
 ) {
   private class CommandGate(
     val isAvailable: () -> Boolean,
-    val unavailable: GatewaySession.InvokeResult,
+    val unavailable: InvokeResult,
     val isAdvertised: () -> Boolean = isAvailable,
   )
 
   private class Command(
     val name: String,
-    val invoke: suspend (String?) -> GatewaySession.InvokeResult,
+    val invoke: suspend (String?) -> InvokeResult,
     val gate: CommandGate? = null,
     val requiresForeground: Boolean = false,
   )
@@ -127,7 +127,7 @@ class InvokeDispatcher(
   suspend fun handleInvoke(
     command: String,
     paramsJson: String?,
-  ): GatewaySession.InvokeResult {
+  ): InvokeResult {
     val binding = commandsByName[command] ?: return nodeInvokeError("INVALID_REQUEST", "unknown command")
     if (binding.requiresForeground && !isForeground()) {
       return nodeInvokeError("NODE_BACKGROUND_UNAVAILABLE", "command requires foreground")
@@ -162,14 +162,14 @@ class InvokeDispatcher(
 /** Talk-mode command adapter implemented by the voice subsystem. */
 interface TalkHandler {
   /** Starts a push-to-talk capture session and keeps it open until stop or cancel. */
-  suspend fun handlePttStart(paramsJson: String?): GatewaySession.InvokeResult
+  suspend fun handlePttStart(paramsJson: String?): InvokeResult
 
   /** Finishes the active push-to-talk capture and submits recognized speech. */
-  suspend fun handlePttStop(paramsJson: String?): GatewaySession.InvokeResult
+  suspend fun handlePttStop(paramsJson: String?): InvokeResult
 
   /** Aborts the active push-to-talk capture without submitting speech. */
-  suspend fun handlePttCancel(paramsJson: String?): GatewaySession.InvokeResult
+  suspend fun handlePttCancel(paramsJson: String?): InvokeResult
 
   /** Runs a bounded one-shot push-to-talk capture. */
-  suspend fun handlePttOnce(paramsJson: String?): GatewaySession.InvokeResult
+  suspend fun handlePttOnce(paramsJson: String?): InvokeResult
 }

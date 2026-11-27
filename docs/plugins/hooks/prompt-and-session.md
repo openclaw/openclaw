@@ -525,9 +525,12 @@ The event is `{ runtime, requestKind, payload, provider, model, messages }`:
 - On CLI runs, `payload` is `{ prompt, prependContext?, appendContext? }`: the
   turn or steered prompt text and the runtime context OpenClaw adds around it.
   A replacement must keep that shape with string values; anything else fails
-  the dispatch. In-place edits to `payload` are sent too. The system prompt,
-  image attachments, and what the CLI does inside its own tool loop are not part
-  of the payload.
+  the dispatch. In-place edits to `payload` are sent too. The system prompt
+  and what the CLI does inside its own tool loop are not part of the payload.
+  Native harnesses that accept inline images, including Copilot side questions,
+  also supply `images`: image content blocks with optional `displayName` values.
+  Hooks can replace or remove those images. Text-only CLI requests do not accept
+  added images.
 - An embedded replacement may rewrite content but not the tool surface, model, or
   Access program. The hook protects `tools`, `tool_choice`, `toolConfig`,
   `functions`, `function_call`, `model`, and `access_programs` at the top level or

@@ -121,60 +121,6 @@ it.each([
 );
 
 it.each([
-  [{ live: true }, "Checking goal"],
-  [{ completed: true }, "Checked goal"],
-  [{ completed: true, isError: true }, "Check goal"],
-  [{}, "Check goal"],
-] as const)(
-  "describes a goal lookup without implying pursuit or completion: %j",
-  async (state, label) => {
-    const container = await mountCard(
-      { id: "goal-lookup", name: "mcp__openclaw__get_goal", args: {}, ...state },
-      { messageKey: "goal-lookup", expanded: false, runActive: true },
-    );
-    expect(text(container, ".chat-tool-row__title")).toBe(label);
-  },
-);
-
-it.each([
-  ["wait", { runId: "cm_test" }, "Waited for tool result"],
-  ["ask_user", { questions: [{ question: "Do not repeat this prompt" }] }, "Asked you a question"],
-  ["tool_call", { id: "openclaw:core:wait", args: { runId: "cm_test" } }, "Waited for tool result"],
-  ["custom_tool", { text: "Inspect the workspace" }, "Custom Tool"],
-  [
-    "ToolSearch",
-    { query: "select:mcp__openclaw__exec,mcp__openclaw__sessions_send" },
-    "Selected tools",
-  ],
-  ["ToolSearch", { query: "find session tools" }, "Searched tools"],
-  ["mcp__openclaw__tool_search", { query: "session tools" }, "Searched tools"],
-  ["mcp__openclaw__sessions_list", { limit: 200 }, "Listed chats"],
-  ["sessions_list", { search: "00000000-0000-4000-8000-000000007ef3" }, "Listed chats"],
-] as const)(
-  "keeps %s factual while retaining its input for inspection",
-  async (name, args, label) => {
-    const container = document.createElement("div");
-    for (const expanded of [false, true]) {
-      await mountCard(
-        { id: "no-detail", name, args, inputText: JSON.stringify(args), completed: true },
-        { messageKey: "no-detail", expanded },
-        container,
-      );
-      expect(text(container, ".chat-tool-disclosure__content")?.trim()).toBe(label);
-      if (expanded) {
-        for (const field of ["text", "query", "search", "limit"] as const) {
-          if (field in args) {
-            expect(text(container, ".chat-tool-msg-body")).toContain(
-              String(args[field as keyof typeof args]),
-            );
-          }
-        }
-      }
-    }
-  },
-);
-
-it.each([
   [
     "kill",
     { status: "completed", cancellationRequested: true, terminationConfirmed: false },
@@ -190,32 +136,6 @@ it.each([
 });
 
 it.each([
-  [
-    "knowledge_attach",
-    { final: false },
-    { state: "uploading", receivedBytes: 3 },
-    "Uploaded knowledge source data",
-  ],
-  [
-    "knowledge_attach",
-    { final: true },
-    { state: "complete", receivedBytes: 3 },
-    "Finished uploading knowledge source file",
-  ],
-  [
-    "knowledge_relink",
-    { dryRun: true },
-    { dryRun: true, linked: 2 },
-    "Previewed links for remembered claims",
-  ],
-  [
-    "knowledge_relink",
-    {},
-    { dryRun: false, scanned: 0, linked: 0 },
-    "Checked remembered claims for missing links",
-  ],
-  ["knowledge_relink", {}, { dryRun: false, linked: 2 }, "Relinked remembered claims"],
-  ["knowledge_relink", {}, { dryRun: true, linked: 2 }, "Previewed links for remembered claims"],
   [
     "knowledge_verify",
     { records: [{ id: "decision" }] },
@@ -271,24 +191,6 @@ it.each([
       { expanded: false },
     );
     expect(text(container, ".chat-tool-disclosure__content")).toBe(label);
-  },
-);
-
-it.each([
-  ["memory_search", "query", ["release checklist", "travel plans"], "Searched memory for"],
-  ["wiki_get", "lookup", ["projects/openclaw", "people/alex"], "Read wiki page"],
-] as const)(
-  "keeps two %s calls distinguishable by their %s",
-  async (name, field, values, prefix) => {
-    const titles = [];
-    for (const value of values) {
-      const container = await mountCard(
-        { id: `${name}-${value}`, name, args: { [field]: value }, completed: true },
-        { expanded: false },
-      );
-      titles.push(text(container, ".chat-tool-row__title"));
-    }
-    expect(titles).toEqual(values.map((value) => `${prefix} “${value}”`));
   },
 );
 
@@ -676,7 +578,7 @@ it("uses names already available to chat rows without exposing unresolved routin
 it.each([
   [undefined, "Delivery unconfirmed · Release review"],
   [{ status: "other" }, "Delivery unconfirmed · Release review"],
-  [{ status: "accepted", targetDisposition: "queued" }, "Message accepted for Release review"],
+  [{ status: "accepted", targetDisposition: "queued" }, "Sent message to Release review"],
   [{ status: "queued", runStarted: false }, "Queued message to Release review"],
   [
     { status: "started", retained: { acceptance: "not_accepted" } },
@@ -684,7 +586,7 @@ it.each([
   ],
   [{ status: "ok", reply: "Received" }, "Sent message to Release review"],
   [{ status: "no_reply" }, "Sent message to Release review"],
-] as const)("does not equate a completed send call with delivery: %j", async (receipt, label) => {
+] as const)("labels session sends from their receipts: %j", async (receipt, label) => {
   const args = { label: "Release review", message: "Please review the change" };
   const container = await mountCard(
     {
@@ -739,7 +641,7 @@ it.each([
         result: { content: [{ type: "text", text: JSON.stringify({ status: "accepted" }) }] },
       }),
     },
-    "Message accepted for Review",
+    "Sent message to Review",
   ],
 ] as const)(
   "keeps the actual phase and receipt through display normalization: %j",

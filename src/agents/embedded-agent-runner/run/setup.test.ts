@@ -155,11 +155,6 @@ describe("buildBeforeModelResolveAttachments", () => {
       { kind: "image", mimeType: "image/jpeg" },
     ]);
   });
-
-  it("omits attachments when there are no images", () => {
-    expect(buildBeforeModelResolveAttachments(undefined)).toBeUndefined();
-    expect(buildBeforeModelResolveAttachments([])).toBeUndefined();
-  });
 });
 
 describe("resolveHookModelSelection", () => {

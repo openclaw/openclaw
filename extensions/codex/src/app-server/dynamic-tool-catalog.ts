@@ -1,4 +1,7 @@
-import { projectRuntimeToolInputSchema } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  getPluginToolMeta,
+  projectRuntimeToolInputSchema,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { applyGatewayToolPolicy } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -11,6 +14,7 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexDynamicToolsLoading } from "./config.js";
 import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+  isJsonObject,
   type CodexDynamicToolFunctionSpec,
   type CodexDynamicToolSpec,
   type JsonValue,
@@ -86,7 +90,11 @@ export function createCodexDynamicToolSpecs(params: {
       specs.push(functionSpec);
       continue;
     }
-    if (entry.tool.catalogMode === "direct-only" && !params.functionToolsOnly) {
+    // Codex has no on-demand promotion; on-demand tools keep their direct contract here.
+    if (
+      (entry.tool.catalogMode === "direct-only" || entry.tool.catalogMode === "on-demand") &&
+      !params.functionToolsOnly
+    ) {
       directOnlyNamespaceTools.push(functionSpec);
       continue;
     }
@@ -261,4 +269,41 @@ export function assertCodexDynamicToolInputMatchesSchema(params: {
   const omitted = validation.errors.length - visibleErrors.length;
   const omittedSuffix = omitted > 0 ? `; ${omitted} more violation(s) omitted` : "";
   throw new Error(`Invalid arguments for tool "${params.toolName}": ${details}${omittedSuffix}.`);
+}
+
+/**
+ * The dynamic-tool watchdog consumes per-call timeoutMs/timeoutSeconds. A closed schema that does
+ * not declare them would reject the call after hooks ran, so only declared fields reach the tool.
+ * External MCP tools skip that validation and keep receiving their arguments unchanged.
+ */
+export function omitUndeclaredTimeoutArguments(
+  entry: Pick<ProjectedCodexDynamicTool<CodexToolDescriptor>, "tool" | "inputSchema">,
+  value: JsonValue | undefined,
+): JsonValue | undefined {
+  const { additionalProperties, properties } = entry.inputSchema;
+  if (
+    !isJsonObject(value) ||
+    additionalProperties !== false ||
+    getPluginToolMeta(entry.tool)?.mcp?.operation === "tool"
+  ) {
+    return value;
+  }
+  let kept = value;
+  for (const key of ["timeoutMs", "timeoutSeconds"]) {
+    if (Object.hasOwn(kept, key) && !(isRecord(properties) && Object.hasOwn(properties, key))) {
+      const { [key]: _consumed, ...rest } = kept;
+      kept = rest;
+    }
+  }
+  return kept;
+}
+
+export function dedupeQuarantinedDynamicTools(
+  tools: readonly CodexDynamicToolSchemaQuarantine[],
+): CodexDynamicToolSchemaQuarantine[] {
+  const byName = new Map<string, CodexDynamicToolSchemaQuarantine>();
+  for (const { tool, violations } of tools) {
+    byName.set(tool, { tool, violations });
+  }
+  return [...byName.values()];
 }

@@ -209,6 +209,7 @@ export type SessionCreatedVia = NonNullable<SessionRow["createdVia"]>;
 export function buildSessionCreationStamp(params: {
   via: SessionCreatedVia;
   surface?: SessionRow["createdSurface"];
+  createdIndependently?: true;
   actor?: SessionCreatedActor;
   now?: number;
   sandbox?: "required";
@@ -218,6 +219,7 @@ export function buildSessionCreationStamp(params: {
 }): {
   createdVia: SessionCreatedVia;
   createdSurface?: SessionRow["createdSurface"];
+  createdIndependently?: true;
   createdActor?: SessionCreatedActor;
   createdAt: number;
   sandbox?: "required";
@@ -226,6 +228,7 @@ export function buildSessionCreationStamp(params: {
 } {
   return {
     createdVia: params.via,
+    ...(params.createdIndependently ? { createdIndependently: true as const } : {}),
     ...(params.surface ? { createdSurface: params.surface } : {}),
     ...(params.actor ? { createdActor: params.actor } : {}),
     createdAt: params.now ?? Date.now(),
@@ -278,6 +281,7 @@ export function preserveCreationStamp<
     ? {
         ...entry,
         createdVia: authoritative.createdVia,
+        createdIndependently: authoritative.createdIndependently,
         createdSurface: authoritative.createdSurface,
         createdActor: authoritative.createdActor,
         createdAt: authoritative.createdAt,

@@ -298,34 +298,6 @@ describe("runPostCorePluginConvergence", () => {
     }
   });
 
-  it("prunes stale local bundled plugin shadows from baseline records before repair", async () => {
-    const bundledRoot = makeTempDir();
-    writeBundledPlugin(path.join(bundledRoot, "discord"));
-    const baseline = {
-      discord: {
-        source: "path" as const,
-        installPath: path.join(makeTempDir(), "dist", "extensions", "discord"),
-        version: "2026.5.4-beta.3",
-      },
-      brave: { source: "npm" as const, installPath: "/p/brave" },
-    };
-    mockRepairs({ brave: baseline.brave });
-    const cfg = configured("discord", "brave");
-
-    const result = await converge(cfg, {
-      env: bundledEnv(bundledRoot),
-      baselineInstallRecords: baseline,
-    });
-
-    expect(mocks.repairInstalls.mock.calls[0]?.[0].baselineRecords).toEqual({
-      brave: baseline.brave,
-    });
-    expect(result).toMatchObject({
-      changes: ['Removed stale local bundled plugin install record "discord".'],
-    });
-    expect(result.installRecords).toEqual({ brave: baseline.brave });
-  });
-
   it.each([false, true])("attributes repair diagnostics; consent blocks=%s", async (blocked) => {
     const message = blocked ? "Capability consent required" : "Install failed: ENETUNREACH";
     const unclassified = "Failed to read inventory";

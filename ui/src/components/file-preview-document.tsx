@@ -1,6 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
-import { stripFrontmatterBlock } from "../../../packages/markdown-core/src/frontmatter.js";
+import { extractMarkdownBody } from "../../../packages/markdown-core/src/frontmatter.js";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { SanitizedHtml } from "./solid/sanitized-html.tsx";
 
@@ -14,7 +14,7 @@ export function FilePreviewDocument(props: {
 }) {
   const chunks = createMemo(() => chunkFileContents(props.content));
   const html = createMemo(() =>
-    toSanitizedMarkdownHtml(stripFrontmatterBlock(props.content), {
+    toSanitizedMarkdownHtml(extractMarkdownBody(props.content), {
       mode: "document",
       remoteImages: false,
       codeBlockChrome: "none",

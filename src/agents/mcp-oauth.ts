@@ -11,7 +11,7 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { buildMcpOAuthAuthorizationFetch, buildMcpOAuthHttpFetch } from "./mcp-http-fetch.js";
 import {
-  mcpOAuthSignInHint,
+  McpOAuthDiagnosticError,
   requesterMcpOAuthStoreKeyPrefix,
   type McpOAuthIdentity,
 } from "./mcp-oauth-identity.js";
@@ -192,9 +192,7 @@ export async function resolveMcpOAuthAccessToken(
         return tokens.access_token;
       }
       if (!tokens.refresh_token) {
-        throw new Error(
-          `MCP server "${params.identity.serverName}" has expired OAuth credentials. ${mcpOAuthSignInHint(params.identity)}`,
-        );
+        throw new McpOAuthDiagnosticError(params.identity, "has expired OAuth credentials.");
       }
 
       const { auth } = await import("@modelcontextprotocol/client");
@@ -232,9 +230,7 @@ export async function resolveMcpOAuthAccessToken(
       await lease.assertOwned();
       const refreshedTokens = await provider.tokens();
       if (result !== "AUTHORIZED" || !refreshedTokens?.access_token) {
-        throw new Error(
-          `MCP server "${params.identity.serverName}" could not refresh OAuth credentials. ${mcpOAuthSignInHint(params.identity)}`,
-        );
+        throw new McpOAuthDiagnosticError(params.identity, "could not refresh OAuth credentials.");
       }
       return refreshedTokens.access_token;
     },

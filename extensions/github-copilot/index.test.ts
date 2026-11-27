@@ -18,7 +18,6 @@ import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { markdownToIR } from "openclaw/plugin-sdk/text-chunking";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runGitHubCopilotDeviceFlow } from "./login.js";
-import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { CopilotRuntimeAuthError } from "./runtime-auth-error.js";
 
 const mocks = vi.hoisted(() => ({
@@ -425,29 +424,6 @@ describe("github-copilot plugin", () => {
       catalog(await createAgentDir(), config, { COPILOT_GITHUB_TOKEN: "ambient-token" }),
     ).rejects.toThrow("models.providers.github-copilot.apiKey");
     noCalls(runtimeAuth, guard);
-  });
-  it("exposes bundled Claude Opus 5 xhigh and max thinking", () => {
-    const model = expectDefined(
-      manifest.modelCatalog.providers[ID].models.find(({ id }) => id === "claude-opus-5"),
-      "bundled Opus 5",
-    );
-    expect(
-      provider
-        .resolveThinkingProfile({ provider: ID, modelId: model.id, compat: model.compat })
-        ?.levels.map(({ id }) => id),
-    ).toEqual(expect.arrayContaining(["xhigh", "max"]));
-  });
-  it.each([
-    ["gpt-5.4-mini", ["none", "low", "medium", "high", "xhigh"], true],
-    ["gpt-5-mini", ["low", "medium", "high"], false],
-  ] as const)("gates %s xhigh on live catalog effort", (modelId, efforts, xhigh) => {
-    const profile = provider.resolveThinkingProfile({
-      provider: ID,
-      modelId,
-      compat: { supportedReasoningEfforts: [...efforts] },
-    });
-    expect(profile).toBeDefined();
-    expect(profile?.levels.some(({ id }) => id === "xhigh") ?? false).toBe(xhigh);
   });
   it("filters hidden and disabled models without excluding chat-only models", async () => {
     mockRuntimeAuth("catalog-policy-token", "https://api.githubcopilot.policy-test");

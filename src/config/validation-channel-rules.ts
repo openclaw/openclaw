@@ -11,14 +11,15 @@ import type { ChannelDmPolicyMetadata } from "./channel-config-metadata.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
 import { evaluateDmPolicyAllowFromDependency } from "./zod-schema.core.js";
 
-const bundledChannelSchemaById = new Map<string, unknown>(
-  GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.filter((entry) => entry.configurable !== false).map(
-    (entry) => [entry.channelId, entry.schema] as const,
-  ),
+const configurableBundledChannels = GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.filter(
+  (entry) => entry.configurable !== false,
+);
+const bundledChannelsById = new Map(
+  configurableBundledChannels.map((entry) => [entry.channelId, entry]),
 );
 
 export const bundledChannelIds = Object.freeze(
-  GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.filter((entry) => entry.configurable !== false)
+  configurableBundledChannels
     .map((entry) => normalizeLowercaseStringOrEmpty(entry.channelId))
     .filter((channelId) => channelId.length > 0),
 );
@@ -142,12 +143,12 @@ export function collectRawBundledChannelConfigIssues(
     return [];
   }
   const issues: ConfigValidationIssue[] = [];
-  for (const [channelId, schema] of bundledChannelSchemaById) {
+  for (const [channelId, entry] of bundledChannelsById) {
     if (!Object.hasOwn(config.channels, channelId)) {
       continue;
     }
     const result = validateJsonSchemaValue({
-      schema: schema as Record<string, unknown>,
+      schema: entry.schema,
       cacheKey: `raw-channel:${channelId}`,
       value: config.channels[channelId],
       applyDefaults: false,

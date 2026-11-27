@@ -7,7 +7,6 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
 import { deadDriverFixture } from "../../infra/update-run-fixture.test-support.js";
 import * as ledger from "../../infra/update-run-ledger.js";
-import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import * as state from "../../state/openclaw-state-db.js";
 import { formatGatewayServiceInstallationDrift } from "../daemon-cli/shared.js";
 import {
@@ -239,13 +238,6 @@ describe.skipIf(process.platform === "win32")("refused pnpm Gateway restart reco
     const recovery = await resolveRefusedRestartRecovery({ run, ...params });
 
     expect(recovery).toBe(variant.recovery ? RECOVERY : undefined);
-    // `openclaw update status`: the stopped Gateway's next step replaces the saved triage advice.
-    const report = renderUpdateRunReport(
-      run,
-      recovery ? { nextAction: recovery } : { currentHealth: { kind: "unavailable" } },
-    );
-    expect(report.lines.at(-1) === RECOVERY).toBe(Boolean(variant.recovery));
-    expect(report.markdown.includes("openclaw triage")).toBe(!variant.recovery);
     // `openclaw gateway status --deep` reads the latest run from the same ledger.
     expect(await readRefusedRestartRecovery({ ...params, stateEnv: fixture.env })).toBe(recovery);
   });

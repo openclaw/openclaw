@@ -13,6 +13,7 @@ import {
   canApplySessionListSnapshot,
   isPrimarySessionListQuery,
   isSameSessionListQuery,
+  prepareSessionRefreshOptions,
   retainSessionPaginationWindow,
   sessionListAgentMatcher,
   sessionListEventMatcher,
@@ -132,8 +133,8 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     publishPrimary: (result) =>
       host.publish({ ...host.readState(), result: host.decorate(result, primaryList) }),
     primary: {
-      prepare: (options, bootstrap, isErrorCurrent) =>
-        preparePrimary(options, bootstrap, isErrorCurrent),
+      prepare: (read, options, bootstrap, isErrorCurrent) =>
+        preparePrimary(read, options, bootstrap, isErrorCurrent),
       retirePublication: () => {
         foregroundPublicationGeneration += 1;
       },
@@ -152,27 +153,35 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
   );
 
   const preparePrimary = (
+    read: SessionListRead,
     options: SessionRefreshOptions,
     bootstrap: boolean,
     isErrorCurrent?: () => boolean,
   ) => {
-    const scope = host.connection.capture();
+    const scope = read.scope;
     const publicationGeneration = foregroundPublicationGeneration;
     const warmRevision = primaryWindows.revision;
     const isCurrent = () =>
-      scope !== null &&
-      host.connection.isCurrent(scope) &&
-      publicationGeneration === foregroundPublicationGeneration;
+      host.connection.isCurrent(scope) && publicationGeneration === foregroundPublicationGeneration;
     const { append = false, force: _force, backgroundHydrate = false, ...requestOptions } = options;
-    const durableListOptions: SessionListOptions = { ...requestOptions };
-    delete durableListOptions.offset;
-    if (!backgroundHydrate) {
+    // Pagination is request-local; replacements retain filters but restart at page one.
+    const { offset: _offset, ...pageOptions } = requestOptions;
+    // Load More omits ownerFirst on the wire; the signed-in prefix still owns its wake and retry.
+    const durableListOptions = append
+      ? prepareSessionRefreshOptions(pageOptions, host.snapshot())
+      : pageOptions;
+    if (!backgroundHydrate || bootstrap || listOptionsSource === "none") {
+      if (!isSameSessionListQuery(lastListOptions, durableListOptions, append)) {
+        eventRefreshCoordinator.acceptWindowExpiry(null);
+      }
       lastListOptions = durableListOptions;
-      listOptionsSource = "foreground";
-    } else if (bootstrap || listOptionsSource === "none") {
-      lastListOptions = durableListOptions;
-      listOptionsSource = "seeded";
+      listOptionsSource = backgroundHydrate ? "seeded" : "foreground";
     }
+    const finishWindowRead = eventRefreshCoordinator.beginWindowRead(
+      read.issuedAt,
+      isCurrent,
+      append,
+    );
     if (!backgroundHydrate) {
       const error = host.observerError();
       host.publish(
@@ -182,8 +191,8 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     }
     return {
       isCurrent,
+      finishWindowRead,
       accept(
-        read: SessionListRead,
         result: SessionsListResult | null,
         failure?: { error: unknown },
       ): SessionRefreshAttempt | null {
@@ -194,6 +203,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
           if (failure) {
             throw failure.error;
           }
+          eventRefreshCoordinator.acceptWindowExpiry(read.expiry, append);
           const issuedRevision = read.revision;
           const currentState = host.readState();
           const mergeWithCurrent =
@@ -421,6 +431,18 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
         ...(options.force === true && options.append !== true ? { invalidated: true } : {}),
         ...(options.offset !== undefined ? { offset: options.offset } : {}),
       });
+    },
+    wakeList(this: void, scope: SessionListScope) {
+      const agentId = (options: SessionListScope) =>
+        options.agentId ? normalizeAgentId(options.agentId) : null;
+      if (!isPrimarySessionListQuery(scope)) {
+        managedList(scope).coordinator.wake();
+      } else if (agentId(scope) === agentId(lastListOptions)) {
+        eventRefreshCoordinator.wake();
+      } else {
+        // Another agent's read owns the primary window; read the requested agent instead.
+        void refresh({ ...scope, force: true });
+      }
     },
     isPrimaryList: isPrimarySessionListQuery,
     async refreshManagedLists() {

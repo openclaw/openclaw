@@ -28,7 +28,6 @@ export function requestModelsList(params: {
     readOnly?: boolean;
     workspaceDir?: string;
   }) => Promise<Array<Record<string, unknown>>>;
-  reqId?: string;
   includeDefaultModels?: boolean;
   includeProviderCapabilities?: boolean;
   deferredAuth?: Promise<PreparedModelRuntimeAuth>;
@@ -119,7 +118,7 @@ export function requestModelsList(params: {
   )({
     req: {
       type: "req",
-      id: params.reqId ?? `req-models-list-${params.view}`,
+      id: `req-models-list-${params.view}`,
       method: "models.list",
       params: requestParams,
     },

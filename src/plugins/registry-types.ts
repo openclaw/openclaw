@@ -149,11 +149,6 @@ export type PluginAgentToolResultMiddlewareRegistration = PluginRegistrationOwne
   runtimes: AgentToolResultMiddlewareRuntime[];
   scopes?: AgentToolResultMiddlewareScope[];
 };
-export type PluginAgentToolResultMiddlewareOwner = {
-  pluginId: string;
-  runtimes: AgentToolResultMiddlewareRuntime[];
-  manifest: PluginManifestRecord;
-};
 export type PluginServiceRegistration = PluginRegistrationOwner & {
   readonly id: string;
   service:
@@ -337,7 +332,6 @@ export type PluginRegistry = {
   migrationProviders: PluginOwnedProviderRegistration<
     import("./types.js").MigrationProviderPlugin
   >[];
-  agentToolResultMiddlewareOwners: PluginAgentToolResultMiddlewareOwner[];
   agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[];
   agentHarnesses: (PluginRegistrationOwner & {
     harness: AgentHarness;

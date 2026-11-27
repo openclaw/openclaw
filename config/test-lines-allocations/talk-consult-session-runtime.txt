@@ -1,0 +1,3 @@
+910
+# Real-Gateway regressions for routing Talk voice consults through the chat's own command runtime (Claude CLI and locked native harness), which current main bypasses.
+# Covers typed-turn handoff authority, the published-runtime lease, command-completion adoption, yielded CLI acknowledgement plus one late result, abort and replaced-voice rejection, and foreign/stale owner fencing through the real controller. Most cases need a real Gateway and session controller, so they cannot share a smaller mocked harness.

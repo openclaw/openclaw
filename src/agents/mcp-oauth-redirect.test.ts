@@ -14,9 +14,7 @@ const homeOptions = {
   env: { OPENCLAW_CONFIG_PATH: undefined, OPENCLAW_STATE_DIR: undefined },
 };
 
-class TestDispatcher {
-  constructor(readonly options: unknown) {}
-}
+const TestDispatcher = vi.fn();
 
 vi.mock("node:dns/promises", async (importOriginal) => {
   const actual = await importOriginal<

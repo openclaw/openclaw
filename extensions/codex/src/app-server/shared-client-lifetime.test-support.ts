@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import { setImmediate } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createAgentHarnessCompletionScopeForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { expect, it, vi } from "vitest";
 import {
   codexCatalogResidentHomeKey,
@@ -233,7 +234,10 @@ export function registerSharedClientLifetimeTests(
     await monitor.registerParent({
       parentThreadId: "parent-thread",
       requesterSessionKey: "agent:main:main",
-      completionScope: { requesterSessionKey: "agent:main:main", requesterAgentId: "main" },
+      completionScope: createAgentHarnessCompletionScopeForTest({
+        requesterSessionKey: "agent:main:main",
+        requesterAgentId: "main",
+      }),
       agentId: "main",
     });
 

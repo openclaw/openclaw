@@ -568,12 +568,12 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
           ],
         },
       });
-      expect(onAudio).toHaveBeenCalledOnce();
-      expect(onAudio.mock.calls[0]?.[0]).toBeInstanceOf(Buffer);
-      if (format === "pcm") {
-        expect(onAudio).toHaveBeenCalledExactlyOnceWith(output);
-      } else {
-        expect(onAudio.mock.calls[0]?.[0]).toHaveLength(80);
+      expect(onAudio).toHaveBeenCalledExactlyOnceWith(
+        format === "pcm" ? output : expect.any(Buffer),
+      );
+      if (format === "telephony") {
+        content({ turnComplete: true });
+        expect(onAudio.mock.calls.map(([chunk]) => chunk.length)).toEqual([75, 5]);
       }
       expect(onTranscript).not.toHaveBeenCalled();
       await bridge.close();

@@ -484,12 +484,10 @@ async function runSweepSample(childCount: number): Promise<Sample> {
     { getSubagentRunsForChildSession, subagentRuns: runs },
     { createSubagentRegistrySweeper },
     { mutateSubagentRuns },
-    { isSameSubagentRunOwner },
   ] = await Promise.all([
     import("../src/agents/subagents/registry/subagent-registry-memory.js"),
     import("../src/agents/subagents/registry/subagent-registry-sweeper.js"),
     import("../src/agents/subagents/registry/subagent-registry-persistence.js"),
-    import("../src/agents/subagents/registry/subagent-run-generation.js"),
   ]);
   const now = Date.now();
   runs.clear();
@@ -506,9 +504,7 @@ async function runSweepSample(childCount: number): Promise<Sample> {
   let retiredObligations = 0;
   const sweeper = createSubagentRegistrySweeper({
     runs,
-    resumedRuns: new Set(),
     clearPendingLifecycleError: () => {},
-    clearPendingLifecycleTimeout: () => {},
     sweepPendingLifecycle: () => {},
     completeSubagentRunWithRecovery: async () => {
       lostContextCompletions += 1;
@@ -517,14 +513,6 @@ async function runSweepSample(childCount: number): Promise<Sample> {
     // These synthetic rows suppress session effects and carry no requester delivery obligations.
     resumePendingRequesterSettlements: () => false,
     startSubagentAnnounceCleanupFlow: () => true,
-    completeCleanupBookkeeping: async () => {},
-    isCleanupOwnerCurrent: (entry) =>
-      isSameSubagentRunOwner(runs.get(entry.runId), entry) || !runs.has(entry.runId),
-    isTerminalTailActive: () => false,
-    sessionEffectsHostCurrent: (entry) => entry.execution.suppressSessionEffects !== true,
-    shouldSuppressSessionEffects: async (entry) => entry.execution.suppressSessionEffects === true,
-    shouldEmitEndedHookForRun: () => false,
-    emitSubagentEndedHookForRun: async () => {},
     callGateway: async () => {
       sessionEffects += 1;
       throw new Error("Registry-sweep benchmark attempted Gateway session effects");

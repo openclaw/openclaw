@@ -56,7 +56,7 @@ enum ConfigStore {
     fileprivate final class Origin {
         let gateway: GatewayConnection
         let selection: Selection
-        var allowsLocalFallback: Bool
+        let allowsLocalFallback: Bool
         var lease: GatewayConnection.ServerLease?
 
         init(gateway: GatewayConnection) {
@@ -75,7 +75,6 @@ enum ConfigStore {
     }
 
     struct Overrides {
-        var isRemoteMode: (@Sendable () async -> Bool)?
         var loadLocal: (@MainActor @Sendable () -> [String: Any])?
         var saveLocal: (@MainActor @Sendable ([String: Any]) -> Void)?
         var loadRemote: (@MainActor @Sendable () async -> [String: Any])?
@@ -92,9 +91,6 @@ enum ConfigStore {
     static func load(gateway: GatewayConnection = .shared) async -> Document {
         let origin = Origin(gateway: gateway)
         let overrides = self.overrides
-        if let isRemoteMode = overrides.isRemoteMode {
-            origin.allowsLocalFallback = await !isRemoteMode()
-        }
         let remote = !origin.allowsLocalFallback
         guard origin.selectionIsCurrent else {
             return Document(root: [:], origin: origin, hash: nil, readError: self.sourceChanged())
