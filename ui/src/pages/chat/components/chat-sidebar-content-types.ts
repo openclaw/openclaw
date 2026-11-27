@@ -249,7 +249,7 @@ type SessionDiffSidebarContent = {
   kind: "session-diff";
   owner: SessionDiffOwner;
   load: SessionDiffLoader;
-  /** Last accepted native Uncommitted result for this exact diff loader. */
+  /** Last accepted native Uncommitted result for this owner; only this loader replaces it. */
   uncommitted?: SessionsDiffResult;
   /** Visible Environment demand shares this content's native diff loader. */
   requestUncommitted?: () => void | (() => void);

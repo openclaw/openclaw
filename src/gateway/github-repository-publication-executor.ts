@@ -436,8 +436,7 @@ export async function executeRepositoryGitHubPublication(params: {
       host: identity.host ?? resolveGitHubHost(),
       assertCurrent: assertPublicationAction,
       readCurrentEntry: params.readCurrentEntry,
-      description:
-        row.body?.trim() || "Published by the Gateway from the accepted repository checkpoint.",
+      defaultDescription: "Published by the Gateway from the accepted repository checkpoint.",
     });
     const { assertAction } = content;
     assertAction();

@@ -691,7 +691,7 @@ function createPublicationBackend(
         if (staged?.kind !== "source") {
           throw new Error("Memory publication input was not started");
         }
-        header = staged.header;
+        header = { ...staged.header, verifiedFile: command.input.verifiedFile };
         rows = readStagedRows<MemorySourceIndexRow>(staged);
       }
       let facts: ReturnType<typeof readMemoryDatabaseFacts> | undefined;

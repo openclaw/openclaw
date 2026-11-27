@@ -1,7 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
-import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
@@ -282,20 +281,8 @@ export async function prepareSessionPrincipalRunAuthority(
       { synchronousCheck: true },
     );
     assertAccessCurrent();
-    const participationSignal = sharing.participationSignal;
-    const signal = participationSignal
-      ? AbortSignal.any(
-          [admitted.authority.signal, participationSignal].filter(
-            (entry): entry is AbortSignal => entry !== undefined,
-          ),
-        )
-      : admitted.authority.signal;
     return {
       ...admitted,
-      authority:
-        signal === admitted.authority.signal
-          ? admitted.authority
-          : createAdmittedRunOperatorAuthority({ ...admitted.authority, signal }),
       release,
       assertCurrent: assertAccessCurrent,
       participationCeiling: sharing.participationCeiling,
@@ -580,7 +567,6 @@ export async function resolveSessionMutationAuthorizationAsync(
     const authorization = result.authorization;
     if (childParticipation) {
       authorization.participationCeiling = childParticipation.authority.participationCeiling;
-      authorization.participationSignal = childParticipation.authority.signal;
     }
     if (authorization.release) {
       creationReleases.push(authorization.release);
@@ -614,7 +600,6 @@ export async function resolveSessionMutationAuthorizationAsync(
         },
         retain,
         retainForRun: () => ({
-          signal: authorization.participationSignal,
           participationCeiling: bindSessionParticipationSource(
             authorization.participationCeiling,
             () => preparedTargets[0]?.read().target,
@@ -622,10 +607,7 @@ export async function resolveSessionMutationAuthorizationAsync(
             authorization.assertAdmittedInputCurrent ?? authorization.assertCurrent,
           ),
           participationAuthority: childParticipation?.authority,
-          assertCurrent: () => {
-            authorization.participationSignal?.throwIfAborted();
-            (authorization.assertAdmittedInputCurrent ?? authorization.assertCurrent)();
-          },
+          assertCurrent: authorization.assertAdmittedInputCurrent ?? authorization.assertCurrent,
           release: retain(),
         }),
         release: () => {

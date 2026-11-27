@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import type { Result } from "@openclaw/normalization-core/result";
 import type { ErrorShape } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionMentionInvitation } from "../config/sessions/session-sharing-authority.types.js";
@@ -113,14 +112,8 @@ export function prepareHumanMentionInvitation(
     ? {
         invitation,
         assertCurrent() {
-          const current = select();
-          // The store owns transcript/view preconditions; this hook checks current authority.
-          if (
-            !current ||
-            current.addedBy !== invitation.addedBy ||
-            !isDeepStrictEqual(current.profiles, invitation.profiles)
-          ) {
-            throw new Error("Mention invitation is not authorized");
+          if (!isActive()) {
+            throw new Error("Mention invitation authority is closed");
           }
         },
       }

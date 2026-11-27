@@ -26,6 +26,7 @@ Own agent assembly, run authority, focused tests.
 - Prepare one admitted context after runtime selection; retries/fallbacks reuse it, never mint authority.
 - Lifecycle owner's `finally`: close admission on terminal, error, cancellation, unsupported recovery paths.
 - Harness host capabilities capture exact admitted authority. Gate tool binding/preparation/execution, hooks, approvals.
+- Tools consume the turn's `TurnGrant` and add no owner, scope or authority check of their own: [operator admission](../gateway/AGENTS.md#operator-admission).
 - Retained tools, preparers, callbacks, approval handles: a new call fails after close, replacement, release, abort, claim loss, lifecycle rotation. A call in progress may finish; abort stops it through its signal.
 - One model resolver for every entry path (turn, `/model`, spawn, isolated/utility completions, `agent --local`, `sessions.create`): a shown model runs on each of them. Exception: a Codex-harness turn on a model newer than its Codex binary fails as described in [model listing](../plugins/AGENTS.md#model-listing).
 - Run on the runtime and credential the user signed in with. Fallback to API-key billing or another runtime happens only where documented, never silently.

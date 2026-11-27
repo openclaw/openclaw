@@ -367,7 +367,7 @@ export function filterSessionEntries(
         }
         // Derived model aliases are not agent-key matches.
         if (!search.startsWith("agent:")) {
-          const subagentRun = getRowContext().subagentRuns.getDisplaySubagentRun(storeKey);
+          const subagentRun = getRowContext().subagentRuns.getSessionDisplayFacts(storeKey);
           // These are exactly the persisted inputs consumed by the identity resolver.
           const modelKey = JSON.stringify([
             "resolved",

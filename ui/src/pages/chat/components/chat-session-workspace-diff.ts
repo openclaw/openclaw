@@ -95,8 +95,7 @@ export function resolveSessionWorkspaceDiff(
           !active ||
           !state.connected ||
           !isCurrentSessionWorkspace(state, workspace) ||
-          current?.kind !== "session-diff" ||
-          current.load !== content.load
+          current?.load !== content.load
         ) {
           return;
         }
@@ -122,7 +121,7 @@ export function resolveSessionWorkspaceDiff(
         result.computing ||
         scope.scope !== "uncommitted" ||
         !isCurrentSessionWorkspace(state, workspace) ||
-        current?.kind !== "session-diff" ||
+        !current ||
         current.load !== content.load ||
         current.uncommitted === result
       ) {

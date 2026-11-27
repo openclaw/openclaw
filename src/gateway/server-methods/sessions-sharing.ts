@@ -371,14 +371,6 @@ function createSessionMemberMutationHandler(
           }
           const assertGrantCurrent = () => {
             access.assertCurrent();
-            const currentGrant = resolveSessionMemberInvitationAccess(
-              params.identityId,
-              grant.value,
-              context.getCommittedRuntimeConfig?.() ?? context.getRuntimeConfig(),
-            );
-            if (!currentGrant.ok || currentGrant.value !== grant.value) {
-              throw new Error("Invitee role changed before invitation commit");
-            }
           };
           const added = await addSessionMember(
             scope,
@@ -662,10 +654,6 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
           },
           () => {
             access.assertCurrent();
-            const current = readGrant();
-            if (!current.ok) {
-              throw new Error(current.error);
-            }
           },
         );
         if (!changed) {

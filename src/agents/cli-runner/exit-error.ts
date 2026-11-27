@@ -9,6 +9,8 @@ import {
   isFailoverError,
   resolveFailoverStatus,
 } from "../failover-error.js";
+import { isClaudeCliBackendId } from "./helpers.js";
+import type { PreparedCliRunContext } from "./types.js";
 
 type CliResumeAttempt = {
   // Option name the backend was invoked with, e.g. --resume-session-at.
@@ -38,6 +40,31 @@ export function createCliFailoverError(
     status: resolveFailoverStatus(reason),
     ...options,
   });
+}
+
+export function resolveCliRunError(error: unknown, context: PreparedCliRunContext): unknown {
+  const { params } = context;
+  const failover = coerceToFailoverError(error, {
+    provider: params.provider,
+    model: context.modelId,
+    sessionId: params.sessionId,
+    lane: params.lane,
+  });
+  if (
+    failover?.reason === "auth" &&
+    params.trigger === "cron" &&
+    params.nativeAuthOnly &&
+    isClaudeCliBackendId(params.provider) &&
+    context.executionTarget.kind !== "node"
+  ) {
+    const explained = new FailoverError(
+      `${failover.message}. Log in to Claude on the Gateway host with \`claude /login\` as the OS user running the Gateway, then retry this job.`,
+      failover,
+    );
+    explained.cause = failover;
+    return explained;
+  }
+  return failover ?? error;
 }
 
 // A refused stream may already have started a native session; the runner decides whether to keep it.
