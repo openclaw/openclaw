@@ -422,7 +422,9 @@ describe("grouped chat rendering", () => {
       for (const expanded of [false, true, false]) {
         await renderToolGroups(groups, { isToolMessageExpanded: () => expanded });
         if (order === "image only") {
-          expect(elementText(".chat-tool-msg-summary")?.trim()).toBe("Viewed 3 images");
+          expect(elementText(".chat-tool-msg-summary")?.trim()).toBe(
+            expanded ? "Viewed 3 images" : undefined,
+          );
         }
         expectCount(".chat-group.assistant .chat-message-image", 3);
         expectCount(".chat-tool-msg-collapse .chat-message-image", expanded ? 3 : 0);

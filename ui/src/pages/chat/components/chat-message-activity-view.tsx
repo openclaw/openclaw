@@ -239,7 +239,7 @@ function prepareActivityGroup(
   ) {
     return undefined;
   }
-  // A step whose only visible activity is its own outcome keeps its direct row.
+  // An isolated step keeps its direct row, except for image inspections.
   const [step] = cardGroups;
   const stepActivity = step ? preparedByCard.get(step.card) : undefined;
   const stepCall = step && unwrapToolCallForDisplay(step.card);
@@ -254,6 +254,7 @@ function prepareActivityGroup(
       approvalReviews.length === 0 &&
       cardGroups.length === 1 &&
       step !== undefined &&
+      stepCall?.name.trim().toLowerCase() !== "view_image" &&
       (visibleActivity.length === 0 ||
         ((step.children.length > 0 || stepInput?.kind !== "edit" || Boolean(stepInput.path)) &&
           visibleCalls.size === 1 &&
