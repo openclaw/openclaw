@@ -8,11 +8,16 @@ import {
   MEMORY_CHUNKING_VERSION,
   normalizeExtraMemoryPathEntries,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { defaultRuntime } from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
+import { registerEmbeddingProvider } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { expect, it, vi } from "vitest";
+import { runMemoryIndex } from "../cli-index-search.runtime.js";
+import { runMemoryStatus } from "../cli-status.runtime.js";
+import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
 import { keepPublishedCacheDuplicates } from "./manager-cache-retention.test-support.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 import {
@@ -175,6 +180,69 @@ it("rebuilds a persisted v2026.11.5 CJK scope hash on normal search", async () =
   expect(await reopened.search("alpha", { lexicalOnly: true })).toEqual(alphaResult);
   expect(reopened.status().custom?.indexIdentity).toEqual({ status: "valid" });
   await closeManager(reopened);
+});
+
+it("recovers an existing media index when the new model skips configured media", async () => {
+  const media = path.join(fixture.paths.workspace, "media");
+  await fs.mkdir(media);
+  await fs.writeFile(path.join(media, "diagram.png"), "png");
+  await fs.writeFile(path.join(media, "meeting.wav"), "wav");
+  registerEmbeddingProvider({
+    id: "gemini",
+    mediaModalities: ({ model }) =>
+      model === "both" ? ["image", "audio"] : model === "image-only" ? ["image"] : [],
+    create: async () => ({ provider: null }),
+  });
+  const config = (model: string) =>
+    fixture.createConfig({
+      provider: "gemini",
+      model,
+      extraPaths: [media],
+      fallback: "none",
+      multimodal: { enabled: true, modalities: ["all"] },
+    });
+  const dbPath = await publishIndex(config("both"));
+  const rows = () =>
+    withDatabase(dbPath, (db) =>
+      db
+        .prepare("SELECT DISTINCT path FROM memory_index_chunks ORDER BY path")
+        .all()
+        .map((row) => row.path),
+    );
+  const note = "memory/2026-01-12.md";
+  expect(rows()).toEqual(["media/diagram.png", "media/meeting.wav", note]);
+  const host = { runInBackgroundContext: runInMemoryTestBackgroundContext };
+  const report = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+  try {
+    for (const [model, skipped, expectedPaths] of [
+      ["image-only", ["audio"], ["media/diagram.png", note]],
+      ["text-only", ["image", "audio"], [note]],
+    ] as const) {
+      const cfg = config(model);
+      const before = rows();
+      await runMemoryStatus({ agent: "main", json: true }, host);
+      expect(report).toHaveBeenLastCalledWith([
+        expect.objectContaining({
+          skippedMultimodalModalities: skipped,
+          status: expect.objectContaining({
+            custom: expect.objectContaining({
+              indexIdentity: expect.objectContaining({ status: "mismatched", code: "model" }),
+            }),
+          }),
+        }),
+      ]);
+      expect(rows()).toEqual(before);
+      await runMemoryIndex({ agent: "main", force: true }, host);
+      expect(rows()).toEqual(expectedPaths);
+      expect(withDatabase(dbPath, readMeta).model).toBe(model);
+      const reopened = await fixture.getFreshManager(cfg, "default");
+      expect(reopened.status().custom?.indexIdentity).toEqual({ status: "valid" });
+      expect(await reopened.search("alpha")).toEqual(alphaResult);
+      await closeManager(reopened);
+    }
+  } finally {
+    report.mockRestore();
+  }
 });
 
 it("rebuilds changed extra-path scope without serving stale rows", async () => {
