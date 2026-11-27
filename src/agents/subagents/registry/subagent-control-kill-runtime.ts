@@ -217,6 +217,9 @@ export async function mutateSubagentRunForKill(
       if (hasSqliteWorkerOutcomeUnknown(error)) {
         throw error;
       }
+      if (isSessionDeliveryGenerationRevokedError(error)) {
+        return { failure: { killed: false, superseded: true as const } };
+      }
       return {
         failure: {
           killed: false,
