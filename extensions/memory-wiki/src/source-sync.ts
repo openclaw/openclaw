@@ -137,11 +137,13 @@ export function refreshMemoryWikiImportedSources(
   onError: (error: unknown) => void,
 ): void {
   // Detach from the request's async scope, which closes once the response is sent.
-  void runInDetachedAsyncContext(() => syncMemoryWikiImportedSources(params)).catch((error) => {
-    if (params.signal.aborted) {
-      return;
-    }
-    setMemoryWikiDashboardState(params.config, { state: "failed" });
-    onError(error);
-  });
+  void runInDetachedAsyncContext(() => syncMemoryWikiImportedSources(params)).catch(
+    (error: unknown) => {
+      if (params.signal.aborted) {
+        return;
+      }
+      setMemoryWikiDashboardState(params.config, { state: "failed" });
+      onError(error);
+    },
+  );
 }
