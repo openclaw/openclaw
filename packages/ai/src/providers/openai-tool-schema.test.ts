@@ -99,6 +99,29 @@ describe("OpenAI strict tool schema normalization", () => {
     expect(isStrictOpenAIJsonSchemaCompatible(schema)).toBe(false);
   });
 
+  it("reports per-tool strict compatibility so mixed tools are not all downgraded", () => {
+    const compatible = objectSchema(
+      { path: { type: "string" } },
+      { additionalProperties: false, required: [] },
+    );
+    const withOneOf = objectSchema({
+      destination: { oneOf: [{ type: "string" }, { type: "integer" }] },
+    });
+
+    // A compatible tool keeps strict mode.
+    expect(isStrictOpenAIJsonSchemaCompatible(compatible)).toBe(true);
+    // An incompatible tool (oneOf) loses strict mode on its own.
+    expect(isStrictOpenAIJsonSchemaCompatible(withOneOf)).toBe(false);
+
+    // The projection resolver still reports request-wide fallback (false)
+    // when any tool is incompatible, preserving diagnostics.
+    const projection = projectOpenAITools([
+      { name: "lookup_order", parameters: compatible },
+      { name: "issue_refund", parameters: withOneOf },
+    ]);
+    expect(resolveOpenAIProjectedToolsStrictToolFlag(projection, true)).toBe(false);
+  });
+
   it.each(["^[a-z]+$", "\\(?=a"])("accepts non-lookaround pattern %s", (pattern) => {
     expect(findOpenAIStrictSchemaViolations({ type: "string", pattern }, "value")).toEqual([]);
   });
