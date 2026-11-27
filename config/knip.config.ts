@@ -281,6 +281,7 @@ const repositoryScriptEntries = [
   "scripts/bench-ingress-polling.mts!",
   "scripts/bench-lobster-validators.mts!",
   "scripts/bench-memory-keyword.mjs!",
+  "scripts/prove-memory-wiki-diagnostics-upgrade.mts!",
   "scripts/bench-session-cost-ready.mts!",
   "scripts/bench-session-projection-ready.mts!",
   // Maintained source headers, guides, and recorded proof commands invoke these exact roots.
