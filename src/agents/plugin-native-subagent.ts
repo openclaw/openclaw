@@ -17,9 +17,8 @@ import { runWithToolExecutionValidation } from "./agent-tools.execution-validati
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import type { NativeSubagentRequestSource } from "./plugin-native-subagent.types.js";
 import { preparePluginCommandScheduledTurns } from "./plugin-scheduled-command.js";
-import { isSubagentRunQueued } from "./subagents/registry/subagent-registry-read.js";
 import {
-  getSwarmRunByLaunchReplayKey,
+  resolveSwarmLaunchReplay,
   listCollectorRunsForRequester,
   prepareSubagentRunsByRunIds,
   type SubagentRunRecord,
@@ -323,24 +322,25 @@ export function createRequestNativeSubagentRuntime(
         return await inFlight.result;
       }
       const result = (async (): Promise<NativeSubagentAccepted> => {
-        const existing = await getSwarmRunByLaunchReplayKey(
+        const replay = await resolveSwarmLaunchReplay(
           replayKey,
+          fingerprint,
           source.options.sessionKey,
           source.options.agentId,
         );
         assertSpawnCurrent();
-        if (existing) {
-          if (existing.swarmLaunchRequestFingerprint !== fingerprint) {
-            throw new Error("Native subagent replay does not match the admitted request.");
-          }
-          if (existing.swarmLaunchPending && !isSubagentRunQueued(existing)) {
-            throw new Error("Native subagent launch is no longer active; start a new request.");
-          }
+        if (replay.status === "mismatch") {
+          throw new Error("Native subagent replay does not match the admitted request.");
+        }
+        if (replay.status === "inactive") {
+          throw new Error("Native subagent launch is no longer active; start a new request.");
+        }
+        if (replay.status === "accepted") {
           return {
-            runId: existing.swarmRunId ?? existing.runId,
-            childSessionKey: existing.childSessionKey,
+            runId: replay.runId,
+            childSessionKey: replay.childSessionKey,
             completionMode: "collect",
-            selection: await readSelection(existing.runId, existing.childSessionKey, requested),
+            selection: await readSelection(replay.currentRunId, replay.childSessionKey, requested),
           };
         }
         const toolCallId = randomUUID();

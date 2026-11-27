@@ -5,9 +5,7 @@ import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.
 import { runAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
 import type { PendingBridgeRequest } from "./code-mode-worker-types.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
-import { isSubagentRunQueued } from "./subagents/registry/subagent-registry-read.js";
-import { getSwarmRunByLaunchReplayKey } from "./subagents/registry/subagent-registry.js";
-import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
+import { resolveSwarmLaunchReplay } from "./subagents/registry/subagent-registry.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,
@@ -43,15 +41,6 @@ function resolveCodeModeSwarmGroupId(ctx: ToolSearchToolContext): string {
     throw new ToolInputError("code mode swarm globals require session and run identity.");
   }
   return `swarm:${sessionKey}:${runId}`;
-}
-
-function replayedSpawnResult(entry: SubagentRunRecord) {
-  return {
-    status: "accepted",
-    runId: entry.swarmRunId ?? entry.runId,
-    sessionKey: entry.childSessionKey,
-    ...(entry.label ? { label: entry.label } : {}),
-  };
 }
 
 function readOptionalStringOption(
@@ -142,21 +131,27 @@ async function runAgentSpawnBridge(params: {
   // The registry persists this exact tuple and payload hash before launch.
   const idempotencyKey = `${params.codeModeRunId}:${params.request.id}`;
   const requesterSessionKey = resolveCodeModeRequesterSessionKey(params.ctx);
-  const existing = await getSwarmRunByLaunchReplayKey(
+  const replay = await resolveSwarmLaunchReplay(
     idempotencyKey,
+    requestFingerprint,
     requesterSessionKey,
     params.ctx.agentId,
   );
-  if (existing) {
-    if (existing.swarmLaunchRequestFingerprint !== requestFingerprint) {
-      throw new ToolInputError("agents.run replay request does not match the persisted collector.");
-    }
-    if (existing.swarmLaunchPending === true && !isSubagentRunQueued(existing)) {
-      throw new ToolInputError("agents.run launch is no longer active; start a new request.");
-    }
+  if (replay.status === "mismatch") {
+    throw new ToolInputError("agents.run replay request does not match the persisted collector.");
+  }
+  if (replay.status === "inactive") {
+    throw new ToolInputError("agents.run launch is no longer active; start a new request.");
+  }
+  if (replay.status === "accepted") {
     params.signal?.throwIfAborted();
     params.ctx.abortSignal?.throwIfAborted();
-    return replayedSpawnResult(existing);
+    return {
+      status: "accepted",
+      runId: replay.runId,
+      sessionKey: replay.childSessionKey,
+      ...(replay.label ? { label: replay.label } : {}),
+    };
   }
   Object.defineProperty(spawnInput, SWARM_CODE_MODE_IDEMPOTENCY_KEY, {
     value: idempotencyKey,
