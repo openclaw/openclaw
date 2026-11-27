@@ -144,6 +144,7 @@
   align-items: center;
   gap: 5px;
   margin-top: 0;
+  white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 

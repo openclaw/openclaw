@@ -6,6 +6,7 @@ import { loadGitHubDetail } from "./detail.js";
 import type { ControlUiGitHubPreviewIdentity } from "./preview-contract.js";
 import {
   githubJson as json,
+  pngResponse,
   queuedFetch as fetchResponses,
   githubRedirect as redirect,
   requestUrl,
@@ -207,12 +208,9 @@ describe("GitHub detail selected read identity", () => {
     expect(first.comments).toHaveLength(kind === "pull" ? 2 : 1);
     if (kind === "pull") {
       expect(first.checks).toMatchObject({ state: "neutral", commit: sha, items: [] });
-      expect(first.metadata).toEqual(
-        expect.arrayContaining([
-          { label: "Files", value: "1" },
-          { label: "Comments", value: "1" },
-        ]),
-      );
+      // Section counts belong to navigation, not to the change metadata.
+      expect(first).toMatchObject({ filesTotal: 1, commentsTotal: 2 });
+      expect(first.metadata?.map(({ label }) => label)).not.toContain("Files");
     }
     expect(await read()).toBe(first);
     expect(selected.revalidate).toHaveBeenCalledTimes(fetchMock.mock.calls.length + 2);
@@ -654,6 +652,37 @@ describe("progressive GitHub documents", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("adds the author's picture to the overview without holding the document for it", async () => {
+    const author = { login: "octocat", avatar_url: "https://avatars.githubusercontent.com/u/7" };
+    const picture = createDeferred<Response>();
+    const pictures: string[] = [];
+    const { read } = fixture("pull", { ...fullPull(), user: author }, (path, options) => {
+      if (path !== "/u/7") {
+        return undefined;
+      }
+      // Public bytes: the selected identity's token never travels to the avatar host.
+      pictures.push(new Headers(options?.headers).get("authorization") ?? "anonymous");
+      return pictures.length === 1 ? pngResponse() : picture.promise;
+    });
+    expect((await read("overview")).imageUrl).toBe("data:image/png;base64,iVBORw==");
+    // Sections reuse the overview's header and never read the picture again.
+    expect((await read("discussion")).imageUrl).toBeUndefined();
+    expect(pictures).toEqual(["anonymous"]);
+
+    // A stalled avatar host spends only the picture's own budget.
+    const timeout = AbortSignal.timeout.bind(AbortSignal);
+    vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) =>
+      ms === 500 ? AbortSignal.abort() : timeout(ms),
+    );
+    const slow = fixture("pull", { ...fullPull(), user: author }, (path) =>
+      path === "/u/7" ? picture.promise : undefined,
+    );
+    const document = await slow.read("overview");
+    picture.resolve(pngResponse());
+    expect(document).toMatchObject({ title: "Read me", author: "octocat" });
+    expect(document.imageUrl).toBeUndefined();
   });
 
   it("loads independent sections and retires old heads", async () => {

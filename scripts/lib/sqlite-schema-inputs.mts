@@ -42,6 +42,7 @@ import {
 import {
   getOpenClawStateRuntimeSchema,
   getOpenClawStatePredecessorSchema,
+  withLegacyWorkshopActivity,
 } from "../../src/state/openclaw-state-schema-runtime.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../src/state/openclaw-state-schema.js";
 
@@ -64,6 +65,8 @@ export function listSqliteSchemaInputs(): SqliteSchemaInput[] {
     add(`state-before-v${version}`, "state", getOpenClawStatePredecessorSchema(version - 1));
   }
   // An already-loaded updater can read replacement catalog assets after a build swap.
+  const beforeWorkshopActivity = withLegacyWorkshopActivity(getOpenClawStatePredecessorSchema(42));
+  add("state-before-workshop-activity", "state", beforeWorkshopActivity);
   const beforeWorkerLoss = getOpenClawStatePredecessorSchema(41);
   const beforeApprovalProfile = withLegacyApprovalProfile(beforeWorkerLoss);
   const beforeProvisionSource = withLegacyWorkerProvisionSource(beforeApprovalProfile);
@@ -153,6 +156,7 @@ export function listSqliteSchemaInputs(): SqliteSchemaInput[] {
         }),
       );
       for (const [era, schema] of [
+        ["before-workshop-activity", beforeWorkshopActivity],
         ["before-v42", beforeWorkerLoss],
         ["before-v41", beforeApprovalProfile],
         ["before-provision-source", beforeProvisionSource],

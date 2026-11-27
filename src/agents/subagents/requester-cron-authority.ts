@@ -18,6 +18,7 @@ import {
   sameRequesterSettleBatch,
   resolveCurrentRequesterSettleBatch,
 } from "./registry/subagent-requester-settle-identity.js";
+import { isSubagentPausedByYield } from "./registry/subagent-requester-turn-custody.js";
 import {
   getSubagentRunRuntimeKey,
   isSameSubagentRunOwner,
@@ -400,7 +401,7 @@ export function revokeRequesterCronAuthorityBatch(
     if (authority?.kind === "yield" && authority.rearmGeneration === rearmGeneration) {
       if (
         isSameSubagentRunOwner(authority.runs.get(entry.runId), entry) &&
-        entry.pauseReason === "sessions_yield" &&
+        isSubagentPausedByYield(entry) &&
         entry.requesterSettleWake?.rearmGeneration === rearmGeneration &&
         isCurrent(authority)
       ) {
@@ -444,7 +445,7 @@ async function withRequesterCronAuthority<T>(
   const authority = params.batch[0] && state.byEntry.get(getSubagentRunRuntimeKey(params.batch[0]));
   const child = params.batch.length === 1 ? params.batch[0] : undefined;
   const pause: RequesterCronAuthorityDispatch["pause"] =
-    child?.pauseReason === "sessions_yield" && child.requesterSettleWake?.pauseNotice
+    isSubagentPausedByYield(child) && child.requesterSettleWake?.pauseNotice
       ? { entry: child }
       : undefined;
   if (
@@ -470,7 +471,7 @@ async function withRequesterCronAuthority<T>(
           (pause.scope
             ? pause.scope.active && !pause.scope.signal.aborted
             : isSameSubagentRunOwner(pausedEntry, pause.entry) &&
-              pausedEntry?.pauseReason === "sessions_yield" &&
+              isSubagentPausedByYield(pausedEntry) &&
               Boolean(pausedEntry.requesterSettleWake?.pauseNotice) &&
               params.isCurrent())
         : authority.runScopeBound === true || params.isCurrent())

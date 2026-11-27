@@ -1222,7 +1222,6 @@ src/agents/sessions/tools/edit.ts	3
 src/agents/sessions/tools/tool-definition-wrapper.ts	1
 src/agents/shell-snapshot.ts	1
 src/agents/spawn-plan.ts	1
-src/agents/subagents/announce/subagent-announce-completion-delivery.ts	1
 src/agents/subagents/announce/subagent-announce-origin.ts	2
 src/agents/subagents/registry/subagent-registry-lifecycle-delivery.ts	2
 src/agents/subagents/registry/subagent-registry.ts	1
@@ -1496,7 +1495,7 @@ src/commands/doctor-telegram-general-topic-conversations.ts	2
 src/commands/doctor-tools-md-migration.ts	5
 src/commands/doctor-workspace.ts	1
 src/commands/doctor/cron/legacy-quarantine-migration.ts	1
-src/commands/doctor/cron/legacy-repair.ts	4
+src/commands/doctor/cron/legacy-repair.ts	3
 src/commands/doctor/cron/store-migration.ts	2
 src/commands/doctor/cron/warnings.ts	1
 src/commands/doctor/shared/allowfrom-fallback-migration.ts	1

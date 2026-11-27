@@ -85,8 +85,6 @@ const enChatToolLabels = {
         replyTimedOutNamed: "Sent to {name} · reply timed out",
         unconfirmed: "Delivery unconfirmed",
         unconfirmedNamed: "Delivery unconfirmed · {name}",
-        accepted: "Message accepted",
-        acceptedNamed: "Message accepted for {name}",
         queued: "Queued message",
         queuedNamed: "Queued message to {name}",
         deferred: "Message deferred",
