@@ -39,6 +39,10 @@ import {
   Summary,
 } from "./inspection-contract.js";
 import { MaintenanceStatus } from "./maintenance-contract.js";
+import {
+  MemoryImportProgressInput,
+  MemoryImportProgressOutput,
+} from "./memory-import-progress-contract.js";
 import { text } from "./model.js";
 import {
   AnnotateInput,
@@ -336,6 +340,17 @@ export const contract = defineFeatureContract({
       input: SavePage,
       output: receipt,
       tool: { name: "knowledge_save_page", label: "Save knowledge page" },
+    },
+    memory_import_progress: {
+      kind: "action",
+      description:
+        "Learn from Memory only. Check up to 100 selected workspace-relative paths and get available SHA-256 hashes and completed paths. Supply an observed hash when the host cannot read the workspace. After all saves for one file finish, or it has nothing new to save, complete it using the path and hash from check. Sources are left unchanged.",
+      input: MemoryImportProgressInput,
+      output: MemoryImportProgressOutput,
+      tool: {
+        name: "knowledge_memory_import_progress",
+        label: "Save or check Memory import progress",
+      },
     },
     remember: {
       kind: "action",

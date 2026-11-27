@@ -68,31 +68,31 @@ The prompt names the Memory files to read: `MEMORY.md`, daily notes
 (`memory/YYYY-MM-DD.md`) and the Dreaming diary (`DREAMS.md`), all in the
 agent workspace.
 
-Save progress for each completed file so another run with the same selections
-can finish an interrupted import
+Save progress after each completed file. If the Gateway restarts while the
+import is running, continue with the original file selections and reload the
+checkpoint before processing any files
 ([#205796](https://github.com/openclaw/openclaw/issues/205796)).
 
-1. List the selected files and compute their SHA-256 hashes together with a
-   host tool such as `shasum -a 256`. Process only the files in the current
-   settings. Never write, move, or delete Memory files, or run Memory commands.
-2. Look up the note `Knowledge scribe checkpoint · Learn from Memory`. An
-   entry `- <workspace-relative path> <sha256> done` records one completed
-   file. Skip a file before reading it only if its path and current hash
-   match a completed entry. If the note is missing, start with no entries.
+1. List only the files selected in the current settings. Never write, move,
+   or delete Memory files, or run Memory commands.
+2. Call `knowledge_memory_import_progress` with `operation: "check"` and the
+   selected paths, in groups of up to 100. It returns their SHA-256 hashes and
+   completed paths. Skip the completed paths before reading them. Supply hashes
+   from the authorized workspace when the tool cannot read it, such as in a sandbox.
+   If a hash is unavailable, process the file normally and leave its progress unmarked.
 3. Read each remaining file with the host file tools and take durable
    decisions, preferences, facts, commitments, and lessons. A daily note's
    date is the item's date unless the text gives another. From `DREAMS.md`,
    take only grounded facts as `agent_inference` citing the entry. Skip
    reflections. Use `knowledge_grep` before saving to skip what Knowledge
    already says. Reconcile changed facts with `knowledge-correct`.
-4. Use `knowledge_remember` to save a file's new items together when they fit
-   in one call. Retain only the cited passages as the excerpt. After all saves
-   for a file succeed, or when it has nothing new to save, record its
-   completed entry with `knowledge_edit_body`. If the note is missing,
-   create it with `knowledge_save_page` (type `note`). Replace the whole
-   previous entry for the same path if there is one. Keep the other entries.
-   Use the revision and hash returned by a checkpoint write for the next edit.
-   If a turn stops before this write, the next run checks the file again
-   and skips facts Knowledge already has.
+4. Use `knowledge_remember` to save a file's new source claims together when
+   they fit in one call. Retain only the cited passages as the excerpt. Save
+   `DREAMS.md` inferences with `knowledge_create_claim`, citing the entry.
+   After all saves for a hashed file succeed, or when it has nothing new to save, call
+   `knowledge_memory_import_progress` with `operation: "complete"` and the
+   file's path and hash before moving on. If the turn stops before this call
+   succeeds, the next run checks the file again and skips facts Knowledge
+   already has.
 5. Report files read and skipped and items saved or already known. End with
    `done` once every selected file is accounted for.
