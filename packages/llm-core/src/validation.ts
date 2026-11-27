@@ -408,23 +408,49 @@ function schemaAcceptsNull(schema: unknown): boolean {
   if (!isObjectBackedRecord(schema)) {
     return true;
   }
+  const branches = Array.isArray(schema.anyOf)
+    ? schema.anyOf
+    : Array.isArray(schema.oneOf)
+      ? schema.oneOf
+      : undefined;
+  if (branches) {
+    return branches.some(schemaAcceptsNull);
+  }
+  if ("const" in schema) {
+    return schema.const === null;
+  }
+  if (Array.isArray(schema.enum)) {
+    return schema.enum.includes(null);
+  }
   const type = schema.type;
-  return (
-    type === undefined ||
-    type === "null" ||
-    (Array.isArray(type) && type.includes("null")) ||
-    (Array.isArray(schema.anyOf) && schema.anyOf.some(schemaAcceptsNull)) ||
-    (Array.isArray(schema.enum) && schema.enum.includes(null))
-  );
+  return type === undefined || type === "null" || (Array.isArray(type) && type.includes("null"));
 }
 
 /**
  * A strict tool schema makes every key required, so the model sends null for a key the tool
- * leaves optional. Absent is what the tool means: drop those nulls before validation.
+ * leaves optional. Absent is what the tool means: drop those nulls before validation, at every
+ * depth the strict projection reaches (properties, array items and union branches).
  */
 function dropNullOptionalArguments(args: unknown, schema: unknown): void {
-  if (!isObjectBackedRecord(args) || !isObjectBackedRecord(schema)) {
+  if (!isObjectBackedRecord(schema)) {
     return;
+  }
+  if (Array.isArray(args)) {
+    for (const item of args) {
+      dropNullOptionalArguments(item, schema.items);
+    }
+    return;
+  }
+  if (!isObjectBackedRecord(args)) {
+    return;
+  }
+  for (const key of ["anyOf", "oneOf", "allOf"] as const) {
+    const branches = schema[key];
+    if (Array.isArray(branches)) {
+      for (const branch of branches) {
+        dropNullOptionalArguments(args, branch);
+      }
+    }
   }
   const properties = schema.properties;
   if (!isObjectBackedRecord(properties)) {

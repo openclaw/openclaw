@@ -74,17 +74,32 @@ describe.each(profiles)("validateToolArguments (%s)", (profile) => {
   });
 
   // A strict tool schema makes every key required, so models send null for "absent".
-  it("treats null for an optional key as absent, but keeps a declared null", () => {
+  it("treats null for an optional key as absent at every depth, but keeps a declared null", () => {
+    const attachment = objectSchema(
+      { media: string, type: { enum: ["image", "file"] } },
+      { required: ["media"] },
+    );
     const validate = validator(
       objectSchema(
-        { path: string, offset: positiveInteger, note: { type: ["string", "null"] } },
+        {
+          path: string,
+          offset: positiveInteger,
+          mode: { anyOf: [string, positiveInteger] },
+          note: { type: ["string", "null"] },
+          attachments: { type: "array", items: attachment },
+        },
         { required: ["path"] },
       ),
     );
-    expect(validate({ path: "a.md", offset: null, note: null })).toEqual({
-      path: "a.md",
-      note: null,
-    });
+    expect(
+      validate({
+        path: "a.md",
+        offset: null,
+        mode: null,
+        note: null,
+        attachments: [{ media: "a.png", type: null }],
+      }),
+    ).toEqual({ path: "a.md", note: null, attachments: [{ media: "a.png" }] });
   });
   it.each([
     { label: "a missing required field", value: {} },

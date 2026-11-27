@@ -47,8 +47,10 @@ function strictToolRouteKey(route: OpenAIStrictToolRoute): string {
   return JSON.stringify([route.api, route.baseUrl, route.model]);
 }
 
-// One store read per route and process; a rejection learned here updates it directly.
-const knownStrictToolRejections = new Map<string, Promise<boolean>>();
+// The store owns expiry; a process re-reads each route at most hourly, so a long-lived Gateway
+// sees an expired record without a store read on every request.
+const STRICT_TOOL_REJECTION_REREAD_MS = 60 * 60 * 1000;
+const knownStrictToolRejections = new Map<string, { known: Promise<boolean>; readAt: number }>();
 
 // Learned strict-tool rejections reuse core plugin state; a later endpoint upgrade is probed
 // again after the TTL, at the cost of one retried request.
@@ -139,18 +141,19 @@ export function configureAiTransportBaseHost(): { runtime: boolean } {
       strictToolRejections: {
         has: (route) => {
           const key = strictToolRouteKey(route);
-          let known = knownStrictToolRejections.get(key);
-          if (!known) {
-            known = openStrictToolRejections()
-              .then((store) => store.lookup(key))
-              .then(Boolean);
-            knownStrictToolRejections.set(key, known);
+          const cached = knownStrictToolRejections.get(key);
+          if (cached && Date.now() - cached.readAt < STRICT_TOOL_REJECTION_REREAD_MS) {
+            return cached.known;
           }
+          const known = openStrictToolRejections()
+            .then((store) => store.lookup(key))
+            .then(Boolean);
+          knownStrictToolRejections.set(key, { known, readAt: Date.now() });
           return known;
         },
         record: async (route) => {
           const key = strictToolRouteKey(route);
-          knownStrictToolRejections.set(key, Promise.resolve(true));
+          knownStrictToolRejections.set(key, { known: Promise.resolve(true), readAt: Date.now() });
           return (await openStrictToolRejections()).registerIfAbsent(key, true);
         },
       },
