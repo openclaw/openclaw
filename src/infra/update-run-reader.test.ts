@@ -13,7 +13,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { assertSqliteSchemaContains } from "./sqlite-schema-contract.test-support.js";
-import { readUpdateRunAdmissionCommand } from "./update-run-admission.read.js";
+import { prepareUpdateRunAdmissionRead } from "./update-run-admission.read.js";
 import {
   createUpdateRun,
   findActiveUpdateRun,
@@ -111,11 +111,14 @@ describe("update run history reads", () => {
     const created = createUpdateRun({ runId, trigger: "cli" }, options);
     expect(created).toMatchObject({ runId, phase: "requested", status: "running" });
     const transactions = vi.spyOn(initial.db, "exec");
-    const result = readUpdateRunAdmissionCommand(initial.db, {
+    const readCandidates = await prepareUpdateRunAdmissionRead({
       type: "updateRuns.reconciliationCandidates",
       input: { excludeRunId: runId },
     });
-    expect(result).toEqual({ type: "updateRuns.reconciliationCandidates", candidates: [] });
+    expect(readCandidates(initial.db)).toEqual({
+      type: "updateRuns.reconciliationCandidates",
+      candidates: [],
+    });
     expect(transactions).not.toHaveBeenCalled();
     closeOpenClawStateDatabaseForTest();
     const olderReader = new DatabaseSync(filename);

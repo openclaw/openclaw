@@ -14,7 +14,9 @@ if (!parentPort || !(cancel instanceof Int32Array)) {
 const cancellation = cancel;
 const port = parentPort;
 const buffer = Buffer.allocUnsafe(64 * 1024);
-const fields = ["dev", "ino", "mode", "uid", "gid", "nlink", "size", "mtimeNs", "ctimeNs"] as const;
+// Link count and change time move with metadata-only writes. The tree's final
+// sweep compares them against the admitted stat and re-reads drifted bytes.
+const fields = ["dev", "ino", "mode", "uid", "gid", "size", "mtimeNs"] as const;
 const unchanged = (job: PackageFileHashJob, stat: BigIntStats) =>
   job.ino !== 0n && fields.every((key) => job[key] === stat[key]);
 const cancelled = new Error("Package file hashing cancelled");

@@ -1,6 +1,6 @@
 import type { WebClient } from "@slack/web-api";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createSlackTokenCacheKey } from "./client.js";
 import { readLruMapEntry, writeLruMapEntry } from "./monitor/lru-map-cache.js";
 
@@ -79,18 +79,52 @@ export async function resolveSlackUserProfile(
   return entry;
 }
 
-/** Adds `user_profile` names to messages, looking up each uncached author once in parallel. */
-export async function addSlackAuthorProfiles<
-  T extends { user?: string; user_profile?: SlackMessageUserProfile },
->(params: SlackUserProfileScope & { client: WebClient; messages: T[] }): Promise<T[]> {
-  const userIds = new Set(
-    params.messages.flatMap((message) =>
-      message.user && !message.user_profile ? [message.user] : [],
-    ),
+// Slack writes a user mention as <@U…> or <@U…|label> in text and as a "user" element in blocks.
+const MENTION_PATTERN = /<@([UW][A-Z0-9]+)(?:\|[^>]*)?>/g;
+
+function blockMentions(node: unknown, ids: Set<string>) {
+  if (Array.isArray(node)) {
+    node.forEach((child) => blockMentions(child, ids));
+  } else if (isRecord(node)) {
+    if (node.type === "user" && typeof node.user_id === "string") {
+      ids.add(node.user_id);
+    }
+    Object.values(node).forEach((child) => blockMentions(child, ids));
+  }
+}
+
+/** The users a message mentions, from its text and blocks. */
+function mentionedUsers(message: { text?: string; blocks?: unknown[] }) {
+  const ids = new Set<string>();
+  for (const match of message.text?.matchAll(MENTION_PATTERN) ?? []) {
+    ids.add(match[1]!);
+  }
+  blockMentions(message.blocks, ids);
+  return ids;
+}
+
+/**
+ * Adds `user_profile` names to messages and answers the names of the users they mention, by
+ * user ID. Each uncached author or mentioned user is looked up once, in parallel; one whose lookup
+ * fails keeps only its ID.
+ */
+export async function addSlackUserProfiles<
+  T extends {
+    user?: string;
+    user_profile?: SlackMessageUserProfile;
+    text?: string;
+    blocks?: unknown[];
+  },
+>(
+  params: SlackUserProfileScope & { client: WebClient; messages: T[] },
+): Promise<{ messages: T[]; mentioned: Record<string, SlackMessageUserProfile> }> {
+  const authors = params.messages.flatMap((message) =>
+    message.user && !message.user_profile ? [message.user] : [],
   );
+  const mentions = new Set(params.messages.flatMap((message) => [...mentionedUsers(message)]));
   const profiles = new Map(
     await Promise.all(
-      [...userIds].map(async (userId) => {
+      [...new Set([...authors, ...mentions])].map(async (userId) => {
         try {
           const { displayName, realName, handle } = await resolveSlackUserProfile({
             ...params,
@@ -106,8 +140,19 @@ export async function addSlackAuthorProfiles<
       }),
     ),
   );
-  return params.messages.map((message) => {
-    const profile = message.user && !message.user_profile ? profiles.get(message.user) : undefined;
-    return profile ? { ...message, user_profile: profile } : message;
-  });
+  const mentioned: Record<string, SlackMessageUserProfile> = {};
+  for (const userId of mentions) {
+    const profile = profiles.get(userId);
+    if (profile) {
+      mentioned[userId] = profile;
+    }
+  }
+  return {
+    messages: params.messages.map((message) => {
+      const profile =
+        message.user && !message.user_profile ? profiles.get(message.user) : undefined;
+      return profile ? { ...message, user_profile: profile } : message;
+    }),
+    mentioned,
+  };
 }

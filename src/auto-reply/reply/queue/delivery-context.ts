@@ -386,12 +386,12 @@ export function collectRuntimeMetadata(items: FollowupRun[], abortSignal?: Abort
       callbackCustodies.length > 0
         ? {
             retain: () => {
-              const releases = callbackCustodies.map((custody) => custody.retain());
-              return () => {
-                for (const release of releases) {
-                  release();
-                }
-              };
+              using holds = new DisposableStack();
+              for (const custody of callbackCustodies) {
+                holds.defer(custody.retain());
+              }
+              const retained = holds.move();
+              return () => retained.dispose();
             },
           }
         : undefined,

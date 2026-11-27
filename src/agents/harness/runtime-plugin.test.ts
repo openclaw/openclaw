@@ -267,6 +267,33 @@ describe("harness runtime plugins", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("reads engine declarations only when a context engine slot is selected", () => {
+    const readEngineIds = vi.fn(() => ["primary-engine", "selected-engine"]);
+    const plugins = [
+      installedProviderRecord("fixture-provider"),
+      {
+        ...installedProviderRecord("engine-owner"),
+        get contextEngineIds() {
+          return readEngineIds();
+        },
+      },
+    ];
+    const selections = [{ provider: "fixture-provider", modelId: "model", runtime: "openclaw" }];
+    expect(resolveScope({ selections }, plugins)).toEqual(["fixture-provider"]);
+    expect(readEngineIds).not.toHaveBeenCalled();
+
+    const config = {
+      plugins: {
+        allow: ["engine-owner", "fixture-provider"],
+        slots: { memory: "none", contextEngine: "selected-engine" },
+      },
+    };
+    expect(resolveScope({ config, selections }, plugins)).toEqual([
+      "engine-owner",
+      "fixture-provider",
+    ]);
+  });
+
   it("includes the configured picker harness in metadata and activation preparation", () => {
     const config: OpenClawConfig = {
       agents: {

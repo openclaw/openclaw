@@ -14,6 +14,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
 import { shortenHomePath } from "../utils.js";
+import type { DoctorMaintenancePending } from "./doctor-maintenance-pending.js";
 import {
   DoctorSqliteMaintenanceLockUnavailableError,
   withDoctorSqliteMaintenanceLock,
@@ -163,6 +164,19 @@ async function repairDoctorAgentMemorySchemas(
     }
   }
   return { repaired, warnings };
+}
+
+/**
+ * Read-only: whether `noteDoctorAgentMemorySchemaHealth` would repair a database. It runs the
+ * repair's own no-op test without the maintenance lock; databases open read-only.
+ */
+export function checkDoctorAgentMemorySchemaPending(params: {
+  env?: NodeJS.ProcessEnv;
+  shouldRepair: boolean;
+}): DoctorMaintenancePending {
+  return params.shouldRepair && needsAgentMemorySchemaMaintenance(params.env ?? process.env)
+    ? "work"
+    : "none";
 }
 
 export async function noteDoctorAgentMemorySchemaHealth(

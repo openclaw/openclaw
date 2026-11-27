@@ -23,7 +23,6 @@ import {
   recordUpdateRunPhase,
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
-import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import { runStep } from "../../infra/update-runner-command.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
@@ -182,9 +181,6 @@ function ghPhases() {
 }
 function submissionBody() {
   return mocks.runGh.mock.calls.find(([args]) => args[0] === "api")?.[1]?.input?.toString();
-}
-function localReport() {
-  return renderUpdateRunReport(getUpdateRun(runId)!).lines.join("\n");
 }
 function recordFactFailure(
   failureFacts: UpdateFailureFact[] | undefined,
@@ -516,9 +512,7 @@ describe("Report action from the authoritative update ledger", () => {
           "config.json",
         ],
       );
-      expect(renderUpdateRunReport(recorded!).lines.join("\n")).toContain(
-        `Failing check package-stage (${code})`,
-      );
+      expect(recorded?.steps.at(-1)?.failureFacts?.[0]?.code).toBe(code);
       await submit(previewDigest);
       expectText(
         submissionBody(),
@@ -567,7 +561,9 @@ describe("Report action from the authoritative update ledger", () => {
           { check: "doctor", code: "doctor-failed", pluginId: "discord", [field]: value },
         ]);
       }
-      expect(localReport()).toContain(value);
+      expect(getUpdateRun(runId)?.steps.flatMap((step) => step.failureFacts ?? [])).toContainEqual(
+        expect.objectContaining({ [field === "path" ? "affectedKey" : field]: value }),
+      );
       const { body, previewDigest } = await preview();
       const excluded = field === "path" ? "private-customer-key" : value;
       expectText(
@@ -610,53 +606,44 @@ describe("Report action from the authoritative update ledger", () => {
       "[redacted-diagnostic]",
       { pluginId: "discord" },
     ),
-  ])(
-    "retains $check through the ledger, local summary and public preview",
-    async ({ publicMessage, ...fact }) => {
-      recordFactFailure(
-        [fact],
-        "failing check",
-        "update-failed",
-        [
-          ...["package rollback", "repairing", "repair attempt 1", "repair attempt 2"].map(
-            (step) => ({ step }),
-          ),
-          ...["global install rollback", "global install backup retention"].map((step) => ({
-            step,
-            failureFacts: [
-              {
-                check: "package-swap",
-                code: "swap-failed",
-                message: "Rollback verification timed out",
-              },
-            ],
-          })),
-        ],
-        "private-raw-log",
-      );
-      const recorded = getUpdateRun(runId)!;
-      expect(recorded.steps.find((step) => step.step === "failing check")?.failureFacts).toEqual([
-        fact,
-      ]);
-      const local = renderUpdateRunReport(recorded).lines.join("\n");
-      const { body } = await preview();
-      expect(local.match(/^Failed:/gmu)).toHaveLength(3);
-      expect(body.match(/^- Failed phase /gmu)).toHaveLength(3);
-      expect(local).toContain("Failed: global install backup retention");
-      expect(body).toContain("Failing check package-swap (swap-failed)");
-      for (const text of [local, body]) {
-        expect(text).toContain(`Failing check ${fact.check} (${fact.code})`);
-        if (fact.affectedKey) {
-          expect(text).toContain(fact.affectedKey);
-        }
-        if (fact.pluginId) {
-          expect(text).toContain(fact.pluginId);
-        }
-      }
-      expect(local).toContain(fact.message);
-      expectText(body, [`: ${publicMessage}\n`], ["private-raw-log"]);
-    },
-  );
+  ])("retains $check through the ledger and public preview", async ({ publicMessage, ...fact }) => {
+    recordFactFailure(
+      [fact],
+      "failing check",
+      "update-failed",
+      [
+        ...["package rollback", "repairing", "repair attempt 1", "repair attempt 2"].map(
+          (step) => ({ step }),
+        ),
+        ...["global install rollback", "global install backup retention"].map((step) => ({
+          step,
+          failureFacts: [
+            {
+              check: "package-swap",
+              code: "swap-failed",
+              message: "Rollback verification timed out",
+            },
+          ],
+        })),
+      ],
+      "private-raw-log",
+    );
+    const recorded = getUpdateRun(runId)!;
+    expect(recorded.steps.find((step) => step.step === "failing check")?.failureFacts).toEqual([
+      fact,
+    ]);
+    const { body } = await preview();
+    expect(body.match(/^- Failed phase /gmu)).toHaveLength(3);
+    expect(body).toContain("Failing check package-swap (swap-failed)");
+    expect(body).toContain(`Failing check ${fact.check} (${fact.code})`);
+    if (fact.affectedKey) {
+      expect(body).toContain(fact.affectedKey);
+    }
+    if (fact.pluginId) {
+      expect(body).toContain(fact.pluginId);
+    }
+    expectText(body, [`: ${publicMessage}\n`], ["private-raw-log"]);
+  });
   it.each([
     { reason: "not-git-install", reportable: true },
     { reason: "already-current", reportable: false },
