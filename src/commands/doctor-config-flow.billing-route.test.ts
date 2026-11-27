@@ -274,9 +274,7 @@ it.each(["run-id", "result-channel"] as const)(
           if (!completedRun) {
             throw new Error("Expected the update run after Doctor committed its repair.");
           }
-          expect(updateRunWarningMessages(completedRun.steps)).toEqual([
-            "Deferred model retirement repair completed after plugin convergence.",
-          ]);
+          expect(updateRunWarningMessages(completedRun.steps)).toEqual([]);
         }
 
         f.defer();

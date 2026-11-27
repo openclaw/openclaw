@@ -415,20 +415,14 @@ function googleToolResultMessage(name: "screenshot" | "weather"): Record<string,
   };
 }
 
-function buildGoogleToolResultParams(
-  content: Array<Record<string, unknown>>,
-  options: {
-    model?: Partial<Model<"google-generative-ai">>;
-    toolName?: string;
-  } = {},
-) {
-  return buildGoogleGenerativeAiParams(buildGeminiModel(options.model), {
+function buildGoogleToolResultParams(content: Array<Record<string, unknown>>) {
+  return buildGoogleGenerativeAiParams(buildGeminiModel(), {
     messages: [
       googleToolCallAssistantTurn(),
       {
         role: "toolResult",
         toolCallId: "call_1",
-        toolName: options.toolName ?? "lookup",
+        toolName: "lookup",
         content,
         isError: false,
         timestamp: 1,

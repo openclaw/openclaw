@@ -384,6 +384,21 @@ correction_review_snapshot() (
   done
 )
 
+# Incoming succession validates retained review bytes without review_guard:
+# that guard can recover a journal or change the checkout through enter_worktree.
+incoming_workflow_review_snapshot() (
+  local pr="$1" head="$2" tree="$3" review="$4" snapshot
+  local PR_NUMBER="" PR_HEAD_SHA="" REVIEW_MODE=""
+  snapshot=$(pr_batch_wrapper_git workflow-ready-snapshot "$canonical_repo_root" "$pr" "$PWD" "$head" "$tree" "$review" incoming) || return 1
+  source .local/pr-meta.env || return 1
+  source .local/review-mode.env || return 1
+  [ "$PR_NUMBER" = "$pr" ] && [ "$PR_HEAD_SHA" = "$head" ] && [ "$REVIEW_MODE" = pr ] || {
+    echo "Incoming workflow succession requires the exact ordinary PR review." >&2; return 1;
+  }
+  validate_review_artifact_data && require_ready_review_recommendation || return 1
+  printf '%s\n' "$snapshot"
+)
+
 # READY succession is deliberately narrower than ordinary preparation: no
 # incoming-only review, local/hosted alias, correction or pending-proof authority.
 ready_workflow_review_snapshot() (

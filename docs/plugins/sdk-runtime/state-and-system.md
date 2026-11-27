@@ -478,6 +478,14 @@ arbitrary callbacks. When accepting a legacy store, check both optional methods
 before using this capability; there is no safe fallback consisting of a separate
 lookup and unconditional write.
 
+To delete the same exact keys from one or two namespaces, use
+`await store.deleteKeys(keys, { alsoFrom: peer })`. Omit the options to delete
+from one store. Both stores must belong to the same plugin and physical state
+database. The host checks both grants at commit and deletes matching rows,
+including expired rows, in one transaction. Missing keys have no effect.
+A call accepts up to 50,000 keys and applies the usual 512-byte key limit.
+Check for `deleteKeys` when accepting older hosts or third-party store adapters.
+
 For a complete operation spanning keys or namespaces, use the optional
 `store.createOperation` capability. Its named plugin module runs inside the
 existing shared-state worker, with all reads and writes in one synchronous

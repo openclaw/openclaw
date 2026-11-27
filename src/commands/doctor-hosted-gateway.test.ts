@@ -92,8 +92,6 @@ it("reports hosted pairing inventory without reconnecting or falling back to dis
 it("passes hosted pressure data to the optional WhatsApp check without reconnecting", async () => {
   const status = { eventLoop: { degraded: true } };
   const contributions = resolveFinalDoctorHealthContributions({
-    runSystemdLingerHealth: async () => {},
-    detectSystemdLingerFindings: async () => [],
     runShellCompletionHealth: async () => {},
     runGatewayHealthChecks: async () => {},
   });

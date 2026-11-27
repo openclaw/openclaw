@@ -672,10 +672,6 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
         warn(message);
       }
     },
-    async cleanupRetainedRuntimes() {
-      assertHeld(this, "Updater runtime cleanup");
-      await settle(() => state.cleanupRetainedRuntimes(serviceVerdict !== undefined));
-    },
     async release() {
       if (this !== maintenance) {
         throw new Error("Gateway restoration requires its original live maintenance owner.");

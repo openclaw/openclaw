@@ -184,7 +184,6 @@ function firstBroadcastPayload(ops: { broadcast: ReturnType<typeof vi.fn> }): un
 function expectRunAborted(params: {
   result: ReturnType<typeof abortChatRunById>;
   entry: RpcSourceRef;
-  ops: ChatAbortOps;
   runId: string;
 }): void {
   expect(params.result).toEqual({ aborted: true });
@@ -220,7 +219,7 @@ it.each([
     try {
       const result = abortChatRunById(ops, { runId, sessionKey });
       if (claimed) {
-        expectRunAborted({ result, entry, ops, runId });
+        expectRunAborted({ result, entry, runId });
       } else {
         expect(result).toEqual({ aborted: true });
         expect(entry.input.abortSignal.aborted).toBe(true);
@@ -515,7 +514,7 @@ describe("abortChatRunById", () => {
 
     const result = abortChatRunById(ops, { runId, sessionKey, stopReason: "user" });
 
-    expectRunAborted({ result, entry, ops, runId });
+    expectRunAborted({ result, entry, runId });
     expect(ops.chatRunState.runs.get(runId)?.buffer).toBeUndefined();
     expect(ops.chatRunState.runs.get(runId)?.deltaSentAt).toBeUndefined();
     expect(ops.chatRunState.runs.get(runId)?.assistantScope).toBeUndefined();
@@ -600,7 +599,7 @@ describe("abortChatRunById", () => {
 
     const result = abortChatRunById(ops, { runId, sessionKey, stopReason: "timeout" });
 
-    expectRunAborted({ result, entry, ops, runId });
+    expectRunAborted({ result, entry, runId });
     expect(ops.broadcast).not.toHaveBeenCalled();
     expect(ops.nodeSendToSession).not.toHaveBeenCalled();
   });

@@ -908,7 +908,9 @@ enum ChatMarkdownBlockSegmenter {
         let lines: [String]
 
         init(_ markdown: String) {
-            self.markdown = markdown.replacingOccurrences(of: "\r\n", with: "\n")
+            self.markdown = markdown
+                .replacingOccurrences(of: "\r\n", with: "\n")
+                .replacingOccurrences(of: "\r", with: "\n")
             self.lines = self.markdown.split(separator: "\n", omittingEmptySubsequences: false)
                 .map(String.init)
         }

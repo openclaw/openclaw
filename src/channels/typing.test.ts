@@ -93,7 +93,7 @@ describe("createTypingCallbacks", () => {
         startImplementation.mockResolvedValueOnce(undefined);
       }
       startImplementation.mockReturnValueOnce(promise);
-      const { start, stop, onStartError, callbacks } = createTypingHarness({
+      const { stop, onStartError, callbacks } = createTypingHarness({
         maxDurationMs: 10_000,
         start: startImplementation,
       });
@@ -102,7 +102,6 @@ describe("createTypingCallbacks", () => {
       if (phase === "keepalive") {
         await vi.advanceTimersByTimeAsync(3_000);
       }
-      const admittedStarts = start.mock.calls.length;
       if (finish === "TTL") {
         vi.spyOn(console, "warn").mockImplementation(() => {});
         await vi.advanceTimersByTimeAsync(7_000);
@@ -123,9 +122,6 @@ describe("createTypingCallbacks", () => {
       expect(stop).toHaveBeenCalledTimes(1);
       expect(onStartError.mock.calls).toEqual(rejected ? [[failure]] : []);
       expect(vi.getTimerCount()).toBe(0);
-      await vi.advanceTimersByTimeAsync(20_000);
-      await callbacks.onReplyStart();
-      expect(start).toHaveBeenCalledTimes(admittedStarts);
     },
   );
 

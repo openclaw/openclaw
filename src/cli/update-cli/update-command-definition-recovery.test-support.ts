@@ -7,7 +7,7 @@ import { createRetainedPackageSwap } from "../../infra/package-update-swap.test-
 import * as portsInspect from "../../infra/ports-inspect.js";
 import * as stateSchemas from "../../infra/update-candidate-state.js";
 import { getUpdateRun, recordUpdateRunVerification } from "../../infra/update-run-ledger.js";
-import { renderUpdateRunReport } from "../../infra/update-run-report.js";
+import { renderUpdateRunSummary } from "../../infra/update-run-notice.js";
 import * as processExec from "../../process/exec.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
@@ -184,10 +184,27 @@ export function registerUnverifiedDefinitionRecoveryTests({
       }
       const recorded = getUpdateRun(run.runId, { env: run.env });
       expect(recorded?.status).toBe(succeeded ? "succeeded" : "failed");
-      const report = renderUpdateRunReport(recorded!).markdown;
-      expect(report).toContain("openclaw update repair");
-      expect(report).not.toMatch(/keep the gateway stopped/i);
-      expect(report).toContain(reportedDetail);
+      if (startup === "exception" || startup === "unrelated-failure") {
+        expect(
+          recorded?.steps.some((step) => step.step === "installed gateway recovery admission"),
+        ).toBe(false);
+        expect(recorded?.origin.nextAction).toContain(
+          "Your Gateway is still serving 2.0.0; nothing to restore.",
+        );
+        expect(recorded?.origin.nextAction).toContain("then run `openclaw update` again.");
+        expect(recorded?.origin.nextAction).not.toContain("stop the Gateway");
+      } else {
+        expect(recorded?.origin.nextAction).toContain("openclaw update repair");
+      }
+      expect(recorded?.origin.nextAction).not.toMatch(/keep the gateway stopped/i);
+      expect([
+        recorded?.reason,
+        ...(recorded?.steps.flatMap((step) => [
+          step.detail,
+          ...(step.failureFacts?.map((fact) => fact.message) ?? []),
+        ]) ?? []),
+      ]).toContainEqual(expect.stringContaining(reportedDetail));
+      expect(renderUpdateRunSummary(recorded!)).toContain(reportedDetail);
     },
   );
   const answered = { serviceRunning: true, pid: 4321, port: 18789, runningVersion: "2026.9.3" };

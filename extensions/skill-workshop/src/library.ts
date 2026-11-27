@@ -4,9 +4,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { listDirectoryTreeStrict, root } from "openclaw/plugin-sdk/file-access-runtime";
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import {
-  commitSkillChange,
   listSkillCopyFiles,
   listSkillFiles,
   MAX_SKILL_SUPPORT_FILE_BYTES,
@@ -23,16 +21,18 @@ import {
 import {
   pathExists,
   listWorkshopChanges,
-  recordWorkshopChange,
-  type WorkshopActor,
   type WorkshopChange,
 } from "openclaw/plugin-sdk/skill-workshop-host-runtime";
 import { resolveSkillWorkshopConfig } from "./config.js";
 import { recoverDetachedRestore } from "./restore-undo-recovery.js";
 import {
+  prepareSkillMutation,
+  type ApplySkillMutation,
+  type WorkshopMutationContext,
+} from "./skill-mutation.js";
+import {
   ignoreMissingPath,
   listVersions,
-  pruneVersions,
   snapshotSkill,
   type MutationPaths,
   type SkillPaths,
@@ -43,16 +43,8 @@ import { resolveWorkshopSkillsDir } from "./skills-root.js";
 import { WorkshopWriteError } from "./workshop-write-error.js";
 
 export { listWorkshopChanges, WorkshopWriteError };
+export type { WorkshopMutationContext } from "./skill-mutation.js";
 
-export type WorkshopMutationContext = {
-  config: OpenClawConfig;
-  agentId: string;
-  actor: WorkshopActor;
-  sessionKey?: string;
-  runId?: string;
-  /** Throws once the caller lost write authority; checked under the skill locks before any write. */
-  assertLive?: () => void;
-};
 export type WorkshopSkillSummary = {
   name: string;
   description: string;
@@ -72,7 +64,6 @@ const ARCHIVE_DIR = ".archive";
 // the filesystem's 255-byte name limit only; otherwise they stay loaded but unmanageable.
 export const NEW_SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
 export const EXISTING_SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,254}$/;
-const skillLocks = new KeyedAsyncQueue();
 
 function resolveSkillPaths(config: OpenClawConfig, agentId: string, name: string): SkillPaths {
   if (!EXISTING_SKILL_NAME_PATTERN.test(name)) {
@@ -223,61 +214,16 @@ async function requireLiveSkill(paths: SkillPaths, name: string): Promise<void> 
   );
 }
 
-/** Sorted acquisition keeps overlapping multi-skill mutations from deadlocking. */
-async function withSkillLocks<T>(keys: readonly string[], run: () => Promise<T>): Promise<T> {
-  const [first, ...rest] = [...new Set(keys)].toSorted((a, b) => a.localeCompare(b));
-  return first === undefined
-    ? await run()
-    : await skillLocks.enqueue(first, () => withSkillLocks(rest, run));
-}
-
 /** Serializes one skill's mutation, then refreshes discovery and records the change. */
 export async function mutateSkill(
   ctx: WorkshopMutationContext,
   name: string,
   action: WorkshopChangeAction,
-  apply: (paths: MutationPaths) => Promise<{ summary: string; versionId?: string }>,
+  apply: ApplySkillMutation,
   alsoLock: readonly SkillPaths[] = [],
 ): Promise<WorkshopChange> {
   const paths = resolveSkillPaths(ctx.config, ctx.agentId, name);
-  const lockKeys = [paths.skillDir, ...alsoLock.map((other) => other.skillDir)];
-  return await withSkillLocks(lockKeys, async () => {
-    ctx.assertLive?.();
-    let change: WorkshopChange | undefined;
-    // The host refreshes discovery, then the change is recorded, then skill_changed observers hear.
-    await commitSkillChange({
-      config: ctx.config,
-      agentId: ctx.agentId,
-      skillName: name,
-      apply: async () => {
-        // Checked at lock time to skip needless work, and again right before each file effect.
-        const applied = await apply({ ...paths, assertLive: () => ctx.assertLive?.() });
-        await pruneVersions(paths.versionsDir);
-        return applied;
-      },
-      // The change log is written after discovery refresh, so a failed record never leaves a
-      // committed skill undiscovered.
-      beforeDispatch: async ({ summary, versionId }) => {
-        change = {
-          id: randomUUID(),
-          agentId: ctx.agentId,
-          skillName: name,
-          action,
-          actor: ctx.actor,
-          summary,
-          ...(versionId ? { versionId } : {}),
-          ...(ctx.sessionKey ? { sessionKey: ctx.sessionKey } : {}),
-          ...(ctx.runId ? { runId: ctx.runId } : {}),
-          createdAtMs: Date.now(),
-        };
-        await recordWorkshopChange(change);
-      },
-    });
-    if (!change) {
-      throw new Error("Skill change finished without a change record.");
-    }
-    return change;
-  });
+  return await prepareSkillMutation(ctx, name, paths, action, apply, alsoLock).commit();
 }
 
 export async function listWorkshopSkills(
@@ -573,18 +519,24 @@ async function archivedRestoreUndoVersion(
   throw restoreUndoMismatch(name);
 }
 
-export async function archiveWorkshopSkill(
-  ctx: WorkshopMutationContext,
-  params: { name: string; absorbedInto?: string; reason?: string; undoRestoreChangeId?: string },
-): Promise<WorkshopChange> {
+type WorkshopArchiveParams = {
+  name: string;
+  absorbedInto?: string;
+  reason?: string;
+  undoRestoreChangeId?: string;
+};
+
+function prepareArchive(ctx: WorkshopMutationContext, params: WorkshopArchiveParams) {
   const absorbedInto =
     params.absorbedInto === undefined
       ? undefined
       : resolveSkillPaths(ctx.config, ctx.agentId, params.absorbedInto);
   // The target stays locked until the source is gone, so it cannot be archived mid-merge.
-  return await mutateSkill(
+  const source = resolveSkillPaths(ctx.config, ctx.agentId, params.name);
+  return prepareSkillMutation(
     ctx,
     params.name,
+    source,
     "archive",
     async (paths) => {
       await requireLiveSkill(paths, params.name);
@@ -636,6 +588,21 @@ export async function archiveWorkshopSkill(
     },
     absorbedInto ? [absorbedInto] : [],
   );
+}
+
+export async function archiveWorkshopSkill(
+  ctx: WorkshopMutationContext,
+  params: WorkshopArchiveParams,
+): Promise<WorkshopChange> {
+  return await prepareArchive(ctx, params).commit();
+}
+
+export async function archiveUnusedWorkshopSkill(
+  ctx: WorkshopMutationContext,
+  params: { name: string; reason: string },
+  cutoffMs: number,
+): Promise<WorkshopChange | undefined> {
+  return await prepareArchive(ctx, params).commitIfInactiveSince(cutoffMs);
 }
 
 /** Restores a saved version (default: newest); the live copy is versioned first, so undo is undoable. */

@@ -50,8 +50,9 @@ const workloads = [
   { name: "shadowed-cwd-churn", command: "git status", text: small },
   { name: "real-cwd-churn", command: "git status", text: small },
 ];
+const logger = { warn: console.warn };
 for (const workload of workloads) {
-  const middleware = createMiddleware();
+  const middleware = createMiddleware(logger);
   const count = workload.name === "real-cwd-churn" ? 160 : iterations;
   const events: AgentToolResultMiddlewareEvent[] = Array.from({ length: 160 }, (_, i) => ({
     toolCallId: "synthetic",

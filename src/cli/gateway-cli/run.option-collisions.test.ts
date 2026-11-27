@@ -202,7 +202,6 @@ vi.mock("../../config/paths.js", async (importOriginal) => ({
   pinRuntimePaths: mocks.pinRuntimePaths,
   resolveConfigPath: () => "/tmp/openclaw-test-missing-config.json",
   resolveStateDir: (env?: NodeJS.ProcessEnv) => env?.OPENCLAW_STATE_DIR ?? "/tmp",
-  resolveGatewayPort: (cfg?: { gateway?: { port?: number } }) => cfg?.gateway?.port ?? 18789,
 }));
 
 vi.mock("../../utils.js", async (importOriginal) => ({
@@ -498,7 +497,7 @@ describe("gateway run option collisions", () => {
     return await prepareGatewayRunBootstrap({ opts: { reset: true }, runtime: defaultRuntime });
   }
 
-  registerGatewayRunConfigGuardTests(configState);
+  registerGatewayRunConfigGuardTests({ ...mocks, configState, runUnconfigured });
   function callArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex = 0): unknown {
     const call = mock.mock.calls[index];
     if (!call) {
@@ -507,8 +506,8 @@ describe("gateway run option collisions", () => {
     return call[argIndex];
   }
 
-  function gatewayStartOptions(index = 0) {
-    expect(startGatewayServer.mock.calls[index]?.[0]).toBe(18789);
+  function gatewayStartOptions(index = 0, port = 18789) {
+    expect(startGatewayServer.mock.calls[index]?.[0]).toBe(port);
     return callArg(startGatewayServer, index, 1) as GatewayServerOptions;
   }
 
@@ -897,7 +896,7 @@ describe("gateway run option collisions", () => {
         await runUnconfigured("--dev", "--reset");
 
         expect(ensureDevGatewayConfig).toHaveBeenCalledWith({ reset: true });
-        expect(gatewayStartOptions().ambientEnvTriggers).toBe("suppress");
+        expect(gatewayStartOptions(0, 19001).ambientEnvTriggers).toBe("suppress");
         expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBe("trusted-token");
         expect(loadGlobalRuntimeDotEnvFiles).toHaveBeenCalled();
       },

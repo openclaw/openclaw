@@ -86,7 +86,16 @@ import {
   type SignalInboundEntry,
 } from "./event-handler.control-lane.js";
 import type * as SignalEvent from "./event-handler.types.js";
-import { resolveSignalInboundRoute, resolveSignalQuoteContext } from "./inbound-context.js";
+import {
+  forgetSignalHistoryImages,
+  rememberSignalHistoryImages,
+  resolveSignalGroupHistoryContext,
+} from "./history-images.js";
+import {
+  mergeSignalInboundBatch,
+  resolveSignalInboundRoute,
+  resolveSignalQuoteContext,
+} from "./inbound-context.js";
 import { renderSignalMentions, resolveSignalMentionDecision } from "./mentions.js";
 import {
   buildSignalReactionSystemEventText,
@@ -156,39 +165,21 @@ export function createSignalEventHandler(deps: SignalEvent.SignalEventHandlerDep
       previousTimestamp,
       envelope: envelopeOptions,
     });
-    let combinedBody = body;
     const historyKey = entry.isGroup ? (entry.groupId ?? "unknown") : undefined;
-    if (entry.isGroup && historyKey) {
-      const channelHistory = createChannelHistoryWindow({ historyMap: deps.groupHistories });
-      combinedBody = channelHistory.buildPendingContext({
-        historyKey,
-        limit: deps.historyLimit,
-        currentMessage: combinedBody,
-        formatEntry: (historyEntry) =>
-          formatInboundEnvelope({
-            channel: "Signal",
-            from: fromLabel,
-            timestamp: historyEntry.timestamp,
-            body: `${[historyEntry.body, formatSignalMediaText(historyEntry.media ?? [])]
-              .filter(Boolean)
-              .join("\n")}${historyEntry.messageId ? ` [id:${historyEntry.messageId}]` : ""}`,
-            chatType: "group",
-            senderLabel: historyEntry.sender,
-            envelope: envelopeOptions,
-          }),
-      });
-    }
+    const history = historyKey
+      ? await resolveSignalGroupHistoryContext({
+          deps,
+          entry,
+          groupId: historyKey,
+          currentMessage: body,
+          fromLabel,
+          envelopeOptions,
+        })
+      : undefined;
     const signalToRaw = entry.isGroup
       ? `group:${entry.groupId}`
       : `signal:${entry.senderRecipient}`;
     const signalTo = normalizeSignalMessagingTarget(signalToRaw) ?? signalToRaw;
-    const inboundHistory =
-      entry.isGroup && historyKey && deps.historyLimit > 0
-        ? createChannelHistoryWindow({ historyMap: deps.groupHistories }).buildInboundHistory({
-            historyKey,
-            limit: deps.historyLimit,
-          })
-        : undefined;
     const replyToMode = resolveSignalReplyToMode({
       cfg,
       accountId: deps.accountId,
@@ -198,7 +189,7 @@ export function createSignalEventHandler(deps: SignalEvent.SignalEventHandlerDep
       replyToMode,
       entry.isBatched === true,
     );
-    const media = await toInboundMediaFactsWithMetadata(entry.media);
+    const media = await toInboundMediaFactsWithMetadata(history?.media ?? entry.media);
     const ctxPayload = (
       deps.channelRuntime?.inbound.buildContext ?? buildChannelInboundEventContext
     )({
@@ -237,9 +228,9 @@ export function createSignalEventHandler(deps: SignalEvent.SignalEventHandlerDep
         replyToId: entry.replyToId ?? entry.messageId,
       },
       message: {
-        body: combinedBody,
+        body: history?.body ?? body,
         bodyForAgent: entry.bodyText,
-        inboundHistory,
+        inboundHistory: history?.inboundHistory,
         rawBody: entry.commandBody,
         commandBody: entry.commandBody,
       },
@@ -574,28 +565,10 @@ export function createSignalEventHandler(deps: SignalEvent.SignalEventHandlerDep
       await settle();
       return;
     }
-    let inbound = last;
-    if (entries.length > 1) {
-      const combinedText = entries
-        .map((entry) => entry.bodyText)
-        .filter(Boolean)
-        .join("\n");
-      const combinedCommandBody = entries
-        .map((entry) => entry.commandBody)
-        .filter(Boolean)
-        .join("\n");
-      if (!combinedText.trim()) {
-        await settle();
-        return;
-      }
-      inbound = {
-        ...last,
-        bodyText: combinedText,
-        commandBody: combinedCommandBody,
-        isBatched: true,
-        nativeReplyBody: last.nativeReplyBody ?? last.bodyText,
-        media: entries.flatMap((entry) => entry.media ?? []),
-      };
+    const inbound = mergeSignalInboundBatch(entries, last);
+    if (!inbound) {
+      await settle();
+      return;
     }
     await handleSignalInboundMessage({
       ...inbound,
@@ -755,6 +728,9 @@ export function createSignalEventHandler(deps: SignalEvent.SignalEventHandlerDep
     const messageText = normalizedMessage.trim();
     const groupId = dataMessage?.groupInfo?.groupId ?? reaction?.groupInfo?.groupId ?? undefined;
     const isGroup = Boolean(groupId);
+    if (groupId && (dataMessage?.adminDelete || dataMessage?.remoteDelete)) {
+      forgetSignalHistoryImages(deps.groupHistories.get(groupId), sender, dataMessage);
+    }
     const hasControlCommandInMessage = isControlCommandMessage(messageText, cfg);
 
     const senderDisplay = formatSignalSenderDisplay(sender);
@@ -986,7 +962,7 @@ export function createSignalEventHandler(deps: SignalEvent.SignalEventHandlerDep
         onceKey: JSON.stringify([deps.accountId, groupId]),
         hint: `Mention patterns can be derived from the agent identity name. Set ${groupsConfigPath}[${JSON.stringify(groupId)}].requireMention=false to process messages without a mention. Preserve existing groups entries; when adding the first groups map, include "*": {} to keep other chats admitted.`,
       });
-      // Skipped messages intentionally avoid downloads; facts stay type-only.
+      // Keep eligible image references in the pending window without fetching bytes.
       const pendingMediaText = formatSignalMediaText(mediaFacts);
       const pendingBodyText = messageText || pendingMediaText || visibleQuoteText;
       const historyKey = groupId ?? "unknown";
@@ -999,6 +975,10 @@ export function createSignalEventHandler(deps: SignalEvent.SignalEventHandlerDep
           media: toHistoryMediaEntries(mediaFacts),
           timestamp: inboundTimestamp,
           messageId,
+          imageSource:
+            deps.ignoreAttachments || envelope.editMessage
+              ? undefined
+              : rememberSignalHistoryImages(sender, dataMessage, deps.mediaMaxBytes),
         },
       });
       await registerSignalReplyContext({
@@ -1115,7 +1095,6 @@ export function createSignalEventHandler(deps: SignalEvent.SignalEventHandlerDep
       }
     }
 
-    const senderName = envelope.sourceName ?? senderDisplay;
     await registerSignalReplyContext({
       accountId: deps.accountId,
       to: signalTo,
@@ -1127,7 +1106,8 @@ export function createSignalEventHandler(deps: SignalEvent.SignalEventHandlerDep
     });
     const entry: SignalInboundEntry = {
       cfg,
-      senderName,
+      sender,
+      senderName: envelope.sourceName ?? senderDisplay,
       senderDisplay,
       senderRecipient,
       senderPeerId,
@@ -1147,6 +1127,12 @@ export function createSignalEventHandler(deps: SignalEvent.SignalEventHandlerDep
       replyToBody: visibleQuoteText || undefined,
       replyToSender: visibleQuoteSender,
       replyToIsQuote: visibleQuoteText ? true : undefined,
+      historyImageQuotes:
+        effectiveWasMentioned &&
+        quoteContext.quoteSender &&
+        typeof dataMessage.quote?.id === "number"
+          ? [{ messageId: String(dataMessage.quote.id), sender: quoteContext.quoteSender }]
+          : undefined,
       turnAdoptionLifecycle,
       resolveChannelIngress,
     };

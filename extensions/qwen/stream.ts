@@ -18,6 +18,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   isQwen38ModelId,
+  isQwen4MaxModelId,
   isQwenTokenPlanDeepSeekV4ModelId,
   isQwenTokenPlanGlmModelId,
   isQwenTokenPlanKimiModelId,
@@ -32,7 +33,7 @@ import {
 type QwenThinkingLevel = ProviderWrapStreamFnContext["thinkingLevel"];
 type QwenThinkingFormat = string | undefined;
 type QwenThinkingContract =
-  | { family: "qwen-3.8" }
+  | { family: "qwen"; modelGeneration: "3.8" | "4" }
   | { family: "deepseek-v4" }
   | { family: "kimi" }
   | { family: "glm"; supportsMax: boolean };
@@ -107,7 +108,10 @@ function resolveQwenThinkingContract(
   modelId: string,
 ): QwenThinkingContract | undefined {
   if (isQwen38ModelId(modelId)) {
-    return { family: "qwen-3.8" };
+    return { family: "qwen", modelGeneration: "3.8" };
+  }
+  if (isQwen4MaxModelId(modelId)) {
+    return { family: "qwen", modelGeneration: "4" };
   }
   if (!isQwenTokenPlanProviderId(providerId)) {
     return undefined;
@@ -124,10 +128,11 @@ function resolveQwenThinkingContract(
   return undefined;
 }
 
-function patchQwen38Payload(
+function patchQwenEffortPayload(
   payload: Record<string, unknown>,
   thinkingLevel: QwenThinkingLevel,
   enableThinking: boolean,
+  modelGeneration: "3.8" | "4",
 ): void {
   delete payload.thinking;
   // An explicit token budget owns reasoning depth; Qwen rejects it together
@@ -136,12 +141,14 @@ function patchQwen38Payload(
     delete payload.reasoning_effort;
     return;
   }
-  payload.reasoning_effort =
-    thinkingLevel === "minimal" || thinkingLevel === "low"
-      ? "low"
-      : thinkingLevel === "medium"
-        ? "medium"
-        : "xhigh";
+  if (thinkingLevel === "minimal" || thinkingLevel === "low") {
+    payload.reasoning_effort = "low";
+  } else if (modelGeneration === "3.8") {
+    payload.reasoning_effort = thinkingLevel === "medium" ? "medium" : "xhigh";
+  } else {
+    payload.reasoning_effort =
+      thinkingLevel === "xhigh" || thinkingLevel === "max" ? "xhigh" : "high";
+  }
 }
 
 function patchTokenPlanDeepSeekV4Payload(
@@ -232,8 +239,16 @@ function createQwenThinkingPayloadPatch(
     } else {
       payloadObj.enable_thinking = enableThinking;
     }
-    if (isQwen38ModelId(model.id) && effectiveThinkingFormat === undefined) {
-      patchQwen38Payload(payloadObj, effectiveThinkingLevel, enableThinking);
+    if (
+      (isQwen38ModelId(model.id) || isQwen4MaxModelId(model.id)) &&
+      effectiveThinkingFormat === undefined
+    ) {
+      patchQwenEffortPayload(
+        payloadObj,
+        effectiveThinkingLevel,
+        enableThinking,
+        isQwen4MaxModelId(model.id) ? "4" : "3.8",
+      );
     } else if (tokenPlanContract?.family === "deepseek-v4") {
       // DashScope's OpenAI endpoint uses enable_thinking, while DeepSeek V4
       // also requires replay reasoning_content and high/max effort mapping.
@@ -308,7 +323,7 @@ export function wrapQwenProviderStream(ctx: ProviderWrapStreamFnContext): Stream
   // The picker catalog is intentionally curated; direct Token Plan refs still
   // need provider constraints unless an explicit transport format owns them.
   const useWireConstraints =
-    (tokenPlanProvider || tokenPlanContract?.family === "qwen-3.8") &&
+    (tokenPlanProvider || tokenPlanContract?.family === "qwen") &&
     !explicitLegacyThinkingFormat &&
     thinkingFormat === undefined;
   const forceThinking = useWireConstraints && isQwenTokenPlanThinkingOnlyModelId(ctx.modelId);
@@ -355,7 +370,7 @@ export function wrapQwenProviderStream(ctx: ProviderWrapStreamFnContext): Stream
               if (
                 !forceThinking &&
                 (rawThinkingLevel === "off" ||
-                  (tokenPlanContract?.family === "qwen-3.8" && rawThinkingLevel === "none"))
+                  (tokenPlanContract?.family === "qwen" && rawThinkingLevel === "none"))
               ) {
                 enableThinking = false;
               }
@@ -380,11 +395,12 @@ export function wrapQwenProviderStream(ctx: ProviderWrapStreamFnContext): Stream
                   }
                 }
               }
-              if (tokenPlanContract?.family === "qwen-3.8") {
-                patchQwen38Payload(
+              if (tokenPlanContract?.family === "qwen") {
+                patchQwenEffortPayload(
                   payload,
                   normalizeQwenThinkingLevel(rawThinkingLevel),
                   enableThinking,
+                  tokenPlanContract.modelGeneration,
                 );
               } else if (tokenPlanContract?.family === "deepseek-v4") {
                 const deepSeekLevel =

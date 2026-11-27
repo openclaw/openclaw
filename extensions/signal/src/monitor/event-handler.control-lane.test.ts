@@ -121,6 +121,7 @@ function createHandler(debounceMs: number, config?: OpenClawConfig) {
 function controlEntry(overrides: Partial<SignalInboundEntry> = {}): SignalInboundEntry {
   return {
     cfg: {},
+    sender: { kind: "phone", raw: "+15550001111", e164: "+15550001111" },
     resolveChannelIngress: async () => {
       throw new Error("control-lane fixture must not resolve ingress");
     },

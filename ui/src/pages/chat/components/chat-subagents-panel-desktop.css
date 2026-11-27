@@ -214,6 +214,13 @@
   line-height: 18px;
 }
 
+.subagents-desktop__status {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  white-space: nowrap;
+}
+
 .subagents-desktop__elapsed {
   grid-column: 3;
   grid-row: 1;

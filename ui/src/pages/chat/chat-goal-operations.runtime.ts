@@ -4,22 +4,29 @@ import type { SessionsGoalMutationResult } from "../../../../packages/gateway-pr
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { SessionGoal } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatGoalsOptionalEnglish } from "../../i18n/locales/en-chat-goals-optional.ts";
 import { goalOperationExpired } from "../../lib/chat/goal-operation-storage.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import type { SessionRowObservation } from "../../lib/sessions/session-capability.ts";
 import {
   areUiSessionKeysEquivalent,
   resolveUiConversationIdentity,
 } from "../../lib/sessions/session-key.ts";
 import {
+  chatGoalRecovery,
+  currentChatGoalSession,
   mutateChatGoal,
   rejectGoalOperation,
   type GoalOperation,
   type GoalOperationTarget,
 } from "./chat-goals.ts";
-import { setChatError } from "./chat-history-state.ts";
+import { isInitialChatHistoryUnavailable, setChatError } from "./chat-history-state.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
-import { adoptStartedChatRun } from "./run-lifecycle.ts";
+import { chatSendHoldReason } from "./chat-send-support.ts";
+import { adoptStartedChatRun, hasDirectSessionRun, isChatBusy } from "./run-lifecycle.ts";
+
+registerEnglishCatalog(registerChatGoalsOptionalEnglish);
 
 const GOAL_REQUEST_TIMEOUT_MS = 30_000;
 const rejectedGoalReasons = new Set([
@@ -270,31 +277,53 @@ export async function confirmChatGoalReplacement(
   host: ChatHost,
   objective: string,
   capture: {
-    goalId: string;
-    previousObjective: string;
-    status: SessionGoal["status"];
-    updatedAt: number;
+    goal: SessionGoal;
     expectedRunId: string | undefined;
     scopeIsCurrent: () => boolean;
-    currentGoal: () => SessionGoal | undefined;
-    unavailable: () => string | null;
-    runId: () => string | null | undefined;
+    sessionKey: string;
+    agentId: string | undefined;
   },
 ): Promise<boolean> {
-  const {
-    goalId,
-    previousObjective,
-    status,
-    updatedAt,
-    expectedRunId,
-    scopeIsCurrent,
-    currentGoal,
-    unavailable,
-    runId,
-  } = capture;
+  const { goal, expectedRunId, scopeIsCurrent, sessionKey, agentId } = capture;
+  const { id: goalId, objective: previousObjective, status, updatedAt } = goal;
   const { showConfirmDialog } = await import("../../components/confirm-dialog.ts");
   if (!scopeIsCurrent()) {
     return false;
+  }
+  const unavailable = () => {
+    if (!host.connected || !host.client) {
+      return t("chat.goals.offline");
+    }
+    if (!host.currentSessionId || isInitialChatHistoryUnavailable(host)) {
+      return t("chat.thread.loading");
+    }
+    const hold = chatSendHoldReason(host, sessionKey, false, agentId);
+    if (hold) {
+      return hold;
+    }
+    const recovery = chatGoalRecovery(host);
+    if (recovery) {
+      return t(recovery.pending ? "chat.goals.actionPending" : "chat.goals.outcomeUnknown");
+    }
+    if ((isChatBusy(host) || hasDirectSessionRun(host)) && !expectedRunId) {
+      return t("chat.goals.busy");
+    }
+    const row = currentChatGoalSession(host);
+    const latest = row?.goal;
+    if (
+      latest?.id !== goalId ||
+      latest.objective !== previousObjective ||
+      latest.status !== status ||
+      latest.updatedAt !== updatedAt ||
+      (host.chatRunId ?? row?.activeRunIds?.[0]) !== expectedRunId
+    ) {
+      return t("chat.goals.goalChanged");
+    }
+    return null;
+  };
+  const initialError = unavailable();
+  if (initialError) {
+    return rejectGoalOperation(host, initialError);
   }
   const confirmed = await showConfirmDialog({
     title: t("chat.goals.replaceTitle"),
@@ -305,21 +334,9 @@ export async function confirmChatGoalReplacement(
   if (!confirmed || !scopeIsCurrent()) {
     return false;
   }
-  const latest = currentGoal();
-  if (
-    latest?.id !== goalId ||
-    latest.objective !== previousObjective ||
-    latest.status !== status ||
-    latest.updatedAt !== updatedAt
-  ) {
-    return rejectGoalOperation(host, t("chat.goals.goalChanged"));
-  }
   const error = unavailable();
   if (error) {
     return rejectGoalOperation(host, error);
-  }
-  if (runId() !== expectedRunId) {
-    return rejectGoalOperation(host, t("chat.goals.goalChanged"));
   }
   return await mutateChatGoal(
     host,
