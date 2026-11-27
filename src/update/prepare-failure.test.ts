@@ -1,6 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
+import { resolveUpdateInstallRoot } from "../infra/update-install-root.js";
+import {
+  prepareManagedHandoffLeaseStore,
+  resolveManagedUpdateLeaseDatabasePath,
+  type ManagedHandoffLease,
+} from "../infra/update-managed-service-handoff-lease.js";
 import { getUpdateRunAsync, listUpdateRunsAsync } from "../infra/update-run-reader.js";
 import { createUpdateRunAsync } from "../infra/update-run-write.async.js";
 import * as updateWrites from "../infra/update-run-write.async.js";
@@ -12,7 +19,8 @@ import {
 import { VERSION } from "../version.js";
 import { node, repository, root } from "./prepare.test-support.js";
 import { prepareUpdate } from "./run.js";
-import { createTrialPending, readTrial } from "./store.js";
+import { createTrialPending, readTrial, resolvePrefix, switchLink, writeTrial } from "./store.js";
+import * as targets from "./target.js";
 
 it("records one failed terminal run when preparation lock acquisition throws", async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
@@ -111,3 +119,120 @@ it("refuses a trial published before the preparation lock is acquired", async ()
     closeOpenClawStateDatabaseForTest();
   }
 });
+
+it("retires all foreign unfinished runs while preserving the serving trial's handoff", async () => {
+  vi.stubEnv("HOME", root);
+  vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+  const { checkout } = await repository();
+  const target = vi
+    .spyOn(targets, "resolveTarget")
+    .mockRejectedValue(new Error("admission observed"));
+  try {
+    openOpenClawStateDatabase({ env: process.env });
+    const foreign = [];
+    for (let i = 0; i < 101; i++) {
+      foreign.push(await createUpdateRunAsync({ trigger: "cli" }));
+    }
+    const handedOver = await createUpdateRunAsync({ trigger: "cli" });
+    const prefix = resolvePrefix();
+    const trial = await createTrialPending(
+      {
+        runId: handedOver.runId,
+        target: path.relative(prefix, checkout),
+        previous: path.relative(prefix, checkout),
+        version: VERSION,
+      },
+      prefix,
+    );
+    const committed = {
+      ...trial,
+      phase: "committed" as const,
+      reported: true,
+      outcome: { status: "succeeded" as const, at: Date.now() },
+    };
+    await writeTrial(committed, prefix);
+    await switchLink(path.relative(prefix, checkout), prefix);
+    const run = await createUpdateRunAsync({ trigger: "cli" });
+    expect(
+      await prepareUpdate({
+        runId: run.runId,
+        runningRoot: checkout,
+        runningVersion: VERSION,
+        channel: "dev",
+        node,
+      }),
+    ).toMatchObject({ status: "failed", reason: "no-target" });
+    expect(target).toHaveBeenCalledOnce();
+    expect(await listUpdateRunsAsync({ active: true })).toMatchObject([
+      { runId: handedOver.runId, status: "running" },
+    ]);
+    for (const interrupted of [foreign[0]!, foreign.at(-1)!]) {
+      expect(await getUpdateRunAsync(interrupted.runId)).toMatchObject({
+        status: "failed",
+        reason: "interrupted",
+      });
+    }
+    expect(await readTrial(prefix)).toEqual(committed);
+  } finally {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+  }
+});
+
+it.each(["live-lease", "restore-directory"] as const)(
+  "leaves foreign runs untouched when %s refuses admission",
+  async (guard) => {
+    vi.stubEnv("HOME", root);
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+    const { checkout } = await repository();
+    const target = vi
+      .spyOn(targets, "resolveTarget")
+      .mockRejectedValue(new Error("must not reach staging"));
+    let lease: ManagedHandoffLease | undefined;
+    let store: Awaited<ReturnType<typeof prepareManagedHandoffLeaseStore>> | undefined;
+    try {
+      const state = openOpenClawStateDatabase({ env: process.env });
+      const foreign = await createUpdateRunAsync({ trigger: "cli" });
+      const run = await createUpdateRunAsync({ trigger: "cli" });
+      if (guard === "restore-directory") {
+        await fs.mkdir(path.join(path.dirname(state.path), ".openclaw-restore-fixture"));
+      } else {
+        store = await prepareManagedHandoffLeaseStore({
+          databasePath: resolveManagedUpdateLeaseDatabasePath(),
+          serviceManagerEnv: resolveServiceManagerEnv(),
+        });
+        const acquired = store.acquire(resolveUpdateInstallRoot(checkout), "live-updater", {
+          kind: "update",
+        });
+        if (acquired.kind !== "acquired") {
+          throw new Error("The fixture did not acquire its live in-place lease");
+        }
+        lease = acquired.lease;
+      }
+      expect(
+        await prepareUpdate({
+          runId: run.runId,
+          runningRoot: checkout,
+          runningVersion: VERSION,
+          channel: "dev",
+          node,
+        }),
+      ).toMatchObject({ status: "failed" });
+      expect(target).not.toHaveBeenCalled();
+      expect(await getUpdateRunAsync(foreign.runId)).toMatchObject({ status: "running" });
+      expect(
+        (await getUpdateRunAsync(run.runId))?.steps.find((step) => step.step === "outcome")?.detail,
+      ).toContain(
+        guard === "live-lease"
+          ? "An in-place updater is still using this installation"
+          : "Interrupted shared-database publication",
+      );
+    } finally {
+      if (store && lease) {
+        expect(store.release(lease)).toBe(true);
+      }
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+    }
+  },
+);

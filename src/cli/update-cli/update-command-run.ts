@@ -59,9 +59,10 @@ import {
 import type { UpdateRunRecord, UpdateRunStep } from "../../infra/update-run-record.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { isUpdateRecoveryPending } from "../../infra/update-run-recovery-schema.js";
+import { loadPluginCohortRecovery } from "../../infra/update-run-recovery-store.js";
 import {
   inspectUpdateRecoveries,
-  assertNoPendingUpdateRecovery,
+  assertPluginCohortRecoveryContinuation,
   loadUpdateRecovery,
   type UpdateRecoveryFence,
 } from "../../infra/update-run-recovery.js";
@@ -114,7 +115,6 @@ import {
 } from "./update-command-service-plan.js";
 import { preflightWindowsUpdateTask } from "./update-command-windows-preflight.js";
 import { verifyRecordedDataAtRiskBeforeUpdate } from "./update-data-at-risk-guidance.js";
-import { inspectInterruptedUpdateRecovery } from "./update-plugin-cohort-settlement.js";
 
 export {
   recordUpdateCommandTarget,
@@ -411,12 +411,13 @@ export function completeUpdateCommandRun(
     if (run.requesterAuthority?.isCurrent() === false) {
       throw new Error("Foreground update requester is no longer authorized.");
     }
-    const pair = assertNoPendingUpdateRecovery({
-      env: run.env,
-      allowNativeRead: true,
-      pluginCohort: { runId: run.runId, fence: run.executorFence },
-    });
+    const pair = loadPluginCohortRecovery(run.runId, { env: run.env, allowNativeRead: true });
     if (pair) {
+      assertPluginCohortRecoveryContinuation(
+        pair,
+        { runId: run.runId, fence: run.executorFence },
+        { env: run.env },
+      );
       if (
         result.after?.version !== pair.reservation.to.version ||
         (result.after?.buildId ?? null) !== pair.reservation.to.buildId
@@ -594,10 +595,6 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
   // owner. Check both roots before config/autostart preparation or history.
   const packageActivationNotes: string[] = [];
   const packageActivationSteps: UpdateStepResult[] = [];
-  // Read a killed update's recovery before package settlement claims the installation.
-  const settleInterruptedUpdate = postCoreUpdateResume
-    ? undefined
-    : await inspectInterruptedUpdateRecovery(discoveredRoot, opts, packageActivationSteps);
   const admitPackageActivation = async (root: string) => {
     if (!postCoreUpdateResume) {
       const settled = await settlePendingPackageActivation(
@@ -684,15 +681,6 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
       throw err;
     }
   }
-  // Every refusal above stands first. Settle under the state selection admission will use.
-  await settleInterruptedUpdate?.((invocationCwd) =>
-    resolveUpdateCommandAdmissionEnv({
-      opts,
-      root: packageAdmission.serviceRoot ?? discoveredRoot,
-      invocationCwd,
-      pkgOwnership,
-    }),
-  );
   return {
     startedAt,
     postCoreUpdateResume,

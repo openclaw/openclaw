@@ -1,10 +1,7 @@
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createUpdateErrorFact } from "../../infra/update-failure-facts.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
-import {
-  assertUpdateRecoveryAdmission,
-  inspectPluginCohortRecoveryAdmission,
-} from "../../infra/update-run-recovery-admission.js";
+import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { UpdateRecoveryRequiredError } from "../../infra/update-run-recovery.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
@@ -179,17 +176,7 @@ export async function withUpdateCommandRecoveryUnwind(
     try {
       await runMutableUpdateRecovery(admitRecovery);
     } catch (error) {
-      // Repair settles a matching cohort pair; other retained recovery keeps its original owner.
-      const repairable =
-        error instanceof UpdateRecoveryRequiredError &&
-        (await runMutableUpdateRecovery(() =>
-          inspectPluginCohortRecoveryAdmission({ env: run.env }, error.record.runId),
-        ).catch(() => undefined));
-      const pending = pendingFailure(
-        error,
-        failure?.error ?? error,
-        repairable ? "Run `openclaw update repair` to finish this recovery." : undefined,
-      );
+      const pending = pendingFailure(error, failure?.error ?? error);
       if (
         failure &&
         !(failure.error instanceof UpdateCommandFailure) &&

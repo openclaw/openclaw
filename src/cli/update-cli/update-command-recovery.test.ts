@@ -24,7 +24,6 @@ import {
   loadUpdateRecovery,
   UpdateRecoveryRequiredError,
 } from "../../infra/update-run-recovery.js";
-import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -64,7 +63,7 @@ describe("package finalization recovery targets", () => {
     ["entry", "settlement"].flatMap((phase) =>
       ["same-target", "distinct-target", "retargeted"].map((kind) => ({ phase, kind })),
     ),
-  )("inspects each selected recovery target once at $phase ($kind)", async ({ phase, kind }) => {
+  )("inspects each selected restore directory once at $phase ($kind)", async ({ phase, kind }) => {
     const first = target();
     const other = kind === "same-target" ? undefined : target();
     if (kind === "same-target") {
@@ -76,7 +75,7 @@ describe("package finalization recovery targets", () => {
       first.params.ownedManagedUpdateEnv = other!.run.env;
     }
     closeOpenClawStateDatabaseForTest();
-    const read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+    const read = vi.spyOn(fs, "readdir");
     const prepare = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync");
     if (kind === "retargeted") {
       observeStat(path.dirname(first.databasePath), () => {
@@ -96,11 +95,9 @@ describe("package finalization recovery targets", () => {
         : kind === "retargeted"
           ? [first.databasePath, other!.databasePath]
           : [first.databasePath];
-    expect(
-      read.mock.calls
-        .filter(([, command]) => command.type === "updateRuns.recoveryAdmission")
-        .map(([options]) => options.path),
-    ).toEqual(recoveryPaths);
+    expect(read.mock.calls.map(([directory]) => String(directory))).toEqual(
+      recoveryPaths.map((databasePath) => path.dirname(databasePath)),
+    );
     // Settlement still needs its independent terminal-history snapshot.
     expect(prepare.mock.calls.map(([pathname]) => pathname)).toEqual(
       phase === "settlement" ? [resolveOpenClawStateSqlitePath(first.run.env)] : [],
@@ -324,44 +321,6 @@ function observeStat(target: string, observed: () => void | Promise<void>, defau
 }
 
 describe("package rollback executor ownership", () => {
-  it("checks the new history target after its admission environment changes", async () => {
-    const env = { OPENCLAW_STATE_DIR: dirs.make("rollback-first-target-") };
-    const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
-    const pendingEnv = { OPENCLAW_STATE_DIR: dirs.make("rollback-pending-target-") };
-    const pendingRun = createUpdateRun({ trigger: "cli" }, { env: pendingEnv });
-    const root = dirs.make("rollback-target-package-");
-    const runtime = { root, nodePath: process.execPath, version: "1.0.0", buildId: null };
-    createRetainedUpdateRecovery(
-      { runId: pendingRun.runId, from: runtime, to: runtime },
-      { env: pendingEnv },
-    );
-    const configSnapshot = await readPreviousConfig(env);
-    closeOpenClawStateDatabaseForTest();
-    const files = [resolveOpenClawStateSqlitePath(env), resolveOpenClawStateSqlitePath(pendingEnv)];
-    const before = await Promise.all(files.map((file) => fs.readFile(file)));
-    let changed = false;
-    observeStat(path.dirname(files[0]!), () => {
-      changed = true;
-      env.OPENCLAW_STATE_DIR = pendingEnv.OPENCLAW_STATE_DIR;
-    });
-    const result = await rollbackFailedUpdate({
-      definitionRecovery: {},
-      result: resultFixture(root, { status: "error" }),
-      previousRoot: root,
-      rollbackBlockedReason: "state-migrated-no-rollback",
-      configSnapshot,
-      opts: { run },
-      timeoutMs: 1000,
-    });
-    expect(changed).toBe(true);
-    expect(result).toMatchObject({
-      rolledBack: false,
-      pendingRecoveryReason: expect.stringContaining(pendingRun.runId),
-    });
-    const after = await Promise.all(files.map((file) => fs.readFile(file)));
-    after.forEach((bytes, index) => expect(bytes.equals(before[index]!), files[index]).toBe(true));
-  });
-
   it("preserves the real package and recovery material when its executor is lost during observation", async () => {
     const base = dirs.make("rollback-real-executor-");
     const { packageRoot, transaction } = await createRetainedPackageSwap(base);

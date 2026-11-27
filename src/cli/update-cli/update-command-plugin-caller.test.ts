@@ -9,7 +9,9 @@ import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
+import type { PluginCohortRecoveryPair } from "../../infra/update-plugin-cohort-schema.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
+import { loadPluginCohortRecovery } from "../../infra/update-run-recovery-store.js";
 import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../../plugins/installed-plugin-index-records.js";
 import { auditDeclaredOpenClawHostDependency } from "../../plugins/plugin-peer-link.js";
 import * as registryRefresh from "../../plugins/registry-refresh.js";
@@ -17,6 +19,7 @@ import {
   readPersistedInstalledPluginIndexRowSync,
   seedInstalledPluginIndex,
 } from "../../plugins/test-helpers/installed-plugin-index.js";
+import { beginUpdatePluginCohort } from "../../plugins/update-cohort-recovery.js";
 import * as pluginUpdates from "../../plugins/update.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import {
@@ -178,6 +181,23 @@ async function exercisePersistence(state: OpenClawTestState, scenario: (typeof s
     OPENCLAW_UPDATE_RUN_HANDOFF: "1",
     [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]: metaPath,
   };
+  // A different updater's saved reservation is history, not permission for these effects.
+  let foreignCohort: PluginCohortRecoveryPair | undefined;
+  if (scenario === "healthy") {
+    const { runId } = createUpdateRun({ trigger: "cli" }, { env: state.env });
+    foreignCohort = await withUpdateCommandExecutor(runId, async (executor) => {
+      const fence = await executor.enter(otherRoot);
+      const runtime = { root: otherRoot, nodePath: process.execPath, buildId: null };
+      return await beginUpdatePluginCohort({
+        runId,
+        installKey: otherRoot,
+        from: { ...runtime, version: "2026.10.9" },
+        to: { ...runtime, version: VERSION },
+        env: state.env,
+        fence,
+      });
+    });
+  }
   let created = createUpdateRun({ trigger: "cli" }, { env: state.env });
   const readRun = (runId = created.runId) => getUpdateRun(runId, { env: state.env });
   let preUpdatePluginInstallRecords = installRecords;
@@ -353,6 +373,10 @@ async function exercisePersistence(state: OpenClawTestState, scenario: (typeof s
     expect(runAtPublication?.status).toBe("succeeded");
     expect(configBoundaryReached).toBe(true);
     expect(transport.exec).toHaveBeenCalled();
+    assert(foreignCohort);
+    expect(loadPluginCohortRecovery(foreignCohort.cohort.runId, { env: state.env })).toEqual(
+      foreignCohort,
+    );
   } else {
     await expect(terminal).rejects.toMatchObject({ code: 1, name: new ExitError(1).name });
     expect(refused).toBeInstanceOf(UpdateCommandPendingRecoveryFailure);

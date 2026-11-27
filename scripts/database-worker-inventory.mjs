@@ -3187,13 +3187,9 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T3",
-        operations: [
-          "readRecoveryRows",
-          "readPluginCohortPairRows",
-          "inspectPluginCohortRecoveryRows",
-        ],
+        operations: ["readRecoveryRows", "readPluginCohortPairRows"],
         evidence:
-          "Runtime mutation/reconciliation/interruption readers execute in existing workers. Native load/inspect recovery callers are update CLI repair, result, rollback and terminal owners plus CLI managed-handoff cleanup; no Gateway reader uses the synchronous recovery facade. Recovery exclusion is retained as activation/rollback custody, not removed as bookkeeping. Cohort runtime inspection uses inspectPluginCohortRecoveriesAsync through openclaw-state-read-handlers; metadata mutations read the pair inside their worker. Native pair reads serve admitted update/repair/config-capture owners; the synchronous mutation continuation is supplied only by CLI execution-guards with its actual executor fence.",
+          "Runtime mutation/reconciliation/interruption readers execute in existing workers. Native load/inspect recovery callers are CLI repair, result, rollback and terminal owners plus Doctor diagnostics. Gateway cohort completion uses loadPluginCohortRecoveryAsync to read only its named pair; metadata mutations recheck that exact transaction in their worker. Current source/executor/finalizer checks remain; foreign saved rows are not update admission authority.",
       },
     ],
   ],

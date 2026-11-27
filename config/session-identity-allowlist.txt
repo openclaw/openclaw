@@ -651,7 +651,6 @@ src/cli/update-cli/update-command-resume.ts	2
 src/cli/update-cli/update-command-run.ts	4
 src/cli/update-cli/update-command-service-drain.ts	3
 src/cli/update-cli/update-command-terminal-record.ts	4
-src/cli/update-cli/update-plugin-cohort-settlement.ts	1
 src/cli/update-cli/update-repair-command.ts	2
 src/cli/update-cli/update-repair-service.ts	2
 src/commands/agents.commands.delete.ts	1

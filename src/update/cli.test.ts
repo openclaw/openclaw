@@ -95,13 +95,6 @@ vi.mock("../infra/update-install-status.js", async (importOriginal) => ({
   }),
 }));
 const prepared = vi.hoisted(() => [] as unknown[]);
-const maintainRuntimes = vi.hoisted(() =>
-  vi.fn(async (_repair: boolean, _authority: { assertCurrent: () => void }) => [] as string[]),
-);
-// mock-isolation: reclamation scans host temp directories; prepare.test.ts runs it for real.
-vi.mock("../commands/doctor-retained-runtime.js", () => ({
-  prepareRetainedUpdateRuntimeMaintenance: async () => maintainRuntimes,
-}));
 // mock-isolation: preparation builds a real release; this test checks only the channel it is given.
 vi.mock("./run.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./run.js")>()),
@@ -175,8 +168,6 @@ afterEach(async () => {
   localRun.status = "skipped";
   localRun.phase = "finished";
   localRun.origin = {};
-  maintainRuntimes.mockReset();
-  maintainRuntimes.mockResolvedValue([]);
   confirmDowngrade.mockReset();
   createRun.mockClear();
   mutateConfig.mockClear();
@@ -365,68 +356,11 @@ it.each(["update.run", "gateway.restart.request"] as const)(
   },
 );
 
-it.each([false, true])(
-  "reclaims earlier updaters' runtimes itself before the Gateway updates (json=%s)",
-  async (json) => {
-    const removed = "Removed abandoned updater runtime: /tmp/openclaw-update-runtime-Gone01";
-    maintainRuntimes.mockImplementation(async () => {
-      // The Gateway's census would count this requesting command as a possible holder.
-      expect(sent).toEqual([]);
-      return [removed];
-    });
-    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-    runsGet.push(() => ({
-      run: {
-        status: "succeeded",
-        phase: "finished",
-        steps: [],
-        after: { version: "2026.11.7" },
-        origin: {},
-      },
-    }));
-    await runReleaseUpdateCli({ json, restart: true, runningRoot: root });
-    expect(maintainRuntimes).toHaveBeenCalledOnce();
-    const lines = (spy: typeof log) => spy.mock.calls.map(([line]) => line);
-    if (json) {
-      // stdout carries only the record.
-      expect(lines(error)).toEqual([removed]);
-      expect(log).not.toHaveBeenCalled();
-      expect(writeJson).toHaveBeenCalledOnce();
-    } else {
-      expect(lines(log)).toEqual([
-        removed,
-        "finished: finished",
-        expect.stringContaining("✅ OpenClaw updated to 2026.11.7."),
-      ]);
-      expect(error).not.toHaveBeenCalled();
-    }
-    expect(process.exitCode).toBe(0);
-  },
-);
-
-it("skips cleanup under a short --timeout and gives the update the budget", async () => {
+it("gives a short --timeout budget to the update request", async () => {
   await expect(
     runReleaseUpdateCli({ json: true, restart: true, runningRoot: root, timeoutMs: 5_000 }),
   ).rejects.toThrow("refused for the test");
-  // A census cannot be interrupted, so a 5 s budget does not start one.
-  expect(maintainRuntimes).not.toHaveBeenCalled();
   expect(sent).toEqual([{ timeoutMs: expect.any(Number) }]);
-});
-
-it("leaves kept-runtime lines to the cleanup owner's log", async () => {
-  const removed = "Removed abandoned updater runtime: /tmp/openclaw-update-runtime-Gone01";
-  maintainRuntimes.mockResolvedValue([
-    removed,
-    "Runtime retained at /tmp/openclaw-update-runtime-Held01: still in use",
-  ]);
-  const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-  await runReleaseUpdateCli({ json: false, restart: false, runningRoot: root });
-  expect(log.mock.calls.map(([line]) => line)).toEqual([
-    removed,
-    expect.stringContaining("already up to date"),
-  ]);
 });
 
 it("says the update is still running when the --timeout budget ends first", async () => {
@@ -535,7 +469,6 @@ it("refuses --no-restart from another checkout before preparation or creating a 
   );
   await expect(fs.stat(path.join(resolvePrefix(), "releases", ".trial"))).rejects.toThrow();
   expect(prepared).toEqual([]);
-  expect(maintainRuntimes).not.toHaveBeenCalled();
 });
 
 it("lets an accessible Gateway take over an opaque first-conversion owner", async () => {
@@ -562,7 +495,6 @@ it.each([{ restart: false }, { restart: true, tag: "beta" }])(
     expect(sent).toEqual([]);
     expect(prepared).toEqual([]);
     expect(createRun).not.toHaveBeenCalled();
-    expect(maintainRuntimes).not.toHaveBeenCalled();
   },
 );
 

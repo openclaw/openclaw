@@ -41,6 +41,7 @@ import {
   writeTrial,
   type Trial,
 } from "./store.js";
+import * as releaseStore from "./store.js";
 
 const notices = vi.hoisted(() => [] as Array<{ runId: string; kind: string; status: string }>);
 const backgroundWork = vi.hoisted(() => {
@@ -711,5 +712,18 @@ process.stdout.write("maintenance-ready\\n");`,
     }
     await watcher.stop();
     await lifecycle.stop();
+  }
+});
+
+it("collects owned release paths after the Gateway is ready", async () => {
+  const prefix = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ready-retention-"));
+  const collect = vi.spyOn(releaseStore, "collectReleases");
+  try {
+    await settleRunFromTrial(null, prefix);
+    expect(collect).toHaveBeenCalledExactlyOnceWith(prefix);
+    await collect.mock.results[0]?.value;
+  } finally {
+    collect.mockRestore();
+    await fs.rm(prefix, { recursive: true, force: true });
   }
 });

@@ -14,6 +14,7 @@ import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
 import {
+  collectReleases,
   readTrial,
   readUpdateLock,
   releaseUpdateLock,
@@ -128,6 +129,8 @@ export async function settleRunFromTrial(
   trial: Trial | null,
   prefix = resolvePrefix(),
 ): Promise<void> {
+  // Ready releases prune by owned path; stale updater records do not gate preparation.
+  void collectReleases(prefix).catch(() => undefined);
   if (
     trial?.outcome &&
     trial.runId &&

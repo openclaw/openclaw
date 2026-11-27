@@ -11,18 +11,17 @@ import {
   writeConfigMachineStateInDatabase,
 } from "../state/config-machine-state-write.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
+import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
 import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { getOpenClawStateFeatureSchemaSql } from "../state/openclaw-state-feature-schema.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import type { EngineConnection } from "./sql-connection.js";
-import { runSqliteReadSnapshotSync } from "./sqlite-transaction.js";
 import {
   assertPluginCohortRecoveryBinding,
   decodePluginCohortRecovery,
   encodePluginCohortRecovery,
-  PLUGIN_COHORT_RECOVERY_KEY_END,
   PLUGIN_COHORT_RECOVERY_KEY_PREFIX,
   type PluginCohortRecovery,
   type PluginCohortRecoveryBinding,
@@ -35,22 +34,12 @@ import { UPDATE_RECOVERY_KEY_END, UPDATE_RECOVERY_KEY_PREFIX } from "./update-ru
 import {
   decodeUpdateRecovery,
   inspectUpdateRecovery,
-  isUpdateRecoveryPending,
   type UpdateRecoveryInspection,
   type UpdateRecoveryRecord,
 } from "./update-run-recovery-schema.js";
 import type { UpdateRecoveryFence } from "./update-run-recovery-types.js";
 
 type RecoveryDatabase = Pick<DB, "update_runs" | "config_machine_state">;
-
-export function readUpdateRecoveryAdmissionFacts(db: EngineConnection) {
-  // Reservations and companions must come from one snapshot; an orphan cannot
-  // disappear between reads. Execution authority stays with the calling updater.
-  return runSqliteReadSnapshotSync(db, () => ({
-    cohorts: inspectPluginCohortRecoveryRows(db),
-    recoveries: inspectRecoveryRows(db),
-  }));
-}
 
 function readRecoveryRows(db: EngineConnection, runId?: string) {
   if (!tableExists(db, "config_machine_state")) {
@@ -157,7 +146,11 @@ export function loadPluginCohortRecovery(
   runId: string,
   options: OpenClawStateDatabaseOptions & { allowNativeRead?: true } = {},
 ): PluginCohortRecoveryPair | undefined {
-  return withUpdateRunRead(({ db }) => readPluginCohortRecoveryInDatabase(db, runId), options);
+  return withUpdateRunRead(
+    ({ db }) => readPluginCohortRecoveryInDatabase(db, runId),
+    options,
+    openDoctorStateSchemaReadAdmission,
+  );
 }
 
 export function readPluginCohortRecoveryInDatabase(
@@ -171,58 +164,19 @@ export function readPluginCohortRecoveryInDatabase(
     : undefined;
 }
 
-/** Runtime consumers retain the existing read worker and its selected database admission. */
-export async function inspectPluginCohortRecoveriesAsync(
+/** Runtime consumers read only their named pair through the existing database worker. */
+export async function loadPluginCohortRecoveryAsync(
+  runId: string,
   options: OpenClawStateDatabaseOptions = {},
-): Promise<PluginCohortRecoveryPair[]> {
+): Promise<PluginCohortRecoveryPair | undefined> {
   const { executeExistingOpenClawStateRead } =
     await import("../state/openclaw-state-db-readonly.js");
   const result = await executeExistingOpenClawStateRead(
     options,
-    { type: "updateRuns.pluginCohortRecoveries" },
+    { type: "updateRuns.pluginCohortRecovery", runId },
     { current: true },
   );
-  return result?.pairs ?? [];
-}
-
-/** Recovery can restore an older index; leave all snapshot generations until it settles. */
-export function canCollectPluginSourceSnapshotsInDatabase(db: EngineConnection): boolean {
-  return (
-    inspectPluginCohortRecoveryRows(db).length === 0 &&
-    !inspectRecoveryRows(db).some(({ record }) => isUpdateRecoveryPending(record))
-  );
-}
-
-export async function canCollectPluginSourceSnapshots(
-  options: OpenClawStateDatabaseOptions = {},
-): Promise<boolean> {
-  const { executeExistingOpenClawStateRead } =
-    await import("../state/openclaw-state-db-readonly.js");
-  const result = await executeExistingOpenClawStateRead(
-    options,
-    { type: "updateRuns.pluginSnapshotCollection" },
-    { current: true },
-  );
-  return result?.allowed === true;
-}
-
-export function inspectPluginCohortRecoveryRows(db: EngineConnection): PluginCohortRecoveryPair[] {
-  if (!tableExists(db, "config_machine_state")) {
-    return [];
-  }
-  const rows = executeSqliteQuerySync(
-    db,
-    getNodeSqliteKysely<RecoveryDatabase>(db)
-      .selectFrom("config_machine_state")
-      .select("state_key")
-      .where("state_key", ">=", PLUGIN_COHORT_RECOVERY_KEY_PREFIX)
-      .where("state_key", "<", PLUGIN_COHORT_RECOVERY_KEY_END)
-      .orderBy("state_key", "asc"),
-  ).rows;
-  return rows.map((row) => {
-    const runId = row.state_key.slice(PLUGIN_COHORT_RECOVERY_KEY_PREFIX.length);
-    return decodePluginCohortPair(readPluginCohortPairRows(db, runId), runId);
-  });
+  return result?.pair;
 }
 
 function withPluginCohortRecoveryWrite<T>(
