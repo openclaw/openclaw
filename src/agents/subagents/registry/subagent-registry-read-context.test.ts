@@ -23,6 +23,36 @@ function makeRun(runId: string, overrides: Partial<SubagentRunRecordOverrides> =
 const toRunMap = (runs: SubagentRunRecord[]) => new Map(runs.map((run) => [run.runId, run]));
 
 describe("subagent registry read index", () => {
+  it("projects execution timing and preserves the inclusive child-link expiry", () => {
+    const run = makeRun("timed", {
+      createdAt: 1,
+      sessionStartedAt: 100,
+      startedAt: 200,
+      endedAt: 300,
+      accumulatedRuntimeMs: 50,
+      model: "fixture-model",
+      controllerSessionKey: " controller ",
+    });
+    const index = buildSubagentRunReadIndexFromRuns({ runs: toRunMap([run]), now: 300 });
+    const expiresAt = 300 + 30 * 60_000;
+    expect(index.getSessionDisplayFacts(run.childSessionKey, expiresAt)).toMatchObject({
+      identity: run,
+      model: "fixture-model",
+      ownerSessionKey: "controller",
+      active: false,
+      status: "done",
+      startedAt: 100,
+      endedAt: 300,
+      runtimeMs: 150,
+      clock: undefined,
+      childLinkExpiresAt: expiresAt,
+      retainChildLink: true,
+    });
+    expect(index.getSessionDisplayFacts(run.childSessionKey, expiresAt + 1)?.retainChildLink).toBe(
+      false,
+    );
+  });
+
   it("indexes the latest generation for each child session", () => {
     const childSessionKey = child("restarted");
     const olderGeneration = makeRun("run-newer-created-at", {
@@ -48,7 +78,7 @@ describe("subagent registry read index", () => {
       runs: toRunMap([persisted]),
       inMemoryRuns: [latestGeneration, olderGeneration],
     });
-    expect(live.getDisplaySubagentRun(childSessionKey)).toBe(latestGeneration);
+    expect(live.getSessionDisplayFacts(childSessionKey)?.identity).toBe(latestGeneration);
   });
 
   it("advances the clock over retained groups after the source map is cleared", () => {
@@ -74,16 +104,16 @@ describe("subagent registry read index", () => {
     runs.clear();
 
     const before = grouped.atTime(startedAt + 1_000);
-    expect(before.getDisplaySubagentRun(childSessionKey)).toBe(active);
+    expect(before.getSessionDisplayFacts(childSessionKey)?.identity).toBe(active);
     expect(before.listDescendantRunsForRequester(root)).toEqual([ended, descendant]);
     expect(before.countActiveDescendantRuns(root)).toBe(1);
     expect(before.countPendingDescendantRuns(root)).toBe(1);
     const after = grouped.atTime(startedAt + 2 * 60 * 60_000 + 1);
-    expect(after.getDisplaySubagentRun(childSessionKey)).toBe(ended);
+    expect(after.getSessionDisplayFacts(childSessionKey)?.identity).toBe(ended);
     expect(after.countActiveDescendantRuns(root)).toBe(0);
     expect(after.countPendingDescendantRuns(root)).toBe(0);
     expect(after.hasDescendantRunAwaitingSettle(root)).toBe(false);
-    expect(grouped.getDisplaySubagentRun(childSessionKey)).toBe(active);
+    expect(grouped.getSessionDisplayFacts(childSessionKey)?.identity).toBe(active);
     expect(before.countActiveDescendantRuns(root)).toBe(1);
     expect(after.inputs).toBe(before.inputs);
     expect(after.inputs).toBe(grouped.inputs);
