@@ -30,7 +30,6 @@ import type {
   RequesterSettleWakeWait,
   SubagentLifecycleOptions,
 } from "./subagent-registry-lifecycle-context.js";
-import { refreshFrozenResultFromSession } from "./subagent-registry-lifecycle-delivery.js";
 import {
   finalizeResumedAnnounceGiveUp,
   resumeSubagentAfterDrain,
@@ -466,9 +465,6 @@ export class SubagentLifecycleController {
     entry: SubagentRunRecord,
     stateContext: OpenClawStateWorkerContext,
   ) => resumeSubagentAfterDrain(this, runId, entry, stateContext);
-
-  refreshFrozenResultFromSession = (sessionKey: string) =>
-    refreshFrozenResultFromSession(this, sessionKey);
 
   markRequesterSettleWakeRestored = (entry: SubagentRunRecord): void => {
     const current = getCurrentSubagentRunOwner(this.options.runs, entry);
