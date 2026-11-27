@@ -35,7 +35,8 @@ vi.mock("../daemon/service.js", async (importOriginal) => ({
   resolveGatewayService: () => ({}),
   readGatewayServiceState: async () => ({ loadState: { status: "loaded" } }),
 }));
-vi.mock("../commands/systemd-linger.js", () => ({
+vi.mock("../commands/systemd-linger.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/systemd-linger.js")>()),
   ensureSystemdUserLingerInteractive: systemd.ensureLinger,
 }));
 
