@@ -125,8 +125,8 @@ request. Plugin dependencies are expected to be present before runtime load.
   - Current declared-but-skipped `videoToVideo` providers in the shared sweep:
     - `alibaba`, `google`, `qwen`, `xai` because those paths currently require remote `http(s)` reference URLs rather than buffer-backed local input
 - Optional narrowing:
-  - `OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS="deepinfra,google,runway,xai"`
-  - `OPENCLAW_LIVE_VIDEO_GENERATION_MODELS="google/veo-3.1-fast-generate-preview,xai/grok-imagine-video,runway/gen4_aleph"`
+  - `OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS="deepinfra,openrouter,runway,xai"`
+  - `OPENCLAW_LIVE_VIDEO_GENERATION_MODELS="openrouter/google/veo-3.1-fast,xai/grok-imagine-video,runway/gen4_aleph"`
   - `OPENCLAW_LIVE_VIDEO_GENERATION_SKIP_PROVIDERS=""` to include every provider in the default sweep, including FAL
   - `OPENCLAW_LIVE_VIDEO_GENERATION_TIMEOUT_MS=60000` to reduce each provider operation cap for an aggressive smoke run
 - Optional auth behavior:
