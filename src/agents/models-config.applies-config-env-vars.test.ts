@@ -168,14 +168,15 @@ describe("models-config planning", () => {
     const { api: _api, ...withoutApi } = provider({ baseUrl: "https://legacy.example/v1" });
     const plan = await generate({
       cfg: { models: { providers: { valid: provider(), legacy: withoutApi } } },
-      // An authored entry left only in the existing file is reported too.
-      existingParsed: { providers: { authored: withoutApi } },
+      // Entries left only in the existing file are reported too, before catalog normalization.
+      existingParsed: { providers: { authored: withoutApi, malformed: { models: [null] } } },
     });
 
     expect(Object.keys(plan.providers)).toEqual(["valid"]);
     expect(plan.skippedProviders?.toSorted()).toEqual([
       'Provider authored, model gpt-5.5: no "api" specified. Set at provider or model level.',
       'Provider legacy, model gpt-5.5: no "api" specified. Set at provider or model level.',
+      'Provider malformed: "baseUrl" is required when defining custom models.',
     ]);
     const registry = ModelRegistry.create(
       AuthStorage.inMemory(),

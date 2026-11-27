@@ -302,6 +302,7 @@ function resolveProvidersForMode(params: {
   existingParsed: unknown;
   providers: Record<string, ProviderConfig>;
   secretRefManagedProviders: ReadonlySet<string>;
+  skippedProviders: Set<string>;
 }): Record<string, ProviderConfig> {
   if (params.mode !== "merge") {
     return params.providers;
@@ -314,6 +315,7 @@ function resolveProvidersForMode(params: {
     nextProviders: params.providers,
     existingProviders: existing.providers as Record<string, ExistingProviderConfig>,
     secretRefManagedProviders: params.secretRefManagedProviders,
+    skippedProviders: params.skippedProviders,
   });
 }
 
@@ -404,14 +406,15 @@ export async function planOpenClawModelsJson(params: {
       }),
     );
   }
+  // The model registry rejects a whole models.json for one invalid provider, so omit those.
+  const skippedProviders = new Set<string>();
   const mergedProviders = resolveProvidersForMode({
     mode,
     existingParsed: { providers: generatedCatalogProviders },
     providers: normalizedProviders,
     secretRefManagedProviders,
+    skippedProviders,
   });
-  // The model registry rejects a whole models.json for one invalid provider, so omit those.
-  const skippedProviders = new Set<string>();
   const finalizeProviders = (candidateProviders: Record<string, ProviderConfig>) => {
     const normalized =
       normalizeProviderCatalogModelsForConfig(candidateProviders) ?? candidateProviders;
@@ -468,6 +471,7 @@ export async function planOpenClawModelsJson(params: {
     existingParsed: params.existingParsed,
     providers: splitRootProviders,
     secretRefManagedProviders,
+    skippedProviders,
   });
   const nextContents = `${JSON.stringify(
     {

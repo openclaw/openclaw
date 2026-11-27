@@ -382,13 +382,22 @@ export function mergeWithExistingProviderSecrets(params: {
   nextProviders: Record<string, ProviderConfig>;
   existingProviders: Record<string, ExistingProviderConfig>;
   secretRefManagedProviders: ReadonlySet<string>;
+  /** Receives the reason for each existing entry left out because the registry would reject it. */
+  skippedProviders: Set<string>;
 }): Record<string, ProviderConfig> {
   const { nextProviders, existingProviders, secretRefManagedProviders } = params;
   const normalizedExistingProviders = normalizeProviderMapKeys(existingProviders);
   const normalizedNextProviders = normalizeProviderMapKeys(nextProviders);
 
-  // The planner drops entries the registry would reject and reports why.
-  const mergedProviders: Record<string, ProviderConfig> = { ...normalizedExistingProviders };
+  const mergedProviders: Record<string, ProviderConfig> = {};
+  for (const [key, entry] of Object.entries(normalizedExistingProviders)) {
+    const reason = findUnwritableProviderReason(key, entry);
+    if (reason) {
+      params.skippedProviders.add(reason);
+      continue;
+    }
+    mergedProviders[key] = entry;
+  }
   for (const [key, newEntry] of Object.entries(normalizedNextProviders)) {
     const existing = normalizedExistingProviders[key];
     if (!existing) {

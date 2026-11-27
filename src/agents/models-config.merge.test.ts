@@ -26,11 +26,13 @@ type Providers = Record<string, ExistingProviderConfig>;
 function mergeSecrets(
   nextProviders: Parameters<typeof merge.mergeWithExistingProviderSecrets>[0]["nextProviders"],
   existingProviders: Providers,
+  skippedProviders = new Set<string>(),
 ) {
   return merge.mergeWithExistingProviderSecrets({
     nextProviders,
     existingProviders,
     secretRefManagedProviders: new Set(),
+    skippedProviders,
   });
 }
 function mergeCustom(next: ProviderOverrides, existing: ProviderOverrides) {
@@ -72,12 +74,21 @@ describe("models-config merge", () => {
     }
   });
 
-  it("normalizes providers and retains valid existing secrets", () => {
-    const merged = mergeSecrets(merge.mergeProviders({ explicit: { openai: provider() } }), {
-      "auth-only": provider({ models: [], apiKey: "AGENT_KEY" }),
-      " OpenAI ": provider({ baseUrl: agentUrl, apiKey: "AGENT_KEY" }),
-    });
+  it("normalizes providers, retaining valid secrets and reporting invalid stale catalogs", () => {
+    const skipped = new Set<string>();
+    const merged = mergeSecrets(
+      merge.mergeProviders({ explicit: { openai: provider() } }),
+      {
+        invalid: provider({ baseUrl: undefined }),
+        "auth-only": provider({ models: [], apiKey: "AGENT_KEY" }),
+        " OpenAI ": provider({ baseUrl: agentUrl, apiKey: "AGENT_KEY" }),
+      },
+      skipped,
+    );
     expect(Object.keys(merged).toSorted()).toEqual(["auth-only", "openai"]);
+    expect([...skipped]).toEqual([
+      'Provider invalid: "baseUrl" is required when defining custom models.',
+    ]);
     expect(merged["auth-only"]?.apiKey).toBe("AGENT_KEY");
     expect(merged.openai).toMatchObject({ apiKey: "AGENT_KEY", baseUrl: agentUrl });
   });
