@@ -334,8 +334,16 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     const result = await this.runCheckedCommand({
       // Keep stat's original parent/basename metadata semantics, while its
       // boundary check validates the container-visible backing rather than a hidden host alias.
+      //
+      // Stat the parent directory itself before `cd`-ing into it: `cd`'s own failure text is
+      // shell-dependent (dash says "can't cd to <dir>" for a missing parent, with no "No such
+      // file or directory", unlike bash) and would otherwise surface as an uncategorized thrown
+      // error instead of the same missing-path null this function already returns when the
+      // basename itself is missing. This keeps exactly one place that classifies "missing" vs.
+      // a real failure (such as permission denied, which `cd` still reports and this still throws).
       checks: [{ target: resolved.target, options: { action: "stat files" } }],
-      script: 'set -eu\ncd -- "$1"\nLC_ALL=C stat -c "%F|%s|%y" -- "$2"',
+      script:
+        'set -eu\nLC_ALL=C stat -c "%F" -- "$1" >/dev/null\ncd -- "$1"\nLC_ALL=C stat -c "%F|%s|%y" -- "$2"',
       args: [anchoredTarget.canonicalParentPath, anchoredTarget.basename],
       allowFailure: true,
       signal: params.signal,
