@@ -6,6 +6,11 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareAgentExecScratch } from "./exec-scratch.js";
 
+vi.mock("@openclaw/fs-safe/root", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@openclaw/fs-safe/root")>();
+  return { ...actual, root: vi.fn(actual.root) };
+});
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let workspace: string;
 let fallback: string;
@@ -65,7 +70,7 @@ it("preserves root identity failures with a permission cause", async () => {
     cause: Object.assign(new Error("permission denied"), { code: "EACCES" }),
   });
   vi.spyOn(opened, "mkdir").mockRejectedValue(error);
-  vi.spyOn(fsSafe, "root").mockResolvedValue(opened);
+  vi.mocked(fsSafe.root).mockResolvedValueOnce(opened);
   await expect(prepareAgentExecScratch(workspace)).rejects.toBe(error);
   await expect(fs.stat(fallback)).rejects.toMatchObject({ code: "ENOENT" });
 });
