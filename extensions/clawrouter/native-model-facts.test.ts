@@ -21,6 +21,7 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => providerAuthRuntimeMo
 import plugin from "./index.js";
 import {
   buildClawRouterProviderConfig,
+  decisionCapabilities,
   normalizeClawRouterResolvedModel,
 } from "./provider-catalog.js";
 
@@ -124,6 +125,32 @@ async function captureRequestBody(
 }
 
 describe("ClawRouter native model facts", () => {
+  it("publishes only matching Luna routes and preserves the complete Decision execution row", async () => {
+    const registered = await registerSingleProviderPlugin(plugin);
+    const route = {
+      provider: "clawrouter",
+      id: "openai/gpt-6-luna",
+      name: "Luna",
+      api: "openai-responses",
+      baseUrl: "https://router.example/v1",
+      contextWindow: 100_000,
+      params: { marker: "configured" },
+    } as const;
+    const nonChat = { ...route, baseUrl: "https://second.example/v1", inference: { chat: false } };
+    const entries = [
+      { ...route, provider: "another" },
+      { ...route, id: "another-model" },
+      { ...route, api: "openai-completions" as const },
+      route,
+      nonChat,
+    ];
+    const rows = await registered.augmentModelCatalog?.({ env: {}, entries });
+    expect(rows).toEqual([
+      { ...route, inference: { ...decisionCapabilities, chat: true } },
+      { ...nonChat, inference: { ...decisionCapabilities, chat: false } },
+    ]);
+  });
+
   beforeEach(() => {
     clearLiveCatalogCacheForTests();
   });

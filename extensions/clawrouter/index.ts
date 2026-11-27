@@ -623,16 +623,16 @@ export default defineSingleProviderPluginEntry({
       // This is protocol support, not a key grant. The decision executor checks the
       // selected credential's catalog before using its native route.
       augmentModelCatalog: ({ entries }) =>
-        entries.map((entry) =>
-          entry.provider === PROVIDER_ID &&
-          entry.id === "openai/gpt-6-luna" &&
-          entry.api === "openai-responses"
-            ? {
-                ...entry,
-                inference: { ...decisionCapabilities, chat: entry.inference?.chat ?? true },
-              }
-            : entry,
-        ),
+        entries
+          .filter(
+            ({ provider, id, api }) =>
+              provider === PROVIDER_ID && id === "openai/gpt-6-luna" && api === "openai-responses",
+          )
+          .map((entry) =>
+            Object.assign({}, entry, {
+              inference: { ...decisionCapabilities, chat: entry.inference?.chat ?? true },
+            }),
+          ),
       // Live catalog routing also applies to explicitly configured model rows.
       preferRuntimeResolvedModel: () => true,
       prepareDynamicModel: async (ctx) => {
