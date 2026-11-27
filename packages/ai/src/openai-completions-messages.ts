@@ -65,8 +65,6 @@ export function convertMessages(
 ): ChatCompletionMessageParam[] {
   const params: ChatCompletionMessageParam[] = [];
   const supportsTools = options.supportsTools !== false;
-  const declaredToolNames =
-    options.declaredToolNames ?? new Set(context.tools?.map((tool) => tool.name));
   const nativeToolCalls = new Map<string, boolean>();
 
   const normalizeToolCallId = (id: string): string => {
@@ -187,7 +185,8 @@ export function convertMessages(
           nonEmptyThinkingBlocks.push(block);
         } else if (block.type === "toolCall") {
           const native =
-            declaredToolNames.has(block.name) ||
+            !options.declaredToolNames ||
+            options.declaredToolNames.has(block.name) ||
             Reflect.get(block, NATIVE_HISTORICAL_TOOL_CALL) === true;
           nativeToolCalls.set(block.id, native);
           if (supportsTools && native) {

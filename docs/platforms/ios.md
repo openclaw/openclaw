@@ -40,7 +40,7 @@ The app requires iOS 26.2 or iPadOS 26.2 or later.
 - Preserves Markdown paragraph breaks, including before lists and while responses are streaming.
 - Renders completed Mermaid code fences as inline diagrams, with source/copy controls and a full-screen zoomable preview. Diagram rendering uses bundled assets and works offline.
 - Long-press a message and choose **Select Text** to select and copy any span in a native text view; code fences show a copy button that copies the raw code.
-- **Settings** opens the Dashboard settings pages when connected with `operator.admin`; the native Gateway screen remains available for connection and pairing.
+- **Settings** in the sidebar opens native app settings. **Advanced** opens the Dashboard settings with full Gateway access.
 - Speaks assistant messages on demand: long-press a message in Chat and choose **Listen**. The app plays supported Gateway `tts.speak` clips with the configured TTS provider and falls back to on-device speech when Gateway audio is unavailable or unplayable. Playback stops on session switch or backgrounding.
 
 ## Chat text size
@@ -71,20 +71,20 @@ and Gateway permissions are unchanged.
 
 ## Settings
 
-Open **Settings** in the sidebar to use the same Dashboard settings pages as the
-web and macOS apps. A connected operator session with `operator.admin` is required.
-The toolbar's **Device** button opens local appearance, notification delivery,
-camera access, keep-awake, Health summaries, Voice & Talk, and permission controls.
-These controls also appear under **Device Settings** at the top of the native
-fallback when offline, connected with Limited access, or using native Cloudflare
-Access authorization that cannot open the embedded Dashboard. They use the same
-native preferences, consent, and iOS permission prompts as the Dashboard; local
-access does not grant Gateway scopes or expose Gateway credentials.
+Open **Settings** in the sidebar to adjust this iPhone or iPad. **Appearance**,
+**Voice & Talk**, **Permissions**, **Accessories**, and **Keep screen awake**
+are available without a Dashboard connection. To choose which pages to pin,
+open **Sidebar** in Settings or tap the edit button next to **Pages** in the
+sidebar.
 
-Access comes from the current connection's accepted scopes, including when
-authenticated ingress does not issue a reusable Gateway token.
-The toolbar's **Gateway** button opens the native connection screen, including
-setup, paired Gateways, manual connection, and advanced connection options.
+**Storage** shows the size of the local chat cache. **Clear Cache** removes
+saved copies of conversations from this device without deleting messages on
+the Gateway or clearing local drafts.
+
+**Advanced** opens the Dashboard settings when the current connection has
+full access (`operator.admin`). In the **OpenClaw** section, tap the Gateway
+name or **Connection** to manage saved Gateways. **Connection details** has
+manual and advanced connection options.
 The sidebar footer also provides Gateway access: **Add Gateway** when none are
 saved, a direct connection-settings button when one is saved, and a quick picker
 when multiple Gateways are saved. The picker keeps saved Gateways available even
@@ -106,26 +106,24 @@ review page, while native exec and plugin approvals keep their existing actions.
 
 The Gateway must serve Dashboard pages that support the companion iOS app.
 If a loaded Settings page does not report that support, a native banner asks you
-to update the Gateway. **Open Gateway** opens the native connection screen;
-Gateway setup and pairing remain available. The offline **Device** section also
-remains available without Dashboard support.
+to update the Gateway. **Open Gateway settings** opens the native connection
+screen. Gateway setup and native Settings remain available without Dashboard
+support.
 
 Embedded Dashboard pages request native signatures instead of receiving the
 app's private device key or a stored device grant in their startup script. The
 connection response can carry a device token in memory, as required by the
 Gateway protocol; the native authentication path does not persist it in page storage.
 
-The **This iPhone** or **This iPad** page contains appearance, notification
-delivery, camera access, keep-awake behavior, and optional Health summaries.
 QR scanning requests camera permission on first use. If access was denied, the
 scanner offers **Open Settings**; allow **Camera** for OpenClaw, then return to
 the scanner. Screen Time or device-management restrictions must be changed by
 the person who manages those restrictions.
 
-Its **Permissions** page shows notification, camera, microphone, speech, location,
+The **Permissions** page shows notification, camera, microphone, speech, location,
 contacts, calendars, reminders, and photo access. Permission requests use native
 iOS prompts; Precise Location shows the system's current state and links to iOS
-Settings. The Dashboard **Talk** page contains this device's Voice Wake, Talk,
+Settings. **Voice & Talk** contains this device's Voice Wake, Talk,
 Talk control, background listening, and speakerphone settings. Enabling Voice
 Wake, camera access, Health summaries, or Always location first asks for native
 confirmation.
@@ -136,19 +134,11 @@ is cleared at startup. The default share instruction is also retired and cleared
 at startup. Share messages include only an instruction explicitly supplied for
 that share. These changes do not remove the Gateway's `talk.speechLocale` option.
 
-**This iPhone** and **This iPad** also open native **Apple Watch**, **Diagnostics**,
-**Licenses**, and **About** screens. When disconnected, connected without admin
-access, or running in demo or screenshot mode, Settings shows a native fallback:
-a **Device** section with **Device Settings** and those four rows, followed by
-the Gateway connection controls. These local screens remain available without
-loading the Dashboard. Connected admins can still use Dashboard settings normally.
-
-Channels (`/settings/channels`) and Skills (`/skills`) are managed in the
-Dashboard. Local device settings are also available natively without duplicating
-Gateway work pages. Provider, voice, speech language, and other Gateway
-configuration remain owned by the Dashboard and keep their existing admin gates.
-The system-agent settings chat remains removed. Agent selection and read-only
-Files browsing remain native.
+**Accessories** opens Apple Watch and ESP setup. **About** includes build
+information, **Diagnostics**, and third-party licenses. **Diagnostics** is
+also available on the Gateway connection screen. Channels (`/settings/channels`), Skills
+(`/skills`), providers, Talk configuration, and credential management remain
+in the Dashboard. **Advanced** opens the Dashboard settings.
 
 The sidebar opens these Gateway pages in the embedded Dashboard without web
 navigation chrome:
@@ -333,9 +323,8 @@ the pinned renderer dependencies are available.
 
 On first launch the app walks through a short pairing explainer, then Gateway
 setup. It does not present an aggregate permissions page. Optional access is
-requested when you use the related feature, or from **Settings** -> **This iPhone**
-(**This iPad** on iPad) -> **Permissions**. A permission request presents the
-native iOS authorization prompt. You can
+requested when you use the related feature, or from **Settings → Permissions**.
+A permission request presents the native iOS authorization prompt. You can
 change granted access later in the iOS Settings app.
 
 1. Start an authenticated Gateway with a route your phone can reach. Tailscale
@@ -482,7 +471,7 @@ does not mean the phone accepted the message. The Watch records that outcome
 without retrying the command. Reconnecting the Watch or requesting Refresh
 also retries saved result delivery without submitting another chat.
 
-If delivery stalls, open **Settings -> This iPhone -> Apple Watch -> Message Delivery** on
+If delivery stalls, open **Settings → Accessories → Apple Watch → Message Delivery** on
 iPhone. **Delivery uncertain** means the phone cannot prove whether a send
 reached the Gateway; check the original conversation before resending. It does
 not automatically repeat that send. Saved messages that lack delivery context
@@ -554,7 +543,7 @@ tailnet-only route is not enough when the Watch is away from the phone.
    transport and a provider/authentication combination that supports
    `gateway-control-v1` and returns an ICE-lite answer with UDP candidates.
    Provider credentials stay on the Gateway.
-2. On iPhone, open **Settings -> This iPhone -> Apple Watch -> Connect Apple Watch**.
+2. On iPhone, open **Settings → Accessories → Apple Watch → Connect Apple Watch**.
    Voice access is included in normal Watch setup; there is no separate
    voice enable setting.
 3. Open OpenClaw on the Watch before the setup code expires. Open **Talk on
@@ -677,7 +666,7 @@ Requirements:
 
 Setup:
 
-1. On iPhone, open **Settings -> This iPhone -> Apple Watch** (or **Device -> Apple Watch** in the offline fallback).
+1. On iPhone, open **Settings → Accessories → Apple Watch**.
 2. Tap **Connect Apple Watch**.
 3. Open OpenClaw on the watch before the short-lived setup code expires.
 4. Verify the separate Apple Watch row with `openclaw nodes status`.
@@ -841,7 +830,7 @@ Agents can still operate the iOS app through OpenClaw by invoking node commands,
 
 ## Voice wake + talk mode
 
-- Voice wake and Talk mode are available on the Dashboard's **Settings -> Talk** page.
+- Voice Wake and Talk mode are available under **Settings → Voice & Talk**.
 - Voice wake sends recognized commands to the active session; use Talk mode for spoken assistant replies.
 - Switching chats or Gateways cancels pending Voice Wake commands and discards buffered recognition from the previous capture.
 - OpenAI realtime Talk uses client-owned WebRTC when `talk.realtime.transport` is `webrtc`; an explicit `gateway-relay` configuration remains Gateway-owned. See [Talk mode](/nodes/talk).
