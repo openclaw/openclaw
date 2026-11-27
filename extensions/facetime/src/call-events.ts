@@ -43,7 +43,7 @@ const TU_CALL_STATUS = {
   disconnected: 6,
 } as const;
 
-/** A caller listed in `ownerHandles`; owner status comes from `commands.ownerAllowFrom`. */
+/** A caller listed in `allowedCallers`; owner status comes from `commands.ownerAllowFrom`. */
 export type AuthenticatedFaceTimeCaller = {
   senderId: string;
 };
@@ -208,15 +208,15 @@ export function normalizeFaceTimeCallEvent(value: unknown): FaceTimeCallStatusEv
 
 export function resolveAuthorizedFaceTimeCaller(params: {
   event: FaceTimeCallStatusEvent;
-  ownerHandles: readonly string[];
+  allowedCallers: readonly string[];
 }): AuthenticatedFaceTimeCaller | undefined {
   if (!isVerifiedFaceTimeTransport(params.event)) {
     return undefined;
   }
-  const ownerHandles = new Set(params.ownerHandles.map(canonicalizeFaceTimeHandle).filter(Boolean));
+  const allowed = new Set(params.allowedCallers.map(canonicalizeFaceTimeHandle).filter(Boolean));
   const handle = collectHandleCandidates(params.event.data.handle)
     .map(canonicalizeFaceTimeHandle)
-    .find((candidate) => ownerHandles.has(candidate));
+    .find((candidate) => allowed.has(candidate));
   return handle ? { senderId: faceTimeSenderId(handle) } : undefined;
 }
 
@@ -230,12 +230,12 @@ export function isVerifiedFaceTimeTransportEvidence(value: unknown): boolean {
 
 export function isAuthorizedFaceTimeHandle(params: {
   handle: string;
-  ownerHandles: readonly string[];
+  allowedCallers: readonly string[];
 }): boolean {
   const canonicalHandle = canonicalizeFaceTimeHandle(params.handle);
   return (
     canonicalHandle.length > 0 &&
-    params.ownerHandles.some((entry) => canonicalizeFaceTimeHandle(entry) === canonicalHandle)
+    params.allowedCallers.some((entry) => canonicalizeFaceTimeHandle(entry) === canonicalHandle)
   );
 }
 

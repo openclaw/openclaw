@@ -13,7 +13,7 @@ import { shortenHomePath } from "../utils.js";
 const MEMORY_PROVENANCE_CHECK_ID = "core/doctor/memory-provenance";
 const DOCS_URL = "https://docs.openclaw.ai/concepts/memory-provenance";
 const FIX_HINT =
-  "Review the file content. Writes from non-owner or tainted turns, and tracked writes after a shell or external edit, record untrusted provenance. This check reports the exclusion only; it does not change provenance.";
+  "Review the file. It stays excluded while its content is exactly what an untrusted write produced. Save any edit in the Control UI or an editor to restore it; saving identical content does not.";
 // Matches the opaque profile ids accepted for personal USER.md bootstrap files.
 const PROFILE_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/;
 

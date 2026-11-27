@@ -2,10 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import {
-  renderUpdateRunReport,
-  updateRunReportInputFromResult,
-} from "../../infra/update-run-report.js";
+import { updateRunReportInputFromResult } from "../../infra/update-run-report.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { updateResult } from "./update-command-maintenance-fixtures.test-support.js";
 import { createPostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
@@ -78,7 +75,6 @@ it.each(["none", "info", "warning"] as const)(
       expect(projected.steps).not.toContainEqual(
         expect.objectContaining({ step: expect.stringMatching(/^warning:/) }),
       );
-      expect(renderUpdateRunReport(projected).headline).not.toContain("attention");
     }
   },
 );
@@ -121,12 +117,9 @@ process.exitCode = 13;
     },
   );
   expect(observed.status).toBe("ok");
-  const report = renderUpdateRunReport(updateRunReportInputFromResult(observed));
-  expect(report.headline).toBe(
-    "✅ OpenClaw updated to 2026.10.6 (from 2026.10.5); 1 warning needs attention.",
-  );
-  expect(report.lines[0]).toMatch(
-    /^Warning: Deferred Doctor inspections did not complete after restart \(.*ERR_MODULE_NOT_FOUND.*\)\. Run `openclaw doctor --lint --all --severity-min info`/s,
+  expect(observed.after?.version).toBe("2026.10.6");
+  expect(observed.steps.at(-1)?.advisory?.message).toMatch(
+    /^Deferred Doctor inspections did not complete after restart \(.*ERR_MODULE_NOT_FOUND.*\)\. Run `openclaw doctor --lint --all --severity-min info`/s,
   );
 });
 

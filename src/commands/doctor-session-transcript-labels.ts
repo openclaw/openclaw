@@ -10,7 +10,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { backupDoctorSqliteRepair } from "../infra/sqlite-index-recovery.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
 import { VERSION, resolveRuntimeServiceBuildId, resolveRuntimeServiceCommit } from "../version.js";
+import type { DoctorMaintenancePending } from "./doctor-maintenance-pending.js";
+import type { ReadOnlySqliteTranscriptReader } from "./doctor-session-sqlite-transcript-readers.js";
 import {
+  checkDoctorSessionTranscriptsPending,
   scanDoctorSessionTranscripts,
   transcriptSnapshotsMatch,
 } from "./doctor-session-transcript-scan.js";
@@ -18,13 +21,88 @@ import { countLabel } from "./doctor-state-integrity-format.js";
 
 const NOTE_TITLE = "Chat history labels";
 
-export async function noteSessionTranscriptLabelHealth(params: {
+type SessionTranscriptLabelParams = {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   shouldRepair: boolean;
   integrityCheck?: "quick" | "full";
-}): Promise<void> {
+};
+
+function labelScanParams(params: SessionTranscriptLabelParams) {
   const env = params.env ?? process.env;
+  return {
+    cfg: params.cfg,
+    env,
+    // Frozen migration identity plus loaded build/codec and the exact target/profile.
+    cleanScanIdentity: (target: { agentId: string; storePath: string }) => [
+      "session-transcript-labels:v1",
+      VERSION,
+      resolveRuntimeServiceBuildId(),
+      resolveRuntimeServiceCommit(),
+      process.versions.node,
+      INBOUND_CONTEXT_MARKER,
+      env.OPENCLAW_PROFILE ?? null,
+      target.agentId,
+      target.storePath,
+      params.shouldRepair,
+      params.integrityCheck ?? "quick",
+    ],
+  };
+}
+
+/** The surgical row updates the repair writes for one session, from its read snapshot. */
+function planSessionTranscriptLabelRepair(
+  reader: ReadOnlySqliteTranscriptReader,
+  sessionId: string,
+) {
+  const readResult = reader.labelRepairSnapshot(
+    sessionId,
+    normalizeLegacyInboundContextLabels,
+    mayContainLegacyInboundContextLabels,
+  );
+  if (!readResult.ok) {
+    return readResult;
+  }
+  const updates: Array<{ seq: number; eventJson: string }> = [];
+  let hasMalformedRow = false;
+  for (const row of readResult.rows) {
+    let event: unknown;
+    try {
+      event = JSON.parse(row.eventJson);
+    } catch {
+      // A malformed sibling cannot produce a valid deferred projection after repair.
+      hasMalformedRow = true;
+      continue;
+    }
+    if (normalizeLegacyInboundContextLabels(event)) {
+      updates.push({ seq: row.seq, eventJson: JSON.stringify(event) });
+    }
+  }
+  return { ok: true as const, rows: readResult.rows, updates, hasMalformedRow };
+}
+
+/**
+ * Read-only: whether {@link noteSessionTranscriptLabelHealth} would rewrite a session. A
+ * session with a malformed sibling row is refused by the repair, so it is not work.
+ */
+export async function checkSessionTranscriptLabelRepairPending(
+  params: SessionTranscriptLabelParams,
+): Promise<DoctorMaintenancePending> {
+  if (!params.shouldRepair) {
+    return "none";
+  }
+  return checkDoctorSessionTranscriptsPending(labelScanParams(params), ({ reader, sessionId }) => {
+    const plan = planSessionTranscriptLabelRepair(reader, sessionId);
+    if (!plan.ok) {
+      return "undecidable";
+    }
+    return plan.updates.length > 0 && !plan.hasMalformedRow ? "work" : "none";
+  });
+}
+
+export async function noteSessionTranscriptLabelHealth(
+  params: SessionTranscriptLabelParams,
+): Promise<void> {
   let foundSessions = 0;
   let foundEvents = 0;
   let repairedSessions = 0;
@@ -33,32 +111,13 @@ export async function noteSessionTranscriptLabelHealth(params: {
 
   await scanDoctorSessionTranscripts(
     {
-      cfg: params.cfg,
-      env,
+      ...labelScanParams(params),
       title: NOTE_TITLE,
       failureLabel: "Failed to inspect or rewrite labels",
-      // Frozen migration identity plus loaded build/codec and the exact target/profile.
-      cleanScanIdentity: (target) => [
-        "session-transcript-labels:v1",
-        VERSION,
-        resolveRuntimeServiceBuildId(),
-        resolveRuntimeServiceCommit(),
-        process.versions.node,
-        INBOUND_CONTEXT_MARKER,
-        env.OPENCLAW_PROFILE ?? null,
-        target.agentId,
-        target.storePath,
-        params.shouldRepair,
-        params.integrityCheck ?? "quick",
-      ],
     },
     async ({ reader, target, databaseOptions, reportError, sessionId }) => {
       const { agentId } = target;
-      const readResult = reader.labelRepairSnapshot(
-        sessionId,
-        normalizeLegacyInboundContextLabels,
-        mayContainLegacyInboundContextLabels,
-      );
+      const readResult = planSessionTranscriptLabelRepair(reader, sessionId);
       if (!readResult.ok) {
         reportError(
           `- Failed to read transcript for session ${sessionId} (${agentId})`,
@@ -66,22 +125,7 @@ export async function noteSessionTranscriptLabelHealth(params: {
         );
         return false;
       }
-
-      const updates: Array<{ seq: number; eventJson: string }> = [];
-      let hasMalformedRow = false;
-      for (const row of readResult.rows) {
-        let event: unknown;
-        try {
-          event = JSON.parse(row.eventJson);
-        } catch {
-          // A malformed sibling cannot produce a valid deferred projection after repair.
-          hasMalformedRow = true;
-          continue;
-        }
-        if (normalizeLegacyInboundContextLabels(event)) {
-          updates.push({ seq: row.seq, eventJson: JSON.stringify(event) });
-        }
-      }
+      const { updates, hasMalformedRow } = readResult;
 
       if (updates.length === 0) {
         return true;

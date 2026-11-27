@@ -1,4 +1,8 @@
-import type { ModelAuthStatusResult, WizardNextResult } from "../../api/types.ts";
+import type {
+  ModelAuthStatusProfile,
+  ModelAuthStatusResult,
+  WizardNextResult,
+} from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { isWizardNotFoundError } from "../../lib/gateway-errors.ts";
 import { invalidateModelAuthStatusRequests } from "../../lib/model-auth-request-state.ts";
@@ -71,7 +75,8 @@ export function createLoginSignIn(
   let record: FirstRunActivationReceipt | null = null;
   let restoring = false;
   let resumeAdmission: object | undefined;
-  // Auth status when the running sign-in started; unknown status never confirms a lost result.
+  // Auth status when the running sign-in started, or when this page reopened it; unknown
+  // status never confirms a lost result.
   let startStatus: ModelAuthStatusResult | null | undefined;
 
   const receiptContext = ({ context, agentId }: LoginScope) => ({
@@ -79,19 +84,27 @@ export function createLoginSignIn(
     agentSelection: { state: { selectedId: agentId } },
   });
 
-  /**
-   * The provider's usable saved accounts and their expiry. Projections such as remaining time
-   * change on every read, so only these tell a new sign-in from the account it started with.
-   */
-  function savedAccounts(status: ModelAuthStatusResult | null): string | undefined {
+  /** The provider's usable saved accounts, when its status is known. */
+  function savedProfiles(status: ModelAuthStatusResult | null | undefined) {
     const entry = status?.providers
       ? listEffectiveModelAuthProviders(status.providers).find(
           (provider) => provider.provider === authProviderId,
         )
       : undefined;
     return entry && entry.status !== "missing" && entry.status !== "expired"
-      ? JSON.stringify(entry.profiles.map((profile) => [profile.profileId, profile.expiry?.at]))
+      ? entry.profiles
       : undefined;
+  }
+
+  /**
+   * Projections such as remaining time change on every read, so only the account and its
+   * expiry tell a new sign-in from the account it started with.
+   */
+  const accountKey = (profile: ModelAuthStatusProfile) =>
+    JSON.stringify([profile.profileId, profile.expiry?.at]);
+
+  function savedAccounts(status: ModelAuthStatusResult | null): string | undefined {
+    return savedProfiles(status)?.map(accountKey).join("\n");
   }
 
   function own(scope: LoginScope): void {
@@ -269,6 +282,9 @@ export function createLoginSignIn(
       adopt(selected, allowSetup);
     }
     own(scope);
+    // A sign-in finished before this read is already in it, so it shows no account; one
+    // finished after it does.
+    startStatus = authStatus;
     record = receipt;
     runner.restore(recovery, observe(receipt), "models.authLogin", {
       label: selected?.label,
@@ -298,6 +314,16 @@ export function createLoginSignIn(
     },
     get authProviderLabel() {
       return authProviderLabel;
+    },
+    /** The email of the account this sign-in added or renewed, once the page's status shows it. */
+    get signedInEmail(): string | undefined {
+      if (!startStatus) {
+        return undefined;
+      }
+      const before = new Set(savedProfiles(startStatus)?.map(accountKey));
+      return savedProfiles(page.getScope().authStatus)?.find(
+        (profile) => !before.has(accountKey(profile)),
+      )?.email;
     },
     /**
      * A sign-in the Gateway no longer has, because its result went to a closed socket, finished

@@ -46,6 +46,9 @@ export interface SessionLike {
     (eventType: string, handler: (event: SessionEvent) => void): () => void;
   };
   rpc?: {
+    remote?: {
+      disable: () => Promise<void>;
+    };
     history?: {
       cancelBackgroundCompaction?: () => Promise<unknown>;
     };

@@ -79,7 +79,6 @@ data class SystemAgentChatState(
   val sending: Boolean = false,
   val expectsSensitiveReply: Boolean = false,
   val errorText: String? = null,
-  val dismissedQuestionIds: Set<String> = emptySet(),
   val retiredQuestionIds: Set<String> = emptySet(),
   val handoff: SystemAgentChatHandoff? = null,
 )
@@ -192,7 +191,6 @@ internal class SystemAgentChatController(
     request(
       message = "Skip for now",
       displayText = nativeString("Skip for now"),
-      dismissedQuestionId = messageId,
     )
   }
 
@@ -205,7 +203,6 @@ internal class SystemAgentChatController(
   private fun request(
     message: String?,
     displayText: String? = null,
-    dismissedQuestionId: String? = null,
   ) {
     val current = state.value
     if (!current.canSend()) return
@@ -240,7 +237,6 @@ internal class SystemAgentChatController(
           messages = if (localMessage == null) it.messages else it.messages + localMessage,
           input = "",
           sending = true,
-          dismissedQuestionIds = it.dismissedQuestionIds + listOfNotNull(dismissedQuestionId),
           retiredQuestionIds = retired,
         )
       }
@@ -380,7 +376,6 @@ private fun SystemAgentChatState.answerableMessage(id: String): SystemAgentChatM
   messages.firstOrNull { it.id == id }?.takeIf { message ->
     canSend() &&
       message.question != null &&
-      message.id !in dismissedQuestionIds &&
       message.id !in retiredQuestionIds
   }
 

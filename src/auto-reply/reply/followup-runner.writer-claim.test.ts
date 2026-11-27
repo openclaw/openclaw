@@ -11,7 +11,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { enqueueFollowupRun } from "./queue.js";
-import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
+import { createMockFollowupRun } from "./test-helpers.js";
 
 const startup = vi.hoisted(() => vi.fn());
 // mock-isolation: Fail at harness startup; queue admission, writer claim, settlement and delivery stay real.
@@ -114,7 +114,6 @@ it.each(["failure", "cancellation"] as const)(
       sessionKey,
       sessionEntry: loadSessionEntry(scope),
       defaultModel: "proof/model",
-      typing: createMockTypingController(),
       typingMode: "never",
     });
     const completed = createDeferred();

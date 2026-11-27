@@ -17,6 +17,7 @@ it("checks imported transaction results and effective commit hooks through the C
       "scripts/check-sqlite-transaction-boundary.mts",
       "scripts/lib/native-typescript.mts",
       "scripts/lib/repo-root.mjs",
+      "scripts/lib/direct-run.mjs",
       "scripts/lib/ts-guard-utils.mts",
       "src/infra/sql-connection.ts",
       "src/infra/postgres-sync/connection.ts",

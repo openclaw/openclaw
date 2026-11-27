@@ -40,6 +40,7 @@ import {
 import { buildChannelUserTurnSender } from "../../sessions/user-turn-transcript.metadata.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { bindCommandOwnerAuthority, getCommandOwnerAuthority } from "../command-owner-authority.js";
+import { getCommandSenderAuthority } from "../command-sender-authority.js";
 import { getGroupThreadTurn } from "../group-thread-context.js";
 import { getRequesterProfile, transferRequesterProfile } from "../requester-profile.js";
 import type { OriginatingChannelType } from "../templating.js";
@@ -265,10 +266,7 @@ export async function executePreparedReplyRun(
     imageSourceIndexes: currentTurnImages.imageSourceIndexes,
   });
   const promptMediaSourceIndexes = currentTurnImages.imageSourceIndexes?.map((sourceIndex) => {
-    if (sourceIndex === undefined) {
-      return undefined;
-    }
-    const promptIndex = inboundMediaIndexes.indexOf(sourceIndex);
+    const promptIndex = sourceIndex === undefined ? -1 : inboundMediaIndexes.indexOf(sourceIndex);
     return promptIndex >= 0 ? promptIndex : undefined;
   });
   const promptMediaImageLayout = buildPersistedMediaImageLayout({
@@ -350,6 +348,8 @@ export async function executePreparedReplyRun(
     (userTurnInput
       ? createUserTurnTranscriptRecorder({
           input: userTurnInput,
+          // This recorder is made after the channel input's session initialization.
+          inputAlreadyAccepted: true,
           // An unstarted occurrence may be re-admitted after a policy publication.
           // Existing completion custody permits that exact source input to resume.
           trackInputCompletion: opts?.internalEventExecution ? true : undefined,
@@ -542,6 +542,10 @@ export async function executePreparedReplyRun(
       // they do not rewrite the sender identity used by command/action auth.
       senderIsOwner,
       gitContributorProfileId: getRequesterProfile(ctx)?.id ?? readSessionInputProfileId(ctx),
+      mcpRequesterProfileId:
+        !ctx.InternalTurnSource && (!inputProvenance || inputProvenance.kind === "external_user")
+          ? getCommandSenderAuthority(ctx)?.()
+          : undefined,
       traceAuthorized: senderIsOwner || (ctx.GatewayClientScopes ?? []).includes("operator.admin"),
       traceLevelOverride: params.directives.traceLevel,
       verboseLevelOverride: params.directives.verboseLevel,

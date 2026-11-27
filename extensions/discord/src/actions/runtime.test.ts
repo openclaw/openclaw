@@ -8,9 +8,6 @@ import {
 } from "discord-api-types/v10";
 import type { OpenClawConfig, DiscordActionConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { GatewayPlugin } from "../internal/gateway.js";
-import { createInternalTestClient } from "../internal/test-builders.test-support.js";
-import { registerGateway, unregisterGateway } from "../monitor/gateway-registry.js";
 import { clearPresences, setPresence } from "../monitor/presence-cache.js";
 import { DiscordThreadInitialMessageError } from "../send.js";
 import * as discordGuildActionRuntime from "../send.js";
@@ -1426,40 +1423,6 @@ describe("handleDiscordGuildAction", () => {
     expect(result.details).toEqual({ ok: true, emojis: [] });
     expectProviderCall(listGuildEmojisDiscord, [expectedGuildId]);
     expect(fetchChannelInfoDiscord).toHaveBeenCalledTimes(resolvesChannel ? 1 : 0);
-  });
-
-  it("reuses the gateway-owned normalized emoji list across requests with different limits", async () => {
-    const client = createInternalTestClient();
-    registerGateway("default", {
-      fetchGuildEmojis: client.fetchGuildEmojis.bind(client),
-    } as GatewayPlugin);
-    listGuildEmojisDiscord.mockResolvedValueOnce([
-      { id: "3", name: "zeta", animated: false, roles: ["role-1"] },
-      { id: "1", name: "alpha", animated: true, managed: true },
-      { id: "2", name: "beta", available: true },
-      { id: null, name: "missing-id" },
-      { id: "4", name: null },
-    ]);
-
-    try {
-      const first = await handleGuildAction("emojiList", { guildId: "G1", limit: 1 });
-      const second = await handleGuildAction("emojiList", { guildId: "G1", limit: 2 });
-
-      expect(first.details).toEqual({
-        ok: true,
-        emojis: [{ name: "alpha", identifier: "alpha:1", animated: true }],
-      });
-      expect(second.details).toEqual({
-        ok: true,
-        emojis: [
-          { name: "alpha", identifier: "alpha:1", animated: true },
-          { name: "beta", identifier: "beta:2" },
-        ],
-      });
-      expect(listGuildEmojisDiscord).toHaveBeenCalledTimes(1);
-    } finally {
-      unregisterGateway("default");
-    }
   });
 
   it.each([

@@ -22,6 +22,7 @@ import {
   SubagentRegistryWriteError,
 } from "./subagent-registry-persistence.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 
 export function isSubagentCompletionDeliveryAllowed(
@@ -177,7 +178,7 @@ export function runDetachedCleanupAttempt(
           stateContext,
           assertCurrent,
           mutate(draft) {
-            if (draft.pauseReason === "sessions_yield" || draft.cleanupCompletedAt) {
+            if (isSubagentPausedByYield(draft) || draft.cleanupCompletedAt) {
               throw new Error("Subagent cleanup is no longer pending.");
             }
             draft.cleanupHandled = true;
@@ -269,7 +270,7 @@ export function beginSubagentCleanup(
   const entry = params.runs.get(runId);
   if (
     !entry ||
-    entry.pauseReason === "sessions_yield" ||
+    isSubagentPausedByYield(entry) ||
     entry.cleanupCompletedAt ||
     entry.cleanupHandled ||
     context.cleanupReservations.has(getSubagentRunRuntimeKey(entry))

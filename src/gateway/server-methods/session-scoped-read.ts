@@ -50,7 +50,7 @@ export function isStartableMainSession(params: {
   );
 }
 
-/** Person-owned reads retain visibility, row generation and the physical store through I/O. */
+/** Person-owned reads decide visibility once, then retain row generation and the store through I/O. */
 export async function retainSessionScopedRead(
   options: GatewayRequestHandlerOptions,
   sessionKey: string,
@@ -108,38 +108,35 @@ export async function retainSessionScopedRead(
   };
   const assertCurrent = () => {
     authority.assertCurrent();
-    const currentCfg = getConfig();
-    assertRoutingCurrent(currentCfg);
-    const currentActor = resolveGatewayOperatorRoleActor(options.client);
-    const visible = createSessionListEntryFilter({
-      client: options.client,
-      cfg: currentCfg,
-      membership: sharing?.readCurrent(currentCfg).membership,
-    });
-    if (
-      (narrow &&
-        (!operatorProfileId ||
-          currentActor?.kind !== "operator" ||
-          currentActor.profileId !== operatorProfileId)) ||
-      (narrow &&
-        !operatorScopeSatisfied("operator.sessions.read", options.client?.connect.scopes ?? [])) ||
-      sharingIdentity(options.client, currentActor)?.id !== profileId ||
-      (readOptions.requireMaterialized &&
-        !read.entry?.sessionId &&
-        !(
-          readOptions.allowStartableMain &&
-          !read.entry &&
-          isStartableMainSession({ cfg: currentCfg, client: options.client, sessionKey, agentId })
-        )) ||
-      !read.isCurrentAtResponse() ||
-      (read.entry && visible?.(read.legacyKey ?? read.canonicalKey, read.entry) === false)
-    ) {
+    assertRoutingCurrent(getConfig());
+    if (!read.isCurrentAtResponse()) {
       throw new SessionMutationAuthorizationChangedError(hiddenSessionNotFound(sessionKey));
     }
   };
   try {
     if (operatorSessionCap(options.client, cfg) === "invited") {
       sharing = await prepareSessionSharingRead({ cfg, sessionKey, agentId });
+    }
+    const facts = sharing?.readCurrent(cfg);
+    const visible = createSessionListEntryFilter({
+      client: options.client,
+      cfg,
+      membership: facts?.membership,
+    });
+    if (
+      (narrow && !operatorProfileId) ||
+      (narrow &&
+        !operatorScopeSatisfied("operator.sessions.read", options.client?.connect.scopes ?? [])) ||
+      (readOptions.requireMaterialized &&
+        !read.entry?.sessionId &&
+        !(
+          readOptions.allowStartableMain &&
+          !read.entry &&
+          isStartableMainSession({ cfg, client: options.client, sessionKey, agentId })
+        )) ||
+      (read.entry && visible?.(read.legacyKey ?? read.canonicalKey, read.entry) === false)
+    ) {
+      throw new SessionMutationAuthorizationChangedError(hiddenSessionNotFound(sessionKey));
     }
     assertCurrent();
     return {
@@ -151,8 +148,6 @@ export async function retainSessionScopedRead(
         canonicalKey: string;
         entry?: { sessionId?: string };
       }) => {
-        assertCurrent();
-        const facts = sharing?.readCurrent(getConfig());
         return Boolean(
           profileId &&
           facts?.membership.has(profileId) &&

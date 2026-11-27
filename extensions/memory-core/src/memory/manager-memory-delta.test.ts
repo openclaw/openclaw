@@ -78,11 +78,24 @@ it.each([false, true])("publishes memory appends and shifts (semantic=%s)", asyn
   expect(before.every((row) => row.embedded === Number(semantic))).toBe(true);
 
   const appended = body(13, 18);
-  await writeNotes(["# Notes", ...initial, ...appended], mtimes[1]);
+  await writeNotes(["# Notes", ...initial, ...appended], semantic ? mtimes[0] : mtimes[1]);
+  if (semantic) {
+    // The unchanged prefix is absent from the delta. Touch the file after planning.
+    fixture.provider.beforeEmbedBatch = async () => {
+      const file = path.join(fixture.paths.workspace, notesPath);
+      await fs.utimes(file, mtimes[1] / 1000, mtimes[1] / 1000);
+    };
+  }
   vi.setSystemTime(1_800_000_100_000);
   Reflect.set(manager, "dirty", true);
   await manager.sync({ reason: "append" });
+  fixture.provider.beforeEmbedBatch = null;
   const after = readIndex(database);
+  expect(
+    database
+      .prepare("SELECT mtime FROM memory_index_sources WHERE source = 'memory' AND path = ?")
+      .get(notesPath),
+  ).toEqual({ mtime: mtimes[1] });
 
   // Only the trailing chunk may change; every earlier row keeps its identity.
   for (const row of before.slice(0, -1)) {

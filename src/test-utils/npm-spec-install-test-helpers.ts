@@ -1,6 +1,9 @@
 import { expect } from "vitest";
 import type { CommandOptions, SpawnResult } from "../process/exec.js";
 import { npmCommandArgs } from "./npm-command.js";
+import { createCommandResult } from "./process-result.js";
+
+export { createCommandResult };
 
 function failure(label: string, overrides: Partial<SpawnResult>, expectedDetail: string) {
   return { label, npmResult: createCommandResult({ code: 1, ...overrides }), expectedDetail };
@@ -39,19 +42,6 @@ type CommandMock = {
     ) => Promise<SpawnResult>,
   ) => unknown;
 };
-
-// Keep command doubles shaped like the real process helper across install and update tests.
-export function createCommandResult(overrides: Partial<SpawnResult> = {}): SpawnResult {
-  return {
-    stdout: "",
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-    ...overrides,
-  };
-}
 
 export function mockNpmViewMetadataResult(run: CommandMock, metadata: NpmViewMetadata) {
   // Preserve the command callback's arity even though view does not inspect options.

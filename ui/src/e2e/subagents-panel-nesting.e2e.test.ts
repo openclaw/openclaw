@@ -219,4 +219,82 @@ suite.define(() => {
       },
     );
   });
+
+  it("keeps a child paused on its background command in Waiting and its parent working", async () => {
+    await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
+      const { parent, child } = scenario();
+      // The live row of a child that called sessions_yield on its own background exec.
+      const paused = {
+        ...child,
+        status: undefined,
+        hasActiveRun: false,
+        activeRunIds: [],
+        endedAt: child.startedAt + 30_000,
+        subagentRunState: "paused",
+        backgroundProcessCount: 1,
+      } satisfies GatewaySessionRow;
+      const elsewhere = {
+        key: "agent:main:elsewhere",
+        agentId: "main",
+        sessionId: "elsewhere-session",
+        kind: "direct",
+        label: "Unrelated chat",
+        updatedAt: parent.updatedAt - 1,
+      } satisfies GatewaySessionRow;
+      const gateway = await installMockGateway(page, {
+        ...previewModel,
+        sessionKey: parent.key,
+        communityInvite: false,
+        sessions: [parent, elsewhere, paused],
+        historyMessages: [{ role: "assistant", content: "The review runs in the background." }],
+      });
+      const parentWorking = page.locator(
+        `.sidebar-recent-session[data-session-key="${parent.key}"] [aria-label="Subagents working"]`,
+      );
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, elsewhere.key));
+      await parentWorking.first().waitFor();
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, parent.key));
+      await parentWorking.first().waitFor();
+      await openChatSidePanelType(page, "Subagents");
+      const panel = page.locator("openclaw-chat-subagents-panel");
+      const row = (group: string) =>
+        panel.locator(`[data-group="${group}"][data-session-key="${paused.key}"]`);
+      await row("waiting").getByText("Running in background").waitFor();
+      // The phone layout reads the same fact for its status.
+      await page.setViewportSize({ width: 390, height: 900 });
+      await page.locator(".shell--mobile-nav").waitFor();
+      await openChatSidePanelType(page, "Subagents");
+      await panel
+        .locator(
+          `[data-session-key="${paused.key}"] .chat-subagents-mobile__indicator[data-status="waiting"]`,
+        )
+        .and(page.getByLabel("Running in background"))
+        .waitFor();
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await row("waiting").waitFor();
+
+      const change = async (changed: GatewaySessionRow, changedParent: GatewaySessionRow) => {
+        const updatedAt = Date.now() + 1;
+        const session = { ...changed, updatedAt };
+        const ancestor = { ...changedParent, updatedAt };
+        await gateway.setSessionsListResponse({ sessions: [ancestor, elsewhere, session] });
+        await gateway.emitGatewayEvent("sessions.changed", {
+          sessionKey: session.key,
+          reason: session.hasActiveRun ? "run-start" : "run-end",
+          ts: updatedAt,
+          session,
+          ancestorSessions: [ancestor],
+        });
+      };
+      // The command exits and wakes the child under a new run.
+      await change({ ...child, subagentRunState: "active" }, parent);
+      await row("active").waitFor();
+      await change(
+        { ...paused, status: "done", subagentRunState: "historical", backgroundProcessCount: 0 },
+        { ...parent, hasActiveSubagentRun: false },
+      );
+      await row("done").waitFor();
+      await parentWorking.first().waitFor({ state: "detached" });
+    });
+  });
 });
