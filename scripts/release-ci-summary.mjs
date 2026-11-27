@@ -2591,6 +2591,19 @@ async function recoveryChildProjection(plan, selection, client) {
   };
 }
 
+function requirePinnedRecoveryPlan(plan) {
+  if (plan.evidenceReuse.requested) {
+    throw new Error(
+      "Pinned recovery requires a direct qualification plan, not a reused aggregate verdict",
+    );
+  }
+  if (!plan.sourceAdmission.coverage.publication_artifact_source_json) {
+    throw new Error(
+      "Pinned recovery requires the original admission to select publication_artifact_source_json. Ordinary reuse_evidence=true does not qualify, and the source cannot be added to an existing run.",
+    );
+  }
+}
+
 // Sealing reuses this one observation of the original plan and child runs.
 // The full verifier still re-reads them before the manifest is written.
 async function resolveReleaseRecovery(sourceRunId, client, normalCiSelection) {
@@ -2601,16 +2614,10 @@ async function resolveReleaseRecovery(sourceRunId, client, normalCiSelection) {
     request: original.plan.sourceAdmission,
     client,
   });
-  if (
-    String(run.id) !== runId ||
-    run.status !== "completed" ||
-    plan.evidenceReuse.requested ||
-    !plan.sourceAdmission.coverage.publication_artifact_source_json
-  ) {
-    throw new Error(
-      "Recovery requires a terminal direct original plan with explicitly retained publication bytes",
-    );
+  if (String(run.id) !== runId || run.status !== "completed") {
+    throw new Error("Pinned recovery requires the original qualification run to be terminal");
   }
+  requirePinnedRecoveryPlan(plan);
   const effective = await recoveryChildProjection(plan, normalCiSelection, client);
   const childRuns = new Map();
   const childAttempts = {};
@@ -2869,14 +2876,7 @@ async function loadRecoveryEvidence({ verifier, trustedIdentity, ...options }) {
     workflowSha: parentRun.head_sha,
     workflowRef: parentRun.head_branch,
   });
-  if (
-    plan.evidenceReuse.requested ||
-    !plan.sourceAdmission.coverage.publication_artifact_source_json
-  ) {
-    throw new Error(
-      "Recovery requires the original direct qualification plan with explicitly retained publication bytes",
-    );
-  }
+  requirePinnedRecoveryPlan(plan);
   const authenticated = await restoreOriginalPublicationAdmission({
     request: plan.sourceAdmission,
     client,

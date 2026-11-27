@@ -241,6 +241,15 @@ Both selections are frozen in P admission and the execution plan. Resume keeps
 them unchanged even when npm advances. The new parent must pass its own gates;
 selecting a failed historical parent never adopts its aggregate verdict.
 
+Ordinary `reuse_evidence=true` is not an explicit selection of a publication
+artifact source. For a candidate publish request with `rerun_group=all`, the
+helper warns in the preview and at dispatch if no
+`publication_artifact_source_json` was selected. The request can
+still qualify normally, but it will not be eligible for the
+[pinned recovery procedure](/reference/full-release-validation/continuation#pinned-aggregate-recovery).
+If that procedure is needed, select and verify the exact publication source
+before admission; it cannot be added to an existing run.
+
 The helper obtains P admission through `openclaw-release-prepare.yml`, then
 creates immutable `release-ci/*` at Q. Never create it or assemble admission
 manually. `--dry-run` previews the tuple, not hosted admission or success.

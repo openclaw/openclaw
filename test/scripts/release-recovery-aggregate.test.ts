@@ -252,6 +252,18 @@ function fixture(substitute = false, recoveryAttempt = 1) {
   };
 }
 
+it("explains why a terminal direct plan with ordinary reuse cannot prepare pinned recovery", async () => {
+  const { runId, client } = candidatePublicationFixture({ reuseEvidence: true });
+  mkdirSync(".openclaw/tmp", { recursive: true });
+  const directory = mkdtempSync(".openclaw/tmp/recovery-cli-");
+  directories.push(directory);
+  const output = join(directory, "request.json");
+  await expect(
+    runReleaseRecoveryCli(["--prepare-recovery", runId, "--output", output], {}, client),
+  ).rejects.toThrow(/original admission.*publication_artifact_source_json.*reuse_evidence=true/u);
+  expect(existsSync(output)).toBe(false);
+});
+
 it("seals the original plan without an original manifest or any new CI/old-parent dispatch", async () => {
   const { f, producer, client, rerun, setSealed } = fixture();
   const { env, manifestPath } = await cliFixture(f, producer, client);

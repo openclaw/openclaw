@@ -58,11 +58,18 @@ Retry selection for `rerun --child` and continuation:
 | Another failure lies outside those dependents                                                                                              | `mode: all-jobs`: rerun whole child; one job retry cannot cover both.                                                                                                                                                    |
 | Workloads passed; only **Seal child receipt** failed                                                                                       | `mode: receipt`: bounded retry of that exact job, carrying workload attempts forward and sealing exact new child attempt. Still requires continuation/strict verification; starting metadata retry is not qualification. |
 
+## Pinned aggregate recovery
+
 A controller repair does not change tooling already pinned by a hosted workflow.
 The child receipt publisher checks out its original `github.sha`; a local or
-new-parent tooling repair cannot retrofit that publisher. For an original direct
-qualification with explicitly retained publication artifacts, repaired protected
-P tooling can seal an evidence-only recovery aggregate instead:
+new-parent tooling repair cannot retrofit that publisher. Repaired protected P
+tooling can seal an evidence-only recovery aggregate for a terminal direct
+qualification whose original admission explicitly selected
+`publication_artifact_source_json`. Ordinary `reuse_evidence=true` (including
+with `rerun_group=all`) does not meet that requirement, and the selection cannot
+be added after admission. This is the pinned `--prepare-recovery` procedure,
+distinct from [`pnpm frv recover`](/reference/full-release-validation/evidence#receipt-backed-aggregate-recovery),
+which has its own evidence requirements.
 
 ```bash
 # Retry only the selected failed job and GitHub-required dependents.
