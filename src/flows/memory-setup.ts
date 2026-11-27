@@ -213,7 +213,7 @@ export async function runMemorySetupFlow(
     ...config,
     memory: { ...config.memory, search: candidateSearch },
   };
-  let skippedMedia: string[] = [];
+  let skippedMedia: string[];
   try {
     const { resolveMemorySearchConfig } = await import("../agents/memory-search.js");
     if (!sameProvider && config.agents?.entries) {
