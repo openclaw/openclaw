@@ -7,15 +7,12 @@ title: "Levanto Sage"
 ---
 
 The optional Levanto plugin connects Sage to OpenClaw's [decision model](/concepts/decision-models)
-role. It does not provide chat completions. It requires the prepared version-2
-decision provider API. Released OpenClaw `2026.10.4` exposes V1 only and cannot
-load this adapter.
+role. It does not provide chat completions.
 
-For development, use a matching source checkout containing both the prepared V2
-runtime and this plugin. Packaged use requires a supporting paired host/plugin
-release. The normal release process aligns the plugin API and build versions
-with that host; the package's older installation floor alone does not establish
-V2 compatibility. Do not override host-version checks to force installation.
+It needs OpenClaw `2026.11.5` or later. Each plugin release requires a host with
+at least its own plugin API version, so install the plugin version that matches
+your OpenClaw release. Extended-stable `2026.10.x` hosts refuse the install. Do
+not override host-version checks to force installation.
 
 ## Connect and select
 

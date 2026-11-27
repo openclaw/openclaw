@@ -6,10 +6,8 @@ prepared Decision V2 API. It does not provide chat completions.
 
 ## Setup
 
-Released OpenClaw `2026.10.4` exposes V1 only. For development, use a matching
-source checkout containing the prepared V2 runtime and this plugin. Packaged
-use requires a supporting paired host/plugin release; the older installation
-floor alone does not establish V2 compatibility.
+Requires OpenClaw `2026.11.5` or later. Each plugin release needs a host with
+at least its own version; extended-stable `2026.10.x` hosts refuse the install.
 
 Enable the plugin and connect a Levanto credential through the normal provider
 connection flow:
