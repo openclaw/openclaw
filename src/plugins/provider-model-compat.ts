@@ -83,11 +83,9 @@ export function normalizeModelCompat(
         : {}),
     }),
   );
-  if (
-    resolved.supportsDeveloperRole &&
-    resolved.supportsUsageInStreaming &&
-    resolved.supportsStrictMode
-  ) {
+  // supportsStrictMode is never filled in: transports resolve its default themselves, and a
+  // present value means the route declared it, which disables the learned strict fallback.
+  if (resolved.supportsDeveloperRole && resolved.supportsUsageInStreaming) {
     return model;
   }
   const patch = {
@@ -96,9 +94,6 @@ export function normalizeModelCompat(
       : {}),
     ...(compat?.supportsUsageInStreaming === undefined
       ? { supportsUsageInStreaming: resolved.supportsUsageInStreaming }
-      : {}),
-    ...(compat?.supportsStrictMode === undefined
-      ? { supportsStrictMode: resolved.supportsStrictMode }
       : {}),
   };
   if (Object.keys(patch).length === 0) {

@@ -101,12 +101,12 @@ function duplicatedCompatFields(compat: ResolvedOpenAICompletionsCompat): Duplic
   };
 }
 
+// Undeclared proxies default to strict tools; a refusal is learned per route by the transports.
 const canonicalProxyCompat = {
   ...defaultDuplicatedCompat,
   supportsStore: false,
   supportsDeveloperRole: false,
   supportsReasoningEffort: false,
-  supportsStrictMode: false,
 } satisfies DuplicatedCompatFields;
 const canonicalOpenRouterCompat = {
   ...canonicalProxyCompat,

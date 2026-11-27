@@ -82,6 +82,11 @@ import {
 } from "./openai-responses-websocket-options.js";
 import { createRecoverableResponsesWebSocketStream } from "./openai-responses-websocket-recovery.js";
 import {
+  recordStrictToolRejection,
+  resolveStrictToolModel,
+  withoutStrictTools,
+} from "./openai-strict-rejection.js";
+import {
   assertCodeModeResponsesToolSurface,
   buildOpenAIClientHeaders,
   buildOpenAISdkRequestOptions,
@@ -271,10 +276,12 @@ function createResponsesTransportExecutor(config: {
           }
           return params;
         };
+        // Strict tools follow the route's learned rejection; a refused request flips them off.
+        let toolModel = await resolveStrictToolModel(model);
         const buildRequest = (replayMode: OpenAIResponsesReplayMode, requestContext = context) =>
           prepareRequest(
             config.buildRequest(
-              model,
+              toolModel,
               requestContext,
               responsesOptions,
               turnState?.metadata,
@@ -382,6 +389,11 @@ function createResponsesTransportExecutor(config: {
             initialRejectedCompaction,
             buildFullHistoryRequest: () => buildRequest("full-history"),
             buildItemConflictRequest,
+            buildRequestWithoutStrictTools: () => {
+              toolModel = withoutStrictTools(toolModel);
+              return buildRequest("checkpoint");
+            },
+            onStrictToolsRejected: () => recordStrictToolRejection(model),
             onCompactionRejected: (checkpoint) =>
               suppressOpenAIResponsesCompaction(output, model, responsesOptions, checkpoint),
             canRetryStream: () => output.content.length === 0,

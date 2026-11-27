@@ -80,8 +80,9 @@ describe("normalizeModelCompat", () => {
     expect(normalized.compat).toMatchObject({
       supportsDeveloperRole: false,
       supportsUsageInStreaming: false,
-      supportsStrictMode: false,
     });
+    // Strict support is resolved by the transports; a filled-in value would read as declared.
+    expect(normalized.compat).not.toHaveProperty("supportsStrictMode");
   });
 
   it("leaves native api.openai.com model untouched", () => {

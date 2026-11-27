@@ -1,6 +1,10 @@
 // Installs OpenClaw-owned transport and diagnostic policy before package helpers;
 // direct imports need the same wiring as the process-default stream facade.
-import { configureAiTransportHost, getDefaultAiTransportHost } from "@openclaw/ai";
+import {
+  configureAiTransportHost,
+  getDefaultAiTransportHost,
+  type OpenAIStrictToolRoute,
+} from "@openclaw/ai";
 import { configureProviderErrorRedactor } from "@openclaw/ai/diagnostics";
 import { getModelProviderLocalService } from "../agents/provider-local-service.js";
 import { getModelProviderRequestTransport } from "../agents/provider-request-config.js";
@@ -37,6 +41,25 @@ function transportLog(subsystem: string): ReturnType<typeof createSubsystemLogge
     transportLogBySubsystem.set(subsystem, log);
   }
   return log;
+}
+
+function strictToolRouteKey(route: OpenAIStrictToolRoute): string {
+  return JSON.stringify([route.api, route.baseUrl, route.model]);
+}
+
+// One store read per route and process; a rejection learned here updates it directly.
+const knownStrictToolRejections = new Map<string, Promise<boolean>>();
+
+// Learned strict-tool rejections reuse core plugin state; a later endpoint upgrade is probed
+// again after the TTL, at the cost of one retried request.
+async function openStrictToolRejections() {
+  const { createCorePluginStateKeyedStore } = await import("../plugin-state/plugin-state-store.js");
+  return createCorePluginStateKeyedStore<true>({
+    ownerId: "core:ai-transport",
+    namespace: "openai-strict-tool-rejections",
+    maxEntries: 256,
+    defaultTtlMs: 30 * 24 * 60 * 60 * 1000,
+  });
 }
 
 // The package host is process-wide, so installing its base policy must be too.
@@ -112,6 +135,24 @@ export function configureAiTransportBaseHost(): { runtime: boolean } {
             data,
           );
         }
+      },
+      strictToolRejections: {
+        has: (route) => {
+          const key = strictToolRouteKey(route);
+          let known = knownStrictToolRejections.get(key);
+          if (!known) {
+            known = openStrictToolRejections()
+              .then((store) => store.lookup(key))
+              .then(Boolean);
+            knownStrictToolRejections.set(key, known);
+          }
+          return known;
+        },
+        record: async (route) => {
+          const key = strictToolRouteKey(route);
+          knownStrictToolRejections.set(key, Promise.resolve(true));
+          return (await openStrictToolRejections()).registerIfAbsent(key, true);
+        },
       },
     });
     return { runtime: false };

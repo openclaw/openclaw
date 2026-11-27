@@ -741,13 +741,12 @@ describe("OpenAI completions compatibility and tools", () => {
       ] as const) {
         const model = makeCompletionsModel({ id: "kimi-k2.6", provider, baseUrl });
         const payload = requestMode(mode, model, undefined, toolContext(parameters));
+        // Managed requests are strict, so the optional key also takes the projection's null branch.
+        const nullBranch = mode === "managed" ? [{ type: "null" }] : [];
         expect(payload.tools?.[0]?.function.parameters, provider).toHaveProperty("properties.v", {
           anyOf: moonshot
-            ? [
-                { type: "string", enum: ["x", "y"] },
-                { type: "number", minimum: 1 },
-              ]
-            : parameters.properties.v.anyOf,
+            ? [{ type: "string", enum: ["x", "y"] }, { type: "number", minimum: 1 }, ...nullBranch]
+            : [...parameters.properties.v.anyOf, ...nullBranch],
         });
       }
       expect(parameters.properties.v.anyOf).toEqual([{ enum: ["x", "y"] }, { minimum: 1 }]);
@@ -907,10 +906,15 @@ describe("OpenAI completions compatibility and tools", () => {
 
   it("normalizes projected schemas according to strictness and compatibility", () => {
     const cases = [
+      // The strict projection keeps an optional key optional by making it required and nullable.
       [
         toolsNative,
         objectSchema({ path: { type: "string" } }, { additionalProperties: false, required: [] }),
-        { strict: false },
+        {
+          strict: true,
+          "parameters.required": ["path"],
+          "parameters.properties.path": { type: ["string", "null"] },
+        },
       ],
       [
         { ...proxy, compat: { unsupportedToolSchemaKeywords: ["not"] } },
@@ -923,9 +927,13 @@ describe("OpenAI completions compatibility and tools", () => {
           hints: { type: "array" },
           typedHints: { type: "array", items: { type: "string" } },
         }),
+        // Strict proxies make these optional keys nullable; omitEmptyArrayItems adds no items.
         {
-          "parameters.properties.hints": { type: "array" },
-          "parameters.properties.typedHints": { type: "array", items: { type: "string" } },
+          "parameters.properties.hints": { type: ["array", "null"] },
+          "parameters.properties.typedHints": {
+            type: ["array", "null"],
+            items: { type: "string" },
+          },
         },
       ],
     ] satisfies [Partial<ToolsModel>, Record<string, unknown>, Record<string, unknown>][];

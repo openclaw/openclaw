@@ -195,7 +195,19 @@ export interface AiTransportHost {
   logInfo(subsystem: string, message: string, data?: Record<string, unknown>): void;
   /** Emits a warning through the host logger. */
   logWarn(subsystem: string, message: string, data?: Record<string, unknown>): void;
+  /**
+   * Remembers OpenAI-protocol routes that rejected strict tools, across processes.
+   * Omitted means each process learns it again with one retried request.
+   */
+  strictToolRejections?: {
+    has(route: OpenAIStrictToolRoute): Promise<boolean>;
+    /** Resolves true when the route was not recorded yet. */
+    record(route: OpenAIStrictToolRoute): Promise<boolean>;
+  };
 }
+
+/** The (api, baseUrl, model) a learned strict-tool rejection belongs to. */
+export type OpenAIStrictToolRoute = { api: string; baseUrl: string; model: string };
 
 const MAX_PENDING_CUSTOM_API_REGISTRATIONS = 32;
 

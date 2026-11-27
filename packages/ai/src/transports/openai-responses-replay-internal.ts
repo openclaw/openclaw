@@ -24,6 +24,7 @@ import {
   isResponsesServiceTierRejection,
   nextResponsesServiceTier,
 } from "./openai-responses-service-tier.js";
+import { isStrictToolRetryCandidate } from "./openai-strict-rejection.js";
 import { log } from "./openai-transport-shared.js";
 import { decodeSseFrames } from "./transport-stream-shared.js";
 import { redactIdentifier } from "./transport-utils.js";
@@ -290,6 +291,10 @@ export async function createResponsesStreamWithRecovery(params: {
     | OpenAIResponsesRequestParams
     | Promise<OpenAIResponsesRequestParams>;
   buildItemConflictRequest?: () => Promise<OpenAIResponsesRequestParams>;
+  /** Rebuilds this request, and every later rebuild, with strict tools off. */
+  buildRequestWithoutStrictTools?: () => Promise<OpenAIResponsesRequestParams>;
+  /** The retry without strict tools was accepted. */
+  onStrictToolsRejected?: () => Promise<void>;
 }): Promise<{
   stream: AsyncIterable<unknown>;
 }> {
@@ -457,6 +462,7 @@ export async function createResponsesStreamWithRecovery(params: {
     log.info(`[responses] rejected ${tier} tier; retrying with ${next}`);
     return { ...attempt, request: { ...attempt.request, service_tier: next } };
   };
+  let strictToolsRetry: "none" | "pending" | "recorded" = "none";
   const send = async (
     initialAttempt: ResponsesEncryptedContentAttempt<OpenAIResponsesRequestParams>,
   ) => {
@@ -486,6 +492,10 @@ export async function createResponsesStreamWithRecovery(params: {
           })
           .withResponse();
         responseAccepted = true;
+        if (strictToolsRetry === "pending") {
+          strictToolsRetry = "recorded";
+          await params.onStrictToolsRejected?.();
+        }
         // Commit a resolved attempt before rejecting a non-stream response.
         commitResponsesEncryptedContentAttempt(attempt, (checkpoint) => {
           if (checkpoint) {
@@ -521,11 +531,28 @@ export async function createResponsesStreamWithRecovery(params: {
           delete request.previous_response_id;
           nextAttempt = { kind: "continuation-rejected", request };
         }
+        let strictToolsDropped = false;
+        if (
+          !nextAttempt &&
+          !responseAccepted &&
+          strictToolsRetry === "none" &&
+          params.buildRequestWithoutStrictTools &&
+          isStrictToolRetryCandidate(params.model, attempt.request.tools, error)
+        ) {
+          // One retry without strict tools; only an accepted retry teaches the route.
+          strictToolsRetry = "pending";
+          strictToolsDropped = true;
+          nextAttempt = {
+            kind: attempt.kind,
+            request: await params.buildRequestWithoutStrictTools(),
+          };
+        }
         if (!nextAttempt) {
           throw error;
         }
-        const retryDescription =
-          nextAttempt.request.service_tier !== attempt.request.service_tier
+        const retryDescription = strictToolsDropped
+          ? "without strict tool schemas"
+          : nextAttempt.request.service_tier !== attempt.request.service_tier
             ? "with a slower service tier"
             : nextAttempt.kind === "reasoning-stripped"
               ? "without encrypted reasoning content"
