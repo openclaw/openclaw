@@ -595,7 +595,7 @@ function* createOpenClawToolsSteps(
         })
       : null,
     !embedded && sessionKey && options?.sessionProjectMoveEligible
-      ? createSessionProjectTool(options)
+      ? createSessionProjectTool(options, { agentId: sessionAgentId, sessionKey })
       : null,
     transcriptsTool,
     imageGenerateTool,
