@@ -1,11 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { hashCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
 import type { CliSessionReseedReceipt } from "../config/sessions.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
-import type { CliHistoryIndex } from "./cli-session-history-index-policy.js";
+import {
+  materializeCliHistoryRow,
+  type CliHistoryIndex,
+} from "./cli-session-history-index-policy.js";
 import { CliSessionHistoryIndex } from "./cli-session-history-index.worker.js";
 import {
   resolveClaudeCliHistorySource,
@@ -40,14 +42,15 @@ export function mergeImportedChatHistoryMessages(
       index.appendImported(message);
     }
     index.finish();
-    return Array.from(index.rows(0, index.count), (row) => {
-      const message =
-        row.local_seq === null ? index.message(row.id) : params.localMessages[row.local_seq - 1];
-      const record = asOptionalRecord(message);
-      return record
-        ? { ...record, ...(row.metadata ? { __openclaw: JSON.parse(row.metadata) } : {}) }
-        : message;
-    });
+    return index
+      .rows(0, index.count)
+      .map((row) =>
+        materializeCliHistoryRow(
+          index,
+          row,
+          row.local_seq === null ? undefined : params.localMessages[row.local_seq - 1],
+        ),
+      );
   } finally {
     index.close();
   }

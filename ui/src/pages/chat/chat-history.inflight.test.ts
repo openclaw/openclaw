@@ -471,6 +471,39 @@ it("keeps an identical new reply after the Gateway retires its persisted predece
   expect(renderedText(state)).toEqual(["Original prompt", "Saved opening.", "Saved opening."]);
 });
 
+it("keeps identical native CLI blocks around a steer without replay", async () => {
+  const runId = "active-run";
+  const text = "Still checking.";
+  const itemId = `cli-assistant:${runId}`;
+  const key = (seq: number) => `${itemId}:seg:native:${seq}`;
+  const run = createChatRunState();
+  const snapshot = () => projectInFlightRunSnapshot({ chatRunState: run, runId });
+  const { original, steer } = steerPrompts(3, 3_000);
+  const first = message("assistant", text, { id: "first", seq: 2, runId, idempotencyKey: key(2) });
+  run.updateBuffer(runId, { itemId, occurrenceId: key(2), text });
+  run.retireBuffer(runId, [key(2)]);
+  const history = {
+    ...activeHistory(runId),
+    messages: [original, first, steer],
+    inFlightRun: snapshot(),
+  };
+  const state = createState(history);
+  await loadChatHistory(state);
+  const saved = ["Original prompt", text, "Steer prompt"];
+  expect(renderedText(state)).toEqual(saved);
+  run.updateBuffer(runId, { itemId, occurrenceId: key(4), text: text + "\n\n" + text });
+  history.inFlightRun = snapshot();
+  await loadChatHistory(state);
+  expect(renderedText(state)).toEqual([...saved, text]);
+  run.retireBuffer(runId, [key(4)]);
+  assistant(state, runId, snapshot().text, { replace: true });
+  publish(state, runId, {
+    runId,
+    message: message("assistant", text, { id: "second", seq: 4, runId, idempotencyKey: key(4) }),
+  });
+  expect(renderedText(state)).toEqual([...saved, text]);
+});
+
 it("keeps an identical unpersisted tail through active history reload", async () => {
   const history = activeHistory("active-run");
   const prompt = message("user", "Repeat", {

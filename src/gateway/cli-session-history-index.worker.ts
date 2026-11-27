@@ -78,7 +78,7 @@ export class CliSessionHistoryIndex {
     this.db = getNodeSqliteKysely<HistoryDatabase>(this.database);
     // Only imported bodies live here; local rows retain their canonical sequence.
     const columns = `id INTEGER PRIMARY KEY, local_seq INTEGER, import_ref INTEGER, message_id TEXT, payload TEXT, bytes INTEGER NOT NULL, role TEXT,
-      text TEXT, drift_text TEXT, timestamp REAL, external_key TEXT, media_key TEXT,
+      native_tool_bytes INTEGER, text TEXT, drift_text TEXT, timestamp REAL, external_key TEXT, media_key TEXT,
       media_prompt INTEGER NOT NULL, metadata TEXT, consumed INTEGER NOT NULL,
       ordinal INTEGER`;
     // sqlite-allow-raw -- Reconstructible temporary schema; no canonical writes or durability.
@@ -181,6 +181,7 @@ export class CliSessionHistoryIndex {
         message_id: parameter((row) => row.message_id),
         payload: parameter((row) => row.payload),
         bytes: parameter((row) => row.bytes),
+        native_tool_bytes: parameter((row) => row.native_tool_bytes),
         role: parameter((row) => row.role),
         text: parameter((row) => row.text),
         drift_text: parameter((row) => row.drift_text),
@@ -328,7 +329,9 @@ export class CliSessionHistoryIndex {
         ),
     );
     const candidates = () =>
-      this.db.selectFrom("messages").select(["id", "text", "metadata", "role"]);
+      this.db
+        .selectFrom("messages")
+        .select(["id", "text", "metadata", "role", "import_ref", "bytes", "native_tool_bytes"]);
     const matchExternal = prepareSqliteQueryTakeFirstSync<string, HistoryMatch>(
       this.database,
       (parameter) =>
@@ -403,7 +406,7 @@ export class CliSessionHistoryIndex {
       return { any: create("any"), window: create("window"), missing: create("missing") };
     };
     const matchers = { withIdentity: textMatchers(true), withoutIdentity: textMatchers(false) };
-    const consume = prepareSqliteQuerySync<Pick<HistoryRow, "id" | "metadata" | "external_key">>(
+    const consume = prepareSqliteQuerySync<Parameters<CliHistoryMergeStore["consume"]>[0]>(
       this.database,
       (parameter) =>
         this.db
@@ -412,6 +415,8 @@ export class CliSessionHistoryIndex {
             metadata: parameter((row) => row.metadata),
             consumed: 1,
             external_key: parameter((row) => row.external_key),
+            import_ref: parameter((row) => row.import_ref),
+            bytes: parameter((row) => row.bytes),
           })
           .where(
             "id",
@@ -445,6 +450,7 @@ export class CliSessionHistoryIndex {
             "import_ref",
             "message_id",
             "bytes",
+            "native_tool_bytes",
             "role",
             "text",
             "drift_text",
@@ -511,21 +517,17 @@ export class CliSessionHistoryIndex {
       this.database,
       this.db
         .selectFrom("messages")
-        .select(["id", "local_seq", "metadata", "ordinal", "bytes"])
+        .select(["id", "local_seq", "import_ref", "metadata", "ordinal", "bytes"])
         .where("ordinal", ">=", start)
         .where("ordinal", "<", end)
         .orderBy("ordinal"),
     ).rows;
   }
 
-  message(id: number): unknown {
+  importedMessage(id: number): unknown {
     const row = executeSqliteQueryTakeFirstSync(
       this.database,
-      this.db
-        .selectFrom("messages")
-        .innerJoin("imports", "imports.id", "messages.import_ref")
-        .select("imports.payload")
-        .where("messages.id", "=", id),
+      this.db.selectFrom("imports").select("payload").where("id", "=", id),
     );
     return row?.payload ? JSON.parse(row.payload) : undefined;
   }

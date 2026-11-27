@@ -3,7 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // Kept beside `cli-output-stream.ts` so the parser stays within the file-size
 // budget; the limits are process constants, not per-backend configuration.
 import { normalizeClaudeCliStreamJsonRecord } from "./cli-output-echoed-binary.js";
-import { readClaudeAttributedSubagentProgressId } from "./cli-output-records.js";
+import { decodeCliRecords, readClaudeAttributedSubagentProgressId } from "./cli-output-records.js";
 
 const CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS = 8 * 1024 * 1024;
 const CLI_STREAM_JSON_DEFAULT_MAX_TURN_LINES = 20_000;
@@ -12,6 +12,94 @@ export const CLI_STREAM_JSON_OUTPUT_LIMITS = Object.freeze({
   maxPendingLineChars: CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
   maxTurnLines: CLI_STREAM_JSON_DEFAULT_MAX_TURN_LINES,
 });
+
+/** Own chunk framing and turn budgets together, including the unterminated final line. */
+export function createCliJsonlStreamInput(params: {
+  claudeStreamJson: boolean;
+  onCustomLine: (line: string, rawLine: string) => boolean;
+  onRecord: (record: Record<string, unknown>) => void;
+  hasError: () => boolean;
+  onError: (error: string) => void;
+}) {
+  const buffer = { pending: "" };
+  const limits = CLI_STREAM_JSON_OUTPUT_LIMITS;
+  let rawChars = 0;
+  let countedClaudeFrames = 0;
+  let rawLines = 0;
+  const reject = (kind: "raw" | "line" | "lines", limit: number) => {
+    params.onError(streamJsonOutputLimitErrorText(kind, limit));
+    buffer.pending = "";
+    return false;
+  };
+  const accountClaudeLine = (lineChars: number, countsFrame = false) => {
+    if (countsFrame && ++countedClaudeFrames > limits.maxTurnLines) {
+      return reject("lines", limits.maxTurnLines);
+    }
+    rawChars += lineChars + 1;
+    return rawChars <= limits.maxTurnRawChars || reject("raw", limits.maxTurnRawChars);
+  };
+  const onLine = (rawLine: string) => {
+    const line = rawLine.trim();
+    if (!line && !params.claudeStreamJson) {
+      return;
+    }
+    if (++rawLines > limits.maxTurnLines && !params.claudeStreamJson) {
+      reject("lines", limits.maxTurnLines);
+      return;
+    }
+    if (!line) {
+      accountClaudeLine(rawLine.length);
+      return;
+    }
+    if (params.onCustomLine(line, rawLine)) {
+      return;
+    }
+    const records = decodeCliRecords(line);
+    if (params.claudeStreamJson) {
+      const record = records.length === 1 ? records[0] : undefined;
+      const charge = chargeClaudeStreamJsonLine(record, rawLine);
+      if (!accountClaudeLine(charge.chars, charge.countsFrame)) {
+        return;
+      }
+    }
+    for (const record of records) {
+      params.onRecord(record);
+    }
+  };
+  return {
+    accountClaudeLine,
+    get rawLines() {
+      return rawLines;
+    },
+    finish() {
+      const tail = buffer.pending;
+      buffer.pending = "";
+      if (tail && !params.hasError()) {
+        onLine(tail);
+      }
+    },
+    push: (chunk: string) => {
+      if (!chunk || params.hasError()) {
+        return;
+      }
+      if (!params.claudeStreamJson) {
+        rawChars += chunk.length;
+        if (rawChars > limits.maxTurnRawChars) {
+          reject("raw", limits.maxTurnRawChars);
+          return;
+        }
+      }
+      if (
+        !frameBoundedCliJsonlChunk(buffer, chunk, (line) => {
+          onLine(line);
+          return !params.hasError();
+        })
+      ) {
+        reject("line", limits.maxPendingLineChars);
+      }
+    },
+  };
+}
 
 // Claude Code attaches `api_message_id` to every stream event frame and the
 // `thinking_display` display setting to thinking frames. The parser reads

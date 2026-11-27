@@ -489,6 +489,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
             storePath: params.storePath,
             persistAssistantTranscript:
               params.storePath !== undefined && params.sessionStore !== undefined,
+            assertSettlementCurrent,
             prompt: cliPrompt,
             runtimeContextFragments: buildEventContext(internalEvents, supplementalContext),
             transcriptPrompt: cliTranscriptPrompt,

@@ -51,7 +51,7 @@ import type { AgentMessage } from "../runtime/index.js";
 import { withSessionManagerWrite } from "../sessions/session-manager-write-admission.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { buildAssistantMessage, buildUsageWithNoCost } from "../stream-message-shared.js";
-import { cliAssistantItemId, cliInterimAssistantItemId } from "./assistant-identity.js";
+import { cliAssistantItemId } from "./assistant-identity.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
 const log = createSubsystemLogger("agents/cli-runner");
@@ -180,6 +180,26 @@ function buildCliTranscriptCounters(
   return usage?.contextUsage ? { ...counters, contextUsage: usage.contextUsage } : counters;
 }
 
+/** The same yielded-progress marker is used on first write and disposition settlement. */
+export function cliAssistantProgressMetadata(params: {
+  itemId?: string;
+  yielded?: true;
+  stopReason: StopReason;
+  text: string;
+  runId: string;
+}) {
+  return params.yielded && params.stopReason === "stop"
+    ? {
+        openclawStreamFallback: {
+          replacementText: params.text,
+          source: "segment" as const,
+          itemId: params.itemId ?? params.runId,
+          ...(params.itemId ? { runId: params.runId } : {}),
+        },
+      }
+    : {};
+}
+
 export async function persistCliAssistantTranscript(params: {
   runParams: RunCliAgentParams;
   text: string;
@@ -188,11 +208,14 @@ export async function persistCliAssistantTranscript(params: {
   usage?: Usage;
   stopReason: StopReason;
   yielded?: true;
+  /** Durable but held out of display until run settlement decides its disposition. */
+  display?: false;
+  segmentKey?: string;
+  assistantItemIds?: readonly string[];
+  itemId?: string;
+  timestamp?: number;
   /** The native Claude row this message mirrors; the history merge joins them by it. */
   nativeIdentity?: { cliSessionId: string; externalId: string };
-  /** Held answers commit before the final run-owned row and retain their own retry identity. */
-  interim?: true;
-  interimReplies?: CliOutput["interimNativeReplies"];
 }): Promise<{
   owned: boolean;
   idempotencyKey?: string;
@@ -209,28 +232,7 @@ export async function persistCliAssistantTranscript(params: {
   if (!runParams.persistAssistantTranscript || !runParams.sessionKey) {
     return { owned: false };
   }
-  // Deduplicate the final answer by its transcript item key, not a session admission pin.
-  const finalNativeItem = params.nativeIdentity
-    ? cliInterimAssistantItemId(runParams.runId, params.nativeIdentity)
-    : undefined;
-  // Completed held answers are separate native rows; narration remains native-only.
-  for (const reply of params.interimReplies ?? []) {
-    if (cliInterimAssistantItemId(runParams.runId, reply) === finalNativeItem) {
-      continue;
-    }
-    await persistCliAssistantTranscript({
-      runParams,
-      text: reply.text,
-      modelId: params.modelId,
-      nativeIdentity: { cliSessionId: reply.cliSessionId, externalId: reply.externalId },
-      interim: true,
-      stopReason: "stop",
-    });
-  }
-  const idempotencyKey =
-    params.interim && params.nativeIdentity
-      ? cliInterimAssistantItemId(runParams.runId, params.nativeIdentity)
-      : cliAssistantItemId(runParams.runId);
+  const idempotencyKey = `${cliAssistantItemId(runParams.runId)}${params.segmentKey ? `:seg:${params.segmentKey}` : ""}`;
   let committed = false;
   try {
     const result = await appendExactAssistantMessageToSessionTranscript({
@@ -245,8 +247,10 @@ export async function persistCliAssistantTranscript(params: {
         : {}),
       storePath: runParams.storePath,
       idempotencyKey,
+      assistantItemIds: params.assistantItemIds,
       runId: runParams.runId,
       config: runParams.config,
+      assertCurrent: runParams.assertSettlementCurrent,
       onMessageCommitted: () => {
         committed = true;
       },
@@ -261,10 +265,11 @@ export async function persistCliAssistantTranscript(params: {
           }),
           prepareAssistantTranscriptMessage: runParams.prepareAssistantTranscriptMessage,
         });
+        // A held snapshot is prepared for delivery first; only its display waits for settlement.
         return message
           ? projectAgentHarnessTranscriptMessageForDisplay({
               runId: runParams.runId,
-              hidden: runParams.privateCompletion === true,
+              hidden: runParams.privateCompletion === true || params.display === false,
               inputProvenance: runParams.inputProvenance,
               message,
             })
@@ -284,17 +289,11 @@ export async function persistCliAssistantTranscript(params: {
           stopReason: params.stopReason,
           usage: params.usage ?? buildUsageWithNoCost({}),
         }),
-        // A paused turn owns visible progress, not a final answer. Keep the
-        // existing keyed-segment contract without hiding narration or media.
-        ...(params.yielded && params.stopReason === "stop"
-          ? {
-              openclawStreamFallback: {
-                replacementText: params.text,
-                source: "segment",
-                itemId: runParams.runId,
-              },
-            }
+        ...cliAssistantProgressMetadata({ ...params, runId: runParams.runId }),
+        ...(params.itemId
+          ? { openclawStreamFallback: { itemId: params.itemId, runId: runParams.runId } }
           : {}),
+        ...(params.timestamp !== undefined ? { timestamp: params.timestamp } : {}),
       },
     });
     if (!result.ok) {

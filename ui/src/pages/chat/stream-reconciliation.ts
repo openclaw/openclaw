@@ -17,6 +17,7 @@ import {
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { isKeyedAssistantStreamFallbackMessage } from "./chat-thread-run-identity.ts";
 import {
+  isIntermediateCliSnapshot,
   lastUserMessageIndex,
   streamCausalInsertIndex,
   streamCausalInterval,
@@ -194,6 +195,7 @@ function hasAssistantStreamPartReplacement(
     if (
       (identity?.role && identity.role !== "assistant") ||
       (identity?.runId && part.runId && identity.runId !== part.runId) ||
+      isIntermediateCliSnapshot(message, identity) ||
       isHiddenAssistantMessage(message) ||
       isKeyedAssistantStreamFallbackMessage(message)
     ) {

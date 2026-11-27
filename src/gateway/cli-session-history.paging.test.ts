@@ -24,7 +24,11 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { readChatHistoryPageKernel } from "./chat-history-page-kernel.js";
 import { CliSessionHistoryIndex } from "./cli-session-history-index.worker.js";
-import { prepareCliSessionHistoryReader, type CliHistoryReaders } from "./cli-session-history.js";
+import {
+  prepareCliSessionHistoryReader,
+  readChatHistoryMessageFromReaders,
+  type CliHistoryReaders,
+} from "./cli-session-history.js";
 import { claudeUser, cliMeta, withClaudeProjectsDir } from "./cli-session-history.test-support.js";
 import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
 import { readChatHistoryMessageId, readChatHistoryMessageSeq } from "./session-history-tail.js";
@@ -80,7 +84,7 @@ function withPagingHistory<T>(
   );
 }
 
-function native(uuid: string, content = uuid, timestamp = 0, role = "assistant") {
+function native(uuid: string, content: unknown = uuid, timestamp = 0, role = "assistant") {
   return JSON.stringify({
     type: role,
     uuid,
@@ -201,6 +205,65 @@ it("pages past native interrupts without consuming an identical canonical human 
           "latest",
         ]);
       });
+    });
+  });
+});
+
+it("pages and expands transformed Claude text with its native tool calls in its canonical slot", async () => {
+  await withPagingHistory("cli-mixed", async (fixture) => {
+    const text = (value: string) => ({ type: "text", text: value });
+    const args = { path: "folder/".repeat(256) };
+    const mixed = [
+      text("Checking OldName"),
+      { type: "tool_use", id: "read-1", name: "Read", input: args },
+    ];
+    await fs.writeFile(
+      fixture.filePath,
+      [native("hidden", mixed, 1), native("mixed", mixed, 2), native("final", "Done", 3)].join(
+        "\n",
+      ),
+    );
+    await fixture.setEvents(
+      ["hidden", "mixed", "final"].map((uuid, i, ids) => ({
+        type: "message",
+        id: "saved-" + uuid,
+        parentId: i ? "saved-" + ids[i - 1] : null,
+        message: {
+          role: "assistant",
+          timestamp: i + 1,
+          content: [text(uuid === "final" ? "Done" : "Checking NewName")],
+          ...(uuid === "hidden" ? { display: false } : {}),
+          __openclaw: cliMeta(uuid, fixture.nativeId),
+        },
+      })),
+    );
+    await fixture.owner.run(fixture.target.database, async () => {
+      const params = historyParams(fixture, fixture.homeDir);
+      const expected = {
+        content: [
+          text("Checking NewName"),
+          { type: "toolcall", id: "read-1", name: "Read", arguments: args },
+        ],
+        __openclaw: { id: "saved-mixed" },
+      };
+      await withCliReader(params, fixture.readers, async (cli) => {
+        const history = await readPreparedPage(params, cli);
+        expect(history.messages).toMatchObject([
+          expected,
+          { content: [text("Done")], __openclaw: { id: "saved-final" } },
+        ]);
+        const small = await cli.readers.readRecentSessionMessagesWithStatsAsync(fixture.scope, {
+          maxMessages: 3,
+          maxBytes: 1024,
+        });
+        expect(small.messages.map(readChatHistoryMessageId)).toEqual(["saved-final"]);
+      });
+      expect(
+        await readChatHistoryMessageFromReaders(
+          { ...params, sessionId: fixture.scope.sessionId, messageId: "saved-mixed" },
+          fixture.readers,
+        ),
+      ).toMatchObject({ found: true, message: expected });
     });
   });
 });
@@ -475,7 +538,17 @@ it("pages merged incognito CLI history without allocating SQLite", async () => {
       filePath,
       [
         ...turns.map(([, externalId, role, , content], index) =>
-          native(externalId, content, (index + 1) * 1000 + 1, role),
+          native(
+            externalId,
+            role === "assistant"
+              ? [
+                  { type: "tool_use", id: "list", name: "List", input: { path: "." } },
+                  { type: "text", text: content },
+                ]
+              : content,
+            (index + 1) * 1000 + 1,
+            role,
+          ),
         ),
         native("native-only", "Native only", 5000),
       ].join("\n"),
@@ -529,7 +602,13 @@ it("pages merged incognito CLI history without allocating SQLite", async () => {
         const older = await read(3);
         expect(older.messages).toMatchObject([
           { content: "repeat", __openclaw: { id: "first", externalId: "native-first" } },
-          { content: "locally edited", __openclaw: { id: "edited", externalId: "known" } },
+          {
+            content: [
+              { type: "toolcall", id: "list", name: "List", arguments: { path: "." } },
+              { type: "text", text: "locally edited" },
+            ],
+            __openclaw: { id: "edited", externalId: "known" },
+          },
         ]);
         expect([...older.messages, ...latest.messages].map(cli.sequence)).toEqual([1, 2, 3, 4, 5]);
         expect(open).not.toHaveBeenCalled();

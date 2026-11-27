@@ -524,6 +524,7 @@ export async function runCliFallbackCandidate(
                     }),
                 }),
             authProfileId,
+            assertSettlementCurrent,
             // The CLI owner rechecks this after awaits and before credential/transport effects.
             assertCurrent: scheduledInference
               ? () => {

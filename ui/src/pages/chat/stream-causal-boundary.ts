@@ -1,4 +1,7 @@
-import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
+import {
+  readSessionMessageIdentity,
+  type SessionMessageIdentity,
+} from "@openclaw/gateway-client/browser";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -19,6 +22,19 @@ type StreamRolloverState = {
   chatStreamStartedAt: number | null;
   chatStreamSegments?: ChatStreamSegment[];
 };
+
+/** A saved native block identifies one occurrence, not the run's current display tail. */
+export function isIntermediateCliSnapshot(
+  message: unknown,
+  identity: SessionMessageIdentity | null,
+): boolean {
+  return Boolean(
+    identity?.role === "assistant" &&
+    identity.runId &&
+    identity.idempotencyKey?.startsWith(`cli-assistant:${identity.runId}:seg:`) &&
+    asNullableRecord(asNullableRecord(message)?.["__openclaw"])?.runTerminal !== true,
+  );
+}
 
 /** A replacement changes cumulative coordinates while preserving independent items and ordering. */
 export function replaceChatStream(

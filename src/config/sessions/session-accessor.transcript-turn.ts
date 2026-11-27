@@ -48,6 +48,7 @@ import { readRetainedSessionEntryFacts } from "./session-entry-read-facts.js";
 import { getSessionInputActor } from "./session-input-actor.js";
 import { resolvePersistedSessionStoreOwnerForTarget } from "./session-store-owner.js";
 import { completeSessionTranscriptCommit } from "./session-transcript-commit-completion.js";
+import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 import { captureSessionTranscriptTargetBinding } from "./transcript-target-binding.js";
 import {
   captureSessionTranscriptSourcePublication,
@@ -275,6 +276,7 @@ export async function persistSessionTranscriptTurn(
     publishWhen: options.publishWhen ?? "when-appended",
     appendedMessages,
     runId: options.runId,
+    assistantItemReceipt: options.assistantItemReceipt,
   });
 
   return {
@@ -456,6 +458,7 @@ async function persistExpectedSessionTranscriptTurn(
     publishWhen: options.publishWhen ?? "when-appended",
     appendedMessages: turn.appendedMessages,
     runId: options.runId,
+    assistantItemReceipt: options.assistantItemReceipt,
   });
 
   if (turn.sessionEntry && scope.sessionStore) {
@@ -572,11 +575,26 @@ async function publishTranscriptTurnUpdate(params: {
   publishWhen: "always" | "when-appended";
   appendedMessages: TranscriptMessageAppendResult<unknown>[];
   runId?: string;
+  assistantItemReceipt?: SessionTranscriptTurnPersistOptions["assistantItemReceipt"];
 }): Promise<void> {
   if (params.updateMode === "none") {
     return;
   }
-  const appendedMessages = params.appendedMessages.filter((message) => message.appended);
+  const receipt = params.assistantItemReceipt;
+  const matched =
+    receipt &&
+    params.appendedMessages.find(
+      ({ message }) => readMessageIdempotencyKey(message) === receipt.idempotencyKey,
+    );
+  // A retried snapshot may have fresh live intervals but must not append a second
+  // row. Its single-row active anchor certifies the original publication cursor.
+  const replay =
+    matched && !matched.appended && params.appendedMessages.length === 1
+      ? matched.anchor
+      : undefined;
+  const appendedMessages = params.appendedMessages.filter(
+    (message) => message.appended || (replay && message === matched),
+  );
   if (params.publishWhen === "when-appended" && appendedMessages.length === 0) {
     return;
   }
@@ -603,7 +621,9 @@ async function publishTranscriptTurnUpdate(params: {
   }
   const sequencedMessages = appendedMessages.map((message) => ({
     message,
-    messageSeq: readCommittedTranscriptMessageSequence(message),
+    messageSeq:
+      readCommittedTranscriptMessageSequence(message) ??
+      (replay ? replay.activeMessagePosition + 1 : undefined),
   }));
   if (
     sequencedMessages.length > 1 &&
@@ -620,6 +640,7 @@ async function publishTranscriptTurnUpdate(params: {
       ...update,
       message: message.message,
       messageId: message.messageId,
+      ...(receipt && message === matched ? { assistantItemIds: receipt.itemIds } : {}),
       ...(messageSeq !== undefined ? { messageSeq } : {}),
       ...(runId ? { runId } : {}),
     });

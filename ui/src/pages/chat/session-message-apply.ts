@@ -15,7 +15,7 @@ import {
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
 } from "./history-merge.ts";
-import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
+import { isIntermediateCliSnapshot, persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 import { prunePersistedAssistantStreamSegments } from "./stream-segment-pruning.ts";
 import { resetToolStreamRun } from "./tool-stream-state.ts";
 
@@ -147,13 +147,14 @@ export function applySessionMessagePayload(
   );
   if (isAssistant && projection.messages.includes(message)) {
     prunePersistedAssistantStreamSegments(state, message);
-    // Terminal rows replace the live tail; keyed commentary replaces only its segment.
+    // A run ID on a snapshot is not a terminal receipt. The Gateway retires its exact span.
     if (
       assistantOwnerRunId &&
       (runActive === false ||
         ((normalizeSessionProjectionRunId(event.runId) === assistantOwnerRunId ||
           incoming.idempotencyKey === `cli-assistant:${assistantOwnerRunId}`) &&
-          !readAssistantStreamSegmentIdentity(message)))
+          !readAssistantStreamSegmentIdentity(message) &&
+          !isIntermediateCliSnapshot(message, incoming)))
     ) {
       state.chatStream = null;
       state.chatStreamStartedAt = null;

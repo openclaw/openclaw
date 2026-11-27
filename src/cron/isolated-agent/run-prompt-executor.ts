@@ -575,6 +575,7 @@ export function createCronPromptExecutor(
                   sessionFile: params.runSessionKey,
                   storePath: params.cronSession.storePath,
                   persistAssistantTranscript: true,
+                  assertSettlementCurrent,
                   modelProvider: providerOverride,
                   requesterModel: { provider: providerOverride, model: modelOverride },
                   modelHasVision: modelSupportsInput(

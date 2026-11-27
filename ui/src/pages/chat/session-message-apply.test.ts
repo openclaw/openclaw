@@ -1,7 +1,8 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { createSessionEventState } from "./chat-state.test-support.ts";
+import { createSessionEventState, renderedTranscript } from "./chat-state.test-support.ts";
 
 function emitGatewayEvent(state: ChatPageHost, event: "session.message", payload: unknown) {
   handlePageGatewayEvent(state, { type: "event", event, payload });
@@ -185,3 +186,49 @@ it.each([
   expect(state.chatStream).toBe("Unowned stream remains untouched.");
   expect(state.chatStreamStartedAt).toBe(100);
 });
+
+it.each([true, false])(
+  "keeps equal CLI replies when Stop precedes the final snapshot (first is commentary=%s)",
+  (commentary) => {
+    const runId = "current-run";
+    const text = "Still checking.";
+    const { state } = createSessionEventState({ chatRunId: runId });
+    const saved = (seq: number) => ({
+      role: "assistant",
+      api: "cli",
+      content: [{ type: "text", text }],
+      ...(commentary && seq === 2
+        ? { openclawStreamFallback: { itemId: "commentary-1", runId } }
+        : {}),
+      __openclaw: {
+        id: `saved-${seq}`,
+        seq,
+        runId,
+        importedFrom: "claude-cli",
+        cliSessionId: "native",
+        externalId: String(seq),
+        transcriptPosition: { source: "canonical", rawSeq: seq },
+        idempotencyKey: `cli-assistant:${runId}:seg:native:${seq}`,
+      },
+    });
+    const persist = (seq: number, hasActiveRun: boolean) =>
+      emitGatewayEvent(state, "session.message", {
+        sessionKey: state.sessionKey,
+        runId,
+        hasActiveRun,
+        message: saved(seq),
+      });
+    handleChatGatewayEvent(state, {
+      sessionKey: state.sessionKey,
+      runId,
+      state: "delta",
+      message: { role: "assistant", content: text },
+    });
+    persist(2, true);
+    expect(renderedTranscript(state).map((row) => row.text)).toEqual([text, text]);
+    handleChatGatewayEvent(state, { sessionKey: state.sessionKey, runId, state: "aborted" });
+    expect(renderedTranscript(state).map((row) => row.text)).toEqual([text, text]);
+    persist(3, false);
+    expect(state.chatMessages).toEqual([saved(2), saved(3)]);
+  },
+);

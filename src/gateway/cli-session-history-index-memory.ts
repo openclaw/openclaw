@@ -162,18 +162,18 @@ export class MemoryCliSessionHistoryIndex implements CliHistoryIndex {
   rows(start: number, end: number) {
     return this.order
       .slice(Math.max(0, start), Math.max(0, end))
-      .map(({ id, local_seq, metadata, ordinal, bytes }) => ({
+      .map(({ id, local_seq, import_ref, metadata, ordinal, bytes }) => ({
         id,
         local_seq,
+        import_ref,
         metadata,
         ordinal,
         bytes,
       }));
   }
 
-  message(id: number): unknown {
-    const reference = this.messages.get(id)?.import_ref;
-    const payload = reference == null ? undefined : this.imports[reference]?.payload;
+  importedMessage(id: number): unknown {
+    const payload = this.imports[id]?.payload;
     return payload ? JSON.parse(payload) : undefined;
   }
 

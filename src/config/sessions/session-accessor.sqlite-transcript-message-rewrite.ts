@@ -23,6 +23,7 @@ import { readTranscriptGenerationInTransaction } from "./session-accessor.sqlite
 import { rewriteSqliteTranscriptEventRowsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import type { SessionTranscriptAccessScope } from "./session-accessor.types.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
+import type { SessionMessageRewriteSelection } from "./session-transcript-mutation.types.js";
 import type { SessionLifecycleRevisionExpectation } from "./session-transcript-turn-lifecycle.types.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import { transcriptEventJsonSql } from "./transcript-payload.js";
@@ -41,6 +42,10 @@ type TranscriptMessageAnchorRewriteResult<TMessage> = {
 export async function rewriteNativeTranscriptMessageAtAnchor<TMessage>(
   anchor: TranscriptEntryAnchor,
   rewriteMessage: (message: unknown) => TMessage | undefined,
+  options: {
+    assistantMetadataOnly?: boolean;
+    expectedEntry?: SessionMessageRewriteSelection["expectedEntry"];
+  } = {},
 ): Promise<TranscriptMessageAnchorRewriteResult<TMessage> | null> {
   const resolved = resolveSqliteTranscriptScope(anchor);
   return await runExclusiveSqliteSessionWrite(
@@ -49,6 +54,21 @@ export async function rewriteNativeTranscriptMessageAtAnchor<TMessage>(
       runOpenClawAgentWriteTransaction(
         (database) => {
           assertSessionTranscriptHot(database.db, resolved.sessionId);
+          if (options.expectedEntry) {
+            const current = readSessionEntryRow(database, resolved.sessionKey)?.entry;
+            const expected = options.expectedEntry;
+            if (
+              !transcriptWriteScopeIsCurrent(current, resolved.sessionId, {
+                sessionKey: resolved.sessionKey,
+                expectedOwner: expected.owner,
+              }) ||
+              current?.lifecycleRevision !== (expected.lifecycleRevision ?? undefined) ||
+              (expected.activeWriterRunId !== undefined &&
+                current?.activeWriterRunId !== (expected.activeWriterRunId ?? undefined))
+            ) {
+              throw new SessionTranscriptWriterClaimReboundError();
+            }
+          }
           const row = executeSqliteQueryTakeFirstSync(
             database.db,
             getSessionKysely(database.db)
@@ -68,13 +88,18 @@ export async function rewriteNativeTranscriptMessageAtAnchor<TMessage>(
           if (message === undefined) {
             return null;
           }
-          rewriteSqliteTranscriptEventRowsInTransaction(database, resolved, [
-            {
-              event: { ...event, message },
-              expectedEventJson: row.event_json,
-              seq: anchor.rawSeq,
-            },
-          ]);
+          rewriteSqliteTranscriptEventRowsInTransaction(
+            database,
+            resolved,
+            [
+              {
+                event: { ...event, message },
+                expectedEventJson: row.event_json,
+                seq: anchor.rawSeq,
+              },
+            ],
+            options,
+          );
           const generation = readTranscriptGenerationInTransaction(database, resolved.sessionId);
           return generation ? { generation, message } : null;
         },

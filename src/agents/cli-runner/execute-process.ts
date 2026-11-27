@@ -20,7 +20,11 @@ import { getProcessSupervisor } from "../../process/supervisor/index.js";
 import type { RunExit } from "../../process/supervisor/types.js";
 import { truncateUtf8Suffix } from "../../utils/utf8-truncate.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
-import type { CliOutput, CliTerminalInterruption } from "../cli-output-contracts.js";
+import type {
+  CliCommentarySegment,
+  CliOutput,
+  CliTerminalInterruption,
+} from "../cli-output-contracts.js";
 import { transformCliResultText } from "../cli-output-results.js";
 import { createCliJsonlStreamingParser } from "../cli-output-stream.js";
 import { formatCliOutputError, parseCliOutput } from "../cli-output.js";
@@ -28,6 +32,7 @@ import { EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS } from "../embedded-agent-runner/run
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import { classifyFailoverReason } from "../failover/classify.js";
 import { CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE } from "../failover/error.js";
+import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import type { CliEventHandlers } from "./execute-events.js";
 import { createCliAbortError, executeNodeClaudeRun } from "./execute-node-claude.js";
 import { executePluginOwnedProcess } from "./execute-plugin.js";
@@ -85,6 +90,7 @@ export async function executeCliProcess(params: {
   cliTurnStartedAt: number;
   observeForkSuccessor: (sessionId: string) => void;
   options?: ExecuteCliProcessOptions;
+  onCommentarySegment?: (segment: CliCommentarySegment) => void;
 }): Promise<CliOutput> {
   const context = params.context;
   const runParams = context.params;
@@ -214,6 +220,17 @@ export async function executeCliProcess(params: {
           params.events.emitLiveEvents && runParams.emitCommentaryText
             ? params.events.emitCliCommentaryText
             : undefined,
+        // Durable history stores what live commentary shows, after the same output replacements.
+        onCommentarySegment: params.onCommentarySegment
+          ? (segment) =>
+              params.onCommentarySegment?.({
+                ...segment,
+                text: applyPluginTextReplacements(
+                  segment.text,
+                  context.backendResolved.textTransforms?.output,
+                ),
+              })
+          : undefined,
         onSessionId: params.observeForkSuccessor,
         onNativeTools: context.preparedBackend.mcpClientGrantCapture?.captureNativeTools,
         onAssistantMessage: params.diagnostics?.observeAssistantMessage,
@@ -357,7 +374,7 @@ export async function executeCliProcess(params: {
         },
         onInterrupted: (reason) => {
           streamingParser?.finish();
-          const partialOutput = streamingParser?.getOutput();
+          const partialOutput = streamingParser?.getOutput(true);
           if (partialOutput?.partialOutputRejected && partialOutput.errorText) {
             throw refuseStream(partialOutput.errorText, partialOutput, {
               code: CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE,
@@ -469,6 +486,7 @@ export async function executeCliProcess(params: {
       }
     }
   } finally {
+    streamingParser?.flushCompletedSegments();
     backendActivity?.close();
   }
   if (
@@ -530,7 +548,7 @@ export async function executeCliProcess(params: {
     }
   }
 
-  const streamedJsonlOutput = streamingParser?.getOutput();
+  const streamedJsonlOutput = streamingParser?.getOutput(Boolean(terminalInterruption));
   const parseOutput = () =>
     parseCliOutput({
       raw: readStdout(),

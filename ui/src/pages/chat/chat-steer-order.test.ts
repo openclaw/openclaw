@@ -7,6 +7,7 @@ import {
   activeHistory,
   buildStateItems,
   createState,
+  renderedText,
   steerPrompts,
 } from "./chat-history.inflight.test-support.ts";
 import { loadChatHistory } from "./chat-history.ts";
@@ -146,3 +147,41 @@ it.each(["tool", "item"] as const)(
     expect(rows()).toEqual([...accepted.slice(0, -1), "Continued. Finishing. Done."]);
   },
 );
+
+it("replaces a live commentary preview with its saved snapshot during the run", () => {
+  const state = createState(activeHistory("active-run"));
+  state.chatRunId = "active-run";
+  const text = "Checking files.";
+  const itemId = "commentary-active-run-native-message";
+  handleAgentEvent(state, {
+    sessionKey: state.sessionKey,
+    runId: "active-run",
+    seq: 1,
+    ts: 1,
+    stream: "item",
+    data: {
+      kind: "preamble",
+      itemId,
+      phase: "end",
+      title: "commentary",
+      status: "running",
+      progressText: text,
+    },
+  });
+  expect(renderedText(state)).toEqual([text]);
+  applySessionMessagePayload(
+    state,
+    {
+      runId: "active-run",
+      message: {
+        ...nativeMessage("assistant", text, 2, { id: "saved", seq: 1, runId: "active-run" }),
+        openclawStreamFallback: { itemId, runId: "active-run" },
+      },
+    },
+    true,
+    { kind: "live", activeRunId: "active-run" },
+  );
+  expect(state.chatRunId).toBe("active-run");
+  expect(renderedText(state)).toEqual([text]);
+  expect(state.chatStreamSegments.some((segment) => segment.itemId === itemId)).toBe(false);
+});

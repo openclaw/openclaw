@@ -283,11 +283,16 @@ describe("cli tool result events", () => {
     const runId = "parsed-activity";
     const { handlers, events } = eventFixture(buildContext(runId));
     const parser = displayParser(handlers);
-    handlers.emitCliCommentaryText("Let me check that for you.");
+    handlers.emitCliCommentaryText("Let me check that for you.", "native-message");
     expect(events).toMatchObject([
       {
         stream: "item",
-        data: { kind: "preamble", phase: "end", progressText: "Let me check that for you." },
+        data: {
+          kind: "preamble",
+          phase: "end",
+          progressText: "Let me check that for you.",
+          itemId: `commentary-${runId}-native-message`,
+        },
       },
     ]);
     for (const [toolCallId, name, args, isError, quiet] of [

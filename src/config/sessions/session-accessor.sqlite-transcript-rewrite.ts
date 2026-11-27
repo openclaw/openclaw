@@ -26,6 +26,7 @@ import {
 } from "./session-transcript-index.js";
 import { reconcileRewrittenTranscriptIndex } from "./session-transcript-reconcile.js";
 import {
+  transcriptAssistantMetadataSettlementIsValid,
   transcriptRewritePreservesAdmission,
   transcriptRewritePreservesProjection,
 } from "./session-transcript-rewrite-effects.js";
@@ -74,9 +75,19 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
     !options.legacyTextStorage &&
     !projectionUnchanged &&
     shouldRebuildSessionTranscriptIndexSynchronously(database.db, resolved.sessionId);
-  const admissionUnchanged = rewrites.every((row) =>
-    transcriptRewritePreservesAdmission(row.expectedEventJson, row.eventJson),
-  );
+  if (
+    options.assistantMetadataOnly &&
+    !rewrites.every((row) =>
+      transcriptAssistantMetadataSettlementIsValid(row.expectedEventJson, row.eventJson),
+    )
+  ) {
+    throw new Error("Assistant metadata settlement changed transcript content");
+  }
+  const admissionUnchanged =
+    options.assistantMetadataOnly ||
+    rewrites.every((row) =>
+      transcriptRewritePreservesAdmission(row.expectedEventJson, row.eventJson),
+    );
   const run = () =>
     withSqliteDatabaseWriteScope(database.db, [...writeScopes], () => {
       // Pre-trajectory media repair precedes admission of the current session-row schema.

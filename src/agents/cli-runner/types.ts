@@ -152,6 +152,8 @@ export type RunCliAgentParams = Pick<
   };
   /** Caller-owned authority for credential use; cancellation alone is not authorization. */
   assertCurrent?: SessionSourceAssertion;
+  /** Retained turn owner for terminal metadata cleanup after execution stops. */
+  assertSettlementCurrent?: SessionSourceAssertion;
   /** Internal completion caller's representation of operator authorization failures. */
   mapOperatorAuthorizationError?: (error: unknown) => Error;
   onExecutionStarted?: () => unknown;

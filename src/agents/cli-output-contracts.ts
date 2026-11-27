@@ -30,11 +30,30 @@ export type CliTerminalInterruption = {
   reason: "aborted" | "timeout";
 };
 
+/**
+ * One completed pre-tool commentary block; `key` names its native message when known.
+ * `native` names the CLI's own record of that block, so history pairs the two even when
+ * display transforms changed the text.
+ */
+export type CliCommentarySegment = {
+  itemId?: string;
+  key?: string;
+  /** Live intervals claimed by this native snapshot, not its durable replay key. */
+  assistantItemIds?: string[];
+  text: string;
+  timestamp: number;
+  native?: { entryId: string; sessionId: string };
+};
+
 /** Normalized result from a CLI-backed model provider turn. */
 export type CliOutput = {
   text: string;
   /** Completed result boundaries, retained for independent delivery and retry. */
   textParts?: string[];
+  /** Parser-owned native snapshot boundaries in rawText (or text before transforms). */
+  textSnapshotRanges?: { key: string; start: number; end: number }[];
+  /** Live intervals for settlement of a tail that did not get its own native snapshot. */
+  assistantOccurrences?: { id: string; key?: string }[];
   /** Completed held answers, excluding narration, mirrored by native identity in canonical history. */
   interimNativeReplies?: Array<{ text: string; cliSessionId: string; externalId: string }>;
   rawText?: string;
@@ -100,6 +119,7 @@ export type CliOutput = {
 
 export type CliStreamingDelta = Pick<CliOutput, "text" | "sessionId" | "usage"> & {
   delta: string;
+  occurrenceId?: string;
 };
 
 /** Incremental thinking text emitted while parsing a streaming CLI response. */
@@ -154,7 +174,9 @@ export type CliJsonlStreamingParserOptions = {
   onToolResult?: (delta: CliToolResultDelta) => void;
   onDisplayToolUseStart?: (delta: CliToolUseStartDelta) => void;
   onDisplayToolResult?: (delta: CliToolResultDelta) => void;
-  onCommentaryText?: (text: string) => void;
+  onCommentaryText?: (text: string, itemId?: string) => void;
+  /** The same commentary text, for canonical history: it never reaches the terminal reply. */
+  onCommentarySegment?: (segment: CliCommentarySegment) => void;
   onSessionId?: (sessionId: string) => void;
   /** Parent initialization fact; its authority owner validates the raw tool list. */
   onNativeTools?: (tools: unknown) => void;

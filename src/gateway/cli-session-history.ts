@@ -1,7 +1,6 @@
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 // Claude's native transcript augments display history, never canonical model context.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { getCliSessionBinding } from "../config/sessions/cli-session-binding.js";
 import type {
   ChatHistoryPage,
@@ -22,7 +21,11 @@ import {
   isPreSessionStartAssistantMessage,
 } from "./chat-display-projection.history.js";
 import { MemoryCliSessionHistoryIndex } from "./cli-session-history-index-memory.js";
-import type { CliHistoryIndex } from "./cli-session-history-index-policy.js";
+import {
+  localCliHistoryToolJoinBytes,
+  materializeCliHistoryRow,
+  type CliHistoryIndex,
+} from "./cli-session-history-index-policy.js";
 import { CliSessionHistoryIndex } from "./cli-session-history-index.worker.js";
 import {
   resolveClaudeCliHistorySource,
@@ -326,16 +329,15 @@ export async function prepareCliSessionHistoryReader(
     }
     const messages: unknown[] = [];
     for (const row of window) {
-      const message =
-        row.local_seq === null ? index.message(row.id) : localMessages.get(row.local_seq);
-      const record = asOptionalRecord(message);
-      if (!record) {
+      const message = materializeCliHistoryRow(
+        index,
+        row,
+        row.local_seq === null ? undefined : localMessages.get(row.local_seq),
+      );
+      if (!message) {
         throw new SessionTranscriptProjectionUnavailableError(params.sessionId!, "window-changed");
       }
-      messages.push({
-        ...record,
-        ...(row.metadata ? { __openclaw: JSON.parse(row.metadata) } : {}),
-      });
+      messages.push(message);
     }
     await assertCurrent();
     return messages;
@@ -352,14 +354,34 @@ export async function prepareCliSessionHistoryReader(
       readWindow: { source: key, latestResetRawSeq: null },
     };
   };
-  const readIndexedMessage: Readers["readSessionMessageByIdAsync"] = async (
-    readScope,
-    messageId,
-    options,
-  ) => {
+  const readIndexedMessage = async (
+    local: ReadSessionMessageByIdResult,
+    ...[readScope, messageId, options]: Parameters<Readers["readSessionMessageByIdAsync"]>
+  ): Promise<ReadSessionMessageByIdResult> => {
     const ordinal = index.ordinal(messageId);
     if (ordinal === undefined) {
-      return { found: false, oversized: false };
+      return local;
+    }
+    if (local.found) {
+      // Canonical archive hits and visibility still win; enrich only this indexed local row.
+      const row = index.rows(ordinal, ordinal + 1)[0];
+      if (
+        !row ||
+        row.local_seq === null ||
+        row.import_ref === null ||
+        row.local_seq !== local.seq
+      ) {
+        return local;
+      }
+      const maxBytes = options?.maxBytes;
+      if (maxBytes !== undefined && row.bytes > maxBytes) {
+        return { found: true, oversized: true, seq: local.seq };
+      }
+      return {
+        ...local,
+        message: materializeCliHistoryRow(index, row, local.message),
+        serializedBytes: row.bytes,
+      };
     }
     const [message] = await readRange(ordinal, ordinal + 1, options?.maxBytes);
     const precedingMessage =
@@ -443,17 +465,20 @@ export async function prepareCliSessionHistoryReader(
     },
   };
   prepared.readers.readSessionMessageByIdAsync = (...args) =>
-    readCanonicalOrImportedMessage(readers, args, () => readIndexedMessage(...args));
+    readCanonicalOrImportedMessage(readers, args, (local) => readIndexedMessage(local, ...args));
   return prepared;
 }
 
 async function readCanonicalOrImportedMessage(
   readers: Readers,
   args: Parameters<Readers["readSessionMessageByIdAsync"]>,
-  readImported: (missing: ReadSessionMessageByIdResult) => Promise<ReadSessionMessageByIdResult>,
+  readImported: (local: ReadSessionMessageByIdResult) => Promise<ReadSessionMessageByIdResult>,
 ): Promise<ReadSessionMessageByIdResult> {
   const local = await readers.readSessionMessageByIdAsync(...args);
-  return local.found || local.historyHidden ? local : readImported(local);
+  return local.historyHidden ||
+    (local.found && (local.oversized || localCliHistoryToolJoinBytes(local.message) === null))
+    ? local
+    : readImported(local);
 }
 
 /** Canonical IDs retain archive access; imported-only IDs use the page owner's admitted index. */
@@ -475,10 +500,10 @@ export async function readChatHistoryMessageFromReaders(
   return readCanonicalOrImportedMessage(
     readers,
     [scope, params.messageId, options],
-    async (missing) => {
+    async (local) => {
       const cli = await prepareCliSessionHistoryReader(params, readers);
       try {
-        return cli ? await cli.readIndexedMessage(scope, params.messageId, options) : missing;
+        return cli ? await cli.readIndexedMessage(local, scope, params.messageId, options) : local;
       } finally {
         cli?.dispose();
       }
