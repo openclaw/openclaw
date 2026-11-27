@@ -15,7 +15,6 @@ struct SettingsHubScreen: View {
     @Binding var navigationPath: [SettingsRoute]
     var headerSidebarAction: OpenClawSidebarHeaderAction?
     var onRouteChange: ((SettingsRoute?) -> Void)?
-    var onApprovalNotificationsRoute: ((String?) -> Void)?
     var onClose: (() -> Void)?
     var onSelectPage: ((RootTabs.SidebarDestination) -> Void)?
     var gatewaySetupRequest: GatewaySetupRequest?

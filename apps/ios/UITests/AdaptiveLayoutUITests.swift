@@ -403,7 +403,7 @@ final class AdaptiveLayoutUITests: XCTestCase {
         let input = app.descendants(matching: .any)["chat-message-input"].firstMatch
         XCTAssertTrue(input.waitForExistence(timeout: 30))
         let window = app.windows.firstMatch.frame
-        let identity = app.buttons["chat-agent-identity"].firstMatch
+        let identity = app.descendants(matching: .any)["chat-agent-identity"].firstMatch
         let actions = app.buttons["Chat actions"].firstMatch
         let composer = app.otherElements["chat-composer-surface"].firstMatch
         for (name, element) in [("identity", identity), ("actions", actions), ("composer", composer)] {
