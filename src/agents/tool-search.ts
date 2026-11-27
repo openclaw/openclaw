@@ -7,6 +7,7 @@ import {
   copyInternalToolResultState,
 } from "../../packages/agent-core/src/internal-hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { classifyAgentToolSource } from "../plugins/tool-metadata.js";
 import { bindGatewayToolPolicyControl } from "./agent-tool-metadata.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import type { AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
@@ -20,6 +21,7 @@ import {
   isDirectVisibleCatalogTool,
   omitDescribedOutputSchema,
   resolveCatalog,
+  selectDirectMcpToolNames,
 } from "./tool-search-catalog.js";
 import { resolveToolSearchConfig } from "./tool-search-config.js";
 import { renderToolSearchControlText } from "./tool-search-control-result.js";
@@ -236,6 +238,10 @@ export function applyToolSearchCatalog(params: {
 }) {
   const config = resolveToolSearchConfig(params.config);
   const directToolNames = new Set(normalizeStringEntries(Array.from(params.directToolNames ?? [])));
+  const directMcpToolNames = selectDirectMcpToolNames(
+    params.tools,
+    params.catalogRef?.sessionPinnedToolNames,
+  );
   // The MCP directory goes in the system prompt's deferred-tool section, so a server
   // that connects later changes an appended prompt update, never this definition.
   return applyToolCatalogCompaction({
@@ -243,7 +249,9 @@ export function applyToolSearchCatalog(params: {
     enabled: config.enabled,
     selection: config,
     isVisibleControlTool: (tool) => shouldExposeControlTool(tool.name, config.mode),
-    isVisibleCatalogTool: (tool) => isDirectVisibleCatalogTool(tool, directToolNames),
+    isVisibleCatalogTool: (tool) =>
+      isDirectVisibleCatalogTool(tool, directToolNames) ||
+      (directMcpToolNames.has(tool.name) && classifyAgentToolSource(tool).source === "mcp"),
   });
 }
 

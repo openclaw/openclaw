@@ -97,6 +97,8 @@ export function formatUnknownToolIdError(
 }
 
 const MAX_INPUT_ERROR_DETAILS = 5;
+// Far above the largest single schema of the measured MCP servers (1.7 KB).
+const MAX_INPUT_ERROR_SCHEMA_CHARS = 8_192;
 const SENSITIVE_INPUT_PATH =
   /(?:auth|card|code|cookie|credential|cvc|cvv|key|pass|pin|secret|session|signature|token)/iu;
 const SCALAR_STRING = /^(?:-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null)$/u;
@@ -175,6 +177,11 @@ export function formatCatalogInputError(
     details.push(`${errors.length - details.length} additional validation issues omitted`);
   }
   const hint = suggestions.length > 0 ? ` Did you mean: ${suggestions.join(", ")}?` : "";
+  // The full schema lets the model retry in one step instead of calling tool_describe.
+  const schemaText = recoverySurface !== "catalog" && schema ? JSON.stringify(schema) : undefined;
+  if (schemaText && schemaText.length <= MAX_INPUT_ERROR_SCHEMA_CHARS) {
+    return `Invalid arguments for tool "${entry.id}": ${details.join("; ")}.${hint} Input schema: ${schemaText}`;
+  }
   const input = compactToolInputHint(schema);
   const signature = input === "unknown" ? "" : ` Expected input: ${input}.`;
   const recovery =
