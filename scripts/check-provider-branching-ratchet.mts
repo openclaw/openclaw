@@ -3,9 +3,10 @@ import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { runPerFileCountRatchet } from "./lib/shrink-ratchet.mts";
 
 // Request and history shaping must follow declared capability (model compat, catalog rows,
-// transcript policy), never a guess from a provider id, model id, API name or URL. Each line on
-// the request/history path that branches on one of those counts once. Existing lines are listed
-// in the allowlist, which may only shrink. Same rule as the 2026-11-27 provider-branching audit.
+// transcript policy), never a guess from a provider id, model id, API name or URL. Each line that
+// branches on one of those counts once, in files on the request/history path (they name a
+// request or history concept). Existing lines are listed in the allowlist, which may only shrink.
+// Same method as the 2026-11-27 provider-branching audit scan.
 const BASELINE_PATH = "config/provider-branching-allowlist.txt";
 const BASELINE_HEADER = [
   "# Provider, model, API and URL branches on the request/history path, per file.",
@@ -13,13 +14,14 @@ const BASELINE_HEADER = [
   "# Format: repo-relative path, tab, positive count. Zero-count files are omitted.",
   "",
 ].join("\n");
+// `glob` magic: without it, `**/` needs at least one directory and top-level files escape.
 const PATHSPECS = [
   "src/agents/**/*.ts",
   "src/plugins/provider-replay*.ts",
   "src/plugins/provider-runtime.ts",
   "packages/ai/src/**/*.ts",
   "packages/llm-core/src/**/*.ts",
-];
+].map((glob) => `:(glob)${glob}`);
 const NAMES =
   "Provider|Model|Anthropic|OpenAI|Openai|Google|Gemini|Bedrock|Mistral|Codex|Responses|Completions|Claude|Vertex|Ollama|Copilot|Moonshot|Kimi|Deepseek|DeepSeek|Qwen|Xai|Grok";
 const IDS =
@@ -37,6 +39,9 @@ const BRANCH = new RegExp(
   ].join("|"),
   "u",
 );
+// Files that name a request or history concept; the audit's request-path filter.
+const REQUEST_PATH =
+  /previous_response_id|previousResponseId|cache_control|cacheControl|cachePoint|replayPolicy|ReplayPolicy|sanitize.*[Rr]eplay|transcriptPolicy|TranscriptPolicy|systemPrompt|system_prompt|compaction|toolDefinitions|tools:/u;
 const EXCLUDE = [
   "*.test.ts",
   "*.test-*.ts",
@@ -45,28 +50,33 @@ const EXCLUDE = [
   "*test-harness*",
   "*test-helpers*",
   "*.generated.ts",
+  "*cli-runner*",
   "test/**",
   "test-helpers/**",
   "fixtures/**",
+  "ui/**",
+  "gateway/**",
+  "channels/**",
 ].map((glob) => `:(exclude,glob)**/${glob}`);
 
-/** One branch per line, as the audit counted. */
+/** One branch per line, as the audit counted; files off the request/history path count zero. */
 export function countProviderBranches(source: string) {
+  if (!REQUEST_PATH.test(source)) {
+    return 0;
+  }
   return source.split("\n").filter((line) => BRANCH.test(line)).length;
 }
 
-function collectCurrent(root: string, staged: boolean) {
-  let output = "";
+function gitGrep(root: string, staged: boolean, args: string[]) {
   try {
-    output = execFileSync(
+    return execFileSync(
       "git",
       [
         "grep",
         "-I",
         "-P",
         ...(staged ? ["--cached"] : []),
-        "-e",
-        BRANCH.source,
+        ...args,
         "--",
         ...PATHSPECS,
         ...EXCLUDE,
@@ -75,15 +85,19 @@ function collectCurrent(root: string, staged: boolean) {
     );
   } catch (error) {
     // git grep exits 1 when nothing matches.
-    if ((error as { status?: number }).status !== 1) {
+    if (!(error instanceof Error && "status" in error && error.status === 1)) {
       throw error;
     }
+    return "";
   }
+}
+
+function collectCurrent(root: string, staged: boolean) {
+  const requestPath = new Set(gitGrep(root, staged, ["-l", "-e", REQUEST_PATH.source]).split("\n"));
   const counts = new Map<string, number>();
-  for (const row of output.split("\n")) {
-    const separator = row.indexOf(":");
-    if (separator > 0) {
-      const file = row.slice(0, separator);
+  for (const row of gitGrep(root, staged, ["-e", BRANCH.source]).split("\n")) {
+    const file = row.slice(0, row.indexOf(":"));
+    if (file && requestPath.has(file)) {
       counts.set(file, (counts.get(file) ?? 0) + 1);
     }
   }
