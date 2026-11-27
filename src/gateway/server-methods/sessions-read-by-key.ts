@@ -11,6 +11,8 @@ import { captureAgentHarnessLifecycleHooks } from "../../agents/harness/registry
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { projectOperatorModelRead } from "../operator-model-presentation.js";
 import { hasOperatorBoundary } from "../operator-role-policy.js";
+import { resolveTelegramSessionGroup } from "../session-channel-group.js";
+import { prepareTelegramSessionEntryRead } from "../session-channel-read.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { withReadySessionRows } from "../session-row-prepared-read.js";
 import { prepareSessionRowPublication } from "../session-row-presentation.js";
@@ -18,6 +20,7 @@ import { requireSessionRowProjection } from "../session-row-projection-access.js
 import {
   authorizeIncognitoSessionTarget,
   createSessionDirectEntryFilter,
+  prepareSessionSharing,
 } from "../session-sharing.js";
 import { readRecentSessionMessagesWithStatsAsync } from "../session-transcript-readers.js";
 import { createVisibleActiveSessionRunProjector } from "./session-active-runs.js";
@@ -233,6 +236,13 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
       const requested = requestedAgent();
       return requested.ok ? [{ key, agentId: requested.agentId }] : [];
     };
+    let channelRequest:
+      | {
+          cfg: ReturnType<typeof context.getRuntimeConfig>;
+          policyConfig: ReturnType<typeof context.getRuntimeConfig>;
+          profileId: string;
+        }
+      | undefined;
     const selected = await withReadySessionRows(projection, queries, (read) => {
       sessionMutationAuthorization?.assertCurrent();
       const requested = requestedAgent();
@@ -249,14 +259,58 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
             membership: record?.membership,
           })
         : undefined;
-      if (!record?.entry.sessionId || boundaryFilter?.(record.key, record.entry) === false) {
+      if (!record?.entry.sessionId) {
         respond(true, { messages: [] }, undefined);
         return undefined;
+      }
+      if (boundaryFilter?.(record.key, record.entry) === false) {
+        const profileId = client?.authenticatedUserProfile?.profileId;
+        // Eligibility only: no transcript is read or returned before the fresh adapter check.
+        const sharing = prepareSessionSharing({ client, cfg: policyConfig }, undefined, () => true);
+        if (
+          !profileId ||
+          !resolveTelegramSessionGroup(record.key, record.entry) ||
+          sharing.directEntryFilter?.(record.key, record.entry) !== true
+        ) {
+          respond(true, { messages: [] }, undefined);
+          return undefined;
+        }
+        channelRequest = { cfg: read.state.cfg, policyConfig, profileId };
       }
       return record;
     });
     if (!selected) {
       return;
+    }
+    let channelRead: Awaited<ReturnType<typeof prepareTelegramSessionEntryRead>> | undefined;
+    if (channelRequest) {
+      const request = channelRequest;
+      channelRead = await prepareTelegramSessionEntryRead({
+        cfg: request.cfg,
+        getConfig: context.getRuntimeConfig,
+        profileId: request.profileId,
+        key: selected.key,
+        entry: selected.entry,
+        // Match the existing membership adapter deadline while retaining request cancellation.
+        signal: AbortSignal.any([
+          AbortSignal.timeout(5_000),
+          ...[signal, client?.connectionSignal].filter((item): item is AbortSignal =>
+            Boolean(item),
+          ),
+        ]),
+      });
+      sessionMutationAuthorization?.assertCurrent();
+      if (
+        signal?.aborted ||
+        client?.invalidated ||
+        client?.connectionSignal?.aborted ||
+        client?.authenticatedUserProfile?.profileId !== request.profileId ||
+        context.getRuntimeConfig() !== request.cfg ||
+        !channelRead(selected.key, selected.entry)
+      ) {
+        respond(true, { messages: [] }, undefined);
+        return;
+      }
     }
     const target = {
       agentId: selected.agentId,
@@ -299,7 +353,19 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
         current.key !== selected.key ||
         current.storeTarget.storePath !== selected.storeTarget.storePath ||
         current.entry.sessionId !== target.sessionId ||
-        boundaryFilter?.(current.key, current.entry) === false
+        (boundaryFilter?.(current.key, current.entry) === false &&
+          (!channelRequest ||
+            !channelRead ||
+            signal?.aborted ||
+            client?.invalidated ||
+            client?.connectionSignal?.aborted ||
+            client?.authenticatedUserProfile?.profileId !== channelRequest.profileId ||
+            policyConfig !== channelRequest.policyConfig ||
+            prepareSessionSharing(
+              { client, cfg: policyConfig },
+              undefined,
+              channelRead,
+            ).directEntryFilter?.(current.key, current.entry) !== true))
       ) {
         respond(true, { messages: [] }, undefined);
         return;

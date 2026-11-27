@@ -31,6 +31,7 @@ import {
 } from "../../routing/session-key.js";
 import { errorShapeFromError } from "../error-shape.js";
 import { hasOperatorBoundary, operatorSessionCap } from "../operator-role-policy.js";
+import { resolveTelegramSessionGroup } from "../session-channel-group.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { withReadySessionRows, type SessionRowReadView } from "../session-row-prepared-read.js";
@@ -45,6 +46,7 @@ import {
   createSessionListEntryFilter,
   createSessionDirectEntryFilter,
   isGatewayAdmin,
+  prepareSessionSharing,
 } from "../session-sharing.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
 import { readSessionPreviewItemsFromTranscriptAsync } from "../session-transcript-preview.js";
@@ -412,6 +414,25 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             }),
           consume,
         );
+      const previewVisibilityFilter = (
+        cfg: SessionRowReadView["state"]["policyConfig"],
+        row?: MaterializedRow,
+      ) => {
+        if (!hasOperatorBoundary(client, cfg)) {
+          return undefined;
+        }
+        const ordinary = createSessionDirectEntryFilter({
+          client,
+          cfg,
+          membership: row?.membership,
+        });
+        const channel =
+          row && resolveTelegramSessionGroup(row.key, row.entry)
+            ? prepareSessionSharing({ client, cfg }).directEntryFilter
+            : undefined;
+        return (key: string | undefined, entry: SessionEntry) =>
+          ordinary?.(key, entry) !== false || channel?.(key, entry) === true;
+      };
       const previews: SessionsPreviewEntry[] = [];
       const buffered: Array<{
         preview: SessionsPreviewEntry;
@@ -446,13 +467,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
               return undefined;
             }
             const current = read.describe({ key, agentId: currentAgent.agentId });
-            const visibilityFilter = hasOperatorBoundary(client, policyConfig)
-              ? createSessionDirectEntryFilter({
-                  client,
-                  cfg: policyConfig,
-                  membership: current?.membership,
-                })
-              : undefined;
+            const visibilityFilter = previewVisibilityFilter(policyConfig, current);
             return current?.entry.sessionId &&
               visibilityFilter?.(current.key, current.entry) !== false
               ? current
@@ -508,13 +523,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                   previous.record,
                 )
               : undefined;
-            const visibilityFilter = hasOperatorBoundary(client, policyConfig)
-              ? createSessionDirectEntryFilter({
-                  client,
-                  cfg: policyConfig,
-                  membership: current?.membership,
-                })
-              : undefined;
+            const visibilityFilter = previewVisibilityFilter(policyConfig, current);
             if (
               !current ||
               current.agentId !== previous.record.agentId ||

@@ -163,6 +163,7 @@ export function prepareSessionSharing(
     isMember: (target: SessionSharingTarget, identityId: string) => boolean;
     channelRead?: (sessionKey: string, entry: ChannelReadEntry) => boolean;
   },
+  channelRead?: (sessionKey: string, entry: ChannelReadEntry) => boolean,
 ) {
   const identity = sharingIdentity(params.client, resolveGatewayOperatorRoleActor(params.client));
   const isCreator = prepareSessionCreatorProfile(identity?.id, prepared?.aliases);
@@ -200,6 +201,7 @@ export function prepareSessionSharing(
           isCreator,
           scopes: params.client?.connect.scopes ?? [],
           channelRead: (sessionKey, row) =>
+            channelRead?.(sessionKey, row) ??
             prepared?.channelRead?.(sessionKey, row) ??
             readTelegramSessionMembership(params.client, params.cfg!, sessionKey, row),
         }),
