@@ -30,14 +30,14 @@ describe("automation results after an ambiguous transport failure", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
-  function register() {
+  function register(cutOffSends = 1) {
     const visible: string[] = [];
     let attempts = 0;
     const outbound: ChannelOutboundAdapter = {
       deliveryMode: "direct",
       sendText: async ({ text, onPlatformSendDispatch }) => {
         await onPlatformSendDispatch?.();
-        if (attempts++ === 0) {
+        if (attempts++ < cutOffSends) {
           throw connectionResetAfterWrite();
         }
         visible.push(text);
@@ -65,19 +65,35 @@ describe("automation results after an ambiguous transport failure", () => {
         : {}),
     });
 
-  it("resends an automation result once instead of losing it", async () => {
+  // Runs the work while skipping its retry backoff and receipt polling.
+  async function withoutWaiting<T>(work: Promise<T>): Promise<T> {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    const channel = register();
-    const pending = send(true);
-    // Skip the resend backoff.
-    for (let step = 0; step < 30 && channel.attempts() < 2; step++) {
+    const pending = Symbol("pending");
+    for (let step = 0; step < 60; step++) {
+      if ((await Promise.race([work, pending])) !== pending) {
+        break;
+      }
       await vi.advanceTimersByTimeAsync(1_000);
     }
-    const result = await pending;
+    return await work;
+  }
+
+  it("resends an automation result once instead of losing it", async () => {
+    const channel = register();
+    const result = await withoutWaiting(send(true));
     expect(result.status).toBe("sent");
     expect(channel.attempts()).toBe(2);
     expect(channel.visible).toEqual(["Backups finished: 3 of 3 hosts, 41 GB."]);
     expect(await loadPendingDeliveries(fixtures.tmpDir())).toEqual([]);
+  });
+
+  it("stops after one resend when that send is cut off too", async () => {
+    const channel = register(2);
+    await expect(withoutWaiting(send(true))).rejects.toThrow(
+      "Network request for 'sendMessage' failed!",
+    );
+    expect(channel.attempts()).toBe(2);
+    expect(channel.visible).toEqual([]);
   });
 
   it("does not blindly replay a failure alert", async () => {
