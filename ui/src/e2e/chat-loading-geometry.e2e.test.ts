@@ -11,6 +11,7 @@ import {
   createControlUiE2eSuite,
   holdModuleResponse,
 } from "./control-ui-e2e-suite.test-support.ts";
+import { installNativeWebChrome } from "./native-nav.test-support.ts";
 import { themeConfigResponse } from "./theme-typography.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -49,6 +50,82 @@ function expectSameBox(actual: Box, expected: Box, stage: string) {
 }
 
 suite.define(() => {
+  it("aligns the macOS chat loading header with the native titlebar", async () => {
+    const directory = createControlUiE2eArtifactDir("macos-chat-loading");
+    await suite.withPage(
+      { viewport: { width: 1600, height: 900 }, reducedMotion: "reduce" },
+      async ({ page }) => {
+        await installNativeWebChrome(page);
+        await seedChatSettings(page, suite.server.baseUrl, {
+          theme: "absolutely",
+          themeMode: "dark",
+        });
+        await installMockGateway(page, {
+          awaitInitialRoster: false,
+          sessionKey,
+          sessions: [row],
+          methodResponses: {
+            "config.get": themeConfigResponse("absolutely", "dark"),
+            "sessions.describe": { session: row },
+            "sessions.resolve": { ok: true, ...row },
+          },
+          historyMessages: [{ role: "assistant", content: readyText }],
+        });
+        const route = await holdModuleResponse(page, /\/pages\/chat\/chat-page\.tsx(?:\?.*)?$/u);
+        try {
+          await page.goto(`${suite.server.baseUrl}chat/main/${sessionId}`, {
+            waitUntil: "domcontentloaded",
+          });
+          await route.request;
+          const toolbar = page.locator(".macos-titlebar-controls");
+          const loadingHeader = page.locator(".lazy-view-state--route .loading-skeleton__header");
+          const loadingComposer = page.locator(
+            ".lazy-view-state--route .loading-skeleton__composer",
+          );
+          await toolbar.waitFor();
+          const loading = await capture(page, loadingComposer, directory, "loading");
+          const native = (await toolbar.boundingBox())!;
+          const header = (await loadingHeader.boundingBox())!;
+          const headerColor = await loadingHeader.evaluate(
+            (el) => getComputedStyle(el).backgroundColor,
+          );
+          expect.soft(header.y).toBe(native.y);
+          expect.soft(header.height).toBe(native.height);
+
+          const toggle = toolbar.locator(".macos-titlebar-controls__sidebar");
+          await toggle.click();
+          await page.locator(".shell--nav-collapsed").waitFor();
+          const placeholder = loadingHeader.locator(".loading-skeleton__title");
+          expect
+            .soft((await placeholder.boundingBox())!.x)
+            .toBeGreaterThan(native.x + native.width);
+          await toggle.click();
+          await page.locator(".shell--nav-collapsed").waitFor({ state: "detached" });
+
+          route.release();
+          await page.getByText(readyText, { exact: true }).waitFor();
+          const readyHeader = page
+            .locator(".sidebar-region__header")
+            .filter({ visible: true })
+            .first();
+          const ready = await capture(
+            page,
+            page.locator(".agent-chat__input--chat").filter({ visible: true }).first(),
+            directory,
+            "ready",
+          );
+          expect.soft((await readyHeader.boundingBox())!.height).toBe(header.height);
+          expect
+            .soft(await readyHeader.evaluate((el) => getComputedStyle(el).backgroundColor))
+            .toBe(headerColor);
+          expectSameBox(loading, ready, "macOS loading versus ready composer");
+        } finally {
+          route.release();
+        }
+      },
+    );
+  });
+
   it.each(viewports)(
     "preserves composer geometry on cold reload at $width px",
     async (viewport) => {

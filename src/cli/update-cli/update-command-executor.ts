@@ -239,6 +239,7 @@ export async function withUpdateCommandExecutor<T>(
         assertCurrent();
       });
       const executor: UpdateCommandExecutor = {
+        exclude: (excluded) => activation.exclude(excluded),
         async enter(root, enterOptions) {
           // Executor closure owns its recovery error unless a deadline already failed.
           if (active || activation.failure) {

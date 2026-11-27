@@ -20,7 +20,6 @@ export async function prepareControlUiBootstrapPreferences(
     ? getCanonicalUserPreferences(profileId, [
         ...Object.values(UI_APPEARANCE_PREFERENCE_KEYS),
         "ui.railShortcuts",
-        "ui.personalSessionGroups",
       ]).catch(() => undefined)
     : undefined;
   // Config display has the same scope ceiling and redaction as config.get.

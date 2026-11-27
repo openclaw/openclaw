@@ -185,19 +185,13 @@ describe("owned completed update publication", () => {
         cleanupOwners.push(captureGatewayStateOwner(f.databasePath)?.role);
         return Promise.reject(new Error("synthetic cleanup failure"));
       });
-    const reportPath = path.join(root, "update-reports", `${f.run.runId}.md`);
-    let savedAtPublication: string | undefined;
-    const captureReport = () => {
-      savedAtPublication ??= fs.readFileSync(reportPath, "utf8");
-    };
-    const jsonOutput = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(captureReport);
+    const jsonOutput = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
     const settled = await f.settle(f.result, captured);
     const result = await publishUpdateCommandTerminalResult(f.params, settled.result, {
       rolledBack: false,
       captured: settled.captured,
     });
     expect(result.status).toBe("ok");
-    expect(savedAtPublication).toContain(after.version);
     // Publication still uses captured facts when separately admitted cleanup fails.
     expect(cleanupOwners.length).toBeGreaterThan(0);
     expect(cleanupOwners.every((role) => role === "agent-embedded")).toBe(true);
@@ -206,8 +200,7 @@ describe("owned completed update publication", () => {
     expect(jsonOutput).toHaveBeenCalledWith(
       expect.objectContaining({
         status: "ok",
-        reportPath,
-        run: expect.objectContaining({ status: "succeeded" }),
+        run: expect.objectContaining({ status: "succeeded", after }),
       }),
     );
     expect(jsonOutput.mock.calls[0]?.[0]).not.toHaveProperty("captured");

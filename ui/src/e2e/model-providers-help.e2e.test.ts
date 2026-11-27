@@ -96,6 +96,7 @@ describeControlUiE2e("Control UI Models help mocked Gateway E2E", () => {
         await page.goto(`${server.baseUrl}settings/model-providers`);
         await page.locator(".page-title", { hasText: "Models" }).first().waitFor();
         const defaults = page.locator(".model-providers__defaults");
+        await defaults.locator("[data-models-more-settings]").click();
         const utilityField = defaults
           .locator(".settings-row")
           .filter({ has: page.locator("#model-providers-utility-help") });

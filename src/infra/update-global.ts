@@ -619,13 +619,14 @@ function inferPnpmProjectRoot(pkgRoot?: string | null): string | null {
     return null;
   }
   const parts = nodeModulesRoot.split(path.sep);
-  // Nested virtual-store packages still belong to the enclosing isolated project.
+  // Virtual-store packages still belong to the enclosing isolated project. A
+  // project-local store is `<project>/node_modules/.pnpm` (pnpm 12) or `<project>/.pnpm` (pnpm 11).
   const storeIndex = parts.length - 3;
-  return path.dirname(
-    parts[storeIndex] === ".pnpm" && parts[storeIndex - 1] === "node_modules"
-      ? parts.slice(0, storeIndex).join(path.sep)
-      : nodeModulesRoot,
-  );
+  if (parts[storeIndex] !== ".pnpm") {
+    return path.dirname(nodeModulesRoot);
+  }
+  const projectEnd = parts[storeIndex - 1] === "node_modules" ? storeIndex - 1 : storeIndex;
+  return parts.slice(0, projectEnd).join(path.sep) || path.sep;
 }
 
 function inferPnpmIsolatedGlobalRootFromPackageRoot(pkgRoot?: string | null): string | null {

@@ -6,6 +6,7 @@ import { t } from "../../lib/reactive/i18n.ts";
 import type { SourceProjection } from "../../lib/reactive/projection.ts";
 import { TemplateArtwork } from "../agents-home/template-artwork.tsx";
 import type { TemplateCreator } from "./creator-publication.ts";
+import { TemplateCreatorSignInCard } from "./creator-sign-in-card.tsx";
 import { TemplateReviewCard } from "./template-review-card.tsx";
 
 type CreatorView = SourceProjection<TemplateCreator, TemplateCreator>;
@@ -29,7 +30,17 @@ function cardStatus(state: TemplateCreator) {
   return "unpublished";
 }
 
-export function TemplateCreatorReviewView(props: { flow: TemplateCreator; view: CreatorView }) {
+type ReviewProps = { flow: TemplateCreator; view: CreatorView };
+
+export function TemplateCreatorReviewView(props: ReviewProps) {
+  return (
+    <Show when={props.view.read().signIn} fallback={<TemplatePublishCard {...props} />}>
+      {(signIn) => <TemplateCreatorSignInCard state={signIn()} flow={props.flow} />}
+    </Show>
+  );
+}
+
+function TemplatePublishCard(props: ReviewProps) {
   const state = () => props.view.read();
   const review = () => state().review;
   const byline = (publisher: string) => t("templatesDraft.byCreator", { creator: "@" + publisher });
@@ -67,7 +78,26 @@ export function TemplateCreatorReviewView(props: { flow: TemplateCreator; view: 
     }
   };
   return (
-    <Show when={review() || state().error || state().busy === "reviewing"}>
+    <Show
+      when={review()}
+      fallback={
+        <Show when={!state().busy && state().error}>
+          {(error) => (
+            <InlineAlert
+              tone="danger"
+              title={t("templatesDraft.draftUnavailable")}
+              action={
+                <button type="button" class="btn btn--sm" onClick={() => props.flow.retryReview()}>
+                  {t("templatesDraft.tryAgain")}
+                </button>
+              }
+            >
+              {error()}
+            </InlineAlert>
+          )}
+        </Show>
+      }
+    >
       <section class="template-publish-card" aria-label={t("templatesDraft.publishTitle")}>
         <header>
           <span class="template-art">
@@ -163,7 +193,12 @@ export function TemplateCreatorReviewView(props: { flow: TemplateCreator; view: 
             </Match>
             <Match when={status() === "pending" && state().publication?.url}>
               {(url) => (
-                <a class="btn primary" href={url()} target="_blank" rel="noopener noreferrer">
+                <a
+                  class="btn primary"
+                  href={`${url()}?view=submission`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
                   {t("templatesDraft.viewSubmission")}
                 </a>
               )}

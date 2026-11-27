@@ -459,14 +459,17 @@ export class StorageEdits extends StoragePublication {
     );
   }
   async annotate(input: AnnotateInput, access: VaultAccess, actor: string): Promise<Receipt> {
+    const annotations = input?.annotations ?? {};
     if (
       !Check(AnnotateInput, input) ||
       !input.reason.trim() ||
-      (!Object.keys(input.annotations).length &&
+      (!Object.keys(annotations).length &&
         !input.addEvidence?.length &&
         input.entities === undefined)
     ) {
-      throw new Error("Invalid annotation input.");
+      throw new Error(
+        "Invalid annotation input. Pass entities and addEvidence as top-level fields beside annotations, not inside it.",
+      );
     }
     access.assertCurrent();
     if (!this.config.writesEnabled) {
@@ -498,7 +501,7 @@ export class StorageEdits extends StoragePublication {
       }
       if (
         previous.lifecycle !== "active" &&
-        (Object.keys(input.annotations).some((k) => k !== "record_class") ||
+        (Object.keys(annotations).some((k) => k !== "record_class") ||
           input.addEvidence?.length ||
           input.entities !== undefined)
       ) {
@@ -506,7 +509,7 @@ export class StorageEdits extends StoragePublication {
       }
       const metadata: Envelope = {
         ...previous.metadata,
-        ...input.annotations,
+        ...annotations,
         revision: previous.revision + 1,
         updated_at: new Date().toISOString(),
       };
@@ -556,7 +559,7 @@ export class StorageEdits extends StoragePublication {
       for (const key of [
         "revision",
         "updated_at",
-        ...Object.keys(input.annotations),
+        ...Object.keys(annotations),
         ...(extra.length ? ["evidence"] : []),
       ]) {
         doc.set(

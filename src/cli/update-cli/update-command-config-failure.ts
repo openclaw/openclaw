@@ -35,7 +35,7 @@ export function resolveUpdateOwnershipFailure(
     ? "Gateway ownership could not be verified."
     : "Gateway maintenance is busy.";
   const nextAction = ownershipUnverified
-    ? "If the recorded holder has stopped, run `openclaw gateway recover-lock` to inspect it before retrying."
+    ? "Stop the recorded Gateway through its service manager or container, then retry."
     : "Wait for the active Gateway or maintenance operation to finish, or stop the Gateway through its service manager before retrying.";
   return {
     message: `Update refused: ${message} ${nextAction}`,

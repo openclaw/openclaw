@@ -1,0 +1,4 @@
+# Real queued starts, live-only producer continuations, grant/role caps and unavailable-owner retry.
+# Three shared auth-mode fixtures cover the credential matrix with four Gateway boots.
+# Covers 2,060 net test lines minus the normal 400-line allowance; no production test hooks.
+1660

@@ -14,10 +14,7 @@ import { prepareUpdateFailureReport } from "../../infra/update-failure-report-pr
 import { recordUpdateRunVerification } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import { readUpdateRunReportHealth } from "../../infra/update-run-report-health.js";
-import {
-  renderUpdateRunReport,
-  updateRunReportInputFromResult,
-} from "../../infra/update-run-report.js";
+import { updateRunReportInputFromResult } from "../../infra/update-run-report.js";
 import { isUpdateRunVerificationConfirmed } from "../../infra/update-run-verification.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -170,8 +167,6 @@ async function verifyHealth(
     waitForStartup: false,
   });
 }
-const reportFor = (input: ReturnType<typeof resultFixture>) =>
-  renderUpdateRunReport(updateRunReportInputFromResult(input)).markdown;
 
 beforeEach(() => {
   controller = new AbortController();
@@ -296,11 +291,56 @@ it.each(["transient-timeout", "mixed"])(
       channelsReady: false,
     });
     expect(facts && isUpdateRunVerificationConfirmed(facts)).toBe(true);
-    const report = reportFor(result);
-    expect(report).toContain("telegram: health collection timed out after 7000ms");
-    expect(report).toContain("openclaw channels status --probe");
-    expect(report).toContain("openclaw health --json");
     expect(result.steps[0]?.warnings?.join("\n")).toContain(`telegram: ${timeout}`);
+  },
+);
+
+it("clears an earlier process's PID when the running service reports none", async () => {
+  mockProcessPlatform("linux");
+  const service = useService();
+  vi.mocked(service.readRuntime).mockResolvedValue({ status: "running" });
+  busyPort();
+  restart.callGateway.mockImplementation(healthResponse(candidate.version, candidate.buildId));
+  await listen();
+  await verifyGateway({ opts: withRun("pidless-service"), requireRunningService: true });
+  // Observations merge into the run: an omitted PID would keep the previous Gateway's.
+  const facts = vi.mocked(recordUpdateRunVerification).mock.calls.at(-1)?.[1];
+  expect(facts).toMatchObject({ serviceRunning: true, runningVersion: candidate.version });
+  expect(facts).toHaveProperty("pid", undefined);
+});
+
+it.each([
+  { refusal: "none", advice: "Rollback: reinstall OpenClaw 2026.9.1" },
+  { refusal: "restart", advice: "Rollback: unavailable; update state was migrated" },
+  // Final recovery verifies again after rollback settled; the recorded refusal still holds.
+  { refusal: "recorded", advice: "Rollback: unavailable; update state was migrated" },
+  // No pre-activation baseline (PostgreSQL state) proves nothing was migrated.
+  { refusal: "unverified", advice: "Rollback: unavailable; rollback safety could not be verified" },
+])(
+  "offers the previous version only while rollback is allowed (refusal=$refusal)",
+  async ({ refusal, advice }) => {
+    gatewayFixture({
+      server: { version: candidate.version, buildId: candidate.buildId, bootId: "candidate-boot" },
+    });
+    await listen((req, res) => res.writeHead(req.url === "/readyz" ? 503 : 200).end());
+    result.before = { version: "2026.9.1" };
+    if (refusal === "recorded") {
+      result.rollbackOutcome = { status: "not-attempted", reason: "state-migrated-no-rollback" };
+    }
+    const rollbackBlockedReason =
+      refusal === "restart"
+        ? "state-migrated-no-rollback"
+        : refusal === "unverified"
+          ? "rollback-state-unverified"
+          : undefined;
+    const verification = verifyGateway({ waitForStartup: false, rollbackBlockedReason });
+    await expect(verification).resolves.toMatchObject({
+      ok: false,
+      summary: "readyz-unhealthy",
+    });
+    const printed = vi.mocked(defaultRuntime.error).mock.calls.flat().join("\n");
+    expect(printed).toContain(advice);
+    expect(printed.includes("reinstall OpenClaw")).toBe(refusal === "none");
   },
 );
 
@@ -424,7 +464,6 @@ it.each([true, false])(
       code: "timeout",
       message,
     });
-    expect(reportFor(result)).toContain(message);
   },
 );
 
@@ -448,9 +487,12 @@ it("prefers a pending recovery observation over previously saved healthy facts",
     recovery: { serviceRestartSafe: true, service: "healthy", version: "2026.9.5" },
   };
   const input = updateRunReportInputFromResult(result);
-  const report = renderUpdateRunReport(input);
-  expect(report.markdown).not.toContain("verified serving");
-  expect(report.markdown).toContain("readiness is pending");
+  expect(input.verification).toMatchObject({ readyz: false, settled: false });
+  expect(input.steps).toContainEqual(
+    expect.objectContaining({
+      detail: expect.stringContaining("readiness is pending"),
+    }),
+  );
   const publicReport = await prepareUpdateFailureReport(
     {
       attemptId: "pending-recovery",
@@ -635,7 +677,7 @@ it.each([true, false, undefined])(
     expect(result.verification).toMatchObject({ readyz: false, channelsReady: false });
     if (coreReady === true) {
       expect(result.steps[0]).toMatchObject({ exitCode: 0 });
-      expect(reportFor(result)).toContain("telegram");
+      expect(result.steps[0]?.warnings?.join("\n")).toContain("telegram");
       expect(result.verification).toMatchObject({ coreReady: true, settled: true });
     }
   },
@@ -669,13 +711,13 @@ it.each([false, true])("warns about stopped channels after repair (json=%s)", as
   );
   expect(validation.ok).toBe(true);
   expect(result.steps[0]).toMatchObject({ exitCode: 0 });
-  const report = reportFor(result);
+  const warnings = result.steps[0]?.warnings?.join("\n") ?? "";
   for (const id of ["telegram/suppressed", "telegram/stopped", "discord"]) {
-    expect(report).toContain(id);
+    expect(warnings).toContain(id);
   }
-  expect(report).toContain("restart-loop breaker tripped");
-  expect(report).not.toContain("telegram/disabled");
-  expect(report).not.toContain("telegram/unconfigured");
+  expect(warnings).toContain("restart-loop breaker tripped");
+  expect(warnings).not.toContain("telegram/disabled");
+  expect(warnings).not.toContain("telegram/unconfigured");
   expect(validation.summary).toContain("channel warnings");
   if (json) {
     expectNoCalls(defaultRuntime.log);
@@ -876,9 +918,15 @@ it.each([
     vi.mocked(service.readRuntime).mockResolvedValue({ status, systemd });
     const ancestry = { complete: true, pids: new Set([process.pid]) };
     vi.spyOn(stale, "inspectSelfAndAncestorPidsSync").mockReturnValue(ancestry);
-    const setFree = () =>
+    const setFree = () => {
       restart.inspectPortUsage.mockResolvedValue(restart.portUsage([], { port: gatewayPort }));
+      restart.readActiveGatewayLockIdentity.mockResolvedValue(undefined);
+    };
     const staleError = new Error("gateway install changed; run: openclaw gateway restart");
+    const fileOwner = (pid: number) => ({ pid, port: gatewayPort, startTime: 123 });
+    restart.readActiveGatewayLockIdentity.mockResolvedValue(
+      fileOwner(port === "foreign" ? 8001 : running.pid),
+    );
     if (port === "free") {
       setFree();
     } else if (port === "woke") {
@@ -886,11 +934,6 @@ it.each([
     } else if (port !== "healthy") {
       rpc.mockRejectedValue(staleError);
     }
-    restart.readActiveGatewayLockIdentity.mockResolvedValue({
-      pid: port === "foreign" ? 8001 : running.pid,
-      port: gatewayPort,
-      startTime: 123,
-    });
     vi.spyOn(processIdentity, "getFileLockProcessStartTime").mockReturnValue(
       port === "reused" ? 456 : 123,
     );
@@ -904,6 +947,7 @@ it.each([
       if (port === "leased") {
         const unknown = { ...successor, state: "unknown" as const };
         lease.mockImplementation((q) => (q?.current ? unknown : undefined));
+        restart.readActiveGatewayLockIdentity.mockResolvedValue(fileOwner(successor.pid));
       }
       if (replaces) {
         now.mockReturnValue(10_100);
@@ -914,6 +958,9 @@ it.each([
           pid: port === "unmatched" ? pid + 1 : pid,
         });
         serve(pid);
+        restart.readActiveGatewayLockIdentity.mockResolvedValue(
+          fileOwner(port === "unmatched" ? pid + 1 : pid),
+        );
       } else if (port !== "busy") {
         setFree();
       }

@@ -9,7 +9,7 @@ const directories = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
 it.each([
-  { budgetMs: 120_000, workMs: 6_000, corrupt: false, safe: true },
+  { budgetMs: 2_400_000, workMs: 1_500_000, corrupt: false, safe: true },
   { budgetMs: 1_000, workMs: 6_000, corrupt: false, safe: false },
   { budgetMs: 120_000, workMs: 6_000, corrupt: true, safe: false },
 ])(

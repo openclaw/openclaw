@@ -59,6 +59,13 @@ state without running shared Doctor or startup repairs. The normal update
 workflow owns those repairs, migration, and rollback, including coordination
 with a Gateway sharing the state directory.
 
+If shared state or client credentials later need repair, for example after a
+restored state database, the managed node refuses to start and names the
+installation that owns the state. Run `openclaw doctor --fix` with that
+installation; the managed node retries automatically. An optional credential
+metadata upgrade does not block the managed node; the owning installation
+applies it the next time it starts or runs Doctor.
+
 Native app nodes and private worker processes continue to use their existing
 update owners. Source checkouts and `dev` installs also remain owner-managed.
 Nodes follow `update.channel` for `stable` and `beta` releases; an
@@ -94,9 +101,11 @@ through the old entrypoint logs a warning when automatic updates are enabled.
 
 Look in the foreground node's stderr or its service logs for update preparation,
 busy deferral, activation, and fallback messages. If an update is deferred for
-schema migration or repair, run `openclaw update` on the node machine. Then
-restart its service with `openclaw node restart`, or relaunch the foreground
-`openclaw node run` command.
+schema migration or repair, stop the node with `openclaw node stop` (or end
+the foreground `openclaw node run` command), run `openclaw update` on the node
+machine, then start it again with `openclaw node start` or relaunch
+`openclaw node run`. A running node keeps the state database open, so
+`openclaw update` refuses while its service runs.
 
 If the launcher reports a stale `node-runtime/activation.lock`, confirm that no
 node update is running before removing the exact lock path from the message.

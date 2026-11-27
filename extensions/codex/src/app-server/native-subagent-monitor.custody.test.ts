@@ -290,6 +290,35 @@ describe("native assignment completion custody", () => {
     await monitor.dispose();
     expect(source.live()).toHaveLength(0);
   });
+
+  it("settles execution when a resumed child's first observed turn is the accepted submission", async () => {
+    vi.useFakeTimers();
+    const { client, runtime, monitor } = createMonitorFixture({
+      hasObservationBacking: () => true,
+    });
+    const source = createCustody();
+    runtime.captureAgentHarnessCompletionCustody.mockResolvedValue(source.root);
+    try {
+      const parent = await registerParent(monitor);
+      parent.bindTurn("parent-turn");
+      await client.item(
+        collabItem("resumeAgent", ["child-thread"], {
+          id: "resume-child",
+          agentsStates: { "child-thread": { status: "completed", message: "Earlier result" } },
+        }),
+      );
+      await submitFollowup(client);
+      await startTurn(client, "turn-b");
+      expect(source.executions.size).toBeGreaterThan(1);
+
+      await completeTurn(client, "turn-b", "A result");
+      await deliverInitialResult(client);
+      await parent.unregister();
+      expect(source.executions.size).toBe(0);
+    } finally {
+      await monitor.dispose();
+    }
+  });
 });
 
 describe("Codex native parent retirement", () => {

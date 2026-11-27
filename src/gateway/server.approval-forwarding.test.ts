@@ -1,7 +1,7 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest, withTestTimeout } from "../../test/helpers/promise.js";
 import type { ChannelOutboundContext } from "../channels/plugins/outbound.types.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { writeConfigFile } from "../config/config.js";
@@ -49,7 +49,7 @@ async function verifyApprovalDeliveryWithCleanup(
   await cleanup();
 }
 
-async function checkApprovalForwarding() {
+async function checkApprovalForwarding(signal: AbortSignal) {
   const forwardingRuntime = await import("../infra/exec-approval-forwarder.runtime.js");
   using forwardingSends = vi.spyOn(forwardingRuntime, "sendDurableMessageBatchCore");
   const capturedRuntime = createDeferred<GatewayNativeApprovalRuntime>();
@@ -171,10 +171,9 @@ async function checkApprovalForwarding() {
           if (forwarded) {
             await vi.waitFor(() => expect(prompts()).not.toHaveLength(0), { timeout: 5_000 });
             // Destination-history writes can change access while cleanup resolves the approval.
-            await withTestTimeout(
+            await withinTest(
               Promise.all(forwardingSends.mock.results.map(({ value }) => value)),
-              5_000,
-              "approval delivery did not settle",
+              signal,
             );
           }
         },
@@ -267,8 +266,7 @@ it("preserves a sole verification or cleanup failure in approval diagnostics", a
   await expect(verifyApprovalDeliveryWithCleanup(pass, pass)).resolves.toBeUndefined();
 });
 
-it("uses the owning native runtime and destination account for approval forwarding", () =>
-  withEnvAsync(
-    { OPENCLAW_SKIP_CHANNELS: undefined, OPENCLAW_SKIP_PROVIDERS: undefined },
-    checkApprovalForwarding,
+it("uses the owning native runtime and destination account for approval forwarding", ({ signal }) =>
+  withEnvAsync({ OPENCLAW_SKIP_CHANNELS: undefined, OPENCLAW_SKIP_PROVIDERS: undefined }, () =>
+    checkApprovalForwarding(signal),
   ));

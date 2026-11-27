@@ -477,9 +477,23 @@ openclaw_worker_retired_total{reason="idle_timeout",script="sqlite-store.worker.
   }
   expectMetrics(
     metrics.render(),
-  )(`openclaw_child_process_spawn_total{family="node",operation="none"} 5
-openclaw_child_process_spawn_total{family="node",operation="sqlite.scoped-read.broker"} 1
-openclaw_child_process_spawn_total{family="git",operation="repository.identities"} 4`);
+  )(`openclaw_child_process_spawn_total{family="node",operation="none",thread="unknown",transport="unknown"} 5
+openclaw_child_process_spawn_total{family="node",operation="sqlite.scoped-read.broker",thread="unknown",transport="unknown"} 1
+openclaw_child_process_spawn_total{family="git",operation="repository.identities",thread="unknown",transport="unknown"} 4`);
+  for (const transport of ["native.descriptor", "native.no-broker", "broker"] as const) {
+    metrics.record({
+      type: "diagnostic.child_process.spawn",
+      family: "git",
+      operation: "workspace.inventory",
+      transport,
+      thread: "main",
+      count: 2,
+      intervalMs: 60_000,
+    });
+    expectMetrics(metrics.render())(
+      `openclaw_child_process_spawn_total{family="git",operation="workspace.inventory",thread="main",transport="${transport}"} 2`,
+    );
+  }
 });
 
 it("accumulates trusted and internal runtime windows without recounting scrapes", () => {

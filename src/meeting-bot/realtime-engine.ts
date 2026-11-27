@@ -131,7 +131,13 @@ export async function startMeetingRealtimeEngine(params: {
     onStall: () => handleOutputBackpressure(),
   });
 
-  const stop = async () => {
+  const sendInputAudio = (audio: Buffer) => {
+    if (harness.recordInputAudio(audio)) {
+      bridge?.sendAudio(audio);
+    }
+  };
+
+  const stop = async (drainInput = true) => {
     if (!stopped) {
       stopped = true;
       outputOwner.reset();
@@ -147,6 +153,18 @@ export async function startMeetingRealtimeEngine(params: {
     }
     const cleanup = Promise.resolve().then(async () => {
       if (!bridgeClosed) {
+        if (drainInput) {
+          try {
+            const tail = params.transport.drainInput?.();
+            if (tail?.length) {
+              sendInputAudio(tail);
+            }
+          } catch (error) {
+            params.logger.warn(
+              `${params.platform.logScope} ${realtimeLogScope} input drain failed: ${formatErrorMessage(error)}`,
+            );
+          }
+        }
         try {
           await bridge?.close();
         } catch (error) {
@@ -191,7 +209,7 @@ export async function startMeetingRealtimeEngine(params: {
     }
   };
   const stopAfterFailure = (source: string) => {
-    void stop().catch((error: unknown) => {
+    void stop(false).catch((error: unknown) => {
       params.logger.warn(
         `${params.platform.logScope} ${realtimeLogScope} ${source} cleanup failed: ${formatErrorMessage(error)}`,
       );
@@ -587,10 +605,7 @@ export async function startMeetingRealtimeEngine(params: {
       if (stopped || audio.byteLength === 0) {
         return;
       }
-      if (!harness.recordInputAudio(audio)) {
-        return;
-      }
-      bridge?.sendAudio(audio);
+      sendInputAudio(audio);
     });
 
     await bridge.connect();
@@ -601,13 +616,13 @@ export async function startMeetingRealtimeEngine(params: {
     }
   } catch (error) {
     try {
-      await stop();
+      await stop(false);
     } catch (cleanupError) {
       params.logger.debug?.(
         `${params.platform.logScope} ${realtimeLogScope} failed-start cleanup ignored: ${formatErrorMessage(cleanupError)}`,
       );
       try {
-        await stop();
+        await stop(false);
       } catch (retryError) {
         params.logger.debug?.(
           `${params.platform.logScope} ${realtimeLogScope} failed-start cleanup retry ignored: ${formatErrorMessage(retryError)}`,

@@ -56,6 +56,7 @@ import {
   type PreparedModelRuntimeInput,
   type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.js";
+import { hasCurrentPreparedModelCatalogReplacement } from "./prepared-model-runtime.lifecycle.js";
 import { resolveInventoryInput } from "./prepared-model-runtime.owner.js";
 import { prepareScopedReadOnlyModelCatalog } from "./prepared-model-runtime.scoped-catalog.js";
 import {
@@ -417,15 +418,35 @@ async function withPreparedModelCatalogOwnerPolicy<T>(
   try {
     const project = async () => {
       // Only published owners expose generation caches; temporary reads use their prepared facts.
-      const owner =
-        refreshed || (request.readOnly && !publishedReadOnlyOwner)
-          ? snapshot
-          : await materializeRequestedModelCatalog(
-              snapshot,
-              request.readOnly,
-              request.refreshFullCatalog,
-              request.providerDiscoveryProviderIds,
-            );
+      let owner = snapshot;
+      if (!refreshed && (!request.readOnly || publishedReadOnlyOwner)) {
+        const materialize = (candidate: PreparedModelRuntimeSnapshot) =>
+          materializeRequestedModelCatalog(
+            candidate,
+            request.readOnly,
+            request.refreshFullCatalog,
+            request.providerDiscoveryProviderIds,
+          );
+        try {
+          owner = await materialize(snapshot);
+        } catch (error) {
+          if (
+            configPolicy !== "published" ||
+            request.readOnly ||
+            request.refreshFullCatalog !== true ||
+            !(error instanceof PreparedModelRuntimePublicationSupersededError)
+          ) {
+            throw error;
+          }
+          const replacement = getPublishedPreparedModelCatalogOwnerSnapshot(request);
+          if (!replacement || !hasCurrentPreparedModelCatalogReplacement(snapshot, replacement)) {
+            throw error;
+          }
+          // Hosted metadata changed without changing request authority. Retry acquisition once;
+          // an interrupted second attempt or later account preparation still fails normally.
+          owner = await materialize(replacement);
+        }
+      }
       // Projection must finish before releasing the selected generation's resources.
       return await read(owner);
     };
@@ -617,7 +638,11 @@ export async function prewarmDefaultNativeModelCatalog(config: OpenClawConfig): 
   if (!agentId) {
     return;
   }
-  const { provider, model } = resolveDefaultModelForAgent({ cfg: config, agentId });
+  const defaultModel = resolveDefaultModelForAgent({ cfg: config, agentId });
+  if (!defaultModel) {
+    return;
+  }
+  const { provider, model } = defaultModel;
   const owner = getPublishedPreparedModelCatalogOwnerSnapshot({ config, agentId });
   // A built-in fallback is not startup demand. Keep warmup for configured models/runtimes and
   // signed-in defaults, without probing native auth or starting discovery to decide.

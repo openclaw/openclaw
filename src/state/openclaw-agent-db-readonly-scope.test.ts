@@ -349,7 +349,7 @@ it.each(["successor", "omitted"] as const)(
     expect(first.value.isOpen).toBe(true);
     expect(first.value).not.toBe(owner.db);
 
-    invalidateOpenClawAgentDatabaseValidation(owner.path);
+    invalidateOpenClawAgentDatabaseValidation(owner.path, "a maintenance write");
     expect(Atomics.load(new Int32Array(initial.validation.valid), 0)).toBe(0);
     setOpenClawAgentDatabaseValidation(owner);
     const successor = await captureOpenClawAgentDatabaseReadValidation(owner);

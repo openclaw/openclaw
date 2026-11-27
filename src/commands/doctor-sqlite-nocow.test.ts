@@ -23,11 +23,18 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareDoctorDatabasePreflight } from "./doctor-database-preflight.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
-import { completeDoctorMigrationBackups } from "./doctor-migration-backup-artifacts.js";
+import {
+  checkDoctorMigrationBackupsPending,
+  completeDoctorMigrationBackups,
+} from "./doctor-migration-backup-artifacts.js";
 import { backupDoctorMigrationDatabases } from "./doctor-migration-backup.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
 import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
-import { inspectDoctorSqliteNoCow, repairDoctorSqliteNoCow } from "./doctor-sqlite-nocow.js";
+import {
+  checkDoctorSqliteNoCowPending,
+  inspectDoctorSqliteNoCow,
+  repairDoctorSqliteNoCow,
+} from "./doctor-sqlite-nocow.js";
 import {
   baseAcl,
   inheritedDefaultAcl,
@@ -262,6 +269,26 @@ it("reports existing CoW stores, skips other filesystems and explains missing to
   expect(inspectDoctorSqliteNoCow([sqlitePath]).notes).toEqual([]);
   vi.mocked(isSqlitePathOnBtrfs).mockReturnValue(true);
   expect(inspectDoctorSqliteNoCow([sqlitePath]).notes.join(",")).toContain("lsattr is unavailable");
+});
+
+it("decides pending NOCOW work without changing the store", () => {
+  seedDatabase();
+  const family = [directory, sqlitePath, `${sqlitePath}-wal`, `${sqlitePath}-shm`];
+  const snapshot = () =>
+    family.map((pathname) => {
+      const stat = fs.statSync(pathname, { bigint: true });
+      return [pathname, stat.isFile() ? fs.readFileSync(pathname) : null, stat.mtimeNs, stat.ino];
+    });
+  const before = snapshot();
+  const decide = () => checkDoctorSqliteNoCowPending(inspectDoctorSqliteNoCow([sqlitePath]));
+
+  expect(decide()).toBe("work");
+  fixture.attributes = true;
+  expect(decide()).toBe("none");
+  fixture.tools = "unavailable";
+  expect(decide()).toBe("undecidable");
+
+  expect(snapshot()).toEqual(before);
 });
 
 it.each(["exchange-timeout", "different-owner"] as const)(
@@ -568,6 +595,39 @@ describe("Doctor NOCOW recovery identities", () => {
       hasUnfinishedRun: false,
       hasPendingRecovery: false,
     });
+  });
+
+  it("has backup completion pending only under schema maintenance until it is recorded", async () => {
+    const maintenance = createOpenClawDatabaseMaintenanceScope({
+      schemaMaintenance: true,
+      assertOwnerCurrent: () => {},
+    });
+    try {
+      await maintenance.run(() =>
+        backupDoctorMigrationDatabases({
+          env,
+          pendingDatabasePaths: [sqlitePath],
+          databasePaths: [sqlitePath],
+        }),
+      );
+      const [manifestPath] = listSessionSqliteMigrationManifestPaths(env);
+      const recorded = fs.readFileSync(manifestPath!);
+      // Without schema maintenance the completion is never recorded.
+      expect(checkDoctorMigrationBackupsPending(env, [sqlitePath])).toBe("none");
+      await maintenance.run(async () => {
+        expect(checkDoctorMigrationBackupsPending(env, [sqlitePath])).toBe("work");
+        expect(fs.readFileSync(manifestPath!)).toEqual(recorded);
+        expect(readSessionSqliteMigrationManifest(manifestPath!)?.completedAt).toBeUndefined();
+
+        completeDoctorMigrationBackups(env, [sqlitePath]);
+        expect(readSessionSqliteMigrationManifest(manifestPath!)?.completedAt).toEqual(
+          expect.any(String),
+        );
+        expect(checkDoctorMigrationBackupsPending(env, [sqlitePath])).toBe("none");
+      });
+    } finally {
+      await maintenance.close();
+    }
   });
 
   it("retains recovery originals when the SQLite generation probe fails", async () => {

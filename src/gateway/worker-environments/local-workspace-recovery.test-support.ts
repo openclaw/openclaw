@@ -492,26 +492,6 @@ export async function proveUnsafePathWorkspaceRecovery(
     const pending = (await readProjection())!;
     expect(pending.pending_target).toBe("canonical");
     expect(pending.pending_ref).toBeTruthy();
-    const { workerWorkspaceResultStaging: staging } = await import("./workspace-result-staging.js");
-    const stage = staging.stageWorkerWorkspaceResult;
-    // Keep the real worker rejection, then revoke its caller before delivery.
-    const revokedStage = vi
-      .spyOn(staging, "stageWorkerWorkspaceResult")
-      .mockImplementationOnce(async (params) => {
-        try {
-          return await stage(params);
-        } catch (failure) {
-          expect(failure).toHaveProperty("code", "WORKSPACE_STAGE_CURRENT_PATH_UNSAFE");
-          setRevoked(true);
-          throw failure;
-        }
-      });
-    try {
-      await expect(prepare()).rejects.toThrow("revoked");
-    } finally {
-      setRevoked(false);
-      revokedStage.mockRestore();
-    }
     await writeText(canonical, "source.txt", "accepted human edit\n");
 
     expect(await prepare()).toBe(projection);

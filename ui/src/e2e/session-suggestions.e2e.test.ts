@@ -332,8 +332,67 @@ suite.define(() => {
       sessionKey: "agent:main:main",
       text: "Try the focused change",
     });
-    await expect(page.locator(".session-suggestion__state")).toHaveText("Pending");
+    await expect(page.locator(".session-suggestion__state")).toHaveText("Awaiting approval");
     await expect(page.locator(".session-suggestion__text")).toHaveText("Try the focused change");
+  });
+
+  it("shows an accepted suggestion as the approver's turn credited to its author", async () => {
+    const { page, gateway } = await openSuggestions("owner", {
+      presenceUsers: [presenceUser("owner", true), presenceUser("alice")],
+    });
+    await gateway.emitGatewayEvent("session.message", {
+      sessionKey: "main",
+      agentId: "main",
+      message: ownerMessage("why you no answer", {
+        id: "accepted-suggestion",
+        suggestedBy: { id: "alice", name: "Alice" },
+      }),
+    });
+    const group = page.locator(".chat-group.user", { hasText: "why you no answer" });
+    const credit = group.locator(".chat-message-source");
+    await expect(credit).toHaveText("Suggested by Alice");
+    await expect(group).not.toHaveClass(/chat-group--peer/);
+    await expect(group.locator(".chat-avatar")).not.toHaveText("SB");
+  });
+
+  it("keeps a long guest suggestion, its avatar and approval state on one line", async () => {
+    const prompt =
+      "Compare the two approaches in the release notes and explain which one keeps the migration simple for teams that already have a working setup.";
+    const { page } = await openSuggestions("viewer", {
+      methodResponses: {
+        "session.suggestions.list": {
+          suggestions: [pendingSuggestion("guest", prompt, 1)],
+          role: "viewer",
+        },
+      },
+    });
+    const row = page.locator(".session-suggestion");
+    const text = row.locator(".session-suggestion__text");
+    const state = row.locator(".session-suggestion__state");
+    await expect(text).toHaveText(prompt);
+    if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+      const frame = await takeControlUiScreenshotFrame(page, row, [text, state], {
+        animations: "disabled",
+        elements: [row, state],
+      });
+      await writeFile(path.join(suite.artifactDir, "guest.png"), frame.png);
+      await writeFile(
+        path.join(suite.artifactDir, "guest-bounds.json"),
+        JSON.stringify(frame.elements.map((item) => item.bounds)),
+      );
+      console.info("Guest suggestion proof:", suite.artifactDir);
+    }
+    await expect(state).toHaveText("Awaiting approval");
+    await expect(row.locator(".chat-author-avatar")).toHaveAttribute("aria-label", "Alice");
+    const preview = row.locator(".session-suggestion__preview");
+    for (const width of [1180, 400]) {
+      await page.setViewportSize({ width, height: 760 });
+      await expect(preview).toHaveCSS("text-overflow", "ellipsis");
+      expect(await preview.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
+      const [promptBox, stateBox] = await Promise.all([bounds(preview), bounds(state)]);
+      expect(promptBox.y + promptBox.height / 2).toBeGreaterThan(stateBox.y);
+      expect(promptBox.y + promptBox.height / 2).toBeLessThan(stateBox.y + stateBox.height);
+    }
   });
 
   it("does not offer live-session commands in a viewer suggestion composer", async () => {

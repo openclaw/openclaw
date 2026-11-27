@@ -14,6 +14,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import * as legacyAuth from "./legacy-inherited-auth-dir.js";
+import { getPreparedModelRuntimePolicyConfigReader } from "./prepared-model-runtime-auth.js";
 import { acquirePreparedModelRuntimeLeaseFromOwners } from "./prepared-model-runtime-lease.js";
 import * as runtimeBuild from "./prepared-model-runtime.build.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
@@ -310,7 +311,9 @@ describe("prepared model runtime automatic selections", () => {
       },
       options,
     );
-    expect(nested.snapshot).toBe(outer.snapshot);
+    expect(nested.snapshot.catalogOwner).toBe(outer.snapshot.catalogOwner);
+    expect(getPreparedModelRuntimePolicyConfigReader(nested.snapshot)?.()).toBe(config);
+    expect(getPreparedModelRuntimePolicyConfigReader(outer.snapshot)?.()).toBe(config);
     expect(nested.snapshot.isCurrent()).toBe(true);
   });
 

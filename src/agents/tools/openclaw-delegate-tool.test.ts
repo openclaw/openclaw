@@ -5,6 +5,7 @@ import { readConfigFileSnapshot } from "../../config/config.js";
 import { createConfigFileSnapshot } from "../../config/io.snapshot-shared.js";
 import {
   clearRuntimeConfigSnapshot,
+  createRuntimeConfigReader,
   hashRuntimeConfigValue,
   setRuntimeConfigAppliedHash,
   setRuntimeConfigSnapshot,
@@ -202,12 +203,10 @@ it("admits each delegated call outside its caller generation without dropping ca
   };
   caches.bindPluginMetadataSnapshotCache(generation.pluginMetadataSnapshot, cache);
   const controller = new AbortController();
-  const approvalAuthorityCheck = vi.fn(() => true);
   const tool = delegate();
   const caller = {
     agentId: "main",
     sessionKey: runSessionKey,
-    approvalAuthorityCheck,
     approvalSignals: [controller.signal],
   };
   callGateway.mockImplementation(async () => {
@@ -507,3 +506,25 @@ it.each(["hook", "trusted"] as const)(
     });
   },
 );
+
+it("retains admitted live policy across config replacement and rechecks revocation", async () => {
+  const config = { tools: { openclaw: { autoApproveChanges: true } } };
+  setRuntimeConfigSnapshot(config);
+  const readDelegationConfig = createRuntimeConfigReader(config);
+  const pinnedConfig = structuredClone(config);
+  setRuntimeConfigSnapshot({ tools: { openclaw: { autoApproveChanges: false } } });
+  try {
+    const tool = delegate({ config: pinnedConfig, readDelegationConfig });
+    callGateway.mockImplementation(async () => {
+      const caller = callerScope.getGatewayToolCallerIdentity();
+      expect(caller?.fullPermission).toBe(false);
+      expect(() => caller?.assertAutoApproveChangesCurrent?.()).toThrow("autoApproveChanges");
+      setRuntimeConfigSnapshot(config);
+      expect(() => caller?.assertAutoApproveChangesCurrent?.()).not.toThrow();
+      return { reply: "Approval required." };
+    });
+    await tool.execute("pinned-policy", { message: "Change logging." });
+  } finally {
+    clearRuntimeConfigSnapshot();
+  }
+});

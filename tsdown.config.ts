@@ -11,6 +11,7 @@ import {
   createBundledPluginBuildInventory,
 } from "./scripts/lib/bundled-plugin-build-entries.mjs";
 import { createCompactModuleLabelsPlugin } from "./scripts/lib/compact-module-labels.mts";
+import { createEmptyRuntimeChunksPlugin } from "./scripts/lib/empty-runtime-chunks.mts";
 import { createFsSafeWindowsHelperAssetPlugin } from "./scripts/lib/fs-safe-windows-helper-asset.mts";
 import { createGatewayRunChunkMetadataPlugin } from "./scripts/lib/gateway-run-chunk-metadata.mts";
 import { createManagedHandoffBuildConfigs } from "./scripts/lib/managed-handoff-build-config.mts";
@@ -31,10 +32,12 @@ import { exactIdFilter } from "./scripts/lib/rolldown-id-filter.mts";
 import { createRuntimeDependencyOwnershipBuildPlugin } from "./scripts/lib/runtime-dependency-ownership-build-plugin.mts";
 import { createRootRuntimeProcessBuildEntries } from "./scripts/lib/runtime-process-build-entries.mts";
 import {
+  brokerNativeResourceBuildEntries,
   getStandaloneRuntimeProcessOutputOptions,
   sharedRuntimeProcessBuildEntries,
   shouldBundleRuntimeSqliteDependency,
   standaloneRuntimeProcessBuildEntries,
+  standaloneRuntimeProcessBuildGroups,
 } from "./scripts/lib/runtime-process-core-build-entries.mts";
 import { createSqliteSchemaAssetsPlugin } from "./scripts/lib/sqlite-schema-assets.mts";
 import { createStandaloneSourceModuleUrlPlugin } from "./scripts/lib/standalone-source-module-urls.mjs";
@@ -1035,21 +1038,37 @@ const configs: UserConfig[] = [
       false,
     );
   }),
-  ...Object.entries(standaloneRuntimeProcessBuildEntries).flatMap(([name, source]) => {
-    if (!Object.hasOwn(unifiedDistEntries, name)) {
-      return [];
-    }
-    const bundleFsSafe = [
-      "infra/sqlite-readonly-location.worker",
-      "state/openclaw-state-read.worker",
-    ].includes(name);
+  ...standaloneRuntimeProcessBuildGroups(
+    Object.fromEntries(
+      Object.entries(standaloneRuntimeProcessBuildEntries).filter(([name]) =>
+        Object.hasOwn(unifiedDistEntries, name),
+      ),
+    ),
+  ).map((entry) => {
+    const firstEntry = Object.keys(entry)[0]!;
+    const isBrokerNativeResource = Object.hasOwn(brokerNativeResourceBuildEntries, firstEntry);
+    const bundleWorkerHelpers = Object.keys(entry).some((name) =>
+      [
+        "config/sessions/disk-budget.worker",
+        "infra/fs-safe-copy.worker",
+        "infra/sqlite-readonly-location.worker",
+        "plugins/plugin-generation-preparation.worker",
+        "state/openclaw-state-read.worker",
+        // Hosts the state reader and must load fs-safe the same way.
+        "infra/shared-worker-host.worker",
+      ].includes(name),
+    );
+    const bundleFsSafe = isBrokerNativeResource || bundleWorkerHelpers;
     const isFsSafe = (id: string) =>
       id === "@openclaw/fs-safe" || id.startsWith("@openclaw/fs-safe/");
     return nodeBuildConfig(
       {
         name: TSDOWN_UNIFIED_CONFIG_GROUP,
-        entry: { [name]: source },
-        minify: { codegen: true, compress: true, mangle: { keepNames: true } },
+        entry,
+        // Attached modules retain ordinary runtime codegen and module ownership labels.
+        ...(isBrokerNativeResource
+          ? {}
+          : { minify: { codegen: true, compress: true, mangle: { keepNames: true } } }),
         deps: {
           ...unifiedDeps,
           neverBundle: bundleFsSafe
@@ -1058,13 +1077,14 @@ const configs: UserConfig[] = [
           alwaysBundle: (id) =>
             shouldAlwaysBundleDependency(id) ||
             shouldBundleRuntimeSqliteDependency(id) ||
-            (bundleFsSafe &&
-              (isFsSafe(id) ||
-                ["semver", "tslog"].some(
-                  (packageName) => id === packageName || id.startsWith(`${packageName}/`),
-                ))),
+            (bundleFsSafe && isFsSafe(id)) ||
+            // Attachments keep runtime-selected companion exports, including tslog's Bun entry.
+            (bundleWorkerHelpers &&
+              ["semver", "tslog"].some(
+                (packageName) => id === packageName || id.startsWith(`${packageName}/`),
+              )),
         },
-        outputOptions: getStandaloneRuntimeProcessOutputOptions(name),
+        outputOptions: getStandaloneRuntimeProcessOutputOptions(firstEntry),
         plugins: [
           createStateSchemaInlinePlugin(),
           ...(bundleFsSafe ? [createPackageRuntimeUrlBuildPlugin("@openclaw/fs-safe")] : []),
@@ -1182,7 +1202,11 @@ for (const config of configs) {
   if (typeof config.dts === "object" && config.dts.emitDtsOnly) {
     continue;
   }
-  config.plugins = [config.plugins, createStandaloneSourceModuleUrlPlugin({ rootDir: repoRoot })]
+  config.plugins = [
+    config.plugins,
+    createEmptyRuntimeChunksPlugin(),
+    createStandaloneSourceModuleUrlPlugin({ rootDir: repoRoot }),
+  ]
     .flat()
     .filter(Boolean);
 }

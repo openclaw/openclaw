@@ -6,7 +6,10 @@ import {
   resolveTimerTimeoutMs,
 } from "../../packages/normalization-core/src/number-coercion.js";
 import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
-import type { OAuthAuthorizationInput } from "../llm/utils/oauth/types.js";
+import {
+  ProviderAuthFailure,
+  providerAuthFailureFromOAuthError,
+} from "../plugins/provider-auth-failure.js";
 import { generatePkceVerifierChallenge } from "./oauth-utils.js";
 export { oauthErrorHtml, oauthSuccessHtml } from "../shared/oauth-page.js";
 export {
@@ -30,7 +33,6 @@ export type {
   OAuthProviderId,
   OAuthProvider,
   OAuthPrompt,
-  OAuthAuthorizationInput,
   OAuthAuthInfo,
   OAuthSelectOption,
   OAuthSelectPrompt,
@@ -45,47 +47,80 @@ export async function generatePKCE(): Promise<{ verifier: string; challenge: str
 }
 
 /** Generates a random base64url OAuth state value for CSRF protection. */
-function generateBase64UrlOAuthState(): string {
+export function generateOAuthState(): string {
   return randomBytes(32).toString("base64url");
 }
 
-export { generateBase64UrlOAuthState as generateOAuthState };
+/**
+ * @deprecated Shipped public type (v2026.11.6); `parseOAuthAuthorizationInput` now always
+ * returns a code. Kept for existing plugin imports.
+ */
+export type OAuthAuthorizationInput = {
+  /** Authorization code parsed from a callback URL, query string, or pasted code. */
+  code?: string;
+  /** Optional OAuth state parsed from callback URL, query string, or `code#state` input. */
+  state?: string;
+};
 
 /**
- * Parses callback URLs, raw query strings, `code#state`, or plain pasted codes.
- * Empty input returns an empty object so callers can keep prompting.
+ * The one paste parser for browser sign-in. Accepts a full redirect address, its query
+ * string, `code#state` or a bare code. A pasted state must match `expected.state`; a bare
+ * code carries none, and PKCE still binds it to this attempt because only this attempt's
+ * verifier can exchange it. Throws `ProviderAuthFailure` for a refusal or a paste that
+ * cannot answer this sign-in, so prompt validators can show its message and stay open.
  */
 export function parseOAuthAuthorizationInput(
-  /** Raw callback URL, query string, `code#state`, or pasted code. */
   input: string,
+  expected: { state?: string; signInUrl?: string },
+): { code: string; state?: string };
+/**
+ * @deprecated Pass `expected` for validation. The shipped one-argument call (v2026.11.6) never
+ * throws: input without a usable code returns `{}` so existing callers keep prompting.
+ */
+export function parseOAuthAuthorizationInput(input: string): OAuthAuthorizationInput;
+export function parseOAuthAuthorizationInput(
+  input: string,
+  expected?: { state?: string; signInUrl?: string },
 ): OAuthAuthorizationInput {
+  if (!expected) {
+    try {
+      return parseOAuthAuthorizationInput(input, {});
+    } catch (error) {
+      if (error instanceof ProviderAuthFailure) {
+        return {};
+      }
+      throw error;
+    }
+  }
   const value = input.trim();
-  if (!value) {
-    return {};
-  }
-
   const url = URL.parse(value);
+  const signIn = expected.signInUrl ? URL.parse(expected.signInUrl) : null;
+  if (url && signIn && url.origin === signIn.origin && url.pathname === signIn.pathname) {
+    throw new ProviderAuthFailure("paste_sign_in_page");
+  }
+  let params = url?.searchParams;
+  let code: string | undefined;
+  let state: string | undefined;
   if (url) {
-    return {
-      code: url.searchParams.get("code") ?? undefined,
-      state: url.searchParams.get("state") ?? undefined,
-    };
+    // Redirect addresses carry the answer in the query string.
+  } else if (/(?:^|[?&])(?:code|state|error)=/.test(value)) {
+    params = new URLSearchParams(value);
+  } else {
+    [code, state] = value.split("#", 2);
   }
-
-  if (value.includes("#")) {
-    const [code, state] = value.split("#", 2);
-    return { code, state };
+  code = (params ? params.get("code") : code)?.trim() || undefined;
+  state = (params ? params.get("state") : state)?.trim() || undefined;
+  if (state && expected.state && state !== expected.state) {
+    throw new ProviderAuthFailure("paste_wrong_attempt");
   }
-
-  if (value.includes("code=")) {
-    const params = new URLSearchParams(value);
-    return {
-      code: params.get("code") ?? undefined,
-      state: params.get("state") ?? undefined,
-    };
+  const error = params?.get("error");
+  if (error) {
+    throw providerAuthFailureFromOAuthError(error);
   }
-
-  return { code: value };
+  if (!code) {
+    throw new ProviderAuthFailure("paste_no_code");
+  }
+  return state ? { code, state } : { code };
 }
 
 /** Converts provider `expires_in` seconds into safe positive milliseconds. */

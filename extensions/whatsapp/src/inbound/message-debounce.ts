@@ -84,11 +84,23 @@ export function createWhatsAppInboundMessageDebouncer(options: {
                 mentioned.size > 0
                   ? { ...last.group?.mentions, jids: Array.from(mentioned) }
                   : last.group?.mentions;
+              // Earlier contact placeholders need their cards. The last message owns other metadata.
+              const earlierContacts = orderedEntries
+                .slice(0, -1)
+                .flatMap(
+                  ({ payload }) =>
+                    payload.channelStructuredContext?.filter(
+                      (context) => context.type === "contact" || context.type === "contacts",
+                    ) ?? [],
+                );
               message = {
                 ...last,
                 turnAdoptionLifecycle: admissionLifecycle,
                 payload: {
                   ...last.payload,
+                  channelStructuredContext: earlierContacts.length
+                    ? [...earlierContacts, ...(last.payload.channelStructuredContext ?? [])]
+                    : last.payload.channelStructuredContext,
                   body: orderedEntries
                     .map((entry) => entry.payload.body)
                     .filter(Boolean)

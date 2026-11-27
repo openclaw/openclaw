@@ -25,7 +25,6 @@ import { withPluginRuntimeGatewayContextResolver } from "../../plugins/runtime/g
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { getUserProfileListItem } from "../../state/user-profile-list-item.test-support.js";
-import { captureResidentUserProfileAccess } from "../../state/user-profile-list.js";
 import {
   ensureCanonicalGatewayOwnerProfile,
   ensureCanonicalUserProfileForEmail,
@@ -46,9 +45,8 @@ import {
   GatewayOperatorAccessDeniedError,
   GatewayOperatorAccessUnavailableError,
   resolveGatewayOperatorAccessAuthority,
-  resumeGatewayOperatorAccessGrant,
 } from "../operator-access-policy.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { ADMIN_SCOPE, SESSION_WRITE_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import {
@@ -644,7 +642,7 @@ describe("visitor access admitted caller", () => {
               "registered Visitor access missing",
             );
             const captured = expectDefined(
-              await captureGatewayOperatorRunAuthority({
+              await prepareGatewayOperatorRunAuthority({
                 client: {
                   ...operatorWriteCliClient([SESSION_WRITE_SCOPE]),
                   authenticatedUserProfile: authenticatedProfile(profile),
@@ -673,13 +671,6 @@ describe("visitor access admitted caller", () => {
                 grantId: expectedGrantId,
               });
               expect(captured.authority.gatewayAccessGrant).toEqual(access.gatewayAccessGrant);
-              expect(() =>
-                resumeGatewayOperatorAccessGrant(
-                  captureResidentUserProfileAccess(profile.id).readCurrentFacts(),
-                  repairedConfig,
-                  access.gatewayAccessGrant ?? null,
-                ),
-              ).not.toThrow();
               expect((await run("allowed")).result).toBe("allowed");
               await expect(run("forbidden")).rejects.toThrow("operator role cannot use this model");
               expect(execute.mock.calls.map((call) => call.slice(0, 2))).toEqual([

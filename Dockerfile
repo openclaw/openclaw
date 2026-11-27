@@ -82,7 +82,7 @@ COPY cli-root-options.mjs gateway-run-argv.mjs gateway-shutdown-budget.mjs ./
 COPY node-host-launcher.mjs ./
 COPY node-compile-cache.mjs ./
 COPY docker-entrypoint.mjs ./
-COPY openclaw.mjs ./
+COPY openclaw.mjs release-launcher-forward.mjs ./
 COPY ui/package.json ./ui/package.json
 COPY tools/solid-lint/package.json ./tools/solid-lint/package.json
 COPY patches ./patches
@@ -308,6 +308,10 @@ RUN npm install --global npm@latest && \
     npm cache clean --force
 
 RUN chown node:node /app
+# The image owns this installation: `openclaw update` names the image update instead of
+# replacing code in a container layer that recreation discards.
+RUN printf '%s\n' '{"schemaVersion":1,"owner":"container-image","displayName":"the OpenClaw container image","updateHint":"Pull the new image and recreate the container to update this Gateway."}' > /app/openclaw-install-owner.json && \
+    chown node:node /app/openclaw-install-owner.json
 
 COPY --from=selected-runtime-assets --chown=node:node /app/dist ./dist
 COPY --from=selected-runtime-assets --chown=node:node /app/node_modules ./node_modules
@@ -329,7 +333,7 @@ COPY --from=selected-runtime-assets --chown=node:node /app/cli-root-options.mjs 
 COPY --from=selected-runtime-assets --chown=node:node /app/node-host-launcher.mjs .
 COPY --from=selected-runtime-assets --chown=node:node /app/node-compile-cache.mjs .
 COPY --from=selected-runtime-assets --chown=node:node /app/docker-entrypoint.mjs .
-COPY --from=selected-runtime-assets --chown=node:node /app/openclaw.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/openclaw.mjs /app/release-launcher-forward.mjs ./
 COPY --from=selected-runtime-assets --chown=node:node /app/.runtime-bootstrap/scripts ./scripts
 COPY --from=selected-runtime-assets --chown=node:node /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} ./${OPENCLAW_BUNDLED_PLUGIN_DIR}
 COPY --from=selected-runtime-assets --chown=node:node /app/skills ./skills

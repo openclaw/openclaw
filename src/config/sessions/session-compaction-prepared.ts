@@ -8,6 +8,7 @@ export function readPreparedSessionCompactionInWorker(
   target: SessionTranscriptRuntimeTarget,
   operation: SessionPreparedCompactionInput["operation"],
   signal?: AbortSignal,
+  timeoutMs?: number,
 ) {
   return withSessionTranscriptReadSource(
     target,
@@ -23,6 +24,7 @@ export function readPreparedSessionCompactionInWorker(
             caller: "compaction",
           },
           signal,
+          { timeoutMs },
         ),
       );
       source.assertCurrent();

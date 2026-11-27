@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import { createPostgresEngineTestFixture } from "../infra/database-engine/engine-store.test-support.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { stateEngineSchema } from "./openclaw-state-db-engine.js";
 
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
@@ -46,13 +47,15 @@ describe.skipIf(!connection)("PostgreSQL approval requester profile migration", 
         before.map((row) => Object.assign({}, row, { requested_by_profile_id: null })),
       );
       expect(upgraded.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
-        schema_version: 41,
+        schema_version: OPENCLAW_STATE_SCHEMA_VERSION,
       });
       upgraded
         .prepare("UPDATE operator_approvals SET requested_by_profile_id = ? WHERE approval_id = ?")
         .run("trusted-profile", "original");
       fixture.invalidate();
-      expect(() => fixture.open(source)).toThrow(/newer|version.*41/iu);
+      expect(() => fixture.open(source)).toThrow(
+        new RegExp(`minimum reader ${OPENCLAW_STATE_SCHEMA_VERSION}.*supports 40`, "iu"),
+      );
       const reopened = fixture.open(stateEngineSchema);
       expect(
         reopened.prepare("SELECT cursor_id, requested_by_profile_id FROM operator_approvals").get(),

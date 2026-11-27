@@ -131,7 +131,7 @@ export async function performGatewaySessionReset(
       ok: true;
       key: string;
       entry: SessionEntry;
-      resolved: { modelProvider: string; model: string };
+      resolved: { modelProvider?: string; model?: string };
       agentId: string;
       storePath: string;
     }
@@ -997,8 +997,8 @@ async function performPreparedGatewaySessionReset({
         const next = lifecycle.nextEntry;
         const selectedModel = resolveSessionModelRef(cfg, next, target.agentId);
         const resolved = {
-          modelProvider: selectedModel.provider,
-          model: selectedModel.model,
+          modelProvider: selectedModel?.provider,
+          model: selectedModel?.model,
         };
         // Runtime model identity is a response projection, not reset persistence. Keep the
         // established RPC entry shape while the stored row retains selection intent only.

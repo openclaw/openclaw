@@ -33,7 +33,6 @@ const tokens = { access: "access-token", refresh: "refresh-token", expires: 1_70
 function runLogin(
   overrides: Partial<Omit<ProviderAuthContext, "prompter">> = {},
   prompter: Partial<ProviderAuthContext["prompter"]> = {},
-  methodId: "oauth" | "device-code" = "device-code",
 ) {
   const context = {
     isRemote: false,
@@ -49,7 +48,7 @@ function runLogin(
     ...overrides,
   } as never;
   return buildOpenAIProvider()
-    .auth?.find((method) => method.id === methodId)
+    .auth?.find((method) => method.id === "oauth")
     ?.run(context);
 }
 function catalogModel(
@@ -109,14 +108,13 @@ describe("OpenAI provider Codex transport hooks", () => {
       ]),
     ).toEqual([
       ["oauth", "openai", [OPENAI_CODEX_DEFAULT_MODEL]],
-      ["device-code", "openai-device-code", [OPENAI_CODEX_DEFAULT_MODEL]],
       ["siwc", "openai-token-sharing", [OPENAI_DEFAULT_MODEL]],
       ["api-key", "openai-api-key", []],
     ]);
     expect(provider.oauthProfileIdRepairs).toBeUndefined();
   });
 
-  it("stores device-code logins as OpenAI OAuth profiles", async () => {
+  it("Codex login uses device code when the server offers it", async () => {
     const controller = new AbortController();
     loginOpenAICodexDeviceCodeMock.mockResolvedValueOnce(tokens);
 
@@ -125,6 +123,7 @@ describe("OpenAI provider Codex transport hooks", () => {
     expect(loginOpenAICodexDeviceCodeMock).toHaveBeenCalledWith(
       expect.objectContaining({ signal: controller.signal }),
     );
+    expect(loginOpenAICodexOAuthMock).not.toHaveBeenCalled();
 
     expect(result).toMatchObject({
       profiles: [
@@ -138,123 +137,141 @@ describe("OpenAI provider Codex transport hooks", () => {
     expect(result?.configPatch?.agents?.defaults?.models).toEqual({ "openai/gpt-6-astra": {} });
   });
 
-  it.each(["oauth", "device-code"] as const)(
-    "keeps same-email workspaces separate across %s logins",
-    async (methodId) => {
-      const access = (accountId: string) =>
-        `header.${Buffer.from(
-          JSON.stringify({
-            "https://api.openai.com/auth": {
-              chatgpt_account_id: accountId,
-              chatgpt_user_id: "user-one",
-            },
-            "https://api.openai.com/profile": { email: "dev@example.com", email_verified: true },
-          }),
-        ).toString("base64url")}.signature`;
-      const login = async (
-        accountId: string,
-        existingProfiles?: ProviderAuthContext["existingProfiles"],
-      ) => {
-        const loginMock =
-          methodId === "oauth" ? loginOpenAICodexOAuthMock : loginOpenAICodexDeviceCodeMock;
-        loginMock.mockResolvedValueOnce({ ...tokens, access: access(accountId) });
-        const result = await runLogin({ existingProfiles }, {}, methodId);
-        return result!.profiles;
-      };
-
-      const personal = await login("acct-personal");
-      const business = await login("acct-business", personal);
-      const existing = [...personal, ...business];
-      const personalAgain = await login("acct-personal", existing);
-      const businessAgain = await login("acct-business", existing);
-
-      expect(personal[0]?.profileId).toBe("openai:dev@example.com");
-      expect(business[0]).toMatchObject({
-        profileId: "openai:dev@example.com:acct-business",
-        credential: { email: "dev@example.com", accountId: "acct-business" },
-      });
-      expect(personalAgain[0]?.profileId).toBe("openai:dev@example.com");
-      expect(businessAgain[0]?.profileId).toBe("openai:dev@example.com:acct-business");
-      const method = buildOpenAIProvider().auth.find((candidate) => candidate.id === methodId)!;
-      const matcher = method.matchesPersonalAccount!;
-      const canReplace = method.canReplaceGeneratedProfile!;
-      const personalCredential = personal[0]!.credential;
-      if (personalCredential.type !== "oauth") {
-        throw new Error("Expected OAuth credential");
-      }
-      const imported = {
-        ...personal[0]!,
-        credential: { ...personalCredential, access: "import-without-workspace-claim" },
-      };
-      expect((await login("acct-business", [imported]))[0]?.profileId).toBe(business[0]?.profileId);
-      expect(canReplace(business[0]!.credential, personalCredential)).toBe(false);
-      expect(canReplace(personalCredential, imported.credential)).toBe(false);
-
-      // A failed refresh retains metadata, not the original access-token claims.
-      const fence = "openclaw-oauth-refresh-fence:v1:" + "a".repeat(32) + ":failed:";
-      const failed = {
-        ...personalCredential,
-        access: fence + "access:" + "b".repeat(64),
-        refresh: fence + "refresh:" + "c".repeat(64),
-        expires: 1,
-      };
-      expect(matcher(personalAgain[0]!.credential, failed)).toBe(false);
-      expect(canReplace(personalCredential, failed)).toBe(true);
-      expect(canReplace(personalCredential, { ...failed, email: "other@example.com" })).toBe(false);
-      expect(canReplace(businessAgain[0]!.credential, failed)).toBe(false);
-      for (const [incoming] of [personalAgain, businessAgain]) {
-        expect(
-          existing
-            .filter((profile) => matcher(incoming!.credential, profile.credential))
-            .map((profile) => profile.profileId),
-        ).toEqual([incoming!.profileId]);
-      }
-    },
-  );
-
-  it.each(["oauth", "device-code"] as const)(
-    "matches stable Codex imports only for the same shared account (%s)",
-    (methodId) => {
-      const token = (claims: Record<string, string>) =>
-        [
-          "fixture",
-          Buffer.from(JSON.stringify({ "https://api.openai.com/auth": claims })).toString(
-            "base64url",
-          ),
-          "fixture",
-        ].join(".");
-      const incoming = {
+  it("keeps same-email workspaces separate across Codex logins", async () => {
+    const access = (accountId: string) =>
+      `header.${Buffer.from(
+        JSON.stringify({
+          "https://api.openai.com/auth": {
+            chatgpt_account_id: accountId,
+            chatgpt_user_id: "user-one",
+          },
+          "https://api.openai.com/profile": { email: "dev@example.com", email_verified: true },
+        }),
+      ).toString("base64url")}.signature`;
+    const login = async (
+      accountId: string,
+      existingProfiles?: ProviderAuthContext["existingProfiles"],
+    ) => {
+      loginOpenAICodexDeviceCodeMock.mockResolvedValueOnce({
         ...tokens,
-        type: "oauth" as const,
-        provider: "openai",
-        access: token({ chatgpt_account_id: "workspace-a", chatgpt_user_id: "same-user" }),
-      };
-      const saved = {
-        ...incoming,
-        access: token({}),
-        accountId: "workspace-a",
-        idToken: token({ chatgpt_user_id: "same-user" }),
-      };
-      const method = buildOpenAIProvider().auth.find((candidate) => candidate.id === methodId)!;
-      const matchesShared = method.matchesSharedAccount!;
-      expect(matchesShared(incoming, saved)).toBe(true);
-      expect(method.matchesPersonalAccount!(incoming, saved)).toBe(false);
-      expect(method.canReplaceGeneratedProfile!(incoming, saved)).toBe(true);
-      for (const unverified of [
-        { ...saved, idToken: undefined },
-        { ...saved, idToken: token({ chatgpt_user_id: "other-user" }) },
-        { ...saved, accountId: "workspace-b" },
-        { ...saved, access: token({ chatgpt_user_id: "other-user" }) },
-        {
-          ...saved,
-          idToken: token({ chatgpt_user_id: "same-user", chatgpt_account_id: "workspace-b" }),
-        },
-      ]) {
-        expect(matchesShared(incoming, unverified)).toBe(false);
-        expect(method.canReplaceGeneratedProfile!(incoming, unverified)).toBe(false);
-      }
-    },
-  );
+        access: access(accountId),
+      });
+      const result = await runLogin({ existingProfiles });
+      return result!.profiles;
+    };
+
+    const personal = await login("acct-personal");
+    const business = await login("acct-business", personal);
+    const existing = [...personal, ...business];
+    const personalAgain = await login("acct-personal", existing);
+    const businessAgain = await login("acct-business", existing);
+
+    expect(personal[0]?.profileId).toBe("openai:dev@example.com");
+    expect(business[0]).toMatchObject({
+      profileId: "openai:dev@example.com:acct-business",
+      credential: { email: "dev@example.com", accountId: "acct-business" },
+    });
+    expect(personalAgain[0]?.profileId).toBe("openai:dev@example.com");
+    expect(businessAgain[0]?.profileId).toBe("openai:dev@example.com:acct-business");
+    const method = buildOpenAIProvider().auth.find((candidate) => candidate.id === "oauth")!;
+    const matcher = method.matchesPersonalAccount!;
+    const canReplace = method.canReplaceGeneratedProfile!;
+    const personalCredential = personal[0]!.credential;
+    if (personalCredential.type !== "oauth") {
+      throw new Error("Expected OAuth credential");
+    }
+    const imported = {
+      ...personal[0]!,
+      credential: { ...personalCredential, access: "import-without-workspace-claim" },
+    };
+    expect((await login("acct-business", [imported]))[0]?.profileId).toBe(business[0]?.profileId);
+    expect(canReplace(business[0]!.credential, personalCredential)).toBe(false);
+    expect(canReplace(personalCredential, imported.credential)).toBe(false);
+
+    // A failed refresh retains metadata, not the original access-token claims.
+    const fence = "openclaw-oauth-refresh-fence:v1:" + "a".repeat(32) + ":failed:";
+    const failed = {
+      ...personalCredential,
+      access: fence + "access:" + "b".repeat(64),
+      refresh: fence + "refresh:" + "c".repeat(64),
+      expires: 1,
+    };
+    expect(matcher(personalAgain[0]!.credential, failed)).toBe(false);
+    expect(canReplace(personalCredential, failed)).toBe(true);
+    expect(canReplace(personalCredential, { ...failed, email: "other@example.com" })).toBe(false);
+    expect(canReplace(businessAgain[0]!.credential, failed)).toBe(false);
+    for (const [incoming] of [personalAgain, businessAgain]) {
+      expect(
+        existing
+          .filter((profile) => matcher(incoming!.credential, profile.credential))
+          .map((profile) => profile.profileId),
+      ).toEqual([incoming!.profileId]);
+    }
+  });
+
+  it("matches stable Codex imports only for the same shared account", () => {
+    const token = (claims: Record<string, string>) =>
+      [
+        "fixture",
+        Buffer.from(JSON.stringify({ "https://api.openai.com/auth": claims })).toString(
+          "base64url",
+        ),
+        "fixture",
+      ].join(".");
+    const incoming = {
+      ...tokens,
+      type: "oauth" as const,
+      provider: "openai",
+      access: token({ chatgpt_account_id: "workspace-a", chatgpt_user_id: "same-user" }),
+    };
+    const saved = {
+      ...incoming,
+      access: token({}),
+      accountId: "workspace-a",
+      idToken: token({ chatgpt_user_id: "same-user" }),
+    };
+    const method = buildOpenAIProvider().auth.find((candidate) => candidate.id === "oauth")!;
+    const matchesShared = method.matchesSharedAccount!;
+    expect(matchesShared(incoming, saved)).toBe(true);
+    expect(method.matchesPersonalAccount!(incoming, saved)).toBe(false);
+    expect(method.canReplaceGeneratedProfile!(incoming, saved)).toBe(true);
+    for (const unverified of [
+      { ...saved, idToken: undefined },
+      { ...saved, idToken: token({ chatgpt_user_id: "other-user" }) },
+      { ...saved, accountId: "workspace-b" },
+      { ...saved, access: token({ chatgpt_user_id: "other-user" }) },
+      {
+        ...saved,
+        idToken: token({ chatgpt_user_id: "same-user", chatgpt_account_id: "workspace-b" }),
+      },
+    ]) {
+      expect(matchesShared(incoming, unverified)).toBe(false);
+      expect(method.canReplaceGeneratedProfile!(incoming, unverified)).toBe(false);
+    }
+  });
+
+  it("Codex login falls back to browser sign-in only when device code is not enabled", async () => {
+    loginOpenAICodexDeviceCodeMock.mockResolvedValueOnce(null);
+    loginOpenAICodexOAuthMock.mockResolvedValueOnce(tokens);
+
+    const result = await runLogin();
+
+    expect(loginOpenAICodexDeviceCodeMock).toHaveBeenCalledOnce();
+    expect(loginOpenAICodexOAuthMock).toHaveBeenCalledOnce();
+    expect(result?.profiles[0]?.credential).toMatchObject({ type: "oauth", ...tokens });
+  });
+
+  it("Codex login surfaces other device-code failures without browser fallback", async () => {
+    const error = new Error("The sign-in code expired before it was approved.");
+    loginOpenAICodexDeviceCodeMock.mockRejectedValueOnce(error);
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await expect(runLogin({ runtime })).rejects.toBe(error);
+
+    // Core prints the failure once; the provider neither echoes it nor adds a help note.
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(loginOpenAICodexOAuthMock).not.toHaveBeenCalled();
+  });
 
   it.each(["structured", "note"])(
     "presents a bounded device-code link through %s UI",

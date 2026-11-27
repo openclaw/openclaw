@@ -21,12 +21,17 @@ import { runWithPreparedMemoryPromptSection } from "../../plugins/memory-state.j
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import {
+  readRunOperatorAuthority,
   runWithPreparedRunSourceScope,
   type AdmittedRunContext,
   type PreparedAgentRunAdmission,
 } from "../admitted-run-context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { runContextEngineMaintenance } from "../embedded-agent-runner/context-engine-maintenance.js";
+import {
+  attachCompactionAccountingRecorder,
+  readCompactionAccountingRecorder,
+} from "../embedded-agent-runner/run/compaction-accounting-bridge.js";
 import { estimateRenderedLlmBoundaryTokenPressure } from "../embedded-agent-runner/run/preemptive-compaction.js";
 import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.js";
 import type { AgentMessage } from "../runtime/index.js";
@@ -46,6 +51,7 @@ import {
   type ContextEngineAssemblySnapshot,
 } from "./context-engine-assembly-attempt.js";
 import type { ContextEngineTurnAttemptFacts } from "./context-engine-turn-attempt.js";
+import { captureContextEngineTurnOperatorSource } from "./context-engine-turn-authority.js";
 
 export {
   buildAfterTurnRuntimeContext as buildHarnessContextEngineRuntimeContext,
@@ -54,11 +60,18 @@ export {
 
 function preparePreTurnRuntimeContext(
   runtimeContext: ContextEngineRuntimeContext | undefined,
+  source: HarnessSourceScope,
 ): ContextEngineRuntimeContext | undefined {
-  if (!runtimeContext?.rewriteTranscriptEntries) {
+  if (!runtimeContext) {
     return runtimeContext;
   }
   const { rewriteTranscriptEntries: _rewriteTranscriptEntries, ...fenced } = runtimeContext;
+  attachCompactionAccountingRecorder(fenced, {
+    ...readCompactionAccountingRecorder(runtimeContext),
+    ...(source.admittedRunContext || source.preparedRunAdmission
+      ? { operatorAuthority: readRunOperatorAuthority(source) }
+      : {}),
+  });
   return fenced;
 }
 
@@ -144,7 +157,7 @@ export async function bootstrapHarnessContextEngine(
   await runWithHarnessSourceFence(params, async () => {
     try {
       const runtimeSettings = buildHarnessContextEngineRuntimeSettings(params);
-      const runtimeContext = preparePreTurnRuntimeContext(params.runtimeContext);
+      const runtimeContext = preparePreTurnRuntimeContext(params.runtimeContext, params);
       if (typeof params.contextEngine?.bootstrap === "function") {
         await params.contextEngine.bootstrap({
           sessionId: params.sessionId,
@@ -291,7 +304,7 @@ async function assembleHarnessContextEngineWithinSourceScope(
     modelId: params.modelId,
     tokenBudget,
   };
-  const runtimeContext = preparePreTurnRuntimeContext(params.runtimeContext);
+  const runtimeContext = preparePreTurnRuntimeContext(params.runtimeContext, params);
   const assemble = () =>
     contextEngine.assemble({
       sessionId: params.sessionId,
@@ -498,6 +511,7 @@ export async function finalizeHarnessContextEngineTurn(
       if (terminal) {
         record({
           boundary: { admission, terminal },
+          operatorSource: captureContextEngineTurnOperatorSource(params.runtimeContext, params),
           sessionIdUsed: params.sessionIdUsed,
           sessionKey: params.sessionKey,
           sessionTarget: params.sessionTarget,

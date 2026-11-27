@@ -49,6 +49,7 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import "../../styles/profile.css";
 import { projectOwner } from "../../lib/reactive/projection.ts";
+import { createScrollPosition } from "../../lib/reactive/scroll-state.ts";
 import { uploadsEnabled } from "../../lib/uploads.ts";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 import { DiscordIdentity } from "./discord-identity.tsx";
@@ -87,7 +88,8 @@ function accessSummary(scopes: readonly string[] | null) {
   );
 }
 
-export function ProfilePage() {
+export function ProfilePage(route: { routeData?: string | null }) {
+  let host!: HTMLElement;
   const context = useApplication();
   const upgrade = projectOwner(context.scopeUpgrade, (source) =>
     source.state.phase === "hidden" ? null : source.state,
@@ -209,6 +211,30 @@ export function ProfilePage() {
   const initialIdentityPending = () =>
     view().ownProfile === null &&
     (view().identityLoading || (view().connected && !view().identityReady));
+  createScrollPosition(
+    () => {
+      const id = route.routeData;
+      if (!id) {
+        return {};
+      }
+      return {
+        reveal: {
+          identity: [id],
+          block: "start",
+          target: () => {
+            if (!hasPresentation() || initialIdentityPending()) {
+              return null;
+            }
+            const section = host.ownerDocument.getElementById(id);
+            return section && host.contains(section) && !section.closest("[hidden]")
+              ? section
+              : null;
+          },
+        },
+      };
+    },
+    { waitForRevealIn: () => host },
+  );
   const agent = () => {
     const list = agents.read();
     const id = list?.defaultId ?? "main";
@@ -463,7 +489,7 @@ export function ProfilePage() {
   );
 
   return (
-    <openclaw-profile-page>
+    <openclaw-profile-page ref={(element) => (host = element)}>
       <SettingsPageHeader
         title={titleForRoute("profile")}
         subtitle={
@@ -564,7 +590,8 @@ export function ProfilePage() {
               onSave={saveIdentity}
             />
           </Show>
-          <Show when={hasPresentation()}>
+          {/* Unidentified readers need Access even when no identity read can finish. */}
+          <Show when={hasPresentation() && (!view().selfUser || !initialIdentityPending())}>
             <div id="settings-profile-access">
               <SettingsSection title={t("profilePage.access.title")}>
                 <SettingsRow

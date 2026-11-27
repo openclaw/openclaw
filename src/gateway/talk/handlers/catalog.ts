@@ -6,8 +6,11 @@ import {
   type TalkCatalogParams,
   validateTalkCatalogParams,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { resolveAgentDir } from "../../../agents/agent-scope-config.js";
 import { AgentSelectionRequiredError } from "../../../agents/agent-scope.js";
 import { getRuntimeAuthProfileStoreCredentialsRevision } from "../../../agents/auth-profiles/runtime-snapshots.js";
+import { loadAuthProfileStoreForRuntimeAsync } from "../../../agents/auth-profiles/store-runtime.js";
+import { signInNeedsApiKeyForVoice } from "../../../agents/voice-sign-in-policy.js";
 import { getRuntimeConfigSnapshotMetadata } from "../../../config/runtime-snapshot.js";
 import { resolveActiveTalkProviderConfig } from "../../../config/talk.js";
 import type { OpenClawConfig } from "../../../config/types.js";
@@ -47,6 +50,7 @@ import {
 } from "../../../tts/provider-registry.js";
 import { isTtsProviderConfiguredAsync, resolveTtsConfig } from "../../../tts/tts.js";
 import { READ_SCOPE } from "../../operator-scopes.js";
+import { isStartableMainSession } from "../../server-methods/session-scoped-read.js";
 import type { GatewayRequestContext, GatewayRequestHandler } from "../../server-methods/types.js";
 import { assertValidParams } from "../../server-methods/validation.js";
 import { getSessionRowProjection } from "../../session-row-projection-access.js";
@@ -226,6 +230,14 @@ async function buildTalkCatalog(
   };
   // Reject ambiguous ownership before provider discovery loads unrelated plugins.
   const realtimeAgentId = resolveTalkSessionAgentId(config, params.sessionKey);
+  // A sign-in the provider refuses for voice gets named, so clients can point to its API key.
+  // Read alongside provider discovery so it never lengthens the catalog build.
+  const pendingAuthStore = loadAuthProfileStoreForRuntimeAsync(
+    resolveAgentDir(config, realtimeAgentId),
+    { readOnly: true, allowKeychainPrompt: false },
+  );
+  // Observed here too: a failed discovery task can end the build before it is awaited.
+  pendingAuthStore.catch(() => undefined);
   const talkResolved = resolveActiveTalkProviderConfig(config.talk);
   const activeSpeechProvider = canonicalizeSpeechProviderId(talkResolved?.provider, config);
   const requestedProvider = normalizeOptionalString(params.provider);
@@ -439,19 +451,29 @@ async function buildTalkCatalog(
       ),
     ),
   ]);
+  const authStore = await pendingAuthStore;
+  const markApiKeyRequired = <T extends Record<string, unknown>>(entries: T[]): T[] =>
+    entries.map((entry) =>
+      entry.configured === false && signInNeedsApiKeyForVoice(authStore, String(entry.id))
+        ? { ...entry, apiKeyRequired: true }
+        : entry,
+    );
   return {
     modes: ["realtime", "stt-tts", "transcription"],
     transports: ["webrtc", "provider-websocket", "gateway-relay", "managed-room"],
     brains: ["agent-consult", "direct-tools", "none"],
     speech: {
       ...(activeSpeechProvider ? { activeProvider: activeSpeechProvider } : {}),
-      providers: speechProviders,
+      providers: markApiKeyRequired(speechProviders),
     },
-    transcription,
+    transcription: {
+      ...transcription,
+      providers: markApiKeyRequired(transcription.providers),
+    },
     realtime: {
       ready: realtimeSelection.ready,
       ...(activeRealtimeProvider ? { activeProvider: activeRealtimeProvider } : {}),
-      providers: realtimeProviders,
+      providers: markApiKeyRequired(realtimeProviders),
     },
   };
 }
@@ -528,7 +550,8 @@ export const talkCatalogHandler: GatewayRequestHandler = async ({
       );
       return;
     }
-    const agentId = resolveTalkSessionAgentId(config, catalogParams.sessionKey);
+    const sessionKey = catalogParams.sessionKey;
+    const agentId = resolveTalkSessionAgentId(config, sessionKey);
     // Wait outside the authorization callback so disclosure stays synchronous there.
     await awaitFirstSnapshot();
     const resolveStarted = Date.now();
@@ -538,15 +561,27 @@ export const talkCatalogHandler: GatewayRequestHandler = async ({
         client,
         isCurrent: () => getSessionRowProjection(context) === projection,
         p: {
-          key: catalogParams.sessionKey,
+          key: sessionKey,
           agentId,
           includeGlobal: true,
           includeUnknown: true,
+          allowMissing: true,
         },
       },
       (session) => {
         if (!session.ok) {
           respond(false, undefined, session.error);
+        } else if (
+          "missing" in session &&
+          isStartableMainSession({
+            cfg: config,
+            client,
+            sessionKey,
+            agentId,
+          })
+        ) {
+          // The first turn creates this main conversation; its agent already owns Talk.
+          respondCatalog(catalogParams);
         } else if ("missing" in session || "ambiguous" in session) {
           respond(
             false,
