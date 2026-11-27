@@ -90,7 +90,7 @@ export function buildExecForegroundResult(params: {
     // Record-time truncation keeps this path visible when it cuts the result; a file cut at
     // its limit stays marked partial through history elision.
     ...(file
-      ? { fullOutputPath: file.path, ...(file.limitReached ? { spillTruncated: true } : {}) }
+      ? { spill: { path: file.path, ...(file.limitReached ? { truncated: true } : {}) } }
       : {}),
   };
   if (params.outcome.status === "failed") {
