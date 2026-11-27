@@ -235,8 +235,8 @@ it("automatically completes the original Git update when its healthy schema-40 v
     expect(status.abandonedRun).toBeUndefined();
     expect(status.staleRun).toBeUndefined();
     expect(status.lastRun?.origin.nextAction).toBeUndefined();
-    const { renderUpdateRunReport } = await import("../infra/update-run-report.js");
-    expect(JSON.stringify(renderUpdateRunReport(status.lastRun))).not.toContain("update repair");
+    const { renderUpdateRunSummary } = await import("../infra/update-run-notice.js");
+    expect(renderUpdateRunSummary(status.lastRun)).not.toContain("update repair");
     await expect(fs.stat(trialPath)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await fs.realpath(path.join(prefix, "openclaw"))).toBe(installed.root);
     expect((await listUpdateRunsAsync({ limit: 10 })).map((entry) => entry.runId)).toEqual([
