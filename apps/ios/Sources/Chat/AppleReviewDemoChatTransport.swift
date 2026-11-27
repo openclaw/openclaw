@@ -321,7 +321,7 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
             ]}
             """#.utf8))
         }
-        return [
+        var choices = [
             OpenClawChatModelChoice(
                 modelID: self.fixture.modelID,
                 name: self.fixture.modelName,
@@ -329,6 +329,25 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
                 contextWindow: 128_000,
                 supportsFastMode: true),
         ] + self.fixture.additionalModels
+        if ScreenshotFixtureMode.composerModelLayout {
+            choices += [
+                OpenClawChatModelChoice(
+                    modelID: "atlas-extended",
+                    name: "Atlas Extended Context Research Preview",
+                    provider: "openai",
+                    contextWindow: nil,
+                    reasoning: false,
+                    supportsFastMode: true),
+                OpenClawChatModelChoice(
+                    modelID: "nova-extended",
+                    name: "Nova Extended Context Research Preview",
+                    provider: "openai",
+                    contextWindow: nil,
+                    reasoning: false,
+                    supportsFastMode: false),
+            ]
+        }
+        return choices
     }
 
     func loadModelCatalog(
@@ -683,6 +702,7 @@ private actor LocalFixtureChatStore {
             timestamp: now,
             transcriptMessageID: "\(runId):user",
             idempotencyKey: "\(runId):user")
+        if ScreenshotFixtureMode.composerModelLayout { self.sentComposerDraftKey = sessionKey }
         self.messages.append(userMessage)
         self.publishReactions(for: userMessage, sessionKey: sessionKey)
         if ProcessInfo.processInfo.arguments.contains("--openclaw-dup-filter-fixture"),
@@ -791,6 +811,7 @@ private actor LocalFixtureChatStore {
         self.publish(event)
     }
 
+    private var sentComposerDraftKey: String?
     private var heldInitialRun = false
     private var activeRunID: String?
     private var eventContinuations: [UUID: AsyncStream<OpenClawChatTransportEvent>.Continuation] = [:]
@@ -918,6 +939,14 @@ private actor LocalFixtureChatStore {
         entry.visibility = .shared
         entry.sharingRole = .owner
         var sessions = [entry]
+        if let key = self.sentComposerDraftKey, key != entry.key {
+            sessions.append(OpenClawChatSessionEntry(
+                key: key,
+                displayName: "Hello",
+                sessionId: "\(self.fixture.sessionIDPrefix)-\(key)",
+                modelProvider: self.selectedModelProvider,
+                model: self.modelID))
+        }
         if ScreenshotFixtureMode.chatSwitchEnabled {
             sessions[0].displayName = "Release checklist"
             var launchPlan = OpenClawChatSessionEntry(

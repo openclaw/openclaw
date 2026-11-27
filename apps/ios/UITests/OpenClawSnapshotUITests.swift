@@ -862,30 +862,26 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.launchApp(for: ScreenshotTarget(
             initialTab: "chat", initialDestination: "chat", name: "model-menu-accessibility"))
         let app = try XCTUnwrap(self.app)
-        let model = app.buttons["chat-composer-inline-model"]
+        let model = self.inlineModelChip(in: app)
         XCTAssertTrue(model.waitForExistence(timeout: 8))
         model.tap()
-        let target = app.buttons["chat-composer-model-selection-target"]
-        XCTAssertTrue(target.waitForExistence(timeout: 3))
-        XCTAssertEqual(target.label, "Changes the global default")
-        let defaultModel = app.buttons["Default: openai/gpt-5.6-sol"]
-        XCTAssertTrue(defaultModel.waitForExistence(timeout: 3))
-        XCTAssertTrue(defaultModel.isHittable)
+        XCTAssertTrue(app.navigationBars["Model"].waitForExistence(timeout: 3))
         self.attachScreenshot(named: "model-menu-default-accessible")
-        let alternative = app.buttons["anthropic/claude-opus-4-1"]
-        XCTAssertTrue(alternative.exists)
+        // The picker is SwiftUI content; this app's accessibility hit test answers with the hosting view for
+        // any SwiftUI element (the base build does the same), so rows are checked for being enabled instead.
+        let alternative = self.pickerModelRow("anthropic/claude-opus-4-1", provider: "anthropic", in: app)
+        XCTAssertTrue(alternative.isEnabled)
         alternative.tap()
-        self.waitForValue("claude-opus-4-1", of: model)
+        self.waitForValue("Claude Opus 4.1", of: model)
         model.tap()
-        XCTAssertTrue(target.waitForExistence(timeout: 3))
-        XCTAssertEqual(target.label, "Changes the global default")
-        XCTAssertTrue(alternative.waitForExistence(timeout: 3))
-        XCTAssertTrue(alternative.isHittable)
+        XCTAssertTrue(app.navigationBars["Model"].waitForExistence(timeout: 3))
+        // The session's model is the one in effect, picked or not: no row offers a way back to another.
+        XCTAssertFalse(app.buttons["chat-model-picker-agent-default"].exists)
         self.attachScreenshot(named: "model-menu-selected-accessible")
-        let original = app.buttons["openai/gpt-5.6-sol"]
-        XCTAssertTrue(original.exists)
+        let original = self.pickerModelRow("openai/gpt-5.6-sol", provider: "openai", in: app)
+        XCTAssertTrue(original.isEnabled)
         original.tap()
-        self.waitForValue("gpt-5.6-sol", of: model)
+        self.waitForValue("GPT-5.6", of: model)
     }
 }
 
@@ -895,26 +891,22 @@ extension OpenClawSnapshotUITests {
             for: Self.chatScreenshotTarget,
             additionalArguments: ["--openclaw-unavailable-model-fixture"])
         let app = try XCTUnwrap(self.app)
-        let inlineModel = app.buttons["chat-composer-inline-model"]
+        let inlineModel = self.inlineModelChip(in: app)
         XCTAssertTrue(inlineModel.waitForExistence(timeout: 8))
         let originalValue = inlineModel.value as? String
         inlineModel.tap()
 
-        let unavailable = app.buttons["anthropic/claude-opus-4-1 — Sign-in needed"]
-        XCTAssertTrue(unavailable.waitForExistence(timeout: 3))
+        let unavailable = self.pickerModelRow("anthropic/claude-opus-4-1", provider: "anthropic", in: app)
+        XCTAssertTrue(unavailable.label.hasSuffix("Sign-in needed"), unavailable.label)
         unavailable.tap()
         XCTAssertEqual(app.buttons["chat-composer-inline-model"].value as? String, originalValue)
-
-        if !unavailable.waitForExistence(timeout: 1) {
-            inlineModel.tap()
-            XCTAssertTrue(unavailable.waitForExistence(timeout: 3))
-        }
+        XCTAssertTrue(unavailable.exists, "A disabled row keeps the picker open")
         self.attachScreenshot(named: "chat-composer-model-unavailable")
         unavailable.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         XCTAssertEqual(app.buttons["chat-composer-inline-model"].value as? String, originalValue)
     }
 
-    func testUnavailableModelIsDisabledInChatActions() throws {
+    func testUnavailableModelIsDisabledInComposer() throws {
         self.launchApp(
             for: Self.chatScreenshotTarget,
             additionalArguments: [
@@ -923,23 +915,13 @@ extension OpenClawSnapshotUITests {
                 "-openclaw.chat.modelRecents", "",
             ])
         let app = try XCTUnwrap(self.app)
-        app.buttons["Chat actions"].tap()
-        let popover = app.descendants(matching: .any)["chat-actions-popover"]
-        XCTAssertTrue(popover.waitForExistence(timeout: 5))
-        let drawer = popover.buttons["chat-model-provider-drawer-anthropic"]
-        XCTAssertTrue(drawer.waitForExistence(timeout: 3))
-        drawer.tap()
+        let modelPicker = self.inlineModelChip(in: app)
+        XCTAssertTrue(modelPicker.waitForExistence(timeout: 8))
+        modelPicker.tap()
 
-        let unavailable = popover.buttons["anthropic/claude-opus-4-1"]
-        XCTAssertTrue(unavailable.waitForExistence(timeout: 3))
+        let unavailable = self.pickerModelRow("anthropic/claude-opus-4-1", provider: "anthropic", in: app)
         XCTAssertFalse(unavailable.isEnabled)
-        XCTAssertTrue(popover.staticTexts["Sign-in needed"].exists)
-        unavailable.tap()
-        XCTAssertTrue(popover.exists)
-
-        unavailable.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-        XCTAssertTrue(popover.exists)
-        self.attachScreenshot(named: "chat-actions-model-unavailable")
+        self.attachScreenshot(named: "chat-composer-model-unavailable")
     }
 
     func testSelectedAuthFailedModelDisablesOnlineSend() throws {
@@ -967,12 +949,12 @@ extension OpenClawSnapshotUITests {
             for: Self.chatScreenshotTarget,
             additionalArguments: ["--openclaw-model-sign-in-fixture", "ordinary"])
         let app = try XCTUnwrap(self.app)
-        let modelMenu = app.buttons["chat-composer-inline-model"]
+        let modelMenu = self.inlineModelChip(in: app)
         XCTAssertTrue(modelMenu.waitForExistence(timeout: 8))
         XCTAssertFalse(app.buttons["chat-model-sign-in"].exists)
         self.attachScreenshot(named: "chat-composer-no-sign-in-row")
         modelMenu.tap()
-        XCTAssertTrue(app.buttons["chat-model-sign-in"].waitForExistence(timeout: 3))
+        XCTAssertTrue(self.pickerSignInRow(in: app).exists)
         self.attachScreenshot(named: "chat-composer-model-menu-sign-in")
         self.assertModelSignInSheetOpens(in: app)
     }
@@ -991,10 +973,37 @@ extension OpenClawSnapshotUITests {
         input.typeText("Check the project.")
         app.buttons["chat-send-message"].tap()
         XCTAssertTrue(app.buttons["Stop response"].waitForExistence(timeout: 8))
-        self.openSignInMenuWithModelChangesDisabled(in: app)
+        // A running reply does not lock model choices; the new model answers from the next message.
+        self.openSignInMenu(in: app, modelChangesEnabled: true)
         self.attachScreenshot(named: "chat-model-sign-in-active-response")
         self.assertModelSignInSheetOpens(in: app)
         XCTAssertTrue(app.buttons["Stop response"].exists)
+        app.buttons["Stop response"].tap()
+    }
+
+    func testEffortChipOpensTheBarDuringActiveResponse() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: [
+                "--openclaw-model-sign-in-fixture", "ordinary",
+                "--openclaw-hold-initial-chat-run", "--openclaw-startup-status-fixture",
+            ])
+        let app = try XCTUnwrap(self.app)
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+        input.typeText("Check the project.")
+        app.buttons["chat-send-message"].tap()
+        XCTAssertTrue(app.buttons["Stop response"].waitForExistence(timeout: 8))
+        let effort = app.buttons["chat-composer-inline-effort"]
+        XCTAssertTrue(effort.waitForExistence(timeout: 5))
+        effort.tap()
+        self.attachScreenshot(named: "chat-effort-tap-active-response")
+        // A reply in progress does not lock the levels; a change applies from the next message.
+        XCTAssertTrue(app.descendants(matching: .any)["chat-effort-bar"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.descendants(matching: .any)["chat-effort-bar-slider"].isEnabled)
+        XCTAssertFalse(app.descendants(matching: .any)["chat-effort-bar-locked"].exists)
+        self.attachScreenshot(named: "chat-effort-bar-active-response")
         app.buttons["Stop response"].tap()
     }
 
@@ -1003,7 +1012,7 @@ extension OpenClawSnapshotUITests {
             for: Self.chatScreenshotTarget,
             additionalArguments: ["--openclaw-model-sign-in-fixture", "empty"])
         let app = try XCTUnwrap(self.app)
-        let modelMenu = app.buttons["chat-composer-inline-model"]
+        let modelMenu = self.inlineModelChip(in: app)
         XCTAssertTrue(modelMenu.waitForExistence(timeout: 8))
         XCTAssertTrue(modelMenu.isEnabled, "Empty catalog must not disable sign-in")
         modelMenu.tap()
@@ -1015,23 +1024,23 @@ extension OpenClawSnapshotUITests {
             for: Self.chatScreenshotTarget,
             additionalArguments: ["--openclaw-model-sign-in-fixture", "read-only"])
         let app = try XCTUnwrap(self.app)
-        self.openSignInMenuWithModelChangesDisabled(in: app)
+        self.openSignInMenu(in: app, modelChangesEnabled: false)
         self.assertModelSignInSheetOpens(in: app)
     }
 
-    func openSignInMenuWithModelChangesDisabled(in app: XCUIApplication) {
-        let modelMenu = app.buttons["chat-composer-inline-model"]
+    func openSignInMenu(in app: XCUIApplication, modelChangesEnabled: Bool) {
+        let modelMenu = self.inlineModelChip(in: app)
         XCTAssertTrue(modelMenu.waitForExistence(timeout: 8))
         XCTAssertTrue(modelMenu.isEnabled, "Model mutation restrictions must not disable sign-in")
         modelMenu.tap()
-        let choice = app.buttons["anthropic/claude-opus-4-1"]
-        XCTAssertTrue(choice.waitForExistence(timeout: 3))
-        XCTAssertFalse(choice.isEnabled, "Opening sign-in must not enable restricted model changes")
+        let choice = self.pickerModelRow("anthropic/claude-opus-4-1", provider: "anthropic", in: app)
+        XCTAssertEqual(choice.isEnabled, modelChangesEnabled)
+        // The provider page is a system push; its back button is the first one in the bar.
+        app.navigationBars.firstMatch.buttons.firstMatch.tap()
     }
 
     func assertModelSignInSheetOpens(in app: XCUIApplication) {
-        let signIn = app.buttons["chat-model-sign-in"]
-        XCTAssertTrue(signIn.waitForExistence(timeout: 3))
+        let signIn = self.pickerSignInRow(in: app)
         XCTAssertTrue(signIn.isEnabled)
         signIn.tap()
         XCTAssertTrue(app.staticTexts[
@@ -1040,12 +1049,9 @@ extension OpenClawSnapshotUITests {
         app.buttons["Close"].tap()
     }
 
-    func testModelSelectionTargetVariantsPersistAcrossBothPickers() throws {
-        for (target, disclosure) in [
-            ("session", "Changes this session only"),
-            ("agent", "Changes this agent's default"),
-            ("global", "Changes the global default"),
-        ] {
+    func testModelSelectionTargetVariantsPersistInComposer() throws {
+        // Whatever a pick changes on the Gateway, the picker only lists models: no scope note in any scope.
+        for target in ["session", "agent", "global"] {
             self.launchApp(
                 for: Self.chatScreenshotTarget,
                 additionalArguments: [
@@ -1054,27 +1060,22 @@ extension OpenClawSnapshotUITests {
                     "-openclaw.chat.modelRecents", "",
                 ])
             let app = try XCTUnwrap(self.app)
-            let inlineModel = app.buttons["chat-composer-inline-model"]
+            let inlineModel = self.inlineModelChip(in: app)
             XCTAssertTrue(inlineModel.waitForExistence(timeout: 8))
+            let note = app.descendants(matching: .any)["chat-composer-model-selection-target"]
             inlineModel.tap()
-            XCTAssertTrue(app.buttons[disclosure].waitForExistence(timeout: 3))
+            XCTAssertTrue(app.navigationBars["Model"].waitForExistence(timeout: 3))
+            XCTAssertFalse(note.exists, "No scope note for a \(target) pick")
 
-            let alternateModel = app.buttons["anthropic/claude-opus-4-1"]
-            XCTAssertTrue(alternateModel.waitForExistence(timeout: 3))
+            let alternateModel = self.pickerModelRow("anthropic/claude-opus-4-1", provider: "anthropic", in: app)
             alternateModel.tap()
-            self.waitForValue("claude-opus-4-1", of: inlineModel)
+            self.waitForValue("Claude Opus 4.1", of: inlineModel)
 
             inlineModel.tap()
-            XCTAssertTrue(app.buttons[disclosure].waitForExistence(timeout: 3))
-            XCTAssertTrue(app.buttons["anthropic/claude-opus-4-1"]
-                .waitForExistence(timeout: 3))
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.5)).tap()
-
-            let actions = app.buttons["Chat actions"]
-            XCTAssertTrue(actions.waitForExistence(timeout: 3))
-            actions.tap()
-            XCTAssertTrue(app.staticTexts[disclosure].waitForExistence(timeout: 3))
-            XCTAssertTrue(app.descendants(matching: .any)["chat-actions-popover"].exists)
+            XCTAssertTrue(app.navigationBars["Model"].waitForExistence(timeout: 3))
+            XCTAssertFalse(note.exists, "No scope note for a \(target) pick")
+            let picked = self.pickerModelRow("anthropic/claude-opus-4-1", provider: "anthropic", in: app)
+            XCTAssertTrue(picked.isSelected, "The picked model stays the current one")
             self.attachScreenshot(named: "chat-model-selection-target-\(target)")
         }
     }
