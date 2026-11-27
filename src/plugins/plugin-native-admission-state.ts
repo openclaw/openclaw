@@ -141,7 +141,7 @@ export function updatePluginNativeAdmissionReceipt(
 }
 
 /** A replaced receipt retires unreferenced file facts before pruning namespace maps. */
-export function releaseReplacedNamespaces(
+function releaseReplacedNamespaces(
   state: AdmissionState,
   replaced: PluginSourceAdmissionReceipt | undefined,
 ): void {

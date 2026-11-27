@@ -8,8 +8,10 @@ import {
   listSkillFiles,
 } from "openclaw/plugin-sdk/skill-authoring-runtime";
 import {
+  listWorkshopChanges,
   readWorkshopActivity,
   recordWorkshopChange,
+  WORKSHOP_CHANGES_MAX_LIMIT,
   type WorkshopActor,
   type WorkshopChange,
 } from "openclaw/plugin-sdk/skill-workshop-host-runtime";
@@ -20,6 +22,7 @@ import {
   type SkillPaths,
   type WorkshopChangeAction,
 } from "./skill-versions.js";
+import { WorkshopWriteError } from "./workshop-write-error.js";
 
 export type WorkshopMutationContext = {
   config: OpenClawConfig;
@@ -27,6 +30,8 @@ export type WorkshopMutationContext = {
   actor: WorkshopActor;
   sessionKey?: string;
   runId?: string;
+  /** Selected Undo anchor, revalidated after the target's lock is acquired. */
+  undoReviewChange?: { runId: string; id: string };
   /** Throws once the caller lost write authority; checked under the skill locks before any write. */
   assertLive?: () => void;
 };
@@ -71,6 +76,26 @@ async function withSkillLocks<T>(keys: readonly string[], run: () => Promise<T>)
     : await skillLocks.enqueue(first, () => withSkillLocks(rest, run));
 }
 
+export function firstReviewChangeForCurrentSkill(
+  feed: readonly WorkshopChange[],
+  name: string,
+  reviewChangeIds: ReadonlySet<string>,
+): WorkshopChange | undefined {
+  let first: WorkshopChange | undefined;
+  // Newest first. An independent create separates this skill from an earlier one of the same name.
+  for (const row of feed) {
+    if (row.skillName !== name) {
+      continue;
+    }
+    if (row.actor === "review" && reviewChangeIds.has(row.id)) {
+      first = row;
+    } else if (row.action === "create") {
+      break;
+    }
+  }
+  return first;
+}
+
 export type ApplySkillMutation = (
   paths: MutationPaths,
 ) => Promise<{ summary: string; versionId?: string }>;
@@ -86,6 +111,20 @@ export function prepareSkillMutation(
   const lockKeys = [paths.skillDir, ...alsoLock.map((other) => other.skillDir)];
   const commit = async (): Promise<WorkshopChange> => {
     ctx.assertLive?.();
+    const undo = ctx.undoReviewChange;
+    if (undo) {
+      const limit = WORKSHOP_CHANGES_MAX_LIMIT;
+      const [reviewChanges, feed] = await Promise.all([
+        listWorkshopChanges(ctx.agentId, { runId: undo.runId, limit }),
+        listWorkshopChanges(ctx.agentId, { limit }),
+      ]);
+      const reviewChangeIds = new Set(reviewChanges.map((change) => change.id));
+      if (firstReviewChangeForCurrentSkill(feed, name, reviewChangeIds)?.id !== undo.id) {
+        throw new WorkshopWriteError(
+          `Cannot undo the review change to "${name}": its history changed. Refresh the Workshop and try again.`,
+        );
+      }
+    }
     let change: WorkshopChange | undefined;
     // The host refreshes discovery, then the change is recorded, then skill_changed observers hear.
     await commitSkillChange({

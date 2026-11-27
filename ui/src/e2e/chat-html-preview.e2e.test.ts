@@ -144,6 +144,9 @@ suite.define(() => {
           const document = outer.contentFrame().frameLocator("iframe");
           const summary = document.locator("summary");
           await summary.waitFor();
+          await page
+            .locator("openclaw-chat-detail-panel:visible openclaw-chat-html-preview [role=status]")
+            .waitFor({ state: "hidden" });
           await page.locator(".sidebar-region").evaluate(async (region) => {
             await Promise.all(
               region
