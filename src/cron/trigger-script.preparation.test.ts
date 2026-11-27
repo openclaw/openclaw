@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type { CodeModeHeadlessResult } from "../agents/code-mode.js";
 import { loadPreparedInboundPluginRegistry } from "../agents/prepared-model-runtime.inbound-registry.js";
 import { prepareOwnedPluginLoadContext } from "../agents/prepared-model-runtime.plugin-context.js";
@@ -10,7 +10,11 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createScheduledGatewayRunner } from "../gateway/scheduled-run-gateway-context.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
-import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
+import {
+  bindLegacyPluginSdkResourceHost,
+  LegacyPluginSdkResourceHost,
+} from "../plugins/legacy-sdk-resource-host.js";
+import { loadAndActivateRootPluginRegistry, loadOpenClawPluginsAsync } from "../plugins/loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   clearPluginLoaderCache,
@@ -19,9 +23,15 @@ import {
 import { waitForPluginCacheRetirement } from "../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { createPluginRegistryOwner } from "../plugins/runtime.js";
+import { createPluginRegistryOwner, stageActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  withPluginRuntimeGatewayContextResolver,
+  withPluginRuntimeRegistryScope,
+} from "../plugins/runtime/gateway-request-scope.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { bindCronJobAdmittedRun, clearCronJobActive, markCronJobActive } from "./active-jobs.js";
 import { createCronScriptRuntimeFixture as createCronScriptRuntime } from "./trigger-script.test-helpers.js";
 
 type HeadlessParams = Parameters<
@@ -115,6 +125,102 @@ afterEach(async () => {
 
 afterAll(cleanupPluginLoaderFixturesForTest);
 
+it("lets an unchanged script job call a newly published plugin without retiring its registry", async () => {
+  const pluginsDir = state.path("online-plugins");
+  fs.mkdirSync(pluginsDir);
+  config.plugins!.load = { paths: [pluginsDir] };
+  let publishedConfig = config;
+  const publish = async (published: OpenClawConfig = publishedConfig) => {
+    clearPluginMetadataLifecycleCaches();
+    const input = { config: published, workspaceDir: state.workspaceDir };
+    const metadata = loadPluginMetadataSnapshot(input);
+    setCurrentPluginMetadataSnapshot(metadata, { config: published });
+    const registry = await loadOpenClawPluginsAsync({
+      ...input,
+      metadataSnapshot: metadata,
+      activate: false,
+      cache: false,
+      throwOnLoadError: true,
+    });
+    prepareOwnedPluginLoadContext(input, process.env, registry, metadata, true);
+    // Online publication preserves retained preparations; retirement must not
+    // accidentally make this addition-only regression pass.
+    stageActivePluginRegistry(registry, null, "gateway-bindable", state.workspaceDir);
+    return registry;
+  };
+  let registry = await publish();
+  // The Gateway resolves its live config on every invocation; publications
+  // between runs must be visible without rebuilding the cron service.
+  const gatewayContext = {
+    getRuntimeConfig: () => publishedConfig,
+    isConfigReloadSettled: () => true,
+  } as never;
+  const resolveGatewayContext = () => gatewayContext;
+  const resourceHost = new LegacyPluginSdkResourceHost();
+  const scheduler = createTestGatewayScheduler();
+  resourceHost.bindScheduler(scheduler);
+  bindLegacyPluginSdkResourceHost(resolveGatewayContext, resourceHost);
+  onTestFinished(async () => {
+    await resourceHost.close();
+    await scheduler.stop();
+  });
+  const runtime = createCronScriptRuntime({
+    config,
+    resolveGatewayContext,
+    loadPluginRegistry: loadPreparedInboundPluginRegistry,
+  });
+  const job = {
+    ...invocation("existing-job", "main", ["cold_probe"]),
+    script: "return { state: await cold_probe({}) };",
+  };
+  // The service admits each run through the standing active-job marker; mirror
+  // that binding so the script's admitted-run assertion sees the occurrence.
+  const abort = new AbortController();
+  const run = () => {
+    const marker = markCronJobActive("existing-job");
+    return withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () =>
+      withPluginRuntimeRegistryScope(registry, () =>
+        runtime
+          .executePayload({
+            ...job,
+            deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
+            executionIdentity: {
+              ingress: { kind: "schedule", boundary: "cron.script", state: "present" },
+              onPostAdmission: (admitted) => bindCronJobAdmittedRun(marker, admitted, abort.signal),
+            },
+          })
+          .finally(() => clearCronJobActive("existing-job", marker)),
+      ),
+    );
+  };
+  await expect(run()).resolves.toMatchObject({
+    kind: "error",
+    error: expect.stringContaining("cold_probe is not defined"),
+  });
+  fs.cpSync(state.path("plugin"), path.join(pluginsDir, "cold-probe"), { recursive: true });
+  registry = await publish();
+  await expect(run()).resolves.toMatchObject({
+    kind: "completed",
+    state: { generation: 1, calls: 1, agentId: "main" },
+  });
+  publishedConfig = {
+    ...config,
+    plugins: {
+      ...config.plugins,
+      entries: { "cold-probe": { enabled: true, config: { generation: 2 } } },
+    },
+  };
+  registry = await publish(publishedConfig);
+  for (let runIndex = 0; runIndex < 2; runIndex += 1) {
+    const result = await run();
+    expect(result, JSON.stringify(result)).toMatchObject({
+      kind: "completed",
+      state: { generation: 2, calls: 1, agentId: "main" },
+    });
+  }
+  abort.abort();
+});
+
 async function executeProbe({ ctx }: HeadlessParams, condition = false) {
   const tool = ctx.catalogRef?.current?.entries.find(
     (entry) => entry.tool.name === "cold_probe",
@@ -175,6 +281,9 @@ it("borrows the current Gateway plugins for detached conditions before and after
       state: { state: { artifact: "built", generation, calls: 1 } },
     });
   try {
+    // A Gateway-owned cron service binds its startup config to the active runtime
+    // source so later online config publications are visible to each invocation.
+    setRuntimeConfigSnapshot(config, config);
     const runtime = createRuntime(config);
     await expectGeneration(runtime, 1);
 
