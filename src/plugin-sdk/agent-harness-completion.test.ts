@@ -52,8 +52,152 @@ import * as completionSdk from "./agent-harness-completion.js";
 import {
   deliverAgentHarnessCompletion,
   isDurableAgentHarnessCompletionDelivery,
+  registerAgentHarnessCompletion,
   type AgentHarnessCompletionDelivery,
 } from "./agent-harness-completion.js";
+
+it("retires a native result consumed before its completion fact without delivering it again", async () => {
+  const send = vi.fn(async () => direct());
+  const retire = vi.fn(async () => {});
+  const registration = {
+    scope: createAgentHarnessCompletionScope(source),
+    assignmentId: "already-consumed-native-turn",
+    isCurrent: () => true,
+    readiness: () => "ready" as const,
+    observeConsumption: async () => false,
+    deliver: send,
+    retire,
+    settleExecution() {},
+    onError(error: unknown) {
+      throw error;
+    },
+  };
+  expect(() =>
+    registerAgentHarnessCompletion({
+      ...registration,
+      scope: { ...registration.scope },
+    }),
+  ).toThrow("host-issued scope");
+  const owner = registerAgentHarnessCompletion(registration);
+  try {
+    owner.consume();
+    await owner.complete("native result");
+    expect(send).not.toHaveBeenCalled();
+    expect(retire).toHaveBeenCalledWith("consumed", expect.any(Function));
+    expect(owner.isConsumed()).toBe(true);
+  } finally {
+    owner.release();
+  }
+});
+
+it("keeps native consumption through an in-flight failure and separates a successor assignment", async () => {
+  vi.useFakeTimers();
+  const started = Promise.withResolvers<void>();
+  const response = Promise.withResolvers<AgentHarnessCompletionDelivery>();
+  const send = vi.fn(() => {
+    started.resolve();
+    return response.promise;
+  });
+  const retire = vi.fn(async () => {});
+  const registration = {
+    scope: createAgentHarnessCompletionScope(source),
+    assignmentId: "native-turn-one",
+    isCurrent: () => true,
+    readiness: () => "ready" as const,
+    observeConsumption: async () => false,
+    deliver: send,
+    retire,
+    settleExecution() {},
+    onError(error: unknown) {
+      throw error;
+    },
+  };
+  const owner = registerAgentHarnessCompletion(registration);
+  const duplicate = registerAgentHarnessCompletion(registration);
+  const successorSend = vi.fn(async () => direct());
+  const successor = registerAgentHarnessCompletion({
+    ...registration,
+    assignmentId: "native-turn-two",
+    deliver: successorSend,
+  });
+  try {
+    const attempt = owner.complete("same native result");
+    await started.promise;
+    await duplicate.complete("same native result");
+    owner.consume();
+    response.resolve({ delivered: false, path: "none", error: "late transport failure" });
+    await attempt;
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(send).toHaveBeenCalledOnce();
+    expect(retire).toHaveBeenCalledWith("consumed", expect.any(Function));
+    await successor.complete("same native result");
+    expect(successorSend).toHaveBeenCalledOnce();
+  } finally {
+    owner.release();
+    duplicate.release();
+    successor.release();
+    vi.useRealTimers();
+  }
+});
+
+it("cannot retire a successor from a released native delivery attempt", async () => {
+  const entered = Promise.withResolvers<void>();
+  const result = Promise.withResolvers<AgentHarnessCompletionDelivery>();
+  const retire = vi.fn(async () => {});
+  const owner = registerAgentHarnessCompletion({
+    scope: createAgentHarnessCompletionScope(source),
+    assignmentId: "released-native-attempt",
+    isCurrent: () => true,
+    readiness: () => "ready",
+    observeConsumption: async () => false,
+    deliver: () => {
+      entered.resolve();
+      return result.promise;
+    },
+    retire,
+    settleExecution() {},
+    onError(error) {
+      throw error;
+    },
+  });
+  const pending = owner.complete("old result");
+  await entered.promise;
+  owner.release();
+  result.resolve(direct());
+  await pending;
+  expect(retire).not.toHaveBeenCalled();
+  expect(() => owner.complete("successor result")).toThrow("no longer active");
+});
+
+it("retries consumed retirement without redelivering after repeated persistence failures", async () => {
+  vi.useFakeTimers();
+  const send = vi.fn(async () => direct());
+  const retire = vi
+    .fn(async () => {})
+    .mockRejectedValueOnce(new Error("write unavailable"))
+    .mockRejectedValueOnce(new Error("write still unavailable"));
+  const owner = registerAgentHarnessCompletion({
+    scope: createAgentHarnessCompletionScope(source),
+    assignmentId: "consumed-retirement",
+    isCurrent: () => true,
+    readiness: () => "ready",
+    observeConsumption: async () => false,
+    deliver: send,
+    retire,
+    settleExecution() {},
+    onError() {},
+  });
+  try {
+    await owner.complete("native result");
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(retire).toHaveBeenCalledTimes(3);
+    expect(send).toHaveBeenCalledOnce();
+    expect(owner.isConsumed()).toBe(true);
+  } finally {
+    owner.release();
+    vi.useRealTimers();
+  }
+});
 
 const source = {
   requesterSessionKey: "main",

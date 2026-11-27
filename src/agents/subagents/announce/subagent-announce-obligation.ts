@@ -243,34 +243,24 @@ export type SubagentAnnounceFlowOutcome =
   | "requester_waiting"
   | "undelivered";
 
-/** A committed transport receipt wins even when its persistence observer fails. */
-export function createSubagentAnnounceObligation(
-  onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void | Promise<void>,
-) {
-  let outcome: SubagentAnnounceFlowOutcome = "undelivered";
-  let reported = false;
-  return {
-    get outcome() {
-      return outcome;
-    },
-    get reported() {
-      return reported;
-    },
-    report: async (delivery: SubagentAnnounceDeliveryResult) => {
-      if (reported) {
-        return;
-      }
-      reported = true;
-      outcome = delivery.delivered
-        ? "delivered"
-        : delivery.reason === "completion_handoff_pending" && delivery.path === "none"
-          ? "requester_waiting"
-          : delivery.path === "queued"
-            ? "session_queued"
-            : "undelivered";
-      await onDeliveryResult?.(delivery);
-    },
-  };
+/** A queued handoff is not a durable receipt for a detached completion. */
+export function isDurableAnnounceDelivery(delivery: SubagentAnnounceDeliveryResult): boolean {
+  if (!delivery.delivered) {
+    return false;
+  }
+  if (delivery.path === "steered") {
+    return true;
+  }
+  if (delivery.path !== "direct") {
+    return false;
+  }
+  const phases = Array.isArray(delivery.phases) ? delivery.phases : undefined;
+  return (
+    !phases ||
+    phases.some(
+      (phase) => phase.phase === "direct-primary" && phase.delivered && phase.path === "direct",
+    )
+  );
 }
 
 /** Durable delivery evidence takes precedence over a later transport failure or handoff. */
