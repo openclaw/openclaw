@@ -345,17 +345,36 @@ enum GatewayLaunchAgentManager {
         if let runtime, !launchAgentExists || replaceRuntime {
             arguments += ["--runtime", "bun", "--runtime-path", runtime.serviceBun.path]
         }
-        let existingLauncher = launchAgentExists && self.launchdConfigSnapshot()?
-            .programArguments.first?.hasSuffix("/Contents/MacOS/openclaw-mac") == true
-        if BundledRuntime.isBundledApp && (runtime != nil || existingLauncher) {
-            guard let bundleIdentifier = Bundle.main.bundleIdentifier else { return arguments }
-            arguments += [
-                "--app-launcher-path", Bundle.main.bundleURL
-                    .appendingPathComponent("Contents/MacOS/openclaw-mac").path,
-                "--app-bundle-identifier", bundleIdentifier,
-            ]
-        }
         return arguments
+    }
+
+    static func needsAppServiceLauncher(
+        serviceRuntime: BundledRuntime?,
+        installedArguments: [String]) -> Bool
+    {
+        serviceRuntime != nil ||
+            (installedArguments.first?.hasSuffix("/Contents/MacOS/openclaw-mac") == true &&
+                installedArguments.dropFirst().first == "_gateway-service")
+    }
+
+    private static func appendAppServiceLauncherArguments(
+        to arguments: inout [String],
+        serviceRuntime: BundledRuntime?) throws
+    {
+        guard arguments.first == "install", BundledRuntime.isBundledApp else { return }
+        let installed = self.launchdConfigSnapshot()?.programArguments ?? []
+        // A staged Bun or an existing app helper preserves attribution across recovery and reinstall.
+        guard self.needsAppServiceLauncher(
+            serviceRuntime: serviceRuntime, installedArguments: installed)
+        else { return }
+        guard let bundleIdentifier = Bundle.main.bundleIdentifier else {
+            throw GatewayHostingError(message: "The signed app identity is unavailable; reinstall OpenClaw.app")
+        }
+        arguments += [
+            "--app-launcher-path", Bundle.main.bundleURL
+                .appendingPathComponent("Contents/MacOS/openclaw-mac").path,
+            "--app-bundle-identifier", bundleIdentifier,
+        ]
     }
 
     static func bundledRuntimeReplacementError(
@@ -794,7 +813,10 @@ extension GatewayLaunchAgentManager {
         let beforeSpawn: (@Sendable () -> String?)?
         if args.first.map(["install", "uninstall", "start", "stop", "restart"].contains) == true {
             let custody: ServiceAuthority
-            do { custody = try expectedServiceAuthority ?? self.gatewayServiceAuthority() } catch {
+            do {
+                try self.appendAppServiceLauncherArguments(to: &arguments, serviceRuntime: serviceRuntime)
+                custody = try expectedServiceAuthority ?? self.gatewayServiceAuthority()
+            } catch {
                 return .failure(error.localizedDescription)
             }
             let authority = legacyAuthority ?? restoring ?? selectedCLI

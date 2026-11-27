@@ -4,6 +4,19 @@ import Testing
 
 @Suite(.serialized)
 struct GatewayLaunchAgentManagerTests {
+    @Test func `app launcher selection covers fresh installs and retained service recovery`() {
+        let runtime = BundledRuntime(root: URL(fileURLWithPath: "/fixture/.openclaw/runtime/build"))
+        let app = "/Applications/OpenClaw.app/Contents/MacOS/openclaw-mac"
+        #expect(GatewayLaunchAgentManager.needsAppServiceLauncher(
+            serviceRuntime: runtime, installedArguments: []))
+        #expect(GatewayLaunchAgentManager.needsAppServiceLauncher(
+            serviceRuntime: nil, installedArguments: [app, "_gateway-service", "/bin/sh"]))
+        #expect(!GatewayLaunchAgentManager.needsAppServiceLauncher(
+            serviceRuntime: nil, installedArguments: [app, "status"]))
+        #expect(!GatewayLaunchAgentManager.needsAppServiceLauncher(
+            serviceRuntime: nil, installedArguments: ["/bin/sh", "/fixture/wrapper.sh"]))
+    }
+
     @Test func `reads app managed Gateway command through the signed service launcher`() {
         let root = URL(fileURLWithPath: "/fixture/.openclaw")
         let environment = root.appendingPathComponent("service-env/ai.openclaw.gateway.env")
