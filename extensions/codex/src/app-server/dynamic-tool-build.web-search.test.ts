@@ -220,3 +220,24 @@ it.each([true, false])(
     expect(allowed).toHaveBeenCalledExactlyOnceWith(false);
   },
 );
+
+it("records webSearchRequested=true for domain-restricted search under cold unsupported verdict", async () => {
+  params.config = domainConfig;
+  params.preparedWebSearchPolicy = { allowed: true, persistentAllowed: true };
+  setCodexTestToolFactory(params, () => webTools.map(createRuntimeDynamicTool));
+  const persistent = vi.fn();
+  const allowed = vi.fn();
+  const requested = vi.fn();
+
+   await buildDynamicToolsForTest(params, workspaceDir, {
+    nativeToolSurfaceEnabled: await nativeSurface(),
+    nativeProviderWebSearchSupport: "unsupported",
+    onPersistentWebSearchPolicyResolved: persistent,
+    onWebSearchPolicyResolved: allowed,
+    onWebSearchRequestedResolved: requested,
+    });
+
+   expect(persistent).toHaveBeenCalledExactlyOnceWith(false);
+  expect(allowed).toHaveBeenCalledExactlyOnceWith(false);
+  expect(requested).toHaveBeenCalledExactlyOnceWith(true);
+  });
