@@ -3,7 +3,10 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog-outcome.js";
 import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
-import { isOAuthRefreshFence } from "./auth-profiles/oauth-refresh-marker.js";
+import {
+  isOAuthRefreshFence,
+  isPendingOAuthRefreshFence,
+} from "./auth-profiles/oauth-refresh-marker.js";
 import { hasOAuthIdentity } from "./auth-profiles/oauth-shared.js";
 import type { RuntimeAuthMaterialization } from "./auth-profiles/runtime-materializations.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
@@ -38,26 +41,48 @@ export function preparedModelCatalogAuthIdentity(
   );
   const identifiedOAuth = profiles.filter(
     ([, profile]) =>
-      profile.type === "oauth" && hasOAuthIdentity(profile) && !isOAuthRefreshFence(profile),
+      profile.type === "oauth" &&
+      hasOAuthIdentity(profile) &&
+      // A pending fence is the same sign-in mid-refresh; a failed one has ended.
+      (!isOAuthRefreshFence(profile) || isPendingOAuthRefreshFence(profile)),
   );
+  // The usable credential map omits a fenced profile, so its account still owns the
+  // provider until the refresh owner settles or fails the claim.
+  const refreshingProviders = new Map<string, string[]>();
+  for (const [id, profile] of identifiedOAuth) {
+    const provider = normalizeProviderId(profile.provider);
+    if (
+      profile.type === "oauth" &&
+      isPendingOAuthRefreshFence(profile) &&
+      !Object.keys(source.credentials ?? {}).some((key) => normalizeProviderId(key) === provider)
+    ) {
+      refreshingProviders.set(provider, [...(refreshingProviders.get(provider) ?? []), id]);
+    }
+  }
   return {
     profiles: Object.fromEntries(
       profiles.map(([id, profile]) => {
         if (profile.type !== "oauth" || !identifiedOAuth.some(([key]) => key === id)) {
           return [id, profile];
         }
+        // A refresh fence drops token-bound fields; the account identity stays.
         const {
           access: _access,
           refresh: _refresh,
           expires: _expires,
           idToken: _idToken,
+          copyToAgents: _copyToAgents,
           ...account
         } = profile;
         return [id, account];
       }),
     ),
-    credentials: Object.fromEntries(
-      Object.entries(source.credentials ?? {})
+    credentials: Object.fromEntries([
+      ...[...refreshingProviders].map(([provider, profileIds]) => [
+        provider,
+        { profileIds: profileIds.toSorted() },
+      ]),
+      ...Object.entries(source.credentials ?? {})
         .filter(([provider]) => includesProvider(provider))
         .map(([provider, credential]) => {
           if (credential.type !== "oauth") {
@@ -76,7 +101,7 @@ export function preparedModelCatalogAuthIdentity(
             .toSorted();
           return [provider, profileIds.length ? { profileIds } : credential];
         }),
-    ),
+    ]),
   };
 }
 
