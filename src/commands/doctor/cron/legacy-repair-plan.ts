@@ -16,7 +16,7 @@ import {
   repairModelRefAuthProfile,
 } from "../shared/retired-model-ref-repair.js";
 import { migrateLegacyNotifyFallback } from "./legacy-notify.js";
-import type { LegacyCronRepairState } from "./legacy-repair.js";
+import type { LegacyCronQuarantine } from "./legacy-quarantine-migration.js";
 import { planCronCodexRefRewriteAgainstPersistedConfig } from "./runtime-policy-migration.js";
 import { assertCronStateSchemaSupportedAsync } from "./schema-safety.js";
 import {
@@ -26,6 +26,24 @@ import {
   normalizeStoredCronJobs,
   recoverValidQuarantinedCronScheduleJobs,
 } from "./store-migration.js";
+import type { inspectCronJobOwnersForDoctor } from "./store-repair.js";
+
+export type CronOwnerProjection =
+  | { kind: "explicit"; agentId: string }
+  | { kind: "runtime-default"; agentId: string }
+  | { kind: "unresolved" };
+
+export type LegacyCronRepairState = {
+  storePath: string;
+  legacyQuarantine?: LegacyCronQuarantine;
+  invalidConfigRows: QuarantinedCronConfigJob[];
+  persistedQuarantine: CronQuarantinedJob[];
+  projectedOwnersByJobId: ReadonlyMap<string, CronOwnerProjection>;
+  rawJobs: Array<Record<string, unknown>>;
+  jobsFingerprint: string | undefined;
+  ownerRows: Awaited<ReturnType<typeof inspectCronJobOwnersForDoctor>>;
+  legacyImport?: { count: number; assertCurrent: () => void };
+};
 
 export type LegacyCronStoreRepairParams = {
   cfg: OpenClawConfig;
@@ -116,9 +134,7 @@ export async function planLegacyCronStoreRepair(params: LegacyCronStoreRepairPar
         `Cron job ${job} has an unsupported delivery mode. Review its intended delivery and set mode to "none", "announce", or "webhook"; Doctor cannot infer the intended route.`,
     ),
   );
-  const legacyWebhook = normalizeOptionalString(
-    (params.cfg.cron as Record<string, unknown> | undefined)?.webhook,
-  );
+  const legacyWebhook = normalizeOptionalString(asOptionalRecord(params.cfg.cron)?.webhook);
   const notifyMigration = migrateLegacyNotifyFallback({
     jobs: state.rawJobs.filter((job) => canRepairCronDeliveryForDoctor(job.delivery)),
     legacyWebhook,

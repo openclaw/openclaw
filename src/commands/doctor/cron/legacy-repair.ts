@@ -43,14 +43,13 @@ import {
 } from "../shared/retired-model-ref-repair.js";
 import { readCronStoreSelectionForDoctor } from "./default-store-selection.js";
 import { parseLegacyCronJobs } from "./legacy-json-shapes.js";
-import {
-  loadLegacyCronQuarantineForMigration,
-  type LegacyCronQuarantine,
-} from "./legacy-quarantine-migration.js";
+import { loadLegacyCronQuarantineForMigration } from "./legacy-quarantine-migration.js";
 import { captureLegacyCronRepairAdmission } from "./legacy-repair-admission.js";
 import {
   hasLegacyCronStoreRepairWork,
   planLegacyCronStoreRepair,
+  type CronOwnerProjection,
+  type LegacyCronRepairState,
   type LegacyCronStoreRepairParams,
 } from "./legacy-repair-plan.js";
 import { archiveLegacyCronFile } from "./quarantine-archive.js";
@@ -65,23 +64,6 @@ import {
   type CronCodexRuntimePolicyTarget,
 } from "./store-migration.js";
 import { backupCronStoreForDoctor, inspectCronJobOwnersForDoctor } from "./store-repair.js";
-
-export type CronOwnerProjection =
-  | { kind: "explicit"; agentId: string }
-  | { kind: "runtime-default"; agentId: string }
-  | { kind: "unresolved" };
-
-export type LegacyCronRepairState = {
-  storePath: string;
-  legacyQuarantine?: LegacyCronQuarantine;
-  invalidConfigRows: QuarantinedCronConfigJob[];
-  persistedQuarantine: CronQuarantinedJob[];
-  projectedOwnersByJobId: ReadonlyMap<string, CronOwnerProjection>;
-  rawJobs: Array<Record<string, unknown>>;
-  jobsFingerprint: string | undefined;
-  ownerRows: Awaited<ReturnType<typeof inspectCronJobOwnersForDoctor>>;
-  legacyImport?: { count: number; assertCurrent: () => void };
-};
 
 export type LegacyCronRepairResult = {
   changes: string[];
