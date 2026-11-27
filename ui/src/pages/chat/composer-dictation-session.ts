@@ -46,7 +46,18 @@ function eventPayload(frame: GatewayEventFrame) {
   if (frame.event !== "talk.event" || !frame.payload || typeof frame.payload !== "object") {
     return null;
   }
-  return asOptionalObjectRecord(frame.payload) ?? null;
+  const payload = asOptionalObjectRecord(frame.payload);
+  const eventType = asOptionalObjectRecord(payload?.talkEvent)?.type;
+  // The relay also uses the transcript envelope for empty lifecycle markers.
+  // They carry no recognized text and must not make a final transcript provisional.
+  if (
+    payload?.type === "transcript" &&
+    payload.text === "" &&
+    (eventType === "input.audio.committed" || eventType === "turn.ended")
+  ) {
+    return null;
+  }
+  return payload ?? null;
 }
 
 function formatDictationError(error: unknown): string {

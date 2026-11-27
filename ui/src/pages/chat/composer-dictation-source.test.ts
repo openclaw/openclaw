@@ -67,6 +67,22 @@ async function fixture() {
 }
 
 describe("dictation source finality and revision ownership", () => {
+  it("accepts the buffered relay final between Stop and turn-end lifecycle markers", async () => {
+    const { session, emit } = await fixture();
+    const finishing = session.finish();
+    const text = "Um, I need fifteen. Sorry, fifty copies.";
+    for (const [seq, type, value] of [
+      [10, "input.audio.committed", ""],
+      [11, "transcript.done", text],
+      [12, "turn.ended", ""],
+    ] as const) {
+      emit({ type: "transcript", final: true, text: value, talkEvent: { type, seq } });
+    }
+    emit({ type: "close", reason: "completed", talkEvent: { type: "session.closed", seq: 13 } });
+    await expect(finishing).resolves.toBe(text);
+    expect(session.cleanupSource(text)).toMatchObject({ revision: 1, isFinal: true });
+  });
+
   it("rejects sequenced replay across Stop while preserving repeated words from distinct events", async () => {
     const { session, emit, onTranscriptChange } = await fixture();
     emit({ type: "partial", text: "preview", talkEvent: { seq: 4 } });

@@ -2,6 +2,7 @@ import { roleScopesAllow } from "../../../../src/shared/operator-scope-compat.js
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { patchSettings } from "../../app/settings.ts";
 import { focusComposerInput, selectComposerInput } from "../../lib/composer-input.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { adjustTextareaHeight } from "./components/chat-composer-dom.ts";
 import { ComposerDictationOwner } from "./composer-dictation.ts";
 import { ComposerMicrophoneOwner } from "./composer-microphone-picker.ts";
