@@ -5,6 +5,7 @@ import { Definition, Field, text } from "./model.js";
 import { Receipt } from "./mutation-contract.js";
 import { PageBudget } from "./page-budget.js";
 import { RememberResult } from "./remember-contract.js";
+import { SearchOutput } from "./retrieval-contract.js";
 import { StoreState } from "./stores-contract.js";
 import { PageRow, Ref, Row } from "./tool-rows.js";
 
@@ -172,6 +173,7 @@ export const LeanHit = Type.Object(
 export type LeanHit = Static<typeof LeanHit>;
 export const LeanSearchOutput = Type.Object(
   {
+    matchStrategy: SearchOutput.properties.matchStrategy,
     hits: Type.Array(LeanHit, { maxItems: 50 }),
     resultCount: Type.Integer(),
     total: Type.Union([Type.Integer(), Type.Null()]),

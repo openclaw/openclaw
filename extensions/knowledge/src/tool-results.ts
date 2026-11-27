@@ -301,6 +301,7 @@ function leanHit(hit: FullHit, withSnippet: boolean): LeanHit {
 }
 
 const leanSearch = (o: SearchOutput): Static<typeof LeanSearchOutput> => ({
+  ...(o.matchStrategy ? { matchStrategy: o.matchStrategy } : {}),
   hits: o.hits.map((h) => leanHit(h, true)),
   resultCount: o.resultCount,
   total: o.total,

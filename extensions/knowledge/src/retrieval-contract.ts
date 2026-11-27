@@ -89,6 +89,9 @@ export const SearchOutput = Type.Object(
   {
     ...common,
     mode: Type.Literal("keyword"),
+    matchStrategy: Type.Optional(
+      Type.Union([Type.Literal("question-terms"), Type.Literal("word-forms")]),
+    ),
     queryMode: Type.Union([Type.Literal("all"), Type.Literal("any"), Type.Literal("phrase")]),
     total: Type.Union([Type.Integer(), Type.Null()]),
     index: Type.Object({
