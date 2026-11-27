@@ -1353,7 +1353,7 @@ extension OpenClawChatComposer {
 
     /// A third of a text line above the draft, so the first line does not sit on the border.
     var draftTopInset: CGFloat {
-        CleanChatComposerMetrics.editorBlockInset + self.scaledBodyLineHeight * OpenClawChatTypography.scale / 3
+        CleanChatComposerMetrics.editorBlockInset + self.scaledBodyLineHeight * OpenClawChatTypography.scaled(17) / 51
     }
 
     var textMinHeight: CGFloat {
