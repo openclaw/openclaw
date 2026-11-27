@@ -90,7 +90,7 @@ describe("Codex native input target scope", () => {
 async function coldChild(modelSource?: ReturnType<typeof createNativeModelSourceFixture>) {
   const { client, monitor, runtime } = createMonitorFixture();
   const custody = createNativeSubagentCompletionCustodyFixture();
-  runtime.captureAgentHarnessCompletionCustody.mockResolvedValue(custody.root);
+  runtime.captureAgentHarnessCompletionCustody.mockResolvedValueOnce(custody.root);
   const parent = await monitor.registerParent(parentRegistration({ modelSource }));
   parent.bindTurn("parent-turn");
   onTestFinished(async () => {
@@ -109,17 +109,17 @@ async function coldChild(modelSource?: ReturnType<typeof createNativeModelSource
     items: [agentMessage("answer-1", "First result", "final_answer")],
   };
   client.setThreadTurns(target, { data: [first], nextCursor: null });
-  const prepare = (returnsSubmissionId = true) =>
+  const prepare = (returnsSubmissionId = true, turnId = "parent-turn", itemId = "input") =>
     monitor.prepareModelInput({
       threadId: "parent-thread",
-      turnId: "parent-turn",
-      itemId: "input",
+      turnId,
+      itemId,
       target,
       returnsSubmissionId,
       readQualification: () => undefined,
       assertCurrent: () => {},
     });
-  return { parent, client, runtime, metadata, first, prepare, custody };
+  return { parent, client, monitor, runtime, metadata, first, prepare, custody };
 }
 
 it.each(["First result", "Second result"])(
@@ -156,6 +156,109 @@ it.each(["First result", "Second result"])(
         result: "Second result",
       }),
     );
+  },
+);
+
+it.each(["matching", "different", "history-only completion", "rejected send"] as const)(
+  "recovers a reused worker from a paged summary with %s",
+  async (scenario) => {
+    const { client, monitor, parent, runtime, metadata, first, prepare } = await coldChild();
+    const registerParentTurn = async (turnId: string) => {
+      const { root } = createNativeSubagentCompletionCustodyFixture();
+      runtime.captureAgentHarnessCompletionCustody.mockResolvedValueOnce(root);
+      const registration = await monitor.registerParent(
+        parentRegistration({ modelSource: undefined }),
+      );
+      onTestFinished(() => registration.unregister());
+      registration.bindTurn(turnId);
+      return registration;
+    };
+    const second = {
+      ...first,
+      id: "second",
+      completedAt: 200,
+      items: [agentMessage("answer-2", "Second result", "final_answer")],
+    };
+
+    await prepare();
+    if (scenario === "history-only completion") {
+      metadata.thread.turns = [first, second];
+    }
+    await client.sendInputOutput({ callId: "input", submissionId: "second" });
+    if (scenario !== "history-only completion") {
+      await client.startTurn("second", { threadId: target });
+      await client.completeTurn({
+        threadId: target,
+        turnId: "second",
+        status: "completed",
+        items: second.items,
+      });
+    }
+    await parent.unregister();
+    expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        announceId: `codex-native:parent-thread:codex-thread:${target}:turn:second:succeeded`,
+        result: "Second result",
+      }),
+    );
+    runtime.deliverAgentHarnessCompletion.mockClear();
+
+    client.setThreadTurns(target, {
+      data: [scenario === "different" ? { ...second, id: "unobserved" } : second],
+      nextCursor: "older",
+    });
+    if (scenario === "rejected send") {
+      const rejected = await registerParentTurn("rejected-parent-turn");
+      await prepare(true, "rejected-parent-turn", "rejected-input");
+      await client.notify({
+        method: "rawResponseItem/completed",
+        params: {
+          threadId: "parent-thread",
+          turnId: "rejected-parent-turn",
+          item: {
+            type: "function_call_output",
+            call_id: "rejected-input",
+            output: "Native input rejected",
+          },
+        },
+      });
+      await rejected.unregister();
+    }
+
+    client.request.mockClear();
+    const resumed = await registerParentTurn("resumed-parent-turn");
+    await prepare(true, "resumed-parent-turn", "resumed-input");
+    expect(client.request).toHaveBeenCalledWith(
+      "thread/turns/list",
+      { threadId: target, limit: 1, sortDirection: "desc", itemsView: "summary" },
+      expect.anything(),
+    );
+    await client.sendInputOutput({
+      callId: "resumed-input",
+      submissionId: "third",
+      turnId: "resumed-parent-turn",
+    });
+    await client.startTurn("third", { threadId: target });
+    const numberedRun = `codex-thread:${target}:turn:third`;
+    expect(resumed.listPendingChildren().some((child) => child.runId === numberedRun)).toBe(
+      scenario !== "different",
+    );
+    if (scenario !== "different") {
+      await client.completeTurn({
+        threadId: target,
+        turnId: "third",
+        status: "completed",
+        items: [agentMessage("answer-3", "Third result", "final_answer")],
+      });
+      await resumed.unregister();
+      expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          announceId: `codex-native:parent-thread:${numberedRun}:succeeded`,
+          completionCustody: expect.anything(),
+          result: "Third result",
+        }),
+      );
+    }
   },
 );
 

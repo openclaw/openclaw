@@ -82,12 +82,19 @@ function isCodexCanonicalAgentPath(path: string): boolean {
   return /^\/root(?:\/[a-z0-9_]+)*$/.test(path);
 }
 
+const MAX_RETIRED_SETTLED_TURNS = 256;
+
 /**
  * Task names outlive a parent registration: a later turn may address the same native child
- * by its path, or need its ID named back. Keyed by native parent thread, then agent path.
+ * by its path, or need its ID named back. Keep a bounded set of settled turn IDs
+ * for reusing those children after the parent registration is pruned.
  */
 export class RetiredNativeChildPaths {
   private readonly byParent = new Map<string, Map<string, string>>();
+  private readonly settledTurns = new Map<
+    string,
+    { nativeParentThreadId: string; nativeTurnId: string }
+  >();
 
   /** `liveAliases` is the monitor's registration-scoped agent-path index. */
   constructor(private readonly liveAliases: Map<string, string>) {}
@@ -104,6 +111,36 @@ export class RetiredNativeChildPaths {
       }
       paths.set(path, threadId);
     }
+    // History recovery can settle a turn without a live completion notification.
+    // Remember its identity only. The next send must verify success in native history.
+    const { nativeTurnId, terminal, unanchored } = known.assignment;
+    this.settledTurns.delete(threadId);
+    if (
+      terminal &&
+      !unanchored &&
+      nativeTurnId &&
+      registrationThreadId === known.nativeParentThreadId &&
+      nativeTurnId === known.turnId &&
+      known.pendingTurns.length === 0
+    ) {
+      this.settledTurns.set(threadId, {
+        nativeParentThreadId: registrationThreadId,
+        nativeTurnId,
+      });
+      if (this.settledTurns.size > MAX_RETIRED_SETTLED_TURNS) {
+        const oldest = this.settledTurns.keys().next();
+        if (!oldest.done) {
+          this.settledTurns.delete(oldest.value);
+        }
+      }
+    }
+  }
+
+  settledTurnId(nativeParentThreadId: string, threadId: string): string | undefined {
+    const settled = this.settledTurns.get(threadId);
+    return settled?.nativeParentThreadId === nativeParentThreadId
+      ? settled.nativeTurnId
+      : undefined;
   }
 
   /** The child that held a canonical path under this native parent before its registration ended. */
@@ -450,8 +487,8 @@ export async function prepareNativeModelToolInput(
       !thread.forkedFromId &&
       (thread.status?.type === "idle" || thread.status?.type === "notLoaded")
     ) {
-      // After a restart the initial assignment may already be acknowledged.
-      // Its sole terminal turn and final message disambiguate late native receipts.
+      // A sole terminal turn can anchor cold recovery. With older turns present,
+      // require the last terminal assignment known to this monitor.
       const assertReceiverCurrent = () => {
         assertCurrent();
         configurationQualification?.assertCurrent();
@@ -471,11 +508,13 @@ export async function prepareNativeModelToolInput(
         { signal, timeoutMs: 3_000, assertCurrent: assertReceiverCurrent },
       );
       assertReceiverCurrent();
-      const turn = page.data.length === 1 && page.nextCursor == null ? page.data[0] : undefined;
+      const turn = page.data.length === 1 ? page.data[0] : undefined;
       const completedAt = turn?.completedAt ?? 0;
       if (
         turn?.id.trim() &&
         (turn.threadId === undefined || turn.threadId === thread.id) &&
+        (page.nextCursor == null ||
+          dependencies.retiredChildren.settledTurnId(request.threadId, thread.id) === turn.id) &&
         turn.status === "completed" &&
         turn.error == null &&
         readString(turn, "itemsView") === "summary" &&
