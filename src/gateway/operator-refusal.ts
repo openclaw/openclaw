@@ -76,24 +76,12 @@ export function operatorRefusalText(cause: OperatorRefusalCause, action = "start
   return `I did not ${action}. ${why} ${nextStep}`;
 }
 
-// Labels for the Stop of work whose starter lost access; each names that person's next step.
-const accessLossStops = {
-  "access-removed": "Ask the owner for access.",
-  "access-reduced": "Send a new message to continue with your new access.",
-} as const;
-
-export type AccessLossStopReason = keyof typeof accessLossStops;
-
-/** The notice on a run stopped because the person who started it lost access. */
-export function accessLossStopText(stopReason: string | undefined): string | undefined {
-  return stopReason !== undefined && Object.hasOwn(accessLossStops, stopReason)
-    ? `Stopped: your access to this session changed. ${accessLossStops[stopReason as AccessLossStopReason]}`
-    : undefined;
-}
-
-/** The session's timeline line for runs stopped because their starter lost access. */
-export function accessLossOwnerText(runs: number, name: string): string {
-  return `Stopped ${runs} ${runs === 1 ? "run" : "runs"} started by ${name}.`;
+/**
+ * The session's timeline line for runs stopped because their starter lost access. Every viewer
+ * of the session sees it, so it names the person instead of addressing them.
+ */
+export function accessLossStopText(runs: number, name: string): string {
+  return `Stopped ${runs} ${runs === 1 ? "run" : "runs"} started by ${name}: their access to this session changed.`;
 }
 
 /** A definite refusal of operator work. Its message is the sentence the person sees. */

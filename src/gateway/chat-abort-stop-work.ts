@@ -9,7 +9,7 @@ import {
 import { getResidentUserProfileDisplay } from "../state/user-profile-list.js";
 import { waitForChatAbortTerminalPersistence } from "./chat-abort-lifecycle-internal.js";
 import { createChatAbortOps } from "./chat-abort-ops.js";
-import { accessLossOwnerText, type AccessLossStopReason } from "./operator-refusal.js";
+import { accessLossStopText } from "./operator-refusal.js";
 import { stopExactClientRun } from "./server-methods/chat-abort-exact-run.js";
 import {
   captureAbortedPartial,
@@ -21,6 +21,9 @@ import { injectGatewayAssistantMessage } from "./server-methods/chat-inject.js";
 import { persistAbortedPartials } from "./server-methods/chat-transcript-persistence.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { captureGatewayScopeMatcher } from "./session-runtime-scope.js";
+
+/** Stop labels on the aborted run; its partial output shows as interrupted. */
+type AccessLossStopReason = "access-removed" | "access-reduced";
 
 /**
  * Stops the work one person started, because a permission writer removed or lowered that
@@ -80,7 +83,7 @@ export async function stopWorkStartedBy(
     const notice = await injectGatewayAssistantMessage(context, {
       sessionKey: stoppedKey,
       agentId,
-      message: accessLossOwnerText(count, name),
+      message: accessLossStopText(count, name),
       literal: true,
     });
     if (!notice.ok) {
@@ -108,10 +111,6 @@ async function stopRun(
     runId,
     active,
     stopReason,
-    lifecycleRevision:
-      session.ok && session.value.entry?.sessionId === sessionId
-        ? session.value.entry.lifecycleRevision
-        : undefined,
     hookContext: {},
     stoppedSession: { agentId, sessionKey },
     onAbortPrepared: () => {

@@ -1,9 +1,9 @@
+import { isDeepStrictEqual } from "node:util";
 import {
   ErrorCodes,
   type UsersListParams,
   type UsersSetRoleParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
 import { prepareUserProfileRoleAuthority } from "../../state/user-channel-identity-operations.js";
@@ -32,20 +32,26 @@ import {
   resolveUserRoleAssignmentError,
 } from "./users-profile-access.js";
 
-const SESSION_ACCESS = ["none", "invited", "view", "suggest", "write"];
-
 /**
- * A role write loses access when the new role drops an operator scope, an agent or session
- * access the old role had. A role that cannot be resolved is not comparable, so it counts as
- * a loss. Other role limits (tools, sandbox, projects) apply to the next request only.
+ * A role write loses access unless the new effective role keeps every operator scope, agent and
+ * session permission of the old one. Session permissions compare only when equal or when the new
+ * role writes every session; any other difference counts as a loss, as does a role that cannot
+ * be resolved. Other role limits (tools, sandbox, projects) apply to the next request only.
  */
-function roleChangeLosesAccess(cfg: OpenClawConfig, change: UserProfileRoleChange): boolean {
-  const roles = cfg.gateway?.roles;
-  const definition = (role: string | null): GatewayOperatorRoleDefinition | undefined => {
-    const name = role ?? roles?.default;
-    return name && roles && Object.hasOwn(roles.definitions, name)
-      ? roles.definitions[name]
-      : undefined;
+function roleChangeLosesAccess(
+  cfg: OpenClawConfig,
+  change: UserProfileRoleChange,
+  identity: { githubLogin?: string | null; openclawIdAccountIds?: readonly string[] } | undefined,
+): boolean {
+  const definition = (role: string | null) => {
+    const { effectiveRole } = resolveOperatorRoleSelection(
+      change.profileId,
+      role,
+      cfg,
+      identity?.githubLogin ?? null,
+      operatorRoleSubject({ ...identity, profileId: change.profileId }),
+    );
+    return effectiveRole ? cfg.gateway?.roles?.definitions[effectiveRole] : undefined;
   };
   const before = definition(change.previousRole);
   const after = definition(change.role);
@@ -60,7 +66,7 @@ function roleChangeLosesAccess(cfg: OpenClawConfig, change: UserProfileRoleChang
     }) ||
     (after.agents !== "*" &&
       (before.agents === "*" || before.agents.some((agent) => !after.agents.includes(agent)))) ||
-    SESSION_ACCESS.indexOf(after.sessions.others) < SESSION_ACCESS.indexOf(before.sessions.others)
+    (after.sessions.others !== "write" && !isDeepStrictEqual(before.sessions, after.sessions))
   );
 }
 
@@ -104,7 +110,7 @@ export async function handleUsersSetRole(
     },
     onRoleChanged: (change) => {
       recorded = recordRoleAssignmentChange(change, options.client, context.logGateway);
-      if (roleChangeLosesAccess(context.getRuntimeConfig(), change)) {
+      if (roleChangeLosesAccess(context.getRuntimeConfig(), change, target)) {
         lostAccess = change.profileId;
       }
     },

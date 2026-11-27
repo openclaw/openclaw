@@ -66,7 +66,8 @@ export const ADMISSION_FILES = new Map([
   ["src/gateway/server-methods/users-model-account-access.ts", 2],
   ["src/gateway/server-methods/users-personal-file.ts", 2],
   ["src/gateway/server-methods/users-profile-access.ts", 2],
-  ["src/gateway/server-methods/users-role.ts", 2],
+  // The role writer compares the old and new effective role to decide an access loss.
+  ["src/gateway/server-methods/users-role.ts", 3],
   ["src/gateway/server/ws-connection/authenticated-request-dispatch.ts", 2],
   ["src/gateway/server/ws-connection/connect-hello.ts", 4],
   ["src/gateway/server/ws-connection/connect-openclaw-id-member-grant.ts", 2],

@@ -244,7 +244,8 @@ Remove a person from session members to revoke invitation access. Work that pers
 started in the session stops at once: a running reply keeps its partial text, and its
 child agents and commands end. Lowering their access (for example from send to read)
 stops it the same way, and lowering a person's role with `users.setRole` stops their
-work in every session. The session shows "Stopped 1 run started by Carol." Their
+work in every session. The session shows "Stopped 1 run started by Carol: their access
+to this session changed." Their
 next message is checked against the new access. Configuration reloads and role
 definition edits apply to the next message only. An old message retry cannot restore
 access, even after a restart. A new selected mention from the

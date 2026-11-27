@@ -4,7 +4,7 @@ import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-ss
 import { withInvitedGuestGateway } from "./guest-session-access.test-support.js";
 
 type Fixture = Parameters<Parameters<typeof withInvitedGuestGateway>[1]>[0];
-type ChatEvent = { runId?: string; state?: string; stopReason?: string; errorMessage?: string };
+type ChatEvent = { runId?: string; state?: string; stopReason?: string };
 
 const HELD = /hold-[a-z-]+/;
 
@@ -132,7 +132,6 @@ it("stops only the removed person's runs in that session, keeps partial output a
 
       expect(aborted(fixture, "hold-carol-removed")).toMatchObject({
         stopReason: "access-removed",
-        errorMessage: "Stopped: your access to this session changed. Ask the owner for access.",
         message: { content: [{ type: "text", text: "partial hold-carol-removed" }] },
       });
       const history = await fixture.sender.request<{ messages: unknown[] }>(
@@ -142,7 +141,9 @@ it("stops only the removed person's runs in that session, keeps partial output a
       );
       const transcript = JSON.stringify(history.messages);
       expect(transcript).toContain("partial hold-carol-removed");
-      expect(transcript).toContain("Stopped 1 run started by Carol.");
+      expect(transcript).toContain(
+        "Stopped 1 run started by Carol: their access to this session changed.",
+      );
 
       expect(aborted(fixture, "hold-carol-kept")).toBeUndefined();
       expect(aborted(fixture, "hold-owner")).toBeUndefined();
