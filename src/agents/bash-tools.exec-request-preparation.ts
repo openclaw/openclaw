@@ -456,11 +456,13 @@ export function resolvePreparedExecEnvironment(params: {
   };
   const routingEnv = buildExecRoutingEnv(executionContext);
   const explicitEnv: Record<string, string> | undefined =
-    params.scratchEnv !== undefined ||
-    params.execParams.env !== undefined ||
-    params.pluginEnv !== undefined
-      ? { ...params.scratchEnv, ...params.execParams.env, ...params.pluginEnv }
+    params.execParams.env !== undefined || params.pluginEnv !== undefined
+      ? { ...params.execParams.env, ...params.pluginEnv }
       : undefined;
+  // Runtime scratch defaults must not change approval bindings; explicit overrides still do.
+  const executionOverrides = params.scratchEnv
+    ? { ...params.scratchEnv, ...explicitEnv }
+    : explicitEnv;
   const storeEnvResult = params.storeEnv
     ? sanitizeHostExecEnvWithDiagnostics({
         baseEnv: {},
@@ -495,23 +497,24 @@ export function resolvePreparedExecEnvironment(params: {
     );
   }
   const hasStoreEnv = storeEnv && Object.keys(storeEnv).length > 0;
-  const untrustedRequestedEnv: Record<string, string> | undefined = hasStoreEnv
-    ? { ...storeEnv, ...explicitEnv }
-    : explicitEnv;
-  const requestedEnv: Record<string, string> | undefined = params.storeSecretEnv
-    ? { ...storeEnv, ...params.storeSecretEnv, ...explicitEnv }
-    : untrustedRequestedEnv;
+  const untrustedExecutionEnv: Record<string, string> | undefined = hasStoreEnv
+    ? { ...storeEnv, ...executionOverrides }
+    : executionOverrides;
+  const requestedEnv: Record<string, string> | undefined =
+    hasStoreEnv || params.storeSecretEnv || explicitEnv
+      ? { ...storeEnv, ...params.storeSecretEnv, ...explicitEnv }
+      : undefined;
   const hostEnvResult =
     params.host === "sandbox"
       ? null
       : sanitizeHostExecEnvWithDiagnostics({
           baseEnv: inheritedBaseEnv,
-          overrides: untrustedRequestedEnv,
+          overrides: untrustedExecutionEnv,
           blockPathOverrides: true,
         });
   if (
     hostEnvResult &&
-    untrustedRequestedEnv &&
+    untrustedExecutionEnv &&
     (hostEnvResult.rejectedOverrideBlockedKeys.length > 0 ||
       hostEnvResult.rejectedOverrideInvalidKeys.length > 0)
   ) {
@@ -548,7 +551,7 @@ export function resolvePreparedExecEnvironment(params: {
     params.sandbox && params.host === "sandbox"
       ? buildSandboxEnv({
           defaultPath: DEFAULT_PATH,
-          paramsEnv: untrustedRequestedEnv,
+          paramsEnv: untrustedExecutionEnv,
           sandboxEnv: params.sandbox.env,
           containerWorkdir: params.sandbox.containerWorkdir,
         })
@@ -587,7 +590,7 @@ export function resolvePreparedExecEnvironment(params: {
     // Secret-kind entries are authenticated ciphertext, not active credentials.
     // Inject them after ordinary env filtering so names such as GH_TOKEN remain usable.
     for (const [key, value] of Object.entries(params.storeSecretEnv)) {
-      if (!explicitEnv || !Object.hasOwn(explicitEnv, key)) {
+      if (!executionOverrides || !Object.hasOwn(executionOverrides, key)) {
         env[key] = value;
       }
     }

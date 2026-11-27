@@ -50,6 +50,7 @@ import { resetProcessRegistryForTests } from "./bash-process-registry.test-suppo
 import * as cronGrant from "./bash-tools.exec-cron-grant.js";
 import { runExecFixture } from "./bash-tools.exec-fixture.test-support.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
+import { createExecTool } from "./bash-tools.exec-run.js";
 import { captureSecurityEvents } from "./test-helpers/security-events.js";
 
 const commitExecAuthorizationMock = vi.hoisted(() =>
@@ -387,6 +388,28 @@ it("executes a cron occurrence via a standing grant without prompting", async ()
   await expect(runNativeCron(result)).rejects.toThrow("exec denied by final preflight");
   expect(readNativeEffects()).toBe("cron-native-launch");
   expect(JSON.stringify(security.events)).toContain("standing-grant");
+  expect(await readGrantUseCounts()).toEqual([1]);
+});
+
+it("uses a pre-scratch standing grant through the exec tool without prompting", async () => {
+  await prepareCronRun();
+  const tool = createExecTool({
+    agentId: "main",
+    runId: "cron-run-1",
+    cwd: workdir,
+    host: "gateway",
+    security: "allowlist",
+    ask: "on-miss",
+    notifyOnExit: false,
+  });
+  const result = await tool.execute(
+    "cron-scratch",
+    { command: grantCommand, awaitResults: true },
+    controller.signal,
+  );
+  expect(callGatewayToolMock).not.toHaveBeenCalled();
+  expect(result.details).toMatchObject({ status: "completed", exitCode: 0 });
+  expect(readNativeEffects()).toBe("cron-native-launch");
   expect(await readGrantUseCounts()).toEqual([1]);
 });
 
