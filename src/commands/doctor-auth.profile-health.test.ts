@@ -39,7 +39,12 @@ vi.mock("../agents/auth-profiles/doctor.js", () => ({
   formatAuthDoctorHint: vi.fn(async () => "Re-authenticate this profile."),
 }));
 
-import { collectAuthProfileHealthFindings, inspectAuthProfileHealth } from "./doctor-auth.js";
+import {
+  checkAuthProfileRefreshPending,
+  collectAuthProfileHealthFindings,
+  collectCopilotAmbientTokenFindings,
+  inspectAuthProfileHealth,
+} from "./doctor-auth.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -339,6 +344,34 @@ describe("inspectAuthProfileHealth", () => {
         fixHint: "Paste the API key value, not an OpenClaw onboarding command.",
       }),
     ]);
+  });
+
+  it("has work only for an OAuth refresh or the unclaimed ambient-token notice", async () => {
+    const cfg = configForAgents("main");
+    const pending = (env: NodeJS.ProcessEnv = {}, inspectProfiles = true) =>
+      checkAuthProfileRefreshPending({ cfg, env, inspectProfiles });
+    useLocalStore(expiredStore("openai-codex:default", now - 60_000));
+    await expect(pending()).resolves.toBe("work");
+    // The check reads the store as lint does and never refreshes.
+    expect(authProfileMocks.resolveApiKeyForProfile).not.toHaveBeenCalled();
+    expect(authProfileMocks.loadAuthProfileStoreForRuntimeAsync).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ readOnly: true, allowKeychainPrompt: false }),
+    );
+    // Doctor skips the profile inspection when auth migration left the stores unready.
+    await expect(pending({}, false)).resolves.toBe("none");
+
+    useLocalStore(
+      createAuthProfileStoreFixture({
+        "openai:key": createApiKeyCredential("openai", "synthetic-key"),
+      }),
+    );
+    await expect(pending()).resolves.toBe("none");
+
+    const env = { OPENCLAW_STATE_DIR: tempDir, GH_TOKEN: "synthetic-ambient-token" };
+    await expect(pending(env)).resolves.toBe("work");
+    expect(await collectCopilotAmbientTokenFindings(cfg, env)).toHaveLength(1);
+    await expect(pending(env)).resolves.toBe("none");
   });
 
   it.each([

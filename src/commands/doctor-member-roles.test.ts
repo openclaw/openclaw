@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createDoctorHealthFlowContext,
   createDoctorPrompterFixture,
+  decideDoctorContributionPending,
 } from "../flows/doctor-health-context.test-support.js";
 import { runWriteConfigHealth } from "../flows/doctor-health-contribution-runners.config.js";
 import { resolveInitialDoctorHealthContributions } from "../flows/doctor-health-contributions-initial.js";
@@ -70,7 +71,6 @@ function contribution() {
     runGatewayConfigHealth: noop,
     runAuthProfileMigration: noop,
     runAuthProfileHealth: noop,
-    runGatewayAuthHealth: noop,
     runLegacyStateHealth: noop,
   }).find(({ id }) => id === "doctor:sandbox");
   expect(
@@ -386,6 +386,7 @@ for (const accepted of [false, true]) {
         .filter(({ requirement }) => requirement === "missing-preset")
         .map(({ target }) => target),
     ).toEqual(["admin", "guest", "viewer"]);
+    await expect(decideDoctorContributionPending(check, ctx)).resolves.toBe("work");
     await check.run(ctx);
     expect(ctx.prompter.confirmAutoFix).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -398,6 +399,8 @@ for (const accepted of [false, true]) {
       expect(await fs.readFile(state.configPath, "utf8")).toBe(original);
       return;
     }
+    // The engine is unavailable here, so the presets were the only work.
+    await expect(decideDoctorContributionPending(check, ctx)).resolves.toBe("none");
     expect(await runWriteConfigHealth(ctx, { runPostWriteRepairs: false })).toBe(true);
     const saved = JSON.parse(await fs.readFile(state.configPath, "utf8")) as OpenClawConfig;
     expect(saved.gateway?.roles).toEqual({
@@ -441,6 +444,7 @@ for (const accepted of [false, true]) {
         message: expect.stringContaining("Access page stays off"),
       }),
     ]);
+    await expect(decideDoctorContributionPending(check, ctx)).resolves.toBe("work");
     await check.run(ctx);
     expect(ctx.prompter.confirmAutoFix).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -452,6 +456,7 @@ for (const accepted of [false, true]) {
       expect(ctx.cfg).toBe(config);
       expect(await fs.readFile(state.configPath, "utf8")).toBe(original);
     } else {
+      await expect(decideDoctorContributionPending(check, ctx)).resolves.toBe("none");
       expect(await runWriteConfigHealth(ctx, { runPostWriteRepairs: false })).toBe(true);
       const saved = JSON.parse(await fs.readFile(state.configPath, "utf8"));
       expect(saved.plugins).toEqual({ allow: ["browser", "openclaw-id-access"] });
@@ -475,6 +480,7 @@ for (const policy of [
       env: state.env,
       prompter: createDoctorPrompterFixture(true),
     });
+    await expect(decideDoctorContributionPending(contribution(), ctx)).resolves.toBe("none");
     await contribution().run(ctx);
     // The suite never reaches the host's real image check or build.
     expect(maybeRepairSandboxImages).toHaveBeenCalled();

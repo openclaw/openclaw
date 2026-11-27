@@ -112,6 +112,47 @@ export async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext):
   });
 }
 
+function sessionTranscriptRepairInputs(ctx: DoctorHealthFlowContext) {
+  return {
+    cfg: ctx.cfg,
+    env: ctx.env ?? process.env,
+    shouldRepair: ctx.prompter.shouldRepair,
+    integrityCheck: ctx.options.fullIntegrityCheck ? ("full" as const) : ("quick" as const),
+  };
+}
+
+export async function checkSessionTranscriptHeadersContributionPending(
+  ctx: DoctorHealthFlowContext,
+): Promise<DoctorMaintenancePending> {
+  const { checkSessionTranscriptHeaderRepairPending } =
+    await import("../commands/doctor-session-transcript-headers.js");
+  return checkSessionTranscriptHeaderRepairPending(sessionTranscriptRepairInputs(ctx));
+}
+
+export async function runSessionTranscriptHeadersHealth(
+  ctx: DoctorHealthFlowContext,
+): Promise<void> {
+  const { noteSessionTranscriptHeaderHealth } =
+    await import("../commands/doctor-session-transcript-headers.js");
+  await noteSessionTranscriptHeaderHealth(sessionTranscriptRepairInputs(ctx));
+}
+
+export async function checkSessionTranscriptLabelsContributionPending(
+  ctx: DoctorHealthFlowContext,
+): Promise<DoctorMaintenancePending> {
+  const { checkSessionTranscriptLabelRepairPending } =
+    await import("../commands/doctor-session-transcript-labels.js");
+  return checkSessionTranscriptLabelRepairPending(sessionTranscriptRepairInputs(ctx));
+}
+
+export async function runSessionTranscriptLabelsHealth(
+  ctx: DoctorHealthFlowContext,
+): Promise<void> {
+  const { noteSessionTranscriptLabelHealth } =
+    await import("../commands/doctor-session-transcript-labels.js");
+  await noteSessionTranscriptLabelHealth(sessionTranscriptRepairInputs(ctx));
+}
+
 export async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairLegacyCronStore, noteLegacyWhatsAppCrontabHealthCheck } =
     await import("../commands/doctor/cron/index.js");
