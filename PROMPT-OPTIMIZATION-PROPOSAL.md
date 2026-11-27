@@ -4,6 +4,8 @@ Related: https://github.com/openclaw/openclaw/issues/206424
 
 ## The problem
 
+Our work focuses on optimizing OpenClaw for long-running, multi-user Discord conversations, particularly agents running local models with a 32k context window. Discord is our test environment, not a limit on the wider applicability of the architectural improvements. The measurements and performance targets below are specific to our conversational workload.
+
 OpenClaw spends model context on its own bookkeeping. Historical runtime-context snapshots accumulate even when a fresh snapshot already supplies the relevant information, and each snapshot contains redundant operational metadata. The two costs compound. Separate durable conversation and stable instructions from volatile per-turn information instead of making the model repeatedly process both.
 
 ## Two complementary solutions, demonstrated in live traffic
