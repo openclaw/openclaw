@@ -1305,8 +1305,11 @@ final class NodeAppModel {
         let enabled = UserDefaults.standard.bool(forKey: "voiceWake.enabled")
         self.voiceWake.setEnabled(enabled)
         self.talkMode.attachGateway(self.operatorGateway)
-        let talkEnabled = UserDefaults.standard.bool(forKey: "talk.enabled")
-        self.setTalkEnabled(talkEnabled)
+        // Talk is a state of this run, never restored: a fresh launch starts with it off and does
+        // not ask for the microphone. Explicit requests still start it (Start Live Voice, the
+        // Watch, the Gateway's talk.mode). Earlier builds kept the last state under this key;
+        // drop it so nothing reads a stale value.
+        UserDefaults.standard.removeObject(forKey: "talk.enabled")
         self.locationService.setAuthorizationChangeHandler { [weak self] snapshot in
             guard let self else { return }
             self.locationAuthorizationSnapshot = snapshot
@@ -1555,18 +1558,15 @@ final class NodeAppModel {
 
     func setTalkEnabled(_ enabled: Bool) {
         if self.isAppleReviewDemoModeEnabled {
-            UserDefaults.standard.set(false, forKey: "talk.enabled")
             self.talkMode.setEnabled(false)
             self.talkMode.statusText = "Demo mode only"
             return
         }
         if enabled, self.auxiliaryAudioCapture != nil {
-            UserDefaults.standard.set(false, forKey: "talk.enabled")
             self.talkMode.setEnabled(false)
             self.talkMode.statusText = "Finish the active audio capture first"
             return
         }
-        UserDefaults.standard.set(enabled, forKey: "talk.enabled")
         if enabled {
             if self.voiceNoteRecorder.isRecording || self.voiceNoteRecorder.isRequestingPermission {
                 self.voiceNoteRecorder.cancel()
@@ -5209,7 +5209,6 @@ extension NodeAppModel {
             remoteAddress: AppleReviewDemoMode.gatewayAddress)))
         self.connectedGatewayID = AppleReviewDemoMode.gatewayID
         self.activeGatewayConnectConfig = nil
-        UserDefaults.standard.set(false, forKey: "talk.enabled")
         UserDefaults.standard.set(false, forKey: "talk.background.enabled")
         self.talkMode.updateGatewayConnected(false)
         self.talkMode.setEnabled(false)
