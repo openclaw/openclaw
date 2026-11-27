@@ -314,6 +314,16 @@ export async function mutateSubagentRunForKill(
       if (!isCurrent()) {
         return;
       }
+      // The mutation may have queued behind a reset; never capture its replacement's work.
+      try {
+        params.session.assertCurrent();
+      } catch (error) {
+        if (!isSessionDeliveryGenerationRevokedError(error)) {
+          throw error;
+        }
+        preparationResult = { killed: false, superseded: true };
+        return;
+      }
       const captured = captureSubagentKillSources({
         target,
         entry: initial,
