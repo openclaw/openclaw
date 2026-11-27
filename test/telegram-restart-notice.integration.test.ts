@@ -3,6 +3,7 @@ import { loadTelegramDispatchHttpFixture } from "../extensions/telegram/test-api
 import { createAgentRunRestartAbortError } from "../src/agents/run-termination.js";
 import { replaceSessionEntrySync } from "../src/config/sessions/session-accessor.sqlite-entry.js";
 import { readSessionTranscriptStartAsync } from "../src/config/sessions/session-transcript-watermark.js";
+import { prepareGatewayRunShutdown } from "../src/gateway/server-run-shutdown.js";
 import { persistRunningSessionsForRestart } from "../src/gateway/session-restart-resume.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../src/infra/agent-run-registry.js";
 import { readLatestAssistantTextByIdentity } from "../src/plugin-sdk/session-transcript-runtime.js";
@@ -52,6 +53,7 @@ it.each([
       suppressFailureFallback: true,
       telegramCfg: saved === "silent before final" ? { errorPolicy: "silent" } : undefined,
       producer: async ({ cfg, replyOptions, dispatcher }) => {
+        const beforeFinal = saved === "before final" || saved === "silent before final";
         await replyOptions?.onPreparedAgentRunStart?.({ runId, transcriptStart });
         if (mode === "progress") {
           await http.emitToolStart(replyOptions, {
@@ -62,17 +64,41 @@ it.each([
           await http.waitForBotApiCall((call) => call.method === "sendMessage");
         }
         if (saved !== "nothing") {
-          const claim = claimAgentRunContext(savedRun, target, {
-            trackOwner: true,
-            ownsContext: true,
-          });
+          const claim = claimAgentRunContext(
+            savedRun,
+            {
+              ...target,
+              onRestartResumeSaved: beforeFinal ? replyOptions?.onRestartResumeSaved : undefined,
+            },
+            {
+              trackOwner: true,
+              ownsContext: true,
+            },
+          );
           try {
-            await persistRunningSessionsForRestart({ cfg });
+            if (beforeFinal) {
+              const shutdown = await prepareGatewayRunShutdown({
+                resolveGatewayContext: () => undefined,
+                warnings: [],
+                persistRunningSessionsForRestart: (signal, collectNotice) =>
+                  persistRunningSessionsForRestart({ cfg, signal, collectNotice }),
+                // Once the old channel is retired even a perfectly worded late send cannot land.
+                cancelReceivedWork: () => {
+                  http.respondToCall = () => ({
+                    error_code: 400,
+                    description: "test transport closed",
+                  });
+                },
+              });
+              await shutdown.released;
+            } else {
+              await persistRunningSessionsForRestart({ cfg });
+            }
           } finally {
             releaseAgentRunContext(savedRun, claim);
           }
         }
-        if (saved === "before final" || saved === "silent before final") {
+        if (beforeFinal) {
           throw createAgentRunRestartAbortError();
         }
         // A shutdown can interrupt the producer while a rejected final settles.

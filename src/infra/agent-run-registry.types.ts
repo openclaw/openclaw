@@ -1,4 +1,5 @@
 import type { AutomationResult } from "../../packages/gateway-protocol/src/schema/cron-automation-result.js";
+import type { RestartResumeNotice } from "../auto-reply/get-reply-options.types.js";
 import type { VerboseLevel } from "../auto-reply/thinking.shared.js";
 import type {
   AgentRunApprovalLeases,
@@ -14,6 +15,7 @@ export type { AutomationResult } from "../../packages/gateway-protocol/src/schem
 
 /** Per-run metadata used to stamp events and gate Control UI visibility. */
 export type AgentRunContext = {
+  onRestartResumeSaved?: RestartResumeNotice;
   /** Trusted refusal fact consumed only by this run's existing terminal mutation. */
   providerReviewTerminal?: import("../sessions/provider-review-terminal.js").ProviderReviewTerminalFact;
   /** Queued reply delivery, rather than runtime execution, owns chat completion. */

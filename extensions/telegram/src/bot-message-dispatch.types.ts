@@ -173,6 +173,7 @@ export type TelegramDispatchTurn = TelegramDispatchTurnConfig &
   TelegramProgressStateSlice &
   TelegramDeliveryStateSlice &
   TelegramReplyStateSlice & {
+    onRestartResumeSaved: (signal?: AbortSignal) => Promise<void>;
     finalDispatchClaimed: boolean;
     finalDeliveryError?: unknown;
     agentRunFailed?: boolean;

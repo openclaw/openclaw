@@ -151,7 +151,7 @@ export function createProgressState(
   };
 }
 
-export async function settleFailedFinalDelivery(
+export async function settleTelegramReplyNotice(
   turn: Turn,
   resumesAfterRestart: boolean,
 ): Promise<void> {
@@ -160,7 +160,7 @@ export async function settleFailedFinalDelivery(
     turn.previewLifecycle.finalSucceeded ||
     turn.finalHandoff !== undefined ||
     turn.context.ctxPayload.InboundEventKind === "room_event" ||
-    !turn.previewLifecycle.finalFailed
+    (!resumesAfterRestart && !turn.previewLifecycle.finalFailed)
   ) {
     return;
   }

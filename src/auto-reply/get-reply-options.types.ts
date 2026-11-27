@@ -68,6 +68,9 @@ export type PreparedAgentRunStart = {
   transcriptStart: PreparedReplyTranscriptStart | null;
 };
 
+/** Best-effort notice after this run's restart marker commits, before its transport closes. */
+export type RestartResumeNotice = (signal: AbortSignal) => Promise<void>;
+
 export type BlockReplyContext = {
   abortSignal?: AbortSignal;
   timeoutMs?: number;
@@ -223,6 +226,7 @@ export type GetReplyOptions = {
   media?: MediaFact[];
   /** Return "reply-dispatch" synchronously to accept the offered completion ownership. */
   onPreparedAgentRunStart?: (start: PreparedAgentRunStart) => unknown;
+  onRestartResumeSaved?: RestartResumeNotice;
   /**
    * @deprecated Use onPreparedAgentRunStart with a prepared transcript boundary. Supported through 2026-12-31. Removal in the first January 2027 stable release.
    * Notifies when an agent run starts. Return "reply-dispatch" synchronously to accept

@@ -8,6 +8,7 @@ import { readSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.j
 import { captureSessionEntrySourceAssertion } from "./session-entry-source-authority.js";
 import {
   isRestartResumeEntryOutOfScope,
+  restartResumeMarkerMatchesRun,
   selectPendingRestartShellCalls,
   type PendingSessionShellCalls,
 } from "./session-restart-resume-scope.js";
@@ -32,7 +33,7 @@ export async function hasSessionRestartResume(
     entry?.sessionId === target.sessionId &&
     marker !== undefined &&
     !isRestartResumeEntryOutOfScope(entry) &&
-    (marker.sourceRunId === undefined || marker.sourceRunId === runId)
+    restartResumeMarkerMatchesRun(marker, runId)
   );
 }
 

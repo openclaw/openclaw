@@ -226,6 +226,7 @@ function createTelegramDispatchReplyOptions(
 
   return {
     hasRepliedRef,
+    onRestartResumeSaved: turn.onRestartResumeSaved,
     onPreparedAgentRunStart: ({ runId, transcriptStart }) => {
       turn.transcriptMirrorRunId = runId;
       turn.restartResumeTarget = transcriptStart;

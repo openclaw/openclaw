@@ -14,6 +14,7 @@ import {
 } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { createSubsystemLogger, danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { runAuthorizedTelegramRequest } from "./account-throttler.js";
 import { resolveAutoTopicLabelConfig } from "./auto-topic-label-config.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import { resolveDispatchTelegramContext } from "./bot-message-dispatch-context.js";
@@ -23,7 +24,7 @@ import {
   finalizePendingAnswerBlockDraft,
 } from "./bot-message-dispatch-delivery.js";
 import { cleanupDrafts, createDraftState } from "./bot-message-dispatch-draft.js";
-import { createProgressState, settleFailedFinalDelivery } from "./bot-message-dispatch-progress.js";
+import { createProgressState, settleTelegramReplyNotice } from "./bot-message-dispatch-progress.js";
 import { createReplyState, shouldReportTelegramError } from "./bot-message-dispatch-reply.js";
 import {
   createFreshTelegramSessionEntryLoader,
@@ -266,6 +267,7 @@ export const dispatchTelegramMessage = async (
   const draftState = createDraftState(turnConfig);
   const progressState = createProgressState(turnConfig, draftState, () => turn);
   const deliveryState = createDeliveryState({ ...turnConfig, lanes: draftState.lanes }, () => turn);
+  let restartResumeSaved = false;
   const turn: TelegramDispatchTurn = {
     ...turnConfig,
     ...draftState,
@@ -276,6 +278,42 @@ export const dispatchTelegramMessage = async (
     noVisibleReplyFallbackEligible: false,
     suppressSilentReplyFallback: false,
     hadErrorReplyFailureOrSkip: false,
+    onRestartResumeSaved: async (signal) => {
+      if (restartResumeSaved) {
+        return;
+      }
+      restartResumeSaved = true;
+      if (
+        isRoomEvent ||
+        turn.isSuperseded() ||
+        turn.sendPolicyDenied ||
+        turn.suppressSilentReplyFallback ||
+        turn.previewLifecycle.finalSuppressed ||
+        turn.finalHandoff !== undefined
+      ) {
+        return;
+      }
+      const visible =
+        turn.finalDeliveryError != null
+          ? turn.deliveryState.snapshot().failedNonSilent > 0
+          : !turn.finalDispatchClaimed &&
+            !turn.previewLifecycle.finalDelivered &&
+            resolveChannelMessageSourceReplyDeliveryMode({
+              cfg,
+              ctx: dispatchContext.ctxPayload,
+            }) === "automatic" &&
+            shouldReportTelegramError(turn, "restart resume");
+      if (!visible) {
+        return;
+      }
+      turn.progressCompositor.cancel();
+      await turn.draftEventQueue;
+      if (!signal?.aborted) {
+        await runAuthorizedTelegramRequest(signal && (() => signal.throwIfAborted()), () =>
+          settleTelegramReplyNotice(turn, true),
+        );
+      }
+    },
   };
 
   let shouldLabelDmTopic = false;
@@ -363,33 +401,24 @@ export const dispatchTelegramMessage = async (
   }
 
   const deliveryError = turn.dispatchError ?? turn.finalDeliveryError;
-  const resumesAfterRestart =
-    deliveryError != null &&
-    (await hasReplyRestartResume(
-      deliveryError,
-      turn.restartResumeTarget,
-      turn.transcriptMirrorRunId,
-    ));
-
-  let deliverySummary = turn.deliveryState.snapshot();
-  // A restart can interrupt the producer before it offers Telegram a final to deliver.
-  const interruptedBeforeFinal =
-    resumesAfterRestart &&
-    turn.finalDeliveryError == null &&
-    !isRoomEvent &&
-    !turn.suppressSilentReplyFallback &&
-    !turn.finalDispatchClaimed &&
-    resolveChannelMessageSourceReplyDeliveryMode({ cfg, ctx: dispatchContext.ctxPayload }) ===
-      "automatic" &&
-    shouldReportTelegramError(turn, deliveryError);
-  if (!turn.sendPolicyDenied && (deliverySummary.failedNonSilent > 0 || interruptedBeforeFinal)) {
-    await settleFailedFinalDelivery(turn, resumesAfterRestart);
-    deliverySummary = turn.deliveryState.snapshot();
-  }
-  if (resumesAfterRestart) {
+  if (
+    restartResumeSaved ||
+    (deliveryError != null &&
+      (await hasReplyRestartResume(
+        deliveryError,
+        turn.restartResumeTarget,
+        turn.transcriptMirrorRunId,
+      )))
+  ) {
     // Recovery owns the answer even if Telegram couldn't display the status notice.
+    await turn.onRestartResumeSaved();
     finalizeStatusInBackground("cancelled", "restart resume");
     return { kind: "completed" };
+  }
+  let deliverySummary = turn.deliveryState.snapshot();
+  if (!turn.sendPolicyDenied && deliverySummary.failedNonSilent > 0) {
+    await settleTelegramReplyNotice(turn, false);
+    deliverySummary = turn.deliveryState.snapshot();
   }
   let sentFallback = false;
   const terminalFailure = turn.dispatchError || turn.agentRunFailed;
