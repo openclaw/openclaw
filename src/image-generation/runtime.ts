@@ -17,10 +17,22 @@ import {
 } from "../media-generation/runtime-shared.js";
 import { createCapabilityProviderLookup } from "../plugins/provider-registry-shared.js";
 import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
+import type { ImageGenerationProvider } from "./provider-types.js";
 import type { GenerateImageParams, GenerateImageRuntimeResult } from "./runtime-types.js";
 import type { ImageGenerationIgnoredOverride, ImageGenerationResult } from "./types.js";
 
 const log = createSubsystemLogger("image-generation");
+
+export function resolveImageGenerationModelCapabilities(
+  provider: ImageGenerationProvider,
+  model?: string,
+) {
+  const overrides = provider.capabilitiesByModel;
+  return (
+    (model && overrides && Object.hasOwn(overrides, model) ? overrides[model] : undefined) ??
+    provider.capabilities
+  );
+}
 
 /** Dependency seam used by image-generation runtime tests and plugin host callers. */
 type ImageGenerationRuntimeDeps = {
@@ -82,11 +94,7 @@ async function runImageGeneration(
     prepareCandidate(candidate, provider) {
       const inputImageCount = params.inputImages?.length ?? 0;
       const model = candidate.model.trim();
-      const modelCapabilities = provider.capabilitiesByModel;
-      const capabilities =
-        (modelCapabilities && Object.hasOwn(modelCapabilities, model)
-          ? modelCapabilities[model]
-          : undefined) ?? provider.capabilities;
+      const capabilities = resolveImageGenerationModelCapabilities(provider, model);
       let prefixLimit: number | undefined;
       let prefixLength = -1;
       if (model) {
