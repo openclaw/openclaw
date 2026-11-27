@@ -6,7 +6,7 @@ import { defaultRuntime, ExitError, restoreRuntimeTerminalState } from "../runti
 import { waitForPendingCliDisposers } from "./runtime-cleanup.js";
 import { waitForCliSignalExit } from "./signal-exit-barrier.js";
 
-let requestedExitCode: number | "process" | undefined;
+let requestedExitCode: number | "process" | "reported-failure" | undefined;
 let settledExitWatchdog:
   | {
       delayMs: number;
@@ -72,7 +72,9 @@ export async function runCliWithExitFinalization(params: {
       signalExitCode = (await waitForCliSignalExit()) ?? signalExitCode;
       const requestedCode = requestedExitCode;
       requestedExitCode = undefined;
-      if (signalExitCode !== undefined) {
+      if (requestedCode === "reported-failure") {
+        process.exitCode = 1;
+      } else if (signalExitCode !== undefined) {
         process.exitCode = signalExitCode;
       } else if (requestedCode !== undefined) {
         process.exitCode = requestedCode === "process" ? resolveProcessExitCode() : requestedCode;
@@ -113,12 +115,15 @@ export function exitCliAfterOutput(runtime: RuntimeEnv, exitCode: number): never
 
 export function requestExitAfterOneShotOutput(
   runtime: RuntimeEnv = defaultRuntime,
-  exitCode?: number,
+  exitCode?: number | "reported-failure",
 ): boolean {
   if (runtime !== defaultRuntime) {
     return false;
   }
-  requestedExitCode = exitCode ?? "process";
+  // An independently diagnosed failure survives a later cancellation or cleanup exit.
+  if (requestedExitCode !== "reported-failure") {
+    requestedExitCode = exitCode ?? "process";
+  }
   return true;
 }
 

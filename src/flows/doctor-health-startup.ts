@@ -2,7 +2,11 @@ import fs, { writeSync } from "node:fs";
 import { intro as clackIntro, outro as clackOutro } from "@clack/prompts";
 import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
-import { exitCliAfterOutput, watchCliExitAfterOutput } from "../cli/one-shot-exit.js";
+import {
+  exitCliAfterOutput,
+  requestExitAfterOneShotOutput,
+  watchCliExitAfterOutput,
+} from "../cli/one-shot-exit.js";
 import { getPendingCliDisposers } from "../cli/runtime-cleanup.js";
 import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import type { DoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
@@ -224,16 +228,17 @@ export async function prepareDoctorInteractiveMaintenance(params: {
 
 export function showDoctorRepairRefusal(
   ctx: DoctorHealthFlowContext,
+  runtime: RuntimeEnv,
 ): UpdatePostInstallDoctorResult | undefined {
+  if (!ctx.configWriteRefusal && ctx.postInstallDoctorResult?.status !== "error") {
+    return undefined;
+  }
+  requestExitAfterOneShotOutput(runtime, "reported-failure");
+  showDoctorHealthSummary(ctx);
   if (!ctx.configWriteRefusal) {
-    if (ctx.postInstallDoctorResult?.status !== "error") {
-      return undefined;
-    }
-    showDoctorHealthSummary(ctx);
     showDoctorOutro("Doctor blocked; required repairs remain incomplete.");
     return ctx.postInstallDoctorResult;
   }
-  showDoctorHealthSummary(ctx);
   showDoctorOutro(
     ctx.configResultWriteCommitted === true
       ? "Doctor finished, but some config fixes were not applied."
