@@ -1,7 +1,6 @@
 /** Retains cancellation selection, session facts, and exact dispatch ownership. */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isDeepStrictEqual } from "node:util";
-import { isSessionDeliveryGenerationRevokedError } from "../../../config/sessions/session-delivery-generation.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   getAgentEventLifecycleGeneration,
@@ -49,9 +48,9 @@ import { compareSubagentRunGeneration, isSameSubagentRunOwner } from "./subagent
 
 type KillBinding = {
   entry: SubagentRunRecord;
-  isCurrent: (entry: SubagentRunRecord, requirePreparedSession?: boolean) => boolean;
+  isCurrent: (entry: SubagentRunRecord) => boolean;
   ownsRun: () => boolean;
-  canTraverse: (requirePreparedSession?: boolean) => boolean;
+  canTraverse: () => boolean;
   prepareRead: SubagentKillSession["prepareRead"];
 };
 
@@ -77,6 +76,12 @@ export type KillSelection = {
 };
 
 type PendingKillTree = { tree: KillTree; prepare: () => Promise<void> };
+
+function hasClaimedKill(entry: SubagentRunRecord | undefined): boolean {
+  return (
+    entry?.killIntent !== undefined || entry?.killReconciliation?.taskCancellationAccepted === true
+  );
+}
 
 export async function withSubagentKillScope<T>(
   params: KillSelection,
@@ -146,7 +151,7 @@ export async function withSubagentKillScope<T>(
           (!controller ||
             !ensureSubagentControllerOwnsRun({ cfg: params.cfg, controller, entry: snapshot })) &&
           ownsRoot?.(snapshot) !== false &&
-          parent?.canTraverse(false) !== false
+          parent?.canTraverse() !== false
         ) {
           unresolvedRunIds.add(snapshot.runId);
           trees.push({
@@ -176,13 +181,13 @@ export async function withSubagentKillScope<T>(
       ) {
         continue;
       }
-      const ownerCurrent = (candidate: SubagentRunRecord, requirePreparedSession = true) =>
+      const ownerCurrent = (candidate: SubagentRunRecord) =>
         isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) &&
-        parent?.canTraverse(requirePreparedSession) !== false &&
+        parent?.canTraverse() !== false &&
         ownsRoot?.(candidate) !== false &&
         (!controller ||
           !ensureSubagentControllerOwnsRun({ cfg: params.cfg, controller, entry: candidate }));
-      if (!ownerCurrent(entry, false) || (!exact && !isCurrentSubagentRun(entry, params.cfg))) {
+      if (!ownerCurrent(entry) || (!exact && !isCurrentSubagentRun(entry, params.cfg))) {
         continue;
       }
       selectedForChild.add(selectedOwner);
@@ -190,20 +195,6 @@ export async function withSubagentKillScope<T>(
       selectedCount += 1;
       const errors = new Set<string>();
       let session: SubagentKillSession | undefined;
-      const ownsSessionIncarnation = () => {
-        if (!session) {
-          return false;
-        }
-        try {
-          session.assertCurrent();
-          return true;
-        } catch (error) {
-          if (isSessionDeliveryGenerationRevokedError(error)) {
-            return false;
-          }
-          throw error;
-        }
-      };
       const { childSessionKey } = entry;
       const latest = () => getLatestOwnedSubagentRun(childSessionKey, childOwner, params.cfg);
       const retirement = subagentRuns.captureRetirement(entry, (candidate) =>
@@ -222,35 +213,34 @@ export async function withSubagentKillScope<T>(
             observed.state === "retired")
         );
       };
-      const isCurrent = (candidate: SubagentRunRecord, requirePreparedSession = true) => {
+      const isCurrent = (candidate: SubagentRunRecord) => {
         const current = getCurrentSubagentRunOwner(subagentRuns, entry);
         return (
           current !== undefined &&
           isSameSubagentRunOwner(candidate, entry) &&
           isSameSubagentRunOwner(current, entry) &&
           ownsRun() &&
-          ownerCurrent(current, requirePreparedSession) &&
-          (exact || isCurrentSubagentRun(current, params.cfg)) &&
-          (!requirePreparedSession || ownsSessionIncarnation())
+          ownerCurrent(current) &&
+          (exact || isCurrentSubagentRun(current, params.cfg))
         );
       };
-      const canTraverse = (requirePreparedSession = true) => {
+      const canTraverse = () => {
         const current = selectedEntry();
-        if (!current || !ownerCurrent(current, requirePreparedSession) || !ownsRun()) {
+        if (!current || !ownerCurrent(current) || !ownsRun()) {
           return false;
         }
         const replacement = latest();
         return (
-          (exact ||
-            isSameSubagentRunOwner(replacement, current) ||
-            (retirement.observation.state === "retired" &&
-              (!replacement || compareSubagentRunGeneration(replacement, current) < 0))) &&
-          (!requirePreparedSession || ownsSessionIncarnation())
+          exact ||
+          isSameSubagentRunOwner(replacement, current) ||
+          (retirement.observation.state === "retired" &&
+            (!replacement || compareSubagentRunGeneration(replacement, current) < 0))
         );
       };
       const prepareRead = () =>
-        prepareSubagentKillSessionReads([parent?.prepareRead, session?.prepareRead], () =>
-          assertSubagentRegistryWriteSourceCurrent(stateContext),
+        prepareSubagentKillSessionReads(
+          [parent?.prepareRead, hasClaimedKill(selectedEntry()) ? undefined : session?.prepareRead],
+          () => assertSubagentRegistryWriteSourceCurrent(stateContext),
         );
       const tree: KillTree = {
         get entry() {
@@ -283,7 +273,7 @@ export async function withSubagentKillScope<T>(
               selectedRun,
             );
             releaseSessions.push(session.release);
-            if (!tree.canTraverse(false)) {
+            if (!tree.canTraverse()) {
               return;
             }
             tree.session = session;
@@ -615,7 +605,7 @@ export async function withSubagentKillScope<T>(
       };
       assertQueuedPublicationCurrent();
       await persistSubagentSessionTiming(tree.entry, {
-        session,
+        session: { ...session, assertCurrent: assertQueuedPublicationCurrent },
         isCurrentGeneration: isCurrent,
         assertCommitAllowed: assertQueuedPublicationCurrent,
         settledQueuedCancellation: {
