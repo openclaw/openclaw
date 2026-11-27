@@ -141,14 +141,16 @@ export function createSessionRowProjectionTranscriptUpdates(params: {
               }
             : undefined;
         // Pure appends preserve the transcript generation; destructive rewrites rotate it
-        // and must fence recall reads that captured the old sharing revision. The watermark
-        // is only certified for rows carrying an activity summary, so a row without one
-        // classifies a clear by its content: it held messages and the postimage now reports
-        // an empty transcript. Unknown or absent receipts cannot be proven appends and keep
-        // conservative invalidation.
+        // and must fence recall reads that captured the old sharing revision. The mutation
+        // owner certifies a destructive rewrite on the postimage itself, so classification
+        // does not depend on the row carrying an activity-summary watermark. The watermark
+        // comparison and the content-based clear fallback keep covering publications whose
+        // owners do not certify the rewrite. Unknown or absent receipts cannot be proven
+        // appends and keep conservative invalidation.
         const previousGeneration = facts?.activitySummaryWatermark?.generation;
         const fenceRecall =
           postimage === undefined ||
+          postimage.destructiveRewrite === true ||
           (previousGeneration !== undefined
             ? previousGeneration !== postimage.generation
             : facts?.transcriptHasMessages === true &&

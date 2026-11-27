@@ -19,6 +19,7 @@ import {
 import { readSessionTranscriptIndexStatus } from "../../config/sessions/session-transcript-projection-writer.js";
 import * as transcriptSearch from "../../config/sessions/session-transcript-search.js";
 import * as sessionTargets from "../../config/sessions/targets-runtime.js";
+import { timedMessageEvent } from "../../config/sessions/transcript-message.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
@@ -856,10 +857,16 @@ test("recall tolerates transcript-only activity on unrelated rows during its wor
 });
 
 // Activity summaries are optional: existing transcripts without one still hold recall hits, so
-// rewrite fencing must not depend on a certified summary watermark.
-test.each([true, false])(
-  "recall discards hits when a destructive transcript rewrite lands during its worker read (activity summary: %s)",
-  async (withActivitySummary) => {
+// rewrite fencing must not depend on a certified summary watermark — for clears and non-empty
+// replacements alike.
+test.each([
+  { withActivitySummary: true, replacement: "clear" },
+  { withActivitySummary: false, replacement: "clear" },
+  { withActivitySummary: true, replacement: "non-empty" },
+  { withActivitySummary: false, replacement: "non-empty" },
+])(
+  "recall discards hits when a destructive transcript rewrite lands during its worker read (activity summary: $withActivitySummary, replacement: $replacement)",
+  async ({ withActivitySummary, replacement }) => {
     await withSearchState(async () => {
       const owner = ensureProfileForEmail("recall-rewrite@example.test").id;
       const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
@@ -901,7 +908,14 @@ test.each([true, false])(
                   sessionKey: key,
                   sessionId: "main-rewrite-target",
                 }),
-                [],
+                replacement === "clear"
+                  ? []
+                  : [
+                      timedMessageEvent("replacement", null, Date.now(), {
+                        role: "user",
+                        content: "replacement",
+                      }),
+                    ],
               );
             },
             { agentId: "main" },

@@ -20,6 +20,7 @@ export type TranscriptMutationOptions = {
   /** The projection writer supplies sibling CTE postimages, which RETURNING cannot reread. */
   writeWindowMutation?: (update: TranscriptWindowUpdate) => SessionTranscriptAuthority | undefined;
   projectionReady?: boolean;
+  destructiveRewrite?: boolean;
 };
 
 export function projectTranscriptMutationPublication(
