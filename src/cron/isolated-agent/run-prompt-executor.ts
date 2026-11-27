@@ -161,6 +161,7 @@ export function createCronPromptExecutor(
     using inferenceLease = new DisposableStack();
     const inference = await prepareCronRunInference({
       job: params.job,
+      trigger,
       agentId: params.agentId,
       cfg: params.cfgWithAgentDefaults,
       agentDir: params.agentDir,

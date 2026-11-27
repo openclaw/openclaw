@@ -7,9 +7,17 @@ import { resolveEffectiveAgentRuntime } from "./run.runtime.js";
 
 /** Resolves a candidate's runtime override from the job's pinned runtime or its cron session. */
 export function createCronRuntimeOverrideResolver(
-  params: Pick<CronRunExecutionParams, "cfgWithAgentDefaults" | "cronSession" | "job" | "agentId">,
+  params: Pick<
+    CronRunExecutionParams,
+    "cfgWithAgentDefaults" | "cronSession" | "job" | "trigger" | "agentId"
+  >,
 ) {
-  const modelPin = resolveCronModelPin(params.job, params.cfgWithAgentDefaults, params.agentId);
+  const modelPin = resolveCronModelPin(
+    params.job,
+    params.cfgWithAgentDefaults,
+    params.agentId,
+    params.trigger,
+  );
   return (provider: string) =>
     resolveSessionRuntimeOverrideForProvider({
       provider,
@@ -22,10 +30,15 @@ export function createCronRuntimeOverrideResolver(
 export function createCronCandidateExecutionResolver(
   params: Pick<
     CronRunExecutionParams,
-    "cfgWithAgentDefaults" | "agentId" | "runSessionKey" | "cronSession" | "job"
+    "cfgWithAgentDefaults" | "agentId" | "runSessionKey" | "cronSession" | "job" | "trigger"
   >,
 ) {
-  const modelPin = resolveCronModelPin(params.job, params.cfgWithAgentDefaults, params.agentId);
+  const modelPin = resolveCronModelPin(
+    params.job,
+    params.cfgWithAgentDefaults,
+    params.agentId,
+    params.trigger,
+  );
   return (provider: string, model: string, sessionRuntimeOverride: string | undefined) =>
     resolveCronCandidateExecution(
       {

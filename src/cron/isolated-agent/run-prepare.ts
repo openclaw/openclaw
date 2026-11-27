@@ -200,7 +200,9 @@ export async function resolveCronRunPreparation(params: CronRunPreparationParams
       exactRunSession: usesExactRunSession,
       hookExternalContentSource,
       inferenceRuntimePinned: Boolean(
-        input.job.payload.kind === "agentTurn" && input.job.payload.modelRuntime,
+        input.trigger !== "event" &&
+        input.job.payload.kind === "agentTurn" &&
+        input.job.payload.modelRuntime,
       ),
     });
     const sourceEntry = sourceSessionKey ? cronSession.store[sourceSessionKey] : undefined;
@@ -357,7 +359,7 @@ export async function resolveCronRunPreparation(params: CronRunPreparationParams
         persistSessionEntry: persistCronSessionRow,
       });
       // An explicitly pinned runtime replaces the override the cron session copied from its source row.
-      const modelPin = resolveCronModelPin(input.job, cfgWithAgentDefaults, agentId);
+      const modelPin = resolveCronModelPin(input.job, cfgWithAgentDefaults, agentId, input.trigger);
       const runtimeSessionEntryFor = (candidateProvider: string) =>
         resolveCronRuntimeSessionEntry(modelPin, cronSession.sessionEntry, candidateProvider);
       const runtimeSessionEntry = runtimeSessionEntryFor(provider);

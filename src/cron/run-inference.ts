@@ -14,8 +14,11 @@ export function resolveCronModelPin(
   job: Pick<CronStoredJob, "payload" | "runtimeAuthority">,
   cfg: OpenClawConfig,
   agentId: string,
+  trigger?: "cron" | "event",
 ): CronModelPin | undefined {
+  // Event hooks share the runner and use normal session model selection.
   if (
+    trigger === "event" ||
     job.runtimeAuthority ||
     job.payload.kind !== "agentTurn" ||
     !job.payload.model ||
@@ -125,9 +128,10 @@ export async function prepareCronRunInference(params: {
   agentId: string;
   cfg: OpenClawConfig;
   agentDir: string;
+  trigger?: "cron" | "event";
 }): Promise<CronRunInference | undefined> {
   const { job } = params;
-  const binding = resolveCronModelPin(job, params.cfg, params.agentId);
+  const binding = resolveCronModelPin(job, params.cfg, params.agentId, params.trigger);
   if (!binding) {
     return undefined;
   }
