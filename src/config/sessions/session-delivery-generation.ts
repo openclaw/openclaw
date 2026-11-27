@@ -51,7 +51,11 @@ import {
   createSessionGenerationReadBatch,
   type GenerationRead,
 } from "./session-delivery-generation-read-batch.js";
-import type { LeaseFacts, SessionGenerationEntry } from "./session-delivery-generation.types.js";
+import type {
+  LeaseFacts,
+  SessionGenerationEntry,
+  SessionGenerationLease,
+} from "./session-delivery-generation.types.js";
 import { withSessionEntriesFromStoresInWorker } from "./session-entry-read-runtime.js";
 import { captureSessionEntrySourceAssertion } from "./session-entry-source-authority.js";
 import {
@@ -88,21 +92,7 @@ async function prepareSessionGenerationLease(
   input: LeaseFacts,
   onRevoked?: (reason: unknown) => void,
   initialRead: GenerationRead = withSessionEntriesFromStoresInWorker,
-): Promise<{
-  assertCurrent: SessionSourceAssertion;
-  assertNativeTransactionCurrent: SessionSourceAssertion;
-  assertDeliveryCurrent: () => void;
-  readSessionSettings: () => Readonly<SessionGenerationEntry> | undefined;
-  prepareRead: () => Promise<void> | undefined;
-  release: () => void;
-  bindCreation: (
-    operation: SessionEntryCreationOperation,
-    publishBinding?: (
-      binding: Pick<SessionGenerationEntry, "sessionId" | "lifecycleRevision">,
-    ) => void,
-  ) => SessionSourceAssertion;
-  isCreationAdopted: () => boolean;
-}> {
+): Promise<SessionGenerationLease> {
   if (!isLeaseFacts(input)) {
     throw new SessionDeliveryGenerationUnavailableError();
   }
@@ -193,6 +183,16 @@ async function prepareSessionGenerationLease(
       if (isSessionStoreTopologyChange(change)) {
         // Registration changes do not retarget an in-flight delivery. Its selected
         // store, current permissions, and actual closure remain checked below.
+        return;
+      }
+      if (
+        change.scope === "sessions" &&
+        change.factsInvalidated === undefined &&
+        change.runtimeSession === undefined &&
+        retained
+      ) {
+        // Committed writers install entry and membership before this catalog notification;
+        // the next assertion still checks the retained source and current facts.
         return;
       }
       if (typeof change.scope === "object") {
@@ -579,6 +579,27 @@ async function prepareSessionGenerationLease(
       [workerSource ?? assertCurrent],
       checkGenerationCurrent,
     );
+    assertGenerationCurrent.prepareSessionSourceStorageEffect = async () => {
+      const storageSource = source;
+      const assertStorageCurrent = () => {
+        if (!active || (admission && !admission.isCurrent())) {
+          throw diag.unavailable("effect-source");
+        }
+      };
+      try {
+        if (!storageSource) {
+          throw diag.unavailable("effect-source");
+        }
+        assertStorageCurrent();
+        await prepareSessionStoreCandidatesInWorker({
+          validate: { candidates, sources: [storageSource] },
+        });
+        assertStorageCurrent();
+        return { assertCurrent: assertStorageCurrent };
+      } catch (error) {
+        return refuseCurrent(error);
+      }
+    };
     assertGenerationCurrent.prepareSessionSourceEffect = async () => {
       let releaseEffect: PreparedSessionSourceEffect["release"];
       try {

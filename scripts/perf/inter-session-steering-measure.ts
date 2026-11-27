@@ -43,6 +43,7 @@ import { DefaultResourceLoader } from "../../src/agents/sessions/resource-loader
 import { SessionManager } from "../../src/agents/sessions/session-manager.js";
 import { SettingsManager } from "../../src/agents/sessions/settings-manager.js";
 import { createUserTurnTranscriptRecorder } from "../../src/sessions/user-turn-transcript.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -137,7 +138,6 @@ const session = new AgentSession({
   modelRegistry: ModelRegistry.inMemory(auth),
   customTools: agent.state.tools,
   allowedToolNames: values.scenario === "tool-boundary" ? ["hold"] : [],
-  cleanupProviderSessionResourcesOnDispose: false,
 });
 const text = "Synthetic delegated task completed. ".repeat(64);
 const recorder = createUserTurnTranscriptRecorder({
@@ -248,12 +248,7 @@ requestCount = 0;
 globalThis.gc?.();
 const inspector = new Session();
 if (values.mode === "allocation") {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 1024,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 1024);
 }
 const hostLoad = loadavg();
 const cpu = process.threadCpuUsage();

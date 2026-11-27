@@ -210,7 +210,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       `/model openai/gpt-5.5 --runtime codex -s`,
       {
         session: { store: storePath },
-        agents: { defaults: { models: { "openai/gpt-5.5": {} } } },
+        agents: { defaults: { model: "openai/gpt-5.5", models: { "openai/gpt-5.5": {} } } },
       },
       { shouldContinue: true },
     );

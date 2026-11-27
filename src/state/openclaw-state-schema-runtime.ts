@@ -16,6 +16,8 @@ import { withLegacyRepositoryDiskAuthority } from "./openclaw-state-db-schema-v3
 import { withLegacyWorkerRetention } from "./openclaw-state-db-schema-v39-worker-retention.js";
 import { withLegacyStateV40Additions } from "./openclaw-state-db-schema-v40-lazy-additions.js";
 import { withLegacyWorkerProvisionSource } from "./openclaw-state-db-schema-v40-worker-provision-source.js";
+import { withLegacyApprovalProfile } from "./openclaw-state-db-schema-v41-approval-profile.js";
+import { withLegacyWorkerLossRecovery } from "./openclaw-state-db-schema-v42-worker-loss-recovery.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const runtimeSchemaCache = new Map<string, string>();
@@ -73,10 +75,19 @@ export function getOpenClawStateRuntimeSchema(
   return schema;
 }
 
+/** The activity table was added during v42; installed readers hash the exact earlier SQL. */
+export function withLegacyWorkshopActivity(schema: string): string {
+  const activityTable = extractSqliteTableSchema(schema, "skill_workshop_activity");
+  return schema.replace(`${activityTable}\n\n`, "");
+}
+
 /** Keep runtime predecessor admission and generated catalog inputs on the same transform chain. */
 export function getOpenClawStatePredecessorSchema(version: number): string {
   let schema = OPENCLAW_STATE_SCHEMA_SQL;
   for (const [introduced, transform] of [
+    [42, withLegacyWorkshopActivity],
+    [42, withLegacyWorkerLossRecovery],
+    [41, withLegacyApprovalProfile],
     [40, withLegacyWorkerProvisionSource],
     [40, withLegacyStateV40Additions],
     [39, withLegacyWorkerRetention],

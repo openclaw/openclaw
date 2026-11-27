@@ -358,6 +358,44 @@ describe("unit-fast vitest lane", () => {
     });
   });
 
+  it("keeps registry-owning helper consumers exactly once in the isolated fast lane", () => {
+    const files = [
+      "src/agents/embedded-agent-runner/run/agent-hook-context.test.ts",
+      "src/agents/harness/hook-context.test.ts",
+      "src/plugins/memory-provider-runtime.audience.test.ts",
+    ];
+    expect(paths.getUnitFastTestFiles(files)).toEqual(files);
+    expect(paths.getUnitFastIsolatedTestFiles(files)).toEqual(files);
+    expect(paths.getUnitFastTimerTestFiles(files)).toEqual([]);
+    for (const file of files) {
+      expect(unitFastTestFiles.filter((candidate) => candidate === file)).toEqual([file]);
+      expect(unitFastIsolatedTestFiles.filter((candidate) => candidate === file)).toEqual([file]);
+      expect(paths.isUnitFastTestFile(file)).toBe(true);
+      expect(paths.resolveUnitFastTestIncludePattern(file)).toBeNull();
+      expect(paths.resolveUnitFastIsolatedTestIncludePattern(file)).toBe(file);
+    }
+
+    const includeFile = path.join(
+      tempDirs.make("openclaw-registry-owner-includes-"),
+      "include.json",
+    );
+    fs.writeFileSync(includeFile, JSON.stringify(files));
+    for (const [env, argv] of [
+      [{}, cli(...files)],
+      [{ OPENCLAW_VITEST_INCLUDE_FILE: includeFile }, cli()],
+      [{}, cli()],
+    ] as const) {
+      const shared = createUnitFastVitestConfig(env, { argv: [...argv] }).test!;
+      const isolated = createUnitFastIsolatedVitestConfig(env, { argv: [...argv] }).test!;
+      expect(shared.isolate).toBe(false);
+      expect(isolated.isolate).toBe(true);
+      for (const file of files) {
+        expect(shared.include?.filter((candidate) => candidate === file)).toEqual([]);
+        expect(isolated.include?.filter((candidate) => candidate === file)).toEqual([file]);
+      }
+    }
+  });
+
   it("routes fake-timer unit-fast tests through the serial fake-timer lane", () => {
     const fakeTimerFiles = unitFastAnalysis
       .filter((entry) => entry.unitFast && entry.reasons.includes("fake-timers"))

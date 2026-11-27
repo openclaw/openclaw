@@ -1,10 +1,10 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { createCronCreatorAuthorityCapability } from "../../agents/cron-creator-authority-context.js";
-import { getRuntimeConfig } from "../../config/config.js";
 import { normalizeCronAuthenticatedChannelRequester } from "../../cron/tools-allow-provenance.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
-import { isConfiguredCommandOwner } from "../command-auth.js";
 import { getCommandOwnerAuthority } from "../command-owner-authority.js";
+
+const log = createSubsystemLogger("cron");
 
 /** Map fresh native ingress identity, not message text or stored delivery, to a requester. */
 export function resolveReplyCronChannelRequester(
@@ -13,62 +13,72 @@ export function resolveReplyCronChannelRequester(
     channel?: string;
     senderId?: string;
     accountId?: string;
-    replyAccountId?: string;
   },
 ) {
-  if (params.channel !== "discord" && params.channel !== "telegram") {
+  const owner = getCommandOwnerAuthority(context);
+  const principal = owner?.channelPrincipal;
+  if (
+    !principal ||
+    !owner.isCurrent() ||
+    principal.channelId !== params.channel ||
+    principal.accountId !== normalizeAccountId(params.accountId) ||
+    principal.senderId !== params.senderId
+  ) {
     return undefined;
-  }
-  if (params.channel === "telegram") {
-    const owner = getCommandOwnerAuthority(context);
-    const principal = owner?.channelPrincipal;
-    if (
-      !owner?.isCurrent() ||
-      principal?.channelId !== "telegram" ||
-      principal.accountId !== normalizeAccountId(params.accountId) ||
-      principal.senderId !== params.senderId
-    ) {
-      return undefined;
-    }
   }
   return normalizeCronAuthenticatedChannelRequester({
     version: 1,
-    channel: params.channel,
-    accountId: normalizeAccountId(
-      params.channel === "telegram" ? params.accountId : params.replyAccountId,
-    ),
-    senderId: params.senderId,
+    channel: principal.channelId,
+    accountId: principal.accountId,
+    senderId: principal.senderId,
   });
 }
 
-/** Capture the original source once; queued admission may refresh its live owner check. */
+/** Capture the original source once; a queued start checks its admitted owner once more. */
 export function createReplyCronAuthorityFactory(
   context: object,
   params: Parameters<typeof resolveReplyCronChannelRequester>[1] & {
     channel: string;
-    commandSenderId?: string;
   },
 ) {
   const authority = getCommandOwnerAuthority(context);
   const requester = resolveReplyCronChannelRequester(context, params);
-  if (params.channel === "telegram" && !requester) {
+  // A linked owner manages by its profile's grant; an asserted owner has no grant (owner list).
+  const grant = authority?.operatorAuthority?.grant;
+  if (!authority || !requester || (grant && grant.automations !== "manage")) {
     return undefined;
   }
-  const owner = {
+  return (runId: string, isCurrentOwner = () => authority.isCurrent()) =>
+    isCurrentOwner()
+      ? createCronCreatorAuthorityCapability(
+          runId,
+          { kind: "external", channel: params.channel },
+          { source: "channel-owner" },
+          undefined,
+          requester,
+        )
+      : undefined;
+}
+
+/**
+ * A configured owner whose ingress identity the host did not bind keeps caller-scoped
+ * automations. Record why: the tool itself only reports "cron job not found".
+ */
+export function logReplyCronOwnerWithoutAuthority(
+  context: object,
+  params: { channel?: string; accountId?: string },
+): void {
+  const owner = getCommandOwnerAuthority(context);
+  const reason = !owner?.channelPrincipal
+    ? "ingress-identity-unbound"
+    : !owner.isCurrent()
+      ? "owner-revoked"
+      : (owner.operatorAuthority?.grant.automations ?? "manage") !== "manage"
+        ? "grant-without-manage"
+        : "ingress-identity-mismatch";
+  log.info("cron: owner turn without management authority", {
     channel: params.channel,
-    accountId: params.replyAccountId,
-    senderId: normalizeOptionalString(params.commandSenderId),
-  };
-  const isCurrent = () =>
-    authority?.isCurrent() ??
-    (params.channel !== "telegram" && isConfiguredCommandOwner(getRuntimeConfig(), owner));
-  return (runId: string, isCurrentOwner = isCurrent) =>
-    createCronCreatorAuthorityCapability(
-      runId,
-      { kind: "external", channel: params.channel },
-      { source: "channel-owner", isCurrent: isCurrentOwner },
-      undefined,
-      requester,
-      { isCurrent: isCurrentOwner, ...owner },
-    );
+    accountId: normalizeAccountId(params.accountId),
+    reason,
+  });
 }

@@ -1,10 +1,10 @@
 ---
-summary: "The built-in openclaw, user, and chrome profiles and the Control UI Browser panel"
+summary: "The built-in openclaw, user, and chrome profiles, the Control UI Browser panel, and Browser handoff (Take control)"
 title: "Browser profiles"
 read_when:
   - You are choosing between the managed browser and a signed-in Chrome session
   - You need a profile that works with nobody at the computer
-  - You are using the Browser panel in the Control UI
+  - You are using the Browser panel in the Control UI or taking manual control from the agent
 ---
 
 - `openclaw`: managed, isolated browser (no extension required).
@@ -60,31 +60,63 @@ screenshots for node-routed browsers, Chrome MCP existing-session profiles,
 missing Playwright, or stream connection failures. Navigation rules apply to
 the stream: navigating to a blocked address stops it and clears the view.
 
-The panel and the agent can use the same browser at the same time. Click **Take
-control** in the panel toolbar to work in the browser without the agent acting
-at the same time. While you hold control of that profile, browser
-actions from anyone else (the agent's browser tool, the `openclaw browser` CLI,
-other Control UI windows) are not run. The agent's browser tool answers that you
-have taken over the browser, and its turn continues; it can still take snapshots
-and screenshots. An action that had already started may finish. Click **Release
-control** to hand the browser back. Control is also released when the Control UI
-window closes or loses its connection, and after 5 minutes without input from
-you. Take control is available for browsers on the Gateway host, not for
-node-routed browsers.
+## Browser handoff
+
+The Browser panel and the agent can view the same browser at the same time. When
+a workflow hits a step you want to handle yourself, use **Take control** to
+pause agent input on that browser profile without losing the session or closing
+the tab.
+
+### When to use it
+
+- **Sign-ins and 2FA:** Log into an account, complete a passkey or one-time
+  code challenge, or approve an OAuth consent screen.
+- **CAPTCHAs and human checks:** Solve interactive verification steps that the
+  agent should not attempt blindly.
+- **Sensitive forms and payments:** Enter payment details, manage saved
+  passwords, or review a final checkout/submission screen before handing back.
+
+### Taking and releasing control
+
+1. Open the **Browser** panel in the Control UI (from the chat side panel's
+   **+** menu, or by asking your agent to show the browser panel).
+2. Click **Take control** in the panel toolbar.
+3. Complete your sign-in, CAPTCHA, or form step directly in the live browser
+   view.
+4. Click **Release control** when you are ready for the agent to continue.
+
+Control also releases automatically if you close the Control UI window, if the
+connection drops, if the browser runtime stops, or after **5 minutes without
+input** from you. **Take control** is available for browsers running on the
+Gateway host; it is not available for node-routed browsers.
+
+### What happens while you have control
+
+- **Agent actions pause cleanly:** While your Control UI connection holds
+  control of that browser, browser input from anyone else (the agent's browser
+  tool, the `openclaw browser` CLI, and other Control UI windows) is refused at
+  the route boundary. The agent's browser tool reports that browser input is
+  paused while you have control, and its turn continues instead of crashing.
+- **In-flight actions and observation continue:** An input action that had
+  already started may finish. Read-only observation (such as snapshots,
+  screenshots, and PDFs) stays available so the agent can still see the page
+  state when you ask it to resume.
+- **Other browsers stay unaffected:** Control is scoped to the browser behind
+  that profile; other separate browser profiles are unaffected.
 
 ### Chrome settings and passwords
 
 You can open `chrome://settings` (for example `chrome://settings/payments`) and
-`chrome://password-manager` from the panel's address bar, to add a payment card
+`chrome://password-manager` from the panel's address bar to add a payment card
 or manage saved passwords yourself. They always open in a new tab, and only
-your authenticated Control UI connection can list, view or use them. The agent's
-browser tool, the `openclaw browser` CLI and other Gateway clients cannot open,
-list, read, capture or interact with these pages, including while you have one
-open. Other `chrome://` pages stay blocked for everyone.
+your authenticated Control UI connection can list, view, or use them. The
+agent's browser tool, the `openclaw browser` CLI, and other Gateway clients
+cannot open, list, read, capture, or interact with these pages, including while
+you have one open. Other `chrome://` pages stay blocked for everyone.
 
 This works for locally managed and CDP-attached Chromium profiles on the Gateway
 host. It is not available for node-routed browsers, Chrome MCP existing-session
-profiles or the browser extension, and a profile that runs Chrome's headless
+profiles, or the browser extension, and a profile that runs Chrome's headless
 shell has no settings pages to open. Chrome may ask for your device password
 before showing a saved password; that prompt appears on the computer running the
 browser, not in the panel.

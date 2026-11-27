@@ -9,15 +9,17 @@ import { waitForNodeWorkerTerminal } from "./node-worker-supervisor.fixture.test
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import {
   TEST_WORKER_ENDPOINT,
+  TEST_WORKER_SOURCE,
   testWorkerLaunchInput,
   writeNodeWorkerFixture,
 } from "./node-worker-supervisor.test-support.js";
 import { NodeWorkerTurnStore } from "./node-worker-turn-store.js";
+import { ensureNodeWorkerWorkspaceSessionRoot } from "./node-worker-workspace-identity.js";
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 
 const tempDirs = useStateDatabaseTempDirs();
 
-function fixture() {
+function fixture(filesystemIsolation = false) {
   const value = writeNodeWorkerFixture(tempDirs.make("device-folder-launch-"));
   const folder = fs.realpathSync.native(value.workspaceDir);
   const allowed = path.dirname(folder);
@@ -26,7 +28,7 @@ function fixture() {
     env: value.env,
     folders: [allowed],
   });
-  const supervisor = createNodeWorkerSupervisor({ ...value, workspace });
+  const supervisor = createNodeWorkerSupervisor({ ...value, workspace, filesystemIsolation });
   const launch = (id: string, prompt = "success") =>
     supervisor.launch(
       { ...testWorkerLaunchInput(folder, id, prompt), sessionKey: "session-1" },
@@ -52,6 +54,8 @@ function fixture() {
   };
   return {
     supervisor,
+    folder,
+    bundleRoot: value.bundleRoot,
     launch,
     retarget,
     afterJournal,
@@ -61,6 +65,43 @@ function fixture() {
 }
 
 describe("device-folder launch fencing", () => {
+  it.runIf(process.platform === "linux")(
+    "runs in an approved folder with its assigned private HOME",
+    async () => {
+      await using context = fixture(true);
+      const id = "device-home";
+      const input = testWorkerLaunchInput(context.folder, id);
+      const worker = path.join(
+        context.bundleRoot,
+        input.gatewayNamespace,
+        "bundles",
+        input.expectedBundleHash,
+        "worker.mjs",
+      );
+      fs.writeFileSync(
+        worker,
+        TEST_WORKER_SOURCE.replace(
+          "const mode = descriptor.assignment.prompt;",
+          'fs.writeFileSync(path.join(process.env.HOME, "home-proof"), descriptor.assignment.turnId); const mode = descriptor.assignment.prompt;',
+        ),
+      );
+      await context.launch(id);
+      expect(await waitForNodeWorkerTerminal(context.supervisor, id)).toMatchObject({
+        state: "completed",
+      });
+      const { environmentId, sessionId, ownerEpoch } = input.descriptor.admission;
+      const sessionRoot = ensureNodeWorkerWorkspaceSessionRoot(
+        context.bundleRoot,
+        input.gatewayNamespace,
+        environmentId,
+        sessionId,
+      );
+      const expectedHome = path.join(sessionRoot, String(ownerEpoch), "model-home");
+      expect(fs.readFileSync(path.join(expectedHome, "home-proof"), "utf8")).toBe(id);
+      expect(fs.existsSync(path.join(context.folder, id + ".started.json"))).toBe(true);
+    },
+  );
+
   it("rejects a folder retargeted while capacity acquisition was waiting", async () => {
     await using context = fixture();
     const acquired = createDeferred();

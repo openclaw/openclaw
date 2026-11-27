@@ -136,7 +136,9 @@ Use the filters together to narrow the inventory before paging:
 - `relationship`: `owned`, `created`, or `involving`, relative to the authenticated requesting user. Ownership is current responsibility; creation is original provenance; involvement means current ownership or retained prompt participation. This is not the agent's owner and does not infer identity from a session label. Without a trusted requesting-user identity, the tool rejects this filter; use an explicit `ownerId` or `creatorId` instead.
 - `ownerId` and `creatorId`: exact resolved actor IDs. Relationship filters narrow visibility; they never grant access.
 - `projectId` and `workspaceDir`: exact persisted project and working-directory associations. Listing does not inspect the filesystem or run Git.
-- `group` and `pinned`: exact sidebar group and pin state. An empty group selects ungrouped sessions.
+- `group`: exact sidebar group; an empty group selects ungrouped sessions.
+- `pinned`: whether a visible session is pinned in the signed-in requester’s **Pinned** section. `true` returns pins in their sidebar order; `false` excludes them. Rail-only shortcuts are independent. Pin filters and `sessions` pin/unpin patches require a verified requester. In an unsigned embedded run, an ordinary list omits the `pinned` field (unknown, not unpinned). Both pin filters are unavailable: run the same query from your signed-in Gateway chat. Historical shared flags do not stand in for your sidebar. Send `pinned` separately from shared settings, including archive or restore.
+- `hasBoard`: saved dashboard presence, without reading or returning dashboard content. `true` means persisted tabs exist, even without widgets; `false` means no persisted tabs. A saved dashboard face preference alone is not a dashboard. An omitted result is unknown, not proof of absence. The filter uses the same authorized Gateway inventory and runs before pagination.
 - `activeOnly`: current direct queued/running work on Gateway-backed inventories; it is unavailable in embedded mode without a live Gateway projection. `activeMinutes` is recency, not liveness. `excludeSubagents` omits subagent runs and ungrouped spawned sessions. Visible spawned conversations assigned to a custom group remain eligible under the normal visibility and archive filters.
 - `kinds`, `label`, `agentId`, and `search`: the existing classification, exact label/agent, and metadata-text filters. Kinds are `main`, `group`, `cron`, `hook`, `node`, and `other`.
 - `archived`: false or omitted selects unarchived sessions; true selects archived sessions; `"all"` includes both.
@@ -148,6 +150,8 @@ Pages are a live view, not a frozen snapshot. Concurrent updates, pinning, reass
 Transcript-derived fields are opt-in: `includeDerivedTitles`, `includeLastMessage`, or `messageLimit` (at most 20 messages per selected row). Metadata-only calls do not read transcripts or start sessions. Previews are hydrated only after session visibility filtering. If a row becomes inaccessible or its session is replaced while enrichment is in progress, it is omitted from the completed inventory. If the first enriched row cannot fit the result budget, the call returns metadata without inline messages or transcript-derived previews and sets `enrichmentOmitted: true`; use `sessions_history` for the full conversation. A metadata row that still exceeds 64 KiB fails explicitly rather than silently losing identity or associations.
 
 Use the returned `sessionId` as `expectedSessionId` when the `sessions` tool archives, restores, or deletes a session, so a stale key cannot target a replacement. Delivery routing, detailed runtime settings, cost estimates, and transcript paths remain omitted. Restricted inventories include `visibility` metadata explaining the effective session-tool scope.
+
+For conservative cleanup, combine explicit `hasBoard: false` with `updatedAt`, pin/archive state, visible parent/child links, and current run status. Confirm the session actually completed the associated work through permitted history/search and verify any PR is merged at its source; a title or PR mention alone is not proof. Preserve running or queued sessions, active descendants, pending inputs, and ambiguous work. Inventory rows and `activeOnly` are observations, not atomic archival preconditions: refresh candidates and active work immediately before archiving with the listed `sessionId` as `expectedSessionId`. This metadata does not grant archival permission or change existing session access checks.
 
 `sessions_history` fetches the conversation transcript for a specific session. By default, tool results are excluded; pass `includeTools: true` to see them. Use `limit` for the newest bounded tail. Pass `offset: 0` when you need pagination metadata, then pass returned `nextOffset` values to page backward through older OpenClaw transcript windows without reading raw transcript files. When an eligible bound external CLI transcript contributes messages, history returns a merged snapshot instead of a numeric offset page—even with an explicit `offset`. The Gateway treats these as terminal snapshots (`hasMore: false`); oversized snapshots remain byte-bounded, so terminal does not imply complete. Local offset paging applies when no external import survives. Unanchored reads stay the current reset-relative view. An explicit `messageId` that remains in that current view, including a pre-reset row kept after reset, keeps current-view behavior. An explicit `messageId` for a retained active-path row outside the current view opens that original closed interval and does not mix later post-reset turns; a missing or off-path `messageId` returns empty history rather than the newest messages.
 
@@ -185,7 +189,7 @@ The returned view is intentionally bounded:
 
 - text, including tool results and credentials, is returned without secret masking
 - thinking signatures, reasoning replay payloads, and inline image data are omitted
-- long text blocks are truncated to 4000 characters, with a truncation marker appended
+- long text blocks are truncated to 4000 characters, with a truncation marker appended; stripped `usage`, `cost`, and `details` metadata does not set `truncated` or `contentTruncated`
 - returned messages are capped at 80 KB; older rows can be dropped or an oversized row replaced with `[sessions_history omitted: message too large]`
 - the tool reports summary flags such as `truncated`, `droppedMessages`, `contentTruncated`, `contentRedacted`, `bytes`, and pagination metadata
 
@@ -243,6 +247,16 @@ reject the batch before mutation. To archive an eligible current session, use a 
 its archive is deferred until the run finishes, while a batch reports that
 current-session target as failed and continues with the others.
 
+To snooze an eligible session, pass `snoozedUntil` as a future Unix timestamp in
+milliseconds, or `null` to wake it early. When an agent snoozes its own session,
+its final reply stays in the transcript. A newer user message accepted after the
+request cancels the pending snooze, even if it steers the same run or is queued.
+If the write returns an error, OpenClaw checks the snooze time once without
+retrying. A matching time or newer user choice needs no notice. Otherwise,
+the original chat says whether the time isn’t set or couldn’t be confirmed.
+When the deadline passes, the session returns to the Active sidebar; the deadline
+does not start an agent run.
+
 Use `sessions_create` for independent sessions. For deliberately supervised child work, use `sessions_spawn` with `visible: true`. Pass `group` to place that child in a sidebar group atomically; omit `group` or pass an empty string to leave it ungrouped. The spawn path enforces the parent's tool policy, sandbox, concurrency limits, and run timeout.
 
 If startup or registration fails, cleanup removes only the child created by that spawn. A session reset or replaced meanwhile is preserved. When cleanup cannot be confirmed, the error includes the child session key for inspection before retrying.
@@ -284,6 +298,8 @@ work retain their delivery and completion obligations. Use Stop to cancel runnin
 Supply the message body in the required `message` argument. Hidden aliases such as `SendMessage`, `content`, and `text` are not accepted.
 
 `sessions_send` runs another session on the same Gateway and optionally waits for the response. Its `sessionKey`, `label`, or `agentId` selects local model context, not an external destination. A peer's reply reaches the requester once, either inline or as a later inter-session input. Continue the conversation with another `sessions_send`. To post to a channel, use `message` with an explicit channel and target.
+
+A supervised child's `sessions_send` to the parent that receives its final result never starts a parent turn and returns no reply. If the parent is running, the message joins that run; otherwise it is recorded in the parent's history, hidden from the chat, and the parent reads it on its next turn. The child's final result still wakes the parent when the child finishes. `mode: "notify"` keeps its own behavior, and sessions made with `sessions_create` are not supervised, so their sends to their creator start a turn as before.
 
 Waiting and delayed inter-session replies recover the accepted run's full answer
 instead of returning its 4,096-character lifecycle preview. If the full answer is
@@ -400,8 +416,13 @@ Retained tasks created without store provenance keep ordinary default messaging
 and their existing explicit resume and cancellation controls. Newly registered
 tasks record their store and can use automatic continuation.
 
-`timeoutSeconds` limits the sending tool's wait, not the receiver's execution
-budget. For nonblocking coordination, use `sessions_send` with `timeoutSeconds: 0`.
+`timeoutSeconds` limits only the reply wait after acceptance, not the receiver's
+execution budget. The default reply wait is 30 seconds; `timeoutSeconds: 0` skips it.
+A separate fixed 30-second admission ceiling covers target lookup, preparation and
+admission for every send. The sending tool declares
+an upper deadline of its start time plus the admission ceiling plus the reply wait
+to the turn watchdog. An admission timeout can follow accepted input; inspect the
+target before retrying.
 When that wait expires, eligible pending reply delivery continues observing the accepted
 run until it finishes; a wait interval does not discard a late reply. Nested
 inter-session replies use the same completion observation.
@@ -422,15 +443,11 @@ An inline reply has `delivery.status: "skipped"` and starts no additional reques
 Neither field is a target-completion receipt.
 Separately admitted turns wait for the active reply and delivery to finish. They keep their order behind other agent commands; cancellation or the
 receiver's execution deadline can withdraw a waiting turn before it runs.
-Sends accepted by an active turn wait for transcript persistence before acknowledging. The existing two-minute steering
-deadline is independent of `timeoutSeconds`, which controls reply waiting. A
-deadline without confirmed persistence returns an error; it never acknowledges
-volatile input or replays input that might already have been consumed.
-A persisted steer is part of the target's history; acknowledgment does not mean
-that the model has finished processing it. A backend without durable steering
-support uses a queued turn with startup delivery recovery instead, reported as
-`targetDisposition: "queued"`. Successful steering produces no separate
-completion turn. `mode: "followup"` always starts a separately admitted turn with its own reply;
+A send accepted by an active turn returns `targetDisposition: "steered"` as soon as
+that run accepts it. From then on the receiving run owns the message: it commits it at
+its next steering boundary, or withdraws it if the run is cancelled, fails, or the
+Gateway restarts before that boundary. Acknowledgment does not mean the model has
+processed the message. Successful steering produces no separate completion turn. `mode: "followup"` always starts a separately admitted turn with its own reply;
 it waits behind active work instead of joining that execution.
 
 If a retry with the same request ID finds that the original admission is still pending, the

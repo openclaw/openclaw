@@ -29,6 +29,7 @@ export type NormalizedPluginsConfig = {
     {
       enabled?: boolean;
       allowMetrics?: boolean;
+      memoryBackend?: boolean;
       hooks?: SchemaContract<NonNullable<PluginEntryConfig["hooks"]>>;
       subagent?: SchemaContract<NonNullable<PluginEntryConfig["subagent"]>> & {
         hasAllowedModelsConfig?: boolean;
@@ -164,6 +165,10 @@ function normalizePluginEntries(
         typeof entry.allowMetrics === "boolean"
           ? entry.allowMetrics
           : normalized[normalizedKey]?.allowMetrics,
+      memoryBackend:
+        typeof entry.memoryBackend === "boolean"
+          ? entry.memoryBackend
+          : normalized[normalizedKey]?.memoryBackend,
       hooks: normalizePluginHooks(entry.hooks) ?? normalized[normalizedKey]?.hooks,
       subagent:
         normalizePluginModelConfig(entry.subagent, "subagent") ??

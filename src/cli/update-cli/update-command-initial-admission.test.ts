@@ -46,11 +46,11 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-it.each(["package", "artifact", "git"] as const)(
+it.each(["package", "artifact"] as const)(
   "admits the acquired owner at the real %s preparation boundary through activation and Doctor",
   async (kind) => {
     const params = {
-      ...executionParams(kind === "git" ? "git" : "package"),
+      ...executionParams("package"),
       root,
       shouldRestart: false,
     };
@@ -96,18 +96,6 @@ it.each(["package", "artifact", "git"] as const)(
           activated = true;
           doctor(options.getDoctorContext?.());
           return successfulUpdate;
-        },
-      );
-      mocks.runGitUpdate.mockImplementation(
-        async (
-          options: Parameters<typeof import("./update-command-git.js").updateGitInstall>[0],
-        ) => {
-          await options.inspectGitTarget?.({ schemaVersions: { state: 15, agent: 19 } });
-          await options.validateCandidate?.(root);
-          await options.beforeGitMutation?.({ schemaVersions: { state: 15, agent: 19 } });
-          activated = true;
-          doctor(options.getDoctorContext?.());
-          return { ...successfulUpdate, mode: "git" };
         },
       );
       const result = await executeMutableUpdate(await bindExecutionGuards(params));

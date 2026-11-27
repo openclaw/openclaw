@@ -343,7 +343,7 @@ describe("process panel observation ownership", () => {
     const processReads = () =>
       f.request.mock.calls.filter(([method]) => method === "sessions.processes.list").length;
     const count = processReads();
-    await vi.advanceTimersByTimeAsync(15_000);
+    await vi.advanceTimersByTimeAsync(120_000);
     expect(processReads()).toBe(count);
     expect(f.data.snapshot.hasResult).toBe(false);
     await f.data.stop(previous);

@@ -47,7 +47,6 @@ export function createReplyInputAdmission(params: {
     if (replyOperation.lifecycleGeneration) {
       assertAgentRunLifecycleGenerationCurrent(replyOperation.lifecycleGeneration);
     }
-    followupRun.operatorAuthority?.assertCurrent();
   };
   const bindSource = () => {
     assertCurrent();
@@ -128,16 +127,23 @@ export function createReplyInputAdmission(params: {
           expectedSessionState: buildSessionTranscriptTurnExpectedState(entry),
           // Consuming queued custody must not precede the durable run fact used
           // by restart recovery, even if execution dies before source adoption.
-          sessionLifecyclePatch: derivePersistedSessionLifecyclePatch({
-            entry,
-            currentLifecycleGeneration:
-              replyOperation.lifecycleGeneration ?? getAgentEventLifecycleGeneration(),
-            event: {
-              runId: params.runId,
-              ts: Date.now(),
-              data: { phase: "start", startedAt: replyOperation.startedAtMs },
-            },
-          }),
+          // Like fresh chat input, this run also takes the writer claim here:
+          // runtimes that do not claim it themselves (such as Claude CLI) would
+          // otherwise leave the previous run's claim in place, and Stop would
+          // refuse to save this run's partial reply.
+          sessionLifecyclePatch: {
+            ...derivePersistedSessionLifecyclePatch({
+              entry,
+              currentLifecycleGeneration:
+                replyOperation.lifecycleGeneration ?? getAgentEventLifecycleGeneration(),
+              event: {
+                runId: params.runId,
+                ts: Date.now(),
+                data: { phase: "start", startedAt: replyOperation.startedAtMs },
+              },
+            }),
+            activeWriterRunId: params.runId,
+          },
         });
         if (persisted?.sessionEntry) {
           params.setEntry(persisted.sessionEntry);

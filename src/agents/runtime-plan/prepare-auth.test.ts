@@ -292,6 +292,61 @@ it("does not defer identity-only login to native Codex", () => {
 });
 
 it.each([
+  ["observed", false, false],
+  ["observed", true, false],
+  ["authored", false, true],
+  ["authored", true, true],
+] as const)(
+  "explains incompatible Codex auth for %s route (explicit order=%s)",
+  (_name, explicitOrder, authored) => {
+    const prefix = explicitOrder
+      ? "Explicit auth order for openai has no usable profiles."
+      : "No route-compatible authentication source is configured for openai.";
+    expectAuthError({
+      ...codexHarness,
+      harnessAuthBootstrap: "harness",
+      modelId: "fixture-account-only-model",
+      profiles: oneProfile("openai:private-account", oauth({ access: "private-access-token" })),
+      ...(explicitOrder ? { order: { openai: ["openai:private-account"] } } : {}),
+      ...(authored
+        ? {
+            config: openAIConfig({
+              api: "openai-responses",
+              baseUrl: "https://private.example/v1",
+            }),
+          }
+        : {
+            observedRoutes: [{}, { api: "openai-responses", baseUrl: "https://api.openai.com/v1" }],
+          }),
+    }).toThrow(
+      new Error(
+        `${prefix} Selected model route requires api-key authentication (openai-responses); configured profiles support subscription authentication. Select a model route compatible with the configured account, or select a compatible account.`,
+      ),
+    );
+  },
+);
+
+it("still forwards the selected OAuth profile on an observed subscription route", () => {
+  expect(
+    preparePlan({
+      ...codexHarness,
+      harnessAuthBootstrap: "harness",
+      modelId: "fixture-account-only-model",
+      observedRoutes: [
+        {},
+        { api: "openai-chatgpt-responses", baseUrl: "https://chatgpt.com/backend-api/codex" },
+      ],
+      profiles: oneProfile("openai:chatgpt", oauth()),
+      order: { openai: ["openai:chatgpt"] },
+    }),
+  ).toMatchObject({
+    forwardedAuthProfileId: "openai:chatgpt",
+    selectedAuthMode: "oauth",
+    modelRoute: { api: "openai-chatgpt-responses", authRequirement: "subscription" },
+  });
+});
+
+it.each([
   { provider: "anthropic", mode: "api_key" as const },
   { provider: "openai", mode: "oauth" as const },
 ])("rejects conflicting binding metadata $provider/$mode", ({ mode, provider }) => {
@@ -483,6 +538,12 @@ it.each(["profile", "secret-ref"] as const)(
       vi.stubEnv("OPENAI_API_KEY", "");
       vi.stubEnv("OPENAI_PLATFORM_KEY", "secret-ref-platform-key");
     }
+    const readAmbientKey = vi.fn(() => undefined);
+    const env = Object.defineProperty(
+      { OPENAI_PLATFORM_KEY: "secret-ref-platform-key" },
+      "OPENAI_API_KEY",
+      { get: readAmbientKey },
+    );
     const config = openAIConfig({
       apiKey: profile
         ? "configured-platform-key"
@@ -496,13 +557,14 @@ it.each(["profile", "secret-ref"] as const)(
       ...subscription,
       config,
       authProfileStore: store,
-      env: profile ? {} : process.env,
+      env,
     });
     expect(plan).toMatchObject({
       selectedAuthMode: profile ? "api_key" : "api-key",
       modelRoute: apiRoute,
     });
     if (profile) {
+      expect(readAmbientKey).toHaveBeenCalled();
       expect(plan).toMatchObject({
         forwardedAuthProfileId: id,
         forwardedAuthProfileCandidateIds: [id],
@@ -530,6 +592,7 @@ it.each(["profile", "secret-ref"] as const)(
         { kind: "direct", evidence: "provider-config", authorization: "declared" },
       ]);
     } else {
+      expect(readAmbientKey).not.toHaveBeenCalled();
       expect(attempts).toEqual([
         {
           kind: "direct",

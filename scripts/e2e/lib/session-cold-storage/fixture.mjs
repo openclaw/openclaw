@@ -202,9 +202,9 @@ export function readColdArchives(stateDir) {
   );
 }
 
-export async function waitForArchives(context, expectedIds, { timeoutMs = 95_000 } = {}) {
+export async function waitForArchives(context, expectedIds) {
   const expected = JSON.stringify(expectedIds.toSorted((a, b) => a.localeCompare(b)));
-  const deadline = Date.now() + timeoutMs;
+  const deadline = Date.now() + 95_000;
   while (Date.now() < deadline) {
     const archives = readColdArchives(context.env.OPENCLAW_STATE_DIR);
     if (JSON.stringify(archives.map((row) => row.session_id)) === expected) {

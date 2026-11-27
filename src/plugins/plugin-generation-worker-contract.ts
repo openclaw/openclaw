@@ -29,6 +29,7 @@ export type GenerationWorkerInput = (
       installRoots: PluginInstallRoots;
       readOnly: boolean;
       retainSourceCustody?: boolean;
+      independentOperationSource?: true;
       sourceCustodyId?: number;
       sourceCustodyDigest?: string;
       inspection?: PluginGenerationInspection;

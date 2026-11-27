@@ -2,6 +2,8 @@
   "oldestSupportedBaseline": null,
   "scenarios": [
     "base",
+    "git-release",
+    "release-update",
     "session-share",
     "backup-schedule",
     "abandoned-update",

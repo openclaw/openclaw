@@ -24,6 +24,7 @@ import type { ChatHost } from "./chat-send-contract.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { chatAttachmentDraftSignature } from "./composer-draft.ts";
 import { resetChatInputHistoryNavigation } from "./input-history.ts";
+import { isPastedTextAttachment } from "./pasted-text-card.ts";
 
 export function chatSubmitKey(
   host: ChatHost,
@@ -68,14 +69,18 @@ export function clearSubmittedComposerState(
   host.chatMessage = "";
   host.chatMentions = [];
   host.chatReplyTarget = null;
-  if (retainAttachments !== "all") {
-    host.chatAttachments =
-      retainAttachments === "annotations"
+  // Submission always consumes pasted-text cards: their text is already in the message and
+  // no queued row owns their payload. Recovery snapshots carry their own data URLs.
+  const consumed = host.chatAttachments.filter(isPastedTextAttachment);
+  host.chatAttachments =
+    retainAttachments === "all"
+      ? host.chatAttachments.filter((attachment) => !isPastedTextAttachment(attachment))
+      : retainAttachments === "annotations"
         ? host.chatAttachments.filter(
             (attachment) => attachment.browserAnnotation || attachment.selectionAnnotation,
           )
         : [];
-  }
+  releaseChatAttachmentPayloads(consumed);
   resetChatInputHistoryNavigation(host);
   host.composerDraftChanged?.();
   return {
@@ -199,7 +204,7 @@ function composerRetainsSubmittedAttachments(
   retainAll = false,
 ): boolean {
   const retained = retainAll
-    ? submittedAttachments
+    ? submittedAttachments?.filter((attachment) => !isPastedTextAttachment(attachment))
     : submittedAttachments?.filter(
         (attachment) => attachment.browserAnnotation || attachment.selectionAnnotation,
       );

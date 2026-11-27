@@ -17,6 +17,8 @@ type CompletionDeliveryDependencies = {
   children: ReadonlyMap<string, ChildState>;
   parents: ReadonlyMap<string, ParentState>;
   retiredParents: Pick<WeakSet<ParentState>, "has">;
+  /** A running sibling keeps this parent's subscription protected through the monitor. */
+  isParentThreadRetained: (parentThreadId: string) => boolean;
   unregisterChild: (child: ChildState) => void;
   abandon: (state: ParentState, child: ChildState, assertCurrent: () => void) => Promise<void>;
   settleNestedCompletion: (
@@ -62,7 +64,7 @@ export class CodexNativeSubagentCompletionDelivery {
     if (childState.completionDeliveryTimer) {
       return;
     }
-    let deferredToForeground = false;
+    let deferred = false;
     try {
       if (childState.cancellationRequested) {
         // Stop settles owned processes before acknowledging cancellation or
@@ -92,13 +94,26 @@ export class CodexNativeSubagentCompletionDelivery {
         await this.abandon(state, childState);
         return;
       }
-      // Foreground parents receive native completion input. Only wake a detached
-      // parent after its last owner leaves; native receipts deduplicate both paths.
-      if (state.owners.size > 0 || !state.completionScope) {
-        deferredToForeground = state.owners.size > 0;
+      // Foreground parents receive native completion input. A detached parent is
+      // woken only after its last owner leaves and no running sibling still
+      // protects it: the wake turn may have to release that subscription, which
+      // the protection refuses. Releasing the last sibling re-drives held results;
+      // native receipts deduplicate both paths.
+      if (
+        state.owners.size > 0 ||
+        !state.completionScope ||
+        this.dependencies.isParentThreadRetained(state.parentThreadId)
+      ) {
+        deferred = state.owners.size > 0 || Boolean(state.completionScope);
         return;
       }
       const historyOwner = childState.historyOwner;
+      // Rediscovering a worker can restore a thread-only assignment for a later turn.
+      const completionIdentity = readCodexNativeSubagentRunId(childState.runId)?.turnId
+        ? childState.runId
+        : childState.nativeTurnId
+          ? codexNativeSubagentRunId(completion.childThreadId, childState.nativeTurnId)
+          : completion.childThreadId;
       const delivery = await this.dependencies.deliver({
         scope: state.completionScope,
         completionCustody: childState.completionCustody,
@@ -114,7 +129,7 @@ export class CodexNativeSubagentCompletionDelivery {
           this.isCurrent(state, childState) && this.claim(state, childState),
         childSessionKey: childState.runId,
         childSessionId: completion.childThreadId,
-        announceId: `codex-native:${childState.nativeParentThreadId}:${readCodexNativeSubagentRunId(childState.runId)?.turnId ? childState.runId : completion.childThreadId}:${completion.status}`,
+        announceId: `codex-native:${childState.nativeParentThreadId}:${completionIdentity}:${completion.status}`,
         announceType: "Subagent",
         taskLabel: "Subagent",
         status: completion.status,
@@ -161,7 +176,7 @@ export class CodexNativeSubagentCompletionDelivery {
         error: message,
       });
     } finally {
-      if (!deferredToForeground) {
+      if (!deferred) {
         // Keep the root through the first handoff, including a foreground parent's
         // pending unregister. Once attempted, sleeping retries retain only delivery authority.
         childState.completionCustody?.settleExecution();

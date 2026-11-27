@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { root } from "openclaw/plugin-sdk/file-access-runtime";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import {
   listSkillCopyFiles,
   MAX_SKILL_SUPPORT_FILE_BYTES,
@@ -41,6 +42,8 @@ const REASON_FILE = ".reason";
 const DRAFT_ID_PATTERN = /^[a-z0-9][a-z0-9-]{5,120}$/u;
 // An unreviewed inbox past this size is not being read; refuse instead of growing it.
 const MAX_DRAFTS = 50;
+// Keep a reviewed draft reserved through publication and removal, including no-op applies.
+const draftMutations = new KeyedAsyncQueue();
 
 export type WorkshopDraft = {
   id: string;
@@ -182,6 +185,10 @@ export async function discardWorkshopDraft(
   assertLive?: () => void,
 ): Promise<void> {
   const draftDir = resolveDraftDir(config, agentId, id);
+  await draftMutations.enqueue(draftDir, () => removeDraft(draftDir, id, assertLive));
+}
+
+async function removeDraft(draftDir: string, id: string, assertLive?: () => void): Promise<void> {
   if (!(await pathExists(draftDir))) {
     throw new WorkshopWriteError(`No draft "${id}". Call action=list to see drafts.`);
   }
@@ -205,6 +212,15 @@ export async function applyWorkshopDraft(
   expectedSkillName?: string,
 ): Promise<WorkshopChange[]> {
   const draftDir = resolveDraftDir(ctx.config, ctx.agentId, id);
+  return draftMutations.enqueue(draftDir, () => applyDraft(ctx, draftDir, id, expectedSkillName));
+}
+
+async function applyDraft(
+  ctx: WorkshopMutationContext,
+  draftDir: string,
+  id: string,
+  expectedSkillName?: string,
+): Promise<WorkshopChange[]> {
   const draft = await readDraft(ctx.config, ctx.agentId, path.dirname(draftDir), id);
   if (!draft) {
     throw new WorkshopWriteError(`No draft "${id}".`);
@@ -261,6 +277,6 @@ export async function applyWorkshopDraft(
             return { summary, ...(versionId ? { versionId } : {}) };
           }),
         ];
-  await discardWorkshopDraft(ctx.config, ctx.agentId, id, ctx.assertLive);
+  await removeDraft(draftDir, id, ctx.assertLive);
   return changes;
 }

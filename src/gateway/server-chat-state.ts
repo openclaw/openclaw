@@ -1,5 +1,6 @@
 import type { AgentPlanStep } from "../channels/streaming.js";
 import type { AgentEventPayload, AgentAssistantSourceReceipt } from "../infra/agent-events.js";
+import type { ChatRef } from "../sessions/chat-ref.js";
 import type { ChatCanvasBlock } from "./chat-display-projection.canvas.js";
 import {
   createLiveAssistantTextProjection,
@@ -33,7 +34,11 @@ export type ChatRunEntry = ChatRunRegistration & {
   registeredSequence: number;
 };
 
-export type ChatAbortMarker = { abortedAtMs: number; sequence: number };
+export type ChatAbortMarker = {
+  abortedAtMs: number;
+  sequence: number;
+  pendingInputCancellation?: { chat: ChatRef; endCause: "user-stop" };
+};
 
 let chatRunOrderingSequence = 0;
 
@@ -45,6 +50,22 @@ export function createChatAbortMarker(now = Date.now()): ChatAbortMarker {
 /** Return the wall-clock timestamp used by maintenance TTL pruning. */
 export function chatAbortMarkerTimestampMs(marker: ChatAbortMarker): number {
   return marker.abortedAtMs;
+}
+
+/** Read the admitted cancellation for this input's session while its receipt settles. */
+export function chatAbortPendingInputEndCause(
+  marker: ChatAbortMarker | undefined,
+  chat: Pick<ChatRef, "agentId" | "storePath" | "sessionKey">,
+): "user-stop" | undefined {
+  const cancellation = marker?.pendingInputCancellation;
+  if (
+    cancellation?.chat.agentId === chat.agentId &&
+    cancellation.chat.storePath === chat.storePath &&
+    cancellation.chat.sessionKey === chat.sessionKey
+  ) {
+    return cancellation.endCause;
+  }
+  return undefined;
 }
 
 /**
@@ -299,6 +320,8 @@ export function createChatRunState(isConnectionActive?: (connId: string) => bool
       display = record.display = {
         projector,
         current: projectTail(projector.replace(rawText)),
+        textScope: record.assistantScope,
+        toolTextAfterSeq: record.progressSnapshot?.lastSeq ?? 0,
         unsentDelta: null,
       };
     } else if (display.reset || display.pendingRawDelta !== undefined) {
@@ -329,6 +352,11 @@ export function createChatRunState(isConnectionActive?: (connId: string) => bool
         visible.startsWith(previous)
           ? next.delta
           : null;
+      // A tool offset belongs to this visible occurrence, not to a later buffer of equal length.
+      if (next.delta === null || display.textScope !== record.assistantScope) {
+        display.toolTextAfterSeq = record.progressSnapshot?.lastSeq ?? 0;
+        display.textScope = record.assistantScope;
+      }
       display.current = next;
       display.unsentDelta =
         display.unsentDelta !== null && display.current.delta !== null

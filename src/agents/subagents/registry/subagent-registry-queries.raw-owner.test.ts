@@ -4,10 +4,9 @@ import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
 import {
   getSubagentRunByChildSessionKeyFromRuns as findChildRun,
   buildSubagentRunReadIndexFromRuns as indexRuns,
-  countActiveRunsForSessionFromRuns as countActiveRuns,
   listRunsForControllerFromRuns as listControlledRuns,
 } from "./subagent-registry-queries.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { countActiveSubagentRunsForSession as countActiveRuns } from "./subagent-registry-state.js";
 import { buildSubagentRunView } from "./subagent-run-view.js";
 
 function toRunMap<T extends { runId: string }>(...runs: T[]) {
@@ -76,7 +75,7 @@ it.each([
   },
 );
 it.each(["none", "running", "pending"] as const)(
-  "accounts for %s grandchildren below a suspended child",
+  "accounts for %s grandchildren below a delivered child",
   (status) => {
     const now = Date.now();
     const hasGrandchild = status !== "none";
@@ -85,13 +84,12 @@ it.each(["none", "running", "pending"] as const)(
       childSessionKey: "agent:main:subagent:parent",
       endedAt: now - (hasGrandchild ? 3_000 : 2_000),
     });
-    const suspended: SubagentRunRecord["delivery"] = { status: "suspended", suspendedAt: now };
     const child = makeRun({
-      runId: "suspended-child",
+      runId: "delivered-child",
       requesterSessionKey: parent.childSessionKey,
-      childSessionKey: "agent:main:subagent:suspended-child",
+      childSessionKey: "agent:main:subagent:delivered-child",
       endedAt: now - (hasGrandchild ? 2_000 : 1_000),
-      delivery: hasGrandchild ? suspended : { ...suspended, suspendedReason: "permanent_failure" },
+      delivery: { status: "delivered" },
     });
     const entries = [parent, child];
     if (hasGrandchild) {
@@ -103,7 +101,7 @@ it.each(["none", "running", "pending"] as const)(
           createdAt: now - 1_000,
           startedAt: now - 1_000,
           ...(status === "running"
-            ? { delivery: suspended }
+            ? { delivery: { status: "pending" } }
             : { endedAt: now, delivery: { status: "pending" } }),
         }),
       );
@@ -112,13 +110,38 @@ it.each(["none", "running", "pending"] as const)(
     expect(countActiveRuns(runs, parent.requesterSessionKey)).toBe(hasGrandchild ? 1 : 0);
     for (const rows of [entries, entries.map(projectSubagentRunForSessionList)]) {
       const index = indexRuns({ runs: toRunMap(...rows) });
-      const count = (excludeSuspendedDelivery = false) =>
-        index.countPendingDescendantRuns(parent.childSessionKey, { excludeSuspendedDelivery });
+      const count = (excludeSettledDelivery = false) =>
+        index.countPendingDescendantRuns(parent.childSessionKey, { excludeSettledDelivery });
       const pending = hasGrandchild ? 2 : 1;
       expect([count(), count(true), count()]).toEqual([pending, pending - 1, pending]);
     }
     expect(runs.get(child.runId)).toBe(child);
     expect(child.cleanupCompletedAt).toBeUndefined();
-    expect(child.delivery?.status).toBe("suspended");
+    expect(child.delivery?.status).toBe("delivered");
   },
 );
+
+it("does not block completion admission on a delivered descendant's unfinished cleanup", () => {
+  const parent = makeRun({
+    runId: "parent",
+    childSessionKey: "agent:main:subagent:parent",
+    endedAt: Date.now(),
+  });
+  const child = makeRun({
+    runId: "delivered-child",
+    requesterSessionKey: parent.childSessionKey,
+    childSessionKey: "agent:main:subagent:delivered-child",
+    endedAt: Date.now() - 1_000,
+    delivery: { status: "delivered" },
+    cleanupHandled: false,
+    cleanupCompletedAt: undefined,
+  });
+  const runs = toRunMap(parent, child);
+  const index = indexRuns({ runs });
+  expect(countActiveRuns(runs, parent.requesterSessionKey)).toBe(0);
+  // Session deletion still waits for cleanup; completion admission does not.
+  expect(index.countPendingDescendantRuns(parent.childSessionKey)).toBe(1);
+  expect(
+    index.countPendingDescendantRuns(parent.childSessionKey, { excludeSettledDelivery: true }),
+  ).toBe(0);
+});

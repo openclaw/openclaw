@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { compareCloudProfiles } from "./cloud-profile-icon-data.ts";
-import { hasProviderBrandIcon, providerDisplayLabel } from "./provider-icon-data.ts";
+import {
+  hasProviderBrandIcon,
+  providerDisplayLabel,
+  resolveProviderIconName,
+} from "./provider-icon-data.ts";
 
 describe("model provider labels", () => {
   it.each([
@@ -8,6 +12,7 @@ describe("model provider labels", () => {
     ["__proto__", "Proto"],
     ["openai", "OpenAI"],
     ["xai", "xAI"],
+    ["llama-app", "Llama"],
     ["acp-opencode", "OpenCode (ACP)"],
     ["acp-qwen", "Qwen Code (ACP)"],
     ["acp-pi", "Pi (ACP)"],
@@ -16,6 +21,11 @@ describe("model provider labels", () => {
     ["vllm", "vLLM"],
   ])("renders provider %s as display text", (provider, label) => {
     expect(providerDisplayLabel(provider)).toBe(label);
+  });
+
+  it("keeps Llama.app distinct from llama.cpp artwork", () => {
+    expect(resolveProviderIconName("llama-app")).toBe("llama");
+    expect(resolveProviderIconName("llama-cpp")).toBe("llamacpp");
   });
 
   it("gives ACP harness groups their agent's brand mark", () => {

@@ -5,10 +5,6 @@ import { root as fsRoot } from "../infra/fs-safe.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
-import {
-  captureAgentToolSourceExecutionGuard,
-  runWithAgentToolSourceExecutionScope,
-} from "./agent-tool-source-execution-guard.js";
 import type { MemoryFlushToolRunContext } from "./agent-tools.memory-flush.types.js";
 import { messageProviderExcludesTool } from "./agent-tools.message-provider-policy.js";
 import type { OpenClawCodingToolsOptions } from "./agent-tools.options.js";
@@ -211,41 +207,38 @@ async function appendMemoryFlushContent(params: {
   content: string;
   sandbox?: MemoryFlushAppendOnlyWriteOptions["sandbox"];
   signal?: AbortSignal;
-  assertCurrent: ReturnType<typeof captureAgentToolSourceExecutionGuard>;
 }) {
-  await runWithAgentToolSourceExecutionScope(params.assertCurrent, async () => {
-    const sandbox = params.sandbox;
-    if (!sandbox) {
-      const root = await fsRoot(params.root);
-      params.assertCurrent();
-      await root.append(params.relativePath, params.content, {
-        mkdir: true,
-        prependNewlineIfNeeded: true,
-        assertBeforeMutation: params.assertCurrent,
-      });
-      return;
-    }
-    // Share write/edit ordering; the bridge has no cross-process append primitive.
-    const queueKey = resolveSandboxFileMutationQueueKey({
-      ...sandbox,
-      filePath: params.absolutePath,
-      cwd: sandbox.root,
-      signal: params.signal,
+  const sandbox = params.sandbox;
+  if (!sandbox) {
+    const root = await fsRoot(params.root);
+    params.signal?.throwIfAborted();
+    await root.append(params.relativePath, params.content, {
+      mkdir: true,
+      prependNewlineIfNeeded: true,
+      assertBeforeMutation: () => params.signal?.throwIfAborted(),
     });
-    await withFileMutationQueueKeyResolution(queueKey, async () => {
-      const existing = await readOptionalUtf8File(params);
-      const separator =
-        existing.length > 0 && !existing.endsWith("\n") && !params.content.startsWith("\n")
-          ? "\n"
-          : "";
-      params.assertCurrent();
-      await sandbox.bridge.writeFile({
-        filePath: params.relativePath,
-        cwd: sandbox.root,
-        data: `${existing}${separator}${params.content}`,
-        mkdir: true,
-        signal: params.signal,
-      });
+    return;
+  }
+  // Share write/edit ordering; the bridge has no cross-process append primitive.
+  const queueKey = resolveSandboxFileMutationQueueKey({
+    ...sandbox,
+    filePath: params.absolutePath,
+    cwd: sandbox.root,
+    signal: params.signal,
+  });
+  await withFileMutationQueueKeyResolution(queueKey, async () => {
+    const existing = await readOptionalUtf8File(params);
+    const separator =
+      existing.length > 0 && !existing.endsWith("\n") && !params.content.startsWith("\n")
+        ? "\n"
+        : "";
+    params.signal?.throwIfAborted();
+    await sandbox.bridge.writeFile({
+      filePath: params.relativePath,
+      cwd: sandbox.root,
+      data: `${existing}${separator}${params.content}`,
+      mkdir: true,
+      signal: params.signal,
     });
   });
 }
@@ -260,7 +253,6 @@ function wrapToolMemoryFlushAppendOnlyWrite(
     ...tool,
     description: `Append new memory notes to ${options.relativePath}; creates parent directories. The content is appended verbatim. Send only new text, never existing entries or a rewritten file.`,
     execute: async (toolCallId, args, signal, onUpdate) => {
-      const assertCurrent = captureAgentToolSourceExecutionGuard(signal);
       const record = getToolParamsRecord(args);
       const normalizedRecord = record
         ? await normalizeFileToolPathParamsFromKeys(
@@ -291,16 +283,13 @@ function wrapToolMemoryFlushAppendOnlyWrite(
         );
       }
 
-      const contentBefore = await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-        const previousContent = await readOptionalUtf8File({
-          absolutePath: allowedAbsolutePath,
-          relativePath: options.relativePath,
-          sandbox: options.sandbox,
-          signal,
-        });
-        assertCurrent();
-        return previousContent;
+      const contentBefore = await readOptionalUtf8File({
+        absolutePath: allowedAbsolutePath,
+        relativePath: options.relativePath,
+        sandbox: options.sandbox,
+        signal,
       });
+      signal?.throwIfAborted();
       assertNewMemoryFlushContent(contentBefore, content);
       const separator =
         contentBefore.length > 0 && !contentBefore.endsWith("\n") && !content.startsWith("\n")
@@ -314,7 +303,6 @@ function wrapToolMemoryFlushAppendOnlyWrite(
           content,
           sandbox: options.sandbox,
           signal,
-          assertCurrent,
         });
       const memoryWriteProvenance = options.memoryWriteProvenance;
       if (memoryWriteProvenance && (await memoryWriteProvenance.classifies(allowedAbsolutePath))) {

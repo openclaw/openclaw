@@ -30,13 +30,13 @@ export type MailboxSink = {
 type ReaderLogger = { info: (message: string) => void; warn: (message: string) => void };
 
 /** Route mailbox writes to the existing serialized claw owner. */
-export function createMailboxSink(owner: OpenClawIdAuthority): MailboxSink {
+export function createMailboxSink(owner: OpenClawIdAuthority, clawId: string): MailboxSink {
   return {
     submit: (statement) => owner.submit(statement, "mailbox"),
     redeem: (redemption, sender) => owner.redeem(redemption, sender),
     redeemNode: (redemption) => owner.redeemNode(redemption),
     memberBrowserRequest: (message) => owner.memberBrowserRequest(message),
-    saveCursor: (cursor) => owner.recordDiscovery({ mailbox_cursor: cursor }),
+    saveCursor: (cursor) => owner.recordDiscovery({ mailbox_cursor: cursor }, clawId),
   };
 }
 

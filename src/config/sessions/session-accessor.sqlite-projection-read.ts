@@ -28,6 +28,7 @@ import { readSessionActorTransactionState } from "./session-actor-transaction.js
 import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
 import { retainTranscriptContextFacts } from "./session-transcript-context-facts.js";
 import type { SessionTranscriptProjectionState } from "./session-transcript-index.js";
+import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import { readSessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts-scope.js";
 import { projectSessionTranscriptFacts } from "./session-transcript-projection-facts.js";
 import type {
@@ -576,4 +577,20 @@ export function readCurrentProjectionSnapshot<T>(
         operationLabel: "sessions.history.read",
         diagnosticContext: diagnostics,
       });
+}
+
+/** Borrow the caller's existing transaction without opening a store or scheduling reconciliation. */
+export function withBorrowedProjectionSnapshot<T>(
+  database: TranscriptReadDatabase,
+  resolved: CurrentTranscriptProjection["resolved"],
+  read: (projection: CurrentTranscriptProjection) => T,
+): T {
+  if (!database.db.isTransaction) {
+    throw new Error("Transcript projection lost its borrowed transaction");
+  }
+  const result = readCurrentProjectionSnapshot(database, resolved, read);
+  if (result.kind === "value") {
+    return result.value;
+  }
+  throw new SessionTranscriptProjectionUnavailableError(resolved.sessionId);
 }

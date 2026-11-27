@@ -174,6 +174,53 @@ it.skipIf(process.platform === "win32").each([
 );
 
 it.skipIf(process.platform === "win32")(
+  "delivers owner snapshots in order across single and multiple IPC frames",
+  async () => {
+    await using fixture = resourceFixture();
+    const created = createDeferred();
+    const delivered = createDeferred();
+    const received: unknown[] = [];
+    const { lease } = await fixture.attach(
+      `
+      export function createNativeWorkerResource(_target, _input, owner) {
+        owner.on("message", value => {
+          if (typeof value === "object") owner.postMessage(value);
+        });
+        return { close() {} };
+      }
+      `,
+      true,
+      (response) => {
+        if (response.type === "resource-created") {
+          created.resolve();
+        } else if (response.type === "resource-owner") {
+          received.push(response.value);
+          if (received.length === 3) {
+            delivered.resolve();
+          }
+        }
+      },
+    );
+    await created.promise;
+    const first = { index: 1, detail: new Map([[1n, undefined]]) };
+    const second = { index: 2, bytes: new Uint8Array(1024 * 1024 + 1).fill(42) };
+    const third = { index: 3 };
+    lease.ownerMessage(first);
+    lease.ownerMessage(second);
+    lease.ownerMessage(third);
+    first.detail.clear();
+    second.bytes[0] = 0;
+    await delivered.promise;
+    expect(received).toEqual([
+      { index: 1, detail: new Map([[1n, undefined]]) },
+      { index: 2, bytes: new Uint8Array(1024 * 1024 + 1).fill(42) },
+      { index: 3 },
+    ]);
+  },
+  20_000,
+);
+
+it.skipIf(process.platform === "win32")(
   "keeps owner cleanup replies usable after an admitted resource operation fails",
   async () => {
     await using fixture = resourceFixture();

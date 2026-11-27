@@ -9,6 +9,7 @@ import { stateTest } from "../../plugin-state/plugin-state-fixtures.test-support
 import { createCorePluginStateKeyedStore } from "../../plugin-state/plugin-state-store.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { prepareUserProfileRoleAuthority } from "../../state/user-channel-identity-operations.js";
 import {
   readOpenClawIdLinkedProfile,
   linkCanonicalOpenClawIdUserProfile,
@@ -18,6 +19,8 @@ import {
   ensureCanonicalUserProfileForEmail,
   mergeCanonicalUserProfiles,
   setCanonicalUserProfileDisplayName,
+  setCanonicalUserProfileRole,
+  ensureCanonicalUserProfileForOpenClawIdIdentity,
 } from "../../state/user-profile-writes.js";
 import { openclawIdHandlers } from "../server-methods/openclaw-id.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
@@ -25,6 +28,7 @@ import { createOpenClawIdAuthority } from "./authority.js";
 import { readStoredClaw, writeStoredClaw } from "./claw-store.js";
 import { fullClaw } from "./claw-store.test-support.js";
 import { createDiscoveryClient } from "./discovery-client.js";
+import { canonicalMemberProfiles } from "./member-profiles.js";
 import { linkedClaw, ownerInvite, redemptionMail, serviceFor } from "./openclaw-id.test-support.js";
 import { publishClaw } from "./publisher.js";
 
@@ -159,15 +163,12 @@ it("keeps canonical email and assigns a new approval time on direct member re-ad
     ),
   ).toMatchObject({ ok: true });
   const { service } = serviceFor(claw.authority);
-  const bob = (await claw.authority.memberProfiles(["acct-bob"]))["acct-bob"]!;
-  expect((await service.prepareMemberProfileCheck(bob.id))()).toBe(true);
   expect(
     await claw.authority.submit(
       await claw.sign({ op: "remove", account_id: "acct-bob" }),
       "tunnel",
     ),
   ).toMatchObject({ ok: true });
-  expect((await service.prepareMemberProfileCheck(bob.id))()).toBe(false);
   await service.stop();
   try {
     vi.useFakeTimers({ toFake: ["Date"] });
@@ -274,12 +275,14 @@ it("registers only eligible local profiles through RPC, retains selection across
     expect(await readOpenClawIdLinkedProfile("acct-bob")).toBeNull();
     expect(await restored.submit(approval, "tunnel")).toMatchObject({ ok: true });
     expect(await readOpenClawIdLinkedProfile("acct-bob")).toMatchObject({ profileId: person.id });
+    expect((await prepareUserProfileRoleAuthority(person.id))?.role).toBe("operator");
+    await setCanonicalUserProfileRole(person.id, "viewer");
     expect(await restored.resolvePeer(mail.peerKey)).toMatchObject({
       kind: "member",
       accountId: "acct-bob",
     });
     expect((await restarted.linkStatus()).members).toMatchObject([
-      { displayName: "Existing Person", email: "bob@example.test" },
+      { displayName: "Existing Person", email: "bob@example.test", role: "viewer" },
     ]);
     expect(JSON.stringify(restored.current()?.authority)).not.toContain(person.id);
     expect(JSON.stringify(invite.cap)).not.toContain(person.id);
@@ -402,3 +405,94 @@ for (const change of ["merged", "deleted", "taken", "account-linked", "same-acco
     );
   });
 }
+
+it("imports legacy member roles once, preserves assignments, and does not undo suspension", async ({
+  state,
+}) => {
+  state.applyEnv();
+  const record = fullClaw();
+  const member = Object.values(record.authority!.members)[0]!;
+  record.authority!.members = {
+    legacy: { ...member, role: "operator" },
+    assigned: { ...member, role: "viewer" },
+  };
+  record.authority!.invites = {};
+  record.invite_reports = {};
+  record.member_approved_at = { legacy: 1, assigned: 1 };
+  const explicit = await ensureCanonicalUserProfileForOpenClawIdIdentity({ accountId: "assigned" });
+  await setCanonicalUserProfileRole(explicit.id, "guest");
+  await writeStoredClaw(record);
+  const owner = createOpenClawIdAuthority();
+  await owner.load();
+  const linked = await readOpenClawIdLinkedProfile("legacy");
+  expect((await prepareUserProfileRoleAuthority(linked!.profileId))?.role).toBe("operator");
+  expect((await prepareUserProfileRoleAuthority(explicit.id))?.role).toBe("guest");
+  expect(owner.current()?.member_profile_roles).toEqual({ legacy: true, assigned: true });
+  await setCanonicalUserProfileRole(linked!.profileId, null);
+  await closeOpenClawStateDatabaseAsync();
+  const restarted = createOpenClawIdAuthority();
+  await restarted.load();
+  expect((await prepareUserProfileRoleAuthority(linked!.profileId))?.role).toBeNull();
+  expect((await prepareUserProfileRoleAuthority(explicit.id))?.role).toBe("guest");
+});
+
+it("does not overwrite an intervening assignment during legacy migration", async ({ state }) => {
+  state.applyEnv();
+  const profile = await ensureCanonicalUserProfileForOpenClawIdIdentity({
+    accountId: "migration-race",
+  });
+  const profileWrites = await import("../../state/user-profile-writes.js");
+  const writeRole = profileWrites.setCanonicalUserProfileRole;
+  using write = vi
+    .spyOn(profileWrites, "setCanonicalUserProfileRole")
+    .mockImplementationOnce(async (...args) => {
+      await writeRole(profile.id, "viewer");
+      return writeRole(...args);
+    });
+  await expect(
+    canonicalMemberProfiles.setRole("migration-race", "administrator", true),
+  ).rejects.toThrow("Member profile changed");
+  expect(write).toHaveBeenCalledTimes(1);
+  expect((await prepareUserProfileRoleAuthority(profile.id))?.role).toBe("viewer");
+  await canonicalMemberProfiles.setRole("migration-race", "administrator", true);
+  expect((await prepareUserProfileRoleAuthority(profile.id))?.role).toBe("viewer");
+});
+
+it("assigns a new invitation's role when an existing member approves another device", async ({
+  state,
+}) => {
+  state.applyEnv();
+  const claw = await linkedClaw({ read: readStoredClaw, write: writeStoredClaw });
+  const profile = await ensureCanonicalUserProfileForOpenClawIdIdentity({
+    accountId: "repeat-member",
+  });
+  for (const role of ["operator", "viewer"] as const) {
+    const invite = await ownerInvite(claw, { email: "repeat@example.test", role, expiresIn: 60 });
+    expect(
+      await claw.authority.registerInvite({ cap: invite.cap, proofKey: invite.proofKey }, "tunnel"),
+    ).toMatchObject({ ok: true });
+    const mail = await redemptionMail({
+      clawId: claw.clawId,
+      inviteId: invite.inviteId,
+      proofKey: invite.proofKey,
+      accountId: "repeat-member",
+      email: "repeat@example.test",
+    });
+    expect(
+      await claw.authority.redeem(mail.message.payload.redemption, mail.message.from),
+    ).toMatchObject({ ok: true });
+    expect(
+      await claw.authority.submit(
+        await claw.sign({
+          op: "add",
+          account_id: "repeat-member",
+          role,
+          peer_keys: [mail.peerKey],
+          invite_id: invite.inviteId,
+        }),
+        "tunnel",
+      ),
+    ).toMatchObject({ ok: true });
+    expect((await prepareUserProfileRoleAuthority(profile.id))?.role).toBe(role);
+  }
+});

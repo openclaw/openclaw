@@ -1,17 +1,24 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { readAgentProvenance } from "../test-utils/agent-provenance.js";
+import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
+import { readAgentProvenance, seedAgentProvenance } from "../test-utils/agent-provenance.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { completeAgentDeletionJournalInDatabase } from "./agent-deletion-journal.js";
+import { journalInput } from "./agent-deletion-journal.test-support.js";
+import { agentProvenancePublication } from "./agent-provenance-publication.js";
 import {
-  deleteAgentProvenanceForAgent as remove,
   listAgentProvenance as list,
   readAgentProvenanceForDisplay as display,
   recordAgentProvenance as record,
 } from "./agent-provenance.js";
+import { deleteAgentProvenanceForAgent as remove } from "./agent-provenance.kernel.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
-import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
 const withState = (run: Parameters<typeof withOpenClawTestState>[1]) =>
@@ -92,5 +99,42 @@ it("records, replaces, lists, and deletes agent creation provenance", async () =
     const database = openOpenClawStateDatabase({ env });
     remove(database.db, "worker");
     expect(readAgentProvenance("worker", { env })).toBeUndefined();
+  });
+});
+
+it("publishes a provenance deletion only when its own journal completion commits", async () => {
+  await withState(async (state) => {
+    const options = { env: state.env };
+    const other = { ...options, path: path.join(state.root, "other.sqlite") };
+    seedAgentProvenance("worker", { createdVia: "operator" }, { ...options, nowMs: 10 });
+    seedAgentProvenance("worker", { createdVia: "operator" }, { ...other, nowMs: 20 });
+    const journal = beginAgentDeletionJournal(journalInput(state), options);
+    const published: string[] = [];
+    const unsubscribe = agentProvenancePublication.subscribeFacts((change) => {
+      if (change.kind === "committed" && change.receipt.facts.get("worker")?.kind === "absent") {
+        published.push("worker");
+      }
+    });
+    try {
+      const complete = (operationId: string, rollback = false) =>
+        runOpenClawStateWriteTransaction((database) => {
+          const completed = completeAgentDeletionJournalInDatabase(database, "WORKER", operationId);
+          if (rollback) {
+            expect(completed).toBe(true);
+            throw new Error("rollback completion");
+          }
+          return completed;
+        }, options);
+      expect(complete("superseded")).toBe(false);
+      expect(() => complete(journal.operationId, true)).toThrow("rollback completion");
+      expect(readAgentProvenance("worker", options)?.createdAtMs).toBe(10);
+      expect(published).toEqual([]);
+      expect(complete(journal.operationId)).toBe(true);
+      expect(published).toEqual(["worker"]);
+      expect(readAgentProvenance("worker", options)).toBeUndefined();
+      expect(readAgentProvenance("worker", other)?.createdAtMs).toBe(20);
+    } finally {
+      unsubscribe();
+    }
   });
 });

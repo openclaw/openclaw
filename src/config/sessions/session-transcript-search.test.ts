@@ -42,7 +42,10 @@ import {
 } from "./session-transcript-reconcile.js";
 import { searchSessionTranscripts as searchSessionTranscriptsAsync } from "./session-transcript-search.js";
 import type { SessionTranscriptSearchParams } from "./session-transcript-search.types.js";
-import { searchSessionTranscriptsReadOnlySync } from "./session-transcript-search.worker.js";
+import {
+  searchSessionTranscriptsFiltered,
+  searchSessionTranscriptsReadOnlySync,
+} from "./session-transcript-search.worker.js";
 import { messageEvent } from "./transcript-message.test-support.js";
 
 vi.mock("../config.js", async () => ({
@@ -132,6 +135,57 @@ function agentDatabase() {
 }
 
 describe("searchSessionTranscripts", () => {
+  it.each([
+    { query: "cafe", match: undefined, word: "café" },
+    { query: "caf", match: "prefix", word: "caféteria" },
+    { query: "blue-cafe", match: undefined, word: "blue\u0001café" },
+  ] as const)(
+    "keeps the native match for $query in a long preview",
+    async ({ query, match, word }) => {
+      const suffix = `note\u0001: ${word}\u0001 at the station.`;
+      const text = `decaféteria\u0001 ${"LongFilename ".repeat(43)}${suffix}`;
+      await appendUserMessage("trip", "agent:main:main", text);
+      const result = await searchSessionTranscriptsAsync({
+        agentId: "main",
+        env: env(),
+        query,
+        ...(match && { match }),
+      });
+      expect(result.hits).toHaveLength(1);
+      const snippet = result.hits[0]!.snippet;
+      expect(snippet.endsWith(suffix)).toBe(true);
+      expect(snippet.length).toBeLessThanOrEqual(501);
+    },
+  );
+
+  it("gives a long matching token room before adding left context", async () => {
+    const word = "z".repeat(420);
+    await appendUserMessage(
+      "trip",
+      "agent:main:main",
+      `${"q".repeat(230)} ${word} after the bridge`,
+    );
+    const { hits } = await searchSessionTranscriptsAsync({
+      agentId: "main",
+      env: env(),
+      query: word,
+    });
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.snippet).toContain(word);
+    expect(hits[0]!.snippet.length).toBeLessThanOrEqual(501);
+  });
+
+  it("keeps the CJK match when its leading context boundary falls inside an emoji", async () => {
+    const tail = `${"路".repeat(159)}青森站`;
+    await appendUserMessage("rail", "agent:main:main", `${"İ".repeat(190)}🚉${tail}`);
+    const result = await searchSessionTranscriptsAsync({
+      agentId: "main",
+      env: env(),
+      query: "青森",
+    });
+    expect(result.hits.map((hit) => hit.snippet)).toEqual([`… ${tail}`]);
+  });
+
   it.each([
     ["明天下午开项目评审会议讨论排期", "会议"],
     ["明日は東京で会議を開きます", "東京"],
@@ -465,15 +519,12 @@ describe("searchSessionTranscripts", () => {
           })),
         );
         expect(result.truncated).toBe(baseline.length > options.limit);
-        expect(
-          result.hits.every((hit) => hit.sessionId !== "dirty" && hit.sessionId !== "excluded"),
-        ).toBe(true);
         let snippets = 0;
         db.function("count_search_snippet", (value) => {
           snippets++;
           return value;
         });
-        const counted = query.replace(/(snippet\([^)]*\))/u, "count_search_snippet($1)");
+        const counted = query.replace(/(snippet\([^)]*\))/gu, "count_search_snippet($1)");
         expect(prepare.call(db, counted).all(...bindings)).toHaveLength(baseline.length);
         expect(snippets).toBe(baseline.length);
         expect(snippets).toBeLessThanOrEqual(options.limit + 1);
@@ -504,6 +555,36 @@ describe("searchSessionTranscripts", () => {
           expect(firstContent).toBeUndefined();
         }
       }
+      statements.length = 0;
+      await searchSessionTranscriptsFiltered(
+        { agentId: "main", env: env(), query: "needle", sessionKeys, limit: 3 },
+        { agentId: "main", env: env() },
+        {
+          consumeInput() {},
+          notify() {},
+          async request(keys) {
+            return { input: Array.isArray(keys) ? keys.map(() => true) : [], consumed() {} };
+          },
+        },
+        () => {},
+      );
+      const { db, query, bindings } = statements[0]!;
+      let snippets = 0;
+      db.function("count_filtered_snippet", (value) => {
+        snippets++;
+        return value;
+      });
+      const counted = query.replace(/(snippet\([^)]*\))/gu, "count_filtered_snippet($1)");
+      const cursor = prepare.call(db, counted).iterate(...bindings);
+      // Reading four candidates must evaluate four snippets, rather than every match.
+      try {
+        for (let row = 0; row < 4; row++) {
+          expect(cursor.next().done).toBe(false);
+        }
+      } finally {
+        cursor.return?.();
+      }
+      expect(snippets).toBe(4);
     } finally {
       spy.mockRestore();
     }

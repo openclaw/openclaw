@@ -35,7 +35,6 @@ export async function completeModelSetupWizard(
     isCurrent,
   }: ModelSetupWizardCompletion,
   pendingPrepareOption: ModelSetupPrepareOption | null,
-  catalogPreference: { nativeSessionCatalogsEnabled?: boolean },
 ): Promise<void> {
   const { state, firstRun, wizard, detect, activate } = owner;
   const prepareOption =
@@ -92,9 +91,6 @@ export async function completeModelSetupWizard(
   }
   wizard.close();
   if (activation) {
-    void activate(
-      { ...activation, ...catalogPreference },
-      activationTargetId(activation.kind, activation.modelRef),
-    );
+    void activate(activation, activationTargetId(activation.kind, activation.modelRef));
   }
 }

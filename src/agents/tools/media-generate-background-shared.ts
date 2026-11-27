@@ -5,6 +5,7 @@ import { getRuntimeConfig } from "../../config/config.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import {
+  composePreparedOnlySessionSource,
   composeSessionSourceAssertion,
   type SessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
@@ -36,7 +37,6 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
 import { normalizeMessageChannel } from "../../utils/message-channel-core.js";
-import { captureAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
 import type { RequiredCompletionTerminalResult } from "../completion-result.js";
 import type { AgentGeneratedAttachment } from "../generated-attachments.js";
 import {
@@ -55,10 +55,7 @@ import {
 import { tryResolveSubagentRequesterAgentId } from "../subagents/announce/subagent-announce-delivery.runtime.js";
 import { resolveAnnounceOrigin } from "../subagents/announce/subagent-announce-origin.js";
 import { resolveRequesterStoreKey } from "../subagents/announce/subagent-requester-store-key.js";
-import {
-  captureGatewayToolCallerAssertion,
-  getGatewayToolCallerIdentity,
-} from "./gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import {
   hasMediaGenerationCustodyObligation,
   retainBlockedMediaCompletion,
@@ -178,10 +175,8 @@ export function captureMediaGenerationAdmission(
 ): SessionSourceAssertion {
   const generation = getAgentRunLifecycleGeneration();
   const env = captureSessionTranscriptStorageEnvironment(process.env);
-  const assertInvocationCurrent = captureAgentToolSourceExecutionGuard();
-  const assertGatewayCallerCurrent = captureGatewayToolCallerAssertion();
   return composeSessionSourceAssertion(
-    [assertInvocationCurrent, assertGatewayCallerCurrent, assertSourceCurrent],
+    [composePreparedOnlySessionSource(getGatewayToolCallerIdentity()), assertSourceCurrent],
     (assertSource) => {
       assertSource();
       if (
@@ -337,7 +332,7 @@ async function createMediaGenerationTaskRun(
     touchMediaGenerationTaskRunContext(handle);
     return handle;
   } catch (error) {
-    // A revoked invocation cannot become an untracked foreground provider call.
+    // A stale admission owner cannot become an untracked foreground provider call.
     assertCurrent();
     log.warn("Failed to admit media generation", {
       sessionKey,
