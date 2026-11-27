@@ -64,6 +64,8 @@ export type CronDelivery = {
   mode: CronDeliveryMode;
   /** Resolve the owner's current direct-message route at execution time. */
   target?: "owner";
+  /** Retained from saved jobs. The public delivery schema does not author this field. */
+  directPolicy?: "allow" | "block";
   channel?: CronMessageChannel;
   to?: string;
   /** Explicit thread/topic id for channels that support threaded delivery. */

@@ -663,19 +663,15 @@ installation. This also protects updates started by supported older releases.
 ## Retired heartbeat-era automation options
 
 Run `openclaw doctor --fix` to repair stored jobs. Doctor backs up the cron
-store and removes Wait until idle, Skip empty scratch, and the direct-message
-policy. It pauses jobs when removing a policy would change execution or allow
-direct messages the job previously blocked, and reports which jobs to review
-before re-enabling. The default Proactive check normally stays enabled on its
-existing schedule. It can now run while another session on the agent is working.
+store and removes Wait until idle and Skip empty scratch. It pauses custom jobs
+when removing those settings changes when they run. The default Proactive check
+can run while another session on the agent is working.
 
-Doctor removes the primary `channel: "last"` selection and preserves saved
-coordinates, configured defaults, and conversation-bound routing. For an
-operator job with no such route or retained requester authority, Doctor can
-pin the last recorded successful destination, including its account and thread.
-Jobs without a recorded destination use normal route resolution. Owner delivery
-still resolves the owner’s direct messages. Failure alerts retain their own
-route settings.
+Doctor removes the old `channel: "last"` value for primary delivery. Jobs with
+an explicit destination keep it. Automatic delivery uses the current route
+each time the job runs. Saved direct-message blocks still apply, including when
+you edit a job or choose **Run Now**. Completion webhooks and failure-alert
+routes keep their saved destinations.
 
 ## Legacy cron delivery settings
 

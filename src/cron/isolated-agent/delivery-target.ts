@@ -160,7 +160,10 @@ function stripSelectedProviderPrefix(params: { channel: string; to?: string }): 
 export async function resolveDeliveryTarget(
   cfg: OpenClawConfig,
   agentId: string,
-  jobPayload: Pick<CronDeliveryPlan, "target" | "channel" | "to" | "threadId" | "accountId"> &
+  jobPayload: Pick<
+    CronDeliveryPlan,
+    "target" | "directPolicy" | "channel" | "to" | "threadId" | "accountId"
+  > &
     Partial<Pick<CronStoredJob, "sessionKey" | "sessionTarget" | "sourceConversation">>,
   options?: {
     dryRun?: boolean;
@@ -236,6 +239,7 @@ export async function resolveDeliveryTarget(
         target: "owner",
         channel: requestedChannel,
         accountId: jobPayload.accountId,
+        directPolicy: jobPayload.directPolicy,
       },
     });
     const to = stripSelectedProviderPrefix({ channel: resolved.channel, to: resolved.to });
@@ -253,6 +257,9 @@ export async function resolveDeliveryTarget(
           channel: resolved.channel,
           accountId: resolved.accountId,
           mode: "explicit",
+          ...(resolved.reason === "dm-blocked"
+            ? { deliverySuppressionReason: "channel_transform" as const }
+            : {}),
           error: new Error(
             `Owner delivery unavailable (${resolved.reason ?? "no-route"}); configure an authorized owner DM or edit this automation's delivery`,
           ),
@@ -513,6 +520,19 @@ export async function resolveDeliveryTarget(
     route && route.threadId === threadId
       ? route
       : await resolveRoute({ accountId, target: toCandidate, resolvedTarget, threadId });
+  if (
+    jobPayload.directPolicy === "block" &&
+    (resolvedTarget.kind === "user" ||
+      route?.chatType === "direct" ||
+      route?.peer.kind === "direct")
+  ) {
+    return {
+      ...failTarget(
+        new Error("Automation delivery to direct messages is blocked by delivery.directPolicy"),
+      ),
+      deliverySuppressionReason: "channel_transform",
+    };
+  }
   return {
     ok: true,
     channel,

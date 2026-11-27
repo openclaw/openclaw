@@ -31,7 +31,6 @@ export function hasRetiredHeartbeatOptions(job: {
   return (
     "idleOnly" in job ||
     Boolean(payload && "skipIfScratchEmpty" in payload) ||
-    Boolean(delivery && "directPolicy" in delivery) ||
     normalizeOptionalLowercaseString(delivery?.channel) === "last"
   );
 }

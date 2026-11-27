@@ -219,6 +219,7 @@ export async function launchCronRun(
         : {}),
       ...(configured?.accountId ? { accountId: configured.accountId } : {}),
       ...(configured?.mode === "none" ? { mode: "none" } : {}),
+      ...(configured?.directPolicy === "block" ? { directPolicy: "block" } : {}),
     };
     assertExecutionPolicy(executionJob);
   }

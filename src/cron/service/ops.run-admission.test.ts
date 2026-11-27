@@ -36,6 +36,32 @@ function blockedRun(
 }
 
 describe("cron service run admission", () => {
+  it("keeps the saved DM block through an ordinary edit and Run now", async () => {
+    const job = {
+      ...makeJob("legacy-dm-block"),
+      delivery: { mode: "announce" as const, target: "owner" as const, directPolicy: "block" },
+    };
+    const runIsolatedAgentJob = vi.fn<NonNullable<CronStateParams["runIsolatedAgentJob"]>>(
+      async () => ({ status: "ok" }),
+    );
+    const { state } = await createCronRunFixture(fixtures.makeStorePath().storePath, job, {
+      runIsolatedAgentJob,
+    });
+    try {
+      await update(state, job.id, {
+        description: "Reworded description",
+        delivery: { mode: "announce", target: "owner" },
+      });
+      await expect(run(state, job.id, "force")).resolves.toMatchObject({ ran: true });
+      expect(runIsolatedAgentJob.mock.calls[0]?.[0].job.delivery).toMatchObject({
+        target: "owner",
+        directPolicy: "block",
+      });
+    } finally {
+      stop(state);
+    }
+  });
+
   it("tells the operator to repair retired heartbeat options before Run now", async () => {
     const job = { ...makeJob("retired-heartbeat-option"), idleOnly: false };
     const { state } = await createCronRunFixture(fixtures.makeStorePath().storePath, job);

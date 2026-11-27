@@ -63,6 +63,7 @@ export function resolveCronNotificationQueueOwner(
 
 type CronFailureAlertRoute = {
   target?: CronDelivery["target"];
+  directPolicy?: CronDelivery["directPolicy"];
   channel: CronMessageChannel;
   to?: string;
   mode?: "announce" | "webhook";

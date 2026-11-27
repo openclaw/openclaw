@@ -565,7 +565,7 @@ describe("heartbeat cadence Doctor cutover", () => {
       },
     },
   ])(
-    "preserves quiet hours and pauses legacy DM-blocked $target delivery",
+    "preserves quiet hours and legacy DM blocks for $target delivery",
     async ({ target, isolatedSession, delivery }) => {
       const f = fixture({
         every: "15m",
@@ -583,7 +583,7 @@ describe("heartbeat cadence Doctor cutover", () => {
       });
       await retireHeartbeatWithDoctor(f.cfg, f.env);
       expect(readState(f)!.jobs[0]).toMatchObject({
-        enabled: target === "none",
+        enabled: true,
         sessionTarget: isolatedSession ? "isolated" : "session:agent:main:custom",
         sessionKey: "agent:main:custom",
         activeHours: { start: "22:00", end: "06:00", timezone: "America/New_York" },
@@ -594,7 +594,7 @@ describe("heartbeat cadence Doctor cutover", () => {
           lightContext: true,
           timeoutSeconds: 75,
         },
-        delivery,
+        delivery: { ...delivery, directPolicy: "block" },
       });
     },
   );

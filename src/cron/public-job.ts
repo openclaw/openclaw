@@ -17,6 +17,7 @@ export function toPublicCronJob(job: CronStoredJob): CronJob {
     toolsAllowExecTargetRequirement: _toolsAllowExecTargetRequirement,
     runtimeAuthority: _runtimeAuthority,
     runtimeAuthorityRecoveryRequired: _runtimeAuthorityRecoveryRequired,
+    delivery,
     ...publicJob
   } = job;
   const state = { ...job.state };
@@ -34,8 +35,14 @@ export function toPublicCronJob(job: CronStoredJob): CronJob {
   delete state.runningScheduleChangeId;
   delete state.failureAlertIncident;
   delete state.lastFailureNotificationId;
+  let publicDelivery: CronJob["delivery"];
+  if (delivery) {
+    const { directPolicy: _directPolicy, ...fields } = delivery;
+    publicDelivery = fields;
+  }
   return {
     ...publicJob,
+    ...(publicDelivery ? { delivery: publicDelivery } : {}),
     state,
     ...(job.schedule.kind === "stream"
       ? { streamExecutionHost: job.streamSandbox ? ("sandbox" as const) : ("gateway" as const) }

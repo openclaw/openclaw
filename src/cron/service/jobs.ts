@@ -438,7 +438,11 @@ export function applyJobPatch(
     }
     // Clear-only failure destinations retain their global-default opt-outs.
     const failureDestination = job.delivery?.failureDestination;
-    job.delivery = failureDestination ? { mode: "none", failureDestination } : undefined;
+    const directPolicy = job.delivery?.directPolicy;
+    job.delivery =
+      failureDestination || directPolicy
+        ? { mode: "none", failureDestination, directPolicy }
+        : undefined;
   }
   if (patch.state) {
     const statePatch = { ...patch.state } as Partial<CronJobState>;
@@ -569,7 +573,10 @@ export function applyDeclarativeJobSpec(
     toolsAllowExecTarget: opts.toolsAllowExecTarget,
   });
   const delivery = resolveInitialCronDelivery(input);
-  if (delivery) {
+  const directPolicy = job.delivery?.directPolicy;
+  if (directPolicy !== undefined) {
+    job.delivery = { ...structuredClone(delivery ?? { mode: "none" }), directPolicy };
+  } else if (delivery) {
     job.delivery = structuredClone(delivery);
   } else {
     delete job.delivery;

@@ -163,6 +163,10 @@ function convertMonitor(
   job.sessionTarget = heartbeat?.isolatedSession ? "isolated" : `session:${session.sessionKey}`;
   job.wakeMode = "now";
   job.activeHours = migrateActiveHours(heartbeat);
+  const directPolicy =
+    heartbeat?.directPolicy === "block" || previous?.delivery?.directPolicy === "block"
+      ? "block"
+      : heartbeat?.directPolicy;
   job.delivery = {
     mode:
       target === "none" || !legacyAlertsEnabled(cfg, target, heartbeat?.accountId)
@@ -175,13 +179,13 @@ function convertMonitor(
         : {}),
     ...(target !== "owner" && target !== "none" && heartbeat?.to ? { to: heartbeat.to } : {}),
     ...(heartbeat?.accountId ? { accountId: heartbeat.accountId } : {}),
+    ...(directPolicy ? { directPolicy } : {}),
   };
-  const blocked = heartbeat?.directPolicy === "block" && job.delivery.mode === "announce";
   if (!previous || isGeneratedHeartbeatMonitor(previous)) {
     delete job.declarationKey;
   }
   if (!previous) {
-    job.enabled = enrolled && intervalMs !== null && !blocked;
+    job.enabled = enrolled && intervalMs !== null;
     const everyMs = intervalMs ?? 30 * 60 * 1000;
     job.schedule = {
       kind: "every",
@@ -192,7 +196,7 @@ function convertMonitor(
   } else {
     // Config was the generated monitor's desired state, not merely its create default.
     // Preserve independent disable state and unchanged anchors/slots at ownership transfer.
-    job.enabled = previous.enabled && enrolled && intervalMs !== null && !blocked;
+    job.enabled = previous.enabled && enrolled && intervalMs !== null;
     if (
       isGeneratedHeartbeatMonitor(previous) &&
       intervalMs !== null &&

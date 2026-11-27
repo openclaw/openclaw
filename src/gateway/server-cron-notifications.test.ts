@@ -284,13 +284,14 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
         accountId: "requested-account",
         threadId: 42,
         target: "owner",
+        directPolicy: "block",
       });
       if (recipient) {
         await delivery;
         expect(mocks.resolveDeliveryTarget).toHaveBeenCalledWith(
           {},
           recipient,
-          expect.objectContaining({ target: "owner" }),
+          expect.objectContaining({ target: "owner", directPolicy: "block" }),
           expect.anything(),
         );
         expect(mocks.sendCronAnnouncePayloadStrict).toHaveBeenCalledWith(

@@ -18,6 +18,7 @@ export function mergeCronDelivery(
   const next: CronDelivery = {
     mode: existing ? existing.mode : implicitMode,
     target: existing?.target,
+    ...(existing?.directPolicy !== undefined ? { directPolicy: existing.directPolicy } : {}),
     channel: existing?.channel,
     to: existing?.to,
     threadId: existing?.threadId,

@@ -7,6 +7,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { CronFailureDestinationConfig } from "../config/types.cron.js";
 import { resolveTargetPrefixedChannel } from "../infra/outbound/channel-target-prefix.js";
+import { normalizeTargetForProvider } from "../infra/outbound/target-normalization.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 import {
   cronDeliveryUsesDefaultDestination,
@@ -20,14 +21,15 @@ import type { CronDelivery, CronJob, CronMessageChannel } from "./types.js";
 /** Normalized routing plan for a cron job's primary delivery behavior. */
 export type CronDeliveryPlan = Pick<
   CronDelivery,
-  "mode" | "target" | "channel" | "to" | "threadId" | "accountId"
+  "mode" | "target" | "directPolicy" | "channel" | "to" | "threadId" | "accountId"
 > & {
   source: "delivery";
   requested: boolean;
 };
 
 function resolveAnnounceChannel(params: { channel?: CronMessageChannel; to?: string }) {
-  return params.channel ?? resolveTargetPrefixedChannel(params.to);
+  const channel = params.channel === "last" ? undefined : params.channel;
+  return channel ?? resolveTargetPrefixedChannel(params.to);
 }
 
 /**
@@ -58,6 +60,7 @@ export function resolveCronDeliveryPlan(
       to,
       threadId: normalizeOptionalThreadValue(defaultDestination.threadId),
       accountId: normalizeOptionalString(defaultDestination.accountId),
+      directPolicy: delivery?.directPolicy,
       source: "delivery",
       requested: true,
     };
@@ -75,6 +78,7 @@ export function resolveCronDeliveryPlan(
     return {
       mode: resolvedMode,
       target: delivery.target,
+      directPolicy: delivery.directPolicy,
       channel: resolvedMode === "webhook" ? undefined : channel,
       to,
       threadId: resolvedMode === "webhook" ? undefined : deliveryThreadId,
@@ -235,7 +239,10 @@ export function resolveFailureDestination(
 
   const result: CronFailureDeliveryPlan = {
     mode: resolvedMode,
-    channel: resolvedMode === "announce" ? resolveAnnounceChannel({ channel, to }) : undefined,
+    channel:
+      resolvedMode === "announce"
+        ? (resolveAnnounceChannel({ channel, to }) ?? channel)
+        : undefined,
     ...(resolvedMode === "announce" && threadId !== undefined ? { threadId } : {}),
     to,
     accountId,
@@ -247,6 +254,21 @@ export function resolveFailureDestination(
   }
 
   return result;
+}
+
+export function normalizeCronDeliveryRecipient(
+  channel: CronMessageChannel | undefined,
+  to: string | undefined,
+): string | undefined {
+  if (!channel || to === undefined) {
+    return to;
+  }
+  try {
+    return normalizeTargetForProvider(channel, to) ?? to;
+  } catch {
+    // Invalid loaded targets are distinct routes; they must not block run finalization.
+    return to;
+  }
 }
 
 function isSameDeliveryTarget(
@@ -270,11 +292,15 @@ function isSameDeliveryTarget(
     channel: normalizeMessageChannel(delivery.channel),
     to: primaryTo,
   });
-  const failureChannelNormalized = failurePlan.channel === "last" ? undefined : failurePlan.channel;
+  const failureChannelNormalized = resolveAnnounceChannel({
+    channel: failurePlan.channel,
+    to: failurePlan.to,
+  });
 
   return (
     failureChannelNormalized === primaryChannelNormalized &&
-    failurePlan.to === primaryTo &&
+    normalizeCronDeliveryRecipient(failureChannelNormalized, failurePlan.to) ===
+      normalizeCronDeliveryRecipient(primaryChannelNormalized, primaryTo) &&
     failurePlan.accountId === primaryAccountId &&
     normalizeOptionalStringifiedId(failurePlan.threadId) === primaryThreadId
   );

@@ -497,6 +497,7 @@ async function sendGatewayCronFailureAlertUnderAdmission(
           requested: true,
           channel: params.channel === "last" ? undefined : params.channel,
           target: params.target,
+          directPolicy: params.directPolicy,
           to: params.to,
           accountId: params.accountId,
           threadId: params.threadId,

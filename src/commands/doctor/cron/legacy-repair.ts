@@ -326,7 +326,7 @@ export async function applyLegacyCronStoreRepair(params: {
     }
   }
 
-  const heartbeatChanges = await migrateRetiredHeartbeatOptions(storePath, repairableJobs, cfg);
+  const heartbeatChanges = await migrateRetiredHeartbeatOptions(storePath, repairableJobs);
   const storeChanged =
     heartbeatChanges.length > 0 ||
     (state.legacyImport?.count ?? 0) > 0 ||

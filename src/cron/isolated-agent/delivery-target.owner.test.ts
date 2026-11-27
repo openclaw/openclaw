@@ -67,6 +67,18 @@ it.each([
   ],
   ["missing owner", { target: "owner" }, { ...cfg, commands: {} }, unavailable],
   ["unknown account", { target: "owner", accountId: "missing" }, cfg, unavailable],
+  [
+    "blocked owner",
+    { target: "owner", channel: "beta", directPolicy: "block" },
+    cfg,
+    { ok: false, deliverySuppressionReason: "channel_transform" },
+  ],
+  [
+    "blocked explicit recipient",
+    { channel: "beta", to: "user:bob", directPolicy: "block" },
+    cfg,
+    { ok: false, deliverySuppressionReason: "channel_transform" },
+  ],
 ] as const)(
   "resolves %s without inheriting the remembered group",
   async (_name, target, config, expected) => {

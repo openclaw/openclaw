@@ -178,6 +178,8 @@ job clears the previous explicit recipient and thread. Selecting a new explicit
 recipient replaces owner targeting. Use `--clear-delivery-target` to remove
 owner targeting.
 
+A saved direct-message block still applies after an upgrade, edit, or manual run.
+
 Use `payload.includeReasoning: true` (`--include-reasoning`) on an agent-turn
 job only when reasoning returned by the agent should accompany a meaningful result.
 Reasoning alone does not create a notification; omitting this setting keeps ordinary
@@ -190,9 +192,9 @@ receiver but its response is lost. An explicit HTTP rejection or a failure prove
 to precede sending records **Not delivered** and allows the in-app fallback
 notification, including when Gateway work admission refuses an alert before its
 transport starts. An unknown outcome does not trigger that fallback.
-When an alert on an owner-targeted route is
-recorded as Not delivered, its fallback turn stays in-session: it is not delivered
-automatically and has no current external conversation for implicit sends.
+When an owner-targeted alert or an alert with a saved direct-message block can’t be
+delivered, its fallback stays in the session. It sends no automatic
+external notification.
 
 A model-backed run can finish successfully even when its final reply says the requested task is blocked or could not be completed. The scheduler does not infer execution failure from assistant prose. Such a reply follows normal delivery: `announce` sends it, `none` stays silent, and `NO_REPLY` suppresses a text-only announcement without failing the run. A blocker report does not itself increment the execution-failure streak, trigger error backoff, or request a failure alert or owner-conversation repair. Runtime errors, such as provider failures and execution timeouts, still use the failure policy below.
 
