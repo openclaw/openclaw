@@ -63,10 +63,7 @@ const HANDOFF_STATUS_ORDER: readonly ChatHandoffSession["status"][] = [
 /** Yielded on sessions_yield with no live work of its own or under it. */
 function isYieldedChild(row: GatewaySessionRow) {
   return (
-    row.subagentRunState === "paused" &&
-    row.status !== "queued" &&
-    !isSessionRunStateActive(row) &&
-    !row.hasActiveSubagentRun
+    row.subagentRunState === "paused" && !isSessionRunStateActive(row) && !row.hasActiveSubagentRun
   );
 }
 

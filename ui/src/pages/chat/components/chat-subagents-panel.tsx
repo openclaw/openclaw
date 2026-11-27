@@ -17,11 +17,7 @@ import { isSessionRunStateActive } from "../../../lib/session-run-state.ts";
 import { parseAgentSessionKey } from "../../../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import type { PaneSessionChangeOptions } from "../chat-pane-shared.ts";
-import {
-  endedWithoutFinishing,
-  isUnfinishedSubagent,
-  pausedSubagentStatus,
-} from "../chat-spawned-subagent.ts";
+import { endedWithoutFinishing, isUnfinishedSubagent } from "../chat-spawned-subagent.ts";
 import { SubagentsPanelData, type SubagentsPanelRow } from "../subagents-panel-data.ts";
 import {
   SessionPanelGroups,
@@ -33,7 +29,10 @@ import { ChatSubagentsMobileList, type ChatSubagentMobileItem } from "./chat-sub
 import "./chat-session-panels.css";
 import "./chat-subagents-panel.css";
 import { ChatSubagentsNative } from "./chat-subagents-native.tsx";
-import { ChatSubagentsPanelDesktop } from "./chat-subagents-panel-desktop.tsx";
+import {
+  ChatSubagentsPanelDesktop,
+  pausedSubagentStatus,
+} from "./chat-subagents-panel-desktop.tsx";
 import { createSubagentsPresentation } from "./chat-subagents-presentation.ts";
 
 registerEnglishCatalog(registerChatSessionOptionalEnglish);

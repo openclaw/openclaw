@@ -297,18 +297,6 @@ export function isUnfinishedSubagent(row: GatewaySessionRow): boolean {
   );
 }
 
-/** What a paused subagent waits on; undefined when it is not paused or waits on children. */
-export function pausedSubagentStatus(row: GatewaySessionRow): string | undefined {
-  if (row.subagentRunState !== "paused") {
-    return undefined;
-  }
-  return row.backgroundProcessCount
-    ? t("chat.handoffSessionStatus.background")
-    : row.hasActiveSubagentRun
-      ? undefined
-      : t("chat.handoffSessionStatus.paused");
-}
-
 function finishedRuntimeMs(row: GatewaySessionRow): number | null {
   const { runtimeMs, startedAt, endedAt } = row;
   if (typeof runtimeMs === "number" && Number.isFinite(runtimeMs) && runtimeMs >= 0) {
