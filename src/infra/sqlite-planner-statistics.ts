@@ -131,8 +131,8 @@ export function sqlitePlannerStatisticsNeedRefresh(database: DatabaseSync): bool
     const analysisChanges = size >= 0 || rows.length > 0;
     const analyzed = new Set(rows.map((row) => row.idx));
     if (indexes.some((index) => !analyzed.has(index.name))) {
-      // An index without statistics is analyzed unconditionally.
-      if (analysisChanges) {
+      // An index without statistics analyzes a table with rows; an empty one is skipped.
+      if (size >= 0) {
         return true;
       }
       continue;

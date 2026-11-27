@@ -159,6 +159,15 @@ describe("SQLite planner maintenance", () => {
       "refreshed after single delete",
       "PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;",
     );
+    // An empty table keeps its old statistics; optimize skips it even with an unanalyzed index.
+    observe(
+      "new index on an emptied analyzed table",
+      `CREATE TABLE lone (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
+       ${fill("lone", 1, 400)}
+       PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;
+       DELETE FROM lone;
+       CREATE INDEX lone_value ON lone(value);`,
+    );
     // Two short-row leaves under a one-cell root: the estimate counts the root's two
     // children, so a recorded count of 15 sits just outside optimize's 10x band.
     observe(

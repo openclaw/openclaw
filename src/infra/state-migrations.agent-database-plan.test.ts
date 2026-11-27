@@ -342,8 +342,15 @@ describe("agent database migration plan", () => {
   ];
   let dropped = "";
 
-  // POSIX mode bits are the permission guard's fixture.
-  it.each(guards.filter((guard) => !windows || guard.condition !== "permissions"))(
+  // On Windows permissions always have work, so the plan stops before its whole-store
+  // reads (archives, archive files, integrity), and POSIX mode bits are no fixture.
+  const windowsUnread = new Set([
+    "permissions",
+    "transcript-archives",
+    "archive-files",
+    "integrity",
+  ]);
+  it.each(guards.filter((guard) => !windows || !windowsUnread.has(guard.condition)))(
     "reports $condition as work and the pass repairs it",
     async (guard) => {
       const fixture = await healthyInstall();
@@ -383,7 +390,7 @@ describe("agent database migration plan", () => {
     try {
       const { plan, conditions } = await conditionsOf(env);
       expect(conditions["schema-version"]).toBe("undecidable");
-      expect(plan.pending).toBe("undecidable");
+      expect(plan.pending).toBe(windows ? "work" : "undecidable");
     } finally {
       installDeletedAgentDatabaseFences([]);
     }
