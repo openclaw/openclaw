@@ -116,19 +116,12 @@ function estimateTranscriptBoundaryTokenPressure(
   params: Parameters<typeof estimateLlmBoundaryTokenPressure>[0],
 ): TranscriptBoundaryTokenPressure {
   const replay = params.replay
-    ? resolveCompactionReplayPressure(
-        params.messages,
-        params.replay.model,
-        params.replay,
-        {
-          text: estimateStringTokenPressure,
-          image: () => IMAGE_BLOCK_TOKENS,
-          json: estimateJsonPayloadTokenPressure,
-          toolResult: estimateStringTokenPressure,
-        },
-        params.systemPrompt,
-        params.requestContext,
-      )
+    ? resolveCompactionReplayPressure(params.messages, params.replay.model, params.replay, {
+        text: estimateStringTokenPressure,
+        image: () => IMAGE_BLOCK_TOKENS,
+        json: estimateJsonPayloadTokenPressure,
+        toolResult: estimateStringTokenPressure,
+      })
     : undefined;
   // Resolve the outgoing replay first: a fresh full-history estimate would be discarded.
   const boundaryPressure = !replay
@@ -143,14 +136,13 @@ function estimateTranscriptBoundaryTokenPressure(
   }
   const messages = replay?.messages ?? params.messages;
   const boundary = resolveProviderContextBoundary(messages);
-  const measuredTokens = replay?.measuredTokens ?? boundary?.totalTokens;
+  const measuredTokens = boundary?.totalTokens;
   // The provider total owns transcript items through its assistant record. It has
   // no system-prompt provenance, so the current rendered prompt stays local too.
   const messagesForPressure = boundary ? messages.slice(boundary.index + 1) : messages;
   const locallyEstimatedTokens = messagesForPressure.reduce(
     (sum, message) => sum + estimateMessageTokenPressure(message),
-    estimateRenderedPromptTokens(params) +
-      (boundary ? 0 : (replay?.prefixTokens ?? 0) - (replay?.measuredTokens ?? 0)),
+    estimateRenderedPromptTokens(params) + (boundary ? 0 : (replay?.prefixTokens ?? 0)),
   );
   const toolSchemaTokens = Math.max(
     0,
@@ -166,9 +158,8 @@ function estimateTranscriptBoundaryTokenPressure(
     estimatedPromptTokens:
       (measuredTokens ?? 0) +
       Math.ceil(locallyEstimatedTokens * SAFETY_MARGIN) +
-      // A saved replay prefix does not bind today's tool definitions. Reserve
-      // their current size even when covered conversation usage is measured.
-      (boundary && !replay ? 0 : toolSchemaTokens),
+      // Measured usage already counts the tool definitions its request sent.
+      (boundary ? 0 : toolSchemaTokens),
     source:
       measuredTokens !== undefined
         ? "provider_context_usage"

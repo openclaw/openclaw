@@ -1,4 +1,4 @@
-import type { Context, Model } from "@openclaw/llm-core";
+import type { Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getAiTransportHost } from "../host.js";
 import { resolveNewestAnthropicCompaction } from "./anthropic-compaction-replay.js";
@@ -7,7 +7,6 @@ import {
   CompactionReplayRefreshRequiredError,
   resolveNewestOpenAIResponsesCompactionReplay,
 } from "./openai-responses-compaction-replay.js";
-import { resolveResponsesContextUsageBoundary } from "./openai-responses-context-usage.js";
 import { OPENAI_RESPONSES_APIS } from "./openai-responses-contracts.js";
 import {
   createCompactionReplayWindowFactCollector as createWindowFactCollector,
@@ -188,15 +187,13 @@ function estimateResponsesInput(
   }, 0);
 }
 
-/** Estimate the canonical prefix and its tail once, independent of unbound usage snapshots. */
+/** Estimate the canonical prefix; later same-route usage anchors the measured window. */
 export function resolveCompactionReplayPressure<T extends ReplayMessage>(
   messages: T[],
   model: Model,
   identity: ReplayIdentity,
   estimate: ReplayPressureEstimator,
-  systemPrompt?: string,
-  requestContext?: Context,
-): { messages: T[]; prefixTokens: number; measuredTokens?: number } | undefined {
+): { messages: T[]; prefixTokens: number } | undefined {
   const checkpoint = resolveCompactionSource(messages, model, identity);
   if (!checkpoint) {
     return undefined;
@@ -215,42 +212,13 @@ export function resolveCompactionReplayPressure<T extends ReplayMessage>(
       : checkpoint.mode === "complete-window"
         ? estimateResponsesInput(checkpoint.output, estimate, checkpoint.outputTokens)
         : estimate.text(checkpoint.item.encrypted_content);
-  const measuredBoundary =
-    checkpoint.family === "responses"
-      ? resolveResponsesContextUsageBoundary(
-          messages,
-          model,
-          identity,
-          systemPrompt,
-          requestContext,
-        )
-      : undefined;
-  if (measuredBoundary) {
-    // Async tool results can be persisted before the final usage event. The wire
-    // owner orders them after its response; count that suffix instead of a raw index.
-    return {
-      messages: [],
-      prefixTokens:
-        measuredBoundary.totalTokens + estimateResponsesInput(measuredBoundary.suffix, estimate),
-      measuredTokens: measuredBoundary.totalTokens,
-    };
-  }
-  // The checkpoint-producing request predates its replacement window. Later usage
-  // is authoritative only when its saved wire prefix still matches this replay.
+  // The checkpoint-producing request predates its replacement window; later usage
+  // measures the window this replay continues.
   const { contextUsage: _staleContextUsage, ...usage } = checkpoint.owner.usage;
-  const tail: T[] = [];
-  for (const message of messages.slice(ownerIndex + 1)) {
-    if (!isAssistantReplayMessage(message) || message.usage.contextUsage === undefined) {
-      tail.push(message);
-      continue;
-    }
-    const { contextUsage: _unboundContextUsage, ...billedUsage } = message.usage;
-    tail.push({ ...message, usage: billedUsage });
-  }
   return {
     messages: [
       { ...owner, content: checkpoint.owner.content.slice(checkpoint.replayIndex), usage },
-      ...tail,
+      ...messages.slice(ownerIndex + 1),
     ],
     prefixTokens,
   };
