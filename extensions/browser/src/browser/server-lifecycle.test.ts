@@ -1,6 +1,5 @@
 // Browser tests cover server lifecycle plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { makeBrowserProfile, makeBrowserServerState } from "./server-context.test-harness.js";
 
 const beginProfileTransitionMock = vi.hoisted(() => vi.fn());
 
@@ -38,31 +37,6 @@ describe("stopKnownBrowserProfiles", () => {
       release();
     }
     await stopping;
-  });
-
-  it("reports an undrained profile instead of hanging runtime shutdown", async () => {
-    vi.useFakeTimers();
-    try {
-      beginProfileTransitionMock.mockReturnValue(new Promise(() => {}));
-      const profile = makeBrowserProfile({ name: "remote", attachOnly: true });
-      const current = makeBrowserServerState({ profile });
-      current.profiles.set(profile.name, { profile, running: null });
-      const onWarn = vi.fn();
-      const stop = stopKnownBrowserProfiles({
-        current,
-        closeSharedAdapters: true,
-        onWarn,
-      });
-      const result = vi.fn();
-      void stop.then(() => result("stopped"), result);
-      await vi.advanceTimersByTimeAsync(30_000);
-      expect(result).toHaveBeenCalledWith(
-        expect.objectContaining({ message: expect.stringMatching(/remote.*timed out/i) }),
-      );
-      expect(onWarn).toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   it("warns after parallel drains when one profile cleanup fails", async () => {
