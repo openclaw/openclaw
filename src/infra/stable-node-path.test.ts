@@ -30,6 +30,26 @@ describe("resolveStableNodePath", () => {
     });
   });
 
+  it("resolves shell-scoped runtime links to the persistent installation path", async () => {
+    await withTestDir({ prefix: "openclaw-stable-node-" }, async (prefix) => {
+      const installation = path.join(prefix, "fnm", "node-versions", "v26.13.1", "installation");
+      const shellScoped = path.join(prefix, "fnm_multishells", "38344_1795483895345");
+      const shellNode = path.join(shellScoped, "node.exe");
+      const installedNode = path.join(installation, "node.exe");
+
+      await fs.mkdir(installation, { recursive: true });
+      await fs.writeFile(installedNode, "", "utf8");
+      await fs.mkdir(path.dirname(shellScoped), { recursive: true });
+      await fs.symlink(
+        installation,
+        shellScoped,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+
+      await expect(resolveStableNodePath(shellNode)).resolves.toBe(installedNode);
+    });
+  });
+
   it("falls back to the bin symlink for the default formula, otherwise original path", async () => {
     await withTestDir({ prefix: "openclaw-stable-node-" }, async (prefix) => {
       const defaultNode = path.join(prefix, "Cellar", "node", "25.9.0", "bin", "node");
