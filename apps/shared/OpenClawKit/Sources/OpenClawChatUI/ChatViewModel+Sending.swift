@@ -55,10 +55,18 @@ extension OpenClawChatViewModel {
 
     var workingIndicatorIdentity: String {
         let selectedRunIDs = self.liveUsageRunID.map { Set([$0]) } ?? []
+        var inputs = pendingLocalUserEchoMessageIDsByRunID
+        // Adopting the Gateway's copy of the input ends its echo entry but keeps its ID. Without this the
+        // line was rebuilt mid-turn: its claw restarted and its label went blank.
+        if let run = self.liveUsageRunID, inputs[run] == nil,
+           let input = self.messages.last(where: { $0.role == "user" && $0.workRunID == run })
+        {
+            inputs[run] = input.id
+        }
         return ChatWorkingIdentity.resolve(
             sessionKey: sessionKey,
             pendingRunIDs: selectedRunIDs,
-            localUserMessageIDsByRunID: pendingLocalUserEchoMessageIDsByRunID,
+            localUserMessageIDsByRunID: inputs,
             fallbackGeneration: runOwnershipGeneration)
     }
 

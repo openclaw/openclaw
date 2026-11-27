@@ -466,10 +466,11 @@ extension OpenClawSnapshotUITests {
         XCTAssertEqual(input.value as? String, text)
         send.tap()
 
+        let working = app.descendants(matching: .any)["chat-working-status"]
         let failureContext = { (checkpoint: String) in
             "IOS_RELEASE_CHAT_FAILURE \(stage) \(checkpoint) draft=\(input.value as? String == text) " +
                 "keyboard=\(app.keyboards.firstMatch.exists) reply=\(app.staticTexts[replyMarker].exists) " +
-                "writing=\(app.staticTexts["Writing"].exists) jump=\(app.buttons["Jump to latest reply"].exists) " +
+                "working=\(working.exists) jump=\(app.buttons["Jump to latest reply"].exists) " +
                 "foreground=\(app.state == .runningForeground) input=\(input.exists) " +
                 "transcript=\(app.scrollViews["chat-transcript"].exists) send=\(send.exists)"
         }
@@ -478,7 +479,7 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(
             app.staticTexts[replyMarker].waitForExistence(timeout: 60),
             failureContext("reply"))
-        XCTAssertTrue(app.staticTexts["Writing"].waitForNonExistence(timeout: 5))
+        XCTAssertTrue(working.waitForNonExistence(timeout: 5))
     }
 
     func dismissChatKeyboardThroughTranscript(in app: XCUIApplication) throws {

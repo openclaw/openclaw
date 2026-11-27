@@ -1239,65 +1239,6 @@ private struct AttachmentRow: View {
     }
 }
 
-@MainActor
-struct ChatTypingIndicatorBubble: View {
-    @Environment(\.openClawAssistantRunContent) private var isRunContent
-    let showsAssistantAvatar: Bool
-    let runIdentity: String
-    let outputTokens: Int?
-    var status: String?
-
-    var body: some View {
-        HStack(alignment: .center, spacing: 8) {
-            if self.showsAssistantAvatar, !self.isRunContent {
-                ChatAssistantAvatar(size: 28)
-            }
-
-            HStack(spacing: 9) {
-                ChatWorkingIndicatorContent(
-                    runIdentity: self.runIdentity,
-                    outputTokens: self.outputTokens,
-                    status: self.status)
-                    .id(self.runIdentity)
-            }
-            .padding(.vertical, 5)
-            .fixedSize(horizontal: true, vertical: false)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .focusable(false)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(
-            Text(verbatim: self.status ?? String(localized: "Writing"))
-                .font(OpenClawChatTypography.caption))
-    }
-}
-
-private struct ChatWorkingIndicatorContent: View {
-    @State private var startedAt: Date
-    let seed: String
-    let outputTokens: Int?
-
-    let status: String?
-
-    init(runIdentity: String, outputTokens: Int?, status: String? = nil) {
-        _startedAt = State(initialValue: Date())
-        self.seed = runIdentity
-        self.outputTokens = outputTokens
-        self.status = status
-    }
-
-    var body: some View {
-        HStack(spacing: 9) {
-            ChatWorkingClawView(seed: self.seed)
-            ChatWorkingStatusText(
-                startedAt: self.startedAt,
-                seed: self.seed,
-                outputTokens: self.outputTokens,
-                status: self.status)
-        }
-    }
-}
-
 /// Inline playback state under an assistant bubble while Listen is active;
 /// tapping it stops speech.
 struct ChatSpeechStatusChip: View {
@@ -1380,15 +1321,6 @@ struct ChatOutboxStatusLabel: View {
         case .failed:
             ("Not sent", "exclamationmark.circle", "Not sent, touch and hold to retry or delete")
         }
-    }
-}
-
-extension ChatTypingIndicatorBubble: @MainActor Equatable {
-    static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.showsAssistantAvatar == rhs.showsAssistantAvatar &&
-            lhs.runIdentity == rhs.runIdentity &&
-            lhs.outputTokens == rhs.outputTokens &&
-            lhs.status == rhs.status
     }
 }
 
