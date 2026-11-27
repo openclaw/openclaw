@@ -20,6 +20,7 @@ import {
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
+import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-chunking";
 import {
   deliverFinalAnswerText,
   handlePreviewFinalizedResult,
@@ -309,7 +310,27 @@ async function deliverReplyWithNormalization(
     return await settleTerminalNoVisibleDelivery(turn, info);
   }
   const controls = resolvePayloadTelegramControls(turn, deduped);
-  const effectivePayload = controls.payload;
+  let effectivePayload = controls.payload;
+  // Models flagged emitsReasoningInContent can carry tagged reasoning sections
+  // inside delivered text. Strip them before any delivery decision so a final
+  // whose text reduces to nothing settles as silent instead of leaking the tags.
+  if (
+    turn.emitsReasoningInContent &&
+    (info.kind === "final" || info.kind === "block") &&
+    payload.isError !== true &&
+    effectivePayload.channelData?.askUser === undefined &&
+    effectivePayload.interactive === undefined &&
+    typeof effectivePayload.text === "string"
+  ) {
+    const stripped = stripReasoningTagsFromText(effectivePayload.text, {
+      mode: "strict",
+      trim: "both",
+      recoverUnclosed: true,
+    });
+    if (stripped !== effectivePayload.text) {
+      effectivePayload = applyTextToPayload(effectivePayload, stripped);
+    }
+  }
   const onMediaAccepted =
     info.kind === "block"
       ? (mediaUrls: readonly string[]) =>

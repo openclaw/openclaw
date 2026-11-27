@@ -5,6 +5,7 @@ import {
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import type { BlockReplyContext } from "openclaw/plugin-sdk/reply-runtime";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   TelegramDispatchTurn as Turn,
   TelegramDispatchTurnConfig as TurnConfig,
@@ -348,6 +349,12 @@ export async function ingestDraftLaneSegments(
     if (!stream) {
       return;
     }
+    // Models flagged emitsReasoningInContent cannot be told reasoning from reply
+    // inside a content delta. Buffer the whole stream and skip the answer preview;
+    // the final delivery carries the actual reply.
+    if (turn.emitsReasoningInContent) {
+      return;
+    }
     const rotationPending =
       turn.streamMode !== "progress" &&
       (turn.activeAnswerDraftIsToolProgressOnly ||
@@ -532,7 +539,39 @@ export function beginDraftQueuedFollowup(turn: Turn): void {
 }
 
 export async function cleanupDrafts(turn: Turn, superseded: boolean): Promise<void> {
-  await turn.previewLifecycle.cleanup({
-    failed: superseded || turn.dispatchError != null || turn.agentRunFailed,
-  });
+  const failed = superseded || turn.dispatchError != null || turn.agentRunFailed;
+  if (!failed && turn.previewLifecycle.finalSuppressed) {
+    await reclaimSuppressedDraftPages(turn);
+  }
+  await turn.previewLifecycle.cleanup({ failed });
+}
+
+/**
+ * Reclaims visible streaming pages left behind when the final reply is silent.
+ * Retained pagination pages exist for prompt context on delivered turns; a
+ * suppressed final owns no reply, so every non-finalized page is orphaned.
+ * Best-effort per message: a failed delete only logs and never fails the turn.
+ */
+async function reclaimSuppressedDraftPages(turn: Turn): Promise<void> {
+  const chatId = turn.context.chatId;
+  for (const lane of [turn.answerLane, turn.reasoningLane]) {
+    // Accepted blocks and their pages keep custody during cleanup.
+    if (lane.finalized) {
+      continue;
+    }
+    for (const page of lane.retainedPromptContextPages.splice(0)) {
+      try {
+        const deleted = await turn.bot.api.deleteMessage(chatId, page.messageId);
+        if (!deleted) {
+          draftLogger.warn(
+            `telegram: suppressed final draft page deletion unconfirmed (chat=${chatId}, message=${page.messageId})`,
+          );
+        }
+      } catch (err) {
+        draftLogger.warn(
+          `telegram: suppressed final draft page deletion failed (chat=${chatId}, message=${page.messageId}): ${formatErrorMessage(err)}`,
+        );
+      }
+    }
+  }
 }

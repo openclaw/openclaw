@@ -64,6 +64,8 @@ export type ModelCatalogCompatConfig = {
   /** Name of the sampling seed field; Mistral uses `random_seed`. */
   seedField?: "seed" | "random_seed";
   emitsDsmlToolCalls?: boolean;
+  /** The model emits its own reasoning into the content stream; channels gate visible previews accordingly. */
+  emitsReasoningInContent?: boolean;
   requiresTypedUnionBranches?: boolean;
   requiresNonEmptyUserOrAssistantMessage?: boolean;
   cacheControlSystemOnly?: boolean;

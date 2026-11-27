@@ -188,4 +188,11 @@ export type TelegramDispatchTurn = TelegramDispatchTurnConfig &
      */
     finalHandoff?: "progress-continuation" | "delivery-queue";
     dispatchError?: unknown;
+    /**
+     * The selected model opts in to emitting reasoning inside the OpenAI-compatible
+     * content stream (compat.emitsReasoningInContent). Answer-lane content previews
+     * are suppressed for such models and delivered text is stripped of tagged
+     * reasoning sections; resolved from onModelSelected, never from session state.
+     */
+    emitsReasoningInContent: boolean;
   };

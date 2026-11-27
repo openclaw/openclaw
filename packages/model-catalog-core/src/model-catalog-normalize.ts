@@ -302,6 +302,7 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
     "adaptiveThinking",
     "thinkingRequired",
     "emitsDsmlToolCalls",
+    "emitsReasoningInContent",
     "requiresTypedUnionBranches",
     "requiresNonEmptyUserOrAssistantMessage",
     "cacheControlSystemOnly",
