@@ -115,6 +115,7 @@ type WikiToolMemoryContext = {
   conversationRecall?: OpenClawPluginToolContext["conversationRecall"];
   signal?: AbortSignal;
   memoryContext?: MemoryCallerContext;
+  /** Present while the service runs; it owns import and compile after the search. */
   refreshSources?: () => void;
 };
 
@@ -170,31 +171,36 @@ export function createWikiSearchTool(
       try {
         return await racePromiseWithAbortSignal(
           async () => {
-            // One-shot callers have no service to own background work.
             if (!memoryContext.refreshSources) {
+              // One-shot callers have no service to own background work.
               await syncMemoryWikiImportedSources({
                 config,
                 appConfig,
                 signal: memoryContext.signal ?? signal,
               });
+              signal.throwIfAborted();
             }
-            signal.throwIfAborted();
-            const results = await searchMemoryWiki({
-              config,
-              appConfig,
-              ...memoryContext,
-              signal,
-              ...(memoryContext.memoryContext
-                ? { memoryContext: { ...memoryContext.memoryContext, signal } }
-                : {}),
-              query: params.query,
-              maxResults: params.maxResults,
-              ...(params.backend ? { searchBackend: params.backend } : {}),
-              ...(params.corpus ? { searchCorpus: params.corpus } : {}),
-              ...(params.mode ? { mode: params.mode } : {}),
-            });
-            signal.throwIfAborted();
-            return textResult(renderWikiSearchResults(results), { results });
+            try {
+              const results = await searchMemoryWiki({
+                config,
+                appConfig,
+                ...memoryContext,
+                signal,
+                ...(memoryContext.memoryContext
+                  ? { memoryContext: { ...memoryContext.memoryContext, signal } }
+                  : {}),
+                query: params.query,
+                maxResults: params.maxResults,
+                ...(params.backend ? { searchBackend: params.backend } : {}),
+                ...(params.corpus ? { searchCorpus: params.corpus } : {}),
+                ...(params.mode ? { mode: params.mode } : {}),
+              });
+              signal.throwIfAborted();
+              return textResult(renderWikiSearchResults(results), { results });
+            } finally {
+              // After the search: a cold read owner activates through the vault queue.
+              memoryContext.refreshSources?.();
+            }
           },
           signal,
           (abortedSignal) =>

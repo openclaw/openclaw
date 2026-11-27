@@ -1,10 +1,10 @@
-import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenClawConfig } from "../api.js";
 import { syncMemoryWikiBridgeSources } from "./bridge.js";
 import {
   refreshMemoryWikiIndexesAfterImport,
   type RefreshMemoryWikiIndexesResult,
 } from "./compile.js";
+import { setMemoryWikiDashboardState } from "./compiled-cache.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import {
   resolveMemoryWikiVaultMutationKey,
@@ -130,94 +130,16 @@ export async function waitForMemoryWikiImportedSourceSyncs(): Promise<void> {
   );
 }
 
-/** Demand-driven maintenance belongs to the service, never to a search deadline. */
-export function createMemoryWikiSourceRefresh(options: {
-  scheduler: PluginServiceSchedulerV1;
-  onError: (config: ResolvedMemoryWikiConfig, error: unknown) => void;
-}) {
-  type Refresh = {
-    requestKey: string;
-    appConfig?: OpenClawConfig;
-    pending: boolean;
-    nextRunAt: number;
-    failures: number;
-    retry?: ReturnType<PluginServiceSchedulerV1["schedule"]>;
-  };
-  const refreshes = new Map<string, Refresh>();
-  const { scheduler } = options;
-  const { signal } = scheduler;
-  signal.addEventListener(
-    "abort",
-    () => {
-      refreshes.clear();
-    },
-    { once: true },
-  );
-
-  return (config: ResolvedMemoryWikiConfig, appConfig?: OpenClawConfig): void => {
-    if (signal.aborted) {
+/** Service-owned refresh. The caller answers from the current index. */
+export function refreshMemoryWikiImportedSources(
+  params: { config: ResolvedMemoryWikiConfig; appConfig?: OpenClawConfig; signal: AbortSignal },
+  onError: (error: unknown) => void,
+): void {
+  void syncMemoryWikiImportedSources(params).catch((error: unknown) => {
+    if (params.signal.aborted) {
       return;
     }
-    // The scheduler owns the async scope as well as cancellation. A fire-and-forget
-    // promise would retain the search caller's closing filesystem/state scope.
-    scheduler.schedule({
-      id: `memory-wiki-demand:${config.vault.path}`,
-      delayMs: 0,
-      run: async () => {
-        try {
-          const vaultKey = await resolveMemoryWikiVaultMutationKey(config.vault.path);
-          if (signal.aborted) {
-            return;
-          }
-          const requestKey = JSON.stringify({
-            ...config,
-            vault: { ...config.vault, path: vaultKey },
-          });
-          let refresh = refreshes.get(vaultKey);
-          if (!refresh || refresh.requestKey !== requestKey || refresh.appConfig !== appConfig) {
-            refresh?.retry?.cancel();
-            refresh = { requestKey, appConfig, pending: false, nextRunAt: 0, failures: 0 };
-            refreshes.set(vaultKey, refresh);
-          }
-          const state = refresh;
-          const run = async () => {
-            if (signal.aborted || refreshes.get(vaultKey) !== state || state.pending) {
-              return;
-            }
-            state.pending = true;
-            state.retry?.cancel();
-            state.retry = undefined;
-            try {
-              await syncMemoryWikiImportedSources({ config, appConfig, signal });
-              state.failures = 0;
-              // Coalesce successful checks too: dashboard polls and searches must not
-              // repeatedly stat every imported source. Explicit imports bypass this.
-              state.nextRunAt = scheduler.now() + 60_000;
-            } catch (error) {
-              if (signal.aborted || refreshes.get(vaultKey) !== state) {
-                return;
-              }
-              const delay = Math.min(60_000, 5_000 * 2 ** Math.min(state.failures++, 4));
-              state.nextRunAt = scheduler.now() + delay;
-              state.retry = scheduler.schedule({
-                id: `memory-wiki-retry:${vaultKey}`,
-                delayMs: delay,
-                run,
-              });
-              options.onError(config, error);
-            } finally {
-              state.pending = false;
-            }
-          };
-          if (!state.pending && !state.retry && scheduler.now() >= state.nextRunAt) {
-            await run();
-          }
-        } catch (error) {
-          if (!signal.aborted) {
-            options.onError(config, error);
-          }
-        }
-      },
-    });
-  };
+    setMemoryWikiDashboardState(params.config, { state: "failed" });
+    onError(error);
+  });
 }

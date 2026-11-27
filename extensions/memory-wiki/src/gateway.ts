@@ -254,6 +254,7 @@ export function registerMemoryWikiGatewayMethods(params: {
   registerResultMethod("wiki.search", READ_SCOPE, async (requestParams, memoryContext) => {
     const { agentId, appConfig, config, signal } = resolveRequestContext(requestParams);
     if (!signal) {
+      // One-shot hosts have no service to own background work.
       await syncMemoryWikiImportedSources({ config, appConfig });
     }
     const query = readStringParam(requestParams, "query", { required: true });
@@ -261,27 +262,22 @@ export function registerMemoryWikiGatewayMethods(params: {
     const searchBackend = readEnumParam(requestParams, "backend", WIKI_SEARCH_BACKENDS);
     const searchCorpus = readEnumParam(requestParams, "corpus", WIKI_SEARCH_CORPORA);
     const mode = readEnumParam(requestParams, "mode", WIKI_SEARCH_MODES);
-    return await searchMemoryWiki({
-      memoryContext,
-      ...(signal
-        ? {
-            signal: memoryContext.signal ? AbortSignal.any([signal, memoryContext.signal]) : signal,
-            refreshSources: () => {
-              if (!signal.aborted) {
-                params.refreshSources(config, appConfig);
-              }
-            },
-          }
-        : {}),
-      config,
-      appConfig,
-      ...(agentId ? { agentId } : {}),
-      query,
-      maxResults,
-      searchBackend,
-      searchCorpus,
-      mode,
-    });
+    try {
+      return await searchMemoryWiki({
+        memoryContext,
+        config,
+        appConfig,
+        ...(agentId ? { agentId } : {}),
+        query,
+        maxResults,
+        searchBackend,
+        searchCorpus,
+        mode,
+      });
+    } finally {
+      // After the search: a cold read owner activates through the vault queue.
+      params.refreshSources(config, appConfig);
+    }
   });
 
   registerResultMethod("wiki.apply", WRITE_SCOPE, async (requestParams) => {

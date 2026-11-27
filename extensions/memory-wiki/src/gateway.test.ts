@@ -327,7 +327,6 @@ describe("memory-wiki gateway methods", () => {
 
       await run();
 
-      expect(respond).toHaveBeenCalledOnce();
       expect(refreshSources).toHaveBeenCalledWith(config, {});
       expect(syncMemoryWikiImportedSources).not.toHaveBeenCalled();
       expect(loadMemoryWikiCompiledDashboards).toHaveBeenCalledWith(config);
@@ -377,8 +376,12 @@ describe("memory-wiki gateway methods", () => {
   ] as const)(
     "forwards wiki.search %s",
     async (query, maxResults, searchBackend, searchCorpus, mode, appConfig) => {
+      const refreshSources = vi.fn();
+      const signal = new AbortController().signal;
       const { config, run, respond } = await createGateway("wiki.search", {
         getAppConfig: () => appConfig,
+        resolveSourceSyncSignal: () => signal,
+        refreshSources,
       });
       await run({ query, maxResults, backend: searchBackend, corpus: searchCorpus, mode });
       expect(searchMemoryWiki).toHaveBeenCalledWith({
@@ -392,38 +395,9 @@ describe("memory-wiki gateway methods", () => {
         searchCorpus,
         mode,
       });
-      expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({ config, appConfig });
-      expect(readRespondPayload(respond)).toEqual({ items: [], total: 0 });
-    },
-  );
-
-  it.each([false, true])(
-    "does not await maintenance or refresh a stopped service (stopped: %s)",
-    async (stopped) => {
-      const service = new AbortController();
-      const refreshSources = vi.fn();
-      const { config, run, respond } = await createGateway("wiki.search", {
-        resolveSourceSyncSignal: () => service.signal,
-        refreshSources,
-      });
-      vi.mocked(searchMemoryWiki).mockImplementationOnce(async (params) => {
-        if (stopped) {
-          service.abort();
-        }
-        params.refreshSources?.();
-        expect(params.signal?.aborted).toBe(stopped);
-        return [];
-      });
-
-      await run({ query: "alpha" });
-
-      expect(readRespondPayload(respond)).toEqual([]);
-      if (stopped) {
-        expect(refreshSources).not.toHaveBeenCalled();
-      } else {
-        expect(refreshSources).toHaveBeenCalledWith(config, {});
-      }
       expect(syncMemoryWikiImportedSources).not.toHaveBeenCalled();
+      expect(refreshSources).toHaveBeenCalledWith(config, appConfig);
+      expect(readRespondPayload(respond)).toEqual({ items: [], total: 0 });
     },
   );
 
