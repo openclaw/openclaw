@@ -1,8 +1,8 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayErrorDetails
 import ai.openclaw.app.gateway.GatewayRequestRejected
-import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.Question
 import ai.openclaw.app.gateway.QuestionAnswers
 import ai.openclaw.app.gateway.QuestionGetResult
@@ -251,7 +251,7 @@ class ChatQuestionTest {
         createScriptedChatController {
           respond("question.list") {
             throw GatewayRequestRejected(
-              GatewaySession.ErrorShape(
+              ErrorShape(
                 code = "FORBIDDEN",
                 message = "permission denied",
                 details =
@@ -282,7 +282,7 @@ class ChatQuestionTest {
           gatewayAdvertisesMethod = { method -> method != "question.list" }
           respond("question.list") {
             throw GatewayRequestRejected(
-              GatewaySession.ErrorShape(
+              ErrorShape(
                 code = "INVALID_REQUEST",
                 message = "missing scope: operator.admin",
               ),
@@ -775,7 +775,7 @@ class ChatQuestionTest {
             getCalls += 1
             releaseLookup.await()
             throw GatewayRequestRejected(
-              GatewaySession.ErrorShape(
+              ErrorShape(
                 code = "INVALID_REQUEST",
                 message = "question not found",
                 details =
@@ -1151,7 +1151,7 @@ class ChatQuestionTest {
           }
           respond("question.get") {
             throw GatewayRequestRejected(
-              GatewaySession.ErrorShape(
+              ErrorShape(
                 code = "INVALID_REQUEST",
                 message = "question not found",
                 details =

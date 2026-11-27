@@ -11,6 +11,10 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import {
+  changedStoreFiles,
+  snapshotStoreFiles,
+} from "../test-utils/store-snapshot.test-support.js";
+import {
   createDoctorHealthFlowContext,
   createDoctorPrompterFixture,
   resolveDoctorHealthContributions,
@@ -25,32 +29,6 @@ import {
 const diagnosticOnly = resolveDoctorHealthContributions().filter(
   (contribution) => contribution.pending === "diagnostic-only",
 );
-
-/**
- * Every file under root with its bytes and modification time. SQLite -shm is read state, and
- * opening a WAL database can leave an empty -wal; any write leaves frames in it or changes the
- * database itself.
- */
-function snapshotInstall(root: string): Record<string, string> {
-  const entries: Record<string, string> = {};
-  const visit = (pathname: string) => {
-    const stat = fs.lstatSync(pathname, { bigint: true });
-    if (stat.isDirectory()) {
-      for (const name of fs.readdirSync(pathname).toSorted()) {
-        visit(path.join(pathname, name));
-      }
-      return;
-    }
-    if (pathname.endsWith("-shm") || (pathname.endsWith("-wal") && stat.size === 0n)) {
-      return;
-    }
-    const bytes = stat.isFile() ? fs.readFileSync(pathname).toString("base64") : "";
-    entries[path.relative(root, pathname)] =
-      `${stat.mtimeNs}:${stat.mode}:${bytes.length}:${bytes}`;
-  };
-  visit(root);
-  return entries;
-}
 
 describe("diagnostic-only Doctor contributions", () => {
   let state: OpenClawTestState;
@@ -94,16 +72,12 @@ describe("diagnostic-only Doctor contributions", () => {
         prompter: createDoctorPrompterFixture(true),
         gatewayMaintenanceActive: true,
       });
-      const before = snapshotInstall(state.root);
+      const before = snapshotStoreFiles(state.root);
 
       await contribution.run(ctx);
       closeDatabases();
 
-      const after = snapshotInstall(state.root);
-      const changed = [...new Set([...Object.keys(before), ...Object.keys(after)])].filter(
-        (file) => before[file] !== after[file],
-      );
-      expect(changed).toEqual([]);
+      expect(changedStoreFiles(before, snapshotStoreFiles(state.root))).toEqual([]);
       expect(ctx.cfg).toEqual(cfg);
       expect(ctx.configResult.pendingChangePanels).toBeUndefined();
     },
