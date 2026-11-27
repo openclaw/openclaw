@@ -495,7 +495,11 @@ const formatSchedule = (
   }
   if (schedule?.kind === "stream") {
     const cwd = schedule.cwd ? ` @ ${schedule.cwd}` : "";
-    return `stream ${schedule.command.join(" ")}${cwd}${suffix}`;
+    // Keep simple listings compact; JSON preserves the argv accepted by --stream-command.
+    const command = schedule.command.every((arg) => /^[\w./:@%+=,-]+$/u.test(arg))
+      ? schedule.command.join(" ")
+      : JSON.stringify(schedule.command);
+    return `stream ${command}${cwd}${suffix}`;
   }
   if (schedule?.kind === "event") {
     return `event ${schedule.source}`;
