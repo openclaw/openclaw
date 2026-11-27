@@ -101,6 +101,17 @@ export type AgentRunContextOwnership = {
 
 export type AgentRunRegistryState = {
   contexts: Map<string, AgentRunContext>;
+  /** Display-only native child observations; never execution or tool authority. */
+  subagentActivities?: Map<
+    symbol,
+    {
+      sessionKey: string;
+      sessionId: string;
+      lifecycleRevision?: string;
+      agentId: string;
+      lifecycleGeneration: string;
+    }
+  >;
   owners: Map<string, AgentRunContextOwnership>;
   queuedRunContextLeases?: WeakMap<AgentRunContext, number>;
   lifecycleGeneration: string;
@@ -114,6 +125,7 @@ export type AgentRunRegistryState = {
 export type ProjectedAgentRunState = "queued" | "running" | "capacity-wait";
 
 export type ProjectedAgentRunIndex = {
+  subagentSessionKeys?: ReadonlyMap<string, ReadonlySet<string>>;
   modelsBySessionId: ReadonlyMap<string, AgentRunModel | null>;
   sessionKeys: ReadonlyMap<string, ProjectedAgentRunState>;
   sessionIds: ReadonlyMap<string, ProjectedAgentRunState>;

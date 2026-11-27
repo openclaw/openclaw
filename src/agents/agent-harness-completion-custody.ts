@@ -6,6 +6,7 @@ import {
 } from "../config/sessions/session-actor-storage-binding.js";
 import { captureOperatorToolGatewayContinuationContext } from "../gateway/server-plugin-in-process-dispatch.js";
 import { emitAgentEvent, getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
+import { retainAgentRunSubagentActivity } from "../infra/agent-run-registry-state.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   getCanonicalGatewayContextResolver,
@@ -41,6 +42,7 @@ type CompletionOwner = {
   scope: AgentHarnessCompletionScope;
   run: <T>(run: () => T) => T;
   emit: (run: () => void) => void;
+  observeActivity: (active: boolean) => void;
 };
 const owners = resolveGlobalSingleton(
   Symbol.for("openclaw.agentHarnessCompletionCustody.registry"),
@@ -117,6 +119,7 @@ export function captureAgentHarnessCompletionCustody(
             },
             releaseRequester,
             root,
+            requester.actor.snapshot(requester.authority)?.entry,
           ),
         );
         handedOff = custody !== undefined;
@@ -175,6 +178,13 @@ export function captureAgentHarnessCompletionCustody(
                 released.resolve();
               },
               root,
+              {
+                sessionId: expected.sessionId,
+                lifecycleRevision:
+                  typeof expected.lifecycleRevision === "string"
+                    ? expected.lifecycleRevision
+                    : undefined,
+              },
             );
             if (custody) {
               handedOff = true;
@@ -218,6 +228,7 @@ async function captureAgentHarnessCompletionCustodyOwner(
   assertRequesterCurrent: () => void,
   releaseRequester: () => void,
   root: ReturnType<typeof retainGatewayRootWorkAdmissionContinuationScope>,
+  requester?: { sessionId?: string; lifecycleRevision?: string },
 ): Promise<AgentHarnessCompletionCustody | undefined> {
   const scope = assertAgentHarnessCompletionScope(scopeInput);
   const requesterTarget = {
@@ -255,7 +266,15 @@ async function captureAgentHarnessCompletionCustodyOwner(
     }
     const lifetime = new AbortController();
     let executionSettled = settled;
+    let releaseActivity: (() => void) | undefined;
+    const clearActivity = () => {
+      releaseActivity?.();
+      releaseActivity = undefined;
+    };
+    captured.signal.addEventListener("abort", clearActivity, { once: true });
     const settleExecution = () => {
+      clearActivity();
+      captured.signal.removeEventListener("abort", clearActivity);
       if (!executionSettled) {
         executionSettled = true;
         if (--executions === 0) {
@@ -291,6 +310,18 @@ async function captureAgentHarnessCompletionCustodyOwner(
     };
     owners.set(custody, {
       scope,
+      observeActivity(active) {
+        if (!active) {
+          clearActivity();
+        } else if (!releaseActivity && !executionSettled && requester?.sessionId) {
+          releaseActivity = retainAgentRunSubagentActivity({
+            sessionKey: scope.requesterSessionKey,
+            sessionId: requester.sessionId,
+            lifecycleRevision: requester.lifecycleRevision,
+            agentId: scope.requesterAgentId,
+          });
+        }
+      },
       run(run) {
         assertCurrent();
         return !executionSettled && root
@@ -333,19 +364,28 @@ export function createAgentHarnessCompletionEventSink(params: {
   }
   const isSourceCurrent = params.isSourceCurrent;
   const generation = getAgentEventLifecycleGeneration();
-  return (event) =>
-    owner.emit(() => {
-      if (!isSourceCurrent()) {
-        throw new Error("Harness native event assignment was replaced");
-      }
-      emitAgentEvent({
-        stream: event.stream,
-        data: event.data,
-        runId,
-        agentId: scope.requesterAgentId,
-        lifecycleGeneration: generation,
+  return (event) => {
+    try {
+      owner.emit(() => {
+        if (!isSourceCurrent()) {
+          throw new Error("Harness native event assignment was replaced");
+        }
+        if (event.stream === "execution") {
+          owner.observeActivity(event.data.state === "running" || event.data.state === "waiting");
+        }
+        emitAgentEvent({
+          stream: event.stream,
+          data: event.data,
+          runId,
+          agentId: scope.requesterAgentId,
+          lifecycleGeneration: generation,
+        });
       });
-    });
+    } catch (error) {
+      owner.observeActivity(false);
+      throw error;
+    }
+  };
 }
 
 /** Only the completion SDK can enter retained authority; plugins cannot execute a callback in it. */
