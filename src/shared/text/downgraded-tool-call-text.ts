@@ -73,45 +73,28 @@ function scanDowngradedToolCalls(
   let pending =
     pendingStart > input.lastIndexOf("]") &&
     !isInsideCode(pendingStart, (codeRegions ??= findCodeRegions(input)));
-  for (const match of input.matchAll(/\[Tool Call(?::[^\]]*|\s+id=[^\s\]]+\s+name=[^\s\]]+)\]/gi)) {
+  for (const match of input.matchAll(/\[Tool Call:[^\]]*\]/gi)) {
     const start = match.index;
     if (start < cursor || isInsideCode(start, (codeRegions ??= findCodeRegions(input)))) {
       continue;
     }
     result += input.slice(cursor, start);
-    const isReplayCall = !match[0].includes(":");
     let index = skipHorizontalWhitespace(input, start + match[0].length);
-    if (isReplayCall) {
-      const opening = input[index];
-      if (opening === "{" || opening === "[" || opening === '"') {
-        const payloadEnd = consumeJsonish(input, index);
-        if (payloadEnd === null) {
-          // Later text can complete the JSONish argument payload; if truncated
-          // before a line break or EOF, drop the rest of the frame line too.
-          pending = true;
-          const lineEnd = input.indexOf("\n", index);
-          index = lineEnd === -1 ? input.length : lineEnd;
-        } else {
-          index = payloadEnd;
-        }
+    index = skipHorizontalWhitespace(input, consumeLineBreak(input, index) ?? index);
+    if (normalizeLowercaseStringOrEmpty(input.slice(index, index + 9)) === "arguments") {
+      index += 9;
+      if (input[index] === ":") {
+        index += 1;
       }
-    } else {
-      index = skipHorizontalWhitespace(input, consumeLineBreak(input, index) ?? index);
-      if (normalizeLowercaseStringOrEmpty(input.slice(index, index + 9)) === "arguments") {
-        index += 9;
-        if (input[index] === ":") {
-          index += 1;
-        }
-        if (input[index] === " ") {
-          index += 1;
-        }
-        const payloadEnd = consumeJsonish(input, index);
-        if (payloadEnd === null) {
-          // Later text can complete the argument object and hide the payload.
-          pending = true;
-        }
-        index = payloadEnd ?? index;
+      if (input[index] === " ") {
+        index += 1;
       }
+      const payloadEnd = consumeJsonish(input, index);
+      if (payloadEnd === null) {
+        // Later text can complete the argument object and hide the payload.
+        pending = true;
+      }
+      index = payloadEnd ?? index;
     }
     if (!result || result.endsWith("\n") || result.endsWith("\r")) {
       index = consumeLineBreak(input, index) ?? index;
@@ -162,7 +145,7 @@ function scanDowngradedPattern(
     // A result without a later tool marker still owns the streaming tail.
     pending ||=
       offset + match.length === input.length ||
-      (ownsTail && !/\[Tool /i.test(input.slice(offset + match.length)));
+      (ownsTail && !input.slice(offset + match.length).includes("[Tool "));
     return "";
   });
   return { text, pending };
@@ -175,7 +158,7 @@ const downgradedScanners: Array<
   (text, regions) =>
     scanDowngradedPattern(
       text,
-      /\[Tool Result (?:for ID[^\]]*|id=[^\s\]]+\s+name=[^\s\]]+)\]\n?[\s\S]*?(?=\n*\[Tool |\n*$)/gi,
+      /\[Tool Result for ID[^\]]*\]\n?[\s\S]*?(?=\n*\[Tool |\n*$)/gi,
       true,
       regions,
     ),

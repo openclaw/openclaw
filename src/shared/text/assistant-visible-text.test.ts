@@ -184,10 +184,6 @@ describe("sanitizeAssistantVisibleText", () => {
   it.each([
     ["Tool Result", "[Tool Result for ID abc]\nstdout: hello"],
     ["Tool Call and Arguments", '[Tool Call: bash (ID: 7)]\nArguments: {"cmd":"ls"}'],
-    [
-      "OpenAI replay Tool Call and Result",
-      '[tool call id=call00_1 name=exec] {"cmd":"ls"}\n[tool result id=call00_1 name=exec] {"status":"completed"}',
-    ],
   ])("preserves fenced %s logs", (_name, log) => {
     const input = "Log format explainer:\n\n```text\n" + log + "\n```\n\nThen we continue.";
     expect(sanitizeAssistantVisibleText(input)).toBe(input);
@@ -211,28 +207,6 @@ describe("sanitizeAssistantVisibleText", () => {
       '<function_calls><invoke name="exec">internal</invoke></function_calls><function_response>\nSearching for: "what skills matter most in the age of AI"\n</function_response>\nOK',
       "OK",
     ],
-    [
-      [
-        "Recovered summary.",
-        '[tool call id=call00_1 name=exec] {"code":"const r = 1"}',
-        '[tool result id=call00_1 name=exec] {"status":"completed","stdout":"1"}',
-      ].join("\n"),
-      "Recovered summary.",
-    ],
-    [
-      [
-        '[tool call id=call00_1 name=exec] {"code":"const r = ...}',
-        '[tool result id=call00_1 name=exec] {"status":"completed"}',
-        '[tool call id=call00_2 name=read] {"path":"notes.txt"}',
-        '[tool result id=call00_2 name=read] {"ok":true}',
-      ].join("\n"),
-      "",
-    ],
-    [
-      'Literal `[tool call id=call00_1 name=exec] {"cmd":"ls"}` stays visible.',
-      'Literal `[tool call id=call00_1 name=exec] {"cmd":"ls"}` stays visible.',
-    ],
-    ["Ordinary [tool call] prose stays visible.", "Ordinary [tool call] prose stays visible."],
   ])("sanitizes delivery text: %j", (input, expected = input) => {
     expect(sanitizeAssistantVisibleText(input)).toBe(expected);
   });
