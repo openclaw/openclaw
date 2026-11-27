@@ -37,7 +37,7 @@ export function noteDoctorAgentDatabasePathHealth(params: {
  * Read-only: the registrations the repair would change, read directly from the existing state
  * database (no copy, no write admission). Zero without a database.
  */
-export function countOpenClawAgentDatabasePathRepairs(env: NodeJS.ProcessEnv): number {
+function countOpenClawAgentDatabasePathRepairs(env: NodeJS.ProcessEnv): number {
   return (
     withExistingOpenClawStateDatabaseCurrentReadOnly(
       ({ db, path }) =>

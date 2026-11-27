@@ -2,10 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
-import {
-  countOpenClawAgentDatabasePathRepairs,
-  noteDoctorAgentDatabasePathHealth,
-} from "../commands/doctor-agent-database-paths.js";
+import { noteDoctorAgentDatabasePathHealth } from "../commands/doctor-agent-database-paths.js";
 import { createUpdateRun, finishUpdateRun } from "../infra/update-run-ledger.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -88,7 +85,6 @@ it("defers only repairable registrations during active and candidate updates", (
 it("decides from a read and opens no write transaction for a clean registry", () => {
   const f = fixture();
   f.register("ordinary.sqlite");
-  expect(countOpenClawAgentDatabasePathRepairs(f.env)).toBe(0);
   const holder = new DatabaseSync(f.state.path);
   holder.exec("BEGIN IMMEDIATE");
   try {
@@ -99,10 +95,12 @@ it("decides from a read and opens no write transaction for a clean registry", ()
     holder.close();
   }
 
-  f.register("(multiple).sqlite", "");
-  f.register("(multiple).main.2.sqlite", "");
-  expect(countOpenClawAgentDatabasePathRepairs(f.env)).toBe(2);
+  // Registrations that need repair still reach the write transaction.
+  const sentinels = [
+    f.register("(multiple).sqlite", ""),
+    f.register("(multiple).main.2.sqlite", ""),
+  ];
   expect(f.repair()).toEqual([]);
   expect(f.registeredPaths()).toEqual([{ path: path.join(f.root, "ordinary.sqlite") }]);
-  expect(countOpenClawAgentDatabasePathRepairs(f.env)).toBe(0);
+  expect(sentinels.map(fs.existsSync)).toEqual([false, false]);
 });

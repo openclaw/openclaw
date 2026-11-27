@@ -307,7 +307,7 @@ export async function hasPluginNativeCaptureReclaimCandidates(stateDir: string):
     collect,
   ).catch(recordFailure);
   if (!found && failure !== undefined) {
-    throw failure instanceof Error ? failure : new Error(String(failure));
+    throw failure instanceof Error ? failure : new Error(formatErrorMessage(failure));
   }
   return found;
 }
