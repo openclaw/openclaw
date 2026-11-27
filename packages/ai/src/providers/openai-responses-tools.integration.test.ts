@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it } from "vitest";
-import { configureAiTransportHost } from "../host.js";
+import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { createLlmRuntime } from "../stream.js";
 import { createOpenAIResponsesTransportStreamFn } from "../transports/openai-responses-client.js";
 import {
@@ -58,66 +58,76 @@ function completedResponseEvents() {
 it.each(
   (["provider", "transport"] as const).flatMap((entrypoint) =>
     [
-      { supportsStrictMode: false, strict: undefined },
-      { supportsStrictMode: true, strict: true },
+      // An undeclared custom endpoint sends tools exactly as before: no strict field.
+      { endpointClass: "custom", supportsStrictMode: undefined, strict: undefined },
+      { endpointClass: "custom", supportsStrictMode: false, strict: undefined },
+      { endpointClass: "custom", supportsStrictMode: true, strict: true },
+      { endpointClass: "openai-public", supportsStrictMode: undefined, strict: true },
     ].map((settings) => Object.assign({ entrypoint }, settings)),
   ),
-)("serializes $entrypoint Responses tools with strict=$strict", async (scenario) => {
-  const { entrypoint, supportsStrictMode, strict } = scenario;
-  const model = { ...responsesLoopbackModel, compat: { supportsStrictMode } };
-  const parameters = Object.freeze({
-    ...schema(Object.freeze({ prompt: string, note: string })),
-    required: Object.freeze(["prompt", "note"]),
-  });
-  let descriptionReads = 0;
-  const tools: Tool[] = [
-    { name: "zeta", description: "Last", parameters },
-    {
-      name: "alpha",
-      get description(): string {
-        descriptionReads += 1;
-        throw new Error("Optional description is unavailable");
-      },
-      parameters,
-    },
-  ];
-  const context = contextFor(tools);
-  const expectedTools = [
-    wireTool("alpha", parameters, strict),
-    wireTool("zeta", parameters, strict, "Last"),
-  ];
-  const lifecycle: string[] = [];
-  const requestOptions = {
-    ...options,
-    transport: "sse" as const,
-    onPayload: () => void lifecycle.push("payload"),
-    onResponse: () => void lifecycle.push("response"),
-  };
-  for (let request = 0; request < 2; request++) {
-    const stream =
-      entrypoint === "provider"
-        ? owner.stream(model, context, requestOptions)
-        : await transport(model, context, requestOptions);
-    for await (const event of stream) {
-      if (event.type === "start" || event.type === "done" || event.type === "error") {
-        lifecycle.push(event.type);
-      }
-    }
-    expect(await stream.result()).toMatchObject({
-      stopReason: "stop",
-      content: [{ type: "text", text: "done" }],
-      usage: { input: 5, output: 3, totalTokens: 8 },
+)(
+  "serializes $entrypoint Responses tools for $endpointClass with strict=$strict",
+  async (scenario) => {
+    const { entrypoint, endpointClass, supportsStrictMode, strict } = scenario;
+    const capabilities = getAiTransportHost().resolveProviderRequestCapabilities({});
+    configureAiTransportHost({
+      resolveProviderRequestCapabilities: () => ({ ...capabilities, endpointClass }),
     });
-  }
-  const turn = ["payload", "response", "start", "done"];
-  expect(lifecycle).toEqual([...turn, ...turn]);
-  expect(server.requests.map((request) => request.tools)).toEqual([expectedTools, expectedTools]);
-  const wire = expect.stringContaining(`"tools":${JSON.stringify(expectedTools)}`);
-  expect(server.rawRequests).toEqual([wire, wire]);
-  expect(descriptionReads).toBe(2);
-  expect(tools.map((tool) => tool.name)).toEqual(["zeta", "alpha"]);
-  expect(tools.every((tool) => tool.parameters === parameters)).toBe(true);
-});
+    const model = { ...responsesLoopbackModel, compat: { supportsStrictMode } };
+    const parameters = Object.freeze({
+      ...schema(Object.freeze({ prompt: string, note: string })),
+      required: Object.freeze(["prompt", "note"]),
+    });
+    let descriptionReads = 0;
+    const tools: Tool[] = [
+      { name: "zeta", description: "Last", parameters },
+      {
+        name: "alpha",
+        get description(): string {
+          descriptionReads += 1;
+          throw new Error("Optional description is unavailable");
+        },
+        parameters,
+      },
+    ];
+    const context = contextFor(tools);
+    const expectedTools = [
+      wireTool("alpha", parameters, strict),
+      wireTool("zeta", parameters, strict, "Last"),
+    ];
+    const lifecycle: string[] = [];
+    const requestOptions = {
+      ...options,
+      transport: "sse" as const,
+      onPayload: () => void lifecycle.push("payload"),
+      onResponse: () => void lifecycle.push("response"),
+    };
+    for (let request = 0; request < 2; request++) {
+      const stream =
+        entrypoint === "provider"
+          ? owner.stream(model, context, requestOptions)
+          : await transport(model, context, requestOptions);
+      for await (const event of stream) {
+        if (event.type === "start" || event.type === "done" || event.type === "error") {
+          lifecycle.push(event.type);
+        }
+      }
+      expect(await stream.result()).toMatchObject({
+        stopReason: "stop",
+        content: [{ type: "text", text: "done" }],
+        usage: { input: 5, output: 3, totalTokens: 8 },
+      });
+    }
+    const turn = ["payload", "response", "start", "done"];
+    expect(lifecycle).toEqual([...turn, ...turn]);
+    expect(server.requests.map((request) => request.tools)).toEqual([expectedTools, expectedTools]);
+    const wire = expect.stringContaining(`"tools":${JSON.stringify(expectedTools)}`);
+    expect(server.rawRequests).toEqual([wire, wire]);
+    expect(descriptionReads).toBe(2);
+    expect(tools.map((tool) => tool.name)).toEqual(["zeta", "alpha"]);
+    expect(tools.every((tool) => tool.parameters === parameters)).toBe(true);
+  },
+);
 
 // Strict is per tool on the schema as written: a fully required, closed tool is strict; a
 // lookaround pattern or an optional key keeps its own tool non-strict and unchanged.
@@ -143,44 +153,4 @@ it("decides strict for each tool in one request", async () => {
       wireTool("write_note", schema({ note: string }), true, "Write"),
     ]),
   );
-});
-
-// A route that refuses strict tools gets one retry without them; the accepted retry is learned.
-it("retries a strict-tool refusal once without strict tools and records the route", async () => {
-  await server.close();
-  server = await createResponsesLoopbackServer((turn) => {
-    const tools = server.requests[turn - 1]?.tools as Array<{ strict?: boolean }> | undefined;
-    return tools?.some((tool) => tool.strict === true)
-      ? { status: 400, body: { error: { message: "strict is not supported" } } }
-      : completedResponseEvents();
-  });
-  const recorded: unknown[] = [];
-  configureAiTransportHost({
-    strictToolRejections: {
-      has: async () => false,
-      record: async (route) => {
-        recorded.push(route);
-        return true;
-      },
-    },
-  });
-  const context = contextFor([
-    { name: "set_value", description: "Set", parameters: schema({ value: string }) },
-  ]);
-
-  const result = await (await transport(responsesLoopbackModel, context, options)).result();
-
-  expect(result.stopReason).toBe("stop");
-  expect(server.requests.map((request) => request.tools)).toEqual([
-    [wireTool("set_value", schema({ value: string }), true, "Set")],
-    [wireTool("set_value", schema({ value: string }), undefined, "Set")],
-  ]);
-  expect(recorded).toEqual([
-    {
-      provider: responsesLoopbackModel.provider,
-      api: responsesLoopbackModel.api,
-      baseUrl: responsesLoopbackModel.baseUrl,
-      model: responsesLoopbackModel.id,
-    },
-  ]);
 });

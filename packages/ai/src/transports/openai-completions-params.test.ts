@@ -889,13 +889,9 @@ describe("OpenAI completions compatibility and tools", () => {
         ],
       },
     );
+    // The surviving tool is parameter-free and open as written, so it is sent non-strict.
     expect(params.tools?.map((entry) => entry.function)).toEqual([
-      {
-        name: "lookup_weather",
-        description: "Get forecast",
-        strict: true,
-        parameters: objectSchema({}, { required: [], additionalProperties: false }),
-      },
+      expect.objectContaining({ name: "lookup_weather", strict: false }),
     ]);
     expect(params.tool_choice).toBe("required");
   });
@@ -930,6 +926,28 @@ describe("OpenAI completions compatibility and tools", () => {
         expect(projected).toHaveProperty(path, value);
       }
     }
+  });
+
+  // Strict needs a route that declares it and a schema strict-compatible as written.
+  it("sends strict only for a declared route and a strict-as-written schema", () => {
+    const closed = objectSchema(
+      { path: { type: "string" } },
+      { additionalProperties: false, required: ["path"] },
+    );
+    const strictOf = (model: Partial<ToolsModel>, parameters: Record<string, unknown>) =>
+      request(model, undefined, toolContext(parameters)).tools?.[0]?.function;
+    // An undeclared custom endpoint sends the tool exactly as before: no strict field.
+    expect(strictOf(proxy, closed)).not.toHaveProperty("strict");
+    expect(strictOf({ ...proxy, compat: { supportsStrictMode: true } }, closed)).toHaveProperty(
+      "strict",
+      true,
+    );
+    expect(strictOf(toolsNative, closed)).toHaveProperty("strict", true);
+    // An optional key or an open root keeps a declared route's tool non-strict and unchanged.
+    expect(strictOf(toolsNative, { ...closed, required: [] })).toHaveProperty("strict", false);
+    expect(
+      strictOf(toolsNative, objectSchema({ path: { type: "string" } }, { required: ["path"] })),
+    ).toHaveProperty("strict", false);
   });
 
   it("fails required choice when every schema is quarantined", () => {

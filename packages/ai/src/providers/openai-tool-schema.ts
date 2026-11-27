@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   normalizeToolParameterSchema,
@@ -101,19 +100,18 @@ export function isStrictOpenAIJsonSchemaCompatible(schema: unknown): boolean {
 }
 
 /**
- * Strict policy for one OpenAI-protocol route, from the resolved model compat only: a route
- * that declares no strict support omits the field; every other route asks for strict tools.
+ * Strict policy for one OpenAI-protocol route, from the resolved model compat only: strict
+ * tools only where the route declares strict support; otherwise the field is omitted.
  */
 export function resolveOpenAIStrictToolSetting(compat: {
   supportsStrictMode?: boolean;
 }): true | undefined {
-  return compat.supportsStrictMode === false ? undefined : true;
+  return compat.supportsStrictMode === true ? true : undefined;
 }
 
 /**
- * Strict is per tool: a tool is strict only when its schema is strict-compatible as written.
- * Strict normalization closes the root object, so an open root (extra arguments allowed) keeps
- * its tool non-strict; a parameter-free tool has nothing to narrow.
+ * Strict is per tool and only for a schema that is strict-compatible as written: the check
+ * runs before strict normalization, which would close an open object and narrow the tool.
  */
 export function resolveOpenAIToolStrictFlag(
   parameters: unknown,
@@ -122,11 +120,11 @@ export function resolveOpenAIToolStrictFlag(
   if (strictSetting !== true) {
     return strictSetting === false ? false : undefined;
   }
-  const properties = isRecord(parameters) ? parameters.properties : undefined;
-  const closedAsWritten =
-    isRecord(parameters) &&
-    (parameters.additionalProperties === false ||
-      !isRecord(properties) ||
-      Object.keys(properties).length === 0);
-  return closedAsWritten && isStrictOpenAIJsonSchemaCompatible(parameters);
+  const asWritten = normalizeToolParameterSchema(parameters ?? {}, {
+    modelCompat: resolveToolSchemaModelCompat(undefined),
+  });
+  return (
+    findOpenAIStrictSchemaViolations(asWritten, "parameters", { requireObjectRoot: true })
+      .length === 0
+  );
 }

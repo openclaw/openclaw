@@ -26,7 +26,7 @@ const makeRoute = (
 const routes = [
   makeRoute("OpenAI"),
   makeRoute("custom provider on OpenRouter", { provider: "custom" }),
-  makeRoute("custom proxy", { baseUrl: "https://proxy.example.test/v1" }),
+  makeRoute("custom proxy", { baseUrl: "https://proxy.example.test/v1", omitStrict: true }),
   makeRoute("explicit opt-out", { compat: { supportsStrictMode: false }, omitStrict: true }),
 ];
 
@@ -110,8 +110,6 @@ it.each(
   expect(captured.url).toBe(`${route.baseUrl}/chat/completions`);
   expect(captured.body.model).toBe(route.id);
   const tool = captured.body.tools[0]!.function;
-  // targetId is optional, so the tool is not strict as written: it is sent with strict: false
-  // (OpenRouter treats an omitted field as strict); a declared opt-out omits the field.
   if (omitStrict) {
     expect(tool).not.toHaveProperty("strict");
   } else {

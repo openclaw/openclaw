@@ -50,12 +50,6 @@ import {
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 import type { OpenAIResponsesOptions } from "./openai-responses-contracts.js";
 import {
-  isStrictToolRetryCandidate,
-  recordStrictToolRejection,
-  resolveStrictToolModel,
-  withoutStrictTools,
-} from "./openai-strict-rejection.js";
-import {
   assertCodeModeResponsesToolSurface,
   buildOpenAIClientHeaders,
   buildOpenAISdkClientOptions,
@@ -419,88 +413,56 @@ export function streamOpenAICompletionsRequest(
                 sawStreamDONE: doneDetector.sawDone,
               };
             })();
-      const send = async (requestModel: Model<"openai-completions">) => {
-        const builtParams = buildOpenAICompletionsRequest(
-          requestModel,
-          requestContext,
-          options,
-          policy,
-        );
-        let params = builtParams;
-        const encodeBody = prepareModelRequestBody(options);
-        const nextParams = await awaitProviderLifecycleCallback(
-          options?.onPayload ? () => options.onPayload?.(params, model) : undefined,
-          options?.signal,
-        );
-        if (nextParams !== undefined) {
-          params = nextParams as typeof params;
+      const builtParams = buildOpenAICompletionsRequest(model, requestContext, options, policy);
+      let params = builtParams;
+      const encodeBody = prepareModelRequestBody(options);
+      const nextParams = await awaitProviderLifecycleCallback(
+        options?.onPayload ? () => options.onPayload?.(params, model) : undefined,
+        options?.signal,
+      );
+      if (nextParams !== undefined) {
+        params = nextParams as typeof params;
+      }
+      if (mode === "managed") {
+        if (
+          (options as { openclawCodeModeToolSurface?: unknown } | undefined)
+            ?.openclawCodeModeToolSurface === true
+        ) {
+          const visibleToolNames = resolveCodeModeResponsesVisibleToolNames(context);
+          enforceCodeModeResponsesToolSurface(
+            params,
+            visibleToolNames,
+            undefined,
+            codeModeToolSurfaceObserver.get(options),
+          );
+          assertCodeModeResponsesToolSurface(params, visibleToolNames);
         }
-        if (mode === "managed") {
-          if (
-            (options as { openclawCodeModeToolSurface?: unknown } | undefined)
-              ?.openclawCodeModeToolSurface === true
-          ) {
-            const visibleToolNames = resolveCodeModeResponsesVisibleToolNames(context);
-            enforceCodeModeResponsesToolSurface(
-              params,
-              visibleToolNames,
-              undefined,
-              codeModeToolSurfaceObserver.get(options),
-            );
-            assertCodeModeResponsesToolSurface(params, visibleToolNames);
-          }
-          if (getCompat(model).requiresNonEmptyUserOrAssistantMessage) {
-            assertOpenAICompletionsPayloadHasConversationTurn(params, model);
-          }
-        }
-        const firstEvent = createFirstStreamEventAbortController(options?.signal);
-        firstEventAbort?.dispose();
-        firstEventAbort = firstEvent;
-        const requestOptions =
-          mode === "direct"
-            ? {
-                ...(await encodeBody(params)),
-                signal: firstEvent.signal,
-                ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
-                maxRetries: 0,
-              }
-            : {
-                ...buildOpenAISdkRequestOptions(model, firstEvent.signal, {
-                  timeoutMs: options?.timeoutMs,
-                }),
-                ...(await encodeBody(params)),
-              };
-        const request = client.chat.completions.create(
-          params as OpenAI.Chat.Completions.ChatCompletionCreateParams,
-          requestOptions,
-        );
-        try {
-          const response = await request.asResponse();
-          return { ok: true as const, builtParams, params, request, response, firstEvent };
-        } catch (error) {
-          // Refused before any output: the caller decides whether a retry without strict fits.
-          return { ok: false as const, error, tools: params.tools };
-        }
-      };
-      const toolModel = mode === "managed" ? await resolveStrictToolModel(model) : model;
-      let sent = await send(toolModel);
-      if (
-        !sent.ok &&
-        mode === "managed" &&
-        isStrictToolRetryCandidate(toolModel, sent.tools, sent.error)
-      ) {
-        // One retry without strict tools; only an accepted retry teaches the route.
-        sent = await send(withoutStrictTools(toolModel));
-        if (sent.ok) {
-          await recordStrictToolRejection(model);
+        if (getCompat(model).requiresNonEmptyUserOrAssistantMessage) {
+          assertOpenAICompletionsPayloadHasConversationTurn(params, model);
         }
       }
-      if (!sent.ok) {
-        throw sent.error;
-      }
-      const { builtParams, params, request, response, firstEvent } = sent;
       const contextOutputBudget = resolveCompletionsContextOutputBudget(builtParams, params);
       const emitReasoning = shouldEmitOpenAICompletionsReasoning(model, options, mode);
+      firstEventAbort = createFirstStreamEventAbortController(options?.signal);
+      const requestOptions =
+        mode === "direct"
+          ? {
+              ...(await encodeBody(params)),
+              signal: firstEventAbort.signal,
+              ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
+              maxRetries: 0,
+            }
+          : {
+              ...buildOpenAISdkRequestOptions(model, firstEventAbort.signal, {
+                timeoutMs: options?.timeoutMs,
+              }),
+              ...(await encodeBody(params)),
+            };
+      const request = client.chat.completions.create(
+        params as OpenAI.Chat.Completions.ChatCompletionCreateParams,
+        requestOptions,
+      );
+      const response = await request.asResponse();
       const responseStream = {
         async *[Symbol.asyncIterator]() {
           // Parse only after provider acceptance; JSON bodies are consumed here too.
@@ -522,8 +484,8 @@ export function streamOpenAICompletionsRequest(
       };
       const hookedResponseStream = withProviderResponseHook({
         stream: responseStream,
-        signal: firstEvent.signal,
-        abort: firstEvent.abort,
+        signal: firstEventAbort.signal,
+        abort: firstEventAbort.abort,
         hook: createOpenAIProviderAcceptanceHook(options, response, model),
         onReady: () => {
           if (contextOutputBudget === undefined) {
@@ -538,7 +500,7 @@ export function streamOpenAICompletionsRequest(
           model: model.id,
           timeoutMs: getFirstStreamEventTimeoutMs(options) ?? 0,
           stage: "completions",
-          abort: firstEvent.abort,
+          abort: firstEventAbort.abort,
           onTimeout: getFirstStreamEventTimeoutHandler(options),
           hint: "The provider may be stalled while parsing the tool payload; retry with a smaller tool surface or enable OPENCLAW_DEBUG_MODEL_PAYLOAD=tools to inspect exposed tools.",
         }),

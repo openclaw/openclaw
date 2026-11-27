@@ -113,8 +113,13 @@ function collectStrictSchemaViolations(
 
   const properties = isRecord(record.properties) ? record.properties : undefined;
 
-  // A nullable key is ["object", "null"]; its object branch follows the object rules.
-  if (record.type === "object" || (Array.isArray(record.type) && record.type.includes("object"))) {
+  // A nullable key is ["object", "null"], and a branch with properties but no type is an object
+  // too; both follow the object rules.
+  if (
+    record.type === "object" ||
+    (Array.isArray(record.type) && record.type.includes("object")) ||
+    (record.type === undefined && properties !== undefined)
+  ) {
     if (record.additionalProperties !== false) {
       violations.push(`${path}.additionalProperties`);
     }

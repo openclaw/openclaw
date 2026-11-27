@@ -35,10 +35,10 @@ it("decides HTTP Responses strict per tool: one permissive tool no longer downgr
   expect(httpParams.tools?.map((tool) => tool.strict)).toEqual([true, false]);
 });
 
-it("normalizes raw parameter-free schemas for HTTP Responses", () => {
+// A parameter-free tool is not closed as written, so it is sent non-strict and unchanged.
+it("keeps raw parameter-free schemas non-strict for HTTP Responses", () => {
   const tool = responseParams([createParameterFreeTool()] as never).tools?.[0];
-  expect(tool?.strict).toBe(true);
-  expect(tool?.parameters).toEqual(emptySchema());
+  expect(tool?.strict).toBe(false);
 });
 
 it("passes prepared executable schemas through compaction-triggered Responses requests", () => {
