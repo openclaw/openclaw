@@ -292,22 +292,14 @@ it("leases an admitted database only while it has a cold archive to backfill", a
       source: "disk" as const,
     };
     const leases = vi.spyOn(maintenanceLease, "withAgentDatabaseMaintenanceLease");
-
-    const pending = await migrateSessionColdNavigation({
-      env: state.env,
-      preparedTargets: [target],
-    });
-    expect(pending.changes).toContainEqual(
+    const run = () => migrateSessionColdNavigation({ env: state.env, preparedTargets: [target] });
+    expect((await run()).changes).toContainEqual(
       expect.stringContaining("Retained navigation for 1 cold transcript(s)"),
     );
     expect(leases).toHaveBeenCalledTimes(1);
-
-    leases.mockClear();
     const before = fs.readFileSync(pathname);
-    expect(
-      await migrateSessionColdNavigation({ env: state.env, preparedTargets: [target] }),
-    ).toEqual({ changes: [], warnings: [] });
-    expect(leases).not.toHaveBeenCalled();
+    expect(await run()).toEqual({ changes: [], warnings: [] });
+    expect(leases).toHaveBeenCalledTimes(1);
     expect(fs.readFileSync(pathname).equals(before)).toBe(true);
     leases.mockRestore();
   });

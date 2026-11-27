@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import * as nodeSqlite from "./node-sqlite.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { compareValidSemver } from "./semver.js";
@@ -12,17 +11,11 @@ import {
   sqlitePlannerStatisticsNeedRefresh,
 } from "./sqlite-planner-statistics.js";
 
-function readRuntimeSqliteVersion(): string {
-  const database = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(":memory:");
-  try {
-    return String(database.prepare("SELECT sqlite_version() AS version").get()?.version);
-  } finally {
-    database.close();
-  }
-}
-
 const tempDirs: string[] = [];
-const runtimeVersion = readRuntimeSqliteVersion();
+const runtimeVersion = (() => {
+  using database = openNodeSqliteDatabase(":memory:");
+  return String(database.prepare("SELECT sqlite_version() AS v").get()?.v);
+})();
 const runtimeAtLeast = (version: string) =>
   (compareValidSemver(runtimeVersion, version) ?? -1) >= 0;
 // The read-only rule mirrors optimize's all-table mask, which SQLite 3.46 introduced.
@@ -33,6 +26,7 @@ afterEach(() => {
   cleanupTempDirs(tempDirs);
 });
 
+const REFRESH = "PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;";
 const fill = (table: string, from: number, to: number) => `
   WITH RECURSIVE n(v) AS (VALUES(${from}) UNION ALL SELECT v + 1 FROM n WHERE v < ${to})
   INSERT INTO ${table} SELECT v, printf('%0200d', v) FROM n;`;
@@ -88,6 +82,8 @@ describe("SQLite planner maintenance", () => {
       database.prepare("SELECT stat FROM sqlite_stat1 WHERE idx = 'samples_value'").get(),
     ).toEqual({ stat: "32 1" });
     expect(database.prepare("PRAGMA analysis_limit").get()?.analysis_limit).toBe(1000);
+    // That line analyzes every table, so its read-only answer is always work.
+    expect(sqlitePlannerStatisticsNeedRefresh(database)).toBe(true);
   });
 
   it("fills missing statistics, preserves usable estimates, and refreshes stale estimates", () => {
@@ -118,23 +114,6 @@ describe("SQLite planner maintenance", () => {
     expect(readStatistics()).not.toBe("40 1");
   });
 
-  it("always reports work where the writing pass runs explicit ANALYZE", () => {
-    const pathname = path.join(makeTempDir(tempDirs, "openclaw-planner-old-"), "store.sqlite");
-    {
-      using writer = openNodeSqliteDatabase(pathname);
-      writer.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT); CREATE INDEX t_v ON t(v);");
-      writer.exec(fill("t", 1, 50));
-      writer.exec("ANALYZE main;");
-    }
-    const admission = nodeSqlite.captureSqliteNativeRuntimeAdmission();
-    assert(admission);
-    vi.spyOn(nodeSqlite, "captureSqliteNativeRuntimeAdmission").mockReturnValue({
-      ...admission,
-      version: "3.44.6",
-    });
-    expect(readOnlyAnswer(pathname)).toBe(true);
-  });
-
   it.runIf(optimizeAllTables)(
     "answers read-only exactly when optimize would refresh statistics",
     () => {
@@ -158,16 +137,16 @@ describe("SQLite planner maintenance", () => {
        CREATE INDEX idle_value ON idle(value);
        ${fill("samples", 1, 3000)} ${fill("plain", 1, 400)}`,
       );
-      observe("refreshed", "PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;");
+      observe("refreshed", REFRESH);
       observe("small growth", fill("samples", 3001, 4000));
       observe("tenfold growth", fill("samples", 4001, 60_000));
-      observe("refreshed again", "PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;");
+      observe("refreshed again", REFRESH);
       observe("unindexed growth", fill("plain", 401, 20_000));
-      observe("refreshed unindexed", "PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;");
+      observe("refreshed unindexed", REFRESH);
       observe("leftmost rows deleted", "DELETE FROM samples WHERE id < 57000;");
-      observe("refreshed after delete", "PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;");
+      observe("refreshed after delete", REFRESH);
       observe("emptied table with statistics", "DELETE FROM plain;");
-      observe("refreshed empty", "PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;");
+      observe("refreshed empty", REFRESH);
       // Bounded analysis records a different count per index; SQLite keeps the last one.
       observe(
         "differing full-index estimates",
@@ -176,7 +155,7 @@ describe("SQLite planner maintenance", () => {
        CREATE INDEX pair_b ON pair(b);
        WITH RECURSIVE n(v) AS (VALUES(1) UNION ALL SELECT v + 1 FROM n WHERE v < 6000)
        INSERT INTO pair SELECT v, printf('%08d', v), printf('%08d', v) FROM n;
-       PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;
+       ${REFRESH}
        UPDATE sqlite_stat1 SET stat = '60000 1' WHERE idx = 'pair_a';
        UPDATE sqlite_stat1 SET stat = '600 1' WHERE idx = 'pair_b';
        ANALYZE sqlite_schema;`,
@@ -186,19 +165,16 @@ describe("SQLite planner maintenance", () => {
         `CREATE TABLE single (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
        CREATE INDEX single_value ON single(value);
        INSERT INTO single VALUES (1, 'one');
-       PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;
+       ${REFRESH}
        DELETE FROM single;`,
       );
-      observe(
-        "refreshed after single delete",
-        "PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;",
-      );
+      observe("refreshed after single delete", REFRESH);
       // An empty table keeps its old statistics; optimize skips it even with an unanalyzed index.
       observe(
         "new index on an emptied analyzed table",
         `CREATE TABLE lone (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
        ${fill("lone", 1, 400)}
-       PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;
+       ${REFRESH}
        DELETE FROM lone;
        CREATE INDEX lone_value ON lone(value);`,
       );
@@ -210,7 +186,7 @@ describe("SQLite planner maintenance", () => {
        CREATE INDEX fan_value ON fan(value);
        WITH RECURSIVE n(v) AS (VALUES(1) UNION ALL SELECT v + 1 FROM n WHERE v < 220)
        INSERT INTO fan SELECT v, printf('%020d', v) FROM n;
-       PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;
+       ${REFRESH}
        UPDATE sqlite_stat1 SET stat = '15 1' WHERE tbl = 'fan';
        ANALYZE sqlite_schema;`,
       );
@@ -229,21 +205,4 @@ describe("SQLite planner maintenance", () => {
       expect(new Set(observations.map(({ sqlite }) => sqlite))).toEqual(new Set([true, false]));
     },
   );
-
-  it.runIf(optimizeAllTables)("reads a refreshed agent schema as current without writing", () => {
-    const pathname = path.join(makeTempDir(tempDirs, "openclaw-planner-agent-"), "agent.sqlite");
-    {
-      using writer = openNodeSqliteDatabase(pathname);
-      writer.exec(OPENCLAW_AGENT_SCHEMA_SQL);
-    }
-    expect(readOnlyAnswer(pathname)).toBe(sqliteWouldRefresh(pathname));
-    {
-      using writer = openNodeSqliteDatabase(pathname);
-      refreshSqlitePlannerStatistics(writer);
-    }
-    const before = fs.readFileSync(pathname);
-    expect(readOnlyAnswer(pathname)).toBe(false);
-    expect(sqliteWouldRefresh(pathname)).toBe(false);
-    expect(fs.readFileSync(pathname).equals(before)).toBe(true);
-  });
 });

@@ -6,6 +6,7 @@ import { normalizeChatType, type ChatType } from "../channels/chat-type.js";
 import { parseSqliteSessionEntryRecord } from "../config/sessions/session-entry-json.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { captureSqliteSchemaFacts } from "../infra/sqlite-schema-admission.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { normalizeAccountId } from "../routing/account-id.js";
@@ -457,9 +458,9 @@ export function hasPendingSessionAdditiveSchema(db: DatabaseSync): boolean {
   return (
     missingColumn ||
     (tableExists(db, "session_conversations") &&
-      !db
-        .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'trigger' AND name = ?")
-        .get("session_conversations_route_context_invalidate_after_update"))
+      !(getAdmittedSqliteSchemaFacts(db) ?? captureSqliteSchemaFacts(db)).triggers.has(
+        "session_conversations_route_context_invalidate_after_update",
+      ))
   );
 }
 

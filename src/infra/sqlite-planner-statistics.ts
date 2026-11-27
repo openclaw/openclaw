@@ -67,6 +67,7 @@ function readTableRowLogEst(database: DatabaseSync, table: string): number {
   // dbstat walks pages depth-first, so the leftmost path ends at the first leaf row.
   const pages = database // sqlite-allow-raw -- Read-only planner estimate.
     .prepare("SELECT pagetype, ncell FROM dbstat WHERE name = ? AND aggregate = FALSE")
+    // SAFETY: dbstat declares pagetype as TEXT and ncell as INTEGER for every row.
     .iterate(table) as Iterable<{ pagetype: string; ncell: number }>;
   let estimate = 1;
   for (const page of pages) {
@@ -103,12 +104,14 @@ export function sqlitePlannerStatisticsNeedRefresh(database: DatabaseSync): bool
   const statRows = hasStatTable
     ? (database // sqlite-allow-raw -- Read-only planner statistics inspection.
         .prepare("SELECT tbl, idx, stat FROM sqlite_stat1")
+        // SAFETY: sqlite_stat1 has exactly these columns; idx and stat may be NULL.
         .all() as Array<{ tbl: string; idx: string | null; stat: string | null }>)
     : [];
   const tables = database // sqlite-allow-raw -- Read-only catalog inspection.
     .prepare(
       "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' AND sql NOT LIKE 'CREATE VIRTUAL %'",
     )
+    // SAFETY: sqlite_schema.name is TEXT and never NULL for a table row.
     .all() as Array<{ name: string }>;
   for (const { name } of tables) {
     const withoutRowid = Boolean(
@@ -120,6 +123,7 @@ export function sqlitePlannerStatisticsNeedRefresh(database: DatabaseSync): bool
     const indexes = (
       database // sqlite-allow-raw -- Read-only catalog inspection.
         .prepare("SELECT name, origin, partial FROM pragma_index_list(?)")
+        // SAFETY: pragma_index_list returns TEXT name/origin and INTEGER partial.
         .all(name) as Array<{ name: string; origin: string; partial: number }>
     ).map((index) => ({
       name: withoutRowid && index.origin === "pk" ? name : index.name,

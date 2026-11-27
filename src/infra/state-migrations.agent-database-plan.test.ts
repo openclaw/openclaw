@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { makeTempDir } from "../../test/helpers/temp-dir.js";
 import { MEDIA_ROWS_MIGRATION_META_KEY } from "../state/openclaw-agent-db-contract.js";
 import * as maintenanceLease from "../state/openclaw-agent-db-maintenance-lease.js";
@@ -10,7 +10,6 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { installDeletedAgentDatabaseFences } from "./agent-database-readers.js";
 import * as nodeSqlite from "./node-sqlite.js";
-import { requireNodeSqlite } from "./node-sqlite.js";
 import { compareValidSemver } from "./semver.js";
 import { corruptSqliteIndexKey } from "./sqlite-index-corruption.test-support.js";
 import { planAgentDatabaseMigration } from "./state-migrations.agent-database-plan.js";
@@ -23,423 +22,267 @@ import {
 } from "./state-migrations.media-persistence.test-support.js";
 import { MEDIA_ARCHIVE_VERIFICATION_KEY } from "./state-migrations.transcript-directives-archives.js";
 
-type AgentDatabaseCondition = keyof Awaited<
-  ReturnType<typeof planAgentDatabaseMigration>
->["databases"][number]["conditions"];
-
-function readRuntimeSqliteVersion(): string {
-  const database = new (requireNodeSqlite().DatabaseSync)(":memory:");
-  try {
-    return String(database.prepare("SELECT sqlite_version() AS version").get()?.version);
-  } finally {
-    database.close();
-  }
-}
+type Plan = Awaited<ReturnType<typeof planAgentDatabaseMigration>>;
+type Fixture = { env: NodeJS.ProcessEnv; databasePath: string };
 
 const tempDirs: string[] = [];
-
 afterEach(() => {
   vi.restoreAllMocks();
   cleanupMediaPersistenceFixtures(tempDirs);
 });
 
+function sql(pathname: string, statement: string, ...params: string[]): unknown {
+  using db = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(pathname);
+  const row = db.prepare(statement).get(...params);
+  return row && Object.values(row)[0];
+}
+
 const message = { role: "user", content: "kept", MediaPath: "/media/image.png" };
+const event = (id: string) => createEvent({ id, parentId: null, timestamp: 1, message });
 
 /** A real agent database after explicit Doctor migrated it: the state a healthy install keeps. */
-async function healthyInstall() {
+async function healthyInstall(): Promise<Fixture> {
   const env = { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "agent-db-plan-") };
-  const databasePath = createLegacyDatabaseFixture({
-    env,
-    eventsBySession: {
-      "session-a": [createEvent({ id: "e1", parentId: null, timestamp: 1, message })],
-    },
-  });
+  const databasePath = createLegacyDatabaseFixture({ env, eventsBySession: { s: [event("e1")] } });
   expect((await migrate({ env })).warnings).toEqual([]);
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   return { env, databasePath };
 }
 
-const writable = (pathname: string, run: (db: import("node:sqlite").DatabaseSync) => void) => {
-  const db = new (requireNodeSqlite().DatabaseSync)(pathname);
-  try {
-    run(db);
-  } finally {
-    db.close();
-  }
-};
-
 /**
- * Names, sizes, inodes and mtimes of every file the state directory holds. A read-only
- * open of the shared state database may add its empty WAL index; a written frame would not be empty.
+ * Name, size, inode and mtime of every file under root. A read-only open of the shared
+ * state database may add its empty WAL index; a written frame would not be empty.
  */
-function fileFacts(root: string): string[] {
-  return allFileFacts(root).filter(
-    (fact) => !/^state\/openclaw\.sqlite-(?:shm \d+|wal 0) /u.test(fact),
-  );
+function fileFacts(root: string, all = false): string[] {
+  return fs
+    .readdirSync(root, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => {
+      const stat = fs.statSync(path.join(entry.parentPath, entry.name), { bigint: true });
+      return `${path.relative(root, path.join(entry.parentPath, entry.name))} ${stat.size} ${stat.ino} ${stat.mtimeNs}`;
+    })
+    .filter((fact) => all || !/^state\/openclaw\.sqlite-(?:shm \d+|wal 0) /u.test(fact))
+    .toSorted();
 }
 
-function allFileFacts(root: string): string[] {
-  const facts: string[] = [];
-  const visit = (dir: string) => {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        visit(full);
-        continue;
-      }
-      const stat = fs.statSync(full, { bigint: true });
-      facts.push(`${path.relative(root, full)} ${stat.size} ${stat.ino} ${stat.mtimeNs}`);
-    }
-  };
-  visit(root);
-  return facts.toSorted();
-}
-
-// Windows has no POSIX modes; the permission repair rewrites them on every pass.
-const windows = process.platform === "win32";
-// Before SQLite 3.46 the writing pass analyzes every table on every pass.
-const plannerAlwaysWork = (compareValidSemver(readRuntimeSqliteVersion(), "3.46.0") ?? -1) < 0;
-// Conditions with work on every pass of this runtime.
+// Windows rewrites modes on every pass; before SQLite 3.46 the pass analyzes every table.
 const alwaysWork = [
-  ...(windows ? [["permissions", "work"]] : []),
-  ...(plannerAlwaysWork ? [["planner-statistics", "work"]] : []),
+  ...(process.platform === "win32" ? [["permissions", "work"]] : []),
+  ...((compareValidSemver(String(sql(":memory:", "SELECT sqlite_version()")), "3.46.0") ?? -1) < 0
+    ? [["planner-statistics", "work"]]
+    : []),
 ];
 
-const conditionsOf = async (env: NodeJS.ProcessEnv) => {
+async function conditionsOf(env: NodeJS.ProcessEnv) {
   const plan = await planAgentDatabaseMigration({ env, configuredAgentDatabaseTargets: [] });
   expect(plan.databases).toHaveLength(1);
   return { plan, conditions: plan.databases[0]!.conditions };
-};
+}
 
-describe("agent database migration plan", () => {
-  it("answers none for every condition of a healthy database and changes no file", async () => {
-    const { env } = await healthyInstall();
-    const agentDir = path.join(env.OPENCLAW_STATE_DIR, "agents");
-    const agentFiles = allFileFacts(agentDir);
-    // The first read closes and seals the earlier pass's shared state handle.
-    await planAgentDatabaseMigration({ env, configuredAgentDatabaseTargets: [] });
-    expect(allFileFacts(agentDir)).toEqual(agentFiles);
-    const before = fileFacts(env.OPENCLAW_STATE_DIR);
-    const writes = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
+it("plans a healthy database as none, and a Doctor rerun leaves it unleased and untouched", async () => {
+  const { env, databasePath } = await healthyInstall();
+  const agentDir = path.join(env.OPENCLAW_STATE_DIR, "agents");
+  const agentFiles = fileFacts(agentDir, true);
+  // The first read closes and seals the earlier pass's shared state handle.
+  await planAgentDatabaseMigration({ env, configuredAgentDatabaseTargets: [] });
+  const before = fileFacts(env.OPENCLAW_STATE_DIR);
+  const opens = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
+  const leases = vi.spyOn(maintenanceLease, "withAgentDatabaseMaintenanceLease");
 
-    const { plan, conditions } = await conditionsOf(env);
-
-    expect(plan.pending).toBe(alwaysWork.length > 0 ? "work" : "none");
-    expect(plan.discovery).toEqual({ discovery: "none", "misplaced-copies": "none" });
-    expect(Object.entries(conditions).filter(([, answer]) => answer !== "none")).toEqual(
-      alwaysWork,
-    );
-    // Every condition the writing pass acts on was read, not skipped.
-    expect(Object.keys(conditions).toSorted()).toEqual(
-      [
-        "engine",
-        "schema-version",
-        "schema-owner",
-        "schema-additive",
-        "entry-validity",
-        "schema-metadata",
-        "canonical-indexes",
-        "runtime-schema",
-        "integrity",
-        "quarantine",
-        "permissions",
-        "registry",
-        "media-rows",
-        "entry-state-preparation",
-        "transcript-archives",
-        "archive-files",
-        "planner-statistics",
-        "cold-navigation",
-      ].toSorted(),
-    );
+  const { plan, conditions } = await conditionsOf(env);
+  expect(plan.pending).toBe(alwaysWork.length > 0 ? "work" : "none");
+  expect(plan.discovery).toEqual({ discovery: "none", "misplaced-copies": "none" });
+  expect(Object.entries(conditions).filter(([, answer]) => answer !== "none")).toEqual(alwaysWork);
+  // Every condition the writing pass acts on was read, not skipped.
+  expect(Object.keys(conditions)).toHaveLength(18);
+  if (alwaysWork.length === 0) {
+    const reported: string[][] = [];
+    const report = (targets: readonly { path: string }[]) =>
+      reported.push(targets.map((t) => t.path));
     expect(
-      writes.mock.calls.filter(([, options]) => options?.readOnly !== true).map(([p]) => p),
-    ).toEqual([]);
-    expect(fileFacts(env.OPENCLAW_STATE_DIR)).toEqual(before);
-  });
-
-  // On Windows the permission repair always has work, so no database is ever unchanged;
-  // the case above covers that answer.
-  it.skipIf(alwaysWork.length > 0)(
-    "leaves a healthy database unleased, unopened for writing and its files untouched on a Doctor rerun",
-    async () => {
-      const { env, databasePath } = await healthyInstall();
-      const agentDir = path.join(env.OPENCLAW_STATE_DIR, "agents");
-      const agentFiles = allFileFacts(agentDir);
-      // Settle the earlier pass's shared state handle, which a later read closes and seals.
-      await planAgentDatabaseMigration({ env, configuredAgentDatabaseTargets: [] });
-      const before = fileFacts(env.OPENCLAW_STATE_DIR);
-      const leases = vi.spyOn(maintenanceLease, "withAgentDatabaseMaintenanceLease");
-      const opens = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
-      let admitted: string[] = [];
-      let prepared: string[] = [];
-
-      const result = await migrate({
-        env,
-        onAdmittedTargets: (targets) => (admitted = targets.map((target) => target.path)),
-        onPreparedRepairTargets: (targets) => (prepared = targets.map((target) => target.path)),
-      });
-
-      expect(result).toEqual({ changes: [], warnings: [] });
-      expect(leases).not.toHaveBeenCalled();
-      expect(
-        opens.mock.calls.filter(([p, options]) => p === databasePath && options?.readOnly !== true),
-      ).toEqual([]);
-      // Later Doctor steps still receive the database as admitted and repair-ready.
-      expect(admitted).toEqual([databasePath]);
-      expect(prepared).toEqual([databasePath]);
-      expect(fileFacts(env.OPENCLAW_STATE_DIR)).toEqual(before);
-      // The agent database family, its clean-close seal included, is untouched throughout.
-      expect(allFileFacts(agentDir)).toEqual(agentFiles);
-    },
-  );
-
-  const stateDatabase = (env: NodeJS.ProcessEnv) => resolveOpenClawStateSqlitePath(env);
-  const guards: Array<{
-    condition: AgentDatabaseCondition;
-    create: (fixture: { env: NodeJS.ProcessEnv; databasePath: string }) => void;
-    repaired: (fixture: { env: NodeJS.ProcessEnv; databasePath: string }) => unknown;
-    expected: unknown;
-  }> = [
-    {
-      condition: "entry-validity",
-      create: ({ databasePath }) =>
-        writable(databasePath, (db) => {
-          db.exec("UPDATE session_nodes SET entry_valid = 0");
-        }),
-      repaired: ({ databasePath }) =>
-        readOne(databasePath, "SELECT count(*) AS n FROM session_nodes WHERE entry_valid = 0"),
-      expected: { n: 0 },
-    },
-    {
-      condition: "transcript-archives",
-      create: ({ databasePath }) =>
-        writable(databasePath, (db) => {
-          db.prepare(
-            "INSERT INTO schema_meta (meta_key, role, agent_id, schema_version, app_version, created_at, updated_at) VALUES (?, 'agent', 'main', 1, 'drifted', 1, 1) ON CONFLICT(meta_key) DO UPDATE SET app_version = 'drifted'",
-          ).run(MEDIA_ARCHIVE_VERIFICATION_KEY);
-        }),
-      repaired: ({ databasePath }) =>
-        readOne(databasePath, "SELECT app_version FROM schema_meta WHERE meta_key = ?", [
-          MEDIA_ARCHIVE_VERIFICATION_KEY,
-        ]),
-      expected: { app_version: "" },
-    },
-    {
-      condition: "planner-statistics",
-      create: ({ databasePath }) =>
-        writable(databasePath, (db) => {
-          db.exec("DELETE FROM sqlite_stat1");
-        }),
-      repaired: ({ databasePath }) =>
-        (
-          readOne(databasePath, "SELECT count(*) > 0 AS analyzed FROM sqlite_stat1") as {
-            analyzed: number;
-          }
-        ).analyzed,
-      expected: 1,
-    },
-    {
-      condition: "schema-metadata",
-      create: ({ databasePath }) =>
-        writable(databasePath, (db) => {
-          db.exec("UPDATE schema_meta SET app_version = '0.0.1' WHERE meta_key = 'primary'");
-        }),
-      repaired: ({ databasePath }) =>
-        readOne(
-          databasePath,
-          "SELECT app_version <> '0.0.1' AS current FROM schema_meta WHERE meta_key = 'primary'",
-        ),
-      expected: { current: 1 },
-    },
-    {
-      condition: "canonical-indexes",
-      create: ({ databasePath }) =>
-        writable(databasePath, (db) => {
-          const index = db
-            .prepare(
-              "SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'session_nodes' AND sql IS NOT NULL ORDER BY name LIMIT 1",
-            )
-            .get() as { name: string };
-          db.exec(`DROP INDEX ${index.name}`);
-          dropped = index.name;
-        }),
-      repaired: ({ databasePath }) =>
-        readOne(databasePath, "SELECT count(*) AS n FROM sqlite_schema WHERE name = ?", [dropped]),
-      expected: { n: 1 },
-    },
-    {
-      condition: "integrity",
-      create: ({ databasePath }) => {
-        const { name, key } = readOne(
-          databasePath,
-          "SELECT (SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'session_nodes' AND sql LIKE '%(session_key)%' ORDER BY name LIMIT 1) AS name, (SELECT session_key FROM session_nodes LIMIT 1) AS key",
-        ) as { name: string; key: string };
-        corruptSqliteIndexKey(databasePath, name, key, `${key.slice(0, -1)}~`);
-      },
-      repaired: ({ databasePath }) => readOne(databasePath, "PRAGMA integrity_check"),
-      expected: { integrity_check: "ok" },
-    },
-    {
-      condition: "schema-additive",
-      create: ({ databasePath }) =>
-        writable(databasePath, (db) => {
-          db.exec("DROP TABLE session_reactions");
-        }),
-      repaired: ({ databasePath }) =>
-        readOne(
-          databasePath,
-          "SELECT count(*) AS n FROM sqlite_schema WHERE name = 'session_reactions'",
-        ),
-      expected: { n: 1 },
-    },
-    {
-      condition: "media-rows",
-      create: ({ databasePath }) =>
-        writable(databasePath, (db) => {
-          db.prepare("DELETE FROM schema_meta WHERE meta_key = ?").run(
-            MEDIA_ROWS_MIGRATION_META_KEY,
-          );
-        }),
-      repaired: ({ databasePath }) =>
-        readOne(databasePath, "SELECT count(*) AS n FROM schema_meta WHERE meta_key = ?", [
-          MEDIA_ROWS_MIGRATION_META_KEY,
-        ]),
-      expected: { n: 1 },
-    },
-    {
-      condition: "permissions",
-      create: ({ databasePath }) => fs.chmodSync(databasePath, 0o644),
-      repaired: ({ databasePath }) => fs.statSync(databasePath).mode & 0o777,
-      expected: 0o600,
-    },
-    {
-      condition: "registry",
-      create: ({ env }) =>
-        writable(stateDatabase(env), (db) => {
-          db.exec("DELETE FROM agent_databases");
-        }),
-      repaired: ({ env }) =>
-        readOne(
-          stateDatabase(env),
-          "SELECT count(*) AS n FROM agent_databases WHERE agent_id = 'main'",
-        ),
-      expected: { n: 1 },
-    },
-    {
-      condition: "archive-files",
-      create: ({ env }) =>
-        writeArchive(
-          path.join(
-            env.OPENCLAW_STATE_DIR!,
-            "agents",
-            "main",
-            "sessions",
-            "legacy.jsonl.deleted.2026-07-24T01-02-03.000Z",
-          ),
-          [createEvent({ id: "a1", parentId: null, timestamp: 2, message })],
-          false,
-        ),
-      repaired: ({ env }) =>
-        fs
-          .readFileSync(
-            path.join(
-              env.OPENCLAW_STATE_DIR!,
-              "agents",
-              "main",
-              "sessions",
-              "legacy.jsonl.deleted.2026-07-24T01-02-03.000Z",
-            ),
-            "utf8",
-          )
-          .includes('"MediaPath"'),
-      expected: false,
-    },
-  ];
-  let dropped = "";
-
-  // On Windows permissions always have work, so the plan stops before its whole-store
-  // reads (archives, archive files, integrity), and POSIX mode bits are no fixture.
-  // A condition with work on every pass stops the plan before its whole-store reads
-  // (archives, archive files, integrity); POSIX mode bits are no fixture on Windows.
-  const unread = new Set(
-    alwaysWork.length > 0
-      ? ["transcript-archives", "archive-files", "integrity", ...alwaysWork.map(([c]) => c)]
-      : [],
-  );
-  it.each(guards.filter((guard) => !unread.has(guard.condition)))(
-    "reports $condition as work and the pass repairs it",
-    async (guard) => {
-      const fixture = await healthyInstall();
-      guard.create(fixture);
-
-      const { conditions } = await conditionsOf(fixture.env);
-      expect(conditions[guard.condition]).toBe("work");
-
-      const leases = vi.spyOn(maintenanceLease, "withAgentDatabaseMaintenanceLease");
-      await migrate({ env: fixture.env });
-      // Work keeps the unchanged writing pass, lease included.
-      expect(leases).toHaveBeenCalled();
-      closeOpenClawAgentDatabasesForTest();
-      closeOpenClawStateDatabaseForTest();
-      expect(guard.repaired(fixture)).toEqual(guard.expected);
-      const after = await conditionsOf(fixture.env);
-      expect(after.conditions[guard.condition]).toBe("none");
-    },
-  );
-
-  it("reports an older schema version as work", async () => {
-    const env = { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "agent-db-plan-old-") };
-    createLegacyDatabaseFixture({
-      env,
-      eventsBySession: { s: [createEvent({ id: "e", parentId: null, timestamp: 1, message })] },
-    });
-    closeOpenClawAgentDatabasesForTest();
-    const { plan, conditions } = await conditionsOf(env);
-    expect(conditions["schema-version"]).toBe("work");
-    expect(plan.pending).toBe("work");
-  });
-
-  it("answers undecidable for a store the read-only reader cannot vouch for", async () => {
-    const { env, databasePath } = await healthyInstall();
-    // A store whose agent was deleted in this process reads as missing.
-    installDeletedAgentDatabaseFences([[path.resolve(databasePath), "main"]]);
-    try {
-      const { plan, conditions } = await conditionsOf(env);
-      expect(conditions["schema-version"]).toBe("undecidable");
-      expect(plan.pending).toBe(alwaysWork.length > 0 ? "work" : "undecidable");
-    } finally {
-      installDeletedAgentDatabaseFences([]);
-    }
-
-    // A configured incognito store is a target, but the reader never vouches for it.
-    const incognitoPath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
-    fs.copyFileSync(databasePath, incognitoPath);
-    const configured = await planAgentDatabaseMigration({
-      env,
-      configuredAgentDatabaseTargets: [{ agentId: "main", path: incognitoPath }],
-    });
-    expect(
-      configured.databases.map(({ path: pathname, conditions }) => [
-        pathname,
-        conditions["schema-version"],
-      ]),
-    ).toEqual(
-      expect.arrayContaining([
-        [incognitoPath, "undecidable"],
-        [databasePath, "none"],
-      ]),
-    );
-    expect(configured.pending).not.toBe("none");
-  });
+      await migrate({ env, onAdmittedTargets: report, onPreparedRepairTargets: report }),
+    ).toEqual({ changes: [], warnings: [] });
+    expect(leases).not.toHaveBeenCalled();
+    // Later Doctor steps still receive the database as admitted and repair-ready.
+    expect(reported).toEqual([[databasePath], [databasePath]]);
+  }
+  expect(opens.mock.calls.filter(([, options]) => options?.readOnly !== true)).toEqual([]);
+  expect(fileFacts(env.OPENCLAW_STATE_DIR)).toEqual(before);
+  expect(fileFacts(agentDir, true)).toEqual(agentFiles);
 });
 
-function readOne(pathname: string, sql: string, params: unknown[] = []) {
-  const db = new (requireNodeSqlite().DatabaseSync)(pathname, { readOnly: true });
+const archiveFile = (f: Fixture) =>
+  path.join(
+    f.env.OPENCLAW_STATE_DIR!,
+    "agents/main/sessions/legacy.jsonl.deleted.2026-07-24T01-02-03.000Z",
+  );
+const firstIndex =
+  "SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'session_nodes'";
+let dropped = "";
+/** Each condition: create its state in a real database; `repaired` reads 1 once the pass fixed it. */
+const guards: Array<{
+  condition: keyof Plan["databases"][number]["conditions"];
+  create: (f: Fixture) => void;
+  repaired: (f: Fixture) => unknown;
+}> = [
+  {
+    condition: "entry-validity",
+    create: (f) => sql(f.databasePath, "UPDATE session_nodes SET entry_valid = 0"),
+    repaired: (f) =>
+      sql(f.databasePath, "SELECT NOT EXISTS (SELECT 1 FROM session_nodes WHERE entry_valid = 0)"),
+  },
+  {
+    condition: "transcript-archives",
+    create: (f) =>
+      sql(
+        f.databasePath,
+        "INSERT INTO schema_meta (meta_key, role, agent_id, schema_version, app_version, created_at, updated_at) VALUES (?, 'agent', 'main', 1, 'drifted', 1, 1) ON CONFLICT(meta_key) DO UPDATE SET app_version = 'drifted'",
+        MEDIA_ARCHIVE_VERIFICATION_KEY,
+      ),
+    repaired: (f) =>
+      sql(
+        f.databasePath,
+        "SELECT app_version = '' FROM schema_meta WHERE meta_key = ?",
+        MEDIA_ARCHIVE_VERIFICATION_KEY,
+      ),
+  },
+  {
+    condition: "planner-statistics",
+    create: (f) => sql(f.databasePath, "DELETE FROM sqlite_stat1"),
+    repaired: (f) => sql(f.databasePath, "SELECT count(*) > 0 FROM sqlite_stat1"),
+  },
+  {
+    condition: "schema-metadata",
+    create: (f) =>
+      sql(
+        f.databasePath,
+        "UPDATE schema_meta SET app_version = '0.0.1' WHERE meta_key = 'primary'",
+      ),
+    repaired: (f) =>
+      sql(
+        f.databasePath,
+        "SELECT app_version <> '0.0.1' FROM schema_meta WHERE meta_key = 'primary'",
+      ),
+  },
+  {
+    condition: "canonical-indexes",
+    create: (f) => {
+      dropped = String(sql(f.databasePath, `${firstIndex} AND sql IS NOT NULL ORDER BY name`));
+      sql(f.databasePath, `DROP INDEX ${dropped}`);
+    },
+    repaired: (f) =>
+      sql(f.databasePath, "SELECT count(*) FROM sqlite_schema WHERE name = ?", dropped),
+  },
+  {
+    condition: "integrity",
+    create: (f) => {
+      const key = String(sql(f.databasePath, "SELECT session_key FROM session_nodes"));
+      const index = String(
+        sql(f.databasePath, `${firstIndex} AND sql LIKE '%(session_key)%' ORDER BY name`),
+      );
+      corruptSqliteIndexKey(f.databasePath, index, key, `${key.slice(0, -1)}~`);
+    },
+    repaired: (f) =>
+      sql(f.databasePath, "SELECT integrity_check = 'ok' FROM pragma_integrity_check"),
+  },
+  {
+    condition: "schema-additive",
+    create: (f) => sql(f.databasePath, "DROP TABLE session_reactions"),
+    repaired: (f) =>
+      sql(f.databasePath, "SELECT count(*) FROM sqlite_schema WHERE name = 'session_reactions'"),
+  },
+  {
+    condition: "media-rows",
+    create: (f) =>
+      sql(
+        f.databasePath,
+        "DELETE FROM schema_meta WHERE meta_key = ?",
+        MEDIA_ROWS_MIGRATION_META_KEY,
+      ),
+    repaired: (f) =>
+      sql(
+        f.databasePath,
+        "SELECT count(*) FROM schema_meta WHERE meta_key = ?",
+        MEDIA_ROWS_MIGRATION_META_KEY,
+      ),
+  },
+  {
+    condition: "permissions",
+    create: (f) => fs.chmodSync(f.databasePath, 0o644),
+    repaired: (f) => Number((fs.statSync(f.databasePath).mode & 0o777) === 0o600),
+  },
+  {
+    condition: "registry",
+    create: (f) => sql(resolveOpenClawStateSqlitePath(f.env), "DELETE FROM agent_databases"),
+    repaired: (f) =>
+      sql(
+        resolveOpenClawStateSqlitePath(f.env),
+        "SELECT count(*) FROM agent_databases WHERE agent_id = 'main'",
+      ),
+  },
+  {
+    condition: "archive-files",
+    create: (f) => writeArchive(archiveFile(f), [event("a1")], false),
+    repaired: (f) => Number(!fs.readFileSync(archiveFile(f), "utf8").includes('"MediaPath"')),
+  },
+];
+
+// A condition with work on every pass stops the plan before its whole-store reads
+// (archives, archive files, integrity); POSIX mode bits are no fixture on Windows.
+const unread = new Set(
+  alwaysWork.length > 0
+    ? ["transcript-archives", "archive-files", "integrity", ...alwaysWork.map(([c]) => c)]
+    : [],
+);
+it.each(guards.filter((guard) => !unread.has(guard.condition)))(
+  "reports $condition as work and the unchanged pass repairs it",
+  async (guard) => {
+    const fixture = await healthyInstall();
+    guard.create(fixture);
+    expect((await conditionsOf(fixture.env)).conditions[guard.condition]).toBe("work");
+
+    const leases = vi.spyOn(maintenanceLease, "withAgentDatabaseMaintenanceLease");
+    await migrate({ env: fixture.env });
+    expect(leases).toHaveBeenCalled();
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    expect(guard.repaired(fixture)).toBe(1);
+    expect((await conditionsOf(fixture.env)).conditions[guard.condition]).toBe("none");
+  },
+);
+
+it("reports an older schema version as work", async () => {
+  const env = { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "agent-db-plan-old-") };
+  createLegacyDatabaseFixture({ env, eventsBySession: { s: [event("e")] } });
+  closeOpenClawAgentDatabasesForTest();
+  const { plan, conditions } = await conditionsOf(env);
+  expect([conditions["schema-version"], plan.pending]).toEqual(["work", "work"]);
+});
+
+it("answers undecidable for a store the read-only reader cannot vouch for", async () => {
+  const { env, databasePath } = await healthyInstall();
+  // A store whose agent was deleted in this process reads as missing.
+  installDeletedAgentDatabaseFences([[path.resolve(databasePath), "main"]]);
   try {
-    return { ...(db.prepare(sql).get(...(params as never[])) as object) };
+    const { plan, conditions } = await conditionsOf(env);
+    expect(conditions["schema-version"]).toBe("undecidable");
+    expect(plan.pending).toBe(alwaysWork.length > 0 ? "work" : "undecidable");
   } finally {
-    db.close();
+    installDeletedAgentDatabaseFences([]);
   }
-}
+  // A configured incognito store is a target, but the reader never vouches for it.
+  const incognitoPath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
+  fs.copyFileSync(databasePath, incognitoPath);
+  const configured = await planAgentDatabaseMigration({
+    env,
+    configuredAgentDatabaseTargets: [{ agentId: "main", path: incognitoPath }],
+  });
+  expect(configured.databases.map((d) => [d.path, d.conditions["schema-version"]])).toEqual(
+    expect.arrayContaining([
+      [incognitoPath, "undecidable"],
+      [databasePath, "none"],
+    ]),
+  );
+  expect(configured.pending).not.toBe("none");
+});

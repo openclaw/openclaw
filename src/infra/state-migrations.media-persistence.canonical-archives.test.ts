@@ -306,38 +306,23 @@ describe("media migration of canonical SQLite transcript archives", () => {
   });
 
   it.each([
-    { name: "a legacy archive row", options: {}, pending: true },
-    {
-      name: "a differing archive copy",
-      options: { content: canonicalContent, fileContent: legacyContent },
-      pending: true,
-    },
-    {
-      name: "a missing archive copy",
-      options: { content: canonicalContent, fileContent: null },
-      pending: true,
-    },
-    {
-      name: "a canonical archive and copy",
-      options: { content: canonicalContent },
-      pending: false,
-    },
-  ])("verification reports $name as pending=$pending", async ({ options, pending }) => {
+    ["a legacy archive row", {}, true],
+    ["a differing archive copy", { content: canonicalContent, fileContent: legacyContent }, true],
+    ["a missing archive copy", { content: canonicalContent, fileContent: null }, true],
+    ["a canonical archive and copy", { content: canonicalContent }, false],
+  ] as const)("verification reports %s as pending=%s", async (_name, options, pending) => {
     const f = fixture(options);
     const before = f.read();
-    const verify = async () => {
-      using database = openDatabase(f.databasePath, true);
-      return await migrateCanonicalTranscriptArchives({
-        agentId: "main",
-        database,
-        pathname: f.databasePath,
-        start: { generation: "", sessionId: "" },
-        verifyOnly: true,
-        transformLine: transformMediaArchiveContent,
-      });
-    };
-    expect((await verify()).pending).toBe(pending);
-    expect(f.read()).toEqual(before);
+    using database = openDatabase(f.databasePath, true);
+    const verified = await migrateCanonicalTranscriptArchives({
+      agentId: "main",
+      database,
+      pathname: f.databasePath,
+      start: { generation: "", sessionId: "" },
+      verifyOnly: true,
+      transformLine: transformMediaArchiveContent,
+    });
+    expect([verified.pending, f.read()]).toEqual([pending, before]);
   });
 
   it("seeks across archive batches without skipping retained generations", async () => {

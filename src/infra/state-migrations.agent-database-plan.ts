@@ -269,6 +269,7 @@ async function planAgentDatabaseMaintenance(
   const handle = opened.database;
   try {
     // The engine check above leaves only native SQLite handles here.
+    // SAFETY: the engine check above returned early for every non-native store.
     const database = handle.db as DatabaseSync;
     let metadata: ReturnType<typeof assertOpenClawAgentDatabaseOwner>;
     try {

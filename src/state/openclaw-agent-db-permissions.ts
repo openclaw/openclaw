@@ -46,6 +46,7 @@ export function agentDatabasePermissionsNeedRepair(
     try {
       return differs(candidate, OPENCLAW_AGENT_DB_FILE_MODE);
     } catch (error) {
+      // SAFETY: statSync throws Node system errors, which carry an errno code.
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         return false;
       }

@@ -29,6 +29,7 @@ export function hasCurrentAgentSchemaMetadata(
     .prepare(
       `SELECT schema_version, app_version, agent_id${hasFloorColumn ? ", min_reader" : ""} FROM schema_meta WHERE meta_key = 'primary'`,
     )
+    // SAFETY: the selected schema_meta columns are nullable scalars; each is compared, never trusted.
     .get() as
     | { schema_version: unknown; app_version: unknown; agent_id: unknown; min_reader?: unknown }
     | undefined;
