@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import type { Agent } from "node:http";
 import path from "node:path";
 import process from "node:process";
-import { createAmbientNodeProxyAgent } from "@openclaw/proxyline";
 import { resolveStateDir } from "../config/paths.js";
+import { loadProxyline } from "../infra/net/proxyline-runtime.js";
 
 // Debug proxy CA files live under OpenClaw state. Capture data lives in the
 // shared global state database.
@@ -108,6 +108,7 @@ export function createDebugProxyWebSocketAgent(settings: DebugProxySettings): Ag
   if (!settings.enabled || !settings.proxyUrl) {
     return undefined;
   }
+  const { createAmbientNodeProxyAgent } = loadProxyline();
   return createAmbientNodeProxyAgent({
     protocol: "https",
     env: {

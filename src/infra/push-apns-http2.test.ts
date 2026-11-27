@@ -13,6 +13,7 @@ type ProxyConnectTunnelParams = Parameters<
 
 const {
   connectSpy,
+  loadProxylineSpy,
   tunnelSpy,
   tlsConnectSpy,
   setTargetTlsEvent,
@@ -54,6 +55,7 @@ const {
     alpnProtocol: "h2" as string | false,
     destroy: vi.fn(),
   });
+  const tunnelSpyLocal = vi.fn(async (_params: ProxyConnectTunnelParams) => fakeProxySocketLocal);
   let targetTlsEvent: "secureConnect" | undefined = "secureConnect";
   return {
     fakeProxySocket: fakeProxySocketLocal,
@@ -63,7 +65,8 @@ const {
     connectSpy: vi.fn(
       (_authority: string, _options?: http2.ClientSessionOptions) => fakeSessionLocal,
     ),
-    tunnelSpy: vi.fn(async (_params: ProxyConnectTunnelParams) => fakeProxySocketLocal),
+    tunnelSpy: tunnelSpyLocal,
+    loadProxylineSpy: vi.fn(() => ({ openProxyConnectTunnel: tunnelSpyLocal })),
     tlsConnectSpy: vi.fn(() => {
       const event = targetTlsEvent;
       if (event) {
@@ -90,8 +93,8 @@ vi.mock("node:tls", () => ({
   connect: tlsConnectSpy,
 }));
 
-vi.mock("@openclaw/proxyline", () => ({
-  openProxyConnectTunnel: tunnelSpy,
+vi.mock("./net/proxyline-runtime.js", () => ({
+  loadProxyline: loadProxylineSpy,
 }));
 
 function connect(overrides: Partial<Parameters<typeof connectApnsHttp2Session>[0]> = {}) {
@@ -143,6 +146,7 @@ describe("connectApnsHttp2Session", () => {
     ).rejects.toThrow("pairing removed");
 
     expect(connectSpy).not.toHaveBeenCalled();
+    expect(loadProxylineSpy).not.toHaveBeenCalled();
   });
 
   it("rejects APNs authorities with non-origin URL components", async () => {
@@ -171,6 +175,7 @@ describe("connectApnsHttp2Session", () => {
     stopActiveManagedProxyRegistration(registration);
 
     expect(session).toBe(fakeSession);
+    expect(loadProxylineSpy).toHaveBeenCalledOnce();
     const tunnelCall = tunnelSpy.mock.lastCall?.[0];
     expect(tunnelCall).toMatchObject({
       targetHost: "api.push.apple.com",
@@ -234,6 +239,7 @@ describe("connectApnsHttp2Session", () => {
       "Proxy CONNECT failed via http://proxy.example:8080: URI malformed",
     );
     expect(tunnelSpy).not.toHaveBeenCalled();
+    expect(loadProxylineSpy).not.toHaveBeenCalled();
   });
 
   it("ignores ambient proxy env when managed proxy is inactive", async () => {
@@ -242,6 +248,7 @@ describe("connectApnsHttp2Session", () => {
     expect(session).toBe(fakeSession);
     expect(connectSpy).toHaveBeenCalledWith("https://api.push.apple.com");
     expect(tunnelSpy).not.toHaveBeenCalled();
+    expect(loadProxylineSpy).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -258,6 +265,7 @@ describe("connectApnsHttp2Session", () => {
         responseHeaders: {},
       });
       expect(fakeRequest.setEncoding).not.toHaveBeenCalled();
+      expect(loadProxylineSpy).toHaveBeenCalledOnce();
       const tunnelCall = tunnelSpy.mock.lastCall?.[0];
       expect(tunnelCall?.proxyUrl).toBeInstanceOf(URL);
       expect(tunnelCall?.proxyUrl).toMatchObject({ href: "http://proxy.example:8080/" });
@@ -286,5 +294,6 @@ describe("connectApnsHttp2Session", () => {
     await expect(probe({ authority: "https://example.com" })).rejects.toThrow(
       "Unsupported APNs authority",
     );
+    expect(loadProxylineSpy).not.toHaveBeenCalled();
   });
 });
