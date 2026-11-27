@@ -233,6 +233,7 @@ describe("GitHub publication branch history", () => {
         if (args.includes("POST") && args.some((arg) => arg.endsWith("/pulls"))) {
           created = JSON.parse(input!);
         }
+        return undefined;
       });
       await f.published(`missing-first-commit-${code}`);
       expect(created).toMatchObject({
