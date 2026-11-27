@@ -103,7 +103,7 @@ it("makes the overview readable before extras and retains visible content throug
       expect(
         await panel
           .locator(".lr-document")
-          .evaluate((node, original) => node === original, initialDocument),
+          .evaluate((node, priorDocument) => node === priorDocument, initialDocument),
       ).toBe(true);
       expect(await content.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
       await page.setViewportSize({ width: 1280, height: 900 });
