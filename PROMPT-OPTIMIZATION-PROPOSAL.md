@@ -15,7 +15,7 @@ A scoped runtime overlay on OpenClaw 2026.11.10 (Windows, local Gemma, openai-co
 Observed first-token latencies on three subsequent requests were approximately 97, 5 and 40 seconds. History changes and cache behavior confound these measurements, so controlled benchmarks are needed.
 
 - [Detailed experiment and roadmap](https://github.com/Animeleague/openclaw/blob/bank/prompt-optimisation-v3.1-2026-11-27/live-bank/2026-11-27-prompt-optimisation-v3.1/README.md)
-- [OpenClaw Transient Tools plugin](https://github.com/Animeleague/openclaw-plugin-transient-tools): complementary public implementation for bounded transient tool interactions rather than indefinitely growing persistent transcripts. Its documented initial compatibility is OpenClaw 2026.7.1.
+- [OpenClaw Transient Turn Context v0.1 plugin](https://github.com/Animeleague/openclaw/tree/bank/transient-turn-context-v0.1-2026-11-27/live-bank/2026-11-27-transient-turn-context-v0.1): complementary proof of concept using the provider replay-policy hook to exclude historical typed runtime-context carriers. Sampled input fell from 14,805 to 6,381 tokens; growth per short exchange fell from 1,080 to 211 tokens. Recall passed; warm-cache reuse decreased and fresh-token cost increased slightly. The generic derivative is locally tested, not independently live-installed; validation beyond the tested route is outstanding.
 - Related cache investigation: https://github.com/openclaw/openclaw/issues/202001
 
 ## Status and limitations
