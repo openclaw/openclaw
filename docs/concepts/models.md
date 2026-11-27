@@ -105,7 +105,7 @@ Full key reference, defaults, and JSON5 examples: [Configuration reference](/gat
 If repeated utility-model failures stop session-observer assessments, the watching
 Control UI chat shows one warning for that run when a utility model or fallback
 is explicitly configured, naming the model and suggesting a
-capable utility model or `utilityModel.fallbacks`. Missing model IDs and exhausted fallback attempts are named in the notice without including raw provider errors or auth-profile IDs. The explicit route stays selected;
+capable utility model or `utilityModel.fallbacks` when none are configured. When fallbacks already exist, the warning suggests checking their availability and timeouts. Missing model IDs and exhausted fallback attempts are named in the notice without including raw provider errors or auth-profile IDs. The explicit route stays selected;
 the next run tries it again. Automatically selected utility models stop assessments
 without a chat warning; Gateway logs retain the failure details. Model-free activity
 headlines remain available. `models status` uses the Gateway’s agent-scoped utility decision when available, rather than reconstructing private account availability from public model rows.

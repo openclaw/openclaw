@@ -44,6 +44,11 @@ export function reportSessionObserverDegradation(
     useUtilityModel: "required",
   });
   const modelLabel = selection ? ` "${selection.provider}/${selection.modelId}"` : "";
+  const utility = readUtilityModelSetting(cfg, state.agentId);
+  const hasFallbacks = utility.kind !== "disabled" && utility.fallbacks.length > 0;
+  const guidance = hasFallbacks
+    ? "Configured utilityModel.fallbacks did not restore assessments; check their availability and timeouts or choose a capable utility model."
+    : "To restore assessments, choose a capable utility model or add capable utilityModel.fallbacks.";
   const failure = isFailoverError(error) ? error : undefined;
   const attempts =
     failure?.attempts ??
@@ -74,10 +79,9 @@ export function reportSessionObserverDegradation(
     stream: "notice",
     data: {
       phase: "warning",
-      message: `Session observer assessments stopped for this run after utility model${modelLabel} failed repeatedly.${details ? ` ${details}` : ""} To restore assessments, choose a capable utility model or add capable utilityModel.fallbacks.`,
+      message: `Session observer assessments stopped for this run after utility model${modelLabel} failed repeatedly.${details ? ` ${details}` : ""} ${guidance}`,
     },
   };
-  const utility = readUtilityModelSetting(cfg, state.agentId);
   if (utility.kind === "explicit" || (utility.kind === "auto" && utility.fallbacks.length > 0)) {
     const owner = getAgentRunContextOwnership(state.runId)?.exclusiveClaimId;
     if (owner) {
@@ -100,13 +104,13 @@ export function createSessionObserverCompletion(params: {
   completeModel: typeof defaultCompleteModel;
   isCurrent: (state: SessionObserverState) => boolean;
 }) {
-  const ensurePrepared = async (state: SessionObserverState) => {
+  const ensurePrepared = async (state: SessionObserverState, cfg: OpenClawConfig) => {
     const modelRef = state.utilityModelRef;
     if (!modelRef) {
       throw new Error("session observer utility model is unavailable");
     }
     const preparedPromise = (state.preparedPromise ??= params.prepareModel({
-      cfg: params.getConfig(),
+      cfg,
       agentId: state.agentId,
       modelRef,
       useUtilityModel: true,
@@ -126,6 +130,7 @@ export function createSessionObserverCompletion(params: {
   };
 
   return async (state: SessionObserverState, notes: readonly string[]) => {
+    const cfg = params.getConfig();
     const controller = new AbortController();
     state.activeController = controller;
     const timeout = setTimeout(
@@ -135,7 +140,7 @@ export function createSessionObserverCompletion(params: {
     const ownedWork = new AsyncWorkScope();
     try {
       const execute = async () => {
-        const prepared = await ensurePrepared(state);
+        const prepared = await ensurePrepared(state, cfg);
         let lastRejectedText = "";
         for (let attempt = 0; attempt < 2; attempt += 1) {
           if (!params.isCurrent(state) || controller.signal.aborted) {
@@ -145,7 +150,7 @@ export function createSessionObserverCompletion(params: {
           const result = await params.completeModel({
             ...prepared,
             purpose: "session-observer",
-            config: params.getConfig(),
+            config: cfg,
             systemPrompt: SESSION_OBSERVER_SYSTEM_PROMPT,
             prompt: buildSessionObserverPrompt(state, notes),
             timeoutMs: SESSION_OBSERVER_MODEL_TIMEOUT_MS,
