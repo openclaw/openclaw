@@ -380,10 +380,12 @@ export function resolveConfiguredPluginAutoEnableCandidates(
   }
 
   const decisionProviderIds = new Set(getConfiguredDecisionProviderIds(params.config));
-  for (const plugin of params.registry.plugins) {
-    for (const providerId of plugin.contracts?.decisionProviders ?? []) {
-      if (decisionProviderIds.has(providerId)) {
-        changes.push({ pluginId: plugin.id, kind: "decision-provider-selected", providerId });
+  if (decisionProviderIds.size > 0) {
+    for (const plugin of params.registry.plugins) {
+      for (const providerId of plugin.contracts?.decisionProviders ?? []) {
+        if (decisionProviderIds.has(providerId)) {
+          changes.push({ pluginId: plugin.id, kind: "decision-provider-selected", providerId });
+        }
       }
     }
   }

@@ -198,23 +198,7 @@ jobs:
             .github/actions/publish-generated-pr/action.yml
             .github/actions/publish-generated-pr/policy.py
             .github/workflows/control-ui-locale-refresh.yml
-          pr-body: &control-ui-pr-body |
-            ## What Problem This Solves
-
-            Keeps generated Control UI locales synchronized without bypassing protected-branch checks.
-
-            ## Why This Change Was Made
-
-            The Control UI Locale Refresh workflow generated worker memory from `${{ needs.resolve-base.outputs.sha }}`, reconciled it once against `${{ steps.locale_memory.outputs.sha }}`, and published the current output through a reviewable automation branch.
-
-            ## User Impact
-
-            No direct user-facing change beyond refreshed translations.
-
-            ## Evidence
-
-            - [Locale refresh run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-            - `node --import tsx scripts/control-ui-i18n.ts check`
+          pr-body: "Preflight only. The finalizer supplies the generated PR body."
 
   refresh:
     needs: [resolve-base, publisher-preflight]
@@ -372,4 +356,20 @@ jobs:
           auto-merge: "true"
           generated-paths: *control-ui-generated-paths
           invalidation-paths: *control-ui-invalidation-paths
-          pr-body: *control-ui-pr-body
+          pr-body: |
+            ## What Problem This Solves
+
+            Keeps generated Control UI locales synchronized without bypassing protected-branch checks.
+
+            ## Why This Change Was Made
+
+            The Control UI Locale Refresh workflow generated worker memory from `${{ needs.resolve-base.outputs.sha }}`, reconciled it once against `${{ steps.locale_memory.outputs.sha }}`, and published the current output through a reviewable automation branch.
+
+            ## User Impact
+
+            No direct user-facing change beyond refreshed translations.
+
+            ## Evidence
+
+            - [Locale refresh run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            - `node --import tsx scripts/control-ui-i18n.ts check`

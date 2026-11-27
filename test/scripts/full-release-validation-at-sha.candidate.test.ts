@@ -239,13 +239,7 @@ describe("candidate-owned full release dispatch entry point", () => {
         "-f",
         "validation_purpose=publish",
         "-f",
-        `publication_selection_json=${JSON.stringify({
-          route: "normal",
-          npmDistTag: "latest",
-          publishOpenclawNpm: true,
-          pluginPublishScope: "all-publishable",
-          plugins: [],
-        })}`,
+        `publication_selection_json=${JSON.stringify(publicationSelectionFixture())}`,
       ]);
 
       expect(result.status).toBe(1);
@@ -737,13 +731,7 @@ describe("candidate-owned full release dispatch entry point", () => {
         "-f",
         "validation_purpose=publish",
         "-f",
-        `publication_selection_json=${JSON.stringify({
-          route: "normal",
-          npmDistTag: "latest",
-          publishOpenclawNpm: true,
-          pluginPublishScope: "all-publishable",
-          plugins: [],
-        })}`,
+        `publication_selection_json=${JSON.stringify(publicationSelectionFixture())}`,
       ]);
       expect(prepared.status, prepared.stderr).toBe(78);
       expect(dispatches(f)).toEqual([P]);

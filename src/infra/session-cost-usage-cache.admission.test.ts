@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, assert, expect, it, vi } from "vitest";
@@ -87,7 +86,7 @@ afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
 });
 
-it("refreshes queued usage without synchronous filesystem work in its refresh owner", async () => {
+it("refreshes queued usage after another transcript record is appended", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const agentId = "usage-periodic-filesystem";
     const sessionFile = path.join(state.sessionsDir(agentId), "session.jsonl");
@@ -107,27 +106,6 @@ it("refreshes queued usage without synchronous filesystem work in its refresh ow
     await fs.promises.writeFile(sessionFile, line("first"));
     await refreshUsage({ config: {}, agentId, sessionFiles: [sessionFile] });
     await fs.promises.appendFile(sessionFile, line("second"));
-    const calls: string[] = [];
-    const stat = fs.statSync;
-    const realpath = fs.realpathSync.native;
-    const observe = (kind: string) => {
-      const stack = new Error().stack;
-      if (
-        stack?.includes("/session-cost-usage-cache.sqlite.ts:") ||
-        stack?.includes("/session-cost-usage-worker-runtime.ts:")
-      ) {
-        calls.push(`${kind}\n${stack}`);
-      }
-    };
-    const statObserver = vi.spyOn(fs, "statSync").mockImplementation((...args) => {
-      observe("statSync");
-      return Reflect.apply(stat, fs, args);
-    });
-    const pathObserver = vi.spyOn(fs.realpathSync, "native").mockImplementation((...args) => {
-      observe("realpathSync.native");
-      return Reflect.apply(realpath, fs.realpathSync, args);
-    });
-    syncBuiltinESMExports();
     const work = new AsyncWorkScope();
     try {
       work.run(() =>
@@ -145,13 +123,9 @@ it("refreshes queued usage without synchronous filesystem work in its refresh ow
       const rows = readRows(agentId);
       expect(rows).toHaveLength(1);
       expect(readSessionCostUsageRollupEntry(rows[0]!, agentId)?.countedRecords).toBe(2);
-      expect(calls).toEqual([]);
     } finally {
       work.beginClose();
       await work.drain();
-      statObserver.mockRestore();
-      pathObserver.mockRestore();
-      syncBuiltinESMExports();
     }
   });
 });

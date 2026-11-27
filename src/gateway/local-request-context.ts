@@ -13,6 +13,7 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
+import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-maintenance-context.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "./agent-runtime-approval-authority.js";
 import { loadGatewayConfigRevisionProjector } from "./config-revision-token.js";
 import { NodeRegistry } from "./node-registry.js";
@@ -200,14 +201,20 @@ async function createLocalGatewayRequestContext(
   bindSessionRowProjection(context, () => projection);
   context.ensureSessionRowProjection = () => {
     if (!initializing) {
-      // The same host retains embedded resources used by admitted work after its caller returns.
-      resourceHost.adopt(context, {
-        release: async () => {
-          await initializing?.catch(() => {});
-          projection?.dispose();
-          await projection?.ensureMaterialized();
-        },
-      });
+      const release = async () => {
+        await initializing?.catch(() => {});
+        projection?.dispose();
+        await projection?.ensureMaterialized();
+      };
+      // Resident reads use the command's database maintenance scope, so it retires them
+      // before closing admission. Otherwise the same host retains embedded resources used
+      // by admitted work after its caller returns.
+      const maintenance = getOpenClawDatabaseMaintenanceScope();
+      if (maintenance) {
+        maintenance.own(context, "agent-resources", release);
+      } else {
+        resourceHost.adopt(context, { release });
+      }
       initializing = import("./session-row-projection.js").then(
         async ({ createSessionRowProjection }) => {
           projection = await createSessionRowProjection({
