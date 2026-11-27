@@ -995,12 +995,12 @@ a.lr-check-row:hover {
 .lr-review-location a {
   color: inherit;
 }
-.lr-review-location a:first-child {
+.lr-review-location .lr-review-file {
   color: var(--text);
   font-family: var(--mono);
   text-decoration: none;
 }
-.lr-review-location a:first-child:hover {
+.lr-review-location .lr-review-file:hover {
   text-decoration: underline;
   text-underline-offset: 3px;
 }

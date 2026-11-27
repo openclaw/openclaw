@@ -375,9 +375,15 @@ export function LinkReaderContent(props: {
           </ReaderLink>
         </header>
         <div class="lr-comment-body">
-          <Show when={location() || childProps.comment.context?.label}>
+          <Show when={location() || childProps.comment.context?.label || reply()}>
             <p class="lr-review-location">
-              <ReaderLink href={permalink()}>{location()}</ReaderLink>
+              <Show when={location()}>
+                {(value) => (
+                  <ReaderLink class="lr-review-file" href={permalink()}>
+                    {value()}
+                  </ReaderLink>
+                )}
+              </Show>
               <Show when={childProps.comment.context?.label}>
                 {(label) => <span>{label()}</span>}
               </Show>

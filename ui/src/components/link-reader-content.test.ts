@@ -473,6 +473,10 @@ describe("link reader document content", () => {
   it("renders plugin-projected comment anchors and context without deriving service semantics", () => {
     const comments: ReaderComment[] = [
       comment("Ordinary comment", { id: "issuecomment-7", url: url + "#issuecomment-7" }),
+      comment("Reply with no file location", {
+        id: "reply-only",
+        context: { replyUrl: "#issuecomment-7", replyLabel: "Parent comment" },
+      }),
       comment("Review comment body", {
         createdAt: "2026-09-02T12:00:00Z",
         id: "discussion_r7",
@@ -493,6 +497,12 @@ describe("link reader document content", () => {
     const container = mount(detail("Description", comments));
     const review = container.querySelector("#discussion_r7")!;
     expect(container.querySelector("#issuecomment-7")).not.toBeNull();
+    const replyLinks = container.querySelectorAll<HTMLAnchorElement>(
+      "#reply-only .lr-review-location a",
+    );
+    expect(Array.from(replyLinks, (link) => [link.textContent, link.href])).toEqual([
+      ["Parent comment", url + "#issuecomment-7"],
+    ]);
     expect(review.textContent).toContain("Review comment");
     expect(review.textContent).toContain("src/reader.ts:4–6");
     expect(review.textContent).toContain("Before change · Outdated");
