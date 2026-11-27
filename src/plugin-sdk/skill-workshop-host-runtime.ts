@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 export {
   listWorkshopChanges,
+  readWorkshopActivity,
   recordWorkshopChange,
   WORKSHOP_CHANGES_MAX_LIMIT,
 } from "../skills/workshop-changes/changes.js";

@@ -75,10 +75,17 @@ export function getOpenClawStateRuntimeSchema(
   return schema;
 }
 
+/** The activity table was added during v42; installed readers hash the exact earlier SQL. */
+export function withLegacyWorkshopActivity(schema: string): string {
+  const activityTable = extractSqliteTableSchema(schema, "skill_workshop_activity");
+  return schema.replace(`${activityTable}\n\n`, "");
+}
+
 /** Keep runtime predecessor admission and generated catalog inputs on the same transform chain. */
 export function getOpenClawStatePredecessorSchema(version: number): string {
   let schema = OPENCLAW_STATE_SCHEMA_SQL;
   for (const [introduced, transform] of [
+    [42, withLegacyWorkshopActivity],
     [42, withLegacyWorkerLossRecovery],
     [41, withLegacyApprovalProfile],
     [40, withLegacyWorkerProvisionSource],
