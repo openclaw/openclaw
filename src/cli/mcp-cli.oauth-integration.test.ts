@@ -317,8 +317,8 @@ it("reports a rejected client registration before offering a sign-in URL", async
       const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
       const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
       await expect(run("login", "fixture")).rejects.toMatchObject({ code: 1 });
-      expect(error).toHaveBeenCalledWith(
-        'OAuth server rejected dynamic client registration for "fixture" (HTTP 400): invalid_client_metadata.',
+      expect(error).toHaveBeenCalledExactlyOnceWith(
+        `OAuth server rejected dynamic client registration for "fixture" (HTTP 400): invalid_client_metadata. Check the provider's client registration settings before retrying.`,
       );
       expect(log).not.toHaveBeenCalled();
     } finally {

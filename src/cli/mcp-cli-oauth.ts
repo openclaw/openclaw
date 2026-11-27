@@ -169,7 +169,7 @@ async function loginMcpServer(
         const providerCode = safeParseJsonRecord(error.body)?.error;
         const oauthCode = Object.values(OAuthErrorCode).find((value) => value === providerCode);
         return fail(
-          `OAuth server rejected dynamic client registration for "${name}" (HTTP ${error.status})${oauthCode ? `: ${oauthCode}` : ""}.`,
+          `OAuth server rejected dynamic client registration for "${name}" (HTTP ${error.status})${oauthCode ? `: ${oauthCode}` : ""}. Check the provider's client registration settings before retrying.`,
         );
       },
     );
