@@ -8,6 +8,7 @@ import {
   resolveSessionWorkContext,
   resolveSessionWorkSubtitle,
 } from "./session-display.ts";
+import { resolveSessionRenameValue } from "./session-rename.ts";
 
 describe("isSessionTitlePending", () => {
   const key = "agent:main:dashboard:naming";
@@ -28,6 +29,16 @@ describe("isSessionTitlePending", () => {
     expect(isSessionTitlePending(key, { titlePending: true, [field]: "  " })).toBe(true);
     expect(isSessionTitlePending(key, { titlePending: true, [field]: key })).toBe(true);
   });
+});
+
+it("renames the same dashboard title displayed after naming settles", () => {
+  const key = "agent:main:dashboard:release";
+  const row = { key, displayName: key, derivedTitle: "First message" };
+  expect(resolveSessionRenameValue({ ...row, titlePending: true })).toBe("");
+  expect(resolveSessionRenameValue(row)).toBe("First message");
+  expect(resolveSessionRenameValue({ ...row, titlePending: true, label: "My release" })).toBe(
+    "My release",
+  );
 });
 
 describe("resolveSessionDisplayName", () => {

@@ -95,7 +95,7 @@ export function scheduleChatDashboardSessionTitle(
       ...(retryAfter ? { retryAfter } : {}),
       onFallback: () =>
         params.context.logGateway.warn(
-          "dashboard session title generation exhausted; leaving title unset until a later message retries",
+          "session title generation exhausted; no model title generated",
         ),
       onTitleStateChanged: () =>
         emitSessionTitleChanged(params.context, {

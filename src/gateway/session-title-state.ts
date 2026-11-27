@@ -1,6 +1,5 @@
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
-import type { MaterializedRow } from "./session-row-projection-record.js";
 
 type SessionTitleTarget = {
   storePath: string;
@@ -68,7 +67,14 @@ export const sessionTitleRequests = {
 };
 
 /** An initial title owns the placeholder until either its name or its fallback has been read. */
-export function isTitlePending(record: MaterializedRow): boolean {
+export function isTitlePending(record: {
+  entry: Pick<SessionEntry, "titleFallbackReady" | "sessionId" | "displayName" | "label">;
+  fallbackTitle?: string | null;
+  key: string;
+  materialized: { row: { hasMessages?: boolean; derivedTitle?: string } };
+  preparedPrivate?: object;
+  storeTarget: { storePath: string };
+}): boolean {
   if (record.entry.titleFallbackReady) {
     return (
       !record.preparedPrivate &&

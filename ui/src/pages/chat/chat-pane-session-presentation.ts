@@ -24,15 +24,9 @@ export function chatSessionPresentationTitle(
   );
   // The roster owns accepted titles; pane metadata fills absent cross-agent rows.
   const source = presentation ?? row;
-  if (!source && createdTitle !== undefined) {
-    return createdTitle;
-  }
-  if (!source && pending) {
-    return "";
-  }
-  return presentation
-    ? resolveSessionDisplayName(key, presentation)
-    : resolveSessionDisplayName(row?.key ?? key, row);
+  return source
+    ? resolveSessionDisplayName(presentation ? key : source.key, source)
+    : (createdTitle ?? (pending ? "" : resolveSessionDisplayName(key)));
 }
 
 /** The presentation key changes with the roster and when a held archive starts sending. */
