@@ -27,13 +27,11 @@ it("separates independent conversation identity from admission depth", () => {
   expect(isSubagentSessionFromEntry(child, lineage)).toBe(true);
   expect(isSubagentSessionFromEntry(child, { ...lineage, spawnDepth: undefined })).toBe(true);
   expect(isSubagentSessionFromEntry("agent:main:subagent:child", undefined)).toBe(true);
-  expect(
-    isSubagentSessionFromEntry(child, { sessionId: "root", updatedAt: 1, spawnDepth: 0 }),
-  ).toBe(false);
+  expect(isSubagentSessionFromEntry(child, { spawnDepth: 0 })).toBe(false);
   expect(
     isSubagentSessionFromEntry(
       child,
-      { sessionId: "acp", updatedAt: 1, spawnDepth: 0, parentSessionKey: parent },
+      { spawnDepth: 0, parentSessionKey: parent },
       { runtime: "acpx" },
     ),
   ).toBe(true);
