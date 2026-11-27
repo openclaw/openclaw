@@ -6,6 +6,7 @@ import {
 } from "../process/gateway-work-admission.js";
 import { captureFullEnv, withEnv } from "../test-utils/env.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
+import { hasPendingGatewayRestart } from "./restart-pending.js";
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -46,7 +47,6 @@ vi.mock("../config/paths.js", () => ({
 
 const {
   consumeGatewayRestartAuthorization,
-  hasPendingGatewayRestart,
   normalizeGatewayRestartDelayMs,
   requestGatewayRestartWithSignalAdmission,
   resetGatewayRestartStateForInProcessRestart,

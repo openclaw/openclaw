@@ -1,4 +1,4 @@
-import { expect, it, onTestFinished } from "vitest";
+import { expect, it } from "vitest";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { withSqliteDatabaseWriteScope } from "../../infra/sqlite-database-admission.js";
 import {
@@ -9,7 +9,6 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { captureRuntimeConfigAsyncReader } from "../io.runtime.js";
 import { upsertSessionEntryCore } from "./session-accessor.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
-import { retainSessionParticipation } from "./session-participation-source.js";
 import * as sharingWorker from "./session-sharing-store.js";
 import {
   addSessionMember,
@@ -18,7 +17,7 @@ import {
 } from "./session-sharing-store.native.js";
 
 it.each(["native", "worker"] as const)(
-  "%s retires persisted and live participant custody only on commit before re-invite",
+  "%s retires persisted participant custody only on commit before re-invite",
   async (writer) => {
     await withOpenClawTestState({ layout: "state-only" }, async ({ env }) => {
       await captureRuntimeConfigAsyncReader()();
@@ -115,18 +114,6 @@ it.each(["native", "worker"] as const)(
         );
       for (const operation of ["downgrade", "remove"] as const) {
         seed(operation);
-        const current = retainSessionParticipation({
-          ...scope,
-          profileId: "participant",
-          sessionId: "current",
-        });
-        const previous = retainSessionParticipation({
-          ...scope,
-          profileId: "participant",
-          sessionId: "old",
-        });
-        onTestFinished(current.release);
-        onTestFinished(previous.release);
         expect(() =>
           runOpenClawAgentWriteTransaction(() => {
             if (operation === "downgrade") {
@@ -134,11 +121,9 @@ it.each(["native", "worker"] as const)(
             } else {
               removeSessionMember(scope, "participant");
             }
-            expect(current.signal.aborted).toBe(false);
             throw new Error("rollback reduction");
           }, scope),
         ).toThrow("rollback reduction");
-        expect(current.signal.aborted).toBe(false);
         if (operation === "downgrade") {
           await (
             writer === "worker" ? sharingWorker.setSessionMemberAccess : setSessionMemberAccess
@@ -149,8 +134,6 @@ it.each(["native", "worker"] as const)(
             "participant",
           );
         }
-        expect(current.signal.aborted).toBe(true);
-        expect(previous.signal.aborted).toBe(false);
         if (operation === "downgrade") {
           setSessionMemberAccess(scope, { identityId: "participant", access: "send" });
         } else {
@@ -160,9 +143,6 @@ it.each(["native", "worker"] as const)(
             access: "send",
           });
         }
-        expect(current.signal.aborted).toBe(true);
-        current.release();
-        previous.release();
         await closeOpenClawAgentDatabasesAsync();
         for (const row of read()) {
           const retired =

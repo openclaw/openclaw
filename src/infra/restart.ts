@@ -26,7 +26,6 @@ import {
 import { restartGatewayViaSupervisor } from "./restart-supervisor.js";
 import type { RestartAttempt } from "./restart.types.js";
 
-export { hasPendingGatewayRestart } from "./restart-pending.js";
 export { normalizeSystemdUnit } from "./restart-supervisor.js";
 export {
   normalizeGatewayRestartDelayMs,

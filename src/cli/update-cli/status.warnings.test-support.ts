@@ -10,6 +10,43 @@ import { printResult } from "./progress.js";
 import { updateStatusCommand } from "./status.js";
 
 export function registerUpdateStatusWarningTests(readConsoleOutput: () => string) {
+  for (const surface of ["summary", "status"] as const) {
+    it.each(["completed", "failed", "skipped", undefined] as const)(
+      `settles historical retirement warnings only with a completed receipt in ${surface} (receipt=%s)`,
+      async (status) => {
+        const run = createUpdateRun({ trigger: "cli" });
+        const retirement = "finalize:doctor:model-retirement";
+        const completion = "Deferred model retirement repair completed after plugin convergence.";
+        const unrelated = "Other repair still pending.";
+        if (status) {
+          recordUpdateRunStep(run.runId, { step: retirement, status });
+        }
+        recordUpdateRunStep(run.runId, {
+          step: `warning:${retirement}`,
+          status: "completed",
+          detail: completion,
+        });
+        recordUpdateRunStep(run.runId, {
+          step: "warning:doctor",
+          status: "completed",
+          detail: unrelated,
+        });
+        const saved = finishUpdateRun(run.runId, { status: "succeeded" });
+        if (surface === "status") {
+          await updateStatusCommand({});
+        } else {
+          await printResult(
+            { runId: run.runId, status: "ok", mode: "npm", steps: [], durationMs: 0 },
+            {},
+          );
+        }
+        expect(readConsoleOutput()).toContain(`Warning: ${unrelated}`);
+        expect(readConsoleOutput().includes(`Warning: ${completion}`)).toBe(status !== "completed");
+        expect(getUpdateRun(run.runId)?.steps).toEqual(saved.steps);
+      },
+    );
+  }
+
   it.each(["summary", "status"] as const)(
     "retains every recorded warning and recovery path after the human %s",
     async (surface) => {

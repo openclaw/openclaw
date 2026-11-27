@@ -115,6 +115,9 @@ describe("update completion ownership", () => {
       );
       const warnings = updateRunWarningMessages(run?.steps ?? []);
       expect(warnings).not.toContain(deferred);
+      expect(warnings).not.toContain(
+        "Deferred model retirement repair completed after plugin convergence.",
+      );
       expect(warnings.includes(unrelated)).toBe(otherAdvisory);
     },
   );

@@ -299,9 +299,12 @@ it.each([
 ] as const)(
   "explains incompatible Codex auth for %s route (explicit order=%s)",
   (_name, explicitOrder, authored) => {
-    const prefix = explicitOrder
-      ? "Explicit auth order for openai has no usable profiles."
-      : "No route-compatible authentication source is configured for openai.";
+    const message = `${
+      explicitOrder
+        ? "Explicit auth order for openai has no usable profiles."
+        : "No route-compatible authentication source is configured for openai."
+    } Selected model route requires api-key authentication (openai-responses); configured profiles support subscription authentication. Select a model route compatible with the configured account, or select a compatible account.`;
+    // Chat replies show userMessage; without it the text classifies as a failed sign-in.
     expectAuthError({
       ...codexHarness,
       harnessAuthBootstrap: "harness",
@@ -318,11 +321,7 @@ it.each([
         : {
             observedRoutes: [{}, { api: "openai-responses", baseUrl: "https://api.openai.com/v1" }],
           }),
-    }).toThrow(
-      new Error(
-        `${prefix} Selected model route requires api-key authentication (openai-responses); configured profiles support subscription authentication. Select a model route compatible with the configured account, or select a compatible account.`,
-      ),
-    );
+    }).toThrow(expect.objectContaining({ message, reason: "auth", userMessage: message }));
   },
 );
 
