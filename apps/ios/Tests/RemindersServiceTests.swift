@@ -34,12 +34,14 @@ struct RemindersServiceTests {
     }
 
     @Test(arguments: [
-        ("America/New_York", "2026-11-01T01:30:15-04:00"),
-        ("America/New_York", "2026-11-01T01:30:15-05:00"),
-        ("Australia/Lord_Howe", "2026-04-05T01:45:15+11:00"),
-        ("Australia/Lord_Howe", "2026-04-05T01:45:15+10:30"),
+        ("America/New_York", "2026-11-01T01:30:15-04:00", false),
+        ("America/New_York", "2026-11-01T01:30:15-05:00", true),
+        ("Australia/Lord_Howe", "2026-04-05T01:45:15+11:00", false),
+        ("Australia/Lord_Howe", "2026-04-05T01:45:15+10:30", true),
     ])
-    func `repeated wall time preserves the requested due instant`(zone: String, dueISO: String) throws {
+    func `repeated wall time preserves the requested due instant`(
+        zone: String, dueISO: String, expectsStartRelativeAlarm: Bool) throws
+    {
         let timeZone = try #require(TimeZone(identifier: zone))
         let formatter = ISO8601DateFormatter()
         let expected = try #require(formatter.date(from: dueISO))
@@ -62,7 +64,17 @@ struct RemindersServiceTests {
                 #expect(components.value(for: field) == wallTime.value(for: field))
             }
         }
-        #expect(reminder.alarms?.map(\.absoluteDate) == [expected])
+        let alarms = try #require(reminder.alarms)
+        #expect(alarms.count == 1)
+        let alarm = try #require(alarms.first)
+        if expectsStartRelativeAlarm {
+            #expect(alarm.absoluteDate == nil)
+            #expect(alarm.relativeOffset == 0)
+            let startDate = try #require(start.date)
+            #expect(startDate.addingTimeInterval(alarm.relativeOffset) == expected)
+        } else {
+            #expect(alarm.absoluteDate == expected)
+        }
         let payload = RemindersService.payload(from: reminder, formatter: formatter)
         #expect(payload.dueISO == formatter.string(from: expected))
     }
