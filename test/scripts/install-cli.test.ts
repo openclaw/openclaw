@@ -532,44 +532,79 @@ fi
     },
   );
 
-  it.each([true, false])(
-    "runs onboarding with stdin from the controlling terminal, not the installer pipe (json: %s)",
-    (json) => {
+  it.each(["redirected", "json", "inherited"])(
+    "gives onboarding interactive input and output (%s)",
+    (mode) => {
       const f = makeFixture("onboard-tty");
       f.shell(
         "cli",
         `
 if [[ "$1" == --version ]]; then
-  printf '2026.9.12\\n'
+  echo 2026.9.12
 else
-  printf 'openclaw-args:%s\\n' "$*" > "$ROOT/onboard-invocation"
-  cat > "$ROOT/onboard-stdin"
+  [[ "$1" == onboard && -t 0 && -t 1 ]] || exit 41
+  echo "wizard output"
+  touch "$ROOT/onboarded"
 fi
 `,
       );
-      const terminalDevice = join(f.root, "terminal-device");
-      writeFileSync(terminalDevice, "terminal stdin bytes\n");
-      const installerPipe = join(f.root, "installer-stdin");
-      writeFileSync(installerPipe, "piped installer bytes\n");
-      const result = f.run(
+      const launcher = f.shell(
+        "run-onboard",
         `
-        install_node() { :; }
-        ensure_git() { :; }
-        install_openclaw() { mkdir -p "$PREFIX/bin"; cp "$ROOT/cli" "$PREFIX/bin/openclaw"; }
-        refresh_gateway_service_if_loaded() { :; }
-        has_controlling_tty() { return 0; }
-        controlling_tty_path() { printf '%s\\n' "$ROOT/terminal-device"; }
-        main ${json ? "--json" : ""} --onboard --prefix "$ROOT/prefix" < "$ROOT/installer-stdin"
-      `,
-        { HOME: f.root },
+source "$INSTALLER"
+install_node() { :; }
+ensure_git() { :; }
+install_openclaw() { mkdir -p "$PREFIX/bin"; cp "$ROOT/cli" "$PREFIX/bin/openclaw"; }
+refresh_gateway_service_if_loaded() { :; }
+main ${mode === "json" ? "--json" : ""} --onboard --prefix "$ROOT/prefix"
+`,
       );
-      expect(result.status, result.stdout + result.stderr).toBe(0);
-      expect(readFileSync(join(f.root, "onboard-invocation"), "utf8")).toBe(
-        "openclaw-args:onboard\n",
+      const log = join(f.root, "output");
+      // A session can inherit terminal descriptors without owning a controlling terminal.
+      const result = spawnSync(
+        "python3",
+        [
+          "-c",
+          `
+import fcntl, os, pty, subprocess, sys, termios
+launcher, mode, log = sys.argv[1:]
+master, slave = pty.openpty()
+os.setsid()
+inherited = mode == "inherited"
+if not inherited:
+    fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+with open(log, "wb") as output:
+    child = subprocess.run([launcher], stdin=slave if inherited else subprocess.DEVNULL,
+                           stdout=slave if inherited else output, timeout=15)
+sys.exit(child.returncode)
+`,
+          launcher,
+          mode,
+          log,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            ROOT: f.root,
+            HOME: f.root,
+            INSTALLER: join(process.cwd(), SCRIPT_PATH),
+            OPENCLAW_INSTALL_CLI_SH_NO_RUN: "1",
+            BASH_ENV: "",
+            ENV: "",
+          },
+        },
       );
-      expect(readFileSync(join(f.root, "onboard-stdin"), "utf8")).toBe("terminal stdin bytes\n");
-      if (json) {
-        expect(result.stdout).toContain('"event":"done"');
+      expect(result.status, result.stderr).toBe(0);
+      expect(existsSync(join(f.root, "onboarded"))).toBe(true);
+      const output = readFileSync(log, "utf8");
+      expect(output).not.toContain("wizard output");
+      if (mode === "json") {
+        const events = output
+          .trimEnd()
+          .split("\n")
+          .map((line) => JSON.parse(line) as Record<string, unknown>);
+        expect(events.at(-1)).toEqual({ event: "done", ok: true, version: "2026.9.12" });
       }
     },
   );
@@ -613,40 +648,6 @@ fi
     expect(events[events.length - 1]).toEqual({ event: "done", ok: true, version: "2026.9.12" });
     expect(result.stderr).toContain("openclaw onboard");
     expect(result.stderr).toContain("No terminal available");
-  });
-
-  it("keeps onboarding output out of the JSON event stream when a terminal exists", () => {
-    const f = makeFixture("onboard-json-tty");
-    f.shell(
-      "cli",
-      `
-if [[ "$1" == --version ]]; then
-  printf '2026.9.12\\n'
-else
-  printf 'interactive onboarding output\\n'
-fi
-`,
-    );
-    const terminalDevice = join(f.root, "terminal-device");
-    writeFileSync(terminalDevice, "terminal stdin bytes\n");
-    const result = f.run(
-      `
-      install_node() { :; }
-      ensure_git() { :; }
-      install_openclaw() { mkdir -p "$PREFIX/bin"; cp "$ROOT/cli" "$PREFIX/bin/openclaw"; }
-      refresh_gateway_service_if_loaded() { :; }
-      has_controlling_tty() { return 0; }
-      controlling_tty_path() { printf '%s\\n' "$ROOT/terminal-device"; }
-      main --json --onboard --prefix "$ROOT/prefix"
-    `,
-      { HOME: f.root },
-    );
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(result.stdout).not.toContain("interactive onboarding output");
-    expect(result.stdout).toContain('"event":"done"');
-    expect(readFileSync(terminalDevice, "utf8")).toBe(
-      "terminal stdin bytes\ninteractive onboarding output\n",
-    );
   });
 
   it("re-execs a streamed installer on Darwin Bash 5.3+ without leaving a temp file", (context) => {

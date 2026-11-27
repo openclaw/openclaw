@@ -1399,9 +1399,11 @@ main() {
   else
     refresh_gateway_service_if_loaded
   fi
-  local onboard_tty=""
+  local onboard_tty="" onboard_with_stdio=0
   if [[ "$RUN_ONBOARD" -eq 1 && "$RUNTIME_ONLY" -eq 0 ]]; then
-    if has_controlling_tty; then
+    if [[ -t 0 && -t 1 ]]; then
+      onboard_with_stdio=1
+    elif has_controlling_tty; then
       onboard_tty="$(controlling_tty_path)"
     else
       # The install already succeeded; onboarding cannot run without a terminal, so
@@ -1449,16 +1451,11 @@ main() {
   fi
   log "Support: https://community.openclaw.ai/"
 
-  if [[ -n "$onboard_tty" ]]; then
-    # A piped installer (`curl … | bash -s -- --onboard`) leaves the curl pipe as
-    # stdin; onboarding must read from the user's terminal instead (#201388).
-    if [[ "$JSON" -eq 1 ]]; then
-      # Keep onboarding's interactive output on the terminal so the JSON event
-      # stream on stdout stays parseable.
-      "${PREFIX}/bin/openclaw" onboard <"$onboard_tty" >>"$onboard_tty"
-    else
-      "${PREFIX}/bin/openclaw" onboard <"$onboard_tty"
-    fi
+  if [[ "$onboard_with_stdio" -eq 1 ]]; then
+    "${PREFIX}/bin/openclaw" onboard
+  elif [[ -n "$onboard_tty" ]]; then
+    # The wizard requires both descriptors to be terminals, even when install output is redirected.
+    "${PREFIX}/bin/openclaw" onboard <"$onboard_tty" >>"$onboard_tty"
   elif [[ "$RUN_ONBOARD" -eq 1 && "$RUNTIME_ONLY" -eq 0 ]]; then
     local quoted_claw=""
     printf -v quoted_claw '%q' "${bin_dir}/openclaw"
