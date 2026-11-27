@@ -33,6 +33,8 @@ export function profileNotice(outcome: string | null): ProfileNotice | null {
       return { message: t("openclawId.profileLinkSignIn"), canLink: true };
     case "linked_elsewhere":
       return { message: t("profilePage.openclawId.linkedElsewhere"), canLink: false };
+    case "link_approval_required":
+      return { message: t("profilePage.openclawId.approvalRequired"), canLink: false };
     case "profile_linked":
       return { message: t("profilePage.openclawId.profileLinked"), canLink: false };
     default:

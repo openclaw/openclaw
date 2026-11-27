@@ -537,6 +537,10 @@ Labs only switches the feature on or off. Everything else lives outside Labs:
   approve or deny their request, change a member's role, and remove members. Use an approved owner
   browser to change access. Devices paired with this Gateway are in
   **Settings → Devices**.
+  To attach an OpenClaw ID to an existing personal Gateway profile, select that profile
+  when inviting the member and approve the request in **People**. Signing in with OpenClaw ID
+  alone does not attach it to a profile. Turning on remote access does not require a personal
+  profile link.
 
 - **Member names**: an approved member is named from their OpenClaw ID account,
   or from the part of their email before the `@` when the account reports no
@@ -609,10 +613,14 @@ the authorization code.
 ### Link OpenClaw ID to your profile
 
 Through a personal sign-in, **Settings → Profile → Identity → OpenClaw ID → Link**
-runs the same device sign-in and records the account on your profile. Both sides are
-proven on one connection, so there is no "who are you?" picker. Owner devices of the
-claw's OpenClaw ID owner account then arrive as you (your name, sessions, personal
-instructions and My GitHub) instead of the shared owner. Their owner authority still
+runs the same device sign-in and checks the account against your profile. Anyone who
+has the device code can approve a device sign-in, so it never creates your profile's
+first OpenClaw ID link. It reports **Linked** when that account is already linked to your
+profile, and otherwise says how to get the link approved. To attach the account, an owner
+invites it as **Existing person on this claw** and approves the request (see below).
+When the claw's OpenClaw ID owner account is linked to your profile, owner devices
+arrive as you (your name, sessions, personal instructions and My GitHub) instead of
+the shared owner. Their owner authority still
 comes from each device's certificate, and linking grants or removes nothing.
 
 If this browser already signed in with OpenClaw ID through the same personal sign-in,

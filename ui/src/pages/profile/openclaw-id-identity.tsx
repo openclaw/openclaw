@@ -86,6 +86,8 @@ export function OpenClawIdIdentity() {
       const outcome = await linkOpenClawIdToProfile(current);
       if (outcome === "linked_elsewhere") {
         setError(t("profilePage.openclawId.linkedElsewhere"));
+      } else if (outcome === "link_approval_required") {
+        setError(t("profilePage.openclawId.approvalRequired"));
       } else if (outcome === "profile_linked") {
         setError(t("profilePage.openclawId.profileLinked"));
       } else if (outcome === "owner_profile" || outcome === "profile_changed") {

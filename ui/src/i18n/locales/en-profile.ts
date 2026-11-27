@@ -33,6 +33,8 @@ const enProfile = {
       ownerOf: "{email} · Owner of {claw}",
       linkedElsewhere:
         "This OpenClaw ID is already linked to another profile. Unlink it from that profile first. If both profiles belong to you, an admin can merge them instead.",
+      approvalRequired:
+        "Signing in with OpenClaw ID does not attach it to a profile. Ask an admin to invite this OpenClaw ID to your profile and approve the request in People.",
       profileLinked:
         "This profile is already linked to an OpenClaw ID. Unlink it first to link another.",
       failed: "Couldn’t update the OpenClaw ID link. Try again.",

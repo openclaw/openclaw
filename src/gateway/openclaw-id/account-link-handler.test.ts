@@ -1,15 +1,19 @@
-// openclawId.account links a device-verified OpenClaw ID to the caller's own profile (OCF-510):
-// the account comes from the Gateway's own token redemption, the profile from the connection.
+// Device sign-in can confirm an approved OpenClaw ID profile binding, not establish one.
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
 
 const ISSUER = "https://issuer.example.test/api/auth";
 const OPENCLAW_ID = { enabled: true, issuerUrl: ISSUER, clientId: "control-ui" };
 
-// mock-isolation: profile storage has its own tests; this file proves which profile and account
-// the handler writes, and that it writes only after the issuer verified the account.
+// mock-isolation: profile storage has its own tests; this file exercises Gateway link outcomes.
 const store = vi.hoisted(() => ({
   link: vi.fn(async () => ({ ok: true as const })),
+  linkedProfile: vi.fn(
+    async (_accountId: string): Promise<{ profileId: string; updatedAt: number } | null> => ({
+      profileId: "profile-josh",
+      updatedAt: 0,
+    }),
+  ),
   unlink: vi.fn(async () => ({ unlinked: true })),
   linksOf: vi.fn(async () => [{ accountId: "acct-other", email: "josh@id.test" }]),
 }));
@@ -28,6 +32,7 @@ vi.mock("../server-methods/personal-profile-authorization.js", async (importOrig
 vi.mock("../../state/user-profile-openclaw-id.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/user-profile-openclaw-id.js")>()),
   linkCanonicalOpenClawIdUserProfile: store.link,
+  readOpenClawIdLinkedProfile: store.linkedProfile,
   unlinkCanonicalOpenClawIdUserProfile: store.unlink,
   readOpenClawIdLinksOfProfile: store.linksOf,
 }));
@@ -113,7 +118,7 @@ async function call(client: unknown, params: Record<string, unknown>) {
 }
 
 describe("openclawId.account linking", () => {
-  it("links the verified account to the caller's profile after the device sign-in", async () => {
+  it("confirms an already approved link after device sign-in", async () => {
     const started = await call(personal, { action: "device_begin" });
     const state = (started.payload as { state: string }).state;
     await new Promise((resolve) => {
@@ -124,22 +129,22 @@ describe("openclawId.account linking", () => {
       ok: true,
       payload: { account: { sub: "acct-owner" }, link: "linked" },
     });
-    expect(store.link).toHaveBeenCalledExactlyOnceWith(
-      { profileId: "profile-josh", accountId: "acct-owner", email: "josh@id.test" },
-      { assertCurrent: expect.any(Function) },
-    );
-    // The write's commit check fails once Labs turns off or the connection's profile changes.
-    const [, { assertCurrent }] = store.link.mock.calls[0] as unknown as [
-      unknown,
-      { assertCurrent: () => void },
-    ];
-    expect(() => assertCurrent()).not.toThrow();
-    config.gateway.openclawId.enabled = false;
-    expect(() => assertCurrent()).toThrow("this connection changed");
-    config.gateway.openclawId.enabled = true;
-    personal.authenticatedUserProfile.profileId = "someone-else";
-    expect(() => assertCurrent()).toThrow("this connection changed");
-    personal.authenticatedUserProfile.profileId = "profile-josh";
+    expect(store.linkedProfile).toHaveBeenLastCalledWith("acct-owner");
+    expect(store.link).not.toHaveBeenCalled();
+  });
+
+  it("signs in but reports no link until a separate approval links the account", async () => {
+    const started = await call(personal, { action: "device_begin" });
+    const state = (started.payload as { state: string }).state;
+    await new Promise((resolve) => {
+      setTimeout(resolve, 5);
+    });
+    store.linkedProfile.mockResolvedValueOnce(null);
+    expect(await call(personal, { action: "device_poll", state, link: true })).toMatchObject({
+      ok: true,
+      payload: { account: { sub: "acct-owner" }, link: "link_approval_required" },
+    });
+    expect(store.link).not.toHaveBeenCalled();
   });
 
   it("signs in without linking unless asked, and reports and removes only the caller's link", async () => {
@@ -177,7 +182,7 @@ describe("openclawId.account linking", () => {
     }
     expect(store.unlink).not.toHaveBeenCalled();
   });
-  it("links a held sign-in without a second device code, under the same checks (OCF-530)", async () => {
+  it("confirms or refuses a held sign-in without a second device code", async () => {
     const fetchMock = issuerFetch;
     const started = await call(personal, { action: "device_begin" });
     await new Promise((resolve) => {
@@ -196,11 +201,17 @@ describe("openclawId.account linking", () => {
       payload: { account: { sub: "acct-owner" }, link: "linked" },
     });
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(store.link).toHaveBeenCalledExactlyOnceWith(
-      { profileId: "profile-josh", accountId: "acct-owner", email: "josh@id.test" },
-      { assertCurrent: expect.any(Function) },
-    );
-    store.link.mockClear();
+    expect(store.linkedProfile).toHaveBeenLastCalledWith("acct-owner");
+    store.linkedProfile.mockResolvedValueOnce(null);
+    expect(await call(personal, { action: "link_held", idToken: held })).toMatchObject({
+      ok: true,
+      payload: { link: "link_approval_required" },
+    });
+    store.linkedProfile.mockResolvedValueOnce({ profileId: "profile-other", updatedAt: 0 });
+    expect(await call(personal, { action: "link_held", idToken: held })).toMatchObject({
+      ok: true,
+      payload: { link: "linked_elsewhere" },
+    });
 
     // A token the issuer never sent here, with the same claims, falls back to a device code.
     const forged = held.replace(/\.[^.]*$/, ".forged");
