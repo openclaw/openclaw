@@ -14,3 +14,11 @@ export function matchesSubagentKillIntent(
     intent.suppressTaskDelivery === claim.suppressTaskDelivery
   );
 }
+
+export function hasSubagentKill(entry: SubagentRunRecord): boolean {
+  return Boolean(entry.killIntent || entry.killReconciliation);
+}
+
+export function isSubagentCompletionCancelled(entry: SubagentRunRecord): boolean {
+  return hasSubagentKill(entry) || entry.suppressCompletionDelivery === true;
+}
