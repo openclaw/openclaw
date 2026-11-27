@@ -619,7 +619,7 @@ export async function discoverClawRouterProviderCatalog(
       {
         provider: PROVIDER_ID,
         ...(auth.profileId ? { profileId: auth.profileId } : {}),
-        status: "ready",
+        status: capabilityModels === undefined ? "unavailable" : "ready",
         capabilityModels,
       },
     ],

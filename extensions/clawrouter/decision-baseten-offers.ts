@@ -87,11 +87,11 @@ export function readBasetenDecisionOffer(offer: ClawRouterCapabilityOffer) {
 
 export async function listClawRouterBasetenDecisionModels(
   context: Pick<ProviderAugmentModelCatalogContext, "config" | "resolveProviderApiKey">,
-): Promise<ProviderAugmentModelCatalogContext["entries"]> {
+): Promise<ProviderAugmentModelCatalogContext["entries"] | undefined> {
   const auth = context.resolveProviderApiKey?.("clawrouter");
   const apiKey = auth?.discoveryApiKey ?? auth?.apiKey;
   if (!context.config || !apiKey) {
-    return [];
+    return undefined;
   }
   const http = resolveClawRouterCapabilityHttpContext(context.config, apiKey);
   http.headers.delete("x-api-key");
@@ -103,8 +103,8 @@ export async function listClawRouterBasetenDecisionModels(
       requireFreshProxyCatalog: true,
     });
   } catch {
-    // Failed native discovery must not suppress unrelated, already known rows.
-    return [];
+    // Only a successful listing can withdraw previously advertised models.
+    return undefined;
   }
   const entries = new Map<string, ProviderAugmentModelCatalogContext["entries"][number]>();
   for (const offer of offers) {

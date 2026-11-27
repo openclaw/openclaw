@@ -7,7 +7,10 @@ import {
   decisionOptions,
   prepareDecisionRuntime,
 } from "../agents/decision-inference.test-support.js";
-import { acquireAgentRunPreparedModelRuntime } from "../agents/prepared-model-runtime.js";
+import {
+  acquireAgentRunPreparedModelRuntime,
+  publishPreparedModelRuntimeSnapshot,
+} from "../agents/prepared-model-runtime.js";
 import { createDecisionTool } from "../agents/tools/decision-tool.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -298,6 +301,67 @@ function basetenCatalog(routeKind: "native" | "manifest") {
     ],
   };
 }
+
+it("retains Baseten rows on catalog HTTP failure and withdraws them on a successful empty listing", async () =>
+  withOpenClawTestState(
+    {
+      env: {
+        OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+      },
+    },
+    async (state) => {
+      let phase: "populated" | "failed" | "empty" = "populated";
+      await withServer(
+        (request, response) => {
+          expect(request.url).toBe("/v1/catalog");
+          const offered = basetenCatalog("native");
+          // The ordinary chat inventory remains healthy when the fresh capability listing fails.
+          const fresh = request.headers["x-clawrouter-client"] === "openclaw";
+          response.writeHead(phase === "failed" && fresh ? 503 : 200, {
+            "content-type": "application/json",
+          });
+          response.end(
+            JSON.stringify({ ...offered, providers: phase === "empty" ? [] : offered.providers }),
+          );
+        },
+        async (origin) => {
+          const config = routerConfig(origin, state.root, "default");
+          const owner = await publishPreparedModelRuntimeSnapshot(
+            {
+              config,
+              agentId: "main",
+              agentDir: resolveAgentDir(config, "main"),
+              workspaceDir: config.agents.defaults.workspace,
+              loadRuntimePlugins: true,
+            },
+            { catalogMode: "static", provenance: "standalone" },
+          );
+          const refresh = () =>
+            owner.loadFullModelCatalog!({ providerIds: ["clawrouter"], refresh: true, wait: true });
+          const ids = (snapshot: Awaited<ReturnType<typeof refresh>>) =>
+            snapshot.entries
+              .filter((row) => row.provider === "clawrouter" && row.id.startsWith("baseten/"))
+              .map((row) => row.id)
+              .toSorted();
+          const populated = await refresh();
+          expect(ids(populated)).toEqual(basetenModels.map((id) => `baseten/${id}`).toSorted());
+          phase = "failed";
+          const failed = await refresh();
+          expect(failed.providerOutcomes).toContainEqual(
+            expect.objectContaining({ provider: "clawrouter", status: "unavailable" }),
+          );
+          expect(ids(failed)).toEqual(ids(populated));
+          phase = "empty";
+          const empty = await refresh();
+          expect(empty.providerOutcomes).toContainEqual(
+            expect.objectContaining({ provider: "clawrouter", status: "ready" }),
+          );
+          expect(ids(empty)).toEqual([]);
+        },
+      );
+    },
+  ));
 
 it.each(
   (["native", "manifest"] as const).flatMap((routeKind) =>
