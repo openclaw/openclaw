@@ -225,16 +225,10 @@ it.each(ids.flatMap((id) => [true, false].map((tools) => ({ id, tools }))))(
       )
     ).result();
     expect(result.stopReason).toBe("error");
-    // With tools, the refused request gets its one retry without strict tools.
-    expect(urls).toEqual(
-      tools
-        ? ["https://api.openai.com/v1/responses", "https://api.openai.com/v1/responses"]
-        : ["https://api.openai.com/v1/chat/completions"],
-    );
-    expect(bodies).toHaveLength(tools ? 2 : 1);
-    if (tools) {
-      expect(bodies[1]?.tools).toEqual([expect.not.objectContaining({ strict: true })]);
-    }
+    expect(urls).toEqual([
+      tools ? "https://api.openai.com/v1/responses" : "https://api.openai.com/v1/chat/completions",
+    ]);
+    expect(bodies).toHaveLength(1);
     expect(bodies[0]).toMatchObject(
       tools
         ? { model: id, reasoning: { effort: "low" }, tools: [{ type: "function", name: "echo" }] }
