@@ -18,19 +18,19 @@ it("loads schedule validation copy with the schedule owner", async () => {
 
 it("loads payload validation copy with the payload owner", async () => {
   const { manager } = await loadI18n();
-  expect(manager.t("cron.errors.systemEventTextRequired")).toBe(
-    "cron.errors.systemEventTextRequired",
+  expect(manager.t("cron.errors.agentMessageRequiredShort")).toBe(
+    "cron.errors.agentMessageRequiredShort",
   );
 
   const { buildCronPayload } = await import("../lib/cron/payload.ts");
   const { DEFAULT_CRON_FORM } = await import("../lib/cron/editor-state.ts");
   expect(() =>
     buildCronPayload(
-      { ...DEFAULT_CRON_FORM, payloadKind: "systemEvent", payloadText: "" },
+      { ...DEFAULT_CRON_FORM, payloadKind: "agentTurn", payloadText: "" },
       null,
       false,
     ),
-  ).toThrow("System event text required.");
+  ).toThrow("Agent message required.");
 });
 
 it("loads run outcome copy with the feedback owner", async () => {

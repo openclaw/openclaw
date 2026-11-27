@@ -82,6 +82,7 @@ const createJob = (index: number, overrides: Partial<CronJob> = {}): CronJob => 
   sessionTarget: "session:agent:main:main",
   wakeMode: "next-heartbeat",
   payload: { kind: "agentTurn", message: "scheduled check" },
+  delivery: { mode: "none" },
   state: { nextRunAtMs: index + 1 },
   ...overrides,
 });

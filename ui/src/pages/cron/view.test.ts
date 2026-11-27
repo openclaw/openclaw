@@ -69,7 +69,6 @@ describe("cron view editor", () => {
     );
     for (const form of [
       { payloadKind: "agentTurn" as const, payloadText: "  " },
-      { payloadKind: "systemEvent" as const, payloadText: "# Event" },
       { payloadKind: "script" as const, payloadLocked: true, payloadText: "# Source" },
       { payloadKind: "command" as const, payloadLocked: true, payloadText: "# Source" },
     ]) {

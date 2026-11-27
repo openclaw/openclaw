@@ -212,8 +212,8 @@ describe.each<Api>(["openai-responses", "anthropic-messages"])("%s", (api) => {
     const sessionKey = "agent:main:main";
     await send(sessionKey, "Hello.");
     await runCron({
-      sessionTarget: "main",
-      payload: { kind: "systemEvent", text: "SCHEDULED_TICK. Reply with the marker." },
+      sessionTarget: "session:agent:main:main",
+      payload: { kind: "agentTurn", message: "SCHEDULED_TICK. Reply with the marker." },
     });
     await expect(observe(sessionKey)).resolves.toEqual({ modelCopies: 1, displayRows: 1 });
   }, 60_000);

@@ -16,6 +16,7 @@ import {
 } from "../../../cron/store.js";
 import { cronStoreKey } from "../../../cron/store/key.js";
 import { makeCronStreamSandboxTarget } from "../../../cron/stream-sandbox.test-support.js";
+import { resolveCronRunToolsAllow } from "../../../cron/tools-allow.js";
 import type { CronJob } from "../../../cron/types.js";
 import { buildUpdateRehearsalPathEnv } from "../../../infra/update-rehearsal-paths.js";
 import { withInstalledOfficialProviderCustody } from "../../../plugins/provider-policy-custody.test-support.js";
@@ -657,6 +658,7 @@ it.each(["per-sender", "global"] as const)(
         enabled: false,
         schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
         delivery: { mode: "webhook", to: "https://example.invalid/finished" },
+        scheduledToolPolicy: { version: 1, mode: "trusted" },
         state: { lastRunAtMs: 45, lastRunStatus: "ok" },
       });
       await saveJobs(storePath, saved);
@@ -665,11 +667,19 @@ it.each(["per-sender", "global"] as const)(
           "UPDATE cron_jobs SET job_json = json_set(job_json, '$.sessionTarget', 'main', '$.payload', json(?)) WHERE store_key = ? AND job_id = ?",
         )
         .run(
-          JSON.stringify({ kind: "systemEvent", text: " Check the calendar. ", toolsAllow: [] }),
+          JSON.stringify({
+            kind: "systemEvent",
+            text: " Check the calendar. ",
+            toolsAllow: ["read"],
+            toolsAllowIsDefault: true,
+          }),
           cronStoreKey(storePath),
           saved.id,
         );
-      const before = expectDefined(await loadLegacyCronRepairState({ cfg, storePath }));
+      const before = expectDefined(
+        await loadLegacyCronRepairState({ cfg, storePath }),
+        "legacy cron repair state",
+      );
       const repaired = await applyLegacyCronStoreRepair({ cfg, state: before });
       expect(repaired.warnings).toEqual([]);
       expect(repaired.changes).toEqual(
@@ -687,9 +697,20 @@ it.each(["per-sender", "global"] as const)(
         state: saved.state,
         delivery: saved.delivery,
         sessionTarget: scope === "global" ? "session:global" : "session:agent:ops:home",
-        payload: { kind: "agentTurn", message: " Check the calendar. ", toolsAllow: [] },
+        payload: {
+          kind: "agentTurn",
+          message: " Check the calendar. ",
+          toolsAllow: ["read"],
+          toolsAllowIsDefault: false,
+        },
       });
-      const after = expectDefined(await loadLegacyCronRepairState({ cfg, storePath }));
+      expect(resolveCronRunToolsAllow(expectDefined(converted, "converted reminder"))).toEqual([
+        "read",
+      ]);
+      const after = expectDefined(
+        await loadLegacyCronRepairState({ cfg, storePath }),
+        "legacy cron repair state",
+      );
       expect((await applyLegacyCronStoreRepair({ cfg, state: after })).changes).toEqual([]);
     })(),
 );
@@ -725,12 +746,21 @@ it(
         .db.prepare("UPDATE cron_jobs SET job_json = ? WHERE store_key = ? AND job_id = ?")
         .run(JSON.stringify(legacy), cronStoreKey(storePath), id);
     }
-    const state = expectDefined(await loadLegacyCronRepairState({ cfg, storePath }));
+    const state = expectDefined(
+      await loadLegacyCronRepairState({ cfg, storePath }),
+      "legacy cron repair state",
+    );
     const result = await applyLegacyCronStoreRepair({ cfg, state });
     expect(result.warnings).toEqual([]);
     const converted = await readJobs(storePath);
-    const approved = expectDefined(converted.find((entry) => entry.id === "approved"));
-    const stale = expectDefined(converted.find((entry) => entry.id === "stale"));
+    const approved = expectDefined(
+      converted.find((entry) => entry.id === "approved"),
+      "approved reminder",
+    );
+    const stale = expectDefined(
+      converted.find((entry) => entry.id === "stale"),
+      "stale reminder",
+    );
     expect(approved.enabled).toBe(true);
     expect(approved.operatorSource).toEqual({
       source,
@@ -751,14 +781,19 @@ it(
     await saveJobs(storePath, job("bad", { agentId: "main" }), job("good", { agentId: "main" }));
     const db = openOpenClawStateDatabase().db;
     db.prepare(
-      "UPDATE cron_jobs SET job_json = json_set(job_json, '$.sessionTarget', 'main', '$.payload', json(?)) WHERE store_key = ?",
+      "UPDATE cron_jobs SET job_json = json_set(json_remove(job_json, '$.delivery'), '$.sessionTarget', 'main', '$.payload', json(?)) WHERE store_key = ?",
     ).run(JSON.stringify({ kind: "systemEvent", text: "tick" }), cronStoreKey(storePath));
     db.prepare(
       "UPDATE cron_jobs SET job_json = json_set(job_json, '$.delivery', json(?)) WHERE store_key = ? AND job_id = 'bad'",
     ).run(JSON.stringify({ mode: "custom", to: "preserve-me" }), cronStoreKey(storePath));
-    const state = expectDefined(await loadLegacyCronRepairState({ cfg, storePath }));
+    const state = expectDefined(
+      await loadLegacyCronRepairState({ cfg, storePath }),
+      "legacy cron repair state",
+    );
     const original = structuredClone(state.rawJobs.find((entry) => entry.id === "bad"));
-    const result = await applyLegacyCronStoreRepair({ cfg, state });
+    const result = await repairLegacyCronStoreWithoutPrompt({
+      cfg: { ...cfg, cron: { store: storePath } } as OpenClawConfig,
+    });
     expect(result.warnings).not.toEqual(
       expect.arrayContaining([expect.stringContaining("Failed writing")]),
     );
@@ -768,12 +803,16 @@ it(
         enabled: true,
         sessionTarget: "session:agent:main:main",
         payload: { kind: "agentTurn", message: "tick" },
+        delivery: { mode: "none" },
       },
     ]);
     expect(await loadCronQuarantinedJobs(storePath)).toMatchObject([
       { reason: "unsupported-delivery", job: original },
     ]);
-    const after = expectDefined(await loadLegacyCronRepairState({ cfg, storePath }));
+    const after = expectDefined(
+      await loadLegacyCronRepairState({ cfg, storePath }),
+      "legacy cron repair state",
+    );
     expect((await applyLegacyCronStoreRepair({ cfg, state: after })).changes).toEqual([]);
   }),
 );

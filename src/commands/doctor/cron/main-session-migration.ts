@@ -55,9 +55,7 @@ export function migrateMainAutomation(raw: Record<string, unknown>, cfg: OpenCla
       message:
         prompt ?? "No reminder text was saved. Replace this prompt before enabling the automation.",
       ...(payload.toolsAllow !== undefined ? { toolsAllow: payload.toolsAllow } : {}),
-      ...(payload.toolsAllowIsDefault !== undefined
-        ? { toolsAllowIsDefault: payload.toolsAllowIsDefault }
-        : {}),
+      ...(payload.toolsAllowIsDefault !== undefined ? { toolsAllowIsDefault: false } : {}),
     };
   } else if (payload?.kind === "agentTurn" && !prompt) {
     payload.message = "No task text was saved. Replace this prompt before enabling the automation.";
@@ -66,9 +64,8 @@ export function migrateMainAutomation(raw: Record<string, unknown>, cfg: OpenCla
   if (agentId && sessionKey) {
     raw.agentId = agentId;
   }
-  // A main-target agent turn without delivery had no external announcement.
-  // A system event used the conversation's reply route; continue using it.
-  raw.delivery ??= { mode: systemEvent && !reason ? "announce" : "none" };
+  // Conversion must not opt an existing job into cron announcement defaults.
+  raw.delivery ??= { mode: "none" };
   if (reason) {
     raw.enabled = false;
     raw.description = [raw.description, "Paused by Doctor: " + reason].filter(Boolean).join("\n\n");

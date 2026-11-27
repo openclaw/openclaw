@@ -253,19 +253,19 @@ async function directCronReq(
 async function addWebhookCronJob(params: {
   ws: WebSocket;
   name: string;
-  sessionTarget?: "main" | "isolated";
+  sessionTarget?: "session:main" | "isolated";
   payloadText?: string;
   delivery: Record<string, unknown>;
   failureAlert?: Record<string, unknown>;
 }) {
-  const { ws, name, sessionTarget = "main", payloadText, delivery, failureAlert } = params;
+  const { ws, name, sessionTarget = "session:main", payloadText, delivery, failureAlert } = params;
   const response = await rpcReq(ws, "cron.add", {
     ...makeCronJob(name, {
       sessionTarget,
       payload:
         sessionTarget === "isolated"
           ? { kind: "agentTurn", message: payloadText ?? "test" }
-          : { kind: "systemEvent", text: payloadText ?? "send webhook" },
+          : { kind: "agentTurn", message: payloadText ?? "send webhook" },
     }),
     delivery,
     ...(failureAlert ? { failureAlert } : {}),
@@ -361,7 +361,7 @@ describe("gateway server cron", () => {
     const addedEvent = waitForCronEvent(ws, (event) => event?.action === "added");
     const response = await request(
       "cron.add",
-      makeCronJob("compact cron event", { payload: { kind: "systemEvent", text } }),
+      makeCronJob("compact cron event", { payload: { kind: "agentTurn", message: text } }),
     );
     const jobId = expectCronJobIdFromResponse(response);
     const added = await addedEvent;
@@ -380,7 +380,7 @@ describe("gateway server cron", () => {
     expect(added?.job).not.toHaveProperty("schedule");
     expect(Buffer.byteLength(JSON.stringify(added))).toBeLessThan(1_024);
     const current = await request("cron.get", { id: jobId });
-    expect(current.payload).toMatchObject({ payload: { kind: "systemEvent", text } });
+    expect(current.payload).toMatchObject({ payload: { kind: "agentTurn", message: text } });
 
     const finished = await run(jobId);
     expect(finished).toMatchObject({
@@ -423,7 +423,7 @@ describe("gateway server cron", () => {
     const cronState = await createDirectCronState();
 
     const added = await cronState.addJob("revision protected", {
-      payload: { kind: "systemEvent", text: "original" },
+      payload: { kind: "agentTurn", message: "original" },
     });
     expect(added.ok).toBe(true);
     const addedJob = added.payload as { id: string };
@@ -506,7 +506,7 @@ describe("gateway server cron", () => {
     });
 
     expect(updateRes.ok).toBe(false);
-    expect(updateRes.error?.message).toContain("cron channel delivery config");
+    expect(updateRes.error?.message).toContain("delivery.channel is not configured: telegram");
     expect(await cronState.request("cron.get", { id: jobId })).toEqual(before);
 
     const renamed = await cronState.request("cron.update", {
@@ -518,8 +518,8 @@ describe("gateway server cron", () => {
 
     for (const bindingPatch of [
       { agentId: "ops" },
-      { sessionTarget: "main" },
-      { payload: { kind: "systemEvent", text: "new work" } },
+      { sessionTarget: "session:main" },
+      { payload: { kind: "agentTurn", message: "new work" } },
     ]) {
       const retargeted = await cronState.request("cron.update", {
         id: jobId,
@@ -529,7 +529,7 @@ describe("gateway server cron", () => {
       expect(retargeted.payload).toMatchObject({
         name: "retained explicit owner",
         agentId: "ops",
-        sessionTarget: "main",
+        sessionTarget: "session:main",
       });
       expect(await cronState.request("cron.get", { id: jobId })).toEqual(retargeted);
     }
@@ -624,7 +624,7 @@ describe("gateway server cron", () => {
     await cronState.cron.start();
     const autoRes = await cronState.addJob("auto run test", {
       schedule: { kind: "at", at: new Date(Date.now() - 1).toISOString() },
-      payload: { kind: "systemEvent", text: "auto" },
+      payload: { kind: "agentTurn", message: "auto" },
     });
     const autoJobId = expectCronJobIdFromResponse(autoRes);
 
@@ -646,7 +646,7 @@ describe("gateway server cron", () => {
 
     const addRes = await cronState.addJob("plugin runtime nudge", {
       schedule: { kind: "cron", expr: "0 3 1 1 *", tz: "America/Los_Angeles" },
-      payload: { kind: "systemEvent", text: "plugin runtime nudge" },
+      payload: { kind: "agentTurn", message: "plugin runtime nudge" },
     });
     const jobId = expectCronJobIdFromResponse(addRes);
     const finishedRun = events.wait(
@@ -698,7 +698,7 @@ describe("gateway server cron", () => {
     const disabledAddRes = await cronState.addJob("disabled plugin runtime nudge", {
       enabled: false,
       schedule: { kind: "cron", expr: "0 3 1 1 *", tz: "America/Los_Angeles" },
-      payload: { kind: "systemEvent", text: "disabled plugin runtime nudge" },
+      payload: { kind: "agentTurn", message: "disabled plugin runtime nudge" },
     });
     const disabledJobId = expectCronJobIdFromResponse(disabledAddRes);
     await expect(runThroughPlugin(disabledJobId)).resolves.toMatchObject({
@@ -953,7 +953,7 @@ describe("gateway server cron", () => {
 
     const triggerInput = makeCronJob("condition watcher", {
       wakeMode: "now",
-      payload: { kind: "systemEvent", text: "changed" },
+      payload: { kind: "agentTurn", message: "changed" },
     });
     const invalidTrigger = { script: "const x = ;" };
     const expectedTriggerError =

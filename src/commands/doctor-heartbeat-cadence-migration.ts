@@ -56,6 +56,20 @@ import {
 
 const CHECK_ID = "core/doctor/heartbeat-cadence-migration";
 
+function isPendingLegacyHeartbeatRetry(job: DoctorCronJob): job is CronJob {
+  return (
+    job.schedule.kind === "at" &&
+    job.sessionTarget.startsWith("session:") &&
+    job.payload.kind === "agentTurn" &&
+    (job.state.lastRunStatus ?? job.state.lastStatus) === "skipped" &&
+    job.state.lastError === "disabled" &&
+    typeof job.state.lastRunAtMs === "number" &&
+    typeof job.state.nextRunAtMs === "number" &&
+    job.state.nextRunAtMs > job.state.lastRunAtMs &&
+    job.state.startupCatchupAtMs !== job.state.nextRunAtMs
+  );
+}
+
 function legacyAlertsEnabled(cfg: OpenClawConfig, target: string, accountId?: string): boolean {
   const channels =
     target !== "owner" && target !== "last" && target !== "none"
@@ -243,7 +257,7 @@ export async function ensureHeartbeatMonitorJobs(
   const loaded = inspected?.loaded ?? [];
   const { agentIds, enrolledAgentIds } =
     inspected ?? planDoctorHeartbeatMonitors(cfg, loaded, () => undefined, legacyFileAgentIds);
-  if (agentIds.size === 0) {
+  if (agentIds.size === 0 && !loaded.some(isPendingLegacyHeartbeatRetry)) {
     return new Map();
   }
   const schedulerSeed = await resolveHeartbeatSchedulerSeed(undefined, { env, readOnly: true });
@@ -278,6 +292,31 @@ export async function ensureHeartbeatMonitorJobs(
       const currentJobs = decodeDoctorHeartbeatJobRows(rows);
       const result = new Map<string, CronJob>();
       let nextSortOrder = rows.reduce((max, row) => Math.max(max, row.sort_order + 1), 0);
+      for (const previous of loaded.filter(isPendingLegacyHeartbeatRetry)) {
+        const current = currentJobs.find((job) => job.id === previous.id);
+        if (
+          !current ||
+          current.payload.kind !== "agentTurn" ||
+          !isDeepStrictEqual(current, previous) ||
+          current.state.runningAtMs !== undefined
+        ) {
+          throw new Error(
+            `Pending automation ${previous.id} changed during Doctor planning; stop the Gateway and retry.`,
+          );
+        }
+        // The old runner's disabled result never executed the pending slot. Transfer
+        // it to cron's existing catch-up owner without rewriting history or cadence.
+        upsertCronJobRow(
+          db,
+          storeKey,
+          {
+            ...current,
+            payload: current.payload,
+            state: { ...current.state, startupCatchupAtMs: current.state.nextRunAtMs },
+          },
+          rows.find((row) => row.job_id === current.id)!.sort_order,
+        );
+      }
       for (const item of planned) {
         const receipt = item.defaultMonitor
           ? readDefaultProactiveJobReceiptInDatabase(db, storeKey, item.agentId)
@@ -400,7 +439,14 @@ export async function hasPendingHeartbeatCadenceMigration(
           ...listAgentIds(cfg),
           ...loaded.flatMap((job) => (job.agentId ? [job.agentId] : [])),
         ]);
-        if (loaded.some((job) => job.payload.kind === "heartbeat" || isHeartbeatTaskCronJob(job))) {
+        if (
+          loaded.some(
+            (job) =>
+              job.payload.kind === "heartbeat" ||
+              isHeartbeatTaskCronJob(job) ||
+              isPendingLegacyHeartbeatRetry(job),
+          )
+        ) {
           return true;
         }
         return [...agentIds].some((agentId) => {

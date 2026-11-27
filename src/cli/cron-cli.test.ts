@@ -507,6 +507,7 @@ it("creates a one-shot webhook reminder with an explicit keep policy", async () 
     {
       "--at": "+30m",
       "--message": "hi",
+      "--agent": "main",
       "--webhook": " https://example.invalid/openclaw ",
       "--keep-after-run": true,
     },

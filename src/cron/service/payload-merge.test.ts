@@ -5,7 +5,7 @@ import { mergeCronPayload } from "./payload-merge.js";
 type MergeCase = [string, CronPayload, CronPayloadPatch, CronPayload];
 const beforeAgent = { kind: "agentTurn", message: "before" } as const;
 const agent = { kind: "agentTurn", message: "after" } as const;
-const command = { kind: "command", argv: ["echo", "after"] } as const;
+const command = { kind: "command", argv: ["echo", "after"] } satisfies CronPayload;
 const tools = { toolsAllow: ["read", "cron"] };
 const defaultTools = { ...tools, toolsAllowIsDefault: true };
 

@@ -78,9 +78,9 @@ const jobs = Array.from({ length: 40 }, (_, index) => ({
   createdAtMs: 1,
   updatedAtMs: 1,
   schedule: { kind: "every" as const, everyMs: 60_000 },
-  sessionTarget: "main" as const,
+  sessionTarget: "session:agent:main:main" as const,
   wakeMode: "now" as const,
-  payload: { kind: "systemEvent" as const, text: "Synthetic recurring event" },
+  payload: { kind: "agentTurn" as const, message: "Synthetic recurring event" },
   state: { nextRunAtMs: 60_001 },
 }));
 const starts = () =>

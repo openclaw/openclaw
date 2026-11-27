@@ -151,7 +151,7 @@ export function mergeLegacyCronJobsForRepair(loaded: LoadedCronStore) {
     }
   }
   const currentJobs = indexedJobs
-    .sort((a, b) => a.sourceIndex - b.sourceIndex)
+    .toSorted((a, b) => a.sourceIndex - b.sourceIndex)
     .map(({ job }) => job);
   return { currentJobs, invalidConfigRows };
 }

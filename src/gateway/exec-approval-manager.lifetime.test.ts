@@ -227,9 +227,9 @@ describe("ExecApprovalManager lifetime", () => {
           name: "Borrowed approval watcher",
           enabled: false,
           schedule: { kind: "stream", command: ["synthetic-source"] },
-          sessionTarget: "main",
+          sessionTarget: "session:agent:main:main",
           wakeMode: "next-heartbeat",
-          payload: { kind: "systemEvent", text: "Synthetic event" },
+          payload: { kind: "agentTurn", message: "Synthetic event" },
         });
         const policyKey = "borrowed-watcher-policy";
         const execPolicy = {

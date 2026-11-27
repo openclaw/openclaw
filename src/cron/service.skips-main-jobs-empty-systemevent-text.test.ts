@@ -8,7 +8,7 @@ import { onTimer } from "./service/timer.test-support.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite();
 
-it("disables persisted main jobs with empty systemEvent text after skipping them", async () => {
+it("rejects empty task prompts before persisting or executing them", async () => {
   const clock = createGatewaySchedulerClock(Date.now());
   await withCronServiceForTest(
     {
@@ -19,23 +19,21 @@ it("disables persisted main jobs with empty systemEvent text after skipping them
     },
     async ({ cron, state, enqueueSystemEvent, runSessionEvent }) => {
       const atMs = Date.parse("2025-12-13T00:00:01.000Z");
-      await cron.add({
-        name: "empty event",
-        enabled: true,
-        schedule: { kind: "at", at: new Date(atMs).toISOString() },
-        sessionTarget: "session:agent:main:main",
-        wakeMode: "now",
-        payload: { kind: "agentTurn", message: "   " },
-      });
+      await expect(
+        cron.add({
+          name: "empty event",
+          enabled: true,
+          schedule: { kind: "at", at: new Date(atMs).toISOString() },
+          sessionTarget: "session:agent:main:main",
+          wakeMode: "now",
+          payload: { kind: "agentTurn", message: "   " },
+        }),
+      ).rejects.toThrow("cannot project invalid cron job");
       await clock.advanceTo(atMs);
       await onTimer(state);
       expect(runSessionEvent).not.toHaveBeenCalled();
       expect(enqueueSystemEvent).not.toHaveBeenCalled();
-      const [job] = await cron.list({ includeDisabled: true });
-      expect(job?.enabled).toBe(false);
-      expect(job?.state.lastStatus).toBe("skipped");
-      expect(job?.state.lastError).toMatch(/non-empty/i);
-      expect(job?.state.nextRunAtMs).toBeUndefined();
+      expect(await cron.list({ includeDisabled: true })).toEqual([]);
     },
   );
 });

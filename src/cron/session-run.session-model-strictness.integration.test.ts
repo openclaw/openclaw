@@ -221,7 +221,6 @@ describe("stored session model selections in scheduled session turns", () => {
     storedSelection?: Pick<SessionEntry, "modelOverrideSource">;
     target?: "main" | "session";
     payload?: { model?: string; fallbacks?: string[] };
-    payloadKind?: "systemEvent";
     storedPin?: { provider: string; model: string } | null;
     defaultPrimary?: string;
     modelAllow?: string[];
@@ -497,13 +496,11 @@ describe("stored session model selections in scheduled session turns", () => {
       const stored: CronStoredJob = makeCronJob({
         id: "session-turn-model",
         agentId: "main",
-        sessionTarget: params.target === "main" ? "main" : `session:${sessionKey}`,
+        sessionTarget:
+          params.target === "main" ? "session:agent:main:main" : `session:${sessionKey}`,
         wakeMode: "now",
         delivery: { mode: "none" },
-        payload:
-          params.payloadKind === "systemEvent"
-            ? { kind: "agentTurn", message: "Reply." }
-            : { kind: "agentTurn", message: "Reply.", ...params.payload },
+        payload: { kind: "agentTurn", message: "Reply.", ...params.payload },
       });
       const conversation = {
         sessionId: "pinned-conversation",
@@ -669,19 +666,16 @@ describe("stored session model selections in scheduled session turns", () => {
   });
 
   it.each([
-    ["user", "session", undefined, userSelection],
-    ["legacy", "session", undefined, {}],
-    ["user", "main", undefined, userSelection],
-    ["legacy", "main", undefined, {}],
-    ["user", "main", "systemEvent", userSelection],
-    ["legacy", "main", "systemEvent", {}],
+    ["user", "session", userSelection],
+    ["legacy", "session", {}],
+    ["user", "main", userSelection],
+    ["legacy", "main", {}],
   ] as const)(
-    "reports a failed %s selection in a %s/%s turn without fallback",
-    async (_name, target, payloadKind, storedSelection) => {
+    "reports a failed %s selection in a %s turn without fallback",
+    async (_name, target, storedSelection) => {
       const { result, requests } = await runWithFailingPinnedModel({
         storedSelection,
         target,
-        payloadKind,
       });
       expect(requests).toEqual(["pinned/model-x"]);
       expect(result?.status).toBe("error");
@@ -692,12 +686,11 @@ describe("stored session model selections in scheduled session turns", () => {
   it.each([
     ["automatic selection", { storedSelection: { modelOverrideSource: "auto" } }],
     [
-      "unpinned main system-event",
+      "unpinned main task",
       {
         storedPin: null,
         defaultPrimary: "pinned/model-x",
         target: "main",
-        payloadKind: "systemEvent",
       },
     ],
     ["explicit job fallbacks", { payload: { fallbacks: ["jobfallback/model-c"] } }],
@@ -766,17 +759,16 @@ describe("stored session model selections in scheduled session turns", () => {
     });
 
     it.each([
-      { target: "session", payloadKind: undefined, blocked: false },
-      { target: "session", payloadKind: undefined, blocked: true },
-      { target: "main", payloadKind: "systemEvent", blocked: false },
+      { target: "session", blocked: false },
+      { target: "session", blocked: true },
+      { target: "main", blocked: false },
     ] as const)(
-      "keeps a queued $target/$payloadKind turn strict after pinning (admission blocked: $blocked)",
-      async ({ target, payloadKind, blocked }) => {
+      "keeps a queued $target turn strict after pinning (admission blocked: $blocked)",
+      async ({ target, blocked }) => {
         const { result, requests } = await runWithFailingPinnedModel({
           storedSelection: {},
           storedPin: null,
           target,
-          payloadKind,
           retargetWhileAdmitting: { pin: pinned, blocked },
         });
         expect(requests).toEqual(["primary/model-a", "pinned/model-x"]);

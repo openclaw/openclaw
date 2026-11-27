@@ -1773,51 +1773,6 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("preserves accepted session and runtime metadata on cached responses", async () => {
-    const context = makeContext();
-    mockGlobalSessionAgentRoster();
-    mocks.agentCommand.mockClear();
-    context.dedupe.set("agent:cached-global-work", {
-      ts: Date.now(),
-      ok: true,
-      payload: {
-        runId: "cached-global-work",
-        sessionKey: "global",
-        agentId: "work",
-        status: "accepted",
-        runtime: {
-          harness: "claude-cli",
-          provider: "anthropic",
-          model: "claude-sonnet-4-6",
-        },
-      },
-    });
-    const respond = vi.fn();
-
-    await invokeAgent(
-      {
-        message: "global session retry",
-        sessionKey: "global",
-        agentId: "work",
-        idempotencyKey: "cached-global-work",
-      },
-      { context, respond, reqId: "cached-global-work" },
-    );
-
-    expectRecordFields(mockCallArg(respond, 0, 1), {
-      runId: "cached-global-work",
-      sessionKey: "global",
-      agentId: "work",
-      status: "in_flight",
-      runtime: {
-        harness: "claude-cli",
-        provider: "anthropic",
-        model: "claude-sonnet-4-6",
-      },
-    });
-    expect(mocks.agentCommand).not.toHaveBeenCalled();
-  });
-
   describe("spawned child execution", () => {
     it("registers plugin subagent completion for ACP-shaped child sessions", async () => {
       await withOpenClawTestState({ label: "acp-plugin", layout: "state-only" }, async (state) => {

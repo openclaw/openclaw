@@ -1098,7 +1098,7 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it.each(["main", "isolated"] as const)(
+  it.each(["session:main", "isolated"] as const)(
     "retains a watched exit behind an active %s run",
     async (sessionTarget) => {
       const watched = createWatchedRun(false);
@@ -1112,7 +1112,7 @@ describe("buildGatewayCronService", () => {
       const runSessionEvent = vi
         .fn<NonNullable<CronServiceState["deps"]["runSessionEvent"]>>()
         .mockResolvedValue({ status: "ok" });
-      if (sessionTarget === "main") {
+      if (sessionTarget === "session:main") {
         runSessionEvent.mockImplementationOnce(async () => {
           await holdPredecessor();
           return { status: "ok" };
@@ -1136,9 +1136,7 @@ describe("buildGatewayCronService", () => {
         const job = await addCronJob(
           state,
           "watch command while manually running",
-          sessionTarget === "main"
-            ? { kind: "agentTurn", message: "manual prompt" }
-            : { kind: "agentTurn", message: "manual prompt" },
+          { kind: "agentTurn", message: "manual prompt" },
           {
             schedule: { kind: "on-exit", command: "true" },
             sessionTarget,
@@ -1161,7 +1159,7 @@ describe("buildGatewayCronService", () => {
           throw new Error("Expected the watched exit's cron run");
         }
         await completion.value;
-        const payloadRunner = sessionTarget === "main" ? runSessionEvent : mocks.runAgent;
+        const payloadRunner = sessionTarget === "session:main" ? runSessionEvent : mocks.runAgent;
         expect(payloadRunner).toHaveBeenCalledTimes(2);
         expect(state.cron.getJob(job.id)?.state.lastRunStatus).toBe("ok");
         expect(state.cron.getJob(job.id)?.enabled).toBe(false);

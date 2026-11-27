@@ -42,7 +42,7 @@ describe("cron default delivery destination", () => {
   });
 
   it("applies to every session target", () => {
-    for (const sessionTarget of ["isolated", "current", "main"] as const) {
+    for (const sessionTarget of ["isolated", "current", "session:main"] as const) {
       expect(
         resolveCronDeliveryPlan(makeCronJob({ sessionTarget, delivery: { mode: "announce" } }), {
           cronConfig: globalOnly,
@@ -53,17 +53,13 @@ describe("cron default delivery destination", () => {
   });
 
   it("follows the implicit mode of jobs without a delivery object", () => {
-    const resolveFor = (sessionTarget: "isolated" | "main") =>
+    const resolveFor = (sessionTarget: "isolated" | "session:main") =>
       resolveCronDeliveryPlan(makeCronJob({ sessionTarget, delivery: undefined }), {
         cronConfig: globalOnly,
         agentId: "ops",
       });
     expect(resolveFor("isolated")).toMatchObject({ mode: "announce", channel: "telegram" });
-    expect(resolveFor("main")).toEqual(
-      resolveCronDeliveryPlan(
-        makeCronJob({ sessionTarget: "session:agent:main:main", delivery: undefined }),
-      ),
-    );
+    expect(resolveFor("session:main")).toMatchObject({ mode: "announce", channel: "telegram" });
   });
 
   it.each<[string, CronDelivery]>([

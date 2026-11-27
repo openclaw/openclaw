@@ -200,7 +200,7 @@ it.each(["activity summary", "runtime settlement", "automation", "sharing revoca
           jobs.push(
             makeCronJob({
               sessionTarget: `session:${SESSION_KEY}`,
-              payload: { kind: "systemEvent", text: "Synthetic automation" },
+              payload: { kind: "agentTurn", message: "Synthetic automation" },
             }),
           );
           invalidateSessionAutomationIndex();

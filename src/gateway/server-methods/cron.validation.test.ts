@@ -63,6 +63,7 @@ import {
   expectCronSuccess,
   expectCronReply,
   expectResponseError,
+  expectInvalidCronPatternError,
   requireCronAddPayload,
   requireRecord,
   agentTurnCronParams,
@@ -199,10 +200,6 @@ async function invokeWake(params: Record<string, unknown>, client?: GatewayClien
 
 function setRuntimeConfig(config: OpenClawConfig): void {
   getRuntimeConfig.mockReturnValue(config);
-}
-
-function expectInvalidCronPatternError(respond: ReturnType<typeof vi.fn>): void {
-  expectResponseError(respond, { code: "INVALID_REQUEST", messageIncludes: "CronPattern" });
 }
 
 describe("cron method validation", () => {
@@ -1136,10 +1133,9 @@ describe("cron method validation", () => {
       enqueueSystemEvent: vi.fn(),
       runIsolatedAgentJob,
     });
-    await cron.start();
     const releaseReplacement = createDeferred();
     try {
-      const staleJob = await cron.add({
+      const staleJob = createCronJob({
         id: "cron-1",
         name: "scoped job",
         enabled: true,
@@ -1150,6 +1146,8 @@ describe("cron method validation", () => {
         payload: { kind: "agentTurn", message: "before replacement" },
         delivery: { mode: "none" },
       });
+      await saveCronStore(storePath, { version: 1, jobs: [staleJob] });
+      await cron.start();
       const replacementEntered = createDeferred();
       const replacement = cron.updateWithPrecondition(
         staleJob.id,

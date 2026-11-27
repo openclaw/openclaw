@@ -51,6 +51,7 @@ import {
   type LegacyCronQuarantine,
 } from "./legacy-quarantine-migration.js";
 import { captureLegacyCronRepairAdmission } from "./legacy-repair-admission.js";
+import { isLegacyMainAutomation } from "./main-session-migration.js";
 import { archiveLegacyCronFile } from "./quarantine-archive.js";
 import { mergeLegacyCronJobsForRepair, mergeRuntimeEntryIntoConfigJob } from "./repair-plan.js";
 import { planCronCodexRefRewriteAgainstPersistedConfig } from "./runtime-policy-migration.js";
@@ -122,14 +123,19 @@ export async function loadLegacyCronRepairState(params: {
     params.storePath ?? resolveCronJobsStorePath(readLegacyCronStorePath(params.cfg), params.env);
   await assertCronStateSchemaSupportedAsync(params.env);
   const legacyQuarantine = await loadLegacyCronQuarantineForMigration(storePath);
-  if (params.onlyIfLegacyDetected && !legacyQuarantine) {
-    return null;
-  }
   const persistedQuarantine = await loadCronQuarantinedJobs(storePath, params.env);
 
   const loaded = params.readOnly
     ? await loadCronJobsStoreWithConfigJobsReadOnly(storePath, params.env)
     : await loadCronJobsStoreWithConfigJobs(storePath);
+  const { currentJobs, invalidConfigRows } = mergeLegacyCronJobsForRepair(loaded);
+  if (
+    params.onlyIfLegacyDetected &&
+    !legacyQuarantine &&
+    !currentJobs.some(isLegacyMainAutomation)
+  ) {
+    return null;
+  }
   const runtimeDefaultAgentId = tryResolveAmbientOwnerAgentId(params.cfg);
   const projectedOwnersByJobId = new Map(
     loaded.store.jobs.map((job) => [job.id, projectCronOwner(job, runtimeDefaultAgentId)]),
@@ -155,7 +161,6 @@ export async function loadLegacyCronRepairState(params: {
       projectedOwnersByJobId.set(jobId, { kind: "explicit", agentId });
     }
   }
-  const { currentJobs, invalidConfigRows } = mergeLegacyCronJobsForRepair(loaded);
   for (const job of currentJobs) {
     const jobId = normalizeOptionalString(job.id) ?? normalizeOptionalString(job.jobId);
     const sqlOwner = jobId ? sqlOwners.get(jobId) : undefined;

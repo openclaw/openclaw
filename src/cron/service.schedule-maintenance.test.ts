@@ -17,7 +17,7 @@ function checkMaintenance(
     id: "maintenance",
     schedule: { kind: "cron", expr: "0 0 21 * * *", tz: "Asia/Shanghai", staggerMs: 0 },
     sessionTarget: "session:agent:main:main",
-    payload: { kind: "agentTurn", message: "tick" },
+    payload: { kind: "command", argv: ["true"] },
     ...overrides,
   });
   const state = createMockCronStateForJobs({ jobs: [job], nowMs });
@@ -42,7 +42,7 @@ it("schedules loaded every jobs without backfilling anchorMs", () => {
 });
 
 it.each([
-  { name: "early system-event slots", state: { nextRunAtMs: now + 30 * 60_000 } },
+  { name: "early non-agent slots", state: { nextRunAtMs: now + 30 * 60_000 } },
   {
     name: "stale future slots after error backoff expires",
     state: {

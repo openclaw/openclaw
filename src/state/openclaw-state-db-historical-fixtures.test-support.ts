@@ -4,6 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { gunzipSync } from "node:zlib";
 import { sha256Hex as sha256 } from "@openclaw/normalization-core/node-crypto";
 import { expect } from "vitest";
+import type { CronStoredJob } from "../cron/types.js";
 import type { SqlConnection } from "../infra/sql-connection.js";
 import { CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
@@ -11,6 +12,15 @@ import {
   addPreCutoverClientCredentialTablesForTest,
   restorePreTemplateStateIdentifiersForTest,
 } from "./openclaw-state-schema.test-support.js";
+
+export type LegacyCronJobFixture = Pick<
+  CronStoredJob,
+  "id" | "name" | "createdAtMs" | "updatedAtMs"
+> & {
+  sessionTarget: string;
+  wakeMode: string;
+  payload: { kind: string };
+};
 
 export function downgradeWorkerPlacementsToV7(db: DatabaseSync): void {
   restorePreTemplateStateIdentifiersForTest(db);

@@ -635,18 +635,18 @@ describe("cron ownership access matrix", () => {
       scheduledToolPolicy: trusted,
       payload,
     });
-    const toEvent = await updateAs(
+    const noTools = await updateAs(
       "scoped",
       {
         id: dormant.id,
         patch: {
-          sessionTarget: "session:agent:main:main",
-          payload: { kind: "agentTurn", message: "Check status" },
+          sessionTarget: "session:agent:ops:main",
+          payload: { kind: "agentTurn", message: "Check status", toolsAllow: [] },
         },
       },
       dormant.context,
     );
-    expect(toEvent.respond.mock.calls[0]?.[0]).toBe(true);
+    expect(noTools.respond.mock.calls[0]?.[0]).toBe(true);
     expect((await dormant.stored())?.scheduledToolPolicy).toEqual(policy(S_A, "default"));
     const reloaded = await seedService(expectDefinedJob(await dormant.stored()));
     const restore = await invokeCron(

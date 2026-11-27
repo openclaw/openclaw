@@ -14,6 +14,7 @@ export function createDueMainJob(params: { now: number; wakeMode: CronJob["wakeM
     sessionTarget: "session:agent:main:main",
     wakeMode: params.wakeMode,
     payload: { kind: "agentTurn", message: "heartbeat seam tick" },
+    delivery: { mode: "none" },
     sessionKey: "agent:main:main",
     state: { nextRunAtMs: params.now - 1 },
   };

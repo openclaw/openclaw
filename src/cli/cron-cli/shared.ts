@@ -85,9 +85,6 @@ export function assertCronTimeoutSupported(
   if (payloadKind === "script") {
     throw new CronCliError("Use --script-timeout-seconds for script jobs, not --timeout-seconds.");
   }
-  if (payloadKind !== "agentTurn" && payloadKind !== "command") {
-    throw new CronCliError(`--timeout-seconds is not supported for ${payloadKind} jobs.`);
-  }
 }
 
 export function parseCronNoOutputTimeoutOption(opts: Record<string, unknown>): number | undefined {

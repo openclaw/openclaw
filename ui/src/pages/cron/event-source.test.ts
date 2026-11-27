@@ -84,7 +84,7 @@ it("validates JSON and the selected event schema before allowing a save", () => 
   expect({
     payload: validateCronForm({
       ...form,
-      payloadKind: "systemEvent",
+      payloadKind: "command",
       sessionTarget: "session:agent:main:main",
     }),
     schema: events.validateCronEventSelection({ ...form, eventArguments: "{}" }, source),

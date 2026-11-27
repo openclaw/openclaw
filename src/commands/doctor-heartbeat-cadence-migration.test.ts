@@ -149,7 +149,7 @@ function seedLegacyMonitor(f: Fixture, overrides: Partial<Omit<DoctorCronJob, "p
     createdAtMs: Date.parse("2026-07-15T12:00:00Z"),
     updatedAtMs: NOW - 60_000,
     schedule: { kind: "every", everyMs: 900_000, anchorMs: 37 },
-    sessionTarget: "main",
+    sessionTarget: "isolated",
     wakeMode: "next-heartbeat",
     state: {
       nextRunAtMs: NOW + 123,
@@ -161,12 +161,12 @@ function seedLegacyMonitor(f: Fixture, overrides: Partial<Omit<DoctorCronJob, "p
     payload: { kind: "heartbeat", toolsAllow: ["read"], toolsAllowIsDefault: false },
   };
   // The retired discriminator cannot enter through the ordinary job writer.
-  // A system-event placeholder also reproduces the shipped authority fingerprint.
+  // A non-tool-bearing placeholder reproduces the shipped authority fingerprint.
   const placeholder: CronStoredJob = {
     ...legacy,
     payload: {
-      kind: "systemEvent",
-      text: "Legacy monitor",
+      kind: "command",
+      argv: ["true"],
       toolsAllow: ["read"],
       toolsAllowIsDefault: false,
     },
@@ -183,7 +183,11 @@ function seedLegacyMonitor(f: Fixture, overrides: Partial<Omit<DoctorCronJob, "p
           .updateTable("cron_jobs")
           .set({
             payload_kind: "heartbeat",
-            job_json: JSON.stringify({ ...JSON.parse(row.job_json), payload: legacy.payload }),
+            job_json: JSON.stringify({
+              ...JSON.parse(row.job_json),
+              sessionTarget: "main",
+              payload: legacy.payload,
+            }),
           })
           .where("store_key", "=", storeKey)
           .where("job_id", "=", legacy.id),
@@ -904,9 +908,10 @@ describe("heartbeat cadence Doctor cutover", () => {
       createdAtMs: NOW - 1000,
       updatedAtMs: NOW - 500,
       schedule: { kind: "at", at: "2026-07-15T12:00:00Z" },
-      sessionTarget: "main",
+      sessionTarget: "session:main",
       wakeMode: "now",
-      payload: { kind: "systemEvent", text: "Reminder" },
+      payload: { kind: "agentTurn", message: "Reminder" },
+      delivery: { mode: "none" },
       state: {
         lastRunAtMs: NOW - 100,
         nextRunAtMs: NOW + 100,

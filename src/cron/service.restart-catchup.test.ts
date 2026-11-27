@@ -45,6 +45,7 @@ function job(overrides: Partial<CronJob>): CronJob {
     updatedAtMs: time("2025-12-13T04:01:00Z"),
     schedule: { kind: "cron", expr: "* * * * *", tz: "UTC" },
     sessionTarget: "session:agent:main:main",
+    delivery: { mode: "none" },
     wakeMode: "next-heartbeat",
     payload: { kind: "agentTurn", message: "tick" },
     ...overrides,

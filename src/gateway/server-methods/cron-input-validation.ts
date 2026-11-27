@@ -305,7 +305,9 @@ export async function assertValidCronSessionTarget(
   const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
     cfg,
     key: targetSessionKey,
-    agentId: input.agentId?.trim() || undefined,
+    agentId:
+      input.agentId?.trim() ||
+      (parseAgentSessionKey(targetSessionKey) ? undefined : tryResolveAmbientOwnerAgentId(cfg)),
   });
   const reservedKey =
     isAgentHarnessSessionKey(targetSessionKey) || isAgentHarnessSessionKey(loaded.canonicalKey);
@@ -401,7 +403,15 @@ export async function captureCronCreatorSession(
   const executionSessionKey = resolveCronSessionTargetSessionKey(job.sessionTarget) ?? "";
   const executionSession =
     !hasRuntimeAuthority && job.payload.kind === "agentTurn" && executionSessionKey
-      ? await loadGatewaySessionEntryReadOnlyInWorker({ cfg, key: executionSessionKey, agentId })
+      ? await loadGatewaySessionEntryReadOnlyInWorker({
+          cfg,
+          key: executionSessionKey,
+          agentId:
+            agentId ??
+            (parseAgentSessionKey(executionSessionKey)
+              ? undefined
+              : tryResolveAmbientOwnerAgentId(cfg)),
+        })
       : undefined;
   const runtimeSessionEntry =
     !hasRuntimeAuthority && job.payload.kind === "agentTurn"

@@ -155,11 +155,16 @@ export function jsonHeaders(headers: Record<string, string> = {}) {
   return { "content-type": "application/json", ...headers };
 }
 
-export const mcpToolCallBody = (name: string, args: Record<string, unknown> = {}, id = 1) =>
-  JSON.stringify(mcpToolCallMessage(name, args, id));
+export const mcpToolCallBody = (name: string, args: Record<string, unknown> = {}) =>
+  JSON.stringify(mcpToolCallMessage(name, args));
 
-export function mcpToolCallMessage(name: string, args: Record<string, unknown> = {}, id = 1) {
-  return { jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } } as const;
+export function mcpToolCallMessage(name: string, args: Record<string, unknown> = {}) {
+  return {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "tools/call",
+    params: { name, arguments: args },
+  } as const;
 }
 
 export function expectMcpToolNames(payload: McpToolResultPayload, expected: string[]) {

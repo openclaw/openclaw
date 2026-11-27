@@ -221,7 +221,7 @@ describe("cron.list scoped SQLite snapshots", () => {
             .prepare(`SELECT ${columns} FROM cron_jobs WHERE store_key = ? AND job_id = 'job-0000'`)
             .get(storeKey);
         update(
-          "UPDATE cron_jobs SET enabled = ?, payload_kind = 'systemEvent', job_json = json_set(job_json, '$.enabled', json(?), '$.delivery.mode', 'not-a-route', '$.sessionTarget', 'main', '$.payload', json(?)) WHERE store_key = ? AND job_id = 'job-0000'",
+          "UPDATE cron_jobs SET enabled = ?, payload_kind = 'agentTurn', job_json = json_set(job_json, '$.enabled', json(?), '$.delivery.mode', 'not-a-route', '$.sessionTarget', 'session:main', '$.payload', json(?)) WHERE store_key = ? AND job_id = 'job-0000'",
           1,
           "true",
           JSON.stringify({ kind: "agentTurn", message: "synthetic legacy job" }),
@@ -290,7 +290,7 @@ describe("cron.list scoped SQLite snapshots", () => {
           patch: { delivery: { mode: "none" } },
         });
         expectReply(corrected, expect.objectContaining({ id: "job-0000" }));
-        expect(JSON.parse(String(raw()))).not.toHaveProperty("delivery");
+        expect(JSON.parse(String(raw()))).toHaveProperty("delivery", { mode: "none" });
         expect((await cron.readJob("job-0001"))?.name).toBe("healthy sibling still editable");
       },
       { defaultAgentId: "ops" },

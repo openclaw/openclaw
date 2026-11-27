@@ -3,15 +3,10 @@ import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { getStateDatabaseSchemaLease } from "../infra/gateway-state-owner.js";
-import { resolveIdentityPathViaExistingAncestorSync } from "../infra/path-existence.js";
-import { isPathInside } from "../infra/path-guards.js";
 import { createSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.media-persistence-targets.js";
 import { runWithDoctorMigrationBackup } from "../infra/update-doctor-migration-attribution.js";
-import {
-  createUpdateDoctorDatabaseWriteCapture,
-  DoctorMaintenanceRefusalError,
-} from "../infra/update-doctor-result.js";
+import { createUpdateDoctorDatabaseWriteCapture } from "../infra/update-doctor-result.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import {
   createOpenClawDatabaseMaintenanceScope,
@@ -24,22 +19,10 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { admitOpenClawMaintenanceLiveAuthorityReads } from "../state/openclaw-state-maintenance-context.js";
 import { assertDoctorAgentLeaseAdmission } from "./doctor-agent-lease-refusal.js";
 import { acquireDoctorGatewayMaintenanceOwner } from "./doctor-maintenance-foreground.js";
-import {
-  traceDoctorMaintenancePending,
-  type DoctorMaintenancePending,
-} from "./doctor-maintenance-pending.js";
+import { traceDoctorMaintenancePending } from "./doctor-maintenance-pending.js";
 import type { DoctorMaintenanceParams } from "./doctor-maintenance-types.js";
 import { captureFreshDoctorMigrationTables } from "./doctor-migration-backup.js";
 import { sanitizeDoctorNote } from "./doctor/emit-notes.js";
-
-/** Reads only path metadata (lstat) of the legacy and current state roots. */
-export async function checkDoctorLegacyStateDirPending(
-  env: NodeJS.ProcessEnv,
-): Promise<DoctorMaintenancePending> {
-  const { resolvePendingLegacyStateDirMigrationPaths } =
-    await import("../infra/state-migrations.state-dir.js");
-  return resolvePendingLegacyStateDirMigrationPaths({ env }) ? "work" : "none";
-}
 
 /** Database custody can change paths while stopped-service custody remains with Doctor. */
 export async function createDoctorMaintenanceState(options: {
@@ -296,7 +279,7 @@ export async function createDoctorMaintenanceState(options: {
         liveAuthorityReadsAdmitted = true;
       }
       await traceDoctorMaintenancePending("legacy-state-dir", () =>
-        checkDoctorLegacyStateDirPending(env),
+        resolvePendingLegacyStateDirMigrationPaths({ env }) ? "work" : "none",
       );
       const { prepareLegacyStateDirMigration } =
         await import("../infra/state-migrations.state-dir.js");
@@ -424,60 +407,6 @@ export async function createDoctorMaintenanceState(options: {
         throw operationError;
       }
       return result!;
-    },
-    async cleanupRetainedRuntimes(inspectService: boolean) {
-      const { captureRetainedNativeWorkerSource } =
-        await import("../infra/worker-native-lifecycle.js");
-      const { retireIdleOpenClawStateReadWorkers } =
-        await import("../state/openclaw-state-read-worker.js");
-      const { prepareRetainedUpdateRuntimeCleanup } = await import("./doctor-retained-runtime.js");
-      assertOwnerCurrent();
-      const cleanup = await state.run(() =>
-        prepareRetainedUpdateRuntimeCleanup(selectedEnv, { inspectService }),
-      );
-      const nativeSource = captureRetainedNativeWorkerSource();
-      // This phase runs after the tracked Doctor callback has settled.
-      let readersRetired: boolean;
-      try {
-        await closeResources();
-        readersRetired = await retireIdleOpenClawStateReadWorkers(nativeSource);
-        await nativeSource.retireIdleBroker();
-      } catch (cause) {
-        throw new DoctorMaintenanceRefusalError(
-          `Doctor inspection resource cleanup failed: ${formatErrorMessage(cause)}. Resolve this cleanup failure before restarting the Gateway or rerunning openclaw doctor --fix.`,
-          { kind: "data-at-risk", reason: "active-mutation" },
-          { cause },
-        );
-      }
-      try {
-        await owner!.run(() =>
-          cleanup(true, {
-            assertCurrent() {
-              assertOwnerCurrent();
-              owner!.assertDatabaseAccess(resolveOpenClawStateSqlitePath(selectedEnv));
-            },
-            assertResourcesSettled(directory) {
-              // Worker threads share this PID and are invisible to the process census.
-              // Cached plugin preparation stays alive for this command, but only a
-              // worker loaded from this runtime can hold it.
-              const holdsRuntime = nativeSource
-                .activeWorkerPaths()
-                .some(
-                  (worker) =>
-                    worker === undefined ||
-                    isPathInside(directory, resolveIdentityPathViaExistingAncestorSync(worker)),
-                );
-              if (!readersRetired || holdsRuntime) {
-                throw new Error(
-                  `independent native work in this process (PID: ${process.pid}); let these holders finish, then rerun openclaw doctor --fix`,
-                );
-              }
-            },
-          }),
-        );
-      } finally {
-        await enterResources(owner!);
-      }
     },
     /** Returns a settled cleanup failure; throws only while Doctor must retain custody. */
     async release(): Promise<Error | undefined> {

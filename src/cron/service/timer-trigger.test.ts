@@ -56,7 +56,7 @@ describe("resolveTransientCronRetryDecision", () => {
     "ends an invalid-target one-shot, alerting only through a route (alert route: %s)",
     async (route) => {
       const job = makeJob("at");
-      job.sessionTarget = "main";
+      job.sessionTarget = "session:main";
       job.failureAlert = route
         ? { channel: "telegram", to: "synthetic-owner", cooldownMs: 60_000 }
         : false;

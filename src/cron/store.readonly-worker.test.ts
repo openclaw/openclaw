@@ -139,6 +139,7 @@ it.each([false, true])(
       const job = makeCronJob({
         name: "scheduled café 🦞",
         sessionTarget: "session:agent:main:main",
+        delivery: { mode: "none" },
         payload: { kind: "agentTurn", message: "persisted event" },
         state: { nextRunAtMs: 60_001 },
       });

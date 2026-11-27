@@ -324,10 +324,7 @@ describe("cron trigger evaluation", () => {
     async ({ sessionTarget, mutation }) => {
       const { h, jobId, run, signal, resolve } = await pendingEvaluation({
         sessionTarget,
-        payload:
-          sessionTarget === "main"
-            ? { kind: "agentTurn", message: "condition payload" }
-            : { kind: "agentTurn", message: "condition payload" },
+        payload: { kind: "agentTurn", message: "condition payload" },
         state: { triggerState: { owner: "previous evaluation" } },
       });
       if (mutation === "remove") {

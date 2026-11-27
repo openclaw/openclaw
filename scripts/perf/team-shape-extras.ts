@@ -466,8 +466,8 @@ export async function seedTeamShapeExtras(options: TeamShapeExtrasOptions) {
           failureAlert: false as const,
         }
       : {
-          sessionTarget: "main" as const,
-          payload: { kind: "systemEvent" as const, text: `Synthetic inspection ${index}` },
+          sessionTarget: "session:agent:main:main" as const,
+          payload: { kind: "agentTurn" as const, message: `Synthetic inspection ${index}` },
         }),
     state: { lastRunAtMs: options.now - DAY_MS, lastRunStatus: index % 5 === 0 ? "error" : "ok" },
   }));

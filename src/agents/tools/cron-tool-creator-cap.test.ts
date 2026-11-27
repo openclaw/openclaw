@@ -55,7 +55,7 @@ function capture(
   return target;
 }
 const agentPayload = { kind: "agentTurn" as const, message: "work" };
-const wakePayload = { kind: "agentTurn" as const, message: "wake" };
+const wakePayload = { kind: "command" as const, argv: ["echo", "wake"] };
 
 describe("cron tool creator cap", () => {
   it("distinguishes explicit stream creates from kindless stream update fields", () => {
@@ -118,7 +118,7 @@ describe("cron tool creator cap", () => {
 
     // Legacy "cron" creator allowlists normalize to the canonical tool id.
     const creatorSnapshot = { toolsAllow: ["read", "automations"], toolsAllowIsDefault: true };
-    expect(triggerJob.payload).toEqual({ kind: "agentTurn", message: "wake", ...creatorSnapshot });
+    expect(triggerJob.payload).toEqual({ ...wakePayload, ...creatorSnapshot });
     expect(agentJob.payload).toEqual({ kind: "agentTurn", message: "work", toolsAllow: ["*"] });
     expect(codexAppJob.payload).toEqual({ kind: "agentTurn", message: "work", ...creatorSnapshot });
     expect(plainJob.payload).toEqual(wakePayload);

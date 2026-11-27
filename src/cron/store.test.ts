@@ -460,8 +460,8 @@ describe("cron store", () => {
     const job = payload.jobs[0];
     job.trigger = { script: "return { fire: false }" };
     job.payload = {
-      kind: "systemEvent",
-      text: "changed",
+      kind: "agentTurn",
+      message: "changed",
       toolsAllow: ["read", "cron"],
       toolsAllowIsDefault: true,
     };

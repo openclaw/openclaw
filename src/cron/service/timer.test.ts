@@ -255,7 +255,7 @@ describe("cron service timer seam coverage", () => {
 
   it.each([
     { target: "isolated", notify: "queue changed", wake: "now" },
-    { target: "main", notify: undefined, wake: "now" },
+    { target: "isolated", notify: undefined, wake: "now" },
   ] as const)(
     "routes $target script side effects (notify=$notify, wake=$wake)",
     async ({ target, notify, wake }) => {
@@ -311,7 +311,7 @@ describe("cron service timer seam coverage", () => {
 
     await expect(
       executeJobCore(state, {
-        ...createDueScriptJob({ now, sessionTarget: "session:agent:main:main" }),
+        ...createDueScriptJob({ now }),
         agentId: undefined,
       }),
     ).resolves.toMatchObject({

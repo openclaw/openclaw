@@ -15,11 +15,12 @@ import {
   resolveCronJobsStorePathFromConfig,
 } from "../cron/store.js";
 import { resolveCronStoreKeyInDatabase } from "../cron/store/paths.js";
-import { updateCronRuntimeRow } from "../cron/store/row-codec.js";
+import { loadCronRows, upsertCronJobRow, updateCronRuntimeRow } from "../cron/store/row-codec.js";
 import type { CronStoredJob as CronJob } from "../cron/types.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
+  openOpenClawStateDatabase,
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
@@ -31,6 +32,7 @@ import {
   ensureHeartbeatMonitorJobs,
   collectHeartbeatCadenceMigrationFindings,
 } from "./doctor-heartbeat-cadence-migration.js";
+import { decodeDoctorHeartbeatJobRows } from "./doctor-heartbeat-jobs.js";
 import { retireHeartbeatWithDoctor } from "./doctor-heartbeat-retirement.js";
 import { resolveLegacyHeartbeatSession } from "./doctor-heartbeat-session.js";
 import { heartbeatTaskDeclarationKey } from "./doctor-heartbeat-task-identity.js";
@@ -145,15 +147,36 @@ async function createExistingInboxJob(fixture: Awaited<ReturnType<typeof createF
     agentId: "main",
     enabled: false,
     schedule: { kind: "every", everyMs: 5 * 60 * 60_000, anchorMs: fixture.nowMs - 60_000 },
-    payload: { kind: "systemEvent", text: "Previous inbox prompt", toolsAllow: ["read"] },
-    sessionTarget: "main",
+    payload: { kind: "agentTurn", message: "Previous inbox prompt", toolsAllow: ["read"] },
+    sessionTarget: "isolated",
     wakeMode: "next-heartbeat",
     state: { lastRunAtMs: fixture.nowMs - 10_000 },
   };
-  const store = await loadCronJobsStore(fixture.storePath);
-  await saveCronJobsStore(fixture.storePath, { ...store, jobs: [...store.jobs, job] });
-  return job;
+  seedLegacyTask(fixture.storePath, job);
+  return (await readTasks(fixture)).find((candidate) => candidate.id === job.id)!;
 }
+function seedLegacyTask(storePath: string, job: CronJob) {
+  if (job.payload.kind !== "agentTurn") {
+    throw new Error("Expected task prompt");
+  }
+  const { message, kind: _kind, ...tools } = job.payload;
+  runOpenClawStateWriteTransaction(({ db }) => {
+    const storeKey = resolveCronStoreKeyInDatabase(db, storePath);
+    upsertCronJobRow(db, storeKey, { ...job, payload: { kind: "command", argv: ["true"] } }, 1);
+    db.prepare(
+      "UPDATE cron_jobs SET payload_kind = 'systemEvent', job_json = ? WHERE store_key = ? AND job_id = ?",
+    ).run(
+      JSON.stringify({
+        ...job,
+        sessionTarget: "main",
+        payload: { ...tools, kind: "systemEvent", text: message },
+      }),
+      storeKey,
+      job.id,
+    );
+  });
+}
+
 type Fixture = Awaited<ReturnType<typeof createFixture>>;
 
 function migrate(
@@ -174,8 +197,11 @@ function readScratch(fixture: Fixture) {
 }
 
 async function readTasks(fixture: Fixture) {
-  return (await loadCronJobsStore(fixture.storePath)).jobs.filter(
-    (job) => job.id !== fixture.monitor.id,
+  const { db } = openOpenClawStateDatabase();
+  return decodeDoctorHeartbeatJobRows(
+    loadCronRows(db, resolveCronStoreKeyInDatabase(db, fixture.storePath)),
+  ).filter(
+    (job): job is CronJob => job.id !== fixture.monitor.id && job.payload.kind !== "heartbeat",
   );
 }
 
@@ -242,12 +268,8 @@ describe("heartbeat scratch task cron migration", () => {
       "tasks:\n  - name: queue\n    interval: 1h\n    prompt: Check queue; reply HEARTBEAT_OK. Keep HEARTBEAT_OK_LOG.\n",
     );
     const previous = await createExistingInboxJob(fixture);
-    previous.payload = { kind: "systemEvent", text: "Check inbox; reply HEARTBEAT_OK." };
-    const store = await loadCronJobsStore(fixture.storePath);
-    await saveCronJobsStore(fixture.storePath, {
-      ...store,
-      jobs: store.jobs.map((job) => (job.id === previous.id ? previous : job)),
-    });
+    previous.payload = { kind: "agentTurn", message: "Check inbox; reply HEARTBEAT_OK." };
+    seedLegacyTask(fixture.storePath, previous);
 
     expect((await migrate(fixture)).warnings).toEqual([]);
     expect(await migrateStoredHeartbeatTaskJobs(fixture.cfg, fixture.env)).toBe(1);
@@ -291,16 +313,6 @@ describe("heartbeat scratch task cron migration", () => {
         payload: { kind: "agentTurn", message: "Check priority inbox items" },
       });
       expect(persisted?.declarationKey).toBeUndefined();
-      await expect(
-        cron.update(job.id, {
-          payload: { kind: "systemEvent", text: "Check priority inbox items" },
-        }),
-      ).rejects.toThrow(
-        'cron sessionTarget "session:agent:research:main" cannot run systemEvent: systemEvent only runs in the main session',
-      );
-      expect(
-        (await loadCronJobsStore(fixture.storePath)).jobs.find((entry) => entry.id === job.id),
-      ).toEqual(persisted);
     } finally {
       cron.stop();
     }
@@ -374,16 +386,16 @@ describe("heartbeat scratch task cron migration", () => {
         updatedAtMs: 20,
         declarationKey: heartbeatTaskDeclarationKey("ops", "inbox"),
         payload: {
-          kind: "systemEvent",
-          text: "Keep the existing task prompt",
+          kind: "agentTurn",
+          message: "Keep the existing task prompt",
           toolsAllow: ["read"],
         },
-        sessionTarget: "main",
+        sessionTarget: "isolated",
         wakeMode: "next-heartbeat",
         schedule: { kind: "every", everyMs: 50000, anchorMs: 12 },
         state: { nextRunAtMs: 12345, queuedAtMs: 12345, lastRunAtMs: 9999 },
       };
-      await saveCronJobsStore(storePath, { version: 1, jobs: [legacy] });
+      seedLegacyTask(storePath, legacy);
       expect(await migrateStoredHeartbeatTaskJobs(cfg)).toBe(1);
       const jobs = (await loadCronJobsStore(storePath)).jobs;
       expect(jobs.find((job) => job.id === legacy.id)).toMatchObject({

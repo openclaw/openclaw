@@ -45,7 +45,12 @@ export function decodeDoctorHeartbeatJobRows(rows: readonly CronJobReadRow[]): D
     };
     if (legacyRow && isRecord(payload) && payload.kind === "systemEvent") {
       const { text, kind: _kind, ...tools } = payload;
-      definitionForDoctor.payload = { ...tools, kind: "agentTurn", message: text };
+      definitionForDoctor.payload = {
+        ...tools,
+        kind: "agentTurn",
+        message: text,
+        ...(tools.toolsAllowIsDefault !== undefined ? { toolsAllowIsDefault: false } : {}),
+      };
     }
     if (isRecord(payload) && payload.kind === "heartbeat") {
       const legacyPayload = LegacyHeartbeatPayloadSchema.parse(payload);
@@ -57,6 +62,9 @@ export function decodeDoctorHeartbeatJobRows(rows: readonly CronJobReadRow[]): D
       });
       if (!decoded) {
         throw new Error(`Legacy automation ${row.job_id} is invalid; its source was retained.`);
+      }
+      if (definition.sessionTarget === "main" && definition.delivery === undefined) {
+        delete decoded.delivery;
       }
       return [
         {
@@ -71,6 +79,9 @@ export function decodeDoctorHeartbeatJobRows(rows: readonly CronJobReadRow[]): D
     const decoded = rowToCronJob(row, definitionForDoctor);
     if (!decoded && legacyRow) {
       throw new Error(`Automation ${row.job_id} is invalid; its source was retained.`);
+    }
+    if (decoded && definition.sessionTarget === "main" && definition.delivery === undefined) {
+      delete decoded.delivery;
     }
     // Ordinary invalid rows belong to Doctor's backed-up cron repair/quarantine.
     return decoded ? [decoded] : [];

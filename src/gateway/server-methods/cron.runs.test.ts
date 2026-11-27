@@ -370,7 +370,7 @@ describe("cron.runs session visibility", () => {
           delete job.agentId;
           delete job.owner;
           job.sessionTarget = sessionTarget;
-          if (sessionTarget === "main") {
+          if (sessionTarget === "session:agent:main:main") {
             job.payload = { kind: "agentTurn", message: "visibility fixture" };
           }
           await saveCronStore(storePath, store);
@@ -381,7 +381,7 @@ describe("cron.runs session visibility", () => {
               ).run(sqlOwner, cronStoreKey(storePath), jobId);
             }
           });
-          const targetKey = sessionTarget === "main" ? "main" : "custom-target";
+          const targetKey = sessionTarget === "session:agent:main:main" ? "main" : "custom-target";
           await createOwnedSession(agentId, targetKey, owner);
           const loaded = await cron.readJob(jobId);
           expect(loaded).toMatchObject({

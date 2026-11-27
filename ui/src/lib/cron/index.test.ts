@@ -173,7 +173,7 @@ it("saves exact event timing and clears its owner", async () => {
     {
       clearAgent: true,
       scheduleExact: true,
-      payloadKind: "systemEvent",
+      payloadKind: "agentTurn",
       payloadText: "updated",
     },
   );
@@ -442,13 +442,12 @@ it.each`
 });
 
 it.each([
-  ["systemEvent", agentPayload(hiddenPolicy), undefined],
   [
     "agentTurn",
     { kind: "command", argv: ["node", "synthetic.mjs"], toolsAllow: [] },
     { script: "return { fire: true }", once: false },
   ],
-] satisfies Array<["agentTurn" | "systemEvent", CronJob["payload"], CronJob["trigger"]]>)(
+] satisfies Array<["agentTurn", CronJob["payload"], CronJob["trigger"]]>)(
   "clones to %s without inheriting payload authority",
   async (target, payload, trigger) => {
     const source = makeJob({ schedule: { kind: "every", everyMs: 60_000 }, payload, trigger });
@@ -462,7 +461,7 @@ it.each([
     }
     Object.assign(state.cronForm, {
       payloadKind: target,
-      sessionTarget: target === "systemEvent" ? "main" : "isolated",
+      sessionTarget: "isolated",
       payloadText: "New task",
     });
     const submitted = await submit();
@@ -470,7 +469,7 @@ it.each([
     expect(submitted.trigger).toEqual(trigger);
     expect(submitted.payload).toEqual({
       kind: target,
-      ...(target === "systemEvent" ? { text: "New task" } : { message: "New task" }),
+      message: "New task",
       toolsAllow: payload.toolsAllow,
     });
   },

@@ -225,10 +225,7 @@ describe("cron model schema regressions", () => {
       "every",
       "cron",
     ]);
-    expect(propertyAt(disabled.parameters, "job.payload.kind")?.enum).toEqual([
-      "systemEvent",
-      "agentTurn",
-    ]);
+    expect(propertyAt(disabled.parameters, "job.payload.kind")?.enum).toEqual(["agentTurn"]);
     for (const key of ["command", "source"]) {
       expect(propertyAt(disabled.parameters, `job.schedule.${key}`)).toBeUndefined();
     }

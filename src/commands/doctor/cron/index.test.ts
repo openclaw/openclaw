@@ -786,7 +786,7 @@ describe("maybeRepairLegacyCronStore", () => {
 
     const job = requirePersistedJob(await readPersistedJobs(), 0);
     expect(job.notify).toBeUndefined();
-    expect(job.delivery).toEqual({ mode: "announce" });
+    expect(job.delivery).toEqual({ mode: "none" });
     const { configJobs: persisted } = await loadCronJobsStoreWithConfigJobs(storePath);
     expect(persisted[0]?.notify).toBe(true);
     expectNoteContaining(
