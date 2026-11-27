@@ -419,7 +419,7 @@ export function createManagedServiceUpdaterFixtureScript(params: {
           },
         })
       : null;
-  // Use the canonical row shape without moving publication ahead of the child.
+  // The child publishes this row; the Gateway decodes it from the typed columns.
   const notificationRow = notification
     ? buildRestartSentinelRow(notification, notification.ts, "current")
     : null;

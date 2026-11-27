@@ -199,6 +199,12 @@ previous release, not manual edits made to the new one.
 
 ## Update implementation contract
 
+Candidate Doctor reads both legacy shared-auth rows under maintenance custody.
+If both rows are absent, Doctor records the ownership and migration receipts
+without reopening the agent database for cleanup. The complete repair plan still
+migrates queued outbound deliveries and imports session data. The installed
+updater needs no change.
+
 ### Release updates
 
 `src/update/` owns updates of Git checkouts and npm, pnpm and Bun global installs.

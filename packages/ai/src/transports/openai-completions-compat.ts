@@ -52,17 +52,13 @@ export type ResolvedOpenAICompletionsCompat = Omit<
   | "sendSessionAffinityHeaders"
   | "reasoningEffortMap"
   | "supportedReasoningEfforts"
+  | "seedField"
 > &
   Pick<OpenAICompletionsCompat, "reasoningEffortMap" | "supportedReasoningEfforts"> & {
     cacheControlFormat?: OpenAICompletionsCompat["cacheControlFormat"];
-    cacheControlSystemOnly: boolean;
-    cacheControlSharedSystem: boolean;
     openRouterRouting?: OpenAICompletionsCompat["openRouterRouting"];
     sessionAffinity: OpenAICompletionsSessionAffinity;
     visibleReasoningDetailTypes: string[];
-    emitsDsmlToolCalls: boolean;
-    requiresNonEmptyUserOrAssistantMessage: boolean;
-    requiresTypedUnionBranches: boolean;
     configuredSupportsLongCacheRetention?: boolean;
     thinkingOffControlUndeclared: boolean;
     /** Absent means `seed`. */
@@ -362,7 +358,7 @@ export function resolveOpenAICompletionsCompat(
     supportsUsageInStreaming:
       configured?.supportsUsageInStreaming ?? defaults.supportsUsageInStreaming,
     maxTokensField: configured?.maxTokensField ?? defaults.maxTokensField,
-    seedField: defaults.seedField,
+    seedField: configured?.seedField ?? defaults.seedField,
     requiresToolResultName: configured?.requiresToolResultName ?? false,
     requiresAssistantAfterToolResult: configured?.requiresAssistantAfterToolResult ?? false,
     requiresThinkingAsText: configured?.requiresThinkingAsText ?? false,
@@ -371,17 +367,21 @@ export function resolveOpenAICompletionsCompat(
       defaults.requiresReasoningContentOnAssistantMessages,
     thinkingFormat,
     // Explicit DeepSeek-format aliases retain their existing response contract.
-    emitsDsmlToolCalls: configured?.thinkingFormat === "deepseek" || defaults.emitsDsmlToolCalls,
+    emitsDsmlToolCalls:
+      configured?.emitsDsmlToolCalls ??
+      (configured?.thinkingFormat === "deepseek" || defaults.emitsDsmlToolCalls),
     openRouterRouting: configured?.openRouterRouting,
     vercelGatewayRouting: configured?.vercelGatewayRouting ?? {},
     zaiToolStream: configured?.zaiToolStream ?? false,
     supportsStrictMode: configured?.supportsStrictMode ?? defaults.supportsStrictMode,
-    requiresTypedUnionBranches: defaults.requiresTypedUnionBranches,
+    requiresTypedUnionBranches:
+      configured?.requiresTypedUnionBranches ?? defaults.requiresTypedUnionBranches,
     supportsJsonSchemaResponseFormat:
       configured?.supportsJsonSchemaResponseFormat ?? defaults.supportsJsonSchemaResponseFormat,
     cacheControlFormat: configured?.cacheControlFormat ?? defaults.cacheControlFormat,
-    cacheControlSystemOnly: defaults.cacheControlSystemOnly,
-    cacheControlSharedSystem: defaults.cacheControlSharedSystem,
+    cacheControlSystemOnly: configured?.cacheControlSystemOnly ?? defaults.cacheControlSystemOnly,
+    cacheControlSharedSystem:
+      configured?.cacheControlSharedSystem ?? defaults.cacheControlSharedSystem,
     sessionAffinity: resolveSessionAffinity(model, defaults.sessionAffinityFormat),
     supportsPromptCacheKey: resolveOpenAIPromptCacheKeySupport(model),
     supportsLongCacheRetention:
@@ -393,6 +393,8 @@ export function resolveOpenAICompletionsCompat(
         ? ((configured as { visibleReasoningDetailTypes?: string[] }).visibleReasoningDetailTypes ??
           defaults.visibleReasoningDetailTypes)
         : defaults.visibleReasoningDetailTypes,
-    requiresNonEmptyUserOrAssistantMessage: defaults.requiresNonEmptyUserOrAssistantMessage,
+    requiresNonEmptyUserOrAssistantMessage:
+      configured?.requiresNonEmptyUserOrAssistantMessage ??
+      defaults.requiresNonEmptyUserOrAssistantMessage,
   };
 }

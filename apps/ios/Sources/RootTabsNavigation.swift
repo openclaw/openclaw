@@ -297,6 +297,7 @@ extension RootTabs {
     /// compact by default so sessions stay above the fold. The Sessions page is
     /// intentionally unpinned — the sessions section + "All Sessions…" own it.
     static let defaultPinnedSidebarPages: [SidebarDestination] = [.overview, .usage, .cron]
+    static let pinnedSidebarPagesStorageKey = "sidebar.pinnedPages"
 
     /// "" = never customized (defaults); "none" = user unpinned everything.
     /// Storage order is the user's pin order (web parity); unknown or
