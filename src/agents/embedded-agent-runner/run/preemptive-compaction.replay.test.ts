@@ -76,6 +76,37 @@ describe("provider checkpoint prompt pressure", () => {
     expect(unmeasured).toBeGreaterThan(20_000);
     expect(unmeasured).toBeLessThan(90_000);
   });
+
+  it("counts async tool results persisted before the terminal usage record as new input", () => {
+    const owner = checkpoint("retained content ".repeat(8_000));
+    const terminal: AssistantMessage = {
+      ...assistant(2_001),
+      responseId: "resp_async",
+      stopReason: "toolUse",
+      content: [{ type: "toolCall", id: "call_read|fc_read", name: "read", arguments: {} }],
+    };
+    const fragment = {
+      ...terminal,
+      usage: { ...terminal.usage, input: 0, output: 0, totalTokens: 0, contextUsage: undefined },
+    };
+    const messages: AgentMessage[] = [
+      owner,
+      fragment,
+      {
+        role: "toolResult",
+        toolCallId: "call_read|fc_read",
+        toolName: "read",
+        content: [{ type: "text", text: "new observation ".repeat(200) }],
+        isError: false,
+        timestamp: 3,
+      },
+      { ...terminal, content: [] },
+    ];
+    const covered = messages.filter((message) => message.role !== "toolResult");
+    // The 3,200-character result was not in the measured request.
+    expect(pressure(messages)).toBeGreaterThan(pressure(covered) + 800);
+    expect(pressure(messages)).toBeLessThan(6_000);
+  });
 });
 
 const BIG_OUTPUT = "build log line ".repeat(90000);

@@ -88,7 +88,7 @@ function isProviderContextUsageBarrier(message: AgentMessage): boolean {
 
 function resolveProviderContextBoundary(
   messages: AgentMessage[],
-): { index: number; totalTokens: number } | undefined {
+): { index: number; totalTokens: number; unmeasured: AgentMessage[] } | undefined {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (message && isProviderContextUsageBarrier(message)) {
@@ -96,11 +96,26 @@ function resolveProviderContextBoundary(
     }
     const contextUsage = message?.role === "assistant" ? message.usage?.contextUsage : undefined;
     if (
+      message?.role === "assistant" &&
       contextUsage?.state === "available" &&
       Number.isFinite(contextUsage.totalTokens) &&
       contextUsage.totalTokens > 0
     ) {
-      return { index, totalTokens: Math.ceil(contextUsage.totalTokens) };
+      // Async tool results persisted between this response's fragments and its usage
+      // record were not in its request; they are new input like later messages.
+      const unmeasured: AgentMessage[] = [];
+      const pending: AgentMessage[] = [];
+      for (let earlier = index - 1; message.responseId && earlier >= 0; earlier -= 1) {
+        const prior = messages[earlier];
+        if (prior?.role === "toolResult") {
+          pending.push(prior);
+        } else if (prior?.role === "assistant" && prior.responseId === message.responseId) {
+          unmeasured.push(...pending.splice(0));
+        } else {
+          break;
+        }
+      }
+      return { index, totalTokens: Math.ceil(contextUsage.totalTokens), unmeasured };
     }
   }
   return undefined;
@@ -139,7 +154,9 @@ function estimateTranscriptBoundaryTokenPressure(
   const measuredTokens = boundary?.totalTokens;
   // The provider total owns transcript items through its assistant record. It has
   // no system-prompt provenance, so the current rendered prompt stays local too.
-  const messagesForPressure = boundary ? messages.slice(boundary.index + 1) : messages;
+  const messagesForPressure = boundary
+    ? [...boundary.unmeasured, ...messages.slice(boundary.index + 1)]
+    : messages;
   const locallyEstimatedTokens = messagesForPressure.reduce(
     (sum, message) => sum + estimateMessageTokenPressure(message),
     estimateRenderedPromptTokens(params) + (boundary ? 0 : (replay?.prefixTokens ?? 0)),

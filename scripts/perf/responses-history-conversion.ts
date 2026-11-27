@@ -316,7 +316,6 @@ if (contextUsage) {
     buildOpenAIResponsesReasoningReplayMetadata(model, identity),
   );
   messages.unshift(checkpoint);
-  const request = buildOpenAIResponsesParams(model, context, options);
   const measured = {
     ...assistant,
     content: [{ type: "text" as const, text: "Completed inspection" }],
