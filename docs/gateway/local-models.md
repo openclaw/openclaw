@@ -381,8 +381,8 @@ When it triggers, OpenClaw stops the model request and reports a repetition
 failure. The affected unfinished block is replaced with
 `[Repetitive output stopped]` in session history, so later turns do not imitate
 the discarded text. Earlier unaffected blocks and completed tool work remain.
-Side effects are not retried automatically. Choose a stronger model or request a
-smaller output, then start a new turn.
+Side effects are not retried automatically. Shorten or rephrase the request, then
+start a new turn.
 
 ## Troubleshooting
 
