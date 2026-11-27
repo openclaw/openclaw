@@ -18,10 +18,12 @@ import type { DB } from "../state/openclaw-state-db.generated.js";
 import { getOpenClawStateFeatureSchemaSql } from "../state/openclaw-state-feature-schema.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import type { EngineConnection } from "./sql-connection.js";
+import { runSqliteReadSnapshotSync } from "./sqlite-transaction.js";
 import {
   assertPluginCohortRecoveryBinding,
   decodePluginCohortRecovery,
   encodePluginCohortRecovery,
+  PLUGIN_COHORT_RECOVERY_KEY_END,
   PLUGIN_COHORT_RECOVERY_KEY_PREFIX,
   type PluginCohortRecovery,
   type PluginCohortRecoveryBinding,
@@ -40,6 +42,15 @@ import {
 import type { UpdateRecoveryFence } from "./update-run-recovery-types.js";
 
 type RecoveryDatabase = Pick<DB, "update_runs" | "config_machine_state">;
+
+export function readUpdateRecoveryAdmissionFacts(db: EngineConnection) {
+  // Reservations and companions must come from one snapshot; an orphan cannot
+  // disappear between reads. Execution authority stays with the calling updater.
+  return runSqliteReadSnapshotSync(db, () => ({
+    cohorts: inspectPluginCohortRecoveryRows(db),
+    recoveries: inspectRecoveryRows(db),
+  }));
+}
 
 function readRecoveryRows(db: EngineConnection, runId?: string) {
   if (!tableExists(db, "config_machine_state")) {
@@ -177,6 +188,25 @@ export async function loadPluginCohortRecoveryAsync(
     { current: true },
   );
   return result?.pair;
+}
+
+function inspectPluginCohortRecoveryRows(db: EngineConnection): PluginCohortRecoveryPair[] {
+  if (!tableExists(db, "config_machine_state")) {
+    return [];
+  }
+  const rows = executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<RecoveryDatabase>(db)
+      .selectFrom("config_machine_state")
+      .select("state_key")
+      .where("state_key", ">=", PLUGIN_COHORT_RECOVERY_KEY_PREFIX)
+      .where("state_key", "<", PLUGIN_COHORT_RECOVERY_KEY_END)
+      .orderBy("state_key", "asc"),
+  ).rows;
+  return rows.map((row) => {
+    const runId = row.state_key.slice(PLUGIN_COHORT_RECOVERY_KEY_PREFIX.length);
+    return decodePluginCohortPair(readPluginCohortPairRows(db, runId), runId);
+  });
 }
 
 function withPluginCohortRecoveryWrite<T>(
