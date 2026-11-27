@@ -35,3 +35,28 @@ export type BrowserPanelStateWriter<Keys extends keyof BrowserPanelState> = Pick
 > & {
   setState<Key extends Keys>(key: Key, value: BrowserPanelState[Key]): void;
 };
+
+export function createBrowserPanelState(): BrowserPanelState {
+  return {
+    running: null,
+    canAutoResizeViewport: false,
+    tabs: [],
+    activeTargetId: null,
+    view: null,
+    loading: false,
+    errorText: null,
+    errorRetry: null,
+    noticeText: null,
+    mode: "interact",
+    strokes: [],
+    inspected: null,
+    inspectPointer: null,
+    evaluateUnavailable: false,
+    controlling: false,
+    controlAvailable: false,
+    urlDraft: "",
+    pendingNewTab: false,
+    urlDraftEditing: false,
+    addressInput: undefined,
+  };
+}

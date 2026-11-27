@@ -27,7 +27,11 @@ import {
 } from "./browser-panel-operation-ownership.ts";
 import { BrowserPanelPendingInput } from "./browser-panel-pending-input.ts";
 import { createBrowserPanelSnapshot } from "./browser-panel-snapshot.ts";
-import type { BrowserPanelMode, BrowserPanelState } from "./browser-panel-state.ts";
+import {
+  createBrowserPanelState,
+  type BrowserPanelMode,
+  type BrowserPanelState,
+} from "./browser-panel-state.ts";
 import { BrowserPanelStream } from "./browser-panel-stream.ts";
 import { BrowserPanelViewportOwner } from "./browser-panel-viewport-owner.ts";
 import { browserRouteKey, type BrowserRoute } from "./browser-target.ts";
@@ -49,30 +53,8 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
   let errorFromAction = false;
   const operations = createBrowserPanelOperations(host);
   const pendingInput = new BrowserPanelPendingInput();
-  const initialState: BrowserPanelState = {
-    running: null,
-    canAutoResizeViewport: false,
-    tabs: [],
-    activeTargetId: null,
-    view: null,
-    loading: false,
-    errorText: null,
-    errorRetry: null,
-    noticeText: null,
-    mode: "interact",
-    strokes: [],
-    inspected: null,
-    inspectPointer: null,
-    evaluateUnavailable: false,
-    controlling: false,
-    controlAvailable: false,
-    urlDraft: "",
-    pendingNewTab: false,
-    urlDraftEditing: false,
-    addressInput: undefined,
-  };
   const panel = {
-    ...initialState,
+    ...createBrowserPanelState(),
     host,
     get native(): BrowserPanelNative {
       return native;

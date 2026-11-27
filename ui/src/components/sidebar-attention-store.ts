@@ -39,6 +39,7 @@ import {
   type CronAttentionJob,
   buildSidebarAttentionEntries,
   cronOverdueAt,
+  isCronAttentionJob,
 } from "./sidebar-attention-items.ts";
 import type { OpenClawIdAttention } from "./sidebar-attention-openclaw-id.ts";
 import {
@@ -51,41 +52,6 @@ type SidebarAttentionOwner = {
   connectionRevision: number;
   dismissalKey: string | null;
 };
-
-function isCronAttentionJob(job: unknown): job is CronAttentionJob {
-  if (
-    !isRecord(job) ||
-    typeof job.id !== "string" ||
-    !job.id ||
-    typeof job.name !== "string" ||
-    typeof job.enabled !== "boolean" ||
-    typeof job.updatedAtMs !== "number" ||
-    (job.agentId !== undefined && typeof job.agentId !== "string") ||
-    !isRecord(job.state)
-  ) {
-    return false;
-  }
-  const state = job.state;
-  const disabled = state.autoDisabled;
-  return (
-    [job.updatedAtMs, state.nextRunAtMs, state.lastRunAtMs, state.runningAtMs].every(
-      (value) =>
-        value === undefined || (typeof value === "number" && Number.isFinite(value) && value >= 0),
-    ) &&
-    [state.lastRunStatus, state.lastStatus].every(
-      (value) => value === undefined || value === "ok" || value === "error" || value === "skipped",
-    ) &&
-    (disabled === undefined ||
-      (isRecord(disabled) &&
-        (disabled.reason === "consecutive-failures" || disabled.reason === "schedule-errors") &&
-        typeof disabled.atMs === "number" &&
-        Number.isFinite(disabled.atMs) &&
-        disabled.atMs >= 0 &&
-        typeof disabled.consecutiveErrors === "number" &&
-        Number.isSafeInteger(disabled.consecutiveErrors) &&
-        disabled.consecutiveErrors > 0))
-  );
-}
 
 export class SidebarAttentionStoreOwner implements StoreOwner {
   readonly mentions: MentionsCapability;

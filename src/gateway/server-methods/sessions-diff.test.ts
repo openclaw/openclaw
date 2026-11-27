@@ -10,10 +10,8 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveExecutablePath } from "../../infra/executable-path.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import * as execRunner from "../../process/exec-runner.js";
 import { captureSessionDiffBaseline } from "../../sessions/session-diff.js";
 import { collectCheckoutDiff } from "../../sessions/session-diff.runtime.js";
@@ -27,11 +25,15 @@ import { withLocalWorkspaceStore } from "../worker-environments/local-workspace-
 import { loadSessionDiff, sessionsDiffHandlers } from "./sessions-diff.js";
 import {
   git,
+  addedFile,
+  changedFile,
+  filePaths,
+  callSessionsDiff,
+  createDiffRepositoryFixture,
   initRepo,
   fixedStoreConfig,
   seedManagedReview,
 } from "./sessions-diff.test-support.js";
-import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const { sessionWorkspaceMocks: hoisted } =
   await import("./sessions-files.repository.test-support.js");
@@ -58,86 +60,30 @@ function mockSession(spawnedCwd: string, entry: Record<string, unknown> = {}): v
   });
 }
 
-async function requestDiff(
-  params: Record<string, unknown>,
-  cfg: OpenClawConfig = {},
-  reqParams: Record<string, unknown> = {},
-  authority: Partial<
-    Pick<GatewayRequestHandlerOptions, "client" | "hasCurrentClientAuthority">
-  > = {},
-) {
-  const calls: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
-  await sessionsDiffHandlers["sessions.diff"]?.({
-    req: { type: "req", id: "sessions.diff", method: "sessions.diff", params: reqParams },
-    params,
-    client: null,
-    ...authority,
-    isWebchatConnect: () => false,
-    respond: (ok, payload, error) => calls.push({ ok, payload, error }),
-    context: {
-      getRuntimeConfig: () => cfg,
-      logGateway: createSubsystemLogger("test/sessions-diff"),
-    } as never,
-  });
-  return calls;
-}
+const requestDiff = callSessionsDiff.bind(undefined, sessionsDiffHandlers["sessions.diff"]!);
 
 describe("loadSessionDiff", () => {
   let repoRoot: string;
   let tempDirs: string[];
+  const { repoGit, write, append, commitFiles, revision, initFiles, seedRepo } =
+    createDiffRepositoryFixture(() => repoRoot);
   const tempDir = (prefix: string) => {
     const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
     tempDirs.push(dir);
     return dir;
   };
-  const repoGit = (...args: string[]) => git(repoRoot, ...args);
   const readDiff = (params: Omit<Parameters<typeof loadSessionDiff>[0], "sessionKey"> = {}) =>
     loadSessionDiff({ sessionKey: "agent:main:s1", ...params });
   const baseline = (sessionId = "s1", cwd = repoRoot) =>
     captureSessionDiffBaseline({ cwd, sessionId });
-  const write = (name: string, data: string | Buffer) =>
-    fs.writeFileSync(path.join(repoRoot, name), data);
-  const append = (name: string, data: string) => fs.appendFileSync(path.join(repoRoot, name), data);
-  const commitFiles = (message = "init", files = ".") => {
-    repoGit("add", files);
-    repoGit("commit", "-qm", message);
-  };
-  const revision = () => repoGit("rev-parse", "HEAD").trim();
   const useBaseline = async (sessionId = "s1", cwd = repoRoot) => {
     const captured = await baseline(sessionId, cwd);
     mockSession(cwd, { sessionDiffBaseline: captured });
     return captured;
   };
-  const filePaths = (result: { files: Array<{ path: string }> } | undefined) =>
-    result?.files.map((file) => file.path);
-  const changedFile = (name: string, status: string, additions: number, deletions = 0) => ({
-    path: name,
-    status,
-    additions,
-    deletions,
-  });
-  const addedFile = (name: string, additions: number, flags: Record<string, boolean>) => ({
-    ...changedFile(name, "added", additions),
-    untracked: true,
-    ...flags,
-  });
   const diffFile = (result: Awaited<ReturnType<typeof readDiff>>, name: string) =>
     result.files.find((file) => file.path === name);
 
-  const initFiles = (files: Record<string, string | Buffer>, format?: "sha1" | "sha256") => {
-    initRepo(repoRoot, format);
-    for (const [name, data] of Object.entries(files)) {
-      write(name, data);
-    }
-  };
-  const seedRepo = (
-    files: Record<string, string | Buffer>,
-    subject = "init",
-    format?: "sha1" | "sha256",
-  ) => {
-    initFiles(files, format);
-    commitFiles(subject);
-  };
   beforeEach(() => {
     setRuntimeConfigSnapshot({});
     vi.clearAllMocks();

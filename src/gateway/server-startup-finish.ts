@@ -22,6 +22,7 @@ import {
 import { controlUiPluginPolicyKey } from "./control-ui-plugin-policy.js";
 import { GATEWAY_EVENTS } from "./events.js";
 import { startOpenClawIdPeopleEvents } from "./openclaw-id/people-events.js";
+import { startOpenClawIdRuntimeEffects } from "./openclaw-id/start-runtime-effects.js";
 import {
   indexPluginNodeCapabilitySurfaces,
   reconcileClientPluginNodeCapabilities,
@@ -422,24 +423,12 @@ export async function finishGatewayStartup(params: {
       log,
     }),
   );
-  runtime.openclawIdService.bindEffects(async () => {
-    const [{ createOpenClawIdRemovalEffects }, { createOpenClawIdMemberActivity }] =
-      await Promise.all([
-        import("./openclaw-id/removal-effects.js"),
-        import("./openclaw-id/member-activity.js"),
-      ]);
-    return {
-      ...createOpenClawIdRemovalEffects({
-        clients: () => clients.authorityClients,
-        context: () => gatewayRequestContext,
-        log,
-      }),
-      describeActivity: createOpenClawIdMemberActivity({ clients: () => clients }).describe,
-    };
+  startOpenClawIdRuntimeEffects({
+    service: runtime.openclawIdService,
+    clients,
+    context: gatewayRequestContext,
+    log,
   });
-  void runtime.openclawIdService
-    .reconcileRuntimePolicy()
-    .catch((error: unknown) => log.warn(`openclaw-id: start failed: ${String(error)}`));
 
   const { startManagedGatewayConfigReloader } = await import("./server-reload-managed.js");
   const assertRuntimeSecurityConfig = (cfg: OpenClawConfig, env?: NodeJS.ProcessEnv) => {

@@ -44,6 +44,7 @@ export function createEmbeddedAttemptDeferredLifecycleOwner(params: {
     describeFlushState: () => string | undefined;
   } | null;
   clearActiveRun: () => void;
+  unsubscribe?: () => void;
 }): EmbeddedAttemptDeferredLifecycleOwner {
   let pending: typeof params | undefined = params;
   let sessionEndData: Record<string, unknown> | undefined;
@@ -54,7 +55,11 @@ export function createEmbeddedAttemptDeferredLifecycleOwner(params: {
   };
   const releaseActiveRun = (owner: typeof params) => {
     try {
-      owner.clearActiveRun();
+      try {
+        owner.unsubscribe?.();
+      } finally {
+        owner.clearActiveRun();
+      }
     } catch (error) {
       log.error(
         `CRITICAL: deferred active run cleanup failed, possible resource leak: ` +
@@ -272,4 +277,17 @@ export function createDeferredEmbeddedRunLifecycleManager(params: {
       }
     },
   };
+}
+
+export function publishEmbeddedAttemptDeferredLifecycleOwner(
+  target: { onDeferredLifecycleOwner?: (owner: EmbeddedAttemptDeferredLifecycleOwner) => void },
+  owner: EmbeddedAttemptDeferredLifecycleOwner,
+): void {
+  try {
+    target.onDeferredLifecycleOwner!(owner);
+  } catch (error) {
+    // Release ownership synchronously; the cleanup scope tracks the diagnostic flush.
+    void owner.discard();
+    throw error;
+  }
 }

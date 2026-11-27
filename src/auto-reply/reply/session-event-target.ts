@@ -1,9 +1,8 @@
-/** Captured destination identity and live generation facts for ordinary session events. */
-
 import {
   assertAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
+/** Captured destination identity and live generation facts for ordinary session events. */
 import { prepareAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
 import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
 import {
@@ -22,6 +21,7 @@ import {
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import type { SessionEntryCreationOperation } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import {
   composeSessionSourceAssertion,
   type SessionSourceAssertion,
@@ -41,7 +41,7 @@ import { readAgentDeletionJournalStatusInWorker } from "../../state/agent-deleti
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import type { PreparedCommandOwnerAuthority } from "../command-auth.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
-import type { SessionEventTarget } from "./session-event-contract.js";
+import type { SessionEventOptions, SessionEventTarget } from "./session-event-contract.js";
 import { narrowSessionEventSettings } from "./session-event-policy.js";
 
 const targetScopes = resolveGlobalSingleton(
@@ -569,4 +569,53 @@ export function assertSessionEventSettingsCurrent(
       "Session event permissions were restricted; start a new turn under the current policy.",
     );
   }
+}
+
+export function bindSessionEventTargetCreation(
+  creation: SessionEntryCreationOperation,
+  readLease: () => Awaited<ReturnType<typeof prepareSessionEventTargetForHost>> | undefined,
+  assertOwnerCurrent: () => void,
+  automation?: SessionEventOptions["scheduledAutomation"],
+) {
+  assertOwnerCurrent();
+  const generationLease = readLease();
+  if (!generationLease) {
+    throw new Error("Session event lost its original generation owner");
+  }
+  const assertCreationCurrent = generationLease.bindCreation(creation);
+  const assertNoticeCreationCurrent = automation?.bindSessionCreation?.(creation);
+  return () => {
+    assertOwnerCurrent();
+    assertCreationCurrent();
+    assertNoticeCreationCurrent?.();
+  };
+}
+
+export async function prepareRotatedSessionEventTarget(params: {
+  agentId: string;
+  sessionKey: string;
+  env?: NodeJS.ProcessEnv;
+  readSessionId: () => string | undefined;
+  assertOwnerCurrent: () => void;
+  onPrepared: (
+    target: SessionEventTarget,
+    lease: Awaited<ReturnType<typeof prepareSessionEventTargetForHost>>,
+  ) => void;
+}) {
+  const { agentId, sessionKey, env, readSessionId, assertOwnerCurrent } = params;
+  const replacement = await captureSessionEventTargetForHost(agentId, sessionKey, {
+    env,
+    assertCurrent: assertOwnerCurrent,
+  });
+  if (replacement.sessionId !== readSessionId()) {
+    throw new Error("Session event reply owner lost its rotated destination");
+  }
+  const replacementLease = await prepareSessionEventTargetForHost(replacement);
+  try {
+    assertOwnerCurrent();
+  } catch (error) {
+    replacementLease.release();
+    throw error;
+  }
+  params.onPrepared(replacement, replacementLease);
 }

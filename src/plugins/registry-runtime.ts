@@ -29,6 +29,7 @@ import {
 } from "./registry-runtime-channel.js";
 import { createPluginRuntimeFacades } from "./registry-runtime-facades.js";
 import { runPluginForkedTurnAsOwner } from "./registry-runtime-forked-turn.js";
+import { readPluginRuntimeProperty } from "./registry-runtime-property.js";
 import { createPluginSystemRuntime } from "./registry-runtime-system.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
@@ -53,27 +54,8 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
   const { registry, registryParams } = state;
   const pluginRuntimes = new WeakMap<PluginRecord, PluginRuntime>();
 
-  const readRuntimeProperty = (record: PluginRecord, prop: PropertyKey, receiver: unknown) => {
-    try {
-      return Reflect.get(registryParams.runtime, prop, receiver);
-    } catch (error) {
-      if (
-        error instanceof Error &&
-        error.message.startsWith("Unable to resolve plugin runtime module") &&
-        !error.message.includes("pluginRuntimeContext=")
-      ) {
-        const propName =
-          typeof prop === "symbol" ? (prop.description ?? prop.toString()) : String(prop);
-        error.message = [
-          error.message,
-          `pluginRuntimeContext=pluginId:${record.id}`,
-          `property:${propName}`,
-          ...(record.source ? [`source:${record.source}`] : []),
-        ].join("; ");
-      }
-      throw error;
-    }
-  };
+  const readRuntimeProperty = (record: PluginRecord, prop: PropertyKey, receiver: unknown) =>
+    readPluginRuntimeProperty(registryParams.runtime, record, prop, receiver);
   const channelRuntime = createRegisteredChannelRuntimeResolver(state, (record) =>
     readRuntimeProperty(record, "channel", registryParams.runtime),
   );

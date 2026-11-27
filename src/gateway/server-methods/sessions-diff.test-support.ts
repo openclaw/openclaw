@@ -1,7 +1,12 @@
 import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 import { insertRegistryWorktree } from "../../agents/worktrees/registry.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { withLocalWorkspaceStore } from "../worker-environments/local-workspace-store.js";
 import { localWorkspaceProjectionFixture } from "../worker-environments/local-workspace-store.test-support.js";
+import type { GatewayRequestHandlerOptions } from "./types.js";
 
 export async function seedManagedReview(
   worktree: { id: string; repoRoot: string; branch: string },
@@ -56,3 +61,70 @@ export const fixedStoreConfig = () =>
       entries: { ops: {}, research: {} },
     },
   }) as const;
+
+export function createDiffRepositoryFixture(repoRoot: () => string) {
+  const repoGit = (...args: string[]) => git(repoRoot(), ...args);
+  const write = (name: string, data: string | Buffer) =>
+    fs.writeFileSync(path.join(repoRoot(), name), data);
+  const append = (name: string, data: string) =>
+    fs.appendFileSync(path.join(repoRoot(), name), data);
+  const commitFiles = (message = "init", files = ".") => {
+    repoGit("add", files);
+    repoGit("commit", "-qm", message);
+  };
+  const revision = () => repoGit("rev-parse", "HEAD").trim();
+  const initFiles = (files: Record<string, string | Buffer>, format?: "sha1" | "sha256") => {
+    initRepo(repoRoot(), format);
+    for (const [name, data] of Object.entries(files)) {
+      write(name, data);
+    }
+  };
+  const seedRepo = (
+    files: Record<string, string | Buffer>,
+    subject = "init",
+    format?: "sha1" | "sha256",
+  ) => {
+    initFiles(files, format);
+    commitFiles(subject);
+  };
+  return { repoGit, write, append, commitFiles, revision, initFiles, seedRepo };
+}
+
+export const filePaths = (result: { files: Array<{ path: string }> } | undefined) =>
+  result?.files.map((file) => file.path);
+export const changedFile = (name: string, status: string, additions: number, deletions = 0) => ({
+  path: name,
+  status,
+  additions,
+  deletions,
+});
+export const addedFile = (name: string, additions: number, flags: Record<string, boolean>) => ({
+  ...changedFile(name, "added", additions),
+  untracked: true,
+  ...flags,
+});
+
+export async function callSessionsDiff(
+  handler: (params: GatewayRequestHandlerOptions) => unknown,
+  params: Record<string, unknown>,
+  cfg: OpenClawConfig = {},
+  reqParams: Record<string, unknown> = {},
+  authority: Partial<
+    Pick<GatewayRequestHandlerOptions, "client" | "hasCurrentClientAuthority">
+  > = {},
+) {
+  const calls: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+  await handler({
+    req: { type: "req", id: "sessions.diff", method: "sessions.diff", params: reqParams },
+    params,
+    client: null,
+    ...authority,
+    isWebchatConnect: () => false,
+    respond: (ok, payload, error) => calls.push({ ok, payload, error }),
+    context: {
+      getRuntimeConfig: () => cfg,
+      logGateway: createSubsystemLogger("test/sessions-diff"),
+    } as never,
+  });
+  return calls;
+}

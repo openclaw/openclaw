@@ -1,20 +1,28 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { collectErrorGraphCandidates } from "@openclaw/normalization-core/error-coercion";
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
   mergeAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
+import { FAILOVER_REASONS } from "../../agents/failover/signal.js";
 import {
   AGENT_RUN_SUPERSEDED_STOP_REASON,
   resolveAgentRunErrorLifecycleFields,
 } from "../../agents/run-termination.js";
 import { isWorkspaceAccessUnavailableError } from "../../agents/workspace-access.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
+import { claimSystemEventTurn } from "../../infra/system-events.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
-import type { SessionEventOptions, SessionEventOutcome } from "./session-event-contract.js";
+import type {
+  SessionEventOptions,
+  SessionEventOutcome,
+  SessionEventReceipt,
+} from "./session-event-contract.js";
 
 /** Reconcile settled controller facts without changing event custody or retry policy. */
 export function resolveSessionEventTerminalOutcome(params: {
@@ -178,4 +186,75 @@ export async function prepareSessionEventReadmission(
         configAttempt: readmission.configAttempt + (kind === "config" ? 1 : 0),
       }
     : undefined;
+}
+
+export function resolveSessionEventTerminalErrorReason(
+  data: Record<string, unknown>,
+): SessionEventOutcome["errorReason"] {
+  const observation = data.errorObservation;
+  return data.phase === "error" && isRecord(observation)
+    ? FAILOVER_REASONS.find((reason) => reason === observation.failoverReason)
+    : undefined;
+}
+
+export function readmitSessionEventOccurrence(params: {
+  ownership: { release: () => unknown };
+  options: SessionEventOptions;
+  adopted: boolean;
+  text: string;
+  occurrenceId: string;
+  assertAcceptanceCurrent?: SessionEventOptions["assertAcceptanceCurrent"];
+  nextReadmission: SessionEventReadmission;
+  sessionKey: string;
+  agentId: string;
+  occurrences: Parameters<typeof claimSystemEventTurn>[1];
+  failure?: Error | string;
+  retry: (
+    text: string,
+    options: SessionEventOptions,
+    readmission: SessionEventReadmission,
+  ) => SessionEventReceipt;
+}): { readmittedReceipt?: SessionEventReceipt; failure?: Error | string } {
+  const { ownership, options, sessionKey, agentId, occurrences } = params;
+  // Passive custody survives only until some attempt adopts the occurrence.
+  const preservePassive =
+    options.preserveOccurrenceOnRejection && !params.adopted ? true : undefined;
+  ownership.release();
+  try {
+    // Re-admit under current policy and preserve only explicitly passive custody.
+    return {
+      readmittedReceipt: params.retry(
+        params.text,
+        {
+          ...options,
+          agentId,
+          sessionKey,
+          occurrences,
+          assertAcceptanceCurrent: params.assertAcceptanceCurrent,
+          preserveOccurrenceOnRejection: preservePassive,
+        },
+        params.nextReadmission,
+      ),
+      failure: params.failure,
+    };
+  } catch (error) {
+    if (!preservePassive) {
+      // The released occurrence carries no producer contract; consume it.
+      claimSystemEventTurn(
+        resolveSystemEventQueueKey(sessionKey, agentId),
+        occurrences,
+        () => {},
+        agentId,
+      )?.cancel();
+    }
+    const failure = error instanceof Error ? error : String(error);
+    createSubsystemLogger("session-events").error("session event policy readmission rejected", {
+      source: options.source,
+      agentId,
+      sessionKey,
+      eventId: params.occurrenceId,
+      error: String(failure),
+    });
+    return { failure };
+  }
 }

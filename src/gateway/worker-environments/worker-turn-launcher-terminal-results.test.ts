@@ -59,6 +59,7 @@ import {
   localResult,
   runIdentity,
 } from "./worker-turn-launcher-flow.test-support.js";
+import { workerTurnTerminalReplyCases } from "./worker-turn-launcher-terminal-reply.test-support.js";
 import * as fx from "./worker-turn-launcher.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 import { gitInit } from "./workspace-recovery.test-support.js";
@@ -740,7 +741,7 @@ describe("worker turn launcher terminal results", () => {
     expect(worker.destroy).not.toHaveBeenCalled();
   });
 
-  it.each(fx.workerTurnTerminalReplyCases)(
+  it.each(workerTurnTerminalReplyCases)(
     "reports canonical usage, prompt tools, and $name",
     async ({
       content,

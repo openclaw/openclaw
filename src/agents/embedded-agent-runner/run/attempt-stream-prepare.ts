@@ -58,6 +58,7 @@ import type {
 import { createSubscribedToolSearchExecutor } from "./attempt-tool-search-executor.js";
 import {
   createEmbeddedAttemptDeferredLifecycleOwner,
+  publishEmbeddedAttemptDeferredLifecycleOwner,
   type EmbeddedAttemptDeferredLifecycleOwner,
 } from "./deferred-lifecycle-owner.js";
 import {
@@ -694,21 +695,10 @@ function prepareStream(
         validateAgentRunDelegatedAuthority(registration.delegatedAuthority) &&
         isCurrentRegistration(),
       trajectoryRecorder: input.trajectoryRecorder ?? null,
-      clearActiveRun: () => {
-        try {
-          unsubscribe();
-        } finally {
-          clearActiveRun();
-        }
-      },
+      unsubscribe,
+      clearActiveRun,
     });
-    try {
-      attempt.onDeferredLifecycleOwner(deferredLifecycleOwner);
-    } catch (error) {
-      // Release ownership synchronously; the cleanup scope tracks the diagnostic flush.
-      void deferredLifecycleOwner.discard();
-      throw error;
-    }
+    publishEmbeddedAttemptDeferredLifecycleOwner(attempt, deferredLifecycleOwner);
   }
 
   return {

@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { prepareAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
 import {
@@ -7,8 +6,6 @@ import {
   type AgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
 import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
-import { FAILOVER_REASONS } from "../../agents/failover/signal.js";
-import type { SessionEntryCreationOperation } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import {
   composeSessionSourceAssertion,
   createDynamicSessionSourceAssertion,
@@ -20,8 +17,6 @@ import { hasInternalHookListeners } from "../../hooks/internal-hooks.js";
 import { cronRunAcceptance } from "../../infra/agent-run-registry.automation.js";
 import { execRequestAbortSignal } from "../../infra/exec-request-context.js";
 import type { SourceDeliveryOutcome } from "../../infra/outbound/source-delivery-plan.types.js";
-import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
-import { claimSystemEventTurn } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
 import { isCronSessionKey } from "../../routing/session-key.js";
@@ -33,7 +28,6 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { createLazyRuntimeNamedExport } from "../../shared/lazy-runtime.js";
 import type { ReplyPayload } from "../../shared/reply-payload.types.js";
 import { readAgentDeletionJournalStatusInWorker } from "../../state/agent-deletion-journal.read.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { NormalizeReplySkipReason } from "./normalize-reply-skip-reason.js";
 import {
   prepareCronRunContinuationCleanup,
@@ -54,23 +48,27 @@ import type {
   SessionEventOutcome,
   SessionEventReceipt,
 } from "./session-event-contract.js";
-import { prepareSessionEventDelivery } from "./session-event-delivery.js";
 import {
   captureSessionEventConfigPolicy,
   narrowSessionEventSettings,
 } from "./session-event-policy.js";
+import { deliverSessionEventReply } from "./session-event-reply-delivery.js";
 import {
   assertSessionEventTargetCurrent,
   assertSessionEventSettingsCurrent,
+  bindSessionEventTargetCreation,
   captureSessionEventTargetForHost,
   getSessionEventRuntimeConfig,
   hasSessionEventOriginatingCaller,
   intersectSessionEventToolsAllow,
   prepareSessionEventTargetForHost,
+  prepareRotatedSessionEventTarget,
 } from "./session-event-target.js";
 import {
   createSessionEventReadmission,
   prepareSessionEventReadmission,
+  readmitSessionEventOccurrence,
+  resolveSessionEventTerminalErrorReason,
   resolveSessionEventTerminalOutcome,
   type SessionEventReadmission,
 } from "./session-event-terminal.js";
@@ -159,14 +157,19 @@ function enqueueSessionEventAttempt(
   let readmittedReceipt: SessionEventReceipt | undefined;
   let operation: ReplyOperation | undefined;
   let inputRecorder: UserTurnTranscriptRecorder | undefined;
-  let delivered = false;
+  const delivery = {
+    delivered: false,
+    deliveryAttempted: false,
+    deliveryAmbiguous: false,
+    deliveryError: undefined as string | undefined,
+  };
   let conversationResultCommitted: true | undefined;
-  let deliveryAttempted = false;
-  let deliveryAmbiguous = false;
-  let deliveryError: string | undefined;
   let deliverySuppressionReason: NormalizeReplySkipReason | undefined;
   let summary: string | undefined;
   let failure: Error | string | undefined;
+  const recordFailure = (error: unknown) => {
+    failure ??= error instanceof Error ? error : String(error);
+  };
   // Placeholder text; the operation's recorded cause is more actionable when present.
   let genericFailure: string | undefined;
   let terminalOutcome: AgentRunTerminalOutcome | undefined;
@@ -181,8 +184,7 @@ function enqueueSessionEventAttempt(
   const jobTools = options.scheduledAutomation
     ? resolveCronRunToolsAllow(options.scheduledAutomation.job)
     : undefined;
-  const producerTools = options.expectedTarget?.toolsAllow;
-  const toolsAllow = intersectSessionEventToolsAllow(jobTools, producerTools);
+  const toolsAllow = intersectSessionEventToolsAllow(jobTools, options.expectedTarget?.toolsAllow);
   const assertOwnerCurrent = () => {
     if (settlement === "finished") {
       throw new Error("Session event occurrence is settled");
@@ -260,23 +262,18 @@ function enqueueSessionEventAttempt(
   const prepareCurrent = async () => {
     assertOwnerCurrent();
     if (operation && preparedBinding && operation.sessionId !== preparedBinding.sessionId) {
-      const replacement = await captureSessionEventTargetForHost(agentId, sessionKey, {
+      await prepareRotatedSessionEventTarget({
+        agentId,
+        sessionKey,
         env,
-        assertCurrent: assertOwnerCurrent,
+        readSessionId: () => operation?.sessionId,
+        assertOwnerCurrent,
+        onPrepared: (replacement, replacementLease) => {
+          generationLease?.release();
+          generationLease = replacementLease;
+          preparedBinding = replacement;
+        },
       });
-      if (replacement.sessionId !== operation.sessionId) {
-        throw new Error("Session event reply owner lost its rotated destination");
-      }
-      const replacementLease = await prepareSessionEventTargetForHost(replacement);
-      try {
-        assertOwnerCurrent();
-      } catch (error) {
-        replacementLease.release();
-        throw error;
-      }
-      generationLease?.release();
-      generationLease = replacementLease;
-      preparedBinding = replacement;
     }
     await options.scheduledAutomation?.prepare?.();
     for (let read = generationLease?.prepareRead(); read; read = generationLease?.prepareRead()) {
@@ -324,7 +321,7 @@ function enqueueSessionEventAttempt(
         await inputRecorder?.waitForPendingInputSettlement?.();
       } catch (error) {
         inputSettled = false;
-        failure ??= error instanceof Error ? error : String(error);
+        recordFailure(error);
       }
       // Submitting custody ends at the first acceptance; a pre-acceptance re-admission
       // carries the still-live assertion so revoked ingress rejects the retry.
@@ -339,7 +336,7 @@ function enqueueSessionEventAttempt(
         adopted,
         started,
         conversationResultCommitted,
-        delivery: { delivered, deliveryAttempted, deliveryAmbiguous },
+        delivery,
         abandoned,
       }));
       settlement = "finished";
@@ -364,44 +361,20 @@ function enqueueSessionEventAttempt(
       signal.removeEventListener("abort", onAbort);
       generationLease?.release();
       if (nextReadmission) {
-        // Passive custody survives only until some attempt adopts the occurrence.
-        const preservePassive =
-          options.preserveOccurrenceOnRejection && !adopted ? true : undefined;
-        ownership.release();
-        try {
-          // Re-admit under current policy with original target, producer checks, cancellation
-          // and delivery opt-out; only previously passive notices keep custody on rejection.
-          readmittedReceipt = enqueueSessionEventAttempt(
-            eventText,
-            {
-              ...options,
-              agentId,
-              sessionKey,
-              assertAcceptanceCurrent: pendingAcceptanceAssertion,
-              occurrences,
-              preserveOccurrenceOnRejection: preservePassive,
-            },
-            nextReadmission,
-          );
-        } catch (error) {
-          if (!preservePassive) {
-            // The released occurrence carries no producer contract; consume it.
-            claimSystemEventTurn(
-              resolveSystemEventQueueKey(sessionKey, agentId),
-              occurrences,
-              () => {},
-              agentId,
-            )?.cancel();
-          }
-          failure = error instanceof Error ? error : String(error);
-          log.error("session event policy readmission rejected", {
-            source: options.source,
-            agentId,
-            sessionKey,
-            eventId: occurrenceId,
-            error: String(failure),
-          });
-        }
+        ({ readmittedReceipt, failure } = readmitSessionEventOccurrence({
+          ownership,
+          options,
+          adopted,
+          text: eventText,
+          sessionKey,
+          agentId,
+          occurrences,
+          occurrenceId,
+          failure,
+          assertAcceptanceCurrent: pendingAcceptanceAssertion,
+          nextReadmission,
+          retry: enqueueSessionEventAttempt,
+        }));
       } else if (options.preserveOccurrenceOnRejection && !adopted && !started) {
         ownership.release();
       } else {
@@ -427,11 +400,8 @@ function enqueueSessionEventAttempt(
         terminalOutcome,
         errorReason: status === "failed" ? errorReason : undefined,
         interruptedByRestart: terminalOutcome.stopReason === "restart",
-        delivered,
+        ...delivery,
         conversationResultCommitted,
-        deliveryAttempted,
-        deliveryAmbiguous,
-        deliveryError,
         deliverySuppressionReason,
         admissionDeferredReason: !started ? automationAdmission.admissionDeferredReason : undefined,
         admissionDeferred:
@@ -465,49 +435,21 @@ function enqueueSessionEventAttempt(
     if (kind === "final" && payload.text) {
       summary ??= truncateUtf16Safe(payload.text, 2000);
     }
-    if (
-      options.deliver === false ||
-      target?.deliver === false ||
-      (options.suppressErrorDelivery && payload.isError === true)
-    ) {
-      return;
-    }
-    if (kind === "final" && sourceDeliveryOutcome?.satisfiesSourceDelivery) {
-      return;
-    }
-    if (!route?.channel || route.channel === INTERNAL_MESSAGE_CHANNEL) {
-      // The normal transcript remains the result for internal/WebChat turns.
-      // This is not evidence of a transport send.
-      return;
-    }
-    const deliverReply = await prepareSessionEventDelivery(route, assertCurrent);
-    deliveryAttempted = true;
-    const assertDeliveryCurrent = () => {
-      assertEffectCurrent();
-      options.scheduledAutomation?.assertDeliveryCurrent?.();
-    };
-    const result = await deliverReply({
-      cfg: getSessionEventRuntimeConfig(),
+    await deliverSessionEventReply({
+      route,
+      payload,
+      kind,
       agentId,
       sessionKey,
-      payload,
-      replyKind: kind,
-      abortSignal: signal,
-      beforeDeliver: async () => {
-        await options.scheduledAutomation?.beforeDeliver?.();
-        assertDeliveryCurrent();
-      },
-      assertCurrent: assertDeliveryCurrent,
+      signal,
+      assertCurrent,
+      assertEffectCurrent,
+      deliveryDisabled: options.deliver === false || target?.deliver === false,
+      suppressErrorDelivery: options.suppressErrorDelivery,
+      sourceDeliverySatisfied: sourceDeliveryOutcome?.satisfiesSourceDelivery,
+      automation: options.scheduledAutomation,
+      state: delivery,
     });
-    delivered ||= result.delivered;
-    deliveryAmbiguous ||= result.ambiguous === true;
-    if (!result.ok) {
-      if (!options.scheduledAutomation) {
-        throw new Error(result.error ?? "Session event delivery failed");
-      }
-      // Cron records transport failure separately from completed agent work.
-      deliveryError = result.error ?? "Session event delivery failed";
-    }
   };
   signal.addEventListener("abort", onAbort, { once: true });
   // Completion outlives the producer's request scope and transcript writer.
@@ -559,9 +501,7 @@ function enqueueSessionEventAttempt(
       ctx,
       dispatcherOptions: {
         deliver: (payload, info) => deliver(payload, info.kind),
-        onError: (error) => {
-          failure ??= error instanceof Error ? error : String(error);
-        },
+        onError: recordFailure,
         onSkip: (_payload, info) => {
           if (info.kind === "final") {
             deliverySuppressionReason = info.reason;
@@ -615,25 +555,16 @@ function enqueueSessionEventAttempt(
           assertCurrent: assertEffectCurrent,
           ...(target.sessionId === "" && options.createIfMissing
             ? {
-                bindSessionCreation: (creation: SessionEntryCreationOperation) => {
-                  assertOwnerCurrent();
-                  if (!generationLease) {
-                    throw new Error("Session event lost its original generation owner");
-                  }
-                  const assertCreationCurrent = generationLease.bindCreation(creation);
-                  const assertNoticeCreationCurrent =
-                    options.scheduledAutomation?.bindSessionCreation?.(creation);
-                  return () => {
-                    assertOwnerCurrent();
-                    assertCreationCurrent();
-                    assertNoticeCreationCurrent?.();
-                  };
-                },
+                bindSessionCreation: (creation) =>
+                  bindSessionEventTargetCreation(
+                    creation,
+                    () => generationLease,
+                    assertOwnerCurrent,
+                    options.scheduledAutomation,
+                  ),
               }
             : {}),
-          onFailed: (error) => {
-            failure ??= error instanceof Error ? error : String(error);
-          },
+          onFailed: recordFailure,
           onSuppressed: (reason) => {
             deliverySuppressionReason = reason === "silent" ? "silent" : undefined;
             if (reason === "aborted") {
@@ -644,11 +575,7 @@ function enqueueSessionEventAttempt(
           ...(options.scheduledAutomation ? { beforeScheduledStart: prepareStart } : {}),
           onStarted: start,
           onTerminalEvent: (event) => {
-            const observation = event.data.errorObservation;
-            errorReason =
-              event.data.phase === "error" && isRecord(observation)
-                ? FAILOVER_REASONS.find((reason) => reason === observation.failoverReason)
-                : undefined;
+            errorReason = resolveSessionEventTerminalErrorReason(event.data);
           },
           onTerminal: async (runId, outcome, deliveryEvidence) => {
             // Settlement rechecks authority and can reject after Stop. Capture the
@@ -687,7 +614,7 @@ function enqueueSessionEventAttempt(
             sourceDeliveryOutcome = terminal.sourceDeliveryOutcome;
             automationResult = terminal.automationResult;
             conversationResultCommitted = terminal.conversationResultCommitted;
-            delivered ||= sourceDeliveryOutcome?.satisfiesSourceDelivery === true;
+            delivery.delivered ||= sourceDeliveryOutcome?.satisfiesSourceDelivery === true;
           },
         },
         onQueuedFollowupReplyBatch: async (batch) => {
@@ -701,7 +628,7 @@ function enqueueSessionEventAttempt(
               await deliver(payload, batch.completion.kind === "progress" ? "block" : "final");
             }
           } catch (error) {
-            failure ??= error instanceof Error ? error : String(error);
+            recordFailure(error);
             throw error;
           }
         },
@@ -766,7 +693,7 @@ function enqueueSessionEventAttempt(
   };
   const settleExecutionFailure = (error: unknown) => {
     // Preserve the execution failure if terminal cleanup also rejects admission.
-    failure ??= error instanceof Error ? error : String(error);
+    recordFailure(error);
     finish();
     return settled.then(() => undefined);
   };

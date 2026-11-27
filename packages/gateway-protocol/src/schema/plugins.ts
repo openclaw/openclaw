@@ -31,6 +31,12 @@ import {
 } from "./plugin-inspection.js";
 import { PluginJsonValueSchema } from "./plugin-json-value.js";
 import { PluginInspectRuntimeRetentionSchema } from "./plugin-retention.js";
+import {
+  PluginRuntimeApplicationSchema,
+  PluginsChangedEventSchema,
+  PluginsRefreshParamsSchema,
+  PluginsRefreshResultSchema,
+} from "./plugin-runtime-refresh.js";
 import { NonEmptyString } from "./primitives.js";
 import { stringLiteralUnion } from "./string-literal-union.js";
 
@@ -678,33 +684,10 @@ export const PluginsInstallParamsSchema = Type.Union([
   }),
 ]);
 
-/** Receipt emitted only after the requested runtime generation was applied. */
-export const PluginRuntimeApplicationSchema = closedObject({
-  operationId: NonEmptyString,
-  generation: Type.Integer({ minimum: 0 }),
-  pluginIds: Type.Array(NonEmptyString),
-  sourceDigests: Type.Optional(Type.Record(NonEmptyString, NonEmptyString)),
-  selectedEntries: Type.Optional(Type.Record(NonEmptyString, NonEmptyString)),
-});
-
-export const PluginsChangedEventSchema = closedObject({
-  generation: Type.Integer({ minimum: 0 }),
-});
-
 export const PluginsInstallResultSchema = closedObject({
   ok: Type.Literal(true),
   plugin: PluginCatalogEntrySchema,
   restartRequired: Type.Boolean(),
-  runtime: Type.Optional(PluginRuntimeApplicationSchema),
-  warnings: Type.Optional(Type.Array(Type.String())),
-});
-
-/** Internal signal that persisted plugin metadata changed outside the Gateway process. */
-export const PluginsRefreshParamsSchema = closedObject({});
-
-export const PluginsRefreshResultSchema = closedObject({
-  ok: Type.Literal(true),
-  restartRequired: Type.Optional(Type.Boolean()),
   runtime: Type.Optional(PluginRuntimeApplicationSchema),
   warnings: Type.Optional(Type.Array(Type.String())),
 });
@@ -814,3 +797,10 @@ export type PluginsControlUiReloadParams = Static<typeof PluginsControlUiReloadP
 export type PluginControlUiActivation = Static<typeof PluginControlUiActivationSchema>;
 export type PluginsSessionActionParams = Static<typeof PluginsSessionActionParamsSchema>;
 export type PluginsSessionActionResult = Static<typeof PluginsSessionActionResultSchema>;
+
+export {
+  PluginRuntimeApplicationSchema,
+  PluginsChangedEventSchema,
+  PluginsRefreshParamsSchema,
+  PluginsRefreshResultSchema,
+} from "./plugin-runtime-refresh.js";
