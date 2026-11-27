@@ -51,7 +51,7 @@ it("does not claim the default runtime's login for an unidentified locked sessio
   });
   const heading = container.querySelector(".chat-controls__locked-model");
   expect(heading?.textContent).toContain("Session model");
-  expect(heading?.textContent).not.toContain("Using Codex’s own login");
+  expect(heading?.textContent).not.toContain("Codex");
 });
 
 async function controls(overrides: Partial<Props>) {

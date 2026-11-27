@@ -97,7 +97,7 @@ suite.define(() => {
       await gateway.emitGatewayEvent("chat.metadata.changed", { modelCatalogChanged: true });
       await expect.poll(() => trigger.textContent()).not.toContain("Preferred:");
       await trigger.click();
-      await polledVisible(picker.getByText("Using Codex’s own login", { exact: true })).toBe(true);
+      await polledVisible(picker.getByText("Codex", { exact: true })).toBe(true);
       expect(await picker.locator(".chat-controls__account-trigger").count()).toBe(0);
       expect(await gateway.getRequests("users.listModelAccounts")).toEqual([]);
     });

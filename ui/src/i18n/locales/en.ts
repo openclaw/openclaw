@@ -1538,7 +1538,7 @@ const startupEnglish = {
       yourProviderAccount: "Your {provider} account",
       yourProviderAccountNumber: "Your {provider} account {number}",
       preferred: "Preferred: {account}",
-      codexLogin: "Using Codex’s own login",
+      codexLogin: "Codex",
       manage: "Manage saved accounts…",
     },
     mentions: {},
