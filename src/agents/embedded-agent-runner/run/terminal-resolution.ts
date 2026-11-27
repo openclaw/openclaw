@@ -67,6 +67,7 @@ import {
   YIELD_DIAGNOSTIC_TEXT,
 } from "./incomplete-turn-resolution.js";
 import type { RunEmbeddedAgentInternalParams as TerminalRunParams } from "./internal-params.js";
+import { resolveSuccessfulToolNames } from "./run-attempt-result.js";
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 import {
   isEmbeddedRunTerminalAbort,
@@ -137,6 +138,21 @@ export async function resolveEmbeddedRunTerminal(input: {
   contextRecoveryState: EmbeddedRunContextRecoveryState;
 }): Promise<TerminalResolution> {
   const { runParams, attempt, retryState, sessionPromptState } = input;
+  const pendingToolName = retryState.pendingTextToolCallName;
+  if (
+    pendingToolName &&
+    (resolveSuccessfulToolNames(attempt).includes(pendingToolName) ||
+      attempt.clientToolCalls?.some((call) => call.name === pendingToolName))
+  ) {
+    retryState.pendingTextToolCallName = undefined;
+  }
+  // A text-only acknowledgement does not settle the call requested by the corrective retry.
+  const textToolCallAttempt =
+    attempt.textToolCallAttempt || Boolean(retryState.pendingTextToolCallName);
+  const completionAttempt =
+    textToolCallAttempt && !attempt.textToolCallAttempt
+      ? { ...attempt, textToolCallAttempt: true }
+      : attempt;
   const replyExpectation = resolveReplyExpectation(runParams);
   const runLogContext = `runId=${runParams.runId} sessionId=${runParams.sessionId}`;
   const modelLogContext = `${runLogContext} provider=${input.activeErrorContext.provider}/${input.activeErrorContext.model}`;
@@ -153,7 +169,7 @@ export async function resolveEmbeddedRunTerminal(input: {
     rawPayloadCount: payloadsForTerminalPath?.length ?? 0,
     aborted: terminalAborted,
     timedOut: terminalTimedOut,
-    attempt,
+    attempt: completionAttempt,
   };
   const intentionalTerminalCompletion =
     !terminalAborted &&
@@ -173,8 +189,10 @@ export async function resolveEmbeddedRunTerminal(input: {
     shouldContinueInteractiveAcceptedSessionSpawns({ attempt, run: runParams });
   const replyRecoverySuppressed =
     !authoredSilenceRequiresResult &&
-    // Optional replies may be silent, but a rejected call is not authored silence.
-    ((replyExpectation === "optional" && !isRejectedBeforeDispatch(attempt)) ||
+    // Optional replies may be silent, but an unexecuted tool attempt is not authored silence.
+    ((replyExpectation === "optional" &&
+      !textToolCallAttempt &&
+      !isRejectedBeforeDispatch(attempt)) ||
       emptyAssistantReplyIsSilent ||
       continuationPending ||
       input.prepared.replyDeliveryState !== "missing");
@@ -196,7 +214,7 @@ export async function resolveEmbeddedRunTerminal(input: {
           hasTerminalToolPresentation: Boolean(input.readTerminalToolPresentation()),
         })
       : [null, null];
-  const emptyResponseRetryCounter = attempt.textToolCallAttempt
+  const emptyResponseRetryCounter = textToolCallAttempt
     ? "textToolCallAttempts"
     : "emptyResponseAttempts";
   if (
@@ -237,6 +255,9 @@ export async function resolveEmbeddedRunTerminal(input: {
     retryState[emptyResponseRetryCounter] < DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT
   ) {
     retryState[emptyResponseRetryCounter] += 1;
+    if (attempt.textToolCallName) {
+      retryState.pendingTextToolCallName = attempt.textToolCallName;
+    }
     sessionPromptState.activateInternalPrompt(nextEmptyResponseRetryInstruction);
     log.warn(
       `empty response detected: ${modelLogContext} ` +
