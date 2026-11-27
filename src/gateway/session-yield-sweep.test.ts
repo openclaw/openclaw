@@ -14,6 +14,7 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadExactSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import * as owed from "../sessions/owed.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   createGatewaySchedulerClock,
@@ -125,7 +126,15 @@ it.for([
     const execCompletion =
       shape === "exec-completion" ? createDeferredCore<SessionEventOutcome>() : undefined;
     const execAccepted = createDeferredCore<{ ok: true }>();
+    const execWithdrawn = createDeferredCore<void>();
     if (execCompletion) {
+      const withhold = owed.withhold;
+      vi.spyOn(owed, "withhold").mockImplementation(async (...args) => {
+        await withhold(...args);
+        if (args[0].to.sessionKey === sessionKey && args[0].kind === "exec") {
+          execWithdrawn.resolve();
+        }
+      });
       // Hold completion before admission, when no session-controller work exists yet.
       vi.spyOn(sessionEventBatch, "enqueueBatchedSessionEventForHost").mockReturnValue({
         id: "synthetic-exec-completion",
@@ -210,7 +219,8 @@ it.for([
             executionStarted: false,
             delivered: false,
           });
-          await execCompletion.promise;
+          // The receipt settles before the asynchronously persisted withdrawal.
+          await execWithdrawn.promise;
           await clock.advanceBy(60_000);
           expect(loadExactSessionEntry(target)!.entry.status).toBe("failed");
         }
