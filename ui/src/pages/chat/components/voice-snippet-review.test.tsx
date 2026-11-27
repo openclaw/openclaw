@@ -178,6 +178,28 @@ it("requires an explicit radio choice for an ambiguous trigger and previews that
   );
 });
 
+it("downloads an exact expansion that joins a neighboring grapheme without applying it", async () => {
+  const download = vi.spyOn(downloads, "downloadTextFile").mockImplementation(() => {});
+  const phrase = "insert snippet signature";
+  const source = `Before. ${phrase}. After.`;
+  const { query, owner, preview, deliver } = await open(catalog("\u0301body"), source);
+  const original = query.getByLabelText(
+    "Original transcript; select a standalone command segment to expand",
+  );
+  if (!(original instanceof HTMLTextAreaElement)) {
+    throw new Error("Expected original transcript");
+  }
+  original.setSelectionRange(source.indexOf(phrase), source.indexOf(phrase) + phrase.length);
+  query.getByRole("button", { name: "Expand selected phrase" }).click();
+  const exact = "Before. \u0301body. After.";
+  await waitForSolid(() => expect(preview.value).toBe(exact));
+  expect(query.getByRole("button", { name: "Add to draft" })).toHaveProperty("disabled", true);
+  await expect(owner.accept()).resolves.toBe(false);
+  query.getByRole("button", { name: "Download plain text" }).click();
+  expect(download).toHaveBeenCalledExactlyOnceWith("openclaw-dictation.txt", exact);
+  expect(deliver).not.toHaveBeenCalled();
+});
+
 it("downloads exact CRLF and NUL text without attempting insertion and retires when the account lifetime ends", async () => {
   const download = vi.spyOn(downloads, "downloadTextFile").mockImplementation(() => {});
   const body = "line 1\r\nline 2\u0000";

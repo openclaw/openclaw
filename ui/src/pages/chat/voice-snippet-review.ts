@@ -107,16 +107,19 @@ export class VoiceSnippetReview {
       const result = await refineDictation(
         this.options.request,
         [...resolved.candidates, ...escapes],
-        { signal: this.options.signal },
+        { signal: this.options.signal, outputBoundaryPolicy: "download-only-review" },
       );
       if (!this.current() || revision !== this.revision) {
         return;
       }
       this.problems = resolved.problems;
       this.result = result;
-      // HTML text controls normalize CR and cannot promise NUL fidelity. Keep the exact
-      // string available for an explicit UTF-8 download instead of silently changing it.
-      this.fallbackOnly = result.text.includes("\r") || result.text.includes("\u0000");
+      // Keep exact bytes for download when an edit joins a neighboring grapheme
+      // or browser text controls cannot guarantee fidelity.
+      this.fallbackOnly =
+        result.unsafeOutputBoundary === true ||
+        result.text.includes("\r") ||
+        result.text.includes("\u0000");
       this.error = this.fallbackOnly ? "unsupported-encoding" : null;
     } catch {
       if (this.current() && revision === this.revision) {

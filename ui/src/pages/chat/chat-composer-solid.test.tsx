@@ -637,6 +637,32 @@ it.each([true, false])(
   },
 );
 
+it("never continues a finish-and-send gesture when its reviewed capture is cancelled while waiting", async () => {
+  const controller = new ComposerDictationOwner({
+    client: null,
+    connected: false,
+    enabled: false,
+    realtimeTalkActive: false,
+    onCommit: () => {},
+    onError: () => {},
+  });
+  vi.spyOn(controller, "active", "get").mockReturnValue(true);
+  const reviewed = vi.spyOn(controller, "requiresReview", "get").mockReturnValue(true);
+  const finish = createDeferred<boolean>();
+  vi.spyOn(controller, "finishActive").mockReturnValue(finish.promise);
+  const onSend = vi.fn();
+  const view = mountComponent(ComposerDictationSendAction, {
+    readDictation: () => controller,
+    onSend,
+  });
+  onTestFinished(() => controller.dispose());
+  view.container.querySelector<HTMLButtonElement>("button")!.click();
+  reviewed.mockReturnValue(false);
+  finish.resolve(true);
+  await Promise.resolve();
+  expect(onSend).not.toHaveBeenCalled();
+});
+
 it("preserves keyboard input-history traversal with hydrated member evidence", () => {
   const { state, view } = mountOwnedComposer({ draft: "Unsent draft" });
   state.chatLocalInputHistoryBySession[state.sessionKey] = [

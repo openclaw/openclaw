@@ -17,6 +17,25 @@ export type ComposerEditorBridge = {
   undo: () => void;
 };
 const editors = new WeakMap<HTMLTextAreaElement, ComposerEditorBridge>();
+const exactInsertions = new WeakSet<HTMLTextAreaElement>();
+
+/** Scope an accepted literal write through the existing input/recipient owner. */
+export function withExactComposerInsertion<T>(input: HTMLTextAreaElement, write: () => T): T {
+  const nested = exactInsertions.has(input);
+  exactInsertions.add(input);
+  try {
+    return write();
+  } finally {
+    if (!nested) {
+      exactInsertions.delete(input);
+    }
+  }
+}
+
+export function isExactComposerInsertion(input: HTMLTextAreaElement): boolean {
+  return exactInsertions.has(input);
+}
+
 export function registerComposerEditor(input: HTMLTextAreaElement, editor: ComposerEditorBridge) {
   editors.set(input, editor);
   return () => editors.delete(input);

@@ -1,0 +1,135 @@
+import type {
+  DeveloperLanguage,
+  DeveloperProfile,
+  DeveloperSymbol,
+} from "./dictation-developer-types.ts";
+
+const grammar = Object.freeze({
+  codeStart: "start code",
+  codeEnd: "end code",
+  literalStart: "literal words",
+  literalEnd: "end literal",
+  spellStart: "spell",
+  spellEnd: "end spell",
+  identifierEnd: "end identifier",
+  symbolStart: "symbol",
+  symbolEnd: "end symbol",
+  snakeCase: "snake case",
+  camelCase: "camel case",
+  pascalCase: "pascal case",
+  kebabCase: "kebab case",
+});
+const spellings = Object.freeze({
+  capital: "capital",
+  lower: "lower",
+  digit: "digit",
+  digits: Object.freeze([
+    "zero",
+    "one",
+    "two",
+    "three",
+    "four",
+    "five",
+    "six",
+    "seven",
+    "eight",
+    "nine",
+  ]),
+});
+const commonSymbols: readonly DeveloperSymbol[] = Object.freeze(
+  [
+    ["open paren", "("],
+    ["close paren", ")"],
+    ["open bracket", "["],
+    ["close bracket", "]"],
+    ["open brace", "{"],
+    ["close brace", "}"],
+    ["single quote", "'"],
+    ["double quote", '"'],
+    ["backtick", "`"],
+    ["plus", "+"],
+    ["hyphen", "-"],
+    ["asterisk", "*"],
+    ["slash", "/"],
+    ["backslash", "\\"],
+    ["underscore", "_"],
+    ["equal sign", "="],
+    ["strict equal", "==="],
+    ["double equal", "=="],
+    ["not equal", "!="],
+    ["less than", "<"],
+    ["greater than", ">"],
+    ["less or equal", "<="],
+    ["greater or equal", ">="],
+    ["colon", ":"],
+    ["semicolon", ";"],
+    ["dot", "."],
+    ["comma", ","],
+    ["question mark", "?"],
+    ["exclamation mark", "!"],
+    ["ampersand", "&"],
+    ["pipe", "|"],
+    ["percent", "%"],
+    ["hash sign", "#"],
+    ["at sign", "@"],
+    ["dollar sign", "$"],
+    ["caret", "^"],
+    ["tilde", "~"],
+    ["space", " "],
+    ["tab", "\t"],
+    ["new line", "\n"],
+    ["literal backslash n", "\\n"],
+    ["literal backslash t", "\\t"],
+  ].map(([spoken, text]) => Object.freeze({ spoken: spoken!, text: text! })),
+);
+
+function profile(language: DeveloperLanguage, name: string): DeveloperProfile {
+  const symbols: readonly DeveloperSymbol[] = Object.freeze([
+    ...commonSymbols,
+    Object.freeze({ spoken: "quote", text: '"' }),
+    Object.freeze({ spoken: "indent", text: language === "python" ? "    " : "  " }),
+    Object.freeze({
+      spoken: "minus",
+      text: "-",
+      alternatives: Object.freeze([
+        Object.freeze({ label: "Hyphen-minus (-)", text: "-" }),
+        Object.freeze({ label: "Minus sign (−)", text: "−" }),
+      ]),
+    }),
+    Object.freeze({
+      spoken: "dash",
+      text: "-",
+      alternatives: Object.freeze([
+        Object.freeze({ label: "Hyphen-minus (-)", text: "-" }),
+        Object.freeze({ label: "Em dash (—)", text: "—" }),
+      ]),
+    }),
+  ]);
+  return Object.freeze({
+    schemaVersion: 1,
+    id: `en-us-${language}`,
+    revision: 1,
+    name,
+    language,
+    languageVersion: "fragments-v1",
+    locale: "en-US",
+    grammar,
+    spelling: spellings,
+    symbols,
+    acronymPolicy: "word",
+    quoteStyle: "double",
+    whitespace: Object.freeze({
+      commaSpace: true,
+      colonSpace: true,
+      operatorSpace: language !== "json",
+      indentation: language === "python" ? "    " : "  ",
+    }),
+  });
+}
+
+export const builtinDeveloperProfiles: readonly DeveloperProfile[] = Object.freeze([
+  profile("plain-code", "Plain code (English)"),
+  profile("json", "JSON fragments (English)"),
+  profile("typescript", "TypeScript fragments (English)"),
+  profile("python", "Python fragments (English)"),
+]);

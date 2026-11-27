@@ -285,7 +285,7 @@ describe("explicit static snippet recognition and composition", () => {
           return ["late result"];
         },
       }),
-    ).rejects.toThrow("cancelled");
+    ).rejects.toMatchObject({ name: "AbortError" });
     await expect(
       refineDictation(request("draft"), [], {
         signal: signal(),

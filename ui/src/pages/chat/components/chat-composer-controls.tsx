@@ -18,7 +18,7 @@ import type { MicrophonePickerProps } from "../composer-microphone-picker.ts";
 import { ComposerContent } from "./chat-composer-content.tsx";
 import type { createChatComposerContext } from "./chat-composer-frame.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
-import { MicrophoneActivity, voiceStatusLabel } from "./chat-voice-activity.tsx";
+import { voiceStatusLabel } from "./chat-voice-activity.tsx";
 
 registerEnglishCatalog(registerSessionNavigationEnglish);
 
@@ -147,6 +147,10 @@ export function renderMicrophonePickerSolid(props: MicrophonePickerProps) {
     </div>
   );
 }
+
+const MicrophoneActivity = lazy(() => import("./microphone-activity.tsx"), {
+  export: "MicrophoneActivity",
+});
 
 // New Session shares the microphone without run controls or a Talk session.
 type ComposerVoiceButtonProps = {
@@ -515,10 +519,22 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
                 aria-label={t("chat.composer.stopVoiceInput")}
               >
                 {voiceErrored() ? null : (
-                  <MicrophoneActivity
-                    status={props.voiceStatus}
-                    inputLevel={props.voiceInputLevel}
-                  />
+                  <ChatLazyBoundary
+                    fallback={
+                      <openclaw-microphone-activity
+                        class="agent-chat__voice-activity"
+                        data-level="0"
+                        data-status="connecting"
+                        data-source="microphone"
+                        aria-hidden="true"
+                      />
+                    }
+                  >
+                    <MicrophoneActivity
+                      status={props.voiceStatus}
+                      inputLevel={props.voiceInputLevel}
+                    />
+                  </ChatLazyBoundary>
                 )}
                 <span class="chat-send-btn__voice-stop-glyph">
                   <Icon name="stop" />

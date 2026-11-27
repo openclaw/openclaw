@@ -20,6 +20,8 @@ function createChatComposerState(): ChatComposerState {
     queuedSubmit: null,
   });
   const [tasks, setTasks] = createSignal<ComposerTasks | null>(null);
+  const [developerSyntaxReady, setDeveloperSyntax] =
+    createSignal<ChatComposerState["developerSyntax"]>(null);
   // Signal writes commit on flush, so concurrent loads share this synchronous owner.
   let owner: ComposerTasks | undefined;
   const state: ChatComposerState = {
@@ -47,6 +49,10 @@ function createChatComposerState(): ChatComposerState {
     stopRunFromEscape: null,
     sendDraft: null,
     dictation: null,
+    developerSyntax: null,
+    developerSyntaxReady,
+    developerSyntaxHost: null,
+    setDeveloperSyntax,
     composerDraftScope: null,
     dictationSelection: null,
     tasks,
@@ -162,12 +168,14 @@ export function suppressStaleSubmittedDraftReplay(
 }
 
 function disposeChatComposerState(state: ChatComposerState) {
+  state.developerSyntaxHost = null;
   state.slashMenu.dispose();
   state.skillMenu.dispose();
   state.emojiMenu.dispose();
   state.mentionMenu.dispose();
   state.composerDraftScope = null;
   state.dictation?.dispose();
+  state.developerSyntax?.dispose();
   state.microphonePicker?.dispose();
   if (state.composerInput) {
     disconnectComposerPopoverAnchorObserver(state.composerInput);

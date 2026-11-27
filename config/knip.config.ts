@@ -84,6 +84,7 @@ const repositoryScriptEntries = [
   "scripts/bench-ios-release-note-overlap.mjs!",
   "scripts/bench-mobile-release-dependencies.mjs!",
   "scripts/bench-duplicate-paragraphs.mts!",
+  "scripts/bench-dictation-developer.mts!",
   "scripts/bench-dictation-snippets.mts!",
   "scripts/bench-plugin-catalog.ts!",
   "scripts/bench-template-detail.mts!",
