@@ -414,23 +414,16 @@ function retireSupersededSubagentRun(
 }
 
 const subagentSweeper = createSubagentRegistrySweeper({
-  ...contextCleanup,
+  cleanupCollectorLaunchResources: contextCleanup.cleanupCollectorLaunchResources,
+  runContextEngineSubagentEnded: contextCleanup.runContextEngineSubagentEnded,
+  notifyContextEngineSubagentEnded: contextCleanup.notifyContextEngineSubagentEnded,
   runs: subagentRuns,
-  resumedRuns,
   clearPendingLifecycleError,
-  clearPendingLifecycleTimeout,
   sweepPendingLifecycle: (now) => pendingLifecycle.sweepExpired(now),
   completeSubagentRunWithRecovery: completionRuntime.completeSubagentRunWithRecovery,
   startSubagentAnnounceCleanupFlow,
-  completeCleanupBookkeeping,
   resumeRequesterSettleWake,
   resumePendingRequesterSettlements,
-  isCleanupOwnerCurrent: subagentLifecycleController.isCleanupOwnerCurrent,
-  isTerminalTailActive: subagentLifecycleController.isTerminalTailActive,
-  sessionEffectsHostCurrent: (entry) =>
-    subagentLifecycleController.sessionEffectsHostCurrent(entry),
-  shouldSuppressSessionEffects: (entry, effects) =>
-    subagentLifecycleController.shouldSuppressSessionEffects(entry, effects),
   callGateway: callSubagentRegistryGateway,
   retireSupersededRun: retireSupersededSubagentRun,
   retireObligations: retireKilledSubagentObligations,

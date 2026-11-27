@@ -8,7 +8,6 @@ import {
   patchSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import { createInternalAgentTurnFacade } from "../../../gateway/agent-turn/internal-facade.js";
-import { abortControlledSubagents } from "../../../gateway/server-methods/chat-abort-descendants.js";
 import {
   createChatAbortContext,
   invokeChatAbortHandler,
@@ -24,6 +23,7 @@ import {
   prepareSystemAgentRunAdmission,
   resolveAdmittedRunActiveAssertion,
 } from "../../admitted-run-context.js";
+import { abortControlledSubagents } from "../cancel-descendants.js";
 import { killSessionSubagentRuns } from "../registry/subagent-control-kill.js";
 import { PROVISIONAL_KILL_RECONCILIATION_MS } from "../registry/subagent-registry-helpers.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
