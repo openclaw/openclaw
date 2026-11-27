@@ -136,6 +136,7 @@ beforeAll(async () => {
 afterAll(() => seedDirs.cleanup());
 
 beforeEach(async () => {
+  vi.clearAllMocks();
   vi.stubEnv("OPENCLAW_SECRET_SENTINELS", undefined);
   observed = [];
   auditEvents = [];
@@ -203,6 +204,41 @@ afterEach(async () => {
 });
 
 describe("secret egress registration lifecycle", () => {
+  it("retains effective CA trust when forwarding through another protected proxy", async () => {
+    const parentProxy = proxy;
+    const defaultCAs = tls.getCACertificates("default");
+    const nestedCaDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-nested-egress-"));
+    tls.setDefaultCACertificates([...defaultCAs, fs.readFileSync(proxy.caCertPath, "utf8")]);
+    try {
+      vi.stubEnv("HTTPS_PROXY", grant.env.HTTPS_PROXY);
+      vi.stubEnv("NO_PROXY", undefined);
+      vi.stubEnv("no_proxy", undefined);
+      proxy = await startSecretEgressProxyServer({
+        caDir: nestedCaDir,
+        onAudit: (event) => auditEvents.push(event),
+      });
+      grant = register();
+      await sendCredential(await openTlsTunnel());
+      expect(observed).toEqual([{ authorization: `Bearer ${value}`, body: "" }]);
+
+      const denied = proxy.registerProcess([
+        { name: "SERVICE_API_KEY", sentinel, allowedHosts: ["other.example"] },
+      ]);
+      await sendCredential(await openTlsTunnel(denied.env));
+      expect(observed).toHaveLength(1);
+      expect(auditEvents).toContainEqual(
+        expect.objectContaining({ kind: "refused", reason: "destination-not-allowed" }),
+      );
+    } finally {
+      if (proxy !== parentProxy) {
+        await proxy.stop();
+      }
+      proxy = parentProxy;
+      tls.setDefaultCACertificates(defaultCAs);
+      fs.rmSync(nestedCaDir, { recursive: true, force: true });
+    }
+  });
+
   it("forwards successive credential requests through one keep-alive CONNECT tunnel", async () => {
     origin.removeAllListeners("request");
     origin.on("request", (request, response) => {
