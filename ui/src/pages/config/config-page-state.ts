@@ -39,7 +39,7 @@ import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { createAppearanceCatalogs } from "./appearance-catalogs.ts";
 import { createConfigPageModels } from "./config-page-models.ts";
 import { createConfigPagePreferences } from "./config-page-preferences.ts";
-import { isAppearanceDataTarget, loadConfigPageReads } from "./config-page-reads.ts";
+import { hasConfigPageDisplay, isAppearanceDataTarget } from "./config-page-reads.ts";
 import {
   configSectionKeysForPage,
   configSelectionFromSearch,
@@ -345,11 +345,23 @@ export function createConfigPage(
       resetConfigViewState();
     }
     const selection = presentation.selections[pageId] ?? defaultConfigSelection(pageId);
-    loadConfigPageReads(runtimeConfig, pageId, selection.activeSection, {
-      data: appearanceDataRequested,
-      importer: appearanceImportRequested,
-      sourceChanged,
-    });
+    const config = runtimeConfig.state;
+    const displayReady = hasConfigPageDisplay(runtimeConfig, pageId, selection.activeSection);
+    if (
+      (!displayReady || appearanceDataRequested || appearanceImportRequested) &&
+      (sourceChanged ||
+        (!config.configSnapshot && !config.configLoading && !currentConfigRead(config)))
+    ) {
+      void runtimeConfig.ensureLoaded().catch(() => undefined);
+    }
+    if (
+      pageId !== "updates" &&
+      (!displayReady || appearanceDataRequested) &&
+      !config.configSchema &&
+      !runtimeConfig.schemaRead
+    ) {
+      void runtimeConfig.ensureSchemaLoaded().catch(() => undefined);
+    }
   }
 
   function resetConfigViewState() {
