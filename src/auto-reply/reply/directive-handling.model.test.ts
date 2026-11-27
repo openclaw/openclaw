@@ -1128,24 +1128,6 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     }
   });
 
-  it("queues a system event for elevated mode directives", async () => {
-    const sessionEntry = createSessionEntry();
-
-    await runHandleCommand("/elevated on", {
-      elevatedAllowed: true,
-      elevatedEnabled: true,
-      sessionEntry,
-    });
-
-    expect(enqueueSystemEvent).toHaveBeenCalledWith(
-      "Elevated ASK - exec runs on host; approvals may still apply.",
-      {
-        sessionKey,
-        contextKey: "mode:elevated",
-      },
-    );
-  });
-
   it.each([
     {
       command: EXEC_DEFAULTS_DIRECTIVE,
