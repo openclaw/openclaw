@@ -26,7 +26,7 @@ const makeRoute = (
 const routes = [
   makeRoute("OpenAI"),
   makeRoute("custom provider on OpenRouter", { provider: "custom" }),
-  makeRoute("custom proxy", { baseUrl: "https://proxy.example.test/v1", omitStrict: true }),
+  makeRoute("custom proxy", { baseUrl: "https://proxy.example.test/v1" }),
   makeRoute("explicit opt-out", { compat: { supportsStrictMode: false }, omitStrict: true }),
 ];
 
@@ -110,11 +110,15 @@ it.each(
   expect(captured.url).toBe(`${route.baseUrl}/chat/completions`);
   expect(captured.body.model).toBe(route.id);
   const tool = captured.body.tools[0]!.function;
-  if (omitStrict) {
-    expect(tool).not.toHaveProperty("strict");
+  // Managed requests make the tool strict and keep targetId optional as a nullable key; direct
+  // requests and a declared opt-out send the tool non-strict with its own required list.
+  if (mode === "managed" && !omitStrict) {
+    expect(tool.strict).toBe(true);
+    expect(tool.parameters.required).toEqual(["action", "targetId"]);
+    expect(tool.parameters.properties).toHaveProperty("targetId.type", ["string", "null"]);
   } else {
-    expect(tool.strict).toBe(false);
+    expect(tool).not.toHaveProperty("strict");
+    expect(tool.parameters.required).toEqual(["action"]);
+    expect(tool.parameters.properties).toHaveProperty("targetId");
   }
-  expect(tool.parameters.required).toEqual(["action"]);
-  expect(tool.parameters.properties).toHaveProperty("targetId");
 });

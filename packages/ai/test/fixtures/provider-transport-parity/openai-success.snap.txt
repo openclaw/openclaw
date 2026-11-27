@@ -33,8 +33,7 @@
               "required": [
                 "query"
               ]
-            },
-            "strict": false
+            }
           }
         }
       ],
@@ -157,9 +156,10 @@
               },
               "required": [
                 "query"
-              ]
+              ],
+              "additionalProperties": false
             },
-            "strict": false
+            "strict": true
           }
         }
       ],

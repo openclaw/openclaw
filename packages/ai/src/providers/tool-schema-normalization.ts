@@ -324,7 +324,13 @@ function nullableStrictSchema(schema: unknown): unknown {
     return schema;
   }
   if (Array.isArray(schema.anyOf)) {
-    return { ...schema, anyOf: [...schema.anyOf, { type: "null" }] };
+    // A sibling constraint (type, enum, ...) would still reject null, so wrap the whole schema.
+    const constrained = Object.keys(schema).some(
+      (key) => key !== "anyOf" && key !== "description" && key !== "title",
+    );
+    return constrained
+      ? { anyOf: [schema, { type: "null" }] }
+      : { ...schema, anyOf: [...schema.anyOf, { type: "null" }] };
   }
   const { const: constValue, ...rest } = schema;
   const next: Record<string, unknown> =

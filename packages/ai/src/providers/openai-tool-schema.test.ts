@@ -155,4 +155,13 @@ describe("OpenAI strict tool schema normalization", () => {
       properties: { mode: { enum: ["image", "file", null] } },
     });
   });
+
+  it("keeps an optional union with a sibling type omittable under strict", () => {
+    const mode = { type: "string", anyOf: [{ enum: ["auto", "manual"] }] };
+    const schema = { type: "object", properties: { mode }, required: [] };
+    expect(normalizeStrictOpenAIJsonSchema(schema)).toMatchObject({
+      required: ["mode"],
+      properties: { mode: { anyOf: [mode, { type: "null" }] } },
+    });
+  });
 });
