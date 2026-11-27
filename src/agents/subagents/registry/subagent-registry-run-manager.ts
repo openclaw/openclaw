@@ -180,6 +180,8 @@ class SubagentRunManager extends SubagentLaunchManager {
     /** A withdrawn queued input never owned the session's active execution metadata. */
     suppressSessionEffects?: boolean;
     session?: SubagentKillSession;
+    /** An acknowledged kill targets its recorded row even after the session rotates. */
+    killClaim?: NonNullable<SubagentRunRecord["killIntent"]>;
     withdrawQueuedReservation?: () => void;
     assertCurrent?: () => void;
     assertPublicationCurrent?: () => void;
@@ -218,7 +220,7 @@ class SubagentRunManager extends SubagentLaunchManager {
     const assertSelectedCurrent = (requireSession = true) => {
       assertSubagentRegistryWriteSourceCurrent(context);
       assertSubagentRegistryWriteOutcomeKnown([...runIds], context.admission);
-      if (requireSession) {
+      if (requireSession && !markParams.killClaim) {
         markParams.session?.assertCurrent();
       }
       if (
@@ -244,6 +246,7 @@ class SubagentRunManager extends SubagentLaunchManager {
       }
     };
     const sessions = new Map<string, SubagentKillSession>();
+    const acquiredSessions: SubagentKillSession[] = [];
     const holds = new Map<string, NonNullable<ReturnType<typeof holdQueuedSwarmRun>>>();
     for (const entry of selected.values()) {
       if (
@@ -266,7 +269,12 @@ class SubagentRunManager extends SubagentLaunchManager {
       }
       for (const entry of selected.values()) {
         if (markParams.runId === entry.runId && markParams.session) {
-          sessions.set(entry.runId, markParams.session);
+          sessions.set(
+            entry.runId,
+            markParams.killClaim
+              ? { ...markParams.session, assertCurrent: () => assertSelectedCurrent(false) }
+              : markParams.session,
+          );
         } else if (
           entry.collect &&
           entry.execution.status === "queued" &&
@@ -280,6 +288,7 @@ class SubagentRunManager extends SubagentLaunchManager {
             entry.childAgentId,
             entry.childSessionIdentity,
           );
+          acquiredSessions.push(session);
           sessions.set(entry.runId, session);
         }
       }
@@ -307,6 +316,16 @@ class SubagentRunManager extends SubagentLaunchManager {
                 entry.killReconciliation !== undefined;
               const existingKillReconciliation = entry.killReconciliation;
               const existingKillIntent = entry.killIntent;
+              if (
+                markParams.killClaim &&
+                !matchesSubagentKillIntent(existingKillIntent, markParams.killClaim) &&
+                !(
+                  existingKillReconciliation?.killedAt === markParams.killClaim.requestedAt &&
+                  existingKillReconciliation.taskCancellationAccepted === true
+                )
+              ) {
+                continue;
+              }
               const currentKillLifecycle =
                 existingKillIntent?.lifecycleGeneration !== undefined &&
                 isAgentEventLifecycleGenerationCurrent(existingKillIntent.lifecycleGeneration);
@@ -516,10 +535,8 @@ class SubagentRunManager extends SubagentLaunchManager {
       return updated;
     } finally {
       releaseTerminalState();
-      for (const session of sessions.values()) {
-        if (session !== markParams.session) {
-          await session.release();
-        }
+      for (const session of acquiredSessions) {
+        await session.release();
       }
       await Promise.all([...holds.values()].map((hold) => hold.release()));
     }
