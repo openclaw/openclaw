@@ -118,7 +118,7 @@ export function createFollowupRunner(
   const resolveGatewayContext = Object.hasOwn(initialDefaults, "resolveGatewayContext")
     ? initialDefaults.resolveGatewayContext
     : getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
-  const defaults = { ...initialDefaults, resolveGatewayContext };
+  const runnerDefaults = { ...initialDefaults, resolveGatewayContext };
   // Follow-ups retain the host owner, never the invoking turn's transcript or request scope.
   const runFollowup = (queued: FollowupRun): Promise<void> =>
     withoutRequiredSessionPlacement(() =>
@@ -129,12 +129,12 @@ export function createFollowupRunner(
             // The source dispatch sealed its typing when it returned; each turn owns a fresh one.
             () =>
               executeFollowup(queued, {
-                ...defaults,
+                ...runnerDefaults,
                 typing: createTypingController({
-                  onReplyStart: defaults.opts?.onReplyStart,
-                  onCleanup: defaults.opts?.onTypingCleanup,
+                  onReplyStart: runnerDefaults.opts?.onReplyStart,
+                  onCleanup: runnerDefaults.opts?.onTypingCleanup,
                   typingIntervalSeconds: queued.run.config.agents?.defaults?.typingIntervalSeconds,
-                  keepalive: defaults.opts?.typingKeepalive ?? true,
+                  keepalive: runnerDefaults.opts?.typingKeepalive ?? true,
                   log: defaultRuntime.log,
                 }),
               }),
