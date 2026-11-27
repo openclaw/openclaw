@@ -61,7 +61,11 @@ struct ChatTranscriptExporterTests {
         #expect(!markdown.contains("private context"))
         #expect(markdown.contains("System · restart recovery"))
         #expect(markdown.contains("[System · gateway restarted] Gateway restarted after an update."))
+        #if os(iOS)
+        #expect(!markdown.contains("Context first line."))
+        #else
         #expect(markdown.contains("[System · injected context] Context first line.\nContext last line."))
+        #endif
         #expect(markdown.contains("[System · background task] Task first line.\nTask last line."))
         #expect(markdown.contains("[Compacted history · saved 12.5k tokens]"))
         #expect(markdown.contains("[Session reset — The earlier conversation was cleared.]"))

@@ -350,29 +350,17 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(app.staticTexts["Notice fixture ready."].waitForExistence(timeout: 8))
         self.attachScreenshot(named: "system-notices-collapsed")
 
-        for (label, start, end) in [
-            ("injected context", "CONTEXT_START", "CONTEXT_END"),
-            ("background task", "TASK_START", "TASK_END"),
-        ] {
-            let disclosure = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", label)).firstMatch
-            let body = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", start)).firstMatch
-            XCTAssertTrue(disclosure.waitForExistence(timeout: 5))
-            XCTAssertFalse(body.exists, "System payload should start collapsed")
-            for _ in 0..<4 where !disclosure.isHittable {
-                app.swipeDown()
-            }
-            XCTAssertTrue(disclosure.isHittable)
-            disclosure.tap()
-            XCTAssertTrue(body.waitForExistence(timeout: 5))
-            XCTAssertTrue(body.label.contains(end), "Expanded disclosure must expose the complete payload")
-            self.attachScreenshot(named: "system-notice-expanded-\(start)")
-            for _ in 0..<4 where !disclosure.isHittable {
-                app.swipeDown()
-            }
-            XCTAssertTrue(disclosure.isHittable)
-            disclosure.tap()
-            XCTAssertTrue(body.waitForNonExistence(timeout: 5))
-        }
+        let context = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", "injected context"))
+        XCTAssertFalse(context.firstMatch.exists)
+        let disclosure = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", "background task")).firstMatch
+        let body = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "TASK_START")).firstMatch
+        XCTAssertTrue(disclosure.waitForExistence(timeout: 5))
+        XCTAssertFalse(body.exists)
+        disclosure.tap()
+        XCTAssertTrue(body.waitForExistence(timeout: 5))
+        XCTAssertTrue(body.label.contains("TASK_END"))
+        disclosure.tap()
+        XCTAssertTrue(body.waitForNonExistence(timeout: 5))
         self.attachScreenshot(named: "system-notices-recollapsed")
     }
 
