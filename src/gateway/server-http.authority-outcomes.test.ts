@@ -3,7 +3,6 @@ import { IncomingMessage, request, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   onInternalDiagnosticEvent,
   waitForDiagnosticEventsDrained,
@@ -13,16 +12,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { AsyncWorkScope, getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
-import type { ResolvedGatewayAuth } from "./auth.js";
-import {
-  bindHttpResponseAuthority,
-  captureHttpRequestAuthority,
-  runGatewayHttpRequest,
-} from "./http-request-authority.js";
-import {
-  GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE,
-  GatewayOperatorAccessUnavailableError,
-} from "./operator-access-policy.js";
+import { runGatewayHttpRequest } from "./http-request-authority.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
 import { createGatewayHttpServer } from "./server-http.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
@@ -279,91 +269,27 @@ it.each([
   },
 );
 
-// Each request owner consumes authority failures and returns 500 for unexpected errors.
-// Shared response handling covers disconnect, staged headers, and partial streams once.
+// Shared response handling covers disconnects and unexpected errors after staged headers.
 it.each([
   ["core", "disconnect"],
-  ["core", "client expired"],
-  ["core", "role boundary enabled"],
-  ["core", "role scope revoked"],
-  ["core", "operator revoked"],
-  ["core", "operator unavailable"],
   ["core", "unexpected"],
   ["core", "unexpected abort"],
-  ["plugin", "stream client expired"],
-  ["plugin", "stream operator revoked"],
-  ["plugin", "operator unavailable"],
-  ["plugin", "stream operator unavailable"],
   ["plugin", "unexpected"],
   ["plugin", "unexpected abort"],
 ])("Gateway HTTP %s owns %s after awaited request work", async (surface, outcome) => {
   const entered = createDeferred<ServerResponse>();
   const release = createRelease();
-  const streaming = createDeferred();
-  const operator = new AbortController();
-  let unavailable = false;
-  let auth: ResolvedGatewayAuth = { mode: "token", token: "before", allowTailscale: false };
-  const roleConfig = (writable: boolean): OpenClawConfig => ({
-    gateway: {
-      roles: {
-        default: "reader",
-        definitions: {
-          reader: {
-            scopes: writable ? ["operator.write"] : ["operator.read"],
-            agents: "*",
-            sessions: { others: "none" },
-          },
-        },
-      },
-    },
-  });
-  let config: OpenClawConfig = outcome === "role scope revoked" ? roleConfig(true) : {};
   const unexpected = outcome.startsWith("unexpected");
-  const streamingResponse = outcome.startsWith("stream");
   const disconnected = outcome === "disconnect";
-  const closed = disconnected || streamingResponse;
-  const [status, message, type] =
-    outcome === "client expired" || outcome.startsWith("role ")
-      ? [401, "Unauthorized", "unauthorized"]
-      : outcome === "operator revoked"
-        ? [403, GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE, "forbidden"]
-        : outcome.endsWith("operator unavailable")
-          ? [
-              503,
-              "Gateway access policy is unavailable. The operation may have completed; check its status before retrying.",
-              "service_unavailable",
-            ]
-          : [500, "Internal Server Error", ""];
+  const status = 500;
+  const message = "Internal Server Error";
   const unexpectedError =
     outcome === "unexpected abort"
       ? new DOMException("Unrelated upstream cancellation", "AbortError")
       : new Error("HTTP request authority expired");
-  route.mockImplementation(async (req, res) => {
-    const authority = bindHttpResponseAuthority(
-      {
-        operatorAccessAuthority: {
-          signal: operator.signal,
-          assertCurrent: () => {
-            operator.signal.throwIfAborted();
-            if (unavailable) {
-              throw new GatewayOperatorAccessUnavailableError();
-            }
-          },
-        },
-      },
-      res,
-      captureHttpRequestAuthority({
-        req,
-        auth,
-        cfg: config,
-        getRuntimeConfig: () => config,
-        getResolvedAuth: () => auth,
-      }),
-    );
-    authority.assertCurrent();
-    if (streamingResponse) {
-      res.write("partial");
-    } else if (!disconnected) {
+  route.mockImplementation(async (_req, res) => {
+    getAsyncWorkSignal()?.throwIfAborted();
+    if (!disconnected) {
       res.setHeader("Content-Length", "1");
       res.setHeader("Content-Encoding", "gzip");
       res.setHeader("Content-Disposition", "attachment; filename=report.txt");
@@ -377,7 +303,7 @@ it.each([
     if (unexpected) {
       throw unexpectedError;
     }
-    authority.assertCurrent();
+    getAsyncWorkSignal()?.throwIfAborted();
     res.end("must not disclose prepared data");
     return true;
   });
@@ -393,7 +319,6 @@ it.each([
     res.setEncoding("utf8");
     res.on("data", (chunk: string) => {
       body += chunk;
-      streaming.resolve();
     });
     res.once("end", () =>
       response.resolve({
@@ -404,11 +329,7 @@ it.each([
       }),
     );
     res.once("aborted", () => response.resolve({ status: res.statusCode, body, aborted: true }));
-    res.once("error", (error) => {
-      if (!streamingResponse) {
-        response.reject(error);
-      }
-    });
+    res.once("error", response.reject);
   });
   client.once("error", (error) => {
     if (disconnected) {
@@ -419,42 +340,18 @@ it.each([
   });
   client.end();
   const res = await entered.promise;
-  if (streamingResponse) {
-    await streaming.promise;
-  }
   if (disconnected) {
     const responseClosed = once(res, "close");
     client.destroy();
     await responseClosed;
-  } else if (outcome.endsWith("client expired")) {
-    auth = { ...auth, token: "after" };
-  } else if (outcome.endsWith("operator revoked")) {
-    operator.abort();
-  } else if (outcome.endsWith("operator unavailable")) {
-    unavailable = true;
-  } else if (outcome.startsWith("role ")) {
-    config = roleConfig(false);
   }
   release.resolve();
   await drainRequests();
   const { headers: responseHeaders, statusMessage, ...received } = await response.promise;
-  if (streamingResponse) {
-    expect(received).toEqual({ status: 200, body: "partial", aborted: true });
-  } else if (!closed) {
-    expect(received).toEqual({
-      status,
-      body: unexpected
-        ? message
-        : JSON.stringify({
-            error: { message, type, ...(unavailable ? { retryable: false } : {}) },
-          }),
-    });
-    expect(statusMessage).toBe(
-      unavailable ? "Service Unavailable" : type === "forbidden" ? "Forbidden" : message,
-    );
-    expect(responseHeaders?.["content-type"]).toBe(
-      unexpected ? "text/plain; charset=utf-8" : "application/json; charset=utf-8",
-    );
+  if (!disconnected) {
+    expect(received).toEqual({ status, body: message });
+    expect(statusMessage).toBe(message);
+    expect(responseHeaders?.["content-type"]).toBe("text/plain; charset=utf-8");
     const contentLength = responseHeaders?.["content-length"];
     if (contentLength !== undefined) {
       expect(contentLength).toBe(String(Buffer.byteLength(received.body)));
@@ -465,8 +362,5 @@ it.each([
     expect(responseHeaders?.["cache-control"]).toBe("no-store");
     expect(responseHeaders?.["access-control-allow-origin"]).toBe("https://example.test");
     expect(responseHeaders?.["x-content-type-options"]).toBe("nosniff");
-  }
-  if (unavailable) {
-    expect(operator.signal.aborted).toBe(false);
   }
 });

@@ -210,7 +210,10 @@ export async function sanitizeContentBlocksImages(
     }
     const canonicalData = prepared.canonicalData ?? prepared.data;
     // Only actual image work loads the backend; text replay stays data-only.
-    const imageOps = await import("../media/image-ops.js");
+    const [imageOps, imageMetadata] = await Promise.all([
+      import("../media/image-ops.js"),
+      import("../media/image-header-metadata.js"),
+    ]);
     const { MAX_IMAGE_DOWNSCALE_SOURCE_PIXELS } =
       await import("../media/image-processor-config.js");
 
@@ -232,7 +235,7 @@ export async function sanitizeContentBlocksImages(
         }
         const buf = Buffer.from(canonicalData, "base64");
         const meta =
-          imageOps.readImageMetadataFromHeader(buf) ?? (await imageOps.getImageMetadata(buf));
+          imageMetadata.readImageMetadataFromHeader(buf) ?? (await imageOps.getImageMetadata(buf));
         const overBytes = buf.byteLength > maxBytes;
         const overDimensions =
           meta !== null && (meta.width > maxDimensionPx || meta.height > maxDimensionPx);

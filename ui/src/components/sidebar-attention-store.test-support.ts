@@ -9,7 +9,7 @@ import { SidebarAttentionStoreOwner } from "./sidebar-attention-store.ts";
 
 export type CompactCronPage = CronJobsListResult<CronCompactJob>;
 
-export function cronPage(id?: string): CompactCronPage {
+export function cronPage(id?: string, status: "ok" | "error" = "error"): CompactCronPage {
   const jobs = id
     ? [
         {
@@ -23,7 +23,7 @@ export function cronPage(id?: string): CompactCronPage {
           lastRunAt: null,
           lastRunAtMs: null,
           lastRunError: null,
-          lastRunStatus: "error" as const,
+          lastRunStatus: status,
         },
       ]
     : [];
@@ -32,7 +32,7 @@ export function cronPage(id?: string): CompactCronPage {
     snapshotRevision: id ?? "empty",
     total: jobs.length,
     offset: 0,
-    limit: 50,
+    limit: 200,
     hasMore: false,
     nextOffset: null,
   };
@@ -73,15 +73,10 @@ export function createStore(
 
 export function inventoryRequest(
   list: (params?: unknown) => unknown,
-  jobs = 1,
   auth: () => unknown = () => ({ ts: 1, providers: [] }),
 ) {
   return vi.fn(async (method: string, params?: unknown) =>
-    method === "cron.list"
-      ? list(params)
-      : method === "cron.status"
-        ? { enabled: true, triggersEnabled: true, jobs }
-        : auth(),
+    method === "cron.list" ? list(params) : auth(),
   );
 }
 

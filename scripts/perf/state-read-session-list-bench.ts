@@ -30,6 +30,7 @@ import {
   runSqliteReadOperationSync,
 } from "../../src/infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema } from "../../src/infra/sqlite-schema-sql.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -144,12 +145,7 @@ let elapsedMs: number | undefined;
 let returnedRows = 0;
 try {
   if (values.allocations) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
     returnedRows = run(iterations);
     allocatedBytes = allocated((await inspector.post("HeapProfiler.stopSampling")).profile.head);
   } else {

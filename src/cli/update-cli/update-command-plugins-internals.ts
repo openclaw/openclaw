@@ -14,6 +14,8 @@ import {
 import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
 import type { UpdateOwedStepId } from "../../infra/update-run-owed-step.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import type { PluginInstallBatchTarget } from "../../plugins/install-runtime-batch.js";
+import type { MissingPluginInstallPayload } from "../../plugins/payload-verification.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { formatCliCommand } from "../command-format.js";
 import { createUpdateConfigFailure } from "./update-command-config-failure.js";
@@ -21,7 +23,18 @@ import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-err
 
 export type PostCorePluginUpdateResult = NonNullable<
   NonNullable<UpdateRunResult["postUpdate"]>["plugins"]
->;
+> & {
+  /** Internal updater receipt, captured before the plugin lifecycle lease is released. */
+  reloadTargets?: PluginInstallBatchTarget[];
+};
+
+export function formatMissingPluginPayloadReason(entry: MissingPluginInstallPayload): string {
+  return entry.reason === "missing-install-path"
+    ? "installPath is missing"
+    : entry.reason === "missing-package-json"
+      ? `package.json is missing under ${entry.installPath}`
+      : `package directory is missing: ${entry.installPath}`;
+}
 
 export function createPostCorePluginUpdateResult(
   result: Pick<PostCorePluginUpdateResult, "status"> & Partial<PostCorePluginUpdateResult>,

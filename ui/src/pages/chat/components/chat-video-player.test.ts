@@ -159,6 +159,24 @@ it("keeps one video element mounted across 202 preparation", async () => {
   expect(onExpand).toHaveBeenCalledWith(src + "&playback=1");
 });
 
+it("does not show preparation when the first video request is ready", async () => {
+  stubManualIntersectionObserver(() => {});
+  const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
+  const response = Promise.withResolvers<Response>();
+  const fetchMock = vi.fn<typeof fetch>(() => response.promise);
+  vi.stubGlobal("fetch", fetchMock);
+  const player = await open("recording", { autoplay: true, playback: "transcode" });
+  const video = media(player);
+  expect(fetchMock).toHaveBeenCalledOnce();
+  expect(player.textContent).not.toContain("Preparing playback…");
+  expect(video?.parentElement?.hidden).toBe(false);
+
+  response.resolve(new Response(null, { status: 200 }));
+  await vi.waitFor(() => expect(play).toHaveBeenCalledOnce());
+  expect(media(player)).toBe(video);
+  expect(fetchMock).toHaveBeenCalledOnce();
+});
+
 it("does not preserve a previous attachment when a new rendition fails", async () => {
   const onExpand = vi.fn();
   const onFallbackExpand = vi.fn();

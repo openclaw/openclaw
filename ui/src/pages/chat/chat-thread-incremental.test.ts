@@ -308,7 +308,9 @@ describe("incremental history build equivalence", () => {
         normalizeMessage(entry.message).content.some((block) => block.type === "canvas"),
       ),
     ).toBe(true);
-    expect(warmPrepended.some((item) => item.kind === "divider" && item.compactionId)).toBe(true);
+    expect(
+      warmPrepended.some((item) => item.kind === "group" && item.compaction?.compactionId),
+    ).toBe(true);
     expect(warmPrepended.some((item) => item.kind === "stream" && item.isStreaming)).toBe(true);
     expect(warmPrepended.some((item) => item.kind === "reading-indicator")).toBe(true);
     expect(
@@ -579,7 +581,7 @@ describe("older-page prepend reuse", () => {
       .flatMap((item) => (item.kind === "group" ? item.messages : []))
       .flatMap((entry) => normalizeMessage(entry.message).content)
       .flatMap((block) => (block.type === "automation_creation_card" ? block.plan.rows : []));
-    expect(rows).toEqual([{ ...slot, status: "created", jobId: "persisted" }]);
+    expect(rows).toEqual([{ ...slot, jobId: "persisted" }]);
     resetChatThreadState();
   });
 

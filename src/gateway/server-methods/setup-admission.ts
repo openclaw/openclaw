@@ -14,9 +14,9 @@ import {
   SetupTargetLockedError,
   withSetupMigrationTargetLock,
 } from "../../wizard/setup.migration-snapshot.js";
+import { retainGatewayDeviceRevocation } from "../device-revocation.js";
 import { captureOperatorToolGatewayContinuationContext } from "../server-plugin-in-process-authority.js";
 import { bindWizardLoginOwner } from "../server-wizard-sessions.js";
-import { retainGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestOptions, RespondFn } from "./types.js";
 
 const SETUP_ADMISSION_BUSY_MESSAGE =
@@ -158,21 +158,20 @@ export async function startGatewayWizard(params: {
     reject("Client required");
     return;
   }
-  let authority: ReturnType<typeof retainGatewayRequestMutationAuthority> | undefined;
+  let releaseDevice: (() => void) | undefined;
   let continuation: Awaited<ReturnType<typeof captureOperatorToolGatewayContinuationContext>>;
   const release = () => {
-    authority?.release();
+    releaseDevice?.();
     continuation?.release();
   };
   const assertCurrent = () => {
     connection?.connectionSignal?.throwIfAborted();
     params.assertCurrent?.();
     continuation?.assertCurrent();
-    authority?.assertCurrent();
   };
   let session: WizardSession | undefined;
   try {
-    authority = retainGatewayRequestMutationAuthority(params.request);
+    releaseDevice = retainGatewayDeviceRevocation(params.request.hasCurrentClientAuthority);
     continuation = await captureOperatorToolGatewayContinuationContext();
     const create = () => {
       assertCurrent();

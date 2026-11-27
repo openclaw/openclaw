@@ -36,7 +36,7 @@ import {
   captureCronCreatorSession,
   requiresExplicitAgentRuntimeToolsAllow,
   normalizeCronAddRequest,
-  assertCronDoesNotTargetAgentHarness,
+  assertValidCronSessionTarget,
 } from "./cron-input-validation.js";
 import { respondInvalidCronParams, respondRefusedCronAgent } from "./cron-job-access.js";
 import { withCronStreamExecApproval } from "./cron-stream-approval.js";
@@ -56,9 +56,6 @@ export const cronAddHandler: GatewayRequestHandler = async ({
   hasCurrentClientAuthority,
 }) => {
   sessionMutationCommitGuard?.();
-  if (hasCurrentClientAuthority?.() === false) {
-    throw new Error("Automation caller authority is no longer active");
-  }
   const commandCreation = readPluginCommandCreation(rawParams);
   const params = commandCreation.params;
   // Normalization fills a missing name from the prompt's first line; a model name replaces it below.
@@ -84,7 +81,6 @@ export const cronAddHandler: GatewayRequestHandler = async ({
     client,
     callerScope,
     sessionMutationCommitGuard,
-    hasCurrentClientAuthority,
     retainExecutionPolicy: cronCreateRequiresStreamExecAuthority(candidate),
   });
   if (commandCreation.creation) {
@@ -163,7 +159,6 @@ export const cronAddHandler: GatewayRequestHandler = async ({
     capture?.assertCurrent();
     creatorOptions?.assertInferenceSelectionCurrent?.();
     assertCronModelJobAllowed(client, cfg, jobCreate);
-    creatorOptions?.assertOperatorSourceCurrent?.();
     creator.assertCurrent();
     execPolicy?.assertCurrentSource?.();
   };
@@ -186,7 +181,7 @@ export const cronAddHandler: GatewayRequestHandler = async ({
       cfg,
       runtimeAuthority !== undefined,
     );
-    await assertCronDoesNotTargetAgentHarness(jobCreate, cfg);
+    await assertValidCronSessionTarget(jobCreate, cfg);
     await assertValidCronCreateDelivery(
       cfg,
       { ...jobCreate, createdActor: creatorOptions.createdActor },
@@ -246,6 +241,20 @@ export const cronAddHandler: GatewayRequestHandler = async ({
   }
   // Resolve the preview before durable add so a preview failure cannot duplicate a retry.
   const previewContext = { cfg, defaultAgentId: context.cron.getDefaultAgentId() };
+  const setupSession = creator.session;
+  const keepDeclarationFor =
+    !commandCreation.creation &&
+    setupSession &&
+    callerScope &&
+    setupSession.entry.templateSetup?.requiredAutomationIds?.some(
+      (id) => jobCreate.declarationKey?.trim() === `template:${setupSession.agentId}:${id}`,
+    )
+      ? {
+          agentId: setupSession.agentId,
+          sessionKey: setupSession.sessionKey,
+          accountId: callerScope.accountId,
+        }
+      : undefined;
   let deliveryPreview: CronDeliveryPreview | undefined;
   let result: Awaited<ReturnType<typeof context.cron.add>>;
   try {
@@ -288,6 +297,8 @@ export const cronAddHandler: GatewayRequestHandler = async ({
           sessionEntryCurrent: creator.sessionEntryCurrent,
 
           enabledExplicit,
+          // Pending chat setup only fills verified slots. Ordinary adds still converge after setup.
+          keepDeclarationFor,
           ...creatorOptions,
           ...(commandCreation.creation
             ? {

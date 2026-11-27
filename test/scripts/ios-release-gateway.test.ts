@@ -179,6 +179,50 @@ function fixture(options: { annotatedTag?: boolean } = {}) {
   return { selectionDir, installDir, state, fetch, installs, select, prepare };
 }
 
+describe("candidate Gateway source qualification", () => {
+  it.each(["match", "build-failure", "cleanup-failure"])(
+    "runs candidate preparation and cleanup only through the isolated owner: %s",
+    async (state) => {
+      const root = tempDirs.make("candidate-gateway-");
+      vi.stubGlobal("fetch", vi.fn());
+      vi.stubEnv("GITHUB_TOKEN", "must-not-reach-candidate-launcher");
+      command.mockImplementation(async ({ bin, args, env }) => {
+        expect(bin).toBe("python3");
+        expect(args?.[0]).toMatch(/native-candidate-(linux|macos)\.py$/u);
+        expect(env?.GITHUB_TOKEN).toBeUndefined();
+        if (args?.[1] === "build") {
+          expect(args).toContain(targetSha);
+          expect(args).toContain(root);
+          return state === "build-failure" ? 17 : 0;
+        }
+        expect(args?.[1]).toBe("cleanup");
+        return state === "cleanup-failure" ? 19 : 0;
+      });
+      const result = prepareIOSReleaseGateway({
+        candidateDir: root,
+        targetSha,
+        signal: new AbortController().signal,
+        selectionDir: path.join(root, "must-not-read"),
+        installDir: path.join(root, "unused"),
+      });
+      if (state === "build-failure") {
+        await expect(result).rejects.toThrow(/build failed.*17/u);
+      } else {
+        const gateway = await result;
+        expect(gateway.entrypoint[0]).toMatch(/native-candidate-entrypoint\.mjs$/u);
+        const cleanup = gateway.dispose?.();
+        if (state === "cleanup-failure") {
+          await expect(cleanup).rejects.toThrow(/cleanup failed.*19/u);
+        } else {
+          await cleanup;
+        }
+      }
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+      expect(command).toHaveBeenCalledTimes(2);
+    },
+  );
+});
+
 describe("iOS stable Gateway package qualification", () => {
   it.each([false, true])("replays the frozen graph (annotated tag: %s)", async (annotatedTag) => {
     vi.stubEnv("GH_TOKEN", annotatedTag ? "synthetic-ios-github-token" : "");

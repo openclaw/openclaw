@@ -24,6 +24,8 @@ import {
   pluginNativeNamespaceIsCurrent,
   pluginNativeNamespaceMemberPath,
   pluginNativeNamespaceMemberRelativePath,
+  refreshPluginNativeMemberIdentity,
+  writablePluginNativeMember,
 } from "./plugin-native-namespace.js";
 import {
   admitPluginNativeRecoveryReference,
@@ -317,14 +319,14 @@ export function createPluginNativeAdmission(
     });
     // Overlapping managed namespaces share inodes; a new hardlink changes earlier captures too.
     for (const namespace of state.namespaces.values()) {
-      for (const [relative, member] of Object.entries(namespace.members)) {
-        const identity = changed.get(member.source);
+      for (const [relative, indexed] of Object.entries(namespace.members)) {
+        const identity = changed.get(indexed.source);
         const sourceChanged =
           identity !== undefined &&
-          pluginSourceIdentityChangedOnlyByCtime(member.sourceIdentity, identity);
+          pluginSourceIdentityChangedOnlyByCtime(indexed.sourceIdentity, identity);
         const captureChanged =
           identity !== undefined &&
-          pluginSourceIdentityChangedOnlyByCtime(member.capturedIdentity, identity);
+          pluginSourceIdentityChangedOnlyByCtime(indexed.capturedIdentity, identity);
         if (!identity || (!sourceChanged && !captureChanged)) {
           continue;
         }
@@ -339,6 +341,7 @@ export function createPluginNativeAdmission(
         ) {
           break;
         }
+        const member = writablePluginNativeMember(namespace, relative)!;
         if (namespace !== previous || !captureChanged) {
           const capturedHash = hashPluginSourceFile(
             pluginNativeNamespaceMemberPath(namespace, relative),
@@ -413,7 +416,6 @@ export function createPluginNativeAdmission(
   const refreshReference = (fact: PluginNativeArtifactFact, input: string, target: string) => {
     const namespace = namespaceById(fact.namespace)!;
     const relative = pluginNativeNamespaceMemberRelativePath(namespace, fact.capturedPath);
-    const member = namespace.members[relative]!;
     const linked = {
       ...fact,
       sourceIdentity: pluginSourceStatIdentity(fs.statSync(input, { bigint: true })),
@@ -423,13 +425,9 @@ export function createPluginNativeAdmission(
     } else {
       fileReferenceTargets.delete(target);
     }
-    const oldIdentity = member.capturedIdentity;
-    member.capturedIdentity = linked.capturedIdentity;
-    if (member.sourceIdentity === oldIdentity) {
-      member.sourceIdentity = linked.capturedIdentity;
-    }
-    fact.sourceIdentity = member.sourceIdentity;
-    fact.capturedIdentity = linked.capturedIdentity;
+    const { capturedIdentity } = linked;
+    fact.sourceIdentity = refreshPluginNativeMemberIdentity(namespace, relative, capturedIdentity);
+    fact.capturedIdentity = capturedIdentity;
     pendingTargets.add(target);
   };
   const assertReferenceNamespaces = (references: Iterable<string> = pendingTargets) => {
@@ -450,7 +448,18 @@ export function createPluginNativeAdmission(
       }
       const link = path.join(namespace.capturedRoot, "node_modules", "openclaw");
       const present = fs.lstatSync(link, { throwIfNoEntry: false });
-      if (present && fs.realpathSync(link) !== hostRoot) {
+      let linkedHost: string | undefined;
+      if (present) {
+        try {
+          linkedHost = fs.realpathSync(link);
+        } catch (error) {
+          // An in-place package swap can remove the old versioned host path.
+          if (!present.isSymbolicLink() || !hasErrnoCode(error, "ENOENT")) {
+            throw error;
+          }
+        }
+      }
+      if (present && linkedHost !== hostRoot) {
         const replacement = createNamespace(
           namespace.sourceDirectory,
           namespace.sourceDirectory,
@@ -503,9 +512,7 @@ export function createPluginNativeAdmission(
           if (!hasErrnoCode(error, "EEXIST")) {
             throw error;
           }
-          if (fs.realpathSync(link) !== hostRoot) {
-            return linkHost(hostRoot);
-          }
+          return linkHost(hostRoot);
         }
       }
     }
@@ -659,19 +666,26 @@ export function createPluginNativeAdmission(
           : undefined,
         record(content: { contentHash: string; sizeBytes: number }) {
           Object.assign(fact, content);
-          Object.assign(member, content);
+          let current = namespace.members[relative]!;
+          if (
+            current.contentHash !== content.contentHash ||
+            current.sizeBytes !== content.sizeBytes
+          ) {
+            current = Object.assign(writablePluginNativeMember(namespace, relative)!, content);
+          }
           for (const other of namespaces()) {
-            for (const sibling of Object.values(other.members)) {
+            for (const name of Object.keys(other.members)) {
+              const sibling = other.members[name]!;
               if (sibling.sizeBytes !== content.sizeBytes || sibling.contentHash) {
                 continue;
               }
               if (
-                (sibling.source === member.source &&
-                  sibling.sourceIdentity === member.sourceIdentity) ||
+                (sibling.source === current.source &&
+                  sibling.sourceIdentity === current.sourceIdentity) ||
                 sibling.capturedIdentity.split(":").slice(0, 2).join(":") ===
-                  member.capturedIdentity.split(":").slice(0, 2).join(":")
+                  current.capturedIdentity.split(":").slice(0, 2).join(":")
               ) {
-                Object.assign(sibling, content);
+                Object.assign(writablePluginNativeMember(other, name)!, content);
               }
             }
           }

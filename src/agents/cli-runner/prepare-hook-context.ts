@@ -41,7 +41,7 @@ export async function prepareCliTurnHookContext(
   },
 ) {
   const turnAudience = await resolveCliTurnMemoryAudience(run, facts);
-  const { requesterDeviceId } = buildAgentHookContextIdentityFields(run);
+  const { requesterDeviceId, execRequestOwners } = buildAgentHookContextIdentityFields(run);
   return {
     turnAudience,
     promptBuildHookContext: {
@@ -58,6 +58,7 @@ export async function prepareCliTurnHookContext(
       ...buildAgentHookMemoryAudienceFields(turnAudience.memoryAudience, run.sessionKey),
       ...buildAgentHookContextChannelFields(run),
       ...(requesterDeviceId ? { requesterDeviceId } : {}),
+      ...(execRequestOwners ? { execRequestOwners } : {}),
     },
   };
 }

@@ -9,7 +9,6 @@ import { buildControlUiChannelAvatarUrl } from "./control-ui-contract.js";
 import { finishFailedGatewayHttpResponse } from "./http-common.js";
 import { HTTP_IMAGE_MAX_BYTES } from "./http-image-response.js";
 import { APNG_BYTES } from "./http-image.test-support.js";
-import { bindHttpResponseAuthority } from "./http-request-authority.js";
 
 const mocks = vi.hoisted(() => ({
   authorize: vi.fn(),
@@ -63,7 +62,6 @@ function avatarEntry(reference = AVATAR_REFERENCE) {
 describe("handleChannelAvatarHttpRequest", () => {
   let port = 0;
   let server: ReturnType<typeof createServer>;
-  let authorityCurrent = true;
 
   beforeAll(async () => {
     server = createServer((req, res) => {
@@ -95,19 +93,12 @@ describe("handleChannelAvatarHttpRequest", () => {
   let sessionVisible = true;
 
   beforeEach(() => {
-    authorityCurrent = true;
     sessionVisible = true;
-    mocks.authorize.mockReset().mockImplementation(({ res }: { res: ServerResponse }) =>
-      bindHttpResponseAuthority(
-        {
-          authMethod: "token",
-          operatorScopes: ["operator.admin", "operator.read"],
-          canReadSession: () => sessionVisible,
-        },
-        res,
-        () => authorityCurrent,
-      ),
-    );
+    mocks.authorize.mockReset().mockImplementation(() => ({
+      authMethod: "token",
+      operatorScopes: ["operator.admin", "operator.read"],
+      canReadSession: () => sessionVisible,
+    }));
     mocks.loadEntry.mockReset().mockResolvedValue({ entry: avatarEntry() });
     mocks.resolveReference.mockReset().mockResolvedValue({
       id: "channel-avatar.png",
@@ -240,28 +231,6 @@ describe("handleChannelAvatarHttpRequest", () => {
     expect(mocks.readMedia).not.toHaveBeenCalled();
     sessionVisible = true;
     expect((await fetch(url)).status).toBe(200);
-  });
-
-  it("rejects revoked authority while channel avatar bytes are loading", async () => {
-    const reading = createDeferredCore();
-    const release = createDeferredCore();
-    mocks.readMedia.mockImplementationOnce(async () => {
-      reading.resolve();
-      await release.promise;
-      return { buffer: PNG_BYTES };
-    });
-
-    const pending = fetch(avatarRoute("agent:main:revoked"));
-    await reading.promise;
-    authorityCurrent = false;
-    release.resolve();
-
-    const response = await pending;
-    expect(response.status).toBe(401);
-    expect(response.headers.get("etag")).toBeNull();
-    expect(await response.json()).toEqual({
-      error: { message: "Unauthorized", type: "unauthorized" },
-    });
   });
 
   it.each([

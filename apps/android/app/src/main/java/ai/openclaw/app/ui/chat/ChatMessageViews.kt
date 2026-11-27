@@ -35,6 +35,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
@@ -719,6 +720,7 @@ fun ChatCodeBlock(
   code: String,
   language: String?,
   isComplete: Boolean = true,
+  readerState: @Composable () -> LazyListState = { rememberLazyListState() },
 ) {
   val display = code.trimEnd()
   // A custom accent may be too light for keywords on the code surface.
@@ -755,7 +757,7 @@ fun ChatCodeBlock(
           ChatCodeText(highlighted, rememberChatReaderAnchor())
         }
       } else {
-        val scroll = rememberLazyListState()
+        val scroll = readerState()
         val action = key(display) { rememberChatReaderAction() }
         val requester = remember { BringIntoViewRequester() }
         val viewportAnchor = rememberChatReaderAnchor(display)

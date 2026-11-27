@@ -22,6 +22,7 @@ import { registerHooks, stripTypeScriptTypes } from "node:module";
 import { loadavg } from "node:os";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -228,12 +229,7 @@ if (values.mode === "retention") {
   let allocatedBytes: number | undefined;
   const loadStart = loadavg();
   if (values.mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 32768,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 32768);
   }
   try {
     const cpuStart = process.threadCpuUsage();

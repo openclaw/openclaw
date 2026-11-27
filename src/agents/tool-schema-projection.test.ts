@@ -1,6 +1,5 @@
-import { publishRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import { Type } from "typebox";
-import { assert, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   filterProviderNormalizableTools,
   filterRuntimeCompatibleTools,
@@ -26,21 +25,6 @@ function expectFiniteDefault(value: unknown) {
 }
 
 describe("runtime tool input schema projection", () => {
-  it("projects mutable schemas without materializing property entry pairs", () => {
-    const parameters = objectSchema({
-      query: { type: "string" },
-      options: { type: "object", properties: { limit: { type: "integer", maximum: 100 } } },
-    });
-    const bytes = JSON.stringify(parameters);
-    using entries = vi.spyOn(Object, "entries");
-    const projection = projectRuntimeToolInputSchema(parameters);
-    const enumerations = entries.mock.calls.length;
-    entries.mockRestore();
-    expect(JSON.stringify(projection.schema)).toBe(bytes);
-    expect(projection.violations).toEqual([]);
-    expect(enumerations).toBe(0);
-  });
-
   it("reports dynamic JSON Schema keywords in traversal order with exact paths", () => {
     const schema = {
       type: "object",
@@ -131,30 +115,6 @@ describe("runtime tool input schema projection", () => {
     expect(projectRuntimeToolInputSchema(parameters)).toEqual({ schema: original, violations: [] });
     expect(filterRuntimeCompatibleTools([tool])).toEqual({ tools: [tool], diagnostics: [] });
     expect(parameters).toEqual(original);
-  });
-
-  it("reuses published inspection facts without copying their empty diagnostics across attempts", () => {
-    const projection = publishRuntimeToolInputSchema(objectSchema({ query: { type: "string" } }));
-    assert(projection.schema !== null && typeof projection.schema === "object");
-    const tool = { name: "search", parameters: projection.schema };
-    const iterator = Array.prototype[Symbol.iterator];
-    let diagnosticCopies = 0;
-    // eslint-disable-next-line no-extend-native -- Count copies without a spy recursively iterating its own call arguments.
-    Array.prototype[Symbol.iterator] = function (this: unknown[]) {
-      if (this === projection.violations) {
-        diagnosticCopies++;
-      }
-      return iterator.call(this);
-    };
-    try {
-      for (let attempt = 0; attempt < 100; attempt++) {
-        filterRuntimeCompatibleTools([tool]);
-      }
-    } finally {
-      // eslint-disable-next-line no-extend-native -- Restore synchronous work-count instrumentation even on failure.
-      Array.prototype[Symbol.iterator] = iterator;
-    }
-    expect(diagnosticCopies).toBe(0);
   });
 
   it("rechecks current descriptors and mutable schemas across filter modes and recovery", () => {

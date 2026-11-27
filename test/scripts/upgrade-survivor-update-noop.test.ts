@@ -64,6 +64,16 @@ const noop = {
   root: "/fixture/openclaw",
   steps: [],
 };
+const requested = { step: "requested", status: "completed", startedAtMs: 1, endedAtMs: 2 };
+const staging = { step: "staging", status: "skipped", startedAtMs: 2, endedAtMs: 4 };
+const plugins = { step: "plugins", status: "completed", startedAtMs: 3, endedAtMs: 4 };
+const ledgerNoop = {
+  ...noop,
+  phase: "finished",
+  origin: {},
+  repair: [],
+  steps: [requested, staging, plugins],
+};
 const legacyAuthWarning = {
   checkId: "core/doctor/browser",
   severity: "warning",
@@ -140,6 +150,35 @@ assert_legacy_operator_doctor_clean
 
 describe("legacy-operator already-current update", () => {
   it.each([
+    { name: "accepts the release updater lifecycle record", report: ledgerNoop, accepted: true },
+    {
+      name: "rejects completed package staging",
+      report: { ...ledgerNoop, steps: [requested, { ...staging, status: "completed" }, plugins] },
+    },
+    {
+      name: "rejects failed plugin maintenance",
+      report: { ...ledgerNoop, steps: [requested, staging, { ...plugins, status: "failed" }] },
+    },
+    {
+      name: "rejects missing plugin maintenance",
+      report: { ...ledgerNoop, steps: [requested, staging] },
+    },
+    {
+      name: "rejects an unexpected release step",
+      report: {
+        ...ledgerNoop,
+        steps: [requested, staging, plugins, { step: "publishing", status: "completed" }],
+      },
+    },
+    { name: "rejects an unfinished release", report: { ...ledgerNoop, phase: "staging" } },
+    {
+      name: "rejects a release that ran a repair",
+      report: { ...ledgerNoop, repair: [{ attempt: 1, status: "succeeded", startedAtMs: 1 }] },
+    },
+    {
+      name: "rejects a release repair request",
+      report: { ...ledgerNoop, origin: { nextAction: "openclaw update repair" } },
+    },
     { name: "accepts no steps", report: noop, accepted: true },
     {
       name: "accepts verified recovery cleanup",

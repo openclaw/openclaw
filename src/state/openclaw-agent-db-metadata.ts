@@ -1,4 +1,5 @@
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
+import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import {
   getSqliteDatabaseAdmission,
@@ -7,12 +8,15 @@ import {
 } from "../infra/sqlite-database-admission.js";
 import { schemaAdmission } from "../infra/sqlite-schema-admission.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
+import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { classifySqliteTableReadError, tableExists } from "./openclaw-state-db-schema-helpers.js";
 
 export type ExistingAgentSchemaMeta = {
   agentId: string | null;
   role: string | null;
   schemaVersion: number | null;
+  /** Absent for the implicit floor derived from the writer's version markers. */
+  minReader?: number;
 };
 
 export const agentSchemaMetadataKey: SqliteDatabaseAdmissionKey<ExistingAgentSchemaMeta> = {
@@ -29,11 +33,19 @@ export const agentSchemaMetadataKey: SqliteDatabaseAdmissionKey<ExistingAgentSch
       !("role" in value) ||
       (value.role !== null && typeof value.role !== "string") ||
       !("schemaVersion" in value) ||
-      (value.schemaVersion !== null && typeof value.schemaVersion !== "number")
+      (value.schemaVersion !== null && typeof value.schemaVersion !== "number") ||
+      ("minReader" in value && value.minReader != null && typeof value.minReader !== "number")
     ) {
       return undefined;
     }
-    return { agentId: value.agentId, role: value.role, schemaVersion: value.schemaVersion };
+    return {
+      agentId: value.agentId,
+      role: value.role,
+      schemaVersion: value.schemaVersion,
+      ...("minReader" in value && typeof value.minReader === "number"
+        ? { minReader: value.minReader }
+        : {}),
+    };
   },
 };
 
@@ -80,7 +92,9 @@ export function readExistingAgentSchemaMeta(db: EngineConnection): ExistingAgent
   let row;
   try {
     row = db
-      .prepare("SELECT role, schema_version, agent_id FROM schema_meta WHERE meta_key = 'primary'")
+      .prepare(
+        "SELECT role, schema_version, agent_id, schema_meta.* FROM schema_meta WHERE meta_key = 'primary'",
+      )
       .get();
   } catch (error) {
     throw classifySqliteTableReadError(
@@ -93,10 +107,30 @@ export function readExistingAgentSchemaMeta(db: EngineConnection): ExistingAgent
   if (!row) {
     return null;
   }
+  const schemaVersion = typeof row.schema_version === "number" ? row.schema_version : null;
+  const physical = isPostgresSqlConnection(db) ? getPostgresPhysicalFacts(db) : undefined;
+  const minReader = isPostgresSqlConnection(db)
+    ? physical && physical.minReader !== physical.version
+      ? physical.minReader
+      : undefined
+    : row.min_reader;
+  if (
+    minReader != null &&
+    (typeof minReader !== "number" ||
+      !Number.isSafeInteger(minReader) ||
+      minReader < (schemaVersion === 0 ? 0 : 1) ||
+      schemaVersion === null ||
+      minReader > schemaVersion)
+  ) {
+    throw new SqliteSchemaMismatchError(
+      "OpenClaw agent database min_reader must be a safe integer between 1 and schema_version (or 0 for schema version 0). Run openclaw doctor --fix before using it.",
+    );
+  }
   const metadata = {
     agentId: normalizeNullableString(row.agent_id),
     role: typeof row.role === "string" ? row.role : null,
-    schemaVersion: typeof row.schema_version === "number" ? row.schema_version : null,
+    schemaVersion,
+    ...(minReader != null ? { minReader } : {}),
   };
   const schemaStillCurrent = schema && getAdmittedSqliteSchemaFacts(db) === schema;
   if (

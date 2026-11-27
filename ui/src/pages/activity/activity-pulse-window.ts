@@ -19,7 +19,20 @@ export function activityPulseBucketStart(
 }
 
 export function activityPulseBoundaries(time: ActivityTimeFilter, now: number): number[] {
-  const bucketCount = { "24h": 25, "7d": 8, "30d": 31, all: 12 }[time];
+  if (time === "7d" || time === "30d") {
+    // The elapsed cutoff can fall on a different local date across a DST change.
+    const days = time === "7d" ? 7 : 30;
+    const cutoff = now - days * 86_400_000;
+    let edge = activityPulseBucketStart(time, cutoff, 0);
+    const boundaries = [edge];
+    while (edge <= now) {
+      edge = activityPulseBucketStart(time, edge, 1);
+      boundaries.push(edge);
+    }
+    return boundaries;
+  }
+
+  const bucketCount = time === "24h" ? 25 : 12;
   const start =
     time === "24h" ? now - 24 * 3_600_000 : activityPulseBucketStart(time, now, 1 - bucketCount);
   return Array.from({ length: bucketCount + 1 }, (_, index) =>

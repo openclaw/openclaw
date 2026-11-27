@@ -43,7 +43,10 @@ function summarizeChildren(
         ])
       : child.attention;
     childAttention.push(attention);
-    unreadChildCount += Number(child.unread) + (descendants?.unreadChildCount ?? 0);
+    // A hidden run counts only while reading its parent can acknowledge it.
+    unreadChildCount +=
+      Number(onlySubagents ? isAcknowledgeableHiddenRun(child) : child.unread) +
+      (descendants?.unreadChildCount ?? 0);
     const visuallyActive = child.isRunVisuallyActive ?? child.hasActiveRun;
     runningChildCount +=
       Number(childShowsParentWorking(child)) + (descendants?.runningChildCount ?? 0);
@@ -199,6 +202,11 @@ export function projectSessionTree(params: {
       childLoadParentKeys: childSessionKeys.length > 0 ? [...childLoadParentKeys] : [],
       children,
       loadingChildren: [...childLoadParentKeys].some((key) => loadingChildKeys.has(key)),
+      hasRunningDescendant: descendants.some(
+        (child) =>
+          child.hasRunningDescendant ||
+          (child.status !== "queued" && childShowsParentWorking(child)),
+      ),
       containsActiveDescendant: children.some(
         (child) => child.active || child.visuallyActive || child.containsActiveDescendant,
       ),

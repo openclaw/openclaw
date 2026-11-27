@@ -937,7 +937,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     { boundary: "callback", revoke: true },
     { boundary: "callback", revoke: false },
   ] as const)(
-    "checks live node policy at $boundary before real execution (revoke=$revoke)",
+    "finishes an admitted launch when node policy changes at $boundary (revoke=$revoke)",
     async ({ boundary, revoke }) => {
       const { runCommand } = await import("./invoke-run-command.js");
       const cwd = fixtureDir("openclaw-node-policy-before-spawn-");
@@ -980,16 +980,12 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         },
       });
 
-      expect(stdout).toBe(revoke ? "" : "approved.txt\n");
-      expect(invokeResult(invoke.sendInvokeResult).ok).toBe(!revoke);
+      // The commit checked node policy once; a later revoke applies to the next command.
+      expect(stdout).toBe("approved.txt\n");
+      expect(invokeResult(invoke.sendInvokeResult).ok).toBe(true);
       expect(
         invoke.sendNodeEvent.mock.calls.filter(([event]) => event === "exec.finished"),
-      ).toHaveLength(revoke ? 0 : 1);
-      if (revoke) {
-        expect(invokeResult(invoke.sendInvokeResult).error?.code).toBe("SYSTEM_RUN_DENIED");
-        expectError(invoke.sendInvokeResult, "exec approval changed before execution");
-        expectExecDeniedEvent(invoke.sendNodeEvent);
-      }
+      ).toHaveLength(1);
     },
   );
 

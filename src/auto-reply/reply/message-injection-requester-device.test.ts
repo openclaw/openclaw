@@ -4,6 +4,8 @@ import {
   registerTestEmbeddedRun,
   testing as embeddedTesting,
 } from "../../agents/embedded-agent-runner/runs.test-support.js";
+import { captureExecRequestOwners, withExecRequestTurn } from "../../infra/exec-request-context.js";
+import { buildAgentHookContextIdentityFields } from "../../plugins/hook-agent-context.js";
 import { createHookRunner } from "../../plugins/hooks.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import type { ReplyBackendMessageInjectionV2 as Injection } from "../../sessions/session-controller.contracts.js";
@@ -19,7 +21,7 @@ afterEach(() => {
   testing.resetSessionControllerForTest();
 });
 
-async function steerAndObserve(runId: string, inputRequesterDeviceId?: string) {
+async function steer(runId: string, inputRequesterDeviceId?: string) {
   const sessionId = `session-${runId}`;
   const sessionKey = `agent:main:${runId}`;
   const operation = createOperation({ sessionId, sessionKey });
@@ -60,7 +62,11 @@ async function steerAndObserve(runId: string, inputRequesterDeviceId?: string) {
     },
   );
   await expect(attempt.outcome).resolves.toMatchObject({ status: "accepted" });
+  return { sessionId, sessionKey };
+}
 
+async function steerAndObserve(runId: string, inputRequesterDeviceId?: string) {
+  const { sessionKey } = await steer(runId, inputRequesterDeviceId);
   const seen: { tool?: string; agent?: string }[] = [];
   const runner = createHookRunner(
     createMockPluginRegistry([
@@ -101,6 +107,55 @@ it("withholds the run's device from hooks after another device steers into it", 
   await expect(steerAndObserve("run-steered-by-cli")).resolves.toEqual([
     { tool: undefined },
     { agent: undefined },
+  ]);
+});
+
+// Device A starts a run that launches a background exec; its completion runs later as its own turn.
+async function completionOwnerDevice(steeringDevice: string) {
+  const startRunId = `run-start-${steeringDevice}`;
+  const sessionId = `session-${startRunId}`;
+  const owners = await withExecRequestTurn(
+    { identity: { runId: startRunId, sessionId, ownerDeviceId: "device-a" } },
+    async () => captureExecRequestOwners({ runId: startRunId, sessionId }) ?? [],
+  );
+  await steer(startRunId, steeringDevice);
+  let seen: unknown;
+  const runner = createHookRunner(
+    createMockPluginRegistry([
+      {
+        hookName: "agent_end",
+        handler: (...args: unknown[]) => {
+          seen = (args[1] as { execRequestOwners?: unknown }).execRequestOwners;
+        },
+      },
+    ]),
+    { catchErrors: false },
+  );
+  const completionRunId = `run-completion-${steeringDevice}`;
+  await withExecRequestTurn(
+    { identity: { runId: completionRunId, sessionId }, owners, continues: true },
+    () =>
+      runner.runAgentEnd(
+        { messages: [], success: true },
+        {
+          runId: completionRunId,
+          ...buildAgentHookContextIdentityFields({ trigger: "event" }),
+        },
+      ),
+  );
+  return seen;
+}
+
+it("withholds the exec starter's device from its completion after another device steered it", async () => {
+  await expect(completionOwnerDevice("device-b")).resolves.toEqual([
+    { runId: "run-start-device-b", sessionId: "session-run-start-device-b" },
+  ]);
+  await expect(completionOwnerDevice("device-a")).resolves.toEqual([
+    {
+      runId: "run-start-device-a",
+      sessionId: "session-run-start-device-a",
+      ownerDeviceId: "device-a",
+    },
   ]);
 });
 

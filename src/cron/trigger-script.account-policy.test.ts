@@ -73,7 +73,7 @@ it.each(["trigger", "payload"] as const)(
         const invoke = async (accountId: string, channel?: string) => {
           const script = `await message({ action: "send", channel: "telegram", accountId: ${JSON.stringify(accountId)}, target: "123", message: "Scheduled report" }); return { fire: false };`;
           const jobId = `account-${entry}-${accountId}`;
-          const marker = markCronJobActive(jobId, { isMessageActionAuthorityCurrent: () => true });
+          const marker = markCronJobActive(jobId);
           const ownerSessionKey = `agent:main:telegram:${accountId}:direct:123`;
           const job: CronStoredJob = makeCronJob({
             id: jobId,
@@ -221,7 +221,7 @@ it("reuses hydrated creator origin for script admission across warm cache change
       });
       const jobId = "script-delete-origin";
       const invoke = async (callerOrigin?: CronScheduledToolCallerOrigin) => {
-        const marker = markCronJobActive(jobId, { isMessageActionAuthorityCurrent: () => true });
+        const marker = markCronJobActive(jobId);
         const job: CronStoredJob = makeCronJob({
           id: jobId,
           agentId: "main",
@@ -316,7 +316,7 @@ it("flags reauthorization exactly when script preparation reaches the missing-ch
       ] as const;
       for (const [index, [entry, toolsAllow, script, blocked]] of cases.entries()) {
         const jobId = `reauthorization-${index}`;
-        const marker = markCronJobActive(jobId, { isMessageActionAuthorityCurrent: () => true });
+        const marker = markCronJobActive(jobId);
         const job: CronStoredJob = makeCronJob({
           id: jobId,
           agentId: "main",

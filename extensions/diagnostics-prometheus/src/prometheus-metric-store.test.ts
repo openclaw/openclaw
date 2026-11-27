@@ -7,6 +7,7 @@ import { familyBudgetPopulation, populateFamilyBudget } from "./family-budget.te
 import { PROMETHEUS_FAMILY_LIMITS, type PrometheusMetricName } from "./prometheus-family-budget.js";
 import * as prometheusFormat from "./prometheus-format.js";
 import { createPrometheusMetricStore } from "./prometheus-metric-store.js";
+import { recordMemorySample } from "./service-memory.js";
 
 const runs = "openclaw_run_completed_total";
 const duration = "openclaw_run_duration_seconds";
@@ -21,6 +22,31 @@ function expectLines(text: string, ...lines: string[]) {
   }
 }
 afterEach(() => vi.restoreAllMocks());
+
+it("reuses prepared memory series and withdraws missing worker gauges", () => {
+  const store = createPrometheusMetricStore();
+  const memory = {
+    rssBytes: 1000,
+    heapUsedBytes: 300,
+    heapTotalBytes: 500,
+    externalBytes: 20,
+    arrayBuffersBytes: 10,
+  };
+  const worker = { script: 'sqlite"雪.worker.js', heapUsed: 100, heapTotal: 200 };
+  recordMemorySample(
+    store,
+    { ...memory, workerHeaps: [worker, { ...worker, script: "gone" }] },
+    [2000],
+  );
+  const format = vi.spyOn(prometheusFormat, "formatLabels");
+  const key = vi.spyOn(prometheusFormat, "metricKey");
+  recordMemorySample(store, { ...memory, workerHeaps: [{ ...worker, heapUsed: 123 }] }, [2000]);
+  expect(format.mock.calls.length).toBe(0);
+  expect(key.mock.calls.length).toBe(0);
+  const rendered = store.render().toString();
+  expectLines(rendered, 'openclaw_worker_heap_used_bytes{script="sqlite\\"雪.worker.js"} 123');
+  expect(rendered).not.toContain('script="gone"');
+});
 
 it.each([121, 257])("retains the full family mix with %s bounded reader operations", (readers) => {
   const store = createPrometheusMetricStore();
@@ -202,6 +228,34 @@ it("preserves label identity across property order, label shapes, and separator 
       `${runs} 17`,
     ].toSorted(),
   );
+});
+
+it("exports a new plugin counter label set at 0 and leaves existing series untouched", () => {
+  const store = createPrometheusMetricStore();
+  const jobs = {
+    name: "openclaw_plugin_demo_jobs_total",
+    type: "counter",
+    help: "Jobs.",
+    labels: ["outcome"],
+  } as const;
+  store.plugin(jobs, { outcome: "ok" }, 2);
+  store.plugin(jobs, { outcome: "error" }, 0);
+  for (const invalid of [-1, Number.NaN, Number.POSITIVE_INFINITY]) {
+    store.plugin(jobs, { outcome: "invalid" }, invalid);
+  }
+  // Core counters still skip 0, so an unknown model cost never renders as a measured $0.
+  store.counter(runs, "Runs.", {}, 0);
+  const first = store.render().toString();
+  expect(samples(first, "openclaw_")).toEqual([
+    `${jobs.name}{outcome="error"} 0`,
+    `${jobs.name}{outcome="ok"} 2`,
+  ]);
+
+  const format = vi.spyOn(prometheusFormat, "formatPrometheusNumber");
+  store.plugin(jobs, { outcome: "ok" }, 0);
+  store.plugin(jobs, { outcome: "error" }, 0);
+  expect(store.render().toString()).toBe(first);
+  expect(format).not.toHaveBeenCalled();
 });
 
 it("enforces family and total ceilings, releasing cleared gauges and retired plugin entries", () => {

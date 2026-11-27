@@ -2,7 +2,6 @@ import { createMemo, For, Show } from "solid-js";
 import type { AgentSelectOption } from "../../components/agent-select-types.ts";
 import "../../components/agent-select-registration.ts";
 import { highlightCodeHtml } from "../../components/markdown-code-blocks.ts";
-import { Icon } from "../../components/solid/icon.tsx";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { listSelectableAgents, normalizeAgentLabel } from "../../lib/agents/display.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -22,7 +21,7 @@ import { CronModelControls } from "./view-model-controls.tsx";
 import {
   ScheduleControls,
   ScheduleDetails,
-  ScheduleNote,
+  ScheduleTimeZone,
   TRAY_SCHEDULE_FIELDS,
   TrayErrors,
 } from "./view-schedule.tsx";
@@ -368,12 +367,9 @@ function PromptBlock(
       </div>
       <div class="cron-prompt__tray">
         <div class="cron-prompt__controls">
-          <span class="cron-prompt__clock" aria-hidden="true">
-            <Icon name="clock" />
-          </span>
           <div class="cron-editor-schedule">
             <ScheduleControls {...props} phoneLayout={props.phoneLayout} />
-            <ScheduleNote {...props} />
+            <ScheduleTimeZone {...props} />
           </div>
           {props.isAgentTurn ? (
             <span class="cron-prompt__run-controls" data-picker-below>
@@ -381,12 +377,12 @@ function PromptBlock(
             </span>
           ) : undefined}
         </div>
-        <div class="cron-editor-tray-errors">
-          <TrayErrors
-            fieldErrors={props.fieldErrors}
-            fields={[...TRAY_SCHEDULE_FIELDS, "payloadModel", "payloadThinking"]}
-          />
-        </div>
+      </div>
+      <div class="cron-editor-tray-errors">
+        <TrayErrors
+          fieldErrors={props.fieldErrors}
+          fields={[...TRAY_SCHEDULE_FIELDS, "payloadModel", "payloadThinking"]}
+        />
       </div>
     </div>
   );

@@ -20,24 +20,21 @@ export interface QualificationExemption {
 export function releaseQualificationExemptions(
   targetVersion: string,
   profile: string,
+  waivers?: ReleaseValidationWaiver[],
 ): QualificationExemption[];
 export function validateQualificationExemptions(
   exemptions: unknown,
   targetVersion: string,
   profile: string,
+  waivers?: ReleaseValidationWaiver[],
 ): void;
 export interface ReleaseValidationWaiver {
-  targetSha?: string;
   targetVersion: string;
+  targetSha?: string;
   childRole: string;
-  jobName: string;
+  jobName?: string;
   reason: string;
-  testFailures?: {
-    stepName: string;
-    signatures: { kind: "vitest"; file: string; test: string }[];
-    alternativeSignatures?: { kind: "vitest"; file: string; test: string }[][];
-  };
-  evidence?: { runId: string; runAttempt: number };
+  step?: string;
   qualificationExemption?: QualificationExemptionEvidence;
 }
 export interface ReleasePolicyJob {
@@ -46,36 +43,57 @@ export interface ReleasePolicyJob {
   conclusion: string | null;
   url?: string;
   html_url?: string;
+  firstIncompleteStep?: string;
+  steps?: { name: string; conclusion: string | null; status?: string }[];
 }
 export interface ReleaseChildPolicy {
   waivers: ReleaseValidationWaiver[];
-  aggregates: {
-    jobName: string;
-    stepName: string;
-    causes: string[];
-    exactCauses?: boolean;
-    logSha256?: string;
-  }[];
+  workflowWaived: boolean;
+  waivedWorkDidNotPass: boolean;
   waivedJobNames: Set<string>;
+  missingRequiredJobs: string[];
   blockingJobs: ReleasePolicyJob[];
   advisoryJobs: ReleasePolicyJob[];
   advisoryFailureAllowed: boolean;
 }
 export function isFailedReleaseJob(job: ReleasePolicyJob): boolean;
 export function evaluateReleaseChildPolicy(input: {
-  child: { key: string; jobs: ReleasePolicyJob[]; runId?: string; runAttempt?: number };
+  child: {
+    key: string;
+    jobs: ReleasePolicyJob[];
+    runId?: string;
+    runAttempt?: number | null;
+    status?: string;
+  };
+  requiredJobs?: string[];
   targetVersion?: string;
   targetSha?: string;
+  waiverPolicy?: ReleaseValidationWaiver[];
 }): ReleaseChildPolicy;
-export class ReleaseAggregateValidationError extends Error {}
-export function validateReleaseWaiverAggregates(input: {
-  policy: ReleaseChildPolicy;
-  jobs: (ReleasePolicyJob & {
-    id: number;
-    steps?: { name: string; conclusion: string | null }[];
-  })[];
-  getJobLog: (jobId: number) => unknown;
-}): Promise<void>;
+export const RELEASE_VALIDATION_WAIVERS_PATH: string;
+export function parseReleaseValidationWaivers(source: string): ReleaseValidationWaiver[];
+export function validateAuthoredReleaseWaivers(
+  previous: ReleaseValidationWaiver[],
+  proposed: ReleaseValidationWaiver[],
+): void;
+export function firstIncompleteReleaseStep(steps?: ReleasePolicyJob["steps"]): string | undefined;
+export function isWaived(
+  scope: {
+    targetVersion?: string;
+    targetSha?: string;
+    childRole: string;
+    jobName?: string;
+    job?: ReleasePolicyJob;
+  },
+  waivers?: ReleaseValidationWaiver[],
+): boolean;
+export function decodeReleaseValidationSource(payload: unknown, sourcePath: string): string;
+export function readReleaseValidationWaivers(
+  readSource: (path: string) => string,
+): ReleaseValidationWaiver[];
+export function readReleaseValidationWaiversAsync(
+  readSource: (path: string) => string | Promise<string>,
+): Promise<ReleaseValidationWaiver[]>;
 
 export function releaseChildAdvisories(child: {
   key: string;

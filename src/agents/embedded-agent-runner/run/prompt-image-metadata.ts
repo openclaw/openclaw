@@ -19,7 +19,7 @@ export function readPersistedImageBlockFactIndexes(
   return value.map((entry) => asSafeIntegerInRange(entry, { min: 0 }) ?? null);
 }
 
-export function readPersistedMediaImageLayout(message: AgentMessage): MediaImageLayout | undefined {
+export function readPersistedMediaImageLayout(message: object): MediaImageLayout | undefined {
   const record = asOptionalRecord(
     asOptionalRecord(Reflect.get(message, "__openclaw"))?.mediaImageLayout,
   );

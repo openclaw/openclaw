@@ -1,3 +1,23 @@
+/* A customizable select sizes to its selected option. Reserve the widest translated
+   choice without moving the other controls when the operator changes modes. */
+:is(.systems-desktop .desktop-toolbar, openclaw-desktop-panel .desktop-touch-toolbar)
+  select.desktop-sizing {
+  display: inline-block;
+  width: max-content;
+  min-width: 88px;
+  max-width: 100%;
+  white-space: nowrap;
+}
+:is(.systems-desktop .desktop-toolbar, openclaw-desktop-panel .desktop-touch-toolbar)
+  .desktop-sizing::after {
+  display: block;
+  height: 0;
+  visibility: hidden;
+  content: attr(data-sizing-labels);
+  white-space: pre;
+  letter-spacing: normal;
+}
+
 openclaw-desktop-panel {
   .desktop-apps {
     display: flex;
@@ -780,12 +800,26 @@ openclaw-desktop-panel {
     gap: 5px;
   }
   .desktop-environment__id {
-    overflow: hidden;
     color: var(--text);
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 12px;
+  }
+  .desktop-environment__label,
+  .desktop-environment__qualifier {
+    display: block;
+    overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  /* Machine IDs share long prefixes. Clip the start, not the identifying end. */
+  .desktop-environment__label[data-identifier="true"],
+  .desktop-environment__qualifier {
+    direction: rtl;
+    text-align: match-parent;
+  }
+  .desktop-environment__qualifier {
+    color: var(--muted);
+    font-size: 11px;
   }
   .desktop-environment__meta,
   .desktop-environment__sessions {
@@ -921,11 +955,12 @@ openclaw-desktop-panel {
     .desktop-touch-toolbar {
       display: grid;
       width: calc(100% - 24px);
-      grid-template-columns: repeat(3, minmax(44px, 1fr));
+      grid-template-columns: minmax(44px, 1fr) minmax(max-content, 1fr) minmax(44px, 1fr);
     }
-    .desktop-touch-toolbar .desktop-sizing {
+    .desktop-document .desktop-touch-toolbar select.desktop-sizing {
       box-sizing: border-box;
-      width: 100%;
+      width: auto;
+      justify-self: stretch;
     }
   }
 }

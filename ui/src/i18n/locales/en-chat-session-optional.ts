@@ -31,8 +31,8 @@ const catalog = {
       contextShowAll: "Show all {count}",
     },
     sessionAutomation: {
-      creating: "Creating automation…",
-      notCreated: "Not created",
+      created: "Created",
+      removed: "Removed",
       unavailable: "Automation unavailable",
       emptyHint: "Automations attached to this session will appear here.",
       scheduleUnavailable: "Schedule unavailable",
@@ -200,6 +200,7 @@ const catalog = {
       undo: "Undo",
       undoing: "Undoing…",
       undone: "Undone",
+      alreadyUndone: "Already undone",
       undoError: "Couldn’t undo the skill change. Try again. Details: {error}",
     },
     youtube: {
@@ -240,6 +241,11 @@ const catalog = {
       askImageUnsupported:
         "This side chat model can’t read images. Choose a model that supports images, then try again.",
       askRateLimited: "Side chat reached its question limit. Try again shortly.",
+      askTimeout: "Side chat timed out.",
+      askStop: "Stop side chat answer",
+      askStopped: "Answer stopped.",
+      askStopFailed: "Couldn’t stop the side chat answer. Try again.",
+      askStillWaiting: "Still waiting for an answer",
       askUnavailable: "Side chat cannot answer right now.",
       askRetry: "Retry",
       health: {

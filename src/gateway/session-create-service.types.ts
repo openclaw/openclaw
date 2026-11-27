@@ -23,6 +23,7 @@ import type {
   ModelAccountConnectAction,
   UserModelAccountSelection,
 } from "./model-account-authority.js";
+import type { operatorSessionCap } from "./operator-role-policy.js";
 import type {
   GatewayOperatorRoleActor,
   SessionMutationAuthorization,
@@ -92,7 +93,7 @@ export type GatewaySessionCommitResult =
       key: string;
       agentId: string;
       entry: SessionEntry;
-      resolved: { modelProvider: string; model: string };
+      resolved: { modelProvider?: string; model?: string };
       resetExisting: boolean;
     }
   | { ok: false; error: ErrorShape; initializationNotCommitted?: true };
@@ -251,6 +252,8 @@ export type CreateGatewaySessionParams = {
   afterSessionCommitted?: SessionEntryCreateWithTranscriptOptions["afterCommitted"];
   bindSharingCreation?: SessionEntryCreateWithTranscriptOptions["bindCreation"];
   followSharingRegistration?: SessionMutationAuthorization["followRegistration"];
+  readSessionSharing?: SessionMutationAuthorization["readTargetSharing"];
+  getCurrentSessionAccessCap?: () => ReturnType<typeof operatorSessionCap>;
   /** Synchronous caller-authority guard checked by each durable owner boundary. */
   commitGuard?: SessionSourceAssertion;
 };
@@ -284,8 +287,12 @@ export type GatewaySessionResetParams = {
     actor?: SessionCreatedActor;
     openclawIdPrincipal?: import("./openclaw-id/tunnel-principal.js").OpenClawIdTunnelPrincipal;
   };
+  /** Admitted scopes for resets that can clear an existing permission boundary. */
+  requestingOperatorScopes?: readonly string[];
   /** Authenticated durable operator identity for missing-session materialization. */
   requestingOperatorProfileId?: string;
+  readSessionSharing?: SessionMutationAuthorization["readTargetSharing"];
+  getCurrentSessionAccessCap?: () => ReturnType<typeof operatorSessionCap>;
   operatorAuthority?: AdmittedRunOperatorAuthority;
   /** Trusted host actor; system-owned resets must identify themselves explicitly. */
   operatorRoleActor?: GatewayOperatorRoleActor;

@@ -140,7 +140,7 @@ describe("lean Tool Search directory", () => {
 });
 
 describe("Tool Search directory omission count", () => {
-  it.each([1, 8])("ignores %i unlisted MCP/client tools without hiding search", async (count) => {
+  it.each([1, 8])("keeps %i MCP/client tools out of the native rows", async (count) => {
     const native = createStubTool("local_directory_tool");
     const baseline = catalogRef([native]);
     const mcpTools = Array.from({ length: count - 1 }, (_, index) => {
@@ -157,7 +157,9 @@ describe("Tool Search directory omission count", () => {
 
     const baselineText = buildToolSchemaDirectoryPrompt({ catalogRef: baseline });
     const expandedText = buildToolSchemaDirectoryPrompt({ catalogRef: expanded });
-    expect(expandedText).toBe(baselineText);
+    // MCP tools follow in their own directory; the native rows and count are unchanged.
+    expect(expandedText.startsWith(baselineText)).toBe(true);
+    expect(expandedText.includes("external_mcp_")).toBe(count > 1);
     expect(expandedText).not.toContain("additional tools omitted");
     expect(expandedText).not.toContain("external_client");
     const runtime = new ToolSearchRuntime({ catalogRef: expanded }, resolveToolSearchConfig());

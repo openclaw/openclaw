@@ -107,7 +107,7 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
   that skill's directory and use the configured skill-file byte limit. Unknown
   agents, unavailable files, paths outside the installed inventory, and oversized
   files return `INVALID_REQUEST`. The method does not read arbitrary host files.
-- `skills.search` and `skills.detail` (`operator.read`) return ClawHub
+- `skills.categories`, `skills.search`, and `skills.detail` (`operator.read`) return ClawHub
   discovery metadata. `skills.detail({ slug, version? })` accepts the publisher-qualified
   `installRef` from search and reads that release's card and scan summary. See
   [Skill registry details](/gateway/protocol/operator-methods#skill-registry-details).
@@ -333,6 +333,30 @@ or restart, not a silent local fallback. The model CLI uses this contract for
 `models list` and `models list --refresh`.
 
 ## Skill registry details
+
+`skills.categories({})` reads `GET /api/v1/skills/-/categories` from the configured
+ClawHub registry. It returns `{ categories: [{ slug, label, description?, icon? }] }` in registry order.
+A registry without this endpoint (HTTP 404) returns an empty category list; other
+registry failures are errors. Clients can check whether the Gateway advertises
+`skills.categories` before offering category filters.
+
+`skills.search({ query?, category?, cursor?, limit? })` returns
+`{ results, nextCursor? }`. The optional `limit` is 1–100.
+
+| Request                          | Registry read                                                        |
+| -------------------------------- | -------------------------------------------------------------------- |
+| No query or category             | Existing cross-source trending feed (`/api/v1/trending?kind=skills`) |
+| Category only                    | Native skills listed by `/api/v1/skills?category=<slug>`             |
+| Text, optionally with a category | `/api/v1/search?q=<text>` with the selected `category`, if any       |
+
+Trending results can include `categories`, an array of registry category slugs.
+Use `skills.categories` for their display labels. When a row has no membership
+metadata, keep it in the ranked feed without assigning it a category.
+
+Pass the returned opaque `nextCursor` back as `cursor` with the same browse filter
+for the next page. No cursor means there is no next page. Text search is not
+paginated. A failed or unavailable category filter never retries as unfiltered
+discovery.
 
 Use the exact `installRef` from `skills.search` when requesting details. For example:
 

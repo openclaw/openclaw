@@ -1,4 +1,4 @@
-import type { AutomationSavedDefinition } from "../../../../src/shared/automation-saved-definition.js";
+import { readCronJobNotFoundError } from "@openclaw/gateway-protocol/gateway-error-details";
 import type { CronJob } from "../../api/types.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
 import { formatUiError } from "../format-error.ts";
@@ -17,7 +17,7 @@ export type CronJobObservation = {
   writable: boolean;
   saving?: boolean;
   error?: string;
-  retryable?: true;
+  readFailure?: "not-found" | "retryable";
 };
 
 /** A mounted exact-job reader, independent of the Automations page's filters and draft. */
@@ -25,7 +25,6 @@ export function watchCronJobDefinition(
   gateway: ApplicationGateway,
   id: string,
   publish: (state: CronJobObservation) => void,
-  initial?: AutomationSavedDefinition,
 ) {
   let state: CronJobObservation = { loading: true, writable: false };
   let generation = 0;
@@ -79,15 +78,19 @@ export function watchCronJobDefinition(
         return;
       }
       if (job?.id !== id) {
-        update({ loading: false, writable: false, retryable: true });
+        update({ loading: false, writable: false, readFailure: "retryable" });
         return;
       }
       awaitingWriteReconciliation = false;
       update({ job, loading: false, writable: writable(job), error: state.error });
-    } catch {
+    } catch (error) {
       if (!request.signal.aborted) {
-        // Removed and inaccessible jobs intentionally have the same Gateway read contract.
-        update({ loading: false, writable: false, retryable: true, error: state.error });
+        // An exact miss is final for this view, not proof of deletion for every viewer.
+        if (readCronJobNotFoundError(error)?.jobId === id) {
+          update({ loading: false, writable: false, readFailure: "not-found" });
+        } else {
+          update({ loading: false, writable: false, readFailure: "retryable", error: state.error });
+        }
       }
     }
   }
@@ -111,19 +114,10 @@ export function watchCronJobDefinition(
     }
   });
   const stopEvents = gateway.subscribeEvents((event) => {
-    if (
-      client &&
-      state.saving === undefined &&
-      isCronInventoryInvalidation(event, gateway.snapshot)
-    ) {
+    if (client && state.saving === undefined && isCronInventoryInvalidation(event)) {
       void read(true);
     }
   });
-  // Only a mounted pending -> confirmed transition supplies a seed. On history load,
-  // reconnect or a viewer without manage authority, read the exact job before display.
-  if (client && initial?.id === id && writable(initial)) {
-    state = { job: initial, loading: true, writable: true };
-  }
   void read();
   return {
     retry: read,

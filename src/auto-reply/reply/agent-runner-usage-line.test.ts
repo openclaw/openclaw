@@ -2,7 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { captureModelCostPricing } from "../../utils/usage-format.js";
+import { captureModelCostPricing } from "../../model-catalog/usage-pricing.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import { appendUsageLine, resolveResponseUsageLine } from "./agent-runner-usage-line.js";
 

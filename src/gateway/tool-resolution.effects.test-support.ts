@@ -180,7 +180,11 @@ export function registerGatewayToolFinalEffectTests() {
               sessionKey: "agent:main:effects",
               operationalRunInstance,
               approvalAuthority: authority,
-              receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
+              receiptAuthority: () => {
+                if (!validateAgentRunDelegatedAuthority(authority)) {
+                  throw new Error("agent tool caller authority is no longer active");
+                }
+              },
               gatewayContextResolver: () => context,
             },
             () =>
@@ -310,7 +314,7 @@ export function registerGatewayToolFinalEffectTests() {
           );
           if (outcome === "tool-cancelled") {
             expect(result).toMatchObject({
-              error: { message: "agent tool caller authority is no longer active" },
+              error: { name: "AbortError" },
             });
           }
           // A cancelled tool wait can finish before the approval owner's durable handoff.

@@ -42,7 +42,6 @@ import { sanitizeNodeIdFragment, sanitizeServerName } from "./agent-bundle-mcp-n
 import { bindAgentToolExecutionLocation } from "./agent-tool-metadata.js";
 import { resolveApiKeyForProfile, resolveAuthProfileOrder } from "./auth-profiles.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
-import { bindRequesterOwnerIdentity } from "./cron-creator-authority-context.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
 import {
   createMcpClientElicitationHandler,
@@ -66,10 +65,7 @@ import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.type
 import type { AgentToolResult } from "./runtime/index.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
-import {
-  captureGatewayToolCallerAssertion,
-  getGatewayToolCallerIdentity,
-} from "./tools/gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 import { callGatewayTool } from "./tools/gateway.js";
 import { hasProviderAuthForTool } from "./tools/model-config.helpers.js";
 import { captureAgentWorkspaceReadiness } from "./workspace-readiness.js";
@@ -89,8 +85,7 @@ function registerNodeToolElicitation(
   signal?: AbortSignal,
 ) {
   const caller = getGatewayToolCallerIdentity();
-  const assertCurrent = captureGatewayToolCallerAssertion();
-  if (!caller || !assertCurrent || caller.sessionKey !== sessionKey) {
+  if (!caller?.operationalRunInstance || caller.sessionKey !== sessionKey) {
     return undefined;
   }
   const registry = getInProcessGatewayRequestContext(caller.gatewayContextResolver)?.nodeRegistry;
@@ -98,19 +93,18 @@ function registerNodeToolElicitation(
   if (!registry || !node) {
     return undefined;
   }
-  assertCurrent();
+  const stopSignal = AbortSignal.any([
+    ...(caller.approvalSignals ?? []),
+    ...(signal ? [signal] : []),
+  ]);
+  stopSignal.throwIfAborted();
   const id = randomUUID();
   const handle = createMcpClientElicitationHandler({
     sessionKey,
     agentId: caller.agentId,
-    assertCurrent,
+    assertCurrent: () => stopSignal.throwIfAborted(),
   });
-  const release = registry.mcpElicitation.register({
-    id,
-    node,
-    signal: AbortSignal.any([...(caller.approvalSignals ?? []), ...(signal ? [signal] : [])]),
-    handle,
-  });
+  const release = registry.mcpElicitation.register({ id, node, signal: stopSignal, handle });
   return { id, [Symbol.dispose]: release };
 }
 
@@ -355,15 +349,6 @@ function* resolveOpenClawPluginToolSteps(
     getRuntimeConfig: resolveCurrentRuntimeConfig,
   });
   const authProfileStore = params.options?.authProfileStore;
-  const requesterOwner =
-    pluginToolInputs.context.senderIsOwner === true
-      ? undefined
-      : bindRequesterOwnerIdentity({
-          runId: params.options?.runId,
-          sessionKey: pluginToolInputs.context.sessionKey,
-          sessionId: pluginToolInputs.context.sessionId,
-          agentId: pluginToolInputs.context.agentId,
-        });
   const delivery = createPluginToolDelivery({
     options: params.options,
     context: pluginToolInputs.context,
@@ -405,7 +390,6 @@ function* resolveOpenClawPluginToolSteps(
               provider: providerId,
               cfg: availabilityConfig,
               workspaceDir: pluginToolInputs.context.workspaceDir,
-              agentDir: params.options?.agentDir,
               authStore: authProfileStore,
               runtimeLookup: availabilityRuntimeLookup,
             })
@@ -496,7 +480,10 @@ function* resolveOpenClawPluginToolSteps(
     : requestRegistry;
   const loadContext = getPluginRuntimeLoadContext(preparedRegistry);
   const metadataSnapshot = preparedModelRuntime?.metadataSnapshot ?? loadContext?.metadataSnapshot;
-  const assertCallerCurrent = captureGatewayToolCallerAssertion();
+  const caller = getGatewayToolCallerIdentity();
+  const assertCallerCurrent = caller?.operationalRunInstance
+    ? () => caller.approvalSignals?.forEach((signal) => signal.throwIfAborted())
+    : undefined;
   const assertRequestCurrent = params.options?.assertInvocationCurrent;
   const resolution = {
     ...pluginToolInputs,
@@ -525,7 +512,6 @@ function* resolveOpenClawPluginToolSteps(
           assertRequestCurrent();
         }
       : assertCallerCurrent,
-    ownerContinuation: requesterOwner,
     clientCaps: params.options?.clientCaps,
     toolAllowlist: params.options?.pluginToolAllowlist,
     toolDenylist: params.options?.pluginToolDenylist,

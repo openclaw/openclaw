@@ -2,11 +2,6 @@ import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { writeHostFile } from "../../agents/host-file-write.js";
-import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
-import {
-  bindCommandOwnerAuthority,
-  captureCommandOwnerAssertion,
-} from "../../auto-reply/command-owner-authority.js";
 import * as databaseIdentity from "../../infra/sqlite-worker-identity.js";
 import { chatRef } from "../../sessions/chat-ref.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
@@ -195,7 +190,7 @@ it("checks retained delivery and source authority without polling and refuses da
   expect(source.assertCurrent).toThrow();
 });
 
-it("writes under prepared generation and command-owner authority without synchronous probes or SQL", async () => {
+it("writes under a prepared generation without synchronous probes or SQL", async () => {
   const { database, scope, generation } = await fixture(settings);
   const source = composeSessionSourceAssertion([generation.assertCurrent], (assertSources) => {
     assertSources();
@@ -204,16 +199,8 @@ it("writes under prepared generation and command-owner authority without synchro
   const warm = await prepareSessionSourceEffect(source);
   warm.assertCurrent();
   await warm.release?.();
-  const context = {};
-  bindCommandOwnerAuthority(context, {
-    sourceAssertion: source,
-    isCurrent() {
-      source();
-      return true;
-    },
-  });
-  const receiptAuthority = captureCommandOwnerAssertion(context);
-  expect(receiptAuthority).toBeDefined();
+  const prepareMutation = source.prepareSessionSourceStorageEffect;
+  expect(prepareMutation).toBeTypeOf("function");
   const file = `${database.path}.effect.txt`;
   await fs.promises.writeFile(file, "original");
   database.db
@@ -244,10 +231,7 @@ it("writes under prepared generation and command-owner authority without synchro
   onTestFinished(() => {
     vi.restoreAllMocks();
   });
-  await withGatewayToolCallerIdentity(
-    { agentId: scope.agentId, sessionKey: scope.sessionKey, receiptAuthority },
-    () => writeHostFile(file, "replacement"),
-  );
+  await writeHostFile(file, "replacement", undefined, prepareMutation);
   expect(await fs.promises.readFile(file, "utf8")).toBe("replacement");
   expect({
     identity: identity.mock.calls.length,

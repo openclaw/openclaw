@@ -58,11 +58,12 @@ export type WorktreeCleanupOwnerPolicy = {
   beforeRemoval?: (record: ManagedWorktreeRecord) => Promise<void>;
   prepareOwners?: (
     records: readonly ManagedWorktreeRecord[],
-  ) => Promise<Pick<WorktreeCleanupOwnerPolicy, "readOwnerState">>;
+  ) => Promise<Pick<WorktreeCleanupOwnerPolicy, "readOwnerState" | "readOwnerActivityAt">>;
   readOwnerState?: (
     ownerKind: ManagedWorktreeOwnerKind,
     ownerId: string,
   ) => "active" | "retired" | "idle" | "other";
+  readOwnerActivityAt?: (ownerId: string) => number | undefined;
   withOwnerCleanup?: <T>(
     record: ManagedWorktreeRecord,
     run: (withOwnerMutation: WorktreeCleanupMutation) => Promise<T>,
@@ -236,7 +237,7 @@ export function createWorktreeGcRemoval(context: {
   progress: WorktreeGcProgress;
   policy: WorktreeCleanupOwnerPolicy;
   expiresBefore: number;
-  classifyOwner?: WorktreeCleanupOwnerPolicy["readOwnerState"];
+  ownerCensus?: Pick<WorktreeCleanupOwnerPolicy, "readOwnerState" | "readOwnerActivityAt">;
   signal?: AbortSignal;
   assertCurrent?: () => void;
   remove: (
@@ -524,7 +525,7 @@ export function createWorktreeGcRemoval(context: {
           const ownerState =
             record.ownerId === undefined
               ? undefined
-              : context.classifyOwner?.(record.ownerKind, record.ownerId);
+              : context.ownerCensus?.readOwnerState?.(record.ownerKind, record.ownerId);
           retiredOwner = ownerState === "retired";
           if (ownerState === "active") {
             progress.protect("idle", record.id, "owner is active");
@@ -534,11 +535,16 @@ export function createWorktreeGcRemoval(context: {
           // across an extra hour without ever shortening retention.
           const idleJitterMs =
             createHash("sha256").update(record.id).digest().readUInt32BE(0) % 3_600_000;
-          // Session custody owns idleness; its registry activity stamp is not a run clock.
-          const idle =
-            record.ownerKind === "session" && ownerState !== undefined
-              ? ownerState === "idle"
-              : record.lastActiveAt + idleJitterMs < context.expiresBefore;
+          const ownerActivityAt =
+            record.ownerKind === "session" && record.ownerId !== undefined
+              ? context.ownerCensus?.readOwnerActivityAt?.(record.ownerId)
+              : undefined;
+          // A terminal run status still belongs to a resumable conversation.
+          const lastActiveAt = Math.max(
+            record.lastActiveAt,
+            Number.isFinite(ownerActivityAt) ? (ownerActivityAt ?? 0) : 0,
+          );
+          const idle = lastActiveAt + idleJitterMs < context.expiresBefore;
           if (retiredOwner || idle) {
             // Capacity eviction and idle cleanup share one decision per record per pass.
             if (!progress.start(record.id)) {

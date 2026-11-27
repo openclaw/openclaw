@@ -86,7 +86,7 @@ const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify(args) + "\\n");
 const replies = ${JSON.stringify(wire)};
 const key = args[0] === "api" ? args[1] : args.slice(0, 2).join(" ");
-const value = replies[key] ?? (key.includes("?") ? replies[key.split("?")[0] + "?*"] : undefined);
+const value = replies[key + " " + args[2]] ?? replies[key] ?? (key.includes("?") ? replies[key.split("?")[0] + "?*"] : undefined);
 if (value === undefined) throw new Error("Unplanned gh request: " + args.join(" "));
 process.stdout.write(value.$base64 ? Buffer.from(value.$base64, "base64") : typeof value === "string" ? value : JSON.stringify(value));
 `,
@@ -232,45 +232,53 @@ function publicationSourceFixture(
   fixture: ReturnType<typeof trustedMainNpmFixture>,
   fullCoverage: boolean,
   route: "normal" | "prepared" = "normal",
+  legacyArtifactInput = false,
 ) {
-  return createPublicationSourceFact(
-    publicationSourceRequest({
-      PUBLICATION_INPUTS_JSON: JSON.stringify({
-        ref: fixture.targetSha,
-        release_profile: "beta",
-        rerun_group: "all",
-        skip_package_telegram_e2e: true,
-        ...(fullCoverage
-          ? {
-              provider: fixture.manifest.validationInputs.provider,
-              mode: fixture.manifest.validationInputs.mode,
-              npm_telegram_provider_mode: fixture.manifest.validationInputs.npmTelegramProviderMode,
-            }
-          : {}),
-        trusted_workflow_json: publicationDispatchEnvelope(null, {
-          validationPurpose: "publish",
-          publicationSelection: {
-            route,
-            npmDistTag: "beta",
-            publishOpenclawNpm: true,
-            pluginPublishScope: "all-publishable",
-            plugins: [],
-          },
-        }),
+  const request = publicationSourceRequest({
+    PUBLICATION_INPUTS_JSON: JSON.stringify({
+      ref: fixture.targetSha,
+      release_profile: "beta",
+      rerun_group: "all",
+      skip_package_telegram_e2e: true,
+      ...(fullCoverage
+        ? {
+            provider: fixture.manifest.validationInputs.provider,
+            mode: fixture.manifest.validationInputs.mode,
+            npm_telegram_provider_mode: fixture.manifest.validationInputs.npmTelegramProviderMode,
+          }
+        : {}),
+      trusted_workflow_json: publicationDispatchEnvelope(null, {
+        validationPurpose: "publish",
+        publicationSelection: {
+          route,
+          npmDistTag: "beta",
+          publishOpenclawNpm: true,
+          pluginPublishScope: "all-publishable",
+          plugins: [],
+        },
       }),
-      PUBLICATION_TOOLING_JSON: JSON.stringify({
-        fullRef: "refs/heads/main",
-        sha: fixture.workflowSha,
-      }),
-      PUBLICATION_COVERAGE_POLICY: "npm-beta-v1",
-      PUBLICATION_TARGET_CONTEXT: "release/2026.8.28",
-      PUBLICATION_TARGET_SHA: fixture.targetSha,
-      GITHUB_REPOSITORY: "openclaw/openclaw",
-      GITHUB_REF: "refs/heads/main",
-      GITHUB_SHA: fixture.workflowSha,
-      GITHUB_RUN_ID: fixture.runId,
-      GITHUB_RUN_ATTEMPT: "1",
     }),
+    PUBLICATION_TOOLING_JSON: JSON.stringify({
+      fullRef: "refs/heads/main",
+      sha: fixture.workflowSha,
+    }),
+    PUBLICATION_COVERAGE_POLICY: "npm-beta-v1",
+    PUBLICATION_TARGET_CONTEXT: "release/2026.8.28",
+    PUBLICATION_TARGET_SHA: fixture.targetSha,
+    GITHUB_REPOSITORY: "openclaw/openclaw",
+    GITHUB_REF: "refs/heads/main",
+    GITHUB_SHA: fixture.workflowSha,
+    GITHUB_RUN_ID: fixture.runId,
+    GITHUB_RUN_ATTEMPT: "1",
+  });
+  return createPublicationSourceFact(
+    {
+      ...request,
+      coverage: {
+        ...request.coverage,
+        ...(legacyArtifactInput && { publication_artifact_source_json: "", telegram_waiver: "" }),
+      },
+    },
     { packages: [], platforms: [] },
     {
       version: "2026.8.28-beta.1",
@@ -280,9 +288,13 @@ function publicationSourceFixture(
   );
 }
 
-function publicationRestoreFixture(fullCoverage = false, route: "normal" | "prepared" = "normal") {
+function publicationRestoreFixture(
+  fullCoverage = false,
+  route: "normal" | "prepared" = "normal",
+  legacyArtifactInput = false,
+) {
   const fixture = trustedMainNpmFixture();
-  const source = publicationSourceFixture(fixture, fullCoverage, route);
+  const source = publicationSourceFixture(fixture, fullCoverage, route, legacyArtifactInput);
   const time = "2026-08-28T12:00:00.000Z";
   const observations = createPublicationObservations(source, {
     sourceDigest: source.digest,
@@ -340,10 +352,26 @@ function publicationRestoreFixture(fullCoverage = false, route: "normal" | "prep
 }
 
 describe("original publication admission reader", () => {
-  it.each(["cached", "artifact", "wrong-producer", "wrong-attempt"] as const)(
+  it.each([
+    "cached",
+    "artifact",
+    "legacy-empty-operand",
+    "nonempty-retired-operand",
+    "wrong-producer",
+    "wrong-attempt",
+  ] as const)(
     "authenticates a %s plan against its later pre-seal recovery attempt",
     async (planSource) => {
-      const fixture = publicationRestoreFixture();
+      const fixture = publicationRestoreFixture(
+        false,
+        "normal",
+        planSource === "legacy-empty-operand",
+      );
+      const {
+        publication_artifact_source_json: _retired,
+        telegram_waiver: _telegram,
+        ...coverage
+      } = fixture.request.coverage;
       fixture.plan.sealParentRunAttempt = planSource === "wrong-attempt" ? 3 : 2;
       fixture.plan.sha256 = releaseExecutionPlanSha256(fixture.plan);
       const parent = publicationParent(fixture);
@@ -380,7 +408,13 @@ describe("original publication admission reader", () => {
         }),
       };
       const operation = restoreOriginalPublicationAdmission({
-        request: fixture.request,
+        request: {
+          ...fixture.request,
+          coverage:
+            planSource === "nonempty-retired-operand"
+              ? { ...coverage, telegram_waiver: "changed" }
+              : coverage,
+        },
         client,
         cachedPlan: planSource === "cached" ? fixture.plan : undefined,
       });
@@ -390,6 +424,12 @@ describe("original publication admission reader", () => {
       }
       if (planSource === "wrong-attempt") {
         await expect(operation).rejects.toThrow("sealer/upload did not succeed");
+        return;
+      }
+      if (planSource === "nonempty-retired-operand") {
+        await expect(operation).rejects.toThrow(
+          "publication original admission operands differ from this attempt",
+        );
         return;
       }
       const restored = await operation;
@@ -607,6 +647,251 @@ process.stdout.write(JSON.stringify(restored));`,
 });
 
 describe("GitHub API commands", () => {
+  it.each(["valid", "truncated", "wrong digest"])(
+    "verifies a release-sized promotion within the publisher request budget: %s",
+    (fault) => {
+      const directory = tempDirs.make("release-promotion-batch-");
+      const shim = join(directory, "gh");
+      writeFileSync(
+        shim,
+        `#!${process.execPath}\n` +
+          String.raw`
+import { createHash } from "node:crypto";
+const args = process.argv.slice(2);
+const source = (expression) => {
+  const text = JSON.stringify({ name: "openclaw", version: expression.startsWith("a".repeat(40)) ? "2026.11.24-beta.2" : "2026.11.24" });
+  return { text, byteSize: Buffer.byteLength(text), oid: createHash("sha1").update("blob " + Buffer.byteLength(text) + "\0" + text).digest("hex"), isBinary: false, isTruncated: false };
+};
+if (args[1] === "graphql") {
+  const query = args.find((arg) => arg.startsWith("query="));
+  const repository = Object.fromEntries([...query.matchAll(/f(\d+):object\(expression:"([a-z0-9:/.-]+)"\)/gu)].map((match) => {
+    const blob = source(match[2]);
+    if (process.env.BLOB_FAULT === "truncated") blob.isTruncated = true;
+    if (process.env.BLOB_FAULT === "wrong digest") blob.oid = "0".repeat(40);
+    return ["f" + match[1], blob];
+  }));
+  process.stdout.write(JSON.stringify({ data: { repository } }));
+} else {
+  const blob = source("a".repeat(40));
+  process.stdout.write(JSON.stringify({ type: "file", path: "package.json", encoding: "base64", size: blob.byteSize, sha: blob.oid, content: Buffer.from(blob.text).toString("base64") }));
+}
+`,
+        { mode: 0o755 },
+      );
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "--eval",
+          `
+import { classifyReleaseEvidenceComparison } from ${JSON.stringify(pathToFileURL(resolve("scripts/full-release-validation-policy.mjs")).href)};
+import { createReleaseEvidenceClient } from ${JSON.stringify(pathToFileURL(resolve(SCRIPT)).href)};
+import { withGithubRequestBudget } from ${JSON.stringify(pathToFileURL(resolve("scripts/lib/plain-gh.mjs")).href)};
+const client = createReleaseEvidenceClient("openclaw/openclaw");
+withGithubRequestBudget(32, (budget) => {
+  const files = ["package.json", ...Array.from({ length: 188 }, (_, index) => "extensions/plugin-" + index + "/package.json")].map((filename) => ({ filename, status: "modified" }));
+  const result = classifyReleaseEvidenceComparison({ status: "ahead", merge_base_commit: { sha: "a".repeat(40) }, files }, {
+    baseSha: "a".repeat(40), targetSha: "b".repeat(40), version: "2026.11.24", targetCoveragePolicy: "npm-stable-v1",
+    rootManifest: { releaseProfile: "stable", runReleaseSoak: "true", controls: { performanceBlocking: true }, validationInputs: { targetVersion: "2026.11.24-beta.2" } },
+    readSourceFile: (sha, path) => client.getSourceFile(sha, path), readSourceFiles: (requests) => client.getSourceFiles(requests),
+  });
+  process.stdout.write(JSON.stringify({ policy: result.policy, paths: result.changedPaths.length, requests: budget.used }));
+});`,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PATH: `${directory}:${process.env.PATH ?? ""}`,
+            BLOB_FAULT: fault,
+          },
+        },
+      );
+      if (fault === "valid") {
+        expect(result.status, result.stderr).toBe(0);
+        expect(JSON.parse(result.stdout)).toEqual({
+          policy: "stable-qualified-beta-final-v1",
+          paths: 189,
+          requests: 13,
+        });
+      } else {
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          fault === "truncated"
+            ? "invalid immutable promotion source blob"
+            : "immutable promotion source blob mismatch",
+        );
+      }
+    },
+  );
+
+  it.skipIf(!hasUnzip).each(["summary", "watch", "reuse", "unwaived", "corrupt-policy"])(
+    "authenticates Q-only selected-job waivers in the ordinary CLI: %s",
+    (scenario) => {
+      const directory = tempDirs.make("release-ci-summary-q-policy-");
+      const fixture = trustedMainPackageFixture({
+        manifestVersion: 3,
+        workflowSha: "b".repeat(40),
+      });
+      const child = expectDefined(
+        expectedChildDispatches(fixture.runId, 1, "main").find(
+          (entry) => entry.manifestKey === "normalCi",
+        ),
+        "CI child",
+      );
+      fixture.parentJob.name = child.parentJobName;
+      Object.assign(fixture.childRun, {
+        conclusion: "failure",
+        display_title: child.displayTitle,
+        path: ".github/workflows/ci.yml",
+      });
+      const jobs = [
+        {
+          name: "synthetic-selected-test",
+          status: "completed",
+          conclusion: "failure",
+          run_attempt: 1,
+        },
+      ];
+      const composite = composeReleaseAttemptJobs([{ runAttempt: 1, jobs }], {
+        effectiveRunAttempt: 1,
+        plannedRunAttempt: 1,
+      });
+      const manifest = {
+        ...fixture.manifest,
+        rerunGroup: "ci",
+        childRuns: {
+          ...fixture.manifest.childRuns,
+          normalCi: String(fixture.childRun.id),
+          releaseChecks: "",
+        },
+        childEvidence: {
+          normalCi: {
+            compositeJobsSha256: composite.sha256,
+            dispatchActor: "github-actions[bot]",
+            effectiveRunAttempt: 1,
+            jobs: composite.jobs,
+            observedRunAttempts: [1],
+            plannedRunAttempt: 1,
+            repository: "openclaw/openclaw",
+            runId: String(fixture.childRun.id),
+            triggeringActor: "github-actions[bot]",
+          },
+        },
+        validationInputs: { ...fixture.manifest.validationInputs, targetVersion: "2099.1.1" },
+      };
+      const runId = scenario === "reuse" ? "29071366026" : fixture.runId;
+      const route = "repos/openclaw/openclaw/";
+      const replies: Record<string, unknown> = {
+        rate_limit: { resources: { core: { limit: 5000, remaining: 4999, reset: 2_000_000_000 } } },
+        [route + "actions/runs/" + fixture.runId + "/jobs?*"]: { jobs: [fixture.parentJob] },
+        [route + "actions/runs/" + fixture.childRun.id]: fixture.childRun,
+        [route + "actions/jobs/" + fixture.parentJob.id + "/logs"]:
+          "TARGET_SHA: " +
+          fixture.targetSha +
+          "\nDispatched: " +
+          fixture.childRun.html_url +
+          " (attempt 1)",
+      };
+      for (const id of scenario === "reuse" ? [fixture.runId, runId] : [runId]) {
+        const sha = id === fixture.runId ? fixture.workflowSha : "c".repeat(40);
+        const current = {
+          ...manifest,
+          runId: id,
+          workflowSha: sha,
+          ...(id === fixture.runId
+            ? {}
+            : {
+                evidenceReuse: {
+                  runId: fixture.runId,
+                  selectedRunId: fixture.runId,
+                  evidenceSha: fixture.targetSha,
+                  changedPaths: [],
+                  policy: "exact-target-full-validation-v1",
+                },
+              }),
+        };
+        const archive = makeStoredZip({ [MANIFEST_ARTIFACT_ENTRY]: JSON.stringify(current) });
+        const artifact = {
+          ...fixture.artifact,
+          id: Number(id),
+          name: "full-release-validation-" + id + "-1",
+          digest: artifactDigest(archive),
+          size_in_bytes: archive.length,
+          workflow_run: { ...fixture.artifact.workflow_run, id: Number(id), head_sha: sha },
+        };
+        const policyPath = "scripts/lib/release-validation-waivers.json";
+        const policy = Buffer.from(
+          JSON.stringify({
+            schema: "openclaw.release-validation-waivers/v1",
+            waivers:
+              scenario === "unwaived"
+                ? []
+                : [
+                    {
+                      targetVersion: "2099.1.1",
+                      childRole: "normalCi",
+                      jobName: "synthetic-selected-test",
+                      reason: "Synthetic Q-only grant",
+                    },
+                  ],
+          }),
+        );
+        Object.assign(replies, {
+          ["run view " + id]: { ...fixture.parentView, headSha: sha },
+          [route + "actions/runs/" + id]: { ...fixture.parentRun, id: Number(id), head_sha: sha },
+          [route + "actions/runs/" + id + "/artifacts?*"]: { artifacts: [artifact] },
+          [route + "actions/artifacts/" + id]: artifact,
+          [route + "actions/artifacts/" + id + "/zip"]: archive,
+          [route + "contents/" + policyPath + "?ref=" + sha]: {
+            path: policyPath,
+            type: "file",
+            encoding: "base64",
+            content: policy.toString("base64"),
+            size: policy.length,
+            sha:
+              scenario === "corrupt-policy"
+                ? "0".repeat(40)
+                : createHash("sha1")
+                    .update("blob " + policy.length + "\0")
+                    .update(policy)
+                    .digest("hex"),
+          },
+        });
+      }
+      const { command } = ghFixture(directory, replies);
+      const result = spawnSync(
+        process.execPath,
+        [SCRIPT, runId, ...(scenario === "watch" ? ["--watch"] : [])],
+        {
+          encoding: "utf8",
+          timeout: 10_000,
+          env: {
+            ...process.env,
+            PATH: directory + ":" + (process.env.PATH ?? ""),
+            OPENCLAW_GH_BIN: command,
+            GH_TOKEN: "synthetic-token",
+          },
+        },
+      );
+      const error =
+        scenario === "unwaived"
+          ? "failed selected job evidence"
+          : scenario === "corrupt-policy"
+            ? "source-admission workflow blob mismatch"
+            : undefined;
+      expect(result.status, result.stderr).toBe(error ? 1 : 0);
+      if (error) {
+        expect(result.stderr).toContain(error);
+      } else {
+        expect(result.stdout).toContain("child: " + fixture.childRun.id + " CI completed/failure");
+        if (scenario === "reuse") {
+          expect(result.stdout).toContain("evidence-root-run: " + fixture.runId);
+        }
+      }
+    },
+  );
+
   it("budgets large artifact downloads for a conservative transfer rate", () => {
     expect(artifactDownloadTimeoutMs(55 * 1024 * 1024)).toBeGreaterThan(60_000);
     expect(artifactDownloadTimeoutMs(245 * 1024 * 1024)).toBeGreaterThan(15 * 60_000);
@@ -630,10 +915,25 @@ describe("GitHub API commands", () => {
         size_in_bytes: archive.length,
       });
       const lineage = { merge_base_commit: { sha: workflowSha }, status: "ahead" };
+      const policy = Buffer.from(
+        '{"schema":"openclaw.release-validation-waivers/v1","waivers":[]}',
+      );
+      const policyPath = "scripts/lib/release-validation-waivers.json";
       const { calls: shimLog } = ghFixture(root, {
         "run view": fixture.parentView,
         "auth token": "wrapper-only-token",
         rate_limit: { resources: { core: { limit: 5000, remaining: 4999, reset: 2_000_000_000 } } },
+        ["repos/openclaw/openclaw/contents/" + policyPath + "?ref=" + workflowSha]: {
+          path: policyPath,
+          type: "file",
+          encoding: "base64",
+          size: policy.length,
+          content: policy.toString("base64"),
+          sha: createHash("sha1")
+            .update("blob " + policy.length + "\0")
+            .update(policy)
+            .digest("hex"),
+        },
         [`repos/openclaw/openclaw/actions/runs/${runId}`]: fixture.parentRun,
         [`repos/openclaw/openclaw/actions/runs/${runId}/artifacts?*`]: {
           artifacts: [fixture.artifact],
@@ -1363,9 +1663,9 @@ describe("release CI summary child correlation", () => {
       ).rejects.toThrow(
         scenario === "retired-advisory"
           ? /advisory jobs differ/u
-          : scenario === "missing-gate" || scenario === "skipped-gate"
-            ? /openclaw\/ci-gate/u
-            : /failed selected job evidence/u,
+          : scenario === "windows-shard"
+            ? /manifest child run does not pass release policy/u
+            : /openclaw\/ci-gate/u,
       );
       expect(JSON.stringify(f.manifest)).toBe(before);
     },
@@ -1853,6 +2153,96 @@ describe("release CI summary child correlation", () => {
         (child) => child.manifestKey,
       ),
     ).toEqual(["productPerformance"]);
+  });
+
+  it.each([
+    "beta profile",
+    "full profile",
+    "missing soak",
+    "advisory performance",
+    "different final",
+    "dependency change",
+    "conditional export order",
+    "source change",
+    "foreign notes",
+    "renamed file",
+    "incomplete comparison",
+  ])("rejects unsafe beta-to-final evidence reuse: %s", (fault) => {
+    const root = manifestFixture();
+    Object.assign(root, {
+      releaseProfile:
+        fault === "beta profile" ? "beta" : fault === "full profile" ? "full" : "stable",
+      runReleaseSoak: fault === "missing soak" ? "false" : "true",
+      controls: { ...root.controls, performanceBlocking: fault !== "advisory performance" },
+      validationInputs: { ...root.validationInputs, targetVersion: "2026.11.24-beta.2" },
+    });
+    const current = reuseManifest(root, {
+      policy: "stable-qualified-beta-final-v1",
+      targetSha: "b".repeat(40),
+      changedPaths: ["package.json"],
+    });
+    current.validationInputs = {
+      ...root.validationInputs,
+      targetVersion: "2026.11.24",
+      coveragePolicy: "npm-stable-v1",
+    };
+    const files = [{ filename: "package.json", status: "modified" }];
+    if (fault === "source change") {
+      files.push({ filename: "src/index.ts", status: "modified" });
+    }
+    if (fault === "foreign notes") {
+      files.push({ filename: "CHANGELOG/2026.11.23.md", status: "modified" });
+    }
+    if (fault === "renamed file") {
+      files[0]!.status = "renamed";
+    }
+    if (fault === "incomplete comparison") {
+      for (let index = 1; index < 300; index++) {
+        files.push({ filename: `extensions/plugin-${index}/package.json`, status: "modified" });
+      }
+    }
+    expect(() =>
+      validateEvidenceReuseChain(
+        current,
+        root,
+        root,
+        () => ({ status: "ahead", merge_base_commit: { sha: root.targetSha }, files }),
+        (sha: string) =>
+          JSON.stringify({
+            version:
+              sha === root.targetSha
+                ? "2026.11.24-beta.2"
+                : fault === "different final"
+                  ? "2026.11.25"
+                  : "2026.11.24",
+            dependencies: {
+              example: sha !== root.targetSha && fault === "dependency change" ? "2" : "1",
+            },
+            exports:
+              fault === "conditional export order"
+                ? {
+                    ".":
+                      sha === root.targetSha
+                        ? { node: "./node.js", default: "./default.js" }
+                        : { default: "./default.js", node: "./node.js" },
+                  }
+                : undefined,
+          }),
+      ),
+    ).toThrow(
+      fault === "beta profile" ||
+        fault === "full profile" ||
+        fault === "missing soak" ||
+        fault === "advisory performance"
+        ? "stable qualification, soak and blocking performance"
+        : fault === "different final"
+          ? "versions differ"
+          : fault === "dependency change" || fault === "conditional export order"
+            ? "non-version changes"
+            : fault === "incomplete comparison"
+              ? "complete same-base"
+              : "product change",
+    );
   });
 
   it("rejects unverified changed paths and cross-SHA exact-target reuse", () => {

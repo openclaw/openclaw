@@ -5,6 +5,8 @@ import { expect, it, vi } from "vitest";
 import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { sessionManagerReloadTranscriptCohort } from "../agents/sessions/session-manager-core.js";
+import { SessionManager } from "../agents/sessions/session-manager.js";
 import {
   loadExactSessionEntryReadOnly,
   loadTranscriptEvents,
@@ -12,7 +14,12 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { activeExecRequestOwners } from "../infra/exec-request-context.js";
 import { closeProvider, listenProvider } from "./gateway-provider-fixture.test-support.js";
-import { createProductState, productModelConfig } from "./server.chat-product.test-support.js";
+import { reportGitHubPublicationTranscript } from "./github-publication-transcript.js";
+import {
+  createProductState,
+  productModelConfig,
+  productProvider,
+} from "./server.chat-product.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
@@ -242,4 +249,110 @@ it("binds native chat.send through stop, resume, and completed-turn follow-up", 
   expect(requestBodies[2]).toContain("The same conversation resumed.");
   expect(await loadTranscriptEvents(transcriptScope)).toEqual(expect.arrayContaining(events));
   expect(loadExactSessionEntryReadOnly({ sessionKey })?.entry).toMatchObject({ sessionId });
+});
+
+it("answers a follow-up when a GitHub publication receipt arrives during startup", async () => {
+  const state = await createProductState("publication-during-chat-startup");
+  const sessionKey = "agent:main:publication-during-chat-startup";
+  const requests: string[] = [];
+  const providerErrors: unknown[] = [];
+  const providerServer = productProvider(providerErrors, (body, response) => {
+    const index = requests.push(body);
+    writeOpenAiResponsesText(response, {
+      text: index === 1 ? "The draft is underway." : "The follow-up was answered.",
+      messageId: `message-${index}`,
+      responseId: `response-${index}`,
+    });
+  });
+  await using cleanup = new AsyncDisposableStack();
+  cleanup.defer(() => state.cleanup());
+  cleanup.defer(() => closeProvider(providerServer));
+  const provider = buildMockOpenAiResponsesProvider(
+    await listenProvider(providerServer),
+    "receipt",
+  );
+  const model = productModelConfig(state.workspaceDir, provider);
+  const token = "publication-startup-test";
+  const { client, server } = await startGatewayWithClient({
+    cfg: {
+      cron: { enabled: false },
+      agents: { defaults: model.defaults },
+      models: model.models,
+      plugins: { slots: { memory: "none" } },
+      tools: { profile: "minimal" },
+      gateway: { auth: { mode: "token", token } },
+    },
+    configPath: state.configPath,
+    token,
+    scopes: ["operator.admin", "operator.read", "operator.write"],
+  });
+  cleanup.defer(async () => {
+    await disconnectGatewayClient(client);
+    await server.close({ reason: "publication startup test cleanup" });
+  });
+  const send = async (message: string, runId: string) => {
+    expect(
+      await client.request("chat.send", { sessionKey, message, idempotencyKey: runId }),
+    ).toMatchObject({ runId, status: "started" });
+    return client.request("agent.wait", { runId });
+  };
+  const initialRunId = "turn-that-requested-publication";
+  expect(await send("Open a draft for the change.", initialRunId)).toMatchObject({ status: "ok" });
+  const entry = expectDefined(loadExactSessionEntryReadOnly({ sessionKey })?.entry, "session");
+  const requestId = "publication-receipt-during-follow-up";
+  const receiptUrl = "https://github.com/example/repository/pull/1";
+  const atReplay = createDeferred();
+  // Use the same independent writer as a real publication, not the follow-up's writer scope.
+  const publication = atReplay.promise.then(() =>
+    reportGitHubPublicationTranscript(
+      () => import("./session-utils.js"),
+      {
+        markReportedAsync: async () => {},
+        readReportLifecycleAsync: async () => entry.lifecycleRevision ?? null,
+      },
+      {
+        agentId: "main",
+        sessionKey,
+        sessionId: entry.sessionId,
+        runId: initialRunId,
+        result: {
+          status: "published",
+          requestId,
+          repository: "example/repository",
+          branch: "draft-change",
+          url: receiptUrl,
+          headCommit: "a".repeat(40),
+        },
+      },
+    ),
+  );
+  const reload = SessionManager.prototype[sessionManagerReloadTranscriptCohort];
+  const gate = vi.spyOn(SessionManager.prototype, sessionManagerReloadTranscriptCohort);
+  cleanup.defer(() => {
+    gate.mockRestore();
+  });
+  gate.mockImplementation(async function (this: SessionManager, ...args) {
+    if (args[0].sessionKey === sessionKey) {
+      atReplay.resolve();
+      await publication;
+    }
+    return reload.apply(this, args);
+  });
+
+  const followUp = "Does this cover every case?";
+  const outcome = await send(followUp, "follow-up-during-publication");
+  const history = await client.request<{ messages: unknown[] }>("chat.history", { sessionKey });
+  const messages = history.messages.map((message) => JSON.stringify(message));
+  expect(messages.filter((message) => message.includes(receiptUrl))).toHaveLength(1);
+  expect(outcome).toMatchObject({ status: "ok" });
+  expect(requests).toHaveLength(2);
+  const request = expectDefined(requests[1], "follow-up provider request");
+  expect(request).toContain(followUp);
+  expect(request.split(receiptUrl)).toHaveLength(2);
+  expect(request.indexOf(receiptUrl)).toBeGreaterThan(request.indexOf(followUp));
+  expect(messages.filter((message) => message.includes(followUp))).toHaveLength(1);
+  expect(
+    messages.filter((message) => message.includes("The follow-up was answered.")),
+  ).toHaveLength(1);
+  expect(providerErrors).toEqual([]);
 });

@@ -108,6 +108,14 @@ export async function withHistoryDatabase<T>(
   }
 }
 
+/** Close every retained history database, as isolate exit would. */
+export function closeHistoryDatabaseScopes(): void {
+  for (const [identity, retained] of historyDatabaseScopes) {
+    retained.scope.close();
+    historyDatabaseScopes.delete(identity);
+  }
+}
+
 export function pruneClosedHistoryDatabaseScopes(): void {
   for (const [identity, retained] of historyDatabaseScopes) {
     if (!retained.scope.hasRetainedConnection) {

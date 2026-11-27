@@ -6,7 +6,6 @@ import {
   CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES,
   CONTROL_UI_OWNER_BOOTSTRAP_PROFILE,
 } from "../../../shared/device-bootstrap-profile.js";
-import { setUserProfileRole } from "../../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import { loadDeviceIdentity, openTrackedWs } from "../../device-authz.test-helpers.js";
 import {
@@ -25,7 +24,7 @@ installGatewayTestHooks({ scope: "suite" });
 await import("../../server.js");
 
 describe("definitions-only operator admission", () => {
-  test("allows setup-code and device-token operators with definitions alone and no effective role", async () => {
+  test("keeps owner authority and leaves nonmember profile roles unenforced without a default", async () => {
     const origin = BROWSER_ORIGIN;
     const auth = { mode: "token", token: "definitions-only-secret" } as const;
     await configureBrowserAuth(auth, {
@@ -68,20 +67,19 @@ describe("definitions-only operator admission", () => {
       expect(connected.ok, JSON.stringify(connected)).toBe(true);
       expect((connected.payload as HelloOk).auth.sessionCap).toBeUndefined();
       const person = ensureProfileForEmail("definitions-only@example.test");
-      setUserProfileRole(person.id, "guest");
-      const listed = await rpcReq<UsersListResult>(reconnect, "users.list", {});
-      expect(listed.ok).toBe(true);
-      expect(listed.payload?.profiles.find((p) => p.id === person.id)).toMatchObject({
-        role: "guest",
-      });
-      expect(
-        listed.payload?.profiles.find((p) => p.id === person.id)?.effectiveRole,
-      ).toBeUndefined();
       const assigned = await rpcReq(reconnect, "users.setRole", {
         profileId: person.id,
         role: "guest",
       });
-      expect(assigned.error?.message).toContain("gateway.roles.default");
+      expect(assigned).toMatchObject({
+        ok: true,
+        payload: { profile: { id: person.id, role: "guest" } },
+      });
+      const listed = await rpcReq<UsersListResult>(reconnect, "users.list", {});
+      expect(listed.ok).toBe(true);
+      const listedPerson = listed.payload?.profiles.find((p) => p.id === person.id);
+      expect(listedPerson).toMatchObject({ role: "guest", roleSource: "default" });
+      expect(listedPerson?.effectiveRole).toBeUndefined();
       expect(
         (await rpcReq(reconnect, "users.setRole", { profileId: person.id, role: null })).ok,
       ).toBe(true);

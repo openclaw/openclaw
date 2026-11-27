@@ -1,5 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { isAutomationsToolName } from "../../../../src/agents/tools/automations-tool-name.js";
+import { automationCreationCall } from "../../../../src/chat/automation-job-result.js";
+import { isToolCallContentType, resolveToolBlockArgs } from "../../../../src/chat/tool-content.js";
 import { getMessageDerivations } from "../../lib/chat/message-derivations.ts";
 
 export type AutomationProjection =
@@ -12,6 +14,24 @@ function scheduler(value: unknown) {
   const block = asOptionalRecord(value);
   const name = block?.toolName ?? block?.tool_name ?? block?.name;
   return typeof name === "string" && isAutomationsToolName(name);
+}
+
+/** Live transcript admission only; the projector still validates the paired terminal result. */
+export function hasNestedAutomationCreationCall(message: Record<string, unknown>): boolean {
+  return (
+    message.customType === "openclaw.nested-tool.v1" &&
+    message.display !== false &&
+    Array.isArray(message.content) &&
+    message.content.some((value) => {
+      const block = asOptionalRecord(value);
+      return (
+        block &&
+        isToolCallContentType(block.type) &&
+        scheduler(block) &&
+        automationCreationCall(resolveToolBlockArgs(block))
+      );
+    })
+  );
 }
 
 /** Dispatch only: the deferred projector independently authenticates the call and its terminal result. */

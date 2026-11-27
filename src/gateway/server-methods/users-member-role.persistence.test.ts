@@ -13,7 +13,6 @@ import {
 } from "../../state/user-profile-list.js";
 import * as profileWrites from "../../state/user-profile-writes.js";
 import { readStoredClaw, writeStoredClaw } from "../openclaw-id/claw-store.js";
-import { createOpenClawIdConnectionAccess } from "../openclaw-id/connection-identity.js";
 import { linkedClaw, serviceFor, TEST_K_SRV } from "../openclaw-id/openclaw-id.test-support.js";
 import { setOpenClawIdTunnelPrincipalLookup } from "../openclaw-id/tunnel-principal.js";
 import { handleGatewayRequest } from "../server-methods.js";
@@ -77,80 +76,63 @@ function setRole(context: GatewayRequestContext, profileId: string, role: string
   return { respond, request };
 }
 
-it.for(["membership preparation", "role write"] as const)(
-  "does not redirect a role assignment through a profile merge during %s",
-  async (stage, { state }) => {
-    state.applyEnv();
-    const { authority, member, other, service, context } = await memberFixture();
-    const entered = createDeferred();
-    const release = createDeferred();
-    Object.assign(
-      service,
-      createOpenClawIdConnectionAccess({
-        enabled: () => true,
-        getAuthority: async () => {
-          if (stage === "membership preparation") {
-            entered.resolve();
-            await release.promise;
-          }
-          return authority;
-        },
-      }),
-    );
-    const write = profileWrites.setCanonicalUserProfileRole;
-    using pausedWrite = vi.spyOn(profileWrites, "setCanonicalUserProfileRole");
-    pausedWrite.mockImplementation(async (...args) => {
-      if (stage === "role write") {
-        entered.resolve();
-        await release.promise;
-      }
-      return write(...args);
-    });
-    const [source, target] = stage === "membership preparation" ? [member, other] : [other, member];
-    const pending = setRole(context, source.id, "reader");
-    try {
-      try {
-        await awaitGateBeforeSettlement(entered.promise, pending.request, "role request settled");
-        await profileWrites.mergeCanonicalUserProfiles(source.id, target.id);
-      } finally {
-        release.resolve();
-        await pending.request;
-      }
-      expect(pending.respond).toHaveBeenCalledExactlyOnceWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: "UNAVAILABLE",
-          message: "Target profile changed; retry the role assignment.",
-        }),
-      );
-      expect(await authority.memberProfiles(["acct-member"])).toMatchObject({
-        "acct-member": { id: target.id },
-      });
-      const snapshot = await readUserProfileSnapshot();
-      const persisted = expectDefined(
-        snapshot.profiles.find(({ id }) => id === target.id),
-        "merged target profile",
-      );
-      expect(persisted.role).toBeUndefined();
-      expect(context.disconnectClientsForUserProfile).not.toHaveBeenCalled();
-    } finally {
-      await service.stop();
-    }
-  },
-);
-
-it("allows current nonmember role writes and clearing a member's stored profile role", async ({
+it("does not redirect a role assignment through a profile merge during its write", async ({
   state,
 }) => {
+  state.applyEnv();
+  const { authority, member, other, service, context } = await memberFixture();
+  const entered = createDeferred();
+  const release = createDeferred();
+  const write = profileWrites.setCanonicalUserProfileRole;
+  using pausedWrite = vi.spyOn(profileWrites, "setCanonicalUserProfileRole");
+  pausedWrite.mockImplementation(async (...args) => {
+    entered.resolve();
+    await release.promise;
+    return write(...args);
+  });
+  const [source, target] = [other, member];
+  const pending = setRole(context, source.id, "reader");
+  try {
+    try {
+      await awaitGateBeforeSettlement(entered.promise, pending.request, "role request settled");
+      await profileWrites.mergeCanonicalUserProfiles(source.id, target.id);
+    } finally {
+      release.resolve();
+      await pending.request;
+    }
+    expect(pending.respond).toHaveBeenCalledExactlyOnceWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        message: "Target profile changed; retry the role assignment.",
+      }),
+    );
+    expect(await authority.memberProfiles(["acct-member"])).toMatchObject({
+      "acct-member": { id: target.id },
+    });
+    const snapshot = await readUserProfileSnapshot();
+    const persisted = expectDefined(
+      snapshot.profiles.find(({ id }) => id === target.id),
+      "merged target profile",
+    );
+    expect(persisted.role).toBe("operator");
+    expect(context.disconnectClientsForUserProfile).not.toHaveBeenCalled();
+  } finally {
+    await service.stop();
+  }
+});
+
+it("allows assigning and clearing member and nonmember profile roles", async ({ state }) => {
   state.applyEnv();
   const { member, other, service, context } = await memberFixture();
   try {
     await profileWrites.setCanonicalUserProfileRole(member.id, "reader");
-    for (const [profileId, role] of [
-      [other.id, "reader"],
-      [other.id, null],
-      [member.id, null],
+    for (const [profileId, role, disconnects] of [
+      [other.id, "reader", 1],
+      [other.id, null, 2],
+      [member.id, "reader", 2],
+      [member.id, null, 3],
     ] as const) {
       const pending = setRole(context, profileId, role);
       await pending.request;
@@ -163,6 +145,7 @@ it("allows current nonmember role writes and clearing a member's stored profile 
         "role assignment target profile",
       );
       expect(persisted.role ?? null).toBe(role);
+      expect(context.disconnectClientsForUserProfile).toHaveBeenCalledTimes(disconnects);
     }
   } finally {
     await service.stop();
@@ -198,7 +181,8 @@ it("uses member administrator authority without changing named-role callers", as
       [member.id, null, false],
       [GATEWAY_OWNER_PROFILE_ID, null, true],
     ] as const) {
-      principal.role = membership ?? "admin";
+      principal.role = "display-label";
+      await profileWrites.setCanonicalUserProfileRole(member.id, membership);
       const client = createOperatorClient({ profileId, scopes: ["operator.admin"] });
       if (membership) {
         client.internal = { openclawIdPrincipal: principal };
