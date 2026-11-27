@@ -102,6 +102,24 @@ it.each(["max", "invalid", undefined])(
   },
 );
 
+it.each([
+  [0.75, 12, "lean"],
+  [12, 0.75, "standard"],
+] as const)(
+  "uses the delegated service's %i GiB limit despite a %i GiB sibling",
+  (limit, sibling, profile) => {
+    files.set("/proc/self/cgroup", "0::/pod/service/gateway\n");
+    files.set("/proc/self/mountinfo", "31 1 0:27 /pod /sys/fs/cgroup rw - cgroup2 cgroup rw\n");
+    files.set("/sys/fs/cgroup/service/memory.max", String(limit * GiB));
+    files.set("/sys/fs/cgroup/pod/service/memory.max", String(sibling * GiB));
+    expect(initializeGatewayResourceProfile(undefined)).toMatchObject({
+      profile,
+      memoryLimitBytes: limit * GiB,
+      memoryLimitSource: "cgroup-v2",
+    });
+  },
+);
+
 it.each([4, 8, 16])("uses host RAM with cgroup v1 (%i GiB)", (memoryGiB) => {
   files.set("/proc/self/cgroup", "5:memory:/service/gateway\n");
   files.set("/sys/fs/cgroup/memory/service/gateway/memory.limit_in_bytes", String(GiB));

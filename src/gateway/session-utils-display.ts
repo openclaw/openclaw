@@ -309,9 +309,11 @@ export function projectPreparedSessionChild(
   rowContext: NonNullable<Parameters<typeof projectGatewaySessionRunState>[0]["rowContext"]>,
   hasActiveDescendantRun = false,
 ) {
+  // A child paused on sessions_yield still owes its parent a result. Its own row keeps
+  // hasActiveSubagentRun for live work, so readers can tell paused alone from waiting.
+  const { fields } = projectGatewaySessionRunState({ ...child, now, rowContext });
   const active =
-    hasActiveDescendantRun ||
-    projectGatewaySessionRunState({ ...child, now, rowContext }).fields.hasActiveSubagentRun;
+    hasActiveDescendantRun || fields.hasActiveSubagentRun || fields.subagentRunState === "paused";
   return {
     included: resolveSessionChildOwners({
       ...child,

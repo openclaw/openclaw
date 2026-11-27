@@ -24,17 +24,14 @@ import type {
 
 export function catalogSessionActivity(
   sessions: readonly SessionCatalogSession[],
-  liveRowsByKey: ReadonlyMap<
-    string,
-    Pick<SidebarRecentSession, "unread" | "backgroundProcessCount" | "isRunVisuallyActive">
-  >,
+  liveRowsByKey: ReadonlyMap<string, Pick<SidebarRecentSession, "unread" | "isRunVisuallyActive">>,
 ) {
   let running = false;
   let unread = false;
   for (const session of sessions) {
     const row = session.sessionKey ? liveRowsByKey.get(session.sessionKey) : undefined;
     running ||= row
-      ? row.isRunVisuallyActive === true || (row.backgroundProcessCount ?? 0) > 0
+      ? row.isRunVisuallyActive === true
       : session.status === "active" || session.status === "running";
     unread ||= row?.unread === true;
   }

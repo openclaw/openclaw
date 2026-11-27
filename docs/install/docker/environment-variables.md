@@ -51,3 +51,18 @@ OPENCLAW_DOCKER_BUILD_NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_DOCKER_BUI
 ```
 
 The explicit tsdown heap override is also the supported opt-in for attempting a build below the automatically detected safe minimum. That attempt may stall or fail.
+
+## Telemetry
+
+To opt out of Gateway update telemetry and ClawHub reporting, add these lines to
+the official Compose project's `.env`. Both the Gateway and CLI services read it.
+
+```dotenv
+OPENCLAW_NO_AUTO_UPDATE=1
+CLAWHUB_DISABLE_TELEMETRY=1
+```
+
+Apply the new environment to the Gateway with `docker compose up -d openclaw-gateway`.
+A plain `docker compose restart` does not pick up changes to `.env`. For custom
+containers, pass the variables in the environment of the processes that need them.
+See [Telemetry controls](/gateway/telemetry#telemetry-controls) for what each switch disables.

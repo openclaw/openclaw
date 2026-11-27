@@ -109,7 +109,6 @@ export function prepareAgentToolSurfacePresentation(
   return {
     codeMode: { ...plan.codeModeConfig, enabled: plan.codeModeControlsEnabled },
     toolSearch: { ...plan.toolSearchConfig, enabled: plan.toolSearchControlsEnabled },
-    toolSearchDirectoryLean: isLocalModelLeanEnabled(params),
     forceDirectMessageTool: params.forceDirectMessageTool,
   };
 }

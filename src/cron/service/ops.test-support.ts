@@ -94,8 +94,6 @@ export async function createBlockedCronRun(
     }),
   );
   await saveCronStore(storePath, { version: 1, jobs: [...blockers, job] });
-  // No spare memory, so exactly the default run slots fill.
-  vi.spyOn(process, "availableMemory").mockReturnValue(0);
   const held = createHeldCronRunner(blockers.length);
   const runTarget = overrides.runIsolatedAgentJob ?? (async () => ({ status: "ok" as const }));
   const runIsolatedAgentJob = vi.fn<Runner>((input) =>
@@ -107,6 +105,8 @@ export async function createBlockedCronRun(
     nowMs: overrides.nowMs ?? (() => job.createdAtMs),
     runIsolatedAgentJob,
   });
+  // No spare memory, so exactly the default run slots fill.
+  state.readAvailableMemoryBytes = () => 0;
   const activeRun = Promise.all(blockers.map((blocker) => run(state, blocker.id, "force")));
   await held.started;
   const queued = createDeferred();

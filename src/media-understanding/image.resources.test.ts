@@ -28,10 +28,8 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
-import {
-  getPluginRuntimeGenerationRegistry,
-  withPluginRuntimeGenerationScope,
-} from "../plugins/runtime/generation-scope.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-state.js";
 import {
   createColdPluginFixture,
   isColdPluginRuntimeLoaded,

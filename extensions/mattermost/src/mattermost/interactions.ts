@@ -196,13 +196,19 @@ function generateInteractionToken(context: Record<string, unknown>, accountId?: 
 }
 
 /**
- * Sanitize a button ID so Mattermost's action router can match it.
- * Mattermost uses the action ID in the URL path `/api/v4/posts/{id}/actions/{actionId}`
- * and IDs containing hyphens or underscores break the server-side routing.
+ * Mattermost routes a click through `/api/v4/posts/{post_id}/actions/{action_id:[A-Za-z0-9]+}`,
+ * so any other character in an action ID makes Mattermost answer 404 before the callback runs.
+ * Other IDs (agent values, `question-0`, non-ASCII text) become `<alphanumerics>x<index>`: the
+ * index after the last `x` keeps them unique on the post; the original value travels in the
+ * signed context. A raw alphanumeric id equal to a derived id in the same post would clash;
+ * accepted, not observed.
  * See: https://github.com/mattermost/mattermost/issues/25747
  */
-function sanitizeActionId(id: string): string {
-  return id.replace(/[-_]/g, "");
+function toMattermostActionId(id: string, index: number): string {
+  if (/^[A-Za-z0-9]+$/.test(id)) {
+    return id;
+  }
+  return `${id.replace(/[^A-Za-z0-9]/g, "").slice(0, 16)}x${index}`;
 }
 
 export function buildButtonAttachments(params: {
@@ -216,8 +222,8 @@ export function buildButtonAttachments(params: {
   }>;
   text?: string;
 }) {
-  const actions = params.buttons.map((btn) => {
-    const safeId = sanitizeActionId(btn.id);
+  const actions = params.buttons.map((btn, index) => {
+    const safeId = toMattermostActionId(btn.id, index);
     const context: Record<string, unknown> = {
       action_id: safeId,
       ...btn.context,

@@ -43,7 +43,10 @@ import {
   prepareRetainedProviderCatalog,
 } from "./prepared-model-runtime.catalog-source.js";
 import * as retry from "./prepared-model-runtime.discovery-retry.js";
-import { assertPreparedModelRuntimeInputCurrent } from "./prepared-model-runtime.errors.js";
+import {
+  assertPreparedModelRuntimeInputCurrent,
+  PreparedModelRuntimePublicationSupersededError,
+} from "./prepared-model-runtime.errors.js";
 import {
   isPreparedModelCatalogFull,
   markPreparedModelCatalogFull,
@@ -109,15 +112,6 @@ export function createPersistentModelCatalogAccess(
     params.inventoryOwner,
     { key: inventoryKey, pluginFingerprint, credentials: params.agentFacts.credentials },
     params.isCurrent,
-    () => {
-      if (published.inventory) {
-        published = {
-          ...published,
-          inventory: retry.recordFailedDiscovery(published.inventory, pending?.providers),
-        };
-        params.inventoryOwner.catalogInventory = published.inventory;
-      }
-    },
   );
   if (retainedInventory) {
     setCatalogAuth(retainedInventory.catalog, currentAuth);
@@ -241,6 +235,7 @@ export function createPersistentModelCatalogAccess(
   const acquireProviderCatalog = async (
     requestedProviderIds: readonly string[] | undefined,
     refresh: boolean,
+    onFailure: (error: unknown, providers: readonly string[]) => void,
   ): Promise<PreparedModelCatalogCandidate> => {
     const providerIds = requestedProviderIds
       ? [...preparedSyntheticAuthProviderScope(requestedProviderIds)]
@@ -253,11 +248,7 @@ export function createPersistentModelCatalogAccess(
         configuredRuntimeModels,
         runtimeModels,
         providerExpiries,
-      } = await worker.loadCatalog(
-        providerIds,
-        (error) => attempt.failed(error, providers, "provider"),
-        refresh,
-      );
+      } = await worker.loadCatalog(providerIds, (error) => onFailure(error, providers), refresh);
       assertCurrent();
       const scope = new Set(
         (
@@ -311,7 +302,12 @@ export function createPersistentModelCatalogAccess(
             provider,
             {
               source,
-              credentials: preparedProviderCatalogCredentials(auth, provider, normalizeProvider),
+              // Record satisfied generation inputs; worker auth below owns account retention.
+              credentials: preparedProviderCatalogCredentials(
+                params.agentFacts,
+                provider,
+                normalizeProvider,
+              ),
               ...retry.discoveryDeadline(failed, expiresAt, retained?.providers.get(provider)),
               ...(legacyProviders.has(provider) ? { legacyAcquired: true } : {}),
             },
@@ -634,16 +630,35 @@ export function createPersistentModelCatalogAccess(
       attempt.setPending(fullRefresh || providers.length ? providers : undefined);
     }
     const providerIds = fullRefresh ? undefined : providers;
+    // Each failed acquisition advances backoff once; worker recovery and rejection share it.
+    let providerFailureRecorded = false;
+    const failProvider = (error: unknown, scope: readonly string[]) => {
+      if (
+        !providerFailureRecorded &&
+        params.isCurrent() &&
+        !(error instanceof PreparedModelRuntimePublicationSupersededError)
+      ) {
+        providerFailureRecorded = true;
+        if (published.inventory) {
+          const inventory = retry.recordFailedDiscovery(published.inventory, providerIds);
+          published = { ...published, inventory };
+          params.inventoryOwner.catalogInventory = inventory;
+        }
+      }
+      attempt.failed(error, scope, "provider");
+    };
     // Generation custody spans both phases so native acquisition never finds it retired; custody
     // holds no plugin, so a slow native lookup does not defer reloads (#199521).
     const promise = runWithPreparedPluginGeneration(params, async () => {
       if (fullRefresh || providers.length) {
-        const candidate = await acquireProviderCatalog(providerIds, refreshResponses).catch(
-          (error: unknown) => {
-            attempt.failed(error, providers, "provider");
-            throw error;
-          },
-        );
+        const candidate = await acquireProviderCatalog(
+          providerIds,
+          refreshResponses,
+          failProvider,
+        ).catch((error: unknown) => {
+          failProvider(error, providers);
+          throw error;
+        });
         // Provider facts belong to their completed acquisition; optional native failure cannot
         // discard them. Native discovery starts from this accepted publication.
         attempt.published(providerIds, "provider", () => publishCatalog(candidate, "provider"));

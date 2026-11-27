@@ -33,7 +33,7 @@ function isAnsweredQuestion(card: ToolCard): boolean {
 export function isStandaloneActivity(card: ToolCard): boolean {
   const name = unwrapToolCallForDisplay(card).name.trim().toLowerCase();
   return (
-    (name === "view_image" && resolveToolCardOutcome(card, undefined) !== "succeeded") ||
+    (name === "view_image" && resolveToolCardOutcome(card, undefined) === "blocked") ||
     (name === "ask_user" && !isAnsweredQuestion(card)) ||
     name === "agents_wait" ||
     readSubagentCancellation(card) !== null ||

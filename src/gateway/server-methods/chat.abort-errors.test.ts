@@ -14,6 +14,7 @@ import {
   registerTestEmbeddedRun as setActiveEmbeddedRun,
   createEmbeddedRunHandle,
 } from "../../agents/embedded-agent-runner/runs.test-support.js";
+import * as chatAbortDescendants from "../../agents/subagents/cancel-descendants.js";
 import * as subagentControlSession from "../../agents/subagents/registry/subagent-control-session.js";
 import { createControlRunFixture } from "../../agents/subagents/registry/subagent-control.fixtures.test-support.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
@@ -55,7 +56,6 @@ import { listOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db
 import { finishFailedGatewayHttpResponse } from "../http-common.js";
 import { handleSessionKillHttpRequest } from "../session-kill-http.js";
 import * as sessionUtils from "../session-utils.js";
-import * as chatAbortDescendants from "./chat-abort-descendants.js";
 import {
   handleChatAbortRequest,
   handleChatAbortRequestWithLifecycle,

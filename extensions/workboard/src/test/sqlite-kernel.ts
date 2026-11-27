@@ -44,6 +44,7 @@ export function createKernelStores(
       registerIfUpdatedAt: async (...args) => kernel.cards.registerIfUpdatedAt(...args),
       claimIfOwnerAvailable: async (...args) => kernel.cards.claimIfOwnerAvailable(...args),
       deleteIfUpdatedAt: async (...args) => kernel.cards.deleteIfUpdatedAt(...args),
+      findCardIdsByPrefix: async (prefix) => kernel.cards.findCardIdsByPrefix(prefix),
       listCardStatuses: async (ids) => kernel.cards.listCardStatuses(ids),
       listBoardAggregates: async () => kernel.cards.listBoardAggregates(),
       listStatsAggregates: async (boardId) => kernel.cards.listStatsAggregates(boardId),
