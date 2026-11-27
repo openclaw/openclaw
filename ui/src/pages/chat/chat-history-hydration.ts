@@ -92,18 +92,12 @@ export async function hydrateChatHistory(
   // Any pending input-history snapshot becomes invalid once we start reloading transcript state.
   state.resetChatInputHistoryNavigation?.();
   state.chatLoading = true;
-  let compactPageRequested = false;
-  let compactRestoredCursor: string | undefined;
-  const request = (cursor?: string) => {
-    const initialHistory = requests.initialHistory;
-    delete requests.initialHistory;
-    const openingReceipt =
-      method === "chat.startup" && initialHistory?.isCurrent() ? initialHistory : undefined;
-    // A full page can cover a cache restored while its subscription was pending.
-    // Keep the exact request check: changed input-run receipts still need a fresh read.
-    const matchesOpening = (compactOpening: boolean) =>
-      openingReceipt !== undefined &&
-      openingReceipt.paramsKey ===
+  const matchesOpeningReceipt = (compactOpening: boolean) => {
+    const receipt = requests.initialHistory;
+    return (
+      method === "chat.startup" &&
+      receipt?.isCurrent() &&
+      receipt.paramsKey ===
         JSON.stringify(
           chatHistoryRequestParams(
             method,
@@ -114,14 +108,14 @@ export async function hydrateChatHistory(
             undefined,
             compactOpening,
           ),
-        );
-    const compactReceipt = state.settings?.compactSessionOpening === true && matchesOpening(true);
-    const compactOpening = shouldRequestCompactOpening(state, compactReceipt);
-    const requestedCursor = (compactOpening ? compactReceipt : matchesOpening(false))
-      ? undefined
-      : cursor;
-    compactPageRequested = compactOpening && requestedCursor === undefined;
-    compactRestoredCursor = compactOpening && compactReceipt ? cursor : undefined;
+        )
+    );
+  };
+  const request = (cursor?: string, compactOpening = false) => {
+    // Keep the exact request check: changed input-run receipts need a fresh read.
+    const requestedCursor = matchesOpeningReceipt(compactOpening) ? undefined : cursor;
+    const initialHistory = requests.initialHistory;
+    delete requests.initialHistory;
     const historyState = readChatHistoryState(state, requestedCursor);
     const key = `${requestKeyPrefix}${requestedCursor === undefined ? "page" : `cursor:${requestedCursor}`}${JSON.stringify(historyState?.stateRevision ?? null)}`;
     const load = requests.historyLoad;
@@ -197,12 +191,18 @@ export async function hydrateChatHistory(
     }
     // The snapshot covers activity emitted before the foreground observer was
     // admitted; subsequent activity arrives through its acknowledged full stream.
-    let response = await request(readChatHistoryCursor(state));
+    const cursor = readChatHistoryCursor(state);
+    const compactReceipt =
+      state.settings?.compactSessionOpening === true && matchesOpeningReceipt(true);
+    const compactOpening = shouldRequestCompactOpening(state, compactReceipt);
+    let compactPageRequested = compactOpening && (cursor === undefined || compactReceipt);
+    let response = await request(cursor, compactOpening);
     if (!isCurrent()) {
       return undefined;
     }
     if (
-      compactRestoredCursor !== undefined &&
+      compactPageRequested &&
+      cursor !== undefined &&
       state.chatMessages.length &&
       !isHistoryCursor(response)
     ) {
@@ -211,7 +211,8 @@ export async function hydrateChatHistory(
         return undefined;
       }
       if (!compactOpeningOverlapsSavedHistory(state, response)) {
-        response = await request(compactRestoredCursor);
+        compactPageRequested = false;
+        response = await request(cursor);
         if (!isCurrent()) {
           return undefined;
         }
