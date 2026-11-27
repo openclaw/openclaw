@@ -9,6 +9,13 @@
   min-width: 0;
 }
 
+.chat-subagents__model {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .chat-subagents__list {
   display: flex;
   flex: 1;

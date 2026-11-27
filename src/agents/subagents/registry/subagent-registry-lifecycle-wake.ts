@@ -50,6 +50,7 @@ import {
   captureRequesterSettleRunIdentity,
   isSubagentObligationRetired,
 } from "./subagent-requester-settle-identity.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import { isClaimedByLiveRequesterTurn } from "./subagent-requester-turn-liveness.js";
 import {
   currentSubagentRunOrObserved,
@@ -128,7 +129,7 @@ export async function retireSubagentObligationsInContext(
         !isSameSubagentRunOwner(current, entry) ||
         !wake ||
         current.execution.status !== "terminal" ||
-        current.pauseReason === "sessions_yield"
+        isSubagentPausedByYield(current)
       ) {
         return { value: undefined };
       }
@@ -212,7 +213,7 @@ function isRetiredByLiveRequesterTurn(entry: SubagentRunRecord): boolean {
 
 function awaitsStoppedPauseRetirement(entry: SubagentRunRecord): boolean {
   return (
-    entry.pauseReason !== "sessions_yield" &&
+    !isSubagentPausedByYield(entry) &&
     entry.requesterSettleWake?.pauseNotice !== undefined &&
     isSubagentObligationRetired(entry)
   );
@@ -222,7 +223,7 @@ function awaitsStoppedPauseRetirement(entry: SubagentRunRecord): boolean {
 function requesterSettleWakeScope(entry: SubagentRunRecord): string {
   const wake = entry.requesterSettleWake;
   const owner = `${entry.requesterStorePath ?? ""}\0${entry.requesterAgentId ?? ""}\0${entry.requesterSessionKey}`;
-  if (entry.pauseReason === "sessions_yield" && wake?.pauseNotice) {
+  if (isSubagentPausedByYield(entry) && wake?.pauseNotice) {
     return `${owner}\0pause\0${entry.runId}\0${wake.rearmGeneration ?? ""}`;
   }
   return `${owner}\0${wake?.batchRunIds?.toSorted().join(",") ?? ""}\0${wake?.rearmGeneration ?? ""}`;
@@ -333,7 +334,7 @@ export function scheduleRequesterSettleWake(
       return false;
     }
   };
-  const pauseNotice = entry.pauseReason === "sessions_yield" && admittedWake?.pauseNotice;
+  const pauseNotice = isSubagentPausedByYield(entry) && admittedWake?.pauseNotice;
   // Failure settlement owns offered results, never a still-working member's future completion.
   const offeredBatch = (pauseNotice ? [runId] : (admittedWake?.batchRunIds ?? [runId])).flatMap(
     (id) => {

@@ -17,10 +17,7 @@ import {
   PROVISIONAL_KILL_RECONCILIATION_MS,
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
-import type {
-  SubagentLifecycleController,
-  SubagentLifecycleOptions,
-} from "./subagent-registry-lifecycle.js";
+import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { getRecordedSubagentChildAuthority, subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import {
@@ -60,21 +57,12 @@ type CompletionRuntime = ReturnType<typeof createSubagentRegistryCompletionRunti
 
 export function createSubagentRegistrySweeper(params: {
   runs: Map<string, SubagentRunRecord>;
-  resumedRuns: Set<object>;
   clearPendingLifecycleError: (runId: string) => void;
-  clearPendingLifecycleTimeout: (runId: string) => void;
   sweepPendingLifecycle: (now: number) => void;
   completeSubagentRunWithRecovery: CompletionRuntime["completeSubagentRunWithRecovery"];
   startSubagentAnnounceCleanupFlow: SubagentLifecycleController["startSubagentAnnounceCleanupFlow"];
-  completeCleanupBookkeeping: SubagentLifecycleController["completeCleanupBookkeeping"];
   resumeRequesterSettleWake: SubagentLifecycleController["resumeRequesterSettleWake"];
   resumePendingRequesterSettlements: SubagentLifecycleController["resumePendingRequesterSettlements"];
-  isCleanupOwnerCurrent: SubagentLifecycleController["isCleanupOwnerCurrent"];
-  isTerminalTailActive: SubagentLifecycleController["isTerminalTailActive"];
-  sessionEffectsHostCurrent: SubagentLifecycleController["sessionEffectsHostCurrent"];
-  shouldSuppressSessionEffects: SubagentLifecycleController["shouldSuppressSessionEffects"];
-  shouldEmitEndedHookForRun: SubagentLifecycleOptions["shouldEmitEndedHookForRun"];
-  emitSubagentEndedHookForRun: SubagentLifecycleOptions["emitSubagentEndedHookForRun"];
   callGateway: typeof callGateway;
   cleanupCollectorLaunchResources: (entry: SubagentRunRecord) => Promise<boolean>;
   runContextEngineSubagentEnded: (params: ContextEngineSubagentEndedParams) => Promise<void>;

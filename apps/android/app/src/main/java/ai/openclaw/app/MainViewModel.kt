@@ -700,7 +700,6 @@ class MainViewModel internal constructor(
   val chatPendingSessionSettingsKeys: StateFlow<Set<String>> =
     runtimeState(initial = emptySet()) { it.chat.pendingSessionSettingsKeys }
   internal val chatStreamingAssistant: StateFlow<ChatController.StreamingAssistant?> = runtimeState(initial = null) { it.chat.streamingAssistant }
-  val chatStreamingAssistantText: StateFlow<String?> = runtimeState(initial = null) { it.chat.streamingAssistantText }
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = runtimeState(initial = emptyList()) { it.chat.pendingToolCalls }
   val chatToolActivities: StateFlow<List<ChatPendingToolCall>> = runtimeState(initial = emptyList()) { it.chat.toolActivities }
   val chatQuestions: StateFlow<List<ChatQuestionPrompt>> = runtimeState(initial = emptyList()) { it.chat.questions }
@@ -1273,9 +1272,12 @@ class MainViewModel internal constructor(
     launchGatewayConnectionOperation { runtime, isCurrent -> runtime.refreshGatewayConnection(isCurrent, manualTlsTrust = true) }
   }
 
-  fun startGatewayDiscovery() {
-    queueRuntimeStartup()
-  }
+  fun loadGatewaySettings(): Unit = queueRuntimeStartup()
+
+  fun startGatewayDiscovery(): Job =
+    viewModelScope.launch(Dispatchers.Default) {
+      ensureRuntime().discoverGateways()
+    }
 
   fun connect(endpoint: GatewayEndpoint) {
     launchGatewayConnectionOperation { runtime, isCurrent -> runtime.connectSwitchingGateway(endpoint, isCurrent = isCurrent) }

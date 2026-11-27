@@ -1,6 +1,6 @@
 package ai.openclaw.app.node
 
-import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.InvokeResult
 import ai.openclaw.app.hasPermission
 import android.Manifest
 import android.content.ContentResolver
@@ -203,7 +203,7 @@ class CalendarHandler internal constructor(
   appContext: Context,
   private val dataSource: CalendarDataSource = SystemCalendarDataSource(appContext),
 ) {
-  fun handleCalendarEvents(paramsJson: String?): GatewaySession.InvokeResult {
+  fun handleCalendarEvents(paramsJson: String?): InvokeResult {
     if (!dataSource.hasReadPermission()) {
       return nodeInvokeError("CALENDAR_PERMISSION_REQUIRED", "grant Calendar permission")
     }
@@ -215,7 +215,7 @@ class CalendarHandler internal constructor(
     }
   }
 
-  fun handleCalendarAdd(paramsJson: String?): GatewaySession.InvokeResult {
+  fun handleCalendarAdd(paramsJson: String?): InvokeResult {
     if (!dataSource.hasWritePermission()) {
       return nodeInvokeError("CALENDAR_PERMISSION_REQUIRED", "grant Calendar permission")
     }
@@ -230,11 +230,11 @@ class CalendarHandler internal constructor(
     }
     return try {
       val event = dataSource.add(request)
-      GatewaySession.InvokeResult.ok(Json.encodeToString(mapOf("event" to event)))
+      InvokeResult.ok(Json.encodeToString(mapOf("event" to event)))
     } catch (err: IllegalArgumentException) {
       val msg = err.message ?: "CALENDAR_INVALID: invalid request"
       val code = if (msg.startsWith("CALENDAR_NOT_FOUND")) "CALENDAR_NOT_FOUND" else "CALENDAR_INVALID"
-      GatewaySession.InvokeResult.error(code = code, message = msg)
+      InvokeResult.error(code = code, message = msg)
     } catch (err: Throwable) {
       nodeInvokeError("CALENDAR_UNAVAILABLE", err.message ?: "calendar add failed")
     }

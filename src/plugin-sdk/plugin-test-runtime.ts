@@ -11,6 +11,8 @@ import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { ReplyOperation } from "../sessions/session-controller.contracts.js";
 
+export { createAgentHarnessCompletionScope as createAgentHarnessCompletionScopeForTest } from "../agents/agent-harness-completion-scope.js";
+
 /** Builds a bundled-plugin Gateway runtime backed by the real session projection and handlers. */
 export async function createTestPluginGatewayRuntime(params: {
   pluginId: string;
