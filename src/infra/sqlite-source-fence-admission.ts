@@ -4,7 +4,7 @@ import {
   type SqliteSourceFenceGrant,
   type SqliteSourceFenceIdentity,
 } from "./sqlite-source-fence-contract.js";
-import { SqliteWorkerError } from "./sqlite-worker-contract.js";
+import { readSqliteWorkerMonotonicNs, SqliteWorkerError } from "./sqlite-worker-contract.js";
 import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerAdmissionFactory,
@@ -64,7 +64,7 @@ export function createSqliteSourceFenceAdmission(options: {
       }
       if (
         Atomics.load(decision, 0) === SOURCE_FENCE_REVOKED ||
-        process.hrtime.bigint() >= options.deadlineNs
+        readSqliteWorkerMonotonicNs() >= options.deadlineNs
       ) {
         throw new SqliteWorkerError("SQLite source fence authority expired", "closed");
       }
@@ -89,9 +89,9 @@ export function createSqliteSourceFenceAdmission(options: {
       kind: "sqlite-source-fence",
       version: 1,
       decision: decision.buffer,
+      remainingNs: new SharedArrayBuffer(BigInt64Array.BYTES_PER_ELEMENT),
       destination,
       sources: identities.slice(1),
-      deadlineNs: options.deadlineNs,
     };
     try {
       const admission = createSqliteWorkerOperationAdmission((request, grant) => {
@@ -106,6 +106,13 @@ export function createSqliteSourceFenceAdmission(options: {
           );
         }
         assertCurrent();
+        // Publish the final duration through shared memory before the READY decision.
+        // The worker already holds its cloned attachment by this point.
+        Atomics.store(
+          new BigInt64Array(attachment.remainingNs),
+          0,
+          options.deadlineNs - readSqliteWorkerMonotonicNs(),
+        );
         if (
           !grant(() => {
             if (

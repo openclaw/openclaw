@@ -1,5 +1,5 @@
 // Tests agent runner helper decisions for payload and runtime preparation.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../types.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
@@ -11,10 +11,6 @@ const {
 } = await import("./agent-runner-helpers.js");
 
 describe("agent runner helpers", () => {
-  beforeEach(() => {
-    vi.useRealTimers();
-  });
-
   it("detects audio payloads from mediaUrl/mediaUrls", () => {
     expect(isAudioPayload({ mediaUrl: "https://example.test/audio.mp3" })).toBe(true);
     expect(isAudioPayload({ mediaUrls: ["https://example.test/video.mp4"] })).toBe(false);
@@ -28,23 +24,20 @@ describe("agent runner helpers", () => {
     expect(createShouldEmitToolOutput({ resolvedVerboseLevel: "full" })()).toBe(true);
   });
 
-  it("reads supplied preferences on each callback while explicit turn choices stay fixed", () => {
-    let level: "off" | "full" | undefined;
-    const options = {
-      readVerboseLevel: () => level,
-      resolvedVerboseLevel: "on" as const,
-    };
-    const result = createShouldEmitToolResult(options);
-    const output = createShouldEmitToolOutput(options);
-    const fixed = createShouldEmitToolOutput({ ...options, verboseLevelOverride: "off" });
-    expect(result()).toBe(true);
+  it("uses the turn-owned preference while keeping explicit overrides fixed", () => {
+    let level = "off";
+    const params = { resolvedVerboseLevel: "on" as const, getVerboseLevel: () => level };
+    const results = createShouldEmitToolResult(params);
+    const output = createShouldEmitToolOutput(params);
+    const explicit = createShouldEmitToolOutput({ ...params, verboseLevelOverride: "off" });
+    expect(results()).toBe(false);
     expect(output()).toBe(false);
     level = "full";
-    expect(result()).toBe(true);
+    expect(results()).toBe(true);
     expect(output()).toBe(true);
-    expect(fixed()).toBe(false);
-    level = "off";
-    expect(result()).toBe(false);
+    expect(explicit()).toBe(false);
+    level = "invalid";
+    expect(results()).toBe(true);
     expect(output()).toBe(false);
   });
 

@@ -1,12 +1,26 @@
 import { createHash } from "node:crypto";
+import {
+  gitMaintenanceEnvironment,
+  gitMaintenanceEnvironmentExpression,
+} from "../../infra/git-maintenance-env.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SpawnResult } from "../../process/exec.js";
+import type { NodeWorkerWorkspaceExecResult } from "../../worker/node-workspace-protocol.js";
+import {
+  prepareRepositoryPublicationRestore,
+  RESTORE_PUBLICATION_INDEX_JS,
+} from "../github-repository-publication-restore.js";
+import type { createNodeWorkspaceTransferCommand } from "./node-workspace-transfer-command.js";
+import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import type {
   PreparedRepositoryWorkspace,
   WorkerWorkspaceCommand,
   WorkerWorkspaceSyncResult,
+  WorkerWorkspaceSyncRequest,
 } from "./tunnel-contract.js";
 import { boundedWorkerError } from "./worker-error.js";
+import { decodeWorkspaceManifest } from "./workspace-manifest-worker.js";
+import { workerWorkspaceTransferPaths } from "./workspace-result-staging.js";
 import {
   workerWorkspaceCommandSucceeded as succeeded,
   workspaceSyncError,
@@ -32,11 +46,17 @@ type RepositoryIdentity = {
 
 const AUTHENTICATED_GIT_JS = String.raw`const fs = require("node:fs");
 const { spawnSync } = require("node:child_process");
-const { origin, token } = JSON.parse(fs.readFileSync(0, "utf8"));
+const { origin, token, disableLazyFetch } = JSON.parse(fs.readFileSync(0, "utf8"));
 const env = { ...process.env };
 for (const key of Object.keys(env)) if (/^(GIT_|GH_TOKEN$|GITHUB_TOKEN$)/i.test(key)) delete env[key];
 Object.assign(env, { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null", GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "" });
-if (token) Object.assign(env, { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "http." + origin + ".extraheader", GIT_CONFIG_VALUE_0: "Authorization: Basic " + Buffer.from("x-access-token:" + token).toString("base64") });
+if (disableLazyFetch) env.GIT_NO_LAZY_FETCH = "1";
+Object.assign(env, token ? ${gitMaintenanceEnvironmentExpression([
+  [
+    '"http." + origin + ".extraheader"',
+    '"Authorization: Basic " + Buffer.from("x-access-token:" + token).toString("base64")',
+  ],
+])} : ${JSON.stringify(gitMaintenanceEnvironment())});
 const args = process.argv.slice(1);
 // Identity-scoped workspaces can put partial-clone .promisor files at MAX_PATH.
 if (process.platform === "win32") args.unshift("-c", "core.longpaths=true");
@@ -52,6 +72,7 @@ const env = { ...process.env };
 for (const key of Object.keys(env)) if (/^(GIT_|GH_TOKEN$|GITHUB_TOKEN$)/i.test(key)) delete env[key];
 const nil = process.platform === "win32" ? "NUL" : "/dev/null";
 Object.assign(env, { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: nil, GIT_TERMINAL_PROMPT: "0", GIT_NO_LAZY_FETCH: "1", GIT_NO_REPLACE_OBJECTS: "1" });
+Object.assign(env, ${JSON.stringify(gitMaintenanceEnvironment())});
 const git = (args, allowDetached = false) => {
   const result = spawnSync("git", ["-c", "core.hooksPath=" + nil, "-c", "core.fsmonitor=false", ...args], {
     env, encoding: "utf8", timeout: 30000, maxBuffer: 262144,
@@ -127,7 +148,11 @@ export function createNodeWorkerRepositoryPreparation(
   ) =>
     exec({
       argv: ["node", "-e", AUTHENTICATED_GIT_JS, "--", ...WORKER_REPOSITORY_GIT_ARGS, ...args],
-      input: JSON.stringify({ origin: identity?.origin, token: identity?.gitToken }),
+      input: JSON.stringify({
+        origin: identity?.origin,
+        token: identity?.gitToken,
+        disableLazyFetch: args[0] === "fetch",
+      }),
       ...(resetWorkspace ? { resetWorkspace: true } : {}),
       timeoutMs: GIT_TIMEOUT_MS,
       transportRetry: "never",
@@ -238,8 +263,27 @@ export function createNodeWorkerRepositoryPreparation(
         baseCommit: prepared.baseCommit,
       };
     },
-    configureAuthor: async (workspaceDir: string, author: { name?: string; email?: string }) => {
-      for (const [key, value] of Object.entries(author)) {
+    configureCheckout: async (
+      workspaceDir: string,
+      author: { name?: string; email?: string },
+      origin?: string,
+    ) => {
+      const settings: Record<string, string | undefined> = {
+        "user.name": author.name,
+        "user.email": author.email,
+      };
+      if (origin) {
+        // Retained checkouts own their origin after the initial materialization.
+        const remotes = await git(undefined, ["-C", workspaceDir, "remote"]);
+        if (!succeeded(remotes)) {
+          throw workspaceSyncError(remotes);
+        }
+        if (!remotes.stdout.split(/\r?\n/u).includes("origin")) {
+          settings["remote.origin.url"] = origin;
+          settings["remote.origin.fetch"] = "+refs/heads/*:refs/remotes/origin/*";
+        }
+      }
+      for (const [key, value] of Object.entries(settings)) {
         if (!value) {
           continue;
         }
@@ -248,7 +292,7 @@ export function createNodeWorkerRepositoryPreparation(
           workspaceDir,
           "config",
           "--local",
-          `user.${key}`,
+          key,
           value,
         ]);
         if (!succeeded(configured)) {
@@ -369,4 +413,92 @@ export function createNodeWorkerRepositoryPreparation(
       return outcome;
     },
   };
+}
+
+export async function restoreNodeWorkerRepositoryCheckpoint(params: {
+  checkpoint: NonNullable<
+    Extract<WorkerWorkspaceSyncRequest["source"], { kind: "repository" }>["checkpoint"]
+  >;
+  baseManifestRef: string;
+  environmentId: string;
+  workspaceTransfer: Pick<NodeWorkspaceTransferService, "publishSnapshot" | "revoke">;
+  signal: AbortSignal;
+  authorize?: () => void;
+  exec: (command: WorkerWorkspaceCommand) => Promise<NodeWorkerWorkspaceExecResult>;
+  transfer: ReturnType<typeof createNodeWorkspaceTransferCommand>;
+}): Promise<string> {
+  const {
+    checkpoint,
+    baseManifestRef,
+    environmentId,
+    workspaceTransfer,
+    signal,
+    authorize,
+    exec,
+    transfer,
+  } = params;
+  const decodedBase = await decodeWorkspaceManifest(checkpoint.baseManifestRaw, undefined, signal);
+  if (decodedBase.manifestRef !== baseManifestRef) {
+    throw new Error("Repository checkpoint baseline differs from its cloned commit");
+  }
+  const decoded = await decodeWorkspaceManifest(checkpoint.currentManifestRaw, undefined, signal);
+  const manifestRef = decoded.manifestRef;
+  const manifest = decoded.manifest;
+  const base = decodedBase.manifest;
+  const token = workspaceTransfer.publishSnapshot(
+    environmentId,
+    {
+      manifest,
+      manifestRef,
+      rawManifest: checkpoint.currentManifestRaw,
+      root: checkpoint.stagingRoot,
+      blobPaths: new Set(workerWorkspaceTransferPaths(manifest, base, signal)),
+      gitPackPath: checkpoint.gitPackPath,
+    },
+    authorize,
+  );
+  try {
+    const restored = await transfer(
+      {
+        direction: "download",
+        token,
+        manifestRef,
+        checkpointBaseManifestRef: baseManifestRef,
+        ...(checkpoint.gitPackPath && checkpoint.gitHistory
+          ? { checkpointGitHistory: checkpoint.gitHistory }
+          : {}),
+      },
+      "Repository checkpoint restore failed",
+      { assertCurrent: authorize },
+    );
+    const historyNote =
+      checkpoint.gitHistoryNote ??
+      (checkpoint.gitHistory && checkpoint.gitPackPath
+        ? JSON.parse(restored.stdout).gitHistoryNote
+        : undefined);
+    if (historyNote) {
+      workspaceSyncLog.info(historyNote);
+    }
+    for (const batch of await prepareRepositoryPublicationRestore({
+      ...checkpoint,
+      current: manifest,
+    })) {
+      const publicationRestored = await exec({
+        argv: ["node", "-e", RESTORE_PUBLICATION_INDEX_JS, batch.action],
+        input: batch.input,
+        timeoutMs: 60_000,
+        transportRetry: "never",
+        assertCurrent: authorize,
+      });
+      if (publicationRestored.code !== 0 || publicationRestored.termination !== "exit") {
+        throw new Error(
+          "Repository publication paths could not be restored; retry workspace preparation",
+        );
+      }
+    }
+  } finally {
+    await workspaceTransfer.revoke(environmentId, token);
+  }
+
+  return manifestRef;
 }

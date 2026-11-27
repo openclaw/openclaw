@@ -10,5 +10,8 @@ export function ownedWorkerBytes(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
   ) {
     return new Uint8Array(bytes.buffer);
   }
-  return Uint8Array.from(bytes);
+  // Avoid an iterable intermediate: large sliced payloads must not become boxed heap entries.
+  const owned = new Uint8Array(bytes.byteLength);
+  owned.set(bytes);
+  return owned;
 }

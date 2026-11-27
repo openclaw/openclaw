@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { clientVoiceSessionTesting } from "./client-voice-session.test-support.js";
@@ -48,6 +52,7 @@ export function useClientVoiceSessionHarness() {
         await cleanupSessionStateForTest({ stateDir: tempDir });
       } finally {
         envSnapshot.restore();
+        clearRuntimeConfigSnapshot();
         removeTempDirs();
       }
     });
@@ -56,6 +61,7 @@ export function useClientVoiceSessionHarness() {
   beforeEach(async () => {
     tempDir = tempDirs.make("openclaw-voice-session-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    setRuntimeConfigSnapshot({});
     sendDurableMessageBatch.mockReset().mockResolvedValue({ status: "sent" });
     sessionTurnMocks.appendExpectedSessionTranscriptTurn.mockReset();
     // The mock factory can remain unrun on a warm graph until the first append.

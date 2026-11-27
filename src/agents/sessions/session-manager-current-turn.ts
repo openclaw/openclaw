@@ -1,6 +1,6 @@
 import type { SessionTranscriptContextVersion } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import { readTranscriptEventAtSeqSync } from "../../config/sessions/session-accessor.sqlite-read.js";
-import { readActiveTranscriptEntryAnchor } from "../../config/sessions/session-accessor.sqlite-transcript-anchor.js";
+import { readActiveTranscriptEntryAnchor } from "../../config/sessions/session-accessor.sqlite-transcript-admitted-read.js";
 import { isIndexedSessionEntry } from "../../config/sessions/session-entry-codec.js";
 import { walkSessionCurrentTurn } from "../../config/sessions/session-entry-navigation.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
@@ -25,6 +25,11 @@ export const sessionManagerPrepareCurrentTurnReplay: unique symbol = Symbol.for(
 /** @internal Runtime model history is not the raw persistence/navigation window. */
 export const sessionManagerReadInitialContext: unique symbol = Symbol.for(
   "openclaw.session-manager.read-initial-context",
+);
+
+/** Model payloads restored from the copied branch, never an authority to read its parent. */
+export const sessionManagerInheritedMessages: unique symbol = Symbol.for(
+  "openclaw.session-manager.inherited-messages",
 );
 
 /** @internal Committed manager facts for the current execution boundary. */

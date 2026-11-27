@@ -51,13 +51,6 @@ import type {
 // Approval forwarding mirrors foreground approvals into chat targets, then sends
 // resolution/expiry notices to the same targets.
 const log = createSubsystemLogger("gateway/exec-approvals");
-type DeliverApprovalPayloads =
-  typeof import("../channels/message/runtime.js").sendDurableMessageBatchCore;
-type MaybePromise<T> = T | Promise<T>;
-type ResolveSessionTargetFn = (params: {
-  cfg: OpenClawConfig;
-  request: ExecApprovalRequest;
-}) => MaybePromise<ExecApprovalForwardTarget | null>;
 
 type ForwardTarget = ExecApprovalForwardTarget & { source: "session" | "target" };
 
@@ -107,10 +100,6 @@ export type ExecApprovalForwarder = {
 };
 
 type ExecApprovalForwarderDeps = {
-  getConfig?: () => OpenClawConfig;
-  deliver?: DeliverApprovalPayloads;
-  nowMs?: () => number;
-  resolveSessionTarget?: ResolveSessionTargetFn;
   /** The owning Gateway's coordinator, where its channel accounts register native handlers. */
   getNativeApprovalRouteCoordinator?: () => ApprovalNativeRouteCoordinator | undefined;
 };
@@ -167,55 +156,6 @@ function restoreApprovalRequestForSuppression(params: {
   }
 }
 
-async function shouldSkipForwardingFallback(params: {
-  approvalKind: ChannelApprovalKind;
-  target: ExecApprovalForwardTarget;
-  cfg: OpenClawConfig;
-  routeRequest: ApprovalRouteRequest;
-  approvalRequest?: ApprovalRequestInput;
-  nativeRouteCoordinator: ApprovalNativeRouteCoordinator | undefined;
-}): Promise<boolean> {
-  const channel = normalizeMessageChannel(params.target.channel) ?? params.target.channel;
-  if (!channel) {
-    return false;
-  }
-  // Channel adapters can suppress generic fallback delivery when they already
-  // own native approval UX for the same target.
-  const plugin = getLoadedChannelPlugin(channel);
-  if (
-    params.approvalKind === "plugin" &&
-    !canChannelEnforcePluginReviewerPolicy(params.cfg, channel, plugin?.approvalCapability)
-  ) {
-    return true;
-  }
-  const adapter = resolveChannelApprovalAdapter(plugin);
-  const fallbackInput = {
-    cfg: params.cfg,
-    approvalKind: params.approvalKind,
-    target: params.target,
-    request: params.approvalRequest ?? buildSyntheticApprovalRequest(params.routeRequest),
-  };
-  if (adapter?.delivery?.shouldBlockForwardingFallback?.(fallbackInput)) {
-    return true;
-  }
-  const delivery = adapter?.delivery;
-  const suppress = delivery?.shouldSuppressForwardingFallbackAsync
-    ? await delivery.shouldSuppressForwardingFallbackAsync(fallbackInput)
-    : (delivery?.shouldSuppressForwardingFallback?.(fallbackInput) ?? false);
-  if (!suppress || !plugin) {
-    return false;
-  }
-  // Suppression hands the chat to the native handler, so it holds only while the handler
-  // for the destination account runs; a target without one is delivered by the default.
-  return hasActiveNativeApprovalRoute(params.nativeRouteCoordinator, {
-    channel,
-    accountId:
-      normalizeOptionalString(params.target.accountId) ??
-      resolveChannelDefaultAccountId({ plugin, cfg: params.cfg }),
-    approvalKind: params.approvalKind,
-  });
-}
-
 function normalizeTurnSourceChannel(value?: string | null): string | undefined {
   const normalized = value ? normalizeMessageChannel(value) : undefined;
   if (
@@ -254,42 +194,10 @@ function extractApprovalRouteRequest(
   };
 }
 
-function defaultResolveSessionTarget(params: {
-  cfg: OpenClawConfig;
-  request: ExecApprovalRequest;
-}): Promise<ExecApprovalForwardTarget | null> {
-  return import("./exec-approval-forwarder.runtime.js").then(
-    ({ resolveExecApprovalSessionTarget }) => {
-      const resolvedTarget = resolveExecApprovalSessionTarget({
-        cfg: params.cfg,
-        request: params.request,
-        turnSourceChannel: normalizeTurnSourceChannel(params.request.request.turnSourceChannel),
-        turnSourceTo: normalizeOptionalString(params.request.request.turnSourceTo),
-        turnSourceAccountId: normalizeOptionalString(params.request.request.turnSourceAccountId),
-        turnSourceThreadId: params.request.request.turnSourceThreadId ?? undefined,
-      });
-      if (!resolvedTarget?.channel || !resolvedTarget.to) {
-        return null;
-      }
-      const channel = resolvedTarget.channel;
-      if (!isDeliverableMessageChannel(channel)) {
-        return null;
-      }
-      return {
-        channel,
-        to: resolvedTarget.to,
-        accountId: resolvedTarget.accountId,
-        threadId: resolvedTarget.threadId,
-      };
-    },
-  );
-}
-
 async function deliverToTargets(params: {
   cfg: OpenClawConfig;
   targets: ForwardTarget[];
   buildPayload: (target: ForwardTarget) => ReplyPayload;
-  deliver: DeliverApprovalPayloads;
   beforeDeliver?: (target: ForwardTarget, payload: ReplyPayload) => Promise<void> | void;
   shouldSend?: () => boolean;
 }) {
@@ -304,7 +212,8 @@ async function deliverToTargets(params: {
     try {
       const payload = params.buildPayload(target);
       await params.beforeDeliver?.(target, payload);
-      const send = await params.deliver({
+      const { sendDurableMessageBatchCore } = await import("./exec-approval-forwarder.runtime.js");
+      const send = await sendDurableMessageBatchCore({
         cfg: params.cfg,
         channel,
         to: target.to,
@@ -320,51 +229,6 @@ async function deliverToTargets(params: {
     }
   });
   await Promise.allSettled(deliveries);
-}
-
-async function resolveForwardTargets(params: {
-  cfg: OpenClawConfig;
-  config?: ExecApprovalForwardingConfig;
-  approvalKind: ChannelApprovalKind;
-  routeRequest: ApprovalRouteRequest;
-  resolveSessionTarget: ResolveSessionTargetFn;
-}): Promise<ForwardTarget[]> {
-  const mode = params.config?.mode ?? "session";
-  const targets: ForwardTarget[] = [];
-  const seen = new Set<string>();
-
-  if (mode === "session" || mode === "both") {
-    const sessionRouteRequest = {
-      ...params.routeRequest,
-      turnSourceChannel: normalizeForwardingTurnSourceChannel(
-        params.routeRequest.turnSourceChannel,
-        params.approvalKind,
-      ),
-    };
-    const sessionTarget = await params.resolveSessionTarget({
-      cfg: params.cfg,
-      request: buildSyntheticApprovalRequest(sessionRouteRequest),
-    });
-    if (sessionTarget) {
-      const key = buildTargetKey(sessionTarget);
-      seen.add(key);
-      targets.push({ ...sessionTarget, source: "session" });
-    }
-  }
-
-  if (mode === "targets" || mode === "both") {
-    const explicitTargets = params.config?.targets ?? [];
-    for (const target of explicitTargets) {
-      const key = buildTargetKey(target);
-      if (seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      targets.push({ ...target, source: "target" });
-    }
-  }
-
-  return targets;
 }
 
 function createApprovalHandlers<
@@ -409,30 +273,121 @@ function createApprovalHandlers<
         return [];
       }
     }
-    const targets = await resolveForwardTargets({
-      ...paramsForRoute,
-      approvalKind: params.strategy.kind,
-      resolveSessionTarget: params.resolveSessionTarget,
-    });
-    const nativeRouteCoordinator = params.getNativeApprovalRouteCoordinator();
-    const selected = await Promise.all(
-      targets.map(
-        async (target) =>
-          !(await shouldSkipForwardingFallback({
-            approvalKind: params.strategy.kind,
-            target,
+    const mode = paramsForRoute.config?.mode ?? "session";
+    const targets: ForwardTarget[] = [];
+    const seen = new Set<string>();
+
+    if (mode === "session" || mode === "both") {
+      const sessionRouteRequest = {
+        ...paramsForRoute.routeRequest,
+        turnSourceChannel: normalizeForwardingTurnSourceChannel(
+          paramsForRoute.routeRequest.turnSourceChannel,
+          params.strategy.kind,
+        ),
+      };
+      const sessionRequest = buildSyntheticApprovalRequest(sessionRouteRequest);
+      const sessionTarget = await import("./exec-approval-forwarder.runtime.js").then(
+        async ({ resolveExecApprovalSessionTargetAsync }) => {
+          const resolvedTarget = await resolveExecApprovalSessionTargetAsync({
             cfg: paramsForRoute.cfg,
-            routeRequest: paramsForRoute.routeRequest,
-            approvalRequest: paramsForRoute.approvalRequest,
-            nativeRouteCoordinator,
-          })),
-      ),
+            request: sessionRequest,
+            turnSourceChannel: normalizeTurnSourceChannel(sessionRequest.request.turnSourceChannel),
+            turnSourceTo: normalizeOptionalString(sessionRequest.request.turnSourceTo),
+            turnSourceAccountId: normalizeOptionalString(
+              sessionRequest.request.turnSourceAccountId,
+            ),
+            turnSourceThreadId: sessionRequest.request.turnSourceThreadId ?? undefined,
+          });
+          if (!resolvedTarget?.channel || !resolvedTarget.to) {
+            return null;
+          }
+          const channel = resolvedTarget.channel;
+          if (!isDeliverableMessageChannel(channel)) {
+            return null;
+          }
+          return {
+            channel,
+            to: resolvedTarget.to,
+            accountId: resolvedTarget.accountId,
+            threadId: resolvedTarget.threadId,
+          };
+        },
+      );
+      if (sessionTarget) {
+        const key = buildTargetKey(sessionTarget);
+        seen.add(key);
+        targets.push({ ...sessionTarget, source: "session" });
+      }
+    }
+
+    if (mode === "targets" || mode === "both") {
+      const explicitTargets = paramsForRoute.config?.targets ?? [];
+      for (const target of explicitTargets) {
+        const key = buildTargetKey(target);
+        if (seen.has(key)) {
+          continue;
+        }
+        seen.add(key);
+        targets.push({ ...target, source: "target" });
+      }
+    }
+
+    const nativeRouteCoordinator = params.getNativeApprovalRouteCoordinator();
+    const suppressed = await Promise.all(
+      targets.map(async (target) => {
+        const approvalKind = params.strategy.kind;
+        const channel = normalizeMessageChannel(target.channel) ?? target.channel;
+        if (!channel) {
+          return false;
+        }
+        // Channel adapters can suppress generic fallback delivery when they already
+        // own native approval UX for the same target.
+        const plugin = getLoadedChannelPlugin(channel);
+        if (
+          approvalKind === "plugin" &&
+          !canChannelEnforcePluginReviewerPolicy(
+            paramsForRoute.cfg,
+            channel,
+            plugin?.approvalCapability,
+          )
+        ) {
+          return true;
+        }
+        const adapter = resolveChannelApprovalAdapter(plugin);
+        const fallbackInput = {
+          cfg: paramsForRoute.cfg,
+          approvalKind,
+          target,
+          request:
+            paramsForRoute.approvalRequest ??
+            buildSyntheticApprovalRequest(paramsForRoute.routeRequest),
+        };
+        if (adapter?.delivery?.shouldBlockForwardingFallback?.(fallbackInput)) {
+          return true;
+        }
+        const delivery = adapter?.delivery;
+        const suppress = delivery?.shouldSuppressForwardingFallbackAsync
+          ? await delivery.shouldSuppressForwardingFallbackAsync(fallbackInput)
+          : (delivery?.shouldSuppressForwardingFallback?.(fallbackInput) ?? false);
+        if (!suppress || !plugin) {
+          return false;
+        }
+        // Suppression hands the chat to the native handler, so it holds only while the handler
+        // for the destination account runs; a target without one is delivered by the default.
+        return hasActiveNativeApprovalRoute(nativeRouteCoordinator, {
+          channel,
+          accountId:
+            normalizeOptionalString(target.accountId) ??
+            resolveChannelDefaultAccountId({ plugin, cfg: paramsForRoute.cfg }),
+          approvalKind,
+        });
+      }),
     );
-    return targets.filter((_, index) => selected[index]);
+    return targets.filter((_, index) => !suppressed[index]);
   };
 
   const deliverResolved = async (resolved: TResolved, entry?: PendingApproval): Promise<void> => {
-    const cfg = params.getConfig();
+    const cfg = getRuntimeConfig();
     const routeRequest = entry?.routeRequest ?? extractApprovalRouteRequest(resolved.request);
     const targets =
       entry?.targets ??
@@ -460,12 +415,11 @@ function createApprovalHandlers<
           resolved,
           target,
         }),
-      deliver: params.deliver,
     });
   };
 
   const handleRequested = async (request: TRequest): Promise<boolean> => {
-    const cfg = params.getConfig();
+    const cfg = getRuntimeConfig();
     const config = params.strategy.config(cfg);
     const requestId = request.id;
     const routeRequest = extractApprovalRouteRequest(request.request) ?? {};
@@ -491,14 +445,13 @@ function createApprovalHandlers<
     pendingEntry.value = { routeRequest, targets: filteredTargets };
     const buildExpiredText = params.strategy.buildExpiredText;
     if (buildExpiredText) {
-      const expiresInMs = Math.max(0, request.expiresAtMs - params.nowMs());
+      const expiresInMs = Math.max(0, request.expiresAtMs - Date.now());
       pending.scheduleExpiry(pendingEntry, expiresInMs, (expired) =>
         trackDelivery(() =>
           deliverToTargets({
             cfg,
             targets: expired.value.targets,
             buildPayload: () => ({ text: buildExpiredText(request) }),
-            deliver: params.deliver,
           }),
         ).catch((err: unknown) => {
           log.error(
@@ -517,7 +470,7 @@ function createApprovalHandlers<
             cfg,
             request,
             target,
-            nowMs: params.nowMs(),
+            nowMs: Date.now(),
           }),
         beforeDeliver: async (target, payload) => {
           const channel = normalizeMessageChannel(target.channel) ?? target.channel;
@@ -534,7 +487,6 @@ function createApprovalHandlers<
             },
           });
         },
-        deliver: params.deliver,
         shouldSend: () => pending.isCurrent(pendingEntry),
       }).then(() => pending.completeDelivery(pendingEntry, pendingEntry.value)),
     ).catch((err: unknown) => {
@@ -612,35 +564,19 @@ const systemAgentApprovalStrategy = {
 export function createExecApprovalForwarder(
   deps: ExecApprovalForwarderDeps = {},
 ): ExecApprovalForwarder {
-  const getConfig = deps.getConfig ?? getRuntimeConfig;
-  const deliver =
-    deps.deliver ??
-    (async (params) => {
-      const { sendDurableMessageBatchCore } = await import("./exec-approval-forwarder.runtime.js");
-      return sendDurableMessageBatchCore(params);
-    });
-  const nowMs = deps.nowMs ?? Date.now;
-  const resolveSessionTarget = deps.resolveSessionTarget ?? defaultResolveSessionTarget;
   const getNativeApprovalRouteCoordinator =
     deps.getNativeApprovalRouteCoordinator ?? (() => undefined);
 
-  const handlerDeps = {
-    getConfig,
-    deliver,
-    nowMs,
-    resolveSessionTarget,
-    getNativeApprovalRouteCoordinator,
-  };
   const execHandlers = createApprovalHandlers({
-    ...handlerDeps,
+    getNativeApprovalRouteCoordinator,
     strategy: execApprovalStrategy,
   });
   const pluginHandlers = createApprovalHandlers({
-    ...handlerDeps,
+    getNativeApprovalRouteCoordinator,
     strategy: pluginApprovalStrategy,
   });
   const systemAgentHandlers = createApprovalHandlers({
-    ...handlerDeps,
+    getNativeApprovalRouteCoordinator,
     strategy: systemAgentApprovalStrategy,
   });
 

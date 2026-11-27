@@ -83,7 +83,7 @@ class VoiceE2eService : Service() {
       if (connect) {
         configureGateway(runtime = runtime, intent = intent)
       }
-      if (connect || !runtime.isConnected.value) {
+      if (connect || !runtime.gatewayConnectionDisplay.value.isConnected) {
         awaitGateway(runtime = runtime, timeoutMs = connectTimeoutMs)
       }
 
@@ -96,7 +96,7 @@ class VoiceE2eService : Service() {
       if (mode == "connect") {
         val resultJson = """{"ok":true,"mode":"connect","connected":true}"""
         writeResult(resultJson)
-        Log.i(tag, "PASS $resultJson")
+        Log.i(tag, "PASS result=$resultFileName")
         return
       }
 
@@ -122,7 +122,7 @@ class VoiceE2eService : Service() {
         )
       val resultJson = encodeResult(result)
       writeResult(resultJson)
-      Log.i(tag, "PASS $resultJson")
+      Log.i(tag, "PASS result=$resultFileName")
     } catch (err: Throwable) {
       val resultJson =
         buildJsonObject {
@@ -130,7 +130,7 @@ class VoiceE2eService : Service() {
           put("error", JsonPrimitive(err.message ?: err::class.java.simpleName))
         }.toString()
       writeResult(resultJson)
-      Log.e(tag, "FAIL $resultJson", err)
+      Log.e(tag, "FAIL result=$resultFileName")
     }
   }
 
@@ -167,7 +167,7 @@ class VoiceE2eService : Service() {
   ) {
     try {
       withTimeout(timeoutMs) {
-        while (!runtime.isConnected.value) {
+        while (!runtime.gatewayConnectionDisplay.value.isConnected) {
           voiceE2eTerminalGatewayFailure(runtime.gatewayConnectionDisplay.value.problem)?.let { error(it) }
           delay(100L)
         }

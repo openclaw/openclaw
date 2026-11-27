@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { withPreparedSessionCapabilityRead } from "../agents/subagents/spawn/subagent-session-store.js";
 import {
   composeSessionSourceAssertion,
   type SessionSourceAssertion,
@@ -10,7 +11,7 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
-import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-state.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { SessionUpstreamLinkCurrentCheck } from "./session-upstream-links.worker-contract.js";
 
@@ -158,34 +159,38 @@ export function createSessionInitialization(
             cfg: child.config,
             agentId: child.agentId,
             sessionKey: child.sessionKey,
+            preparedSessionEntry: preparation.entry,
           }).sandboxed
         ) {
           throw new Error(
             "Session creation cannot prepare an execution environment; fork from the original source instead.",
           );
         }
-        const result = withPluginRuntimeGatewayRequestScope(
-          { isWebchatConnect: () => false, pluginRegistry: registry },
-          () => {
-            const policy = resolvePluginHarnessToolPolicies({
-              ...child,
-              provider: runtimeProvider,
-              modelId: id,
-            });
-            if (policy.toolPolicyRestricted) {
-              throw new Error(
-                "The child's native tool policy requires run-owned preparation. Fork an original imported message instead.",
-              );
-            }
-            return {
-              webSearchAllowed: resolveWebSearchToolPolicy({
+        const result = await withPreparedSessionCapabilityRead(() =>
+          withPluginRuntimeGatewayRequestScope(
+            { isWebchatConnect: () => false, pluginRegistry: registry },
+            () => {
+              const policy = resolvePluginHarnessToolPolicies({
                 ...child,
-                modelProvider: provider,
+                preparedSessionEntry: preparation.entry,
+                provider: runtimeProvider,
                 modelId: id,
-                webSearchEnabled: child.config.tools?.web?.search?.enabled,
-              }).persistentAllowed,
-            };
-          },
+              });
+              if (policy.toolPolicyRestricted) {
+                throw new Error(
+                  "The child's native tool policy requires run-owned preparation. Fork an original imported message instead.",
+                );
+              }
+              return {
+                webSearchAllowed: resolveWebSearchToolPolicy({
+                  ...child,
+                  modelProvider: provider,
+                  modelId: id,
+                  webSearchEnabled: child.config.tools?.web?.search?.enabled,
+                }).persistentAllowed,
+              };
+            },
+          ),
         );
         owner.handle.assertCurrent();
         return result;

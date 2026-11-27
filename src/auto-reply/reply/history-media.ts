@@ -36,7 +36,7 @@ export function resolveRecentInboundHistoryImages(params: {
 
   const out: RecentInboundHistoryImage[] = [];
   const seen = new Set<string>();
-  const entries = Array.isArray(params.ctx.InboundHistory) ? params.ctx.InboundHistory : [];
+  const entries = params.ctx.InboundHistory ?? [];
   for (
     let index = entries.length - 1;
     index >= 0 && out.length < RECENT_HISTORY_IMAGE_LIMIT;
@@ -47,7 +47,7 @@ export function resolveRecentInboundHistoryImages(params: {
     if (timestamp === undefined || Math.abs(nowMs - timestamp) > RECENT_HISTORY_IMAGE_TTL_MS) {
       continue;
     }
-    const mediaEntries = Array.isArray(entry.media) ? entry.media : [];
+    const mediaEntries = entry.media ?? [];
     for (
       let mediaIndex = mediaEntries.length - 1;
       mediaIndex >= 0 && out.length < RECENT_HISTORY_IMAGE_LIMIT;

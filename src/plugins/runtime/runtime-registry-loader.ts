@@ -1,6 +1,7 @@
 // Runtime registry loader assembles process-root plugin runtimes from config metadata.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../../agents/agent-scope-config.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withActivatedPluginIds } from "../activation-context.js";
 import {
@@ -88,7 +89,10 @@ export async function ensurePluginRegistryLoaded(options?: {
   persistedSandboxBackendIds?: readonly string[];
 }): Promise<void> {
   const scope = options?.scope ?? "all";
-  const context = resolvePluginRuntimeLoadContext(options);
+  const context = resolvePluginRuntimeLoadContext({
+    ...options,
+    config: options?.config ?? (await captureRuntimeConfigAsyncReader()()),
+  });
   let pluginIds: string[];
   switch (scope) {
     case "configured-channels":

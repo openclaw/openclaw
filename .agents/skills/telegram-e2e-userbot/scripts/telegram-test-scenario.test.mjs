@@ -89,6 +89,7 @@ function fixture() {
         chat: args?.chat,
         requireForum: args?.scenario?.actions.some((action) => action.forumTopicId !== undefined),
         createForum: args?.createForum,
+        createDmTopic: args?.createDmTopic,
         ...options,
       }),
   };
@@ -311,6 +312,69 @@ test("a run-owned forum receives the scenario's topic sends and is deleted befor
   assert.equal(summary.testForum.setup.groupId, forum.groupId);
   assert.equal(summary.testForum.setup.forumTopicId, forum.forumTopicId);
   assert.equal(summary.testForum.cleanup.status, "deleted");
+});
+
+test("a DM topic uses the existing lease and restores mode before release despite stale Bot API flags", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-dm-topic-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const f = fixture();
+  const events = [];
+  let threaded = false;
+  const command = f.options.runCommandImpl;
+  f.options.runCommandImpl = async (name, args) => {
+    if (args.includes("prepare-dm-topic") || args.includes("cleanup-dm-topic")) {
+      threaded = args.includes("prepare-dm-topic");
+      events.push(threaded ? "topic-created" : "mode-restored");
+      return {
+        status: 0,
+        timedOut: false,
+        stdout: JSON.stringify({
+          ok: true,
+          chatId: "42",
+          forumTopicId: 777,
+          status: threaded ? "ready" : "restored",
+          threadedMode: { before: !threaded, after: threaded },
+        }),
+      };
+    }
+    assert.equal(args.includes("prepare-group"), false);
+    return command(name, args);
+  };
+  f.options.fetchImpl = async () =>
+    Response.json({
+      ok: true,
+      result: { id: 42, username: "sut_bot", has_topics_enabled: false },
+    });
+  const release = f.credential.release;
+  f.credential.release = async () => {
+    assert.equal(threaded, false);
+    events.push("released");
+    await release();
+  };
+  const output = path.join(root, "summary.json");
+  await runTelegramTestScenario({
+    args: {
+      dm: true,
+      createDmTopic: true,
+      output,
+      scenario: { actions: [{ type: "send", atMs: 0, text: "topic turn" }] },
+    },
+    acquireCredential: async () => f.credential,
+    checkCredential: f.check,
+    driveScenario: async (args, _repo, credential) => {
+      assert.equal(threaded, true);
+      assert.equal(credential.groupId, "-1001", "DM setup must not replace the shared group");
+      assert.equal(credential.chatTarget.kind, "dm");
+      assert.equal(args.scenario.actions[0].forumTopicId, 777);
+      fs.writeFileSync(output, JSON.stringify({ recordingComplete: true }));
+      events.push("delivered");
+    },
+  });
+  assert.deepEqual(events, ["topic-created", "delivered", "mode-restored", "released"]);
+  const summary = JSON.parse(fs.readFileSync(output, "utf8"));
+  assert.equal(summary.testDmTopic.setup.threadedMode.after, true);
+  assert.equal(summary.testDmTopic.cleanup.threadedMode.after, false);
+  assert.equal(f.releaseCount(), 1);
 });
 
 test("a failed run still deletes its run-owned forum before release", async () => {

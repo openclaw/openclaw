@@ -2,7 +2,7 @@ import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { enableNodeSqliteKyselyStatementCache } from "./kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
-import { runWithSqliteBusyTimeout, setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
+import { runWithSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import {
   runSqliteImmediateTransactionSync,
   type SqliteTransactionOptions,
@@ -78,23 +78,31 @@ export function withExistingSqliteRollbackDatabase<T>(
     throw new Error("Existing SQLite storage is empty.");
   }
   const existing = retained?.database;
-  const reader = existing ?? openNodeSqliteDatabase(pathname, { readOnly: true });
+  const reader =
+    existing ??
+    openNodeSqliteDatabase(pathname, { readOnly: true, timeout: options.busyTimeoutMs });
   if (retained && !retained.database) {
     enableNodeSqliteKyselyStatementCache(reader);
     retained.database = reader;
   }
   let writer: DatabaseSync | undefined;
   let snapshotOpen = false;
+  let normalLocking = false;
   const releaseReader = () => {
     if (!reader.isOpen) {
       return;
     }
     try {
-      // Bun's close_v2 can retain prepared statements until GC. End the native
-      // snapshot explicitly so closing cannot leave its SHARED lock alive.
       if (snapshotOpen && reader.isTransaction) {
-        reader.exec("PRAGMA locking_mode = NORMAL"); // sqlite-allow-raw -- Release locks even when snapshot validation failed.
         reader.exec("ROLLBACK"); // sqlite-allow-raw -- End our read-only snapshot before closing.
+        // NORMAL locking applies at the next file access, so ROLLBACK alone keeps
+        // the SHARED lock taken in EXCLUSIVE mode until close. Bun's close_v2
+        // defers that while statements remain, which left this process's own
+        // writer unable to commit. Only verified rollback stores reach NORMAL, so
+        // this autocommit read cannot create WAL sidecars; earlier failures close.
+        if (normalLocking) {
+          reader.exec("PRAGMA page_count"); // sqlite-allow-raw -- Drop the lock retained from EXCLUSIVE mode.
+        }
       }
       snapshotOpen = false;
     } finally {
@@ -104,9 +112,6 @@ export function withExistingSqliteRollbackDatabase<T>(
     }
   };
   try {
-    if (!existing) {
-      setSqliteBusyTimeout(reader, options.busyTimeoutMs);
-    }
     // Disable WAL shared-memory admission before the first pager read. A foreign
     // WAL database cannot acquire an exclusive writer lock through a read-only
     // connection, so SQLite refuses without creating WAL/SHM coordination files.
@@ -120,9 +125,8 @@ export function withExistingSqliteRollbackDatabase<T>(
     if (!["delete", "truncate", "persist"].includes(String(mode))) {
       throw new Error("Existing SQLite storage requires rollback journal mode.");
     }
-    // Keep the snapshot open, but let ROLLBACK release its lock without waiting
-    // for Bun to finalize retained statements after close_v2.
     reader.exec("PRAGMA locking_mode = NORMAL"); // sqlite-allow-raw -- Restore connection-local lock policy.
+    normalLocking = true;
     if (!existing) {
       options.validate?.(reader);
     }
@@ -131,8 +135,9 @@ export function withExistingSqliteRollbackDatabase<T>(
         throw new Error("Read-only SQLite observation cannot admit a writer.");
       });
     }
-    writer = openNodeSqliteDatabase(resolveExistingSqliteFileUri(pathname));
-    setSqliteBusyTimeout(writer, options.busyTimeoutMs);
+    writer = openNodeSqliteDatabase(resolveExistingSqliteFileUri(pathname), {
+      timeout: options.busyTimeoutMs,
+    });
     const database = writer;
     return operation(database, (write, transactionOptions) => {
       // Waiting while our reader blocks another writer's commit would deadlock.

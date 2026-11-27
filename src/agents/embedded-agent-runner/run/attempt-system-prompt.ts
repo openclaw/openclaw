@@ -2,6 +2,7 @@ import {
   splitSystemPromptCacheBoundary,
   SYSTEM_PROMPT_CACHE_BOUNDARY,
 } from "@openclaw/ai/internal/shared";
+import { shareSystemPromptPrefix } from "../../sessions/system-prompt-pool.js";
 import type { buildConfiguredAgentSystemPrompt } from "../../system-prompt-config.js";
 
 export type SystemPromptRefresh = ((currentSystemPrompt: string) => string) & {
@@ -32,13 +33,12 @@ export function extractAttemptPermissionNotice(systemPrompt: string) {
 
 /**
  * Builds the embedded system prompt and applies provider-specific transforms
- * unless this is a raw model run. Raw runs still keep `baseSystemPrompt` for
- * diagnostics/cache boundaries, but submit an empty provider prompt.
+ * unless this is a raw model run, which submits an empty provider prompt.
  */
 export async function buildAttemptSystemPrompt(params: BuildAttemptSystemPromptParams) {
   const { buildConfiguredAgentSystemPrompt } = await import("../../system-prompt-config.js");
   let renderedSkillsPrompt = "";
-  const baseSystemPrompt = buildConfiguredAgentSystemPrompt({
+  const baseSystemPrompt = await buildConfiguredAgentSystemPrompt({
     ...params.embeddedSystemPrompt,
     onRenderedSkillsPrompt: (skillsPrompt) => {
       renderedSkillsPrompt = skillsPrompt;
@@ -51,21 +51,19 @@ export async function buildAttemptSystemPrompt(params: BuildAttemptSystemPromptP
   // Runtime additions at the cache boundary stay outside both owned regions;
   // permission refreshes replace capability guidance without dropping that context.
   const splitPrompt = splitSystemPromptCacheBoundary(transformedSystemPrompt);
-  const stablePrompt = renderAttemptPromptSection(
-    "STABLE",
-    splitPrompt?.stablePrefix ?? transformedSystemPrompt,
+  const systemPrompt = shareSystemPromptPrefix(
+    params.isRawModelRun
+      ? ""
+      : splitPrompt
+        ? `${renderAttemptPromptSection("STABLE", splitPrompt.stablePrefix)}${SYSTEM_PROMPT_CACHE_BOUNDARY}${renderAttemptPromptSection("DYNAMIC", splitPrompt.dynamicSuffix)}` // nosemgrep: security.opengrep.ghsa-2qj5-gwg2-xwc4.openclaw.prompt-unsanitized-literal-interpolation -- These are complete prompts from trusted builders/transforms; path literals are sanitized at their producers, not by flattening prompt newlines here.
+        : renderAttemptPromptSection("STABLE", transformedSystemPrompt),
   );
-  const dynamicPrompt = splitPrompt
-    ? renderAttemptPromptSection("DYNAMIC", splitPrompt.dynamicSuffix)
-    : "";
-  const systemPrompt = params.isRawModelRun
-    ? ""
-    : splitPrompt
-      ? `${stablePrompt}${SYSTEM_PROMPT_CACHE_BOUNDARY}${dynamicPrompt}` // nosemgrep: security.opengrep.ghsa-2qj5-gwg2-xwc4.openclaw.prompt-unsanitized-literal-interpolation -- These are complete prompts from trusted builders/transforms; path literals are sanitized at their producers, not by flattening prompt newlines here.
-      : stablePrompt;
+  // Refresh closures borrow the shared render, not a per-attempt source string.
+  const sections = splitSystemPromptCacheBoundary(systemPrompt);
+  const stablePrompt = sections?.stablePrefix ?? systemPrompt;
+  const dynamicPrompt = sections?.dynamicSuffix ?? "";
 
   return {
-    baseSystemPrompt,
     systemPrompt,
     skillsPrompt: params.isRawModelRun ? "" : renderedSkillsPrompt,
     refreshSystemPrompt: (currentSystemPrompt: string, permissionNotice?: string) => {
@@ -88,7 +86,9 @@ export async function buildAttemptSystemPrompt(params: BuildAttemptSystemPromptP
           return section === "STABLE" ? stablePrompt : dynamicPrompt;
         },
       );
-      return replacedNotice || !nextNotice ? refreshed : `${refreshed}\n\n${nextNotice}`;
+      return shareSystemPromptPrefix(
+        replacedNotice || !nextNotice ? refreshed : `${refreshed}\n\n${nextNotice}`,
+      );
     },
   };
 }

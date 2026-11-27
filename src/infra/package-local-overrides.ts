@@ -28,7 +28,8 @@ import {
   type LocalPackageOverridesPlan,
   type LocalPackageOverridesResult,
 } from "./package-local-overrides-shared.js";
-import { resolveRuntimeArgs } from "./runtime-worker-url.js";
+import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
+import { resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
 import { relocateRuntimePath } from "./update-runtime-relocation.js";
 
 export { captureLocalPackageOverrides } from "./package-local-overrides-capture.js";
@@ -37,64 +38,56 @@ export type {
   LocalPackageOverridesResult,
 } from "./package-local-overrides-shared.js";
 
-function resolveLocalOverrideRuntimeUrls(): string[] {
-  return [
-    import.meta.resolve("@openclaw/fs-safe/config"),
-    import.meta.resolve("@openclaw/fs-safe/root"),
-    import.meta.resolve("@openclaw/fs-safe/durability"),
-    import.meta.resolve("@openclaw/fs-safe/errors"),
-  ];
+type LocalOverrideRuntime = {
+  entryUrl: string;
+  configUrl: string;
+  rootUrl: string;
+  durabilityUrl: string;
+  errorsUrl: string;
+};
+
+function resolveLocalOverrideRuntime(): LocalOverrideRuntime {
+  return {
+    entryUrl: resolveRuntimeProcessEntrypointUrl("packageLocalOverrides").href,
+    configUrl: import.meta.resolve("@openclaw/fs-safe/config"),
+    rootUrl: import.meta.resolve("@openclaw/fs-safe/root"),
+    durabilityUrl: import.meta.resolve("@openclaw/fs-safe/durability"),
+    errorsUrl: import.meta.resolve("@openclaw/fs-safe/errors"),
+  };
 }
 
 /** Resolve while the installed updater still exists; keep its complete dependency scope. */
 export async function prepareLocalOverrideRuntime(params: {
   sourceRoot: string;
   destinationRoot: string;
-}): Promise<string[]> {
+}): Promise<LocalOverrideRuntime> {
   const sourceRoot = await fs.realpath(params.sourceRoot);
   const destinationRoot = path.join(
     await fs.realpath(path.dirname(params.destinationRoot)),
     path.basename(params.destinationRoot),
   );
-  return await Promise.all(
-    resolveLocalOverrideRuntimeUrls().map(async (url) => {
-      // Real paths preserve external stores, and rebase in-project dependencies with
-      // the entire retained npm package or native package-manager project.
-      const modulePath = await fs.realpath(fileURLToPath(url));
-      return pathToFileURL(relocateRuntimePath(modulePath, [{ sourceRoot, destinationRoot }])).href;
-    }),
-  );
+  const runtime = resolveLocalOverrideRuntime();
+  const relocate = (modulePath: string) =>
+    pathToFileURL(relocateRuntimePath(modulePath, [{ sourceRoot, destinationRoot }])).href;
+  const dependency = async (url: string) => {
+    // Keep external stores intact and move project dependencies with the retained tree.
+    return relocate(await fs.realpath(fileURLToPath(url)));
+  };
+  const [configUrl, rootUrl, durabilityUrl, errorsUrl] = await Promise.all([
+    dependency(runtime.configUrl),
+    dependency(runtime.rootUrl),
+    dependency(runtime.durabilityUrl),
+    dependency(runtime.errorsUrl),
+  ]);
+  return {
+    // A standalone entry is an addressable image alias, without a physical JS file.
+    entryUrl: relocate(fileURLToPath(runtime.entryUrl)),
+    configUrl,
+    rootUrl,
+    durabilityUrl,
+    errorsUrl,
+  };
 }
-
-// Keep required native policy isolated from the operator's process-global defaults.
-// Root.move in fs-safe 0.8.5 is a check+rename fallback, even in required mode.
-const REQUIRED_FS_SAFE_OPERATION_SCRIPT = `
-const [configUrl, rootUrl, durabilityUrl, errorsUrl, rootDir, sourcePath, relativePath] = process.argv.slice(1);
-const { configureFsSafeNative } = await import(configUrl);
-configureFsSafeNative({ mode: "require" });
-const { root } = await import(rootUrl);
-const { publishFileExclusive } = await import(durabilityUrl);
-const { FsSafeError } = await import(errorsUrl);
-const packageFs = await root(rootDir, { hardlinks: "reject", symlinks: "reject" });
-const source = await packageFs.open(sourcePath);
-try {
-  await publishFileExclusive({
-    sourcePath: source.realPath,
-    targetPath: await packageFs.resolve(relativePath),
-    expectedSourceIdentity: source.exactIdentity,
-    strategy: "rename-noreplace",
-  });
-  process.stdout.write("moved");
-} catch (error) {
-  // A post-rename verification/sync failure must still enter caller rollback.
-  if (error instanceof FsSafeError && error.details?.targetCreated === true) {
-    process.stdout.write("moved");
-  }
-  throw error;
-} finally {
-  await source.handle.close();
-}
-`;
 
 class LocalOverrideRollbackError extends Error {
   constructor(
@@ -118,7 +111,7 @@ function createLocalOverrideMutationPath(relativePath: string, label: string): s
 
 function createLocalOverrideMutations(
   packageFs: LocalOverridePackageRoot,
-  runtimeUrls: readonly string[],
+  runtime: LocalOverrideRuntime,
 ) {
   const assertTopology = (relativePath: string) =>
     assertLocalOverrideMutationTopology({
@@ -138,11 +131,11 @@ function createLocalOverrideMutations(
       execFile(
         process.execPath,
         [
-          ...resolveRuntimeArgs(),
-          "--input-type=module",
-          "--eval",
-          REQUIRED_FS_SAFE_OPERATION_SCRIPT,
-          ...runtimeUrls,
+          ...resolveRuntimeWorkerArgv(new URL(runtime.entryUrl)),
+          runtime.configUrl,
+          runtime.rootUrl,
+          runtime.durabilityUrl,
+          runtime.errorsUrl,
           packageFs.rootReal,
           params.sourcePath,
           params.relativePath,
@@ -381,7 +374,7 @@ export async function applyLocalPackageOverrides(params: {
   packageRoot: string;
   plan: LocalPackageOverridesPlan | null;
   reapply: boolean;
-  runtimeUrls?: readonly string[];
+  runtime?: LocalOverrideRuntime;
 }): Promise<LocalPackageOverridesResult> {
   if (!params.plan) {
     return emptyResult("none");
@@ -459,13 +452,13 @@ export async function applyLocalPackageOverrides(params: {
   let preserveRollbackDir = false;
   let mutations: ReturnType<typeof createLocalOverrideMutations> | undefined;
   try {
-    const runtimeUrls = params.runtimeUrls ?? resolveLocalOverrideRuntimeUrls();
+    const runtime = params.runtime ?? resolveLocalOverrideRuntime();
     const packageFs = await openFsRoot(params.packageRoot, {
       hardlinks: "reject",
       mkdir: true,
       symlinks: "reject",
     });
-    mutations = createLocalOverrideMutations(packageFs, runtimeUrls);
+    mutations = createLocalOverrideMutations(packageFs, runtime);
     try {
       assertDirectoryIdentitySync(packageFs.rootReal, packageRootIdentity);
     } catch {
@@ -484,11 +477,10 @@ export async function applyLocalPackageOverrides(params: {
         rollbackEntries.push({ path: change.path, backupPath, backupMode });
       } else {
         const content = await fs.readFile(change.savedPath);
-        const stats = await fs.stat(change.savedPath);
         const appliedEntry: PackageDistContentInventoryEntry = {
           path: change.path,
           sha256: createHash("sha256").update(content).digest("hex"),
-          mode: change.mode ?? normalizeFileMode(stats.mode),
+          mode: change.mode,
           size: content.length,
         };
         const cleanupPaths = await mutations.replace({

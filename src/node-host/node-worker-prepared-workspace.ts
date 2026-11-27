@@ -1,14 +1,14 @@
 import fs from "node:fs";
-import fsp from "node:fs/promises";
 import path from "node:path";
 import type { WorkspaceHashMemo } from "../gateway/worker-environments/workspace-hash-memo.js";
-import { hasNodeErrorCode } from "../infra/path-guards.js";
+import { pathEntryExists } from "../infra/path-existence.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import type {
   NodeWorkerPreparedWorkspaceInput,
   NodeWorkerPreparedWorkspaceResult,
 } from "../worker/node-workspace-prepared-protocol.js";
 import type { NodeWorkerWorkspaceExecInput } from "../worker/node-workspace-protocol.js";
+import type { NodeWorkerCommandIsolation } from "./node-worker-command-filesystem.js";
 import {
   type NodeWorkerPreparedWorkspaceRow,
   NodeWorkerPreparedWorkspaceStore,
@@ -44,6 +44,7 @@ export class NodeWorkerPreparedWorkspaceRuntime {
     options: Pick<OpenClawStateDatabaseOptions, "env" | "path">,
     private readonly hashMemos: Map<string, WorkspaceHashMemo>,
     enabled: boolean,
+    private readonly isolation?: NodeWorkerCommandIsolation,
   ) {
     this.root = path.resolve(
       enabled ? fs.realpathSync.native(home) : home,
@@ -121,6 +122,7 @@ export class NodeWorkerPreparedWorkspaceRuntime {
           !source.baseCommit ||
           source.baseCommit !== prepared.baseCommit ||
           (await captureManifest({
+            mode: "eligible",
             workspaceDir: workspace.workspaceDir,
             manifestHome: workspace.homeDir,
             baseCommit: source.baseCommit,
@@ -128,6 +130,7 @@ export class NodeWorkerPreparedWorkspaceRuntime {
             baseManifestRef: workspace.sourceManifestRef,
             hashMemo,
             signal,
+            isolation: this.isolation,
           })) !== workspace.preparedManifestRef
         ) {
           throw new Error("INVALID_REQUEST: prepared workspace source does not match its manifest");
@@ -243,15 +246,8 @@ export class NodeWorkerPreparedWorkspaceRuntime {
             },
             () => store.assertCurrent(retiring),
           );
-          if (!removed) {
-            try {
-              await fsp.lstat(ownerRoot);
-              throw new Error("INVALID_REQUEST: prepared workspace retirement path is not owned");
-            } catch (error) {
-              if (!hasNodeErrorCode(error, "ENOENT")) {
-                throw error;
-              }
-            }
+          if (!removed && (await pathEntryExists(ownerRoot))) {
+            throw new Error("INVALID_REQUEST: prepared workspace retirement path is not owned");
           }
           await store.retire(retiring, true);
           generationKeys.push(generationKey);

@@ -118,7 +118,6 @@ export async function hydrateDiscordMessageIfNeeded(params: {
         params.messageChannelId,
         params.message.id,
       );
-      logVerbose(`discord: hydrated inbound payload via REST for ${params.message.id}`);
       hydrated = new Message(params.client, {
         ...(params.message.partial ? {} : params.message.rawData),
         ...fetched,

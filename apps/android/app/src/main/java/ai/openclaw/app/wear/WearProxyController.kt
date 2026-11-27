@@ -1,12 +1,12 @@
 package ai.openclaw.app.wear
 
 import ai.openclaw.app.GatewayAgentSummary
-import ai.openclaw.app.node.asArrayOrNull
+import ai.openclaw.app.asArrayOrNull
 import ai.openclaw.app.parseGatewayModelCatalog
+import ai.openclaw.app.providerQualifiedRef
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
 import ai.openclaw.app.takeCodePoints
 import ai.openclaw.app.takeUtf8Bytes
-import ai.openclaw.app.ui.chat.providerQualifiedRef
 import ai.openclaw.wear.shared.WearMessage
 import ai.openclaw.wear.shared.WearProxyCapability
 import ai.openclaw.wear.shared.WearRealtimeTalkCodec
@@ -456,7 +456,14 @@ internal fun projectWearChatEvent(payload: JsonElement): JsonObject? {
     copyBoolean(source, "replace")
     copyString(source, "errorMessage", MAX_ERROR_MESSAGE_CHARS)
     copyString(source, "stopReason", 100)
-    projectMessage(source["message"])?.let { put("message", it) }
+    projectMessage(source["message"])?.let { message ->
+      val anonymousFinal =
+        source.stringOrNull("state") == "final" && message.stringOrNull("role") == "assistant" &&
+          message["id"] == null && message["entryId"] == null && message["idempotencyKey"] == null
+      // Anonymous final timestamps describe broadcast time, not the stored reply.
+      // History owns its canonical timestamp; retaining this clock duplicates the reply on Wear.
+      put("message", if (anonymousFinal) JsonObject(message - "timestamp") else message)
+    }
   }
 }
 

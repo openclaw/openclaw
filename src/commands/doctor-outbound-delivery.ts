@@ -7,8 +7,6 @@ import {
   OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
 } from "../infra/outbound/delivery-queue-namespaces.js";
 import { withLegacyMigrationStateLock } from "../infra/state-migrations.lock.js";
-import { listRetiredDeliveryQueueFiles } from "../infra/state-migrations.retired-delivery-files.js";
-import { assertNoRetiredStateFiles } from "../infra/state-migrations.retired-files.js";
 import type { MigrationMessages } from "../infra/state-migrations.types.js";
 import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-error.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
@@ -20,7 +18,8 @@ export async function migrateDoctorDeliveryQueues(params: {
   env: NodeJS.ProcessEnv;
 }): Promise<MigrationMessages> {
   const stateEnv = { ...params.env, OPENCLAW_STATE_DIR: params.stateDir };
-  assertNoRetiredStateFiles("JSON delivery queues", listRetiredDeliveryQueueFiles(params.stateDir));
+  const { repairRetiredDoctorState } = await import("./doctor-retired-state-repair.js");
+  const retired = await repairRetiredDoctorState(stateEnv);
   if (
     (await countPendingDeliveryQueueEntriesReadOnly(
       [
@@ -31,9 +30,9 @@ export async function migrateDoctorDeliveryQueues(params: {
       stateEnv,
     )) === 0
   ) {
-    return { changes: [], warnings: [] };
+    return retired;
   }
-  return withLegacyMigrationStateLock({
+  const migrated = await withLegacyMigrationStateLock({
     stateDir: params.stateDir,
     env: params.env,
     label: "legacy delivery queues",
@@ -176,4 +175,9 @@ export async function migrateDoctorDeliveryQueues(params: {
       };
     },
   });
+  return {
+    ...migrated,
+    changes: [...retired.changes, ...migrated.changes],
+    warnings: [...retired.warnings, ...migrated.warnings],
+  };
 }

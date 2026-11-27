@@ -15,15 +15,16 @@ import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
 } from "openclaw/plugin-sdk/native-command-config-runtime";
+import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   danger,
   logVerbose,
   shouldLogVerbose,
   getChildLogger,
-  createSubsystemLogger,
   createNonExitingRuntime,
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/runtime-env";
+import { getSessionEntryAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   registerSessionBindingAdapterV2,
@@ -33,10 +34,9 @@ import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
 import { getOrCreateAccountThrottler } from "./account-throttler.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { normalizeTelegramApiRoot } from "./api-root.js";
-import type { TelegramBotDeps } from "./bot-deps.js";
 import { createTelegramHandlers } from "./bot-handlers.runtime.js";
+import type { TelegramPluginCommandContinuation } from "./bot-handlers.types.js";
 import { createTelegramMessageProcessor } from "./bot-message.js";
-import { defaultTelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 import {
   ensureTelegramMessageProcessingResult,
@@ -47,7 +47,7 @@ import {
   TelegramSpooledReplayProcessingError,
 } from "./bot-processing-outcome.js";
 import { createTelegramUpdateTracker } from "./bot-update-tracker.js";
-import { apiThrottler, Bot, type ApiClientOptions } from "./bot.runtime.js";
+import { Bot, type ApiClientOptions } from "./bot.runtime.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import {
   setTelegramCallbackQueryAnswerPromise,
@@ -61,17 +61,20 @@ import {
   prepareTelegramPollAnswerContextAsync,
   settleTelegramPollAnswerContext,
 } from "./poll-answer-context.js";
-import { formatTelegramRawUpdateForLog } from "./raw-update-log.js";
+import {
+  TELEGRAM_CLIENT_TIMEOUT_BACKSTOP_SECONDS,
+  telegramUploadTimeoutTransformer,
+} from "./request-timeouts.js";
 import type { TelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 import { createTelegramSequentializer } from "./sequentialize.js";
 import { createTelegramThreadBindingManager } from "./thread-bindings.js";
+import { prepareTelegramWidgetQueryContextAsync } from "./widgets/widget-query-context.js";
 
 export async function createTelegramBotCore(
-  opts: TelegramBotOptions & { telegramDeps: TelegramBotDeps },
+  opts: TelegramBotOptions,
 ): Promise<InstanceType<typeof Bot>> {
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
-  const telegramDeps = opts.telegramDeps;
-  const cfg = opts.config ?? telegramDeps.getRuntimeConfig();
+  const cfg = opts.config ?? getRuntimeConfig();
   const account = resolveTelegramAccount({
     cfg,
     accountId: opts.accountId,
@@ -106,13 +109,15 @@ export async function createTelegramBotCore(
 
   const client: ApiClientOptions = {
     fetch: asTelegramClientFetch(finalFetch),
+    timeoutSeconds: TELEGRAM_CLIENT_TIMEOUT_BACKSTOP_SECONDS,
     ...(normalizedApiRoot ? { apiRoot: normalizedApiRoot } : {}),
   };
   const bot = new Bot(opts.token, {
     client,
     ...(opts.botInfo ? { botInfo: opts.botInfo } : {}),
   });
-  const accountThrottler = getOrCreateAccountThrottler(opts.token, apiThrottler);
+  const accountThrottler = getOrCreateAccountThrottler(opts.token);
+  bot.api.config.use(telegramUploadTimeoutTransformer);
   bot.api.config.use(accountThrottler.transformer);
   const sendChatActionHandler: TelegramSendChatActionHandler = {
     sendChatAction: (chatId, action, threadParams) =>
@@ -134,7 +139,6 @@ export async function createTelegramBotCore(
       typeof opts.updateOffset?.persistenceFloorUpdateId === "number"
         ? opts.updateOffset.persistenceFloorUpdateId
         : initialUpdateId,
-    ackPolicy: "after_agent_dispatch",
     ...(typeof opts.updateOffset?.onUpdateId === "function"
       ? { onAcceptedUpdateId: opts.updateOffset.onUpdateId }
       : {}),
@@ -152,6 +156,16 @@ export async function createTelegramBotCore(
   bot.use(async (ctx, next) => {
     const begin = updateTracker.beginUpdate(ctx);
     if (!begin.accepted) {
+      // Dedupe must distinguish a completed update from an older attempt that
+      // still owns middleware after its spool claim timed out.
+      recordTelegramMessageProcessingResult(
+        begin.reason === "pending"
+          ? {
+              kind: "failed-retryable",
+              error: new Error("Telegram update processing is still pending"),
+            }
+          : { kind: "skipped" },
+      );
       return;
     }
     try {
@@ -200,11 +214,15 @@ export async function createTelegramBotCore(
     await next();
   });
 
-  // poll_answer omits its chat and topic. Resolve the send-time route before
-  // sequentialize so the vote shares the same lane as ordinary session turns.
+  // poll_answer omits its chat and topic, and widget_query omits its topic. Resolve
+  // the send-time route before sequentialize so both share their session's lane.
   bot.use(async (ctx, next) => {
     try {
       await prepareTelegramPollAnswerContextAsync({
+        update: ctx.update,
+        accountId: account.accountId,
+      });
+      await prepareTelegramWidgetQueryContextAsync({
         update: ctx.update,
         accountId: account.accountId,
       });
@@ -224,19 +242,6 @@ export async function createTelegramBotCore(
   // only that route's sequential lane until registration succeeds or declines it.
   bot.use(async (ctx, next) => {
     await settleTelegramPollAnswerContext({ update: ctx.update, accountId: account.accountId });
-    await next();
-  });
-
-  const rawUpdateLogger = createSubsystemLogger("gateway/channels/telegram/raw-update");
-
-  bot.use(async (ctx, next) => {
-    if (shouldLogVerbose()) {
-      try {
-        rawUpdateLogger.debug(`telegram update: ${formatTelegramRawUpdateForLog(ctx.update)}`);
-      } catch (err) {
-        rawUpdateLogger.debug(`telegram update log failed: ${String(err)}`);
-      }
-    }
     await next();
   });
 
@@ -265,10 +270,10 @@ export async function createTelegramBotCore(
     cfg: OpenClawConfig;
   }) => {
     const agentId = params.agentId ?? ownerAgentId;
-    const storePath = telegramDeps.resolveStorePath(params.cfg.session?.store, { agentId });
+    const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
     try {
       const storedActivation = (
-        await telegramDeps.getSessionEntryAsync?.({
+        await getSessionEntryAsync({
           storePath,
           sessionKey: params.sessionKey,
         })
@@ -307,12 +312,19 @@ export async function createTelegramBotCore(
     bot,
     runtime,
     opts: runtimeOpts,
-    telegramDeps,
     resolveTelegramGroupConfig,
   };
+  // Native commands register before the message pipeline exists; continuations bind to it below.
+  const pluginCommandTurns: { continue?: TelegramPluginCommandContinuation } = {};
   const { nativeCommandNames, nativeCommandCallbackDispatcher } =
     await registerTelegramNativeCommands({
       ...botContext,
+      continuePluginCommandTurn: async (turn) => {
+        if (!pluginCommandTurns.continue) {
+          throw new Error("Telegram message pipeline is not ready for plugin command turns.");
+        }
+        await pluginCommandTurns.continue(turn);
+      },
       cfg,
       accountId: account.accountId,
       telegramCfg,
@@ -321,10 +333,6 @@ export async function createTelegramBotCore(
       nativeSkillsEnabled,
       resolveGroupPolicy,
       shouldSkipUpdate,
-      telegramDeps: {
-        ...telegramDeps,
-        sendMessageTelegram: defaultTelegramNativeCommandDeps.sendMessageTelegram,
-      },
     });
   const messageContext = {
     ...botContext,
@@ -354,6 +362,7 @@ export async function createTelegramBotCore(
     processMessage,
   });
 
+  pluginCommandTurns.continue = handlers.continuePluginCommandTurn;
   handlers.register(nativeCommandCallbackDispatcher);
 
   const originalStop = bot.stop.bind(bot);

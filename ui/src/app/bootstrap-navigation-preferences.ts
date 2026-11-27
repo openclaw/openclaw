@@ -51,6 +51,7 @@ export function createApplicationNavigationPreferences(
     },
     subscribe(listener) {
       listeners.add(listener);
+      // Forward persisted preferences through the synchronous navigation owner.
       const stopPreferences = preferences.subscribe(() => listener(snapshot()));
       return () => {
         listeners.delete(listener);

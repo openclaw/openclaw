@@ -1,5 +1,4 @@
 // Plugin compatibility registry tests cover compatibility metadata loading and validation.
-import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import { listPluginCompatRecords, type PluginCompatCode } from "./registry.js";
 
@@ -19,13 +18,12 @@ function expectNonEmptyStringList(values: readonly string[], label: string) {
 describe("plugin compatibility registry", () => {
   it("keeps every record actionable", () => {
     for (const record of listPluginCompatRecords()) {
-      expect(record.introduced, record.code).toMatch(datePattern);
       expect(record.docsPath, record.code).toMatch(/^\//u);
       if (record.status === "deprecated") {
         expect(record.deprecated, record.code).toMatch(datePattern);
         expect(record.warningStarts, record.code).toMatch(datePattern);
         if (record.removalGate !== undefined) {
-          expect(record.removalGate, record.code).toBe("next-plugin-sdk-major");
+          expect(record.removalGate, record.code).toBe("stable-deprecation-period");
           expect(record.removeAfter, record.code).toBeUndefined();
         } else if (removalDatePendingCompatCodes.has(record.code)) {
           expect(record.removeAfter, record.code).toBeUndefined();
@@ -36,10 +34,6 @@ describe("plugin compatibility registry", () => {
       }
       expectNonEmptyStringList(record.surfaces, `${record.code}: surfaces`);
       expectNonEmptyStringList(record.diagnostics, `${record.code}: diagnostics`);
-      expectNonEmptyStringList(record.tests, `${record.code}: tests`);
-      for (const testPath of record.tests) {
-        expect(fs.existsSync(testPath), `${record.code}: ${testPath}`).toBe(true);
-      }
     }
   });
 });

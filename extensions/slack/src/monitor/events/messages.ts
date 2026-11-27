@@ -30,40 +30,6 @@ function isBotAuthoredEnterpriseEvent(event: { bot_id?: unknown; subtype?: unkno
   return Boolean(asString(event.bot_id)) || event.subtype === "bot_message";
 }
 
-async function resolveSlackAppMentionChannelType(params: {
-  ctx: SlackMonitorContext;
-  eventScope?: SlackEventScope;
-  mention: SlackAppMentionEvent;
-}): Promise<{
-  type: SlackMessageEvent["channel_type"] | undefined;
-  lookupFailureCategory?: Awaited<
-    ReturnType<SlackMonitorContext["resolveChannelName"]>
-  >["lookupFailureCategory"];
-}> {
-  const explicitType = asString(params.mention.channel_type);
-  if (explicitType) {
-    return { type: normalizeSlackChannelType(explicitType, params.mention.channel) };
-  }
-  const rememberedType = params.ctx.recallSlackChannelType(
-    params.mention.channel,
-    params.eventScope,
-  );
-  if (rememberedType) {
-    return { type: normalizeSlackChannelType(rememberedType, params.mention.channel) };
-  }
-  // app_mention omits channel_type, and Slack ID prefixes are not a type contract.
-  // Only an authoritative event/cache/API type may choose this event's owner.
-  const resolved = await params.ctx
-    .resolveChannelName(params.mention.channel, params.eventScope)
-    .catch(() => ({ type: undefined, lookupFailureCategory: "other" as const }));
-  return {
-    type: resolved.type
-      ? normalizeSlackChannelType(resolved.type, params.mention.channel)
-      : undefined,
-    lookupFailureCategory: resolved.lookupFailureCategory,
-  };
-}
-
 function resolveAssistantMessageChangedSender(params: {
   message?: Record<string, unknown>;
   botUserId: string;
@@ -252,12 +218,30 @@ export function registerSlackMessageEvents(params: {
 
             // DM and MPIM messages are owned by message.im/message.mpim. Resolve the
             // omitted type before this guard so event ordering cannot change ownership.
-            const { type: channelType, lookupFailureCategory } =
-              await resolveSlackAppMentionChannelType({
-                ctx,
-                mention,
-                eventScope,
-              });
+            const { type: channelType, lookupFailureCategory } = await (async (): Promise<{
+              type: SlackMessageEvent["channel_type"] | undefined;
+              lookupFailureCategory?: Awaited<
+                ReturnType<SlackMonitorContext["resolveChannelName"]>
+              >["lookupFailureCategory"];
+            }> => {
+              const explicitType = asString(mention.channel_type);
+              if (explicitType) {
+                return { type: normalizeSlackChannelType(explicitType, mention.channel) };
+              }
+              const rememberedType = ctx.recallSlackChannelType(mention.channel, eventScope);
+              if (rememberedType) {
+                return { type: normalizeSlackChannelType(rememberedType, mention.channel) };
+              }
+              // app_mention omits channel_type, and Slack ID prefixes are not a type contract.
+              // Only an authoritative event/cache/API type may choose this event's owner.
+              const resolved = await ctx.resolveChannelName(mention.channel, eventScope);
+              return {
+                type: resolved.type
+                  ? normalizeSlackChannelType(resolved.type, mention.channel)
+                  : undefined,
+                lookupFailureCategory: resolved.lookupFailureCategory,
+              };
+            })();
             if (!channelType) {
               // OpenClaw manifests pair app_mention with message.channels/groups/im/mpim.
               // Never guess here: the canonical message event still owns delivery.

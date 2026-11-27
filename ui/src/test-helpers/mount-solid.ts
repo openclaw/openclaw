@@ -4,8 +4,7 @@ import {
 } from "@solidjs/testing-library";
 import { hydrate, render, type JSX } from "@solidjs/web";
 import { createComponent } from "solid-js";
-import { afterEach } from "vitest";
-import { cleanupSolid, trackSolidRoot } from "./solid-cleanup.ts";
+import { trackSolidRoot } from "./solid-cleanup.ts";
 
 export { cleanupSolid } from "./solid-cleanup.ts";
 
@@ -14,8 +13,6 @@ export type MountSolidOptions = Omit<
   NonNullable<Parameters<typeof testingLibraryRender>[1]>,
   "location"
 >;
-
-afterEach(cleanupSolid);
 
 export function mountSolid(ui: () => JSX.Element, options: MountSolidOptions = {}) {
   const baseElement = options.baseElement ?? options.container ?? document.body;

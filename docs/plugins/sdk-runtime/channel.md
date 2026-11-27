@@ -9,6 +9,20 @@ sidebarTitle: "Channel helpers"
 
 Channel-specific runtime helpers, available when a channel plugin is loaded. Part of the [Plugin runtime helpers](/plugins/sdk-runtime) reference; [Channel plugins](/plugins/sdk-channel-plugins) is the step-by-step guide.
 
+## Queued source replies
+
+A channel with a task-correlated reply destination can pass
+`replyOptions.onQueuedFollowupReplyBatch` to inbound dispatch. The callback remains
+attached to that input when it queues behind an active turn. Batches distinguish
+progress from completed, failed, and aborted execution; only terminal batches
+should settle the source task, including successful completion with no payloads.
+
+Set the callback's `ownsCompletion(channel)` predicate for the channel whose
+completion it owns. Matching replies stay with this source callback instead of
+being routed as a new outbound message. Leave it unset for ordinary origin-routed
+channel replies. The channel must retain its task identity and make settlement
+idempotent; progress does not establish completion.
+
 ## Channel namespaces
 
 <AccordionGroup>
@@ -57,6 +71,8 @@ Channel-specific runtime helpers, available when a channel plugin is loaded. Par
 
     When returning a guarded response for streaming, use `responseWithRelease(response, release)` from `openclaw/plugin-sdk/fetch-runtime` to retain request ownership until its body completes, fails, or is cancelled. Consume or cancel bodies explicitly for prompt release; garbage collection of abandoned wrappers provides only best-effort cleanup.
 
+    Guarded fetch accepts `streamTimeoutMs` for header/body inactivity independently of the whole-request `timeoutMs`; when both are supplied, `timeoutMs` takes precedence. The existing `createPinnedDispatcher` helper also accepts `streamTimeoutMs` as its fifth argument. These stream settings retain TCP/TLS connection deadlines and default to the existing transport policy when omitted.
+
     `api.runtime.channel.mentions` is the shared inbound mention-policy surface for bundled channel plugins that use runtime injection:
 
     ```typescript
@@ -99,7 +115,7 @@ Channel-specific runtime helpers, available when a channel plugin is loaded. Par
   </Accordion>
 </AccordionGroup>
 
-Reply options accept `onVisibleWorkSessions(sessions)` to receive visible work sessions. For a fresh child created through the local Gateway, the host awaits this callback before the child's first turn, so plugins can persist session-scoped context first. Accepted sessions are also reported before final reply delivery, including when the settled run failed. Each descriptor carries `sessionKey`, the canonical `url`, and an optional `label`. A child can be reported at creation and again at settlement; consumers must be idempotent by session key.
+Reply options accept `onVisibleWorkSessions(sessions)` to receive visible work sessions. For a fresh child created through the local Gateway, the host awaits this callback before the child's first turn, so plugins can persist session-scoped context first. Accepted sessions are also reported before final reply delivery, including when the settled run failed. Each descriptor carries `sessionKey`, the session `url`, and an optional `label`. A child can be reported at creation and again at settlement; consumers must be idempotent by session key.
 
 ## Awaited conversation binding mutations
 
@@ -121,9 +137,9 @@ each resolver so in-process write receipts invalidate ownership before an effect
 Core preserves the resolver's error and fallback handling and releases prepared
 facts when the operation ends; do not retain the reader for later operations.
 
-The synchronous `prepareConversationRouteOwners` and
-`resolveConversationRouteOwner` hooks remain deprecated compatibility until the
-next Plugin SDK major. See
+The released synchronous `resolveConversationRouteOwner` hook remains deprecated
+compatibility while plugins migrate. The unreleased synchronous
+`prepareConversationRouteOwners` hook has been removed. See
 [binding migration](/plugins/sdk-migration/how-to-migrate#await-plugin-state-and-conversation-bindings).
 
 Await `getSessionBindingService().touchAsync(bindingId, at, scope)` when recording
@@ -203,10 +219,9 @@ Lifecycle setters have explicit Promise-returning counterparts:
 Callers await their results before reporting the affected bindings.
 
 The existing synchronous lookup, touch, route resolver, and lifecycle setter contracts
-remain deprecated through the next Plugin SDK major. The resolver's staged
-migration is recorded here and in the compatibility registry; its broad barrel
-is already deprecated, while its per-function IDE annotation is deferred until
-the caller migration is complete. Synchronous entry points call only synchronous
+remain deprecated through 2026-12-31, with removal in the first January 2027
+stable release. See the [binding migration mapping](/plugins/sdk-migration/sqlite-async#conversation-and-native-session-bindings).
+Synchronous entry points call only synchronous
 implementations; they never start an async mutation whose result would be lost.
 An adapter exposing both variants keeps them under the same state owner.
 

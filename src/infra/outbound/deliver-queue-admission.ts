@@ -5,10 +5,10 @@ import { createInitialDeliveryProducerClaim } from "../delivery-queue-sqlite-cla
 import { isDeliveryRecoveryOwnedRetry } from "../delivery-recovery.shared.js";
 import { throwSqliteLifecycleErrors } from "../sqlite-lifecycle-errors.js";
 import type { InternalDeliverOutboundPayloadsParams } from "./deliver-contracts.js";
+import { stripInternalRuntimeScaffoldingFromPayload } from "./deliver-payload-normalize.js";
 import {
   collectPayloadMediaSources,
   resolveOutboundMediaAccessForSend,
-  stripInternalRuntimeScaffoldingFromPayload,
 } from "./deliver-payload.js";
 import { resolveConversationDeliveryScope } from "./delivery-completion.js";
 import { releaseSpoolArtifacts, stageQueuePayloadMedia } from "./delivery-queue-media-spool.js";
@@ -69,7 +69,12 @@ export function restoreQueuedDeliveryCustody(
     );
   }
   const payloads = preparedOutboundPayloads(custody.preparedBatch);
-  return { ...params, ...custody, payloads, sessionGeneration: entry.sessionGeneration };
+  return {
+    ...params,
+    ...custody,
+    payloads,
+    sessionGeneration: entry.sessionGeneration,
+  };
 }
 
 /** Stages producer-owned media and atomically admits one durable outbound intent. */

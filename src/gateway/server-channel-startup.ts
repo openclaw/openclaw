@@ -24,8 +24,7 @@ export function runChannelAccountStartup<T>(start: () => T): T {
 
 export function waitForChannelStartupHandoff(): Promise<void> {
   return new Promise((resolve) => {
-    const handle = setImmediate(resolve);
-    handle.unref?.();
+    setImmediate(resolve).unref();
   });
 }
 

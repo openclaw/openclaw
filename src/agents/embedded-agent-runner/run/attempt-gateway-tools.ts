@@ -1,4 +1,3 @@
-import { readGitHubPublicationFact } from "../../../gateway/github-publication-discovery.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { agentHarnessExposesOpenClawTools } from "../../harness/tool-surface.js";
 import {
@@ -28,7 +27,6 @@ export function withPreparedEmbeddedGatewayTools<T>(
 ): Promise<T> {
   const callerIdentity = createAdmittedGatewayToolCallerIdentity({
     admittedRunContext: attempt.admittedRunContext,
-    cronAuthorityCheck: attempt.cronCreatorAuthorityCapability?.isCurrent,
     agentId: attempt.agentId,
     sessionKey: attempt.sessionKey,
     turnSourceChannel: attempt.messageChannel ?? attempt.messageProvider,
@@ -51,11 +49,9 @@ export function withPreparedEmbeddedGatewayTools<T>(
       gateway &&
       !gateway.localEmbedded
     ) {
-      attempt.githubPublicationAvailable = readGitHubPublicationFact({
-        sessionId: attempt.sessionId,
-        sessionKey: attempt.sessionKey,
-        agentId: attempt.agentId,
-      }).available;
+      // This is a brokered request capability, not a credential or workspace grant.
+      // The publisher qualifies the current target and identity when invoked.
+      attempt.githubPublicationAvailable = true;
     }
     return run();
   });

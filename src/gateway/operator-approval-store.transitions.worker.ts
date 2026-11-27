@@ -1,14 +1,19 @@
-// First-answer, consumption, and expiry transactions owned by the approval worker.
+// Startup recovery, first-answer, consumption, and expiry owned by the approval worker.
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
+import type { Updateable } from "kysely";
 import { mintMcpToolGrantLocked } from "../infra/exec-approvals-sqlite.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
+import type {
+  OpenClawStateDatabase,
+  OpenClawStateDatabaseOptions,
+} from "../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import type { CronStandingGrantMintSpec } from "./operator-approval-standing-grants.types.js";
 import { mintCronStandingGrantLocked } from "./operator-approval-standing-grants.worker.js";
 import { operatorApprovalTerminalFields } from "./operator-approval-store.fields.js";
 import { operatorApprovalPublication } from "./operator-approval-store.publication.js";
 import {
+  OPERATOR_APPROVAL_TERMINAL_RETENTION_MS,
   requireApprovalId,
   requireString,
   matchesExpectedApprovalOwner,
@@ -29,11 +34,28 @@ import type {
   OperatorApprovalTerminalReason,
   OperatorApprovalDatabase,
   OperatorApprovalRecord,
+  OperatorApprovalRow,
   ResolveOperatorApprovalResult,
   ForceDenyOperatorApprovalResult,
   TerminalizeOperatorApprovalsResult,
   ConsumeOperatorApprovalResult,
 } from "./operator-approval-store.types.js";
+
+function updateOperatorApprovalRow(
+  database: OpenClawStateDatabase,
+  id: string,
+  fields: Updateable<OperatorApprovalDatabase["operator_approvals"]>,
+): OperatorApprovalRow {
+  const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);
+  return executeSqliteQuerySync(
+    database.db,
+    stateDb
+      .updateTable("operator_approvals")
+      .set(fields)
+      .where("approval_id", "=", id)
+      .returningAll(),
+  ).rows[0]!;
+}
 
 export function resolveOperatorApprovalInDatabase(params: {
   id: string;
@@ -89,24 +111,17 @@ export function resolveOperatorApprovalInDatabase(params: {
     }
 
     const auditTimestampMs = clampAuditTimestamp(nowMs, record.createdAtMs);
-    const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);
-    const result = executeSqliteQuerySync(
-      database.db,
-      stateDb
-        .updateTable("operator_approvals")
-        .set(
-          operatorApprovalTerminalFields(
-            params.decision === "deny" ? "denied" : "allowed",
-            "user",
-            auditTimestampMs,
-            params.decision,
-            { kind: params.resolver.kind, id: resolverId },
-          ),
-        )
-        .where("approval_id", "=", id)
-        .returningAll(),
+    row = updateOperatorApprovalRow(
+      database,
+      id,
+      operatorApprovalTerminalFields(
+        params.decision === "deny" ? "denied" : "allowed",
+        "user",
+        auditTimestampMs,
+        params.decision,
+        { kind: params.resolver.kind, id: resolverId },
+      ),
     );
-    row = result.rows[0]!;
     record = requireDecodedRecord(row);
     operatorApprovalPublication.stagePostimages(database.db, [row]);
     if (
@@ -179,24 +194,17 @@ export function forceDenyOperatorApprovalInDatabase(params: {
       return { outcome: "not-due", record };
     }
     const auditTimestampMs = clampAuditTimestamp(nowMs, record.createdAtMs);
-    const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);
-    const result = executeSqliteQuerySync(
-      database.db,
-      stateDb
-        .updateTable("operator_approvals")
-        .set(
-          operatorApprovalTerminalFields(
-            params.status ?? "denied",
-            params.reason,
-            auditTimestampMs,
-            "deny",
-            { kind: params.resolver.kind, id: normalizeNullableString(params.resolver.id) },
-          ),
-        )
-        .where("approval_id", "=", id)
-        .returningAll(),
+    const terminalRow = updateOperatorApprovalRow(
+      database,
+      id,
+      operatorApprovalTerminalFields(
+        params.status ?? "denied",
+        params.reason,
+        auditTimestampMs,
+        "deny",
+        { kind: params.resolver.kind, id: normalizeNullableString(params.resolver.id) },
+      ),
     );
-    const terminalRow = result.rows[0]!;
     operatorApprovalPublication.stagePostimages(database.db, [terminalRow]);
     return { outcome: "denied", record: requireDecodedRecord(terminalRow) };
   }, params.databaseOptions);
@@ -232,6 +240,71 @@ export function expireDueOperatorApprovalsInDatabase(params: {
         .filter((record): record is OperatorApprovalRecord => record !== null),
     };
   }, params.databaseOptions);
+}
+
+export function recoverOperatorApprovalsInDatabase(params: {
+  runtimeEpoch: string;
+  nowMs?: number;
+  database: OpenClawStateDatabase;
+}): TerminalizeOperatorApprovalsResult & { pruned: number } {
+  const runtimeEpoch = requireString(params.runtimeEpoch, "operator approval runtime epoch");
+  const { database } = params;
+  const nowMs = params.nowMs ?? Date.now();
+  const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);
+  const orphanRows = executeSqliteQuerySync(
+    database.db,
+    stateDb
+      .selectFrom("operator_approvals")
+      .selectAll()
+      .where("status", "=", "pending")
+      .where("runtime_epoch", "!=", runtimeEpoch)
+      .orderBy("created_at_ms", "asc")
+      .orderBy("approval_id", "asc"),
+  ).rows;
+  let affected = 0;
+  const terminalRows: OperatorApprovalRow[] = [];
+  for (const row of orphanRows) {
+    const auditTimestampMs = clampAuditTimestamp(nowMs, row.created_at_ms);
+    const terminalFields = operatorApprovalTerminalFields(
+      "cancelled",
+      "gateway-restart",
+      auditTimestampMs,
+    );
+    const result = executeSqliteQuerySync(
+      database.db,
+      stateDb
+        .updateTable("operator_approvals")
+        .set(terminalFields)
+        .where("approval_id", "=", row.approval_id)
+        .where("status", "=", "pending"),
+    );
+    const rowAffected = Number(result.numAffectedRows ?? 0n);
+    affected += rowAffected;
+    if (rowAffected === 1) {
+      terminalRows.push({ ...row, ...terminalFields });
+    }
+  }
+  operatorApprovalPublication.stagePostimages(database.db, terminalRows);
+  const prunedRows = executeSqliteQuerySync(
+    database.db,
+    stateDb
+      .deleteFrom("operator_approvals")
+      .where("status", "!=", "pending")
+      .where("resolved_at_ms", "is not", null)
+      .where("resolved_at_ms", "<=", nowMs - OPERATOR_APPROVAL_TERMINAL_RETENTION_MS)
+      .returning("approval_id"),
+  ).rows;
+  operatorApprovalPublication.stageDeletions(
+    database.db,
+    prunedRows.map((row) => row.approval_id),
+  );
+  return {
+    affected,
+    pruned: prunedRows.length,
+    records: terminalRows
+      .map((row) => decodeOperatorApprovalRow(row))
+      .filter((record): record is OperatorApprovalRecord => record !== null),
+  };
 }
 
 export function consumeOperatorApprovalAllowOnceInDatabase(params: {
@@ -292,20 +365,11 @@ export function consumeOperatorApprovalAllowOnceInDatabase(params: {
       record.resolvedAtMs,
       record.updatedAtMs,
     );
-    const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);
-    const result = executeSqliteQuerySync(
-      database.db,
-      stateDb
-        .updateTable("operator_approvals")
-        .set({
-          consumed_at_ms: auditTimestampMs,
-          consumed_by: consumerId,
-          updated_at_ms: auditTimestampMs,
-        })
-        .where("approval_id", "=", id)
-        .returningAll(),
-    );
-    row = result.rows[0]!;
+    row = updateOperatorApprovalRow(database, id, {
+      consumed_at_ms: auditTimestampMs,
+      consumed_by: consumerId,
+      updated_at_ms: auditTimestampMs,
+    });
     record = requireDecodedRecord(row);
     operatorApprovalPublication.stagePostimages(database.db, [row]);
     return { outcome: "consumed", record };

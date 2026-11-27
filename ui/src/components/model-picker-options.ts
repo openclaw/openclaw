@@ -4,8 +4,10 @@ import type { t } from "../i18n/index.ts";
 export type ModelPickerOption = {
   value: string;
   label: string;
+  /** Trailing part of the full label to keep visible in a compact picker. */
+  labelSuffix?: string;
   provider?: string;
-  detail?: string;
+  description?: string;
   disabled?: boolean;
 };
 
@@ -32,14 +34,18 @@ export type ModelPickerParams = {
   onChange: (value: string) => void;
 };
 
-export function modelPickerOptions(params: ModelPickerParams) {
+export function modelPickerOptions(
+  params: Pick<ModelPickerParams, "value" | "options" | "custom">,
+) {
   let customValue = "__openclaw_custom_model__";
-  const values = new Set([params.value, ...params.options.map((option) => option.value)]);
-  while (values.has(customValue)) {
-    customValue += "_";
+  if (params.custom) {
+    const values = new Set([params.value, ...params.options.map((option) => option.value)]);
+    while (values.has(customValue)) {
+      customValue += "_";
+    }
   }
-  const options: Array<ModelPickerOption & { description?: string }> = [
-    ...params.options.map((option) => ({ ...option, description: option.detail })),
+  const options: ModelPickerOption[] = [
+    ...params.options,
     ...(params.custom ? [{ value: customValue, label: params.custom.label }] : []),
   ];
   const selectedIndex = options.findIndex((option) => option.value === params.value);
@@ -79,7 +85,7 @@ export function decisionModelPickerParams(
     options.push({
       value: selected,
       label: selected,
-      detail: translate("chat.modelControls.decisionUnavailable"),
+      description: translate("chat.modelControls.decisionUnavailable"),
       disabled: true,
     });
   }
@@ -99,7 +105,7 @@ export function decisionModelPickerParams(
               }),
               ...(inherited &&
               !params.models.some((model) => `${model.provider}/${model.id}` === inherited)
-                ? { detail: translate("chat.modelControls.decisionUnavailable") }
+                ? { description: translate("chat.modelControls.decisionUnavailable") }
                 : {}),
             },
           ]

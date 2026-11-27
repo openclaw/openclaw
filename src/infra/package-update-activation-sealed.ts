@@ -19,7 +19,6 @@ import {
   readPackageActivationStatus,
   runPackageActivationRecovery,
   settlePendingPackageActivation,
-  settleRemountedPackageActivation,
 } from "./package-update-activation.js";
 
 async function main() {
@@ -46,7 +45,7 @@ async function main() {
   const journal =
     action === "repair"
       ? openPackageActivationSettlementJournal(anchor)
-      : openPackageActivationJournal(anchor);
+      : openPackageActivationJournal(anchor, { readOnly: action === "status" });
   const record = action === "status" ? journal.read() : (await journal.readForRecovery()).record;
   assertPackageActivationOperation(record, operationId);
   const complete = isPackageActivationComplete(anchor, record);
@@ -54,6 +53,7 @@ async function main() {
     (entry) => entry.name === "helper",
   )?.source;
   if (
+    action !== "status" &&
     !complete &&
     ((helper !== resolvePackageActivationHelper(anchor) && helper !== stagedHelper) ||
       packageActivationIdentity(helper, false) !== record.descriptor.helperIdentity ||
@@ -69,7 +69,12 @@ async function main() {
       record.descriptor.authority.installKey,
       path.join(anchor, "previous"),
     ]);
-    const settled = await settleRemountedPackageActivation(anchor, operationId);
+    const settled = await settlePendingPackageActivation(
+      record.descriptor.authority.installKey,
+      undefined,
+      undefined,
+      { operationId },
+    );
     if (fs.existsSync(resolvePackageActivationJournalPath(anchor))) {
       throw new Error(
         `${settled?.warning ?? "Settlement remains active."} Preserve the journal and retry this recovery command before updating with the older CLI.`,

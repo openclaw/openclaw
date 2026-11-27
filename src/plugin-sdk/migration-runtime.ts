@@ -8,6 +8,7 @@ import { hasNodeErrorCode } from "@openclaw/fs-safe/path";
 import { sha256HexPrefixCore } from "@openclaw/normalization-core/node-crypto";
 import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { cloneConfigWithResolutionFacts } from "../config/resolution-facts.js";
 import {
   ensureAbsoluteDirectory,
   pathExists,
@@ -73,32 +74,27 @@ export function withCachedMigrationConfigRuntime(
   }
   const configApi = runtime.config;
   let cachedConfig: MigrationProviderContext["config"] | undefined;
-  const current = (): ReturnType<typeof configApi.current> => {
-    cachedConfig ??= structuredClone(
-      (configApi.current() ?? fallbackConfig) as MigrationProviderContext["config"],
+  function current(options: { clone: true }): MigrationProviderContext["config"];
+  function current(): ReturnType<typeof configApi.current>;
+  function current(options?: { clone: true }) {
+    cachedConfig ??= cloneConfigWithResolutionFacts(
+      configApi.current({ clone: true }) ?? fallbackConfig,
     );
-    return cachedConfig;
-  };
+    return options?.clone ? cloneConfigWithResolutionFacts(cachedConfig) : cachedConfig;
+  }
   return {
     ...runtime,
     config: {
       ...runtime.config,
       current,
       mutateConfigFile: async (params) => {
-        const result = await configApi.mutateConfigFile({
-          ...params,
-          mutate: async (draft, context) => {
-            const mutationResult = await params.mutate(draft, context);
-            cachedConfig = structuredClone(draft);
-            return mutationResult;
-          },
-        });
-        cachedConfig = structuredClone(result.nextConfig);
+        const result = await configApi.mutateConfigFile(params);
+        cachedConfig = cloneConfigWithResolutionFacts(result.nextConfig);
         return result;
       },
       replaceConfigFile: async (params) => {
         const result = await configApi.replaceConfigFile(params);
-        cachedConfig = structuredClone(result.nextConfig);
+        cachedConfig = cloneConfigWithResolutionFacts(result.nextConfig);
         return result;
       },
     },

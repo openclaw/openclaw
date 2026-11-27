@@ -78,11 +78,17 @@ export function recordSkippedCronRunsInWorker(
               deps: {
                 nowMs: () => policy.nowMs,
                 cronConfig: policy.cronConfig,
+                defaultAgentId: policy.defaultAgentId,
                 log: createCronMutationLogger(outcome.logs),
               },
               preparedFailureAlert: {
                 jobId: job.id,
-                value: resolveFailureAlert({ deps: { cronConfig: policy.cronConfig } }, job),
+                value: resolveFailureAlert(
+                  {
+                    deps: { cronConfig: policy.cronConfig, defaultAgentId: policy.defaultAgentId },
+                  },
+                  job,
+                ),
               },
             };
             applyJobResult(
@@ -90,6 +96,7 @@ export function recordSkippedCronRunsInWorker(
               job,
               {
                 status: "skipped",
+                errorReason: undefined,
                 completionStatus: "failed",
                 error:
                   change.kind === "ownerless"

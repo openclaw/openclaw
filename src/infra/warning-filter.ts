@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 const warningFilterKey = Symbol.for("openclaw.warning-filter");
@@ -37,13 +38,12 @@ function normalizeWarningArgs(args: unknown[]): ProcessWarning {
     message = warningArg;
   }
 
-  if (secondArg && typeof secondArg === "object" && !Array.isArray(secondArg)) {
-    const options = secondArg as { type?: unknown; code?: unknown };
-    if (typeof options.type === "string") {
-      name = options.type;
+  if (isRecord(secondArg)) {
+    if (typeof secondArg.type === "string") {
+      name = secondArg.type;
     }
-    if (typeof options.code === "string") {
-      code = options.code;
+    if (typeof secondArg.code === "string") {
+      code = secondArg.code;
     }
   } else {
     if (typeof secondArg === "string") {
@@ -73,12 +73,7 @@ export function installProcessWarningFilter(): void {
     }
     // Node does not emit Error + options warnings through the same path after wrapping; preserve
     // visibility by re-emitting a normalized warning object for unsuppressed cases.
-    if (
-      args[0] instanceof Error &&
-      args[1] &&
-      typeof args[1] === "object" &&
-      !Array.isArray(args[1])
-    ) {
+    if (args[0] instanceof Error && isRecord(args[1])) {
       const warning = args[0];
       const emitted = Object.assign(new Error(warning.message), {
         name: warning.name,

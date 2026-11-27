@@ -3,29 +3,27 @@ import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 import { SessionSharingIdentitySchema, SessionSharingRoleSchema } from "./sessions-sharing.js";
+import { stringLiteralUnion } from "./string-literal-union.js";
 
 const SessionSuggestionTargetParamsSchema = {
   sessionKey: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
 };
 
-export const SessionSuggestionStateSchema = Type.Union([
-  Type.Literal("pending"),
-  Type.Literal("accepted"),
-  Type.Literal("dismissed"),
+export const SessionSuggestionStateSchema = stringLiteralUnion([
+  "pending",
+  "accepted",
+  "dismissed",
 ]);
 
-export const SessionSuggestionResolutionSchema = Type.Union([
-  Type.Literal("send"),
-  Type.Literal("queue"),
-  Type.Literal("edit"),
-  Type.Literal("dismiss"),
+export const SessionSuggestionResolutionSchema = stringLiteralUnion([
+  "send",
+  "queue",
+  "edit",
+  "dismiss",
 ]);
 
-export const SessionSuggestionActionSchema = Type.Union([
-  Type.Literal("added"),
-  Type.Literal("resolved"),
-]);
+export const SessionSuggestionActionSchema = stringLiteralUnion(["added", "resolved"]);
 
 export const SessionSuggestionSchema = closedObject({
   id: NonEmptyString,

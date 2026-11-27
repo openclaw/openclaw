@@ -6,17 +6,11 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/memory-core-host-engine-f
 import { listSessionTranscriptCorpusEntriesForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
-import {
-  formatMemoryDreamingDay,
-  resolveMemoryLightDreamingConfig,
-  resolveMemoryRemDreamingConfig,
-} from "openclaw/plugin-sdk/memory-core-host-status";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeConceptToken } from "./concept-vocabulary.js";
 import { isPromotionOriginBlocked } from "./dreaming-consolidation-candidates.js";
 import { readRecentDreamDiaryEntries } from "./dreaming-dreams-file.js";
-import { appendFailedDreamingEvent } from "./dreaming-events.js";
 import {
   readSessionIngestionState,
   writeSessionIngestionState,
@@ -30,9 +24,13 @@ import {
   type DailyIngestionFileState,
   type DailyIngestionState,
 } from "./dreaming-ingestion-state.js";
-import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
-import type { NarrativePhaseData, PreparedDreamNarrative } from "./dreaming-narrative.js";
-import { formatErrorMessage } from "./dreaming-shared.js";
+import type {
+  DreamingPhasePreparation,
+  DreamingPhaseRunParams,
+  LightDreamingConfig,
+  RemDreamingConfig,
+} from "./dreaming-phase-types.js";
+import { dedupeEntries, prioritizeLightEntriesByDiaryCoverage } from "./dreaming-snippet-dedupe.js";
 import { findForgottenMemorySessionIds } from "./memory-entry-origins.js";
 import {
   inspectWorkspaceFile,
@@ -40,11 +38,9 @@ import {
   readWorkspaceText,
 } from "./memory-workspace-files.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
-import { textSimilarity as snippetSimilarity } from "./memory/tokenize.js";
 import {
   appendSessionCorpusLines,
   mergeTrackedMessageHashes,
-  resolveAdmissionPolicy,
   resolveSessionAgentsForWorkspace,
   resolveSessionIngestionFileCap,
   scanSessionIngestionSource,
@@ -64,35 +60,14 @@ import {
   filterFreshLightDreamingEntries,
   readLightStagedKeys,
   readShortTermRecallEntries,
-  recordDreamingPhaseSignals,
-  recordRemConsideredPhaseSignals,
   recordShortTermRecalls,
   type ShortTermRecallEntry,
 } from "./short-term-promotion.js";
-
-type Logger = Pick<OpenClawPluginApi["logger"], "info" | "warn" | "error">;
-type LightDreamingConfig = ReturnType<typeof resolveMemoryLightDreamingConfig>;
-type RemDreamingConfig = ReturnType<typeof resolveMemoryRemDreamingConfig>;
-type DreamingSweepParams = {
-  agentId?: string;
-  workspaceDir: string;
-  pluginConfig?: Record<string, unknown>;
-  cfg?: OpenClawConfig;
-  logger: Logger;
-  nowMs?: number;
-};
-type DreamingPhaseRunParams<TConfig extends LightDreamingConfig | RemDreamingConfig> =
-  DreamingSweepParams & {
-    config: TConfig;
-    nowMs: number;
-    admissionPolicy?: SessionAdmissionPolicy;
-  };
 const DAILY_INGESTION_SCORE = 0.62;
 const DAILY_INGESTION_MAX_SNIPPET_CHARS = 280;
 const DAILY_INGESTION_MIN_SNIPPET_CHARS = 8;
 const DAILY_INGESTION_MAX_CHUNK_LINES = 4;
 const LIGHT_DIARY_HISTORY_LIMIT = 4;
-const LIGHT_DIARY_SNIPPET_SIMILARITY_THRESHOLD = 0.35;
 const MANAGED_DAILY_DREAMING_BLOCKS = [
   {
     heading: "## Light Sleep",
@@ -507,7 +482,9 @@ async function collectSessionIngestionBatches(params: {
   for (const agentId of agentIds) {
     const knownStateKeys = new Set<string>();
     const corpus = await listSessionTranscriptCorpusEntriesForAgent(agentId, {
+      config: params.cfg,
       includeRetainedSqlite: true,
+      includeContentRevision: false,
     });
     const forgottenSessionIds = await findForgottenMemorySessionIds({
       agentId,
@@ -863,85 +840,6 @@ function entryAverageScore(entry: ShortTermRecallEntry): number {
   return signalCount > 0 ? Math.max(0, Math.min(1, entry.totalScore / signalCount)) : 0;
 }
 
-function dedupeEntries(
-  entries: ShortTermRecallEntry[],
-  threshold: number,
-): Array<ShortTermRecallEntry & { sourceEntryKeys: string[] }> {
-  const deduped: Array<ShortTermRecallEntry & { sourceEntryKeys: string[] }> = [];
-  for (const entry of entries) {
-    const duplicate = deduped.find(
-      (candidate) =>
-        candidate.path === entry.path &&
-        snippetSimilarity(candidate.snippet, entry.snippet) >= threshold,
-    );
-    if (duplicate) {
-      // Merged tags also become narrative input, so retain their source keys.
-      duplicate.sourceEntryKeys.push(entry.key);
-      if (entry.recallCount > duplicate.recallCount) {
-        duplicate.recallCount = entry.recallCount;
-      }
-      duplicate.totalScore = Math.max(duplicate.totalScore, entry.totalScore);
-      duplicate.maxScore = Math.max(duplicate.maxScore, entry.maxScore);
-      duplicate.queryHashes = uniqueStrings([...duplicate.queryHashes, ...entry.queryHashes]);
-      duplicate.userQueryHashes = uniqueStrings([
-        ...(duplicate.userQueryHashes ?? []),
-        ...(entry.userQueryHashes ?? []),
-      ]);
-      duplicate.recallDays = [
-        ...new Set([...duplicate.recallDays, ...entry.recallDays]),
-      ].toSorted();
-      duplicate.conceptTags = uniqueStrings([...duplicate.conceptTags, ...entry.conceptTags]);
-      duplicate.lastRecalledAt =
-        compareStoreTimestampDesc(entry.lastRecalledAt, duplicate.lastRecalledAt) < 0
-          ? entry.lastRecalledAt
-          : duplicate.lastRecalledAt;
-      continue;
-    }
-    deduped.push({ ...entry, sourceEntryKeys: [entry.key] });
-  }
-  return deduped;
-}
-
-function normalizeDiaryCoverageText(text: string): string {
-  return text.toLowerCase().replace(/\s+/g, " ").trim();
-}
-
-function isEntryCoveredByRecentDiary(
-  entry: ShortTermRecallEntry,
-  recentDiaryEntries: readonly string[],
-): boolean {
-  const snippet = normalizeDiaryCoverageText(entry.snippet);
-  if (!snippet) {
-    return false;
-  }
-  return recentDiaryEntries.some((diaryEntry) => {
-    const diaryText = normalizeDiaryCoverageText(diaryEntry);
-    return (
-      diaryText.includes(snippet) ||
-      snippetSimilarity(entry.snippet, diaryEntry) >= LIGHT_DIARY_SNIPPET_SIMILARITY_THRESHOLD
-    );
-  });
-}
-
-function prioritizeLightEntriesByDiaryCoverage<T extends ShortTermRecallEntry>(
-  entries: T[],
-  recentDiaryEntries: readonly string[],
-): T[] {
-  if (recentDiaryEntries.length === 0) {
-    return entries;
-  }
-  const fresh: T[] = [];
-  const covered: T[] = [];
-  for (const entry of entries) {
-    if (isEntryCoveredByRecentDiary(entry, recentDiaryEntries)) {
-      covered.push(entry);
-    } else {
-      fresh.push(entry);
-    }
-  }
-  return [...fresh, ...covered];
-}
-
 function buildLightDreamingBody(entries: ShortTermRecallEntry[]): string[] {
   if (entries.length === 0) {
     return ["- No notable updates."];
@@ -1070,7 +968,7 @@ export function previewRemDreaming(params: {
   };
 }
 
-async function ingestDreamingPhaseSignals(
+export async function ingestDreamingPhaseSignals(
   params: DreamingPhaseRunParams<LightDreamingConfig | RemDreamingConfig>,
 ): Promise<void> {
   const { workspaceDir, nowMs } = params;
@@ -1150,9 +1048,9 @@ async function readDreamingPhaseEntries(
   ).filter((entry) => !isPromotionOriginBlocked(entry));
 }
 
-async function prepareLightDreaming(
+export async function prepareLightDreaming(
   params: DreamingPhaseRunParams<LightDreamingConfig>,
-): Promise<NarrativePhaseData | undefined> {
+): Promise<DreamingPhasePreparation> {
   const { nowMs } = params;
   const recentEntries = await readDreamingPhaseEntries(params, "light");
   const rankedEntries = dedupeEntries(
@@ -1171,31 +1069,10 @@ async function prepareLightDreaming(
   });
   const entries = prioritizeLightEntriesByDiaryCoverage(rankedEntries, recentDiaryEntries);
   const capped = entries.slice(0, params.config.limit);
-  const bodyLines = buildLightDreamingBody(capped);
-  await writeDailyDreamingPhaseBlock({
-    workspaceDir: params.workspaceDir,
-    phase: "light",
-    bodyLines,
-    hasContent: capped.length > 0,
-    nowMs,
-    timezone: params.config.timezone,
-    storage: params.config.storage,
-  });
-  await recordDreamingPhaseSignals({
-    workspaceDir: params.workspaceDir,
-    phase: "light",
-    keys: capped.map((entry) => entry.key),
-    nowMs,
-  });
-  if (entries.length > 0 && params.config.storage.mode !== "separate") {
-    params.logger.info(
-      `memory-core: light dreaming staged ${Math.min(entries.length, params.config.limit)} candidate(s) [workspace=${params.workspaceDir}].`,
-    );
-  }
-
+  let data: DreamingPhasePreparation["data"];
   if (capped.length > 0) {
     const themes = uniqueStrings(capped.flatMap((e) => e.conceptTags).filter(Boolean));
-    return {
+    data = {
       phase: "light",
       snippets: capped.map((e) => e.snippet).filter(Boolean),
       sourceEntryKeys: capped.flatMap((entry) => entry.sourceEntryKeys),
@@ -1204,12 +1081,17 @@ async function prepareLightDreaming(
       ...(recentDiaryEntries.length > 0 ? { recentDiaryEntries } : {}),
     };
   }
-  return undefined;
+  return {
+    bodyLines: buildLightDreamingBody(capped),
+    keys: capped.map((entry) => entry.key),
+    logMessage: `memory-core: light dreaming staged ${Math.min(entries.length, params.config.limit)} candidate(s) [workspace=${params.workspaceDir}].`,
+    data,
+  };
 }
 
-async function prepareRemDreaming(
+export async function prepareRemDreaming(
   params: DreamingPhaseRunParams<RemDreamingConfig>,
-): Promise<NarrativePhaseData | undefined> {
+): Promise<DreamingPhasePreparation> {
   const { nowMs } = params;
   const allEntries = await readDreamingPhaseEntries(params, "rem");
   // Prefer entries staged by light sleep so REM synthesises from the
@@ -1226,40 +1108,13 @@ async function prepareRemDreaming(
     limit: params.config.limit,
     minPatternStrength: params.config.minPatternStrength,
   });
-  await writeDailyDreamingPhaseBlock({
-    workspaceDir: params.workspaceDir,
-    phase: "rem",
-    bodyLines: preview.bodyLines,
-    hasContent: entries.length > 0,
-    nowMs,
-    timezone: params.config.timezone,
-    storage: params.config.storage,
-  });
-  if (stagedEntries.length > 0) {
-    await recordRemConsideredPhaseSignals({
-      workspaceDir: params.workspaceDir,
-      keys: stagedEntries.map((entry) => entry.key),
-      nowMs,
-    });
-  }
-  await recordDreamingPhaseSignals({
-    workspaceDir: params.workspaceDir,
-    phase: "rem",
-    keys: preview.candidateKeys,
-    nowMs,
-  });
-  if (entries.length > 0 && params.config.storage.mode !== "separate") {
-    params.logger.info(
-      `memory-core: REM dreaming wrote reflections from ${entries.length} recent memory trace(s) [workspace=${params.workspaceDir}].`,
-    );
-  }
-
+  let data: DreamingPhasePreparation["data"];
   if (entries.length > 0) {
     const snippets = preview.candidateTruths.map((t) => t.snippet).filter(Boolean);
     const themes = preview.reflections.filter(
       (r) => !r.startsWith("- No strong") && !r.startsWith("  -"),
     );
-    return {
+    data = {
       phase: "rem",
       sourceEntryKeys: entries.map((entry) => entry.key),
       snippets:
@@ -1272,53 +1127,13 @@ async function prepareRemDreaming(
       ...(themes.length > 0 ? { themes } : {}),
     };
   }
-  return undefined;
-}
-
-export async function runDreamingSweepPhases(
-  params: DreamingSweepParams,
-): Promise<{ narratives: PreparedDreamNarrative[]; failed: boolean }> {
-  // All phases in one sweep share the same observation and report timestamp.
-  const sweepNowMs =
-    typeof params.nowMs === "number" && Number.isFinite(params.nowMs) ? params.nowMs : Date.now();
-  const admissionPolicy = resolveAdmissionPolicy(params.pluginConfig);
-  const narratives: PreparedDreamNarrative[] = [];
-  let failed = false;
-  async function runPhase<TConfig extends LightDreamingConfig | RemDreamingConfig>(
-    phase: "light" | "rem",
-    config: TConfig,
-    prepare: (params: DreamingPhaseRunParams<TConfig>) => Promise<NarrativePhaseData | undefined>,
-  ): Promise<void> {
-    if (!config.enabled || config.limit <= 0) {
-      return;
-    }
-    try {
-      const phaseParams = { ...params, config, nowMs: sweepNowMs, admissionPolicy };
-      await ingestDreamingPhaseSignals(phaseParams);
-      // Keep source selection and report publication inside the forget boundary;
-      // model work runs outside it and revalidates its inputs before publication.
-      const data = await withMemoryWorkspaceLock(params.workspaceDir, () => prepare(phaseParams));
-      if (data) {
-        narratives.push({ data, timezone: config.timezone, model: config.execution?.model });
-      }
-    } catch (err) {
-      await appendFailedDreamingEvent({
-        workspaceDir: params.workspaceDir,
-        phase,
-        error: formatErrorMessage(err),
-        storageMode: config.storage.mode,
-        nowMs: sweepNowMs,
-        logger: params.logger,
-      });
-      params.logger.error(`memory-core: ${phase} dreaming failed: ${formatErrorMessage(err)}`);
-      failed = true;
-    }
-  }
-  await runPhase("light", resolveMemoryLightDreamingConfig(params), prepareLightDreaming);
-  if (!failed) {
-    await runPhase("rem", resolveMemoryRemDreamingConfig(params), prepareRemDreaming);
-  }
-  return { narratives, failed };
+  return {
+    bodyLines: preview.bodyLines,
+    keys: preview.candidateKeys,
+    consideredKeys: stagedEntries.map((entry) => entry.key),
+    logMessage: `memory-core: REM dreaming wrote reflections from ${entries.length} recent memory trace(s) [workspace=${params.workspaceDir}].`,
+    data,
+  };
 }
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,179 +1,177 @@
-import { createEffect, createMemo, createSignal, onCleanup, onSettled, untrack } from "solid-js";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
-import { pathForRoute } from "../../app-route-paths.ts";
-import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
-import { SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
+import { createEffect, createMemo, Loading, Show } from "solid-js";
+import type { CronJob } from "../../api/types.ts";
+import type { SolidRouteProps } from "../../app-route-types.tsx";
+import { isNativeEmbedHost } from "../../app/native-web-chrome.ts";
+import { AgentScopeControl } from "../../components/agent-scope-control.tsx";
+import { AutomationsFilter } from "../../components/app-sidebar-automations-filter.tsx";
+import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
-import { i18n } from "../../i18n/index.ts";
-import { hasCronFormErrors } from "../../lib/cron/index.ts";
-import { getCronRunsViewState } from "../../lib/cron/runs.ts";
-import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { profileDirectory } from "../../lib/profile-directory.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { projectI18n, t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge, LitContent } from "../../lit/solid-bridge.ts";
-import { CronPageController } from "./cron-page-controller.ts";
-import { reserveCronEditorClearance } from "./editor-clearance.ts";
-import {
-  buildCronSuggestions,
-  resolveConversationTargetSuggestions,
-  THINKING_SUGGESTIONS,
-} from "./form-suggestions.ts";
-import { CronRunTranscriptView } from "./run-transcript.tsx";
-import type { CronProps } from "./view-types.ts";
+import { i18nRevision } from "../../lib/reactive/i18n.ts";
+import { rememberSectionLocation, sectionLocation } from "../../lib/section-navigation.ts";
+import { createCronPage } from "./cron-page-state.ts";
+import { resolveCronRouteData } from "./route-model.ts";
+import { buildCronViewProps } from "./view-props.ts";
 import { CronView } from "./view.tsx";
 
-export function CronPageContent(props: { controller: CronPageController; revision: () => number }) {
-  const translations = projectI18n(i18n);
-  const revision = () => {
-    translations.revision();
-    return props.revision();
+export function CronPageContent(props: { page: ReturnType<typeof createCronPage> }) {
+  const revision = () => i18nRevision() + props.page.revision();
+  // Search publications must not invalidate the retained rows' permission branches.
+  // Sample values because Gateway auth and identity snapshots can be mutated in place.
+  const permissionFacts = createMemo(
+    () => {
+      revision();
+      const source = props.page.context().gateway;
+      const { hello, selfUser } = source.snapshot;
+      return {
+        source,
+        auth: Boolean(hello?.auth),
+        role: hello?.auth?.role,
+        scopes: hello?.auth?.scopes?.join("\n"),
+        identityType: selfUser?.identity?.type,
+        identityId: selfUser?.identity?.id,
+        directory: profileDirectory(source).result,
+      };
+    },
+    {
+      equals: (a, b) =>
+        a.source === b.source &&
+        a.auth === b.auth &&
+        a.role === b.role &&
+        a.scopes === b.scopes &&
+        a.identityType === b.identityType &&
+        a.identityId === b.identityId &&
+        a.directory === b.directory,
+    },
+  );
+  const canPresentCreate = createMemo(() => {
+    permissionFacts();
+    return props.page.canCreateCron();
+  });
+  function canPresentJob(job: CronJob): boolean {
+    permissionFacts();
+    return props.page.canManageJob(job);
+  }
+
+  const viewProps = createMemo(() => {
+    revision();
+    return buildCronViewProps(props.page);
+  });
+  const pageHeader = () => {
+    revision();
+    const page = props.page;
+    return {
+      agents: page.inventories.agents.read().agentsList?.agents ?? [],
+      selectedAgentId: page.context().agentSelection.state.scopeId,
+    };
   };
-  const viewProps = createMemo<CronProps>(() => {
-    revision();
-    const page = props.controller;
-    const channels = page.context.channels.state;
-    const suggestions = buildCronSuggestions({
-      channels,
-      runtimeConfig: page.context.runtimeConfig.state,
-      cron: page.cron,
-      agentsList: page.agentsList,
-      modelSuggestions: page.cronModelSuggestions,
-      conversationTargets: resolveConversationTargetSuggestions(
-        page.deliveryDirectory.conversations,
-        page.cron.cronForm.deliveryAccountId,
-      ),
-    });
-    const canManage = page.canManageCron;
-    return {
-      ...page.actions,
-      loading: page.cron.cronLoading,
-      hasLoaded: page.cron.cronJobsSnapshotRevision !== null,
-      listError: page.cron.cronJobsError,
-      canManage,
-      status: page.cron.cronStatus,
-      jobs: page.cron.cronJobs,
-      jobsLoadingMore: page.cron.cronJobsLoadingMore,
-      jobsTotal: page.cron.cronJobsTotal,
-      jobsHasMore: page.cron.cronJobsHasMore,
-      jobsQuery: page.cron.cronJobsQuery,
-      jobsEnabledFilter: page.cron.cronJobsEnabledFilter,
-      jobsScheduleKindFilter: page.cron.cronJobsScheduleKindFilter,
-      jobsLastStatusFilter: page.cron.cronJobsLastStatusFilter,
-      jobsTriggerFilter: page.cron.cronJobsTriggerFilter,
-      jobsSortBy: page.cron.cronJobsSortBy,
-      jobsSortDir: page.cron.cronJobsSortDir,
-      editingJob: page.cron.cronEditingJob,
-      createOpen: page.cron.cronCreateOpen,
-      listTab: page.listTab,
-      detailTab: page.detailTab,
-      error:
-        page.cron.cronError ??
-        page.cron.cronRunsError ??
-        page.deliveryDirectory.error ??
-        page.modelSuggestionsError,
-      busy: page.cron.cronBusy,
-      form: page.cron.cronForm,
-      heartbeatScratch: canManage ? page.heartbeatScratch : "",
-      channels: channels.channelsSnapshot?.channelMeta?.length
-        ? channels.channelsSnapshot.channelMeta.map((entry) => entry.id)
-        : (channels.channelsSnapshot?.channelOrder ?? []),
-      channelLabels: channels.channelsSnapshot?.channelLabels ?? {},
-      channelMeta: channels.channelsSnapshot?.channelMeta ?? [],
-      runs: page.cron.cronRuns,
-      runsState: getCronRunsViewState(page.cron),
-      highlightedRunId: page.cron.cronRunsRunId,
-      runsHasMore: page.cron.cronRunsHasMore,
-      runsLoadingMore: page.cron.cronRunsLoadingMore,
-      runsStatuses: page.cron.cronRunsStatuses,
-      runsDeliveryStatuses: page.cron.cronRunsDeliveryStatuses,
-      runsQuery: page.cron.cronRunsQuery,
-      runsSortDir: page.cron.cronRunsSortDir,
-      fieldErrors: page.cron.cronFieldErrors,
-      canSubmit: !hasCronFormErrors(page.cron.cronFieldErrors),
-      agentSuggestions: suggestions.agentSuggestions,
-      modelSuggestions: suggestions.modelSuggestions,
-      thinkingSuggestions: THINKING_SUGGESTIONS,
-      timezoneSuggestions: suggestions.timezoneSuggestions,
-      deliveryToSuggestions: suggestions.deliveryToSuggestions,
-      failureAlertToSuggestions: suggestions.failureAlertToSuggestions,
-      accountSuggestions: suggestions.accountTargets,
-    };
-  });
-  const header = createMemo(() => {
-    revision();
-    const controller = props.controller;
-    return {
-      title: titleForRoute("cron"),
-      subtitle: controller.cron.cronSessionFilter
-        ? t("cron.list.sessionFilter")
-        : subtitleForRoute("cron"),
-      filtered: Boolean(controller.cron.cronSessionFilter),
-      actions: controller.cron.cronSessionFilter
-        ? undefined
-        : renderAgentScopeControl({
-            agents: controller.agentsList?.agents ?? [],
-            selection: controller.context.agentSelection,
-          }),
-    };
-  });
-  createEffect(revision, () => {
-    props.controller.afterRender();
-    return reserveCronEditorClearance(props.controller.host);
-  });
+  // The Automations sidebar lists every automation, beside the page, in the collapsed rail's peek
+  // or in the phone drawer; there the page is the automation itself, without the section header.
+  // The native embed shows no sidebar, so the page lists the automations under its header.
+  const listsJobs = isNativeEmbedHost();
   return (
     <>
-      <SettingsPageHeader
-        title={header().title}
-        subtitle={header().subtitle}
-        actions={
-          header().filtered ? (
-            <a
-              class="btn"
-              href={pathForRoute("cron", props.controller.context.basePath)}
-              onClick={(event: MouseEvent) => {
-                if (shouldHandleNavigationClick(event)) {
-                  event.preventDefault();
-                  props.controller.context.navigate("cron", { search: "" });
-                }
-              }}
-            >
-              {t("cron.list.showAll")}
-            </a>
-          ) : header().actions === undefined ? undefined : (
-            <LitContent render={() => header().actions} />
-          )
-        }
-      />
-      <CronRunTranscriptView controller={props.controller.runTranscript} revision={revision} />
+      <Show when={listsJobs}>
+        <HubPageHeader
+          active="cron"
+          docsUrl="https://docs.openclaw.ai/automation/cron-jobs"
+          actions={
+            <>
+              <AgentScopeControl
+                agents={pageHeader().agents}
+                selection={props.page.context().agentSelection}
+                selectedId={pageHeader().selectedAgentId}
+              />
+              <AutomationsFilter />
+            </>
+          }
+        />
+      </Show>
       <SettingsWorkspace>
-        <CronView {...viewProps()} />
+        <CronView
+          {...viewProps()}
+          listsJobs={listsJobs}
+          onClosePanel={() => {
+            // Closing the automation leaves Automations on its empty state for this tab.
+            viewProps().onClosePanel();
+            const context = props.page.context();
+            rememberSectionLocation(context.gateway, "automations", null);
+            context.replace("cron", { search: "" });
+          }}
+          canManageJob={canPresentJob}
+          canCreate={canPresentCreate()}
+          busy={props.page.saving() || viewProps().busy}
+          toggleSavingJobId={props.page.toggleSavingJobId()}
+        />
       </SettingsWorkspace>
     </>
   );
 }
 
-export function CronPage(props: { routeSearch?: string; host: HTMLElement }) {
+function CronPageBody(props: { routeSearch?: string; host: HTMLElement }) {
   const context = useApplication();
-  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-  const controller = new CronPageController(
-    context,
-    untrack(() => props.host),
-    () => setRevision((value) => value + 1),
+  const page = createCronPage(
+    () => context,
+    () => props.host,
   );
+  // Route changes retarget Gateway job queries.
+  // While the next route loads its search is unknown, not empty, so nothing acts on it.
+  // Effects never compare, and route data republishes the same search, so a memo lets only a
+  // real change through; a stale repeat would otherwise re-record an automation just forgotten.
+  const routeSearch = createMemo(() => props.routeSearch);
   createEffect(
-    () => props.routeSearch ?? "",
-    (search) => controller.setRouteSearch(search),
+    () => routeSearch(),
+    (search) => {
+      if (search === undefined) {
+        return;
+      }
+      const route = resolveCronRouteData(search);
+      // Returning to Automations in this tab reopens the automation left open.
+      const opened = sectionLocation(context.gateway, "automations");
+      if (!search && opened) {
+        context.replace(opened.route, opened.options);
+        return;
+      }
+      rememberSectionLocation(
+        context.gateway,
+        "automations",
+        route.jobId
+          ? { route: "cron", options: { search: `?job=${encodeURIComponent(route.jobId)}` } }
+          : route.activity
+            ? { route: "cron", options: { search: "?activity" } }
+            : null,
+      );
+      page.setRouteSearch(search);
+      // `?new` is the sidebar's New automation entry.
+      if (route.create) {
+        page.actions.onOpenCreate();
+      } else if (
+        (!search || route.activity) &&
+        (page.cron().cronEditingJob || page.cron().cronCreateOpen)
+      ) {
+        // The section's own root, as choosing Automations again opens it, and its Activity close
+        // the panel.
+        page.actions.onClosePanel();
+      }
+    },
   );
-  onSettled(() => controller.activate());
-  onCleanup(() => controller.dispose());
-  return <CronPageContent controller={controller} revision={revision} />;
+  return <CronPageContent page={page} />;
 }
 
-// Module re-evaluation can retain the shared custom-element registry.
-if (!customElements.get("openclaw-cron-page")) {
-  defineSolidBridge<{ routeSearch: string }>(
-    "openclaw-cron-page",
-    (props, host) => <CronPage routeSearch={props.routeSearch} host={host} />,
-    { properties: { routeSearch: { default: "", attribute: false } } },
+function CronPage(props: { routeSearch?: string }) {
+  let host!: HTMLElement;
+  return (
+    <openclaw-cron-page ref={(element) => (host = element)}>
+      <CronPageBody routeSearch={props.routeSearch} host={host} />
+    </openclaw-cron-page>
+  );
+}
+
+export function renderSolid(props: SolidRouteProps) {
+  return (
+    <Loading>
+      <CronPage routeSearch={typeof props.data === "string" ? props.data : undefined} />
+    </Loading>
   );
 }

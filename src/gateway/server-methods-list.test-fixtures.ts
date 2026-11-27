@@ -32,7 +32,7 @@ taskSuggestions.create taskSuggestions.accept taskSuggestions.dismiss environmen
 environments.status worktrees.list worktrees.branches fs.listDir worktrees.create
 worktrees.remove worktrees.restore worktrees.gc agents.list agents.create agents.update
 agents.delete agents.files.list agents.files.get agents.files.set sessions.files.list
-sessions.files.get sessions.files.set sessions.files.reveal artifacts.list artifacts.get
+sessions.files.get sessions.files.download sessions.files.set sessions.files.reveal artifacts.list artifacts.get
 artifacts.download skills.status skills.library.list skills.library.read skills.library.save
 skills.library.mutate skills.library.activate skills.library.import skills.library.upload
 skills.search skills.detail skills.securityVerdicts
@@ -45,7 +45,7 @@ skills.proposals.apply skills.proposals.reject skills.proposals.quarantine updat
 update.run voicewake.get voicewake.set secrets.reload secrets.resolve voicewake.routing.get
 sessions.list sessions.subscribe sessions.messages.subscribe sessions.messages.unsubscribe
 sessions.viewers.set sessions.preview sessions.describe sessions.branches.list
-sessions.branches.switch sessions.rewind sessions.fork sessions.create sessions.recover
+sessions.branches.switch sessions.rewind sessions.fork sessions.create
 sessions.send sessions.abort sessions.patch sessions.goal.update sessions.goal.clear
 sessions.pluginPatch sessions.cleanup sessions.reset sessions.delete sessions.compact
 sessions.groups.list sessions.groups.defaults sessions.groups.put sessions.groups.rename

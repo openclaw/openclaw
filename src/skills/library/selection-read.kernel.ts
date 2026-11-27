@@ -1,6 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { SkillLibrarySelection } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 
 type RevisionSelection = Pick<SkillLibrarySelection, "skillId" | "revision">;
@@ -15,7 +15,7 @@ export type SkillLibraryReadOnlyOperations = {
   };
 };
 
-function revisionBatchQuery(db: DatabaseSync, selections: readonly RevisionSelection[]) {
+function revisionBatchQuery(db: EngineConnection, selections: readonly RevisionSelection[]) {
   return getNodeSqliteKysely<Pick<StateDatabase, "skill_library_revisions">>(db)
     .selectFrom("skill_library_revisions")
     .where((eb) =>
@@ -39,7 +39,7 @@ function orderRevisionRows<Row extends { skill_id: string; revision: string }>(
 }
 
 export function selectSkillLibraryRevisionMetadataBatch(
-  db: DatabaseSync,
+  db: EngineConnection,
   selections: readonly RevisionSelection[],
 ) {
   const rows = executeSqliteQuerySync(
@@ -50,7 +50,7 @@ export function selectSkillLibraryRevisionMetadataBatch(
 }
 
 export function selectSkillLibraryRevisionManifestsBatch(
-  db: DatabaseSync,
+  db: EngineConnection,
   selections: readonly RevisionSelection[],
 ) {
   const rows = executeSqliteQuerySync(

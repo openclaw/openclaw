@@ -18,7 +18,9 @@ export function catalogResult(
   return {
     id: provider.id,
     label: provider.label,
+    ...(provider.requiresFreshList ? { requiresFreshList: true as const } : {}),
     capabilities: {
+      ...(provider.supportsProfileRelation ? { profileRelation: true as const } : {}),
       continueSession: Boolean(provider.continueSession || provider.copyToGatewaySession),
       archive: Boolean(provider.archive),
       ...(provider.openTerminal ? { openTerminal: true } : {}),

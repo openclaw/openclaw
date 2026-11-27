@@ -1,6 +1,9 @@
 // Owns queued delivery execution, custody transitions, and terminal cleanup.
 import type { AuditMessageFailureStage } from "../../audit/audit-event-types.js";
-import { assertSessionWriterDeliveryAuthorized } from "../../auto-reply/reply/session-writer-delivery-authority.js";
+import {
+  assertSessionWriterDeliveryAuthorized,
+  prepareSessionWriterDeliveryAuthority,
+} from "../../auto-reply/reply/session-writer-delivery-authority.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   isAmbiguousDeliveryTransportError,
@@ -61,8 +64,8 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
   producerClaimId?: string,
   producerLease?: DeliveryProducerLease,
 ): Promise<OutboundDeliveryResult[]> {
-  // Lease loss revokes queue mutation authority. Caller cancellation still
-  // follows the normal abort cleanup path through the combined signal.
+  // Lease loss stops initiation. Concrete receipts retain exact-claim settlement;
+  // the combined abort signal still fences preparation and every later send.
   const throwIfProducerLeaseLost = (): void => producerLease?.signal.throwIfAborted();
   const payloadCount = params.preparedBatch?.sourcePayloadCount ?? params.payloads.length;
   const ownsAuditTerminal = params.deliveryQueueId === undefined;
@@ -93,7 +96,9 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     }
     await settleDurableDelivery(
       params.deliveryCompletion,
-      result ? { result } : { platformSendStarted: platformSendStarted && !allPayloadsSuppressed },
+      result
+        ? { result, batch: { results: deliveredResults, payloadCount, payloadOutcomes } }
+        : { platformSendStarted: platformSendStarted && !allPayloadsSuppressed },
       platformQueueStateDir,
       params.deliveryQueueStateContext,
       params.conversationDeliveryTarget,
@@ -179,16 +184,15 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     }
   };
   let generation: Awaited<ReturnType<typeof prepareOutboundDeliveryGeneration>> | undefined;
+  let writer: Awaited<ReturnType<typeof prepareSessionWriterDeliveryAuthority>> | undefined;
   const assertPlatformSendAuthorized = (): void => {
     throwIfAborted(params.abortSignal);
-    assertSessionWriterDeliveryAuthorized(
-      params.deliveryCompletion?.kind === "pending-final"
-        ? params.deliveryCompletion.sessionWriterDeliveryAuthority
-        : undefined,
-    );
+    assertSessionWriterDeliveryAuthorized(writer?.authority);
   };
   const wrappedParams: InternalDeliverOutboundPayloadsParams = {
     ...params,
+    transcriptDeliveryId: platformQueueId,
+    transcriptStateDir: params.deliveryQueueStateDir,
     // A provider marker can represent the whole durable intent only when one payload owns it.
     // Adapters must narrow further when one payload can fan out into multiple platform sends.
     ...(exactReconciliationRequired && params.payloads.length === 1
@@ -284,7 +288,9 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       }
     },
     onError: (err: unknown, payload: NormalizedOutboundPayload) => {
-      throwIfProducerLeaseLost();
+      if (deliveredResults.length === 0) {
+        throwIfProducerLeaseLost();
+      }
       params.onError?.(err, payload);
     },
     onPayloadDeliveryOutcome: (outcome: OutboundPayloadDeliveryOutcome) => {
@@ -300,6 +306,11 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     },
     onDeliveryResult: async (result) => {
       deliveredResults.push(result);
+      // A concrete receipt moves this owner to claim-fenced settlement. Recovery
+      // shares this owner even when the nested execution has no local queueId.
+      if (params.deliveryQueueOwner) {
+        params.deliveryQueueOwner.signal = undefined;
+      }
       if (queueOwner && queuedPostSendState === undefined) {
         queuedPostSendState = await persistPostSendState(queueOwner);
       }
@@ -314,6 +325,11 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
 
   try {
     throwIfProducerLeaseLost();
+    writer = await prepareSessionWriterDeliveryAuthority(
+      params.deliveryCompletion?.kind === "pending-final"
+        ? params.deliveryCompletion.sessionWriterDeliveryAuthority
+        : undefined,
+    );
     if (params.sessionGeneration !== undefined) {
       generation = await prepareOutboundDeliveryGeneration(params.sessionGeneration);
       throwIfProducerLeaseLost();
@@ -345,7 +361,9 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     const failedOutcomes = payloadOutcomes.filter((outcome) => outcome.status === "failed");
     allPayloadsSuppressed =
       results.length === 0 && areOutboundPayloadsIntentionallySuppressed(payloadOutcomes);
-    throwIfProducerLeaseLost();
+    if (deliveredResults.length === 0) {
+      throwIfProducerLeaseLost();
+    }
     platformResultsReturned = true;
     if (
       queueOwner &&
@@ -484,7 +502,15 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
   } catch (caughtError) {
     let err = caughtError;
     try {
-      throwIfProducerLeaseLost();
+      if (err instanceof OutboundDeliveryError && err.results.length > 0) {
+        deliveredResults = err.results;
+        if (params.deliveryQueueOwner) {
+          params.deliveryQueueOwner.signal = undefined;
+        }
+      }
+      if (deliveredResults.length === 0) {
+        throwIfProducerLeaseLost();
+      }
       if (isOutboundDeliveryAdmissionClosedError(err)) {
         throw err;
       }
@@ -500,9 +526,6 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
         } catch (rejection) {
           err = rejection;
         }
-      }
-      if (err instanceof OutboundDeliveryError && err.results.length > 0) {
-        deliveredResults = err.results;
       }
       const failureIsProvenNotSent = isProvenBatchNotSent(err, payloadOutcomes);
       const hasPlatformSendEvidence =
@@ -645,8 +668,8 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
         : error;
     }
   } finally {
+    writer?.release();
     generation?.release();
-    await producerLease?.stop();
     for (const outcome of payloadOutcomes) {
       if (outcome.status === "failed" && params.deliveryQueueOwner) {
         outcome.error = params.deliveryQueueOwner.project(outcome.error);

@@ -1,5 +1,4 @@
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-
 export function sessionsList(placement: "local" | "active") {
   return {
     count: 1,
@@ -21,14 +20,14 @@ export function sessionsList(placement: "local" | "active") {
   };
 }
 
-export async function openPalette(page: import("playwright").Page) {
+async function openPalette(page: import("playwright").Page) {
   await waitForControlUiGatewayReady(page);
   await page.evaluate(() => {
     window.dispatchEvent(new CustomEvent("openclaw:command-palette-open"));
   });
   await page
     .locator("openclaw-command-palette")
-    .getByRole("textbox", { name: "Search or start a task…" })
+    .getByRole("textbox", { name: "Search…" })
     .waitFor();
 }
 
@@ -40,3 +39,11 @@ export async function openDesktopPanel(page: import("playwright").Page, baseUrl:
   await panel.locator("section[aria-label='Desktop']").waitFor();
   return panel;
 }
+
+export const observe = (token: string, control = false, extra: object = {}) => ({
+  transport: "rfb",
+  wsPath: `/desktop/observe?token=${token}`,
+  expiresAtMs: 60_000,
+  control,
+  ...extra,
+});

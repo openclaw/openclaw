@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred, awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveDefaultSessionStorePath } from "../config/sessions/paths.js";
 import {
   appendTranscriptMessage,
@@ -12,6 +13,7 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
+import * as sessionHistory from "../config/sessions/session-history.js";
 import * as historyReaders from "../config/sessions/session-transcript-worker-readers.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -32,6 +34,7 @@ describe("memory source sessions", () => {
     "resolves metadata and deletion selectors in the %s session store",
     async (layout) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        setRuntimeConfigSnapshot({});
         const storePath =
           layout === "default"
             ? resolveDefaultSessionStorePath("main")
@@ -44,6 +47,7 @@ describe("memory source sessions", () => {
         const scope = { agentId: "main", storePath };
         const sessionId = `source-${"x".repeat(300)}`;
         const sessionKey = "agent:main:source-session";
+        const prompt = "memory-target-saved-prompt".repeat(128);
         await upsertSessionEntryCore(
           { ...scope, sessionKey },
           {
@@ -52,6 +56,7 @@ describe("memory source sessions", () => {
             updatedAt: 1_000,
             chatType: "group",
             hookExternalContentSource: "gmail",
+            skillsSnapshot: { prompt, skills: [] },
           },
         );
         recordSessionParticipant(
@@ -61,14 +66,26 @@ describe("memory source sessions", () => {
         await closeOpenClawAgentDatabasesAsync();
         closeOpenClawAgentDatabasesForTest();
 
-        expect(
-          await loadMemorySessionMetadataAsync({ ...scope, sessionId, sessionKey }),
-        ).toMatchObject({
-          sessionId,
-          sessionKey,
-          hookExternalContentSource: "gmail",
-          chatType: "group",
-        });
+        const metadataSql = observeHostDataSql();
+        try {
+          using reader = vi
+            .spyOn(sessionHistory, "listSessionTranscriptInstancesInWorker")
+            .mockImplementation(async (...args) => listSessionTranscriptInstances(...args));
+          expect(
+            await loadMemorySessionMetadataAsync({ ...scope, sessionId, sessionKey }),
+          ).toMatchObject({
+            sessionId,
+            sessionKey,
+            hookExternalContentSource: "gmail",
+            chatType: "group",
+          });
+          expect(reader).toHaveBeenCalledOnce();
+          expect(metadataSql.queries.some((sql) => /from "session_participants"/i.test(sql))).toBe(
+            false,
+          );
+        } finally {
+          metadataSql.restore();
+        }
         expect(
           await loadMemorySessionMetadataBatchAsync({
             ...scope,
@@ -83,9 +100,15 @@ describe("memory source sessions", () => {
             sessions: [{ sessionId, sessionKey: "agent:main:another-session" }],
           }),
         ).toEqual([]);
-        expect(resolveMemorySessionTargets({ ...scope, sessionIds: [sessionId] })).toEqual([
-          expect.objectContaining({ sessionId, sessionKey, resolution: "live" }),
-        ]);
+        const parses = vi.spyOn(JSON, "parse");
+        try {
+          expect(resolveMemorySessionTargets({ ...scope, sessionIds: [sessionId] })).toEqual([
+            expect.objectContaining({ sessionId, sessionKey, resolution: "live" }),
+          ]);
+          expect(parses.mock.calls.filter(([text]) => text.includes(prompt))).toHaveLength(0);
+        } finally {
+          parses.mockRestore();
+        }
         const targetSql = observeHostDataSql();
         try {
           expect(await loadMemorySessionMetadataAsync({ ...scope, sessionId })).toMatchObject({
@@ -96,9 +119,6 @@ describe("memory source sessions", () => {
             await resolveMemorySessionTargetsAsync({ ...scope, participants: ["profile-source"] }),
           ).toEqual([expect.objectContaining({ sessionId, sessionKey, resolution: "live" })]);
           expect(targetSql.queries).toEqual([]);
-          for (const call of targetSql.calls) {
-            expect(call).not.toHaveBeenCalled();
-          }
         } finally {
           targetSql.restore();
         }
@@ -149,9 +169,6 @@ describe("memory source sessions", () => {
             await loadArchivedSessionsAsync({ ...scope, archiveNames: [archiveName] }),
           ).toEqual(expectedArchives);
           expect(hostSql.queries).toEqual([]);
-          for (const call of hostSql.calls) {
-            expect(call).not.toHaveBeenCalled();
-          }
         } finally {
           hostSql.restore();
         }
@@ -170,6 +187,7 @@ describe("memory source sessions", () => {
 
   it("keeps another agent's live and archived sources out of a shared store selection", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const storePath = path.join(state.root, "shared.sqlite");
       const mainScope = { agentId: "main", storePath };
       for (const agentId of ["main", "other"]) {
@@ -201,12 +219,6 @@ describe("memory source sessions", () => {
           sessionKey: "agent:other:source",
         }),
       ).toBeUndefined();
-      expect(
-        await loadMemorySessionMetadataBatchAsync({
-          ...mainScope,
-          sessions: [{ sessionId: "other-source", sessionKey: "agent:other:source" }],
-        }),
-      ).toEqual([]);
       await deleteSessionEntryLifecycle({
         agentId: "other",
         storePath,
@@ -221,6 +233,7 @@ describe("memory source sessions", () => {
 
   it("selects the exact recorded email source without conflating webhooks", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       for (const source of ["email", "webhook"] as const) {
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey: `agent:main:${source}` },
@@ -288,15 +301,10 @@ describe("memory source sessions", () => {
 
   it("does not create an absent configured session store while inspecting sources", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const storePath = path.join(state.root, "absent", "sessions.json");
       const scope = { agentId: "main", storePath, sessionId: "missing" };
       expect(await loadMemorySessionMetadataAsync(scope)).toBeUndefined();
-      expect(
-        await loadMemorySessionMetadataBatchAsync({
-          ...scope,
-          sessions: [{ sessionId: "missing" }],
-        }),
-      ).toEqual([]);
       expect(await loadArchivedSessionsAsync({ ...scope, sessionIds: ["missing"] })).toEqual([]);
       expect(await resolveMemorySessionTargetsAsync({ ...scope, sessionIds: ["missing"] })).toEqual(
         [expect.objectContaining({ sessionId: "missing", resolution: "unresolved" })],
@@ -306,6 +314,7 @@ describe("memory source sessions", () => {
   });
   it("refuses archive inventory after its retained database closes", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const scope = { agentId: "main", storePath: resolveDefaultSessionStorePath("main") };
       await upsertSessionEntryCore(
         { ...scope, sessionKey: "agent:main:inventory" },

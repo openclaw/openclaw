@@ -12,6 +12,7 @@ import {
   THEME_WORKING_PHRASE_MAX_LENGTH,
 } from "../theme.js";
 import { closedObject } from "./closed-object.js";
+import { stringLiteralUnion } from "./string-literal-union.js";
 
 const ThemeValue = Type.String({ minLength: 1, maxLength: THEME_TOKEN_MAX_LENGTH });
 const ThemeArtworkId = Type.String({ pattern: THEME_ARTWORK_ID_PATTERN.source, maxLength: 32 });
@@ -41,17 +42,10 @@ export const ThemePaletteSchema = closedObject({
 export const ThemeDefinitionSchema = closedObject({
   name: Type.String({ minLength: 1, maxLength: THEME_NAME_MAX_LENGTH }),
   description: Type.String({ minLength: 1, maxLength: THEME_DESCRIPTION_MAX_LENGTH }),
-  mascot: Type.Optional(Type.Union([Type.Literal("claw"), Type.Literal("none")])),
+  mascot: Type.Optional(stringLiteralUnion(["claw", "none"])),
   brandName: Type.Optional(Type.String({ minLength: 1, maxLength: THEME_BRAND_NAME_MAX_LENGTH })),
   brandIcon: Type.Optional(ThemeArtworkId),
-  workingIndicator: Type.Optional(
-    Type.Union([
-      Type.Literal("claw"),
-      Type.Literal("dots"),
-      Type.Literal("brand"),
-      Type.Literal("none"),
-    ]),
-  ),
+  workingIndicator: Type.Optional(stringLiteralUnion(["claw", "dots", "brand", "none"])),
   lobsterdex: Type.Optional(Type.Boolean()),
   communityLinks: Type.Optional(Type.Boolean()),
   workingPhrases: Type.Optional(
@@ -64,11 +58,7 @@ export const ThemeDefinitionSchema = closedObject({
   light: Type.Optional(ThemePaletteSchema),
   dark: Type.Optional(ThemePaletteSchema),
 });
-export const ThemeModeSchema = Type.Union([
-  Type.Literal("system"),
-  Type.Literal("light"),
-  Type.Literal("dark"),
-]);
+export const ThemeModeSchema = stringLiteralUnion(["system", "light", "dark"]);
 const ThemeId = Type.String({ minLength: 1, maxLength: 256 });
 export const ThemesListParamsSchema = closedObject({});
 export const ThemesGetParamsSchema = closedObject({ id: Type.Optional(ThemeId) });

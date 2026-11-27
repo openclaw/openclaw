@@ -1,8 +1,10 @@
 import { resolveOpenAIResponsesPayloadPolicy } from "@openclaw/ai/internal/openai-responses-payload-policy";
-import {
-  normalizeFastMode,
-  normalizeOptionalLowercaseString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeFastMode } from "@openclaw/normalization-core/string-coerce";
+
+export {
+  normalizeOpenAIServiceTier,
+  type OpenAIServiceTier,
+} from "@openclaw/ai/internal/openai-responses-payload-policy";
 
 export type OpenAIFastMode = boolean | "ultrafast";
 
@@ -13,19 +15,6 @@ export function normalizeOpenAIFastMode(value: unknown): OpenAIFastMode | undefi
   }
   const fastMode = normalizeFastMode(value);
   return fastMode === "auto" ? undefined : fastMode;
-}
-
-export type OpenAIServiceTier = "auto" | "default" | "flex" | "priority" | "ultrafast";
-
-export function normalizeOpenAIServiceTier(value: unknown): OpenAIServiceTier | undefined {
-  const normalized = normalizeOptionalLowercaseString(value);
-  return normalized === "auto" ||
-    normalized === "default" ||
-    normalized === "flex" ||
-    normalized === "priority" ||
-    normalized === "ultrafast"
-    ? normalized
-    : undefined;
 }
 
 export function supportsOpenAIResponsesFastMode(model: {

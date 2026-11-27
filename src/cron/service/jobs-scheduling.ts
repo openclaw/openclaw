@@ -7,11 +7,15 @@ import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { isCronJobActive } from "../active-jobs.js";
 import { coerceFiniteScheduleNumber } from "../schedule-number.js";
 import { computeNextRunAtMs, computePreviousRunAtMs } from "../schedule.js";
+import {
+  cronSourceIdentity,
+  createCronSourceIdentity,
+  setCronSourceIdentity,
+} from "../source-schedule.js";
 import { resolveCronStaggerMs } from "../stagger.js";
 import { hasCanonicalCronDeliveryMode } from "../store/delivery-codec.js";
-import { CRON_STUCK_RUN_MS } from "../store/run-receipt-store.js";
 import type { CronScheduleMaintenanceOptions } from "../store/runtime-worker.types.js";
-import { createCronStreamSourceIdentity, resolveCronStreamBatching } from "../stream-schedule.js";
+import { resolveCronStreamBatching } from "../stream-schedule.js";
 import type { CronJob, CronSchedule } from "../types.js";
 import { autoDisableCronJob } from "./auto-disable.js";
 import {
@@ -20,10 +24,29 @@ import {
   resolveForcePreservedOneShotAtMs,
 } from "./one-shot-schedule.js";
 import type { CronJobPolicyContext, CronServiceState, DeferredCronNotifications } from "./state.js";
+import { MIN_REFIRE_GAP_MS } from "./timer-constants.js";
 import { hasPendingCronTriggerInterval } from "./trigger-interval.js";
 
-/** Skip reason recorded when a main-session heartbeat run is disabled. */
-export const HEARTBEAT_SKIP_DISABLED = "disabled";
+/** A new timer receipt owns continuation; never reopen the interrupted occurrence. */
+export function resolveCronRestartRetryAtMs(
+  job: CronJob,
+  startedAtMs: number,
+  nowMs: number,
+): number | undefined {
+  if (
+    !isJobEnabled(job) ||
+    job.payload.kind !== "agentTurn" ||
+    !["at", "every", "cron"].includes(job.schedule.kind)
+  ) {
+    return undefined;
+  }
+  // Publish the same retry floor that recurring-run admission will enforce.
+  const delay =
+    job.schedule.kind === "at"
+      ? MIN_REFIRE_GAP_MS
+      : errorBackoffMs(normalizeConsecutiveErrors(job.state.consecutiveErrors));
+  return Math.max(nowMs, startedAtMs) + delay;
+}
 
 const STAGGER_OFFSET_CACHE_MAX = 4096;
 const staggerOffsetCache = new Map<string, number>();
@@ -96,7 +119,6 @@ export function resolveNextRunAtMsOrDisable(params: {
   }
   autoDisableCronJob({
     job: params.job,
-    reason: "schedule-errors",
     atMs: params.state.deps.nowMs(),
     consecutiveErrors: 1,
     deferredNotifications: params.deferredNotifications,
@@ -109,6 +131,18 @@ export function resolveJobLastRunStatus(job: Pick<CronJob, "state">) {
   return job.state.lastRunStatus ?? job.state.lastStatus;
 }
 
+/** Resolves run end using the same persisted duration semantics as retry backoff. */
+export function resolveJobLastRunEndedAtMs(job: Pick<CronJob, "state">): number | undefined {
+  if (!isFiniteTimestamp(job.state.lastRunAtMs)) {
+    return undefined;
+  }
+  const lastDurationMs =
+    typeof job.state.lastDurationMs === "number" && Number.isFinite(job.state.lastDurationMs)
+      ? Math.max(0, Math.floor(job.state.lastDurationMs))
+      : 0;
+  return job.state.lastRunAtMs + lastDurationMs;
+}
+
 /** Resolves the retry backoff delay for a one-based consecutive error count. */
 export function errorBackoffMs(
   consecutiveErrors: number,
@@ -118,24 +152,23 @@ export function errorBackoffMs(
   return expectDefined(scheduleMs[Math.max(0, idx)], "schedule ms entry at math.max(0, idx)");
 }
 
+export function normalizeConsecutiveErrors(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+}
+
 /** Returns the earliest retry timestamp after a failed cron run and its runtime duration. */
 export function resolveJobErrorBackoffUntilMs(
   job: CronJob,
   scheduleMs = DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
 ): number | undefined {
-  if (resolveJobLastRunStatus(job) !== "error" || !isFiniteTimestamp(job.state.lastRunAtMs)) {
+  if (resolveJobLastRunStatus(job) !== "error") {
     return undefined;
   }
-  const consecutiveErrorsRaw = job.state.consecutiveErrors;
-  const consecutiveErrors =
-    typeof consecutiveErrorsRaw === "number" && Number.isFinite(consecutiveErrorsRaw)
-      ? Math.max(1, Math.floor(consecutiveErrorsRaw))
-      : 1;
-  const lastDurationMs =
-    typeof job.state.lastDurationMs === "number" && Number.isFinite(job.state.lastDurationMs)
-      ? Math.max(0, Math.floor(job.state.lastDurationMs))
-      : 0;
-  const lastEndedAtMs = job.state.lastRunAtMs + lastDurationMs;
+  const lastEndedAtMs = resolveJobLastRunEndedAtMs(job);
+  if (lastEndedAtMs === undefined) {
+    return undefined;
+  }
+  const consecutiveErrors = normalizeConsecutiveErrors(job.state.consecutiveErrors);
   return asDateTimestampMs(lastEndedAtMs + errorBackoffMs(consecutiveErrors, scheduleMs));
 }
 
@@ -332,11 +365,19 @@ export function isJobEnabled(job: Pick<CronJob, "enabled">): boolean {
 }
 
 export function isTimeScheduledJob(job: Pick<CronJob, "schedule">): boolean {
-  return job.schedule.kind !== "on-exit" && job.schedule.kind !== "stream";
+  return (
+    job.schedule.kind !== "on-exit" &&
+    job.schedule.kind !== "stream" &&
+    job.schedule.kind !== "event"
+  );
 }
 
 /** Computes the next run timestamp for enabled jobs across every/at/cron schedules. */
-export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | undefined {
+export function computeJobNextRunAtMs(
+  job: CronJob,
+  nowMs: number,
+  opts?: { preserveEveryAnchor?: boolean },
+): number | undefined {
   if (!isJobEnabled(job)) {
     return undefined;
   }
@@ -357,7 +398,8 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
       schedule: job.schedule,
       fallbackAnchorMs,
     });
-    const lastRunAtMs = job.state.lastRunAtMs;
+    // A retry must not become a new anchor for the authored interval.
+    const lastRunAtMs = opts?.preserveEveryAnchor ? undefined : job.state.lastRunAtMs;
     if (isFiniteTimestamp(lastRunAtMs) && lastRunAtMs >= anchorMs) {
       const nextFromLastRun = Math.floor(lastRunAtMs) + everyMs;
       if (!isFiniteTimestamp(nextFromLastRun)) {
@@ -410,7 +452,6 @@ export function recordScheduleComputeError(params: {
   if (errorCount >= MAX_SCHEDULE_ERRORS) {
     autoDisableCronJob({
       job,
-      reason: "schedule-errors",
       atMs: state.deps.nowMs(),
       consecutiveErrors: errorCount,
       deferredNotifications: params.deferredNotifications,
@@ -432,14 +473,12 @@ export function recordScheduleComputeError(params: {
 function normalizeJobTickState(params: {
   state: CronJobPolicyContext;
   job: CronJob;
-  nowMs: number;
   ownership: CronScheduleOwnership;
 }): {
   changed: boolean;
   skip: boolean;
 } {
-  const { state, job, nowMs, ownership } = params;
-  const { log } = state.deps;
+  const { job, ownership } = params;
   let changed = false;
 
   if (!job.state) {
@@ -447,12 +486,15 @@ function normalizeJobTickState(params: {
     changed = true;
   }
 
-  if (job.schedule.kind === "stream" && !job.state.streamSourceIdentity?.trim()) {
+  if (
+    (job.schedule.kind === "stream" || job.schedule.kind === "event") &&
+    !cronSourceIdentity(job)?.trim()
+  ) {
     // Identity is store-owned state. A hand-imported or pre-identity row must
     // not reach the watcher (which fails closed on a missing identity) or
     // admission (which would reject every batch); assign one like any other
     // repairable tick state.
-    job.state.streamSourceIdentity = createCronStreamSourceIdentity();
+    setCronSourceIdentity(job, createCronSourceIdentity());
     changed = true;
   }
 
@@ -493,35 +535,6 @@ function normalizeJobTickState(params: {
   }
 
   changed = clearInvalidForcePreservedNextRun(job) || changed;
-
-  const queuedAt = job.state.queuedAtMs;
-  if (
-    typeof queuedAt === "number" &&
-    Math.abs(nowMs - queuedAt) > CRON_STUCK_RUN_MS &&
-    !ownsCronRunMarker(ownership, job.id, queuedAt)
-  ) {
-    log.warn({ jobId: job.id, queuedAtMs: queuedAt }, "cron: clearing stuck queued marker");
-    job.state.queuedAtMs = undefined;
-    changed = true;
-  }
-
-  const runningAt = job.state.runningAtMs;
-  if (
-    typeof runningAt === "number" &&
-    Math.abs(nowMs - runningAt) > CRON_STUCK_RUN_MS &&
-    !ownership.isJobActive(job.id) &&
-    !ownsCronRunMarker(ownership, job.id, runningAt)
-  ) {
-    log.warn({ jobId: job.id, runningAtMs: runningAt }, "cron: clearing stuck running marker");
-    Object.assign(job.state, { runningAtMs: undefined, runningReceiptId: undefined });
-    delete job.state.runningScheduleChangeId;
-    changed = true;
-    const nextRun = job.state.nextRunAtMs;
-    const lastRun = job.state.lastRunAtMs;
-    const alreadyExecutedSlot =
-      hasScheduledNextRunAtMs(nextRun) && isFiniteTimestamp(lastRun) && lastRun >= nextRun;
-    return { changed, skip: !alreadyExecutedSlot };
-  }
 
   return { changed, skip: false };
 }
@@ -634,7 +647,7 @@ export function recomputeSingleJobForMaintenance(
   ownership: CronScheduleOwnership,
 ): boolean {
   const now = opts.nowMs ?? state.deps.nowMs();
-  const tick = normalizeJobTickState({ state, job, nowMs: now, ownership });
+  const tick = normalizeJobTickState({ state, job, ownership });
   let changed = tick.changed;
   if (tick.skip) {
     return changed;
@@ -667,8 +680,7 @@ export function recomputeSingleJobForMaintenance(
   const hasPendingPacedNextRun =
     isFiniteTimestamp(pacedNextRunAtMs) &&
     hasScheduledNextRunAtMs(nextRunAtMs) &&
-    pacedNextRunAtMs === nextRunAtMs &&
-    (now < pacedNextRunAtMs || opts.preserveExpiredPacedNextRunJobId === job.id);
+    pacedNextRunAtMs === nextRunAtMs;
   if (pacedNextRunAtMs !== undefined && !hasPendingPacedNextRun) {
     job.state.pacedNextRunAtMs = undefined;
     changed = true;
@@ -703,7 +715,10 @@ export function nextWakeAtMs(state: CronServiceState): number | undefined {
       isTimeScheduledJob(job) &&
       hasScheduledNextRunAtMs(job.state.nextRunAtMs)
     ) {
-      nextWake = Math.min(nextWake ?? Infinity, job.state.nextRunAtMs);
+      nextWake = Math.min(
+        nextWake ?? Infinity,
+        Math.max(job.state.nextRunAtMs, job.state.admissionDeferred?.retryAtMs ?? 0),
+      );
     }
   }
   return nextWake;

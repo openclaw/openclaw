@@ -36,6 +36,7 @@ describe("statusSummaryRuntime", () => {
         model: "gpt-5.5",
         agentId: "research",
         sessionKey: "agent:research:main",
+        acpMeta: null,
       }),
     ).toEqual({ id: "codex", label: "OpenAI Codex" });
   });
@@ -52,6 +53,7 @@ describe("statusSummaryRuntime", () => {
         provider: "openai",
         model: "gpt-5.5",
         sessionKey: "agent:main:main",
+        acpMeta: null,
       }),
     ).toEqual({ id: "codex", label: "OpenAI Codex (previous runtime: OpenClaw Default)" });
   });
@@ -70,6 +72,7 @@ describe("statusSummaryRuntime", () => {
         provider: "openai",
         model: "gpt-5.5",
         sessionKey: "agent:main:main",
+        acpMeta: null,
       }),
     ).toEqual({ id: "codex", label: "OpenAI Codex" });
   });

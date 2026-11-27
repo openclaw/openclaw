@@ -4,6 +4,7 @@ import type {
   DiscordVoiceAudioReceipt,
   DiscordVoiceTranscriptCapture,
 } from "./recording-types.js";
+import { publishRecordingUtterance, type RecordingSource } from "./recording-utterance.js";
 
 type Capture = DiscordVoiceTranscriptCapture | undefined;
 const MAX_REALTIME_RECORDING_BYTES = 1024 * 1024;
@@ -19,7 +20,7 @@ export class DiscordRealtimeRecordingInput {
   unavailable: boolean;
   private readonly sealed = { audio: false, batch: false };
   private pending = 0;
-  private readonly listeners = new Set<() => void>();
+  onChange: (() => void) | undefined;
 
   constructor(batchDisabled: boolean) {
     this.unavailable = batchDisabled;
@@ -38,7 +39,7 @@ export class DiscordRealtimeRecordingInput {
     if (!receipt?.capture || receipt.capture !== this.capture) {
       this.eligible = false;
     }
-    this.notify();
+    this.onChange?.();
   }
 
   observeBatch(result: Promise<DiscordVoiceSegmentOutcome>): void {
@@ -58,39 +59,28 @@ export class DiscordRealtimeRecordingInput {
       )
       .finally(() => {
         this.pending -= 1;
-        this.notify();
+        this.onChange?.();
       });
   }
 
   exclude(): void {
     this.eligible = false;
-    this.notify();
+    this.onChange?.();
   }
 
   seal(input: "audio" | "batch"): void {
     this.sealed[input] = true;
-    this.notify();
+    this.onChange?.();
   }
 
   get complete(): boolean {
     return this.sealed.audio && this.sealed.batch && this.pending === 0;
   }
-
-  subscribe(listener: () => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
-
-  private notify(): void {
-    for (const listener of this.listeners) {
-      listener();
-    }
-  }
 }
 
 /** Realtime text is usable only when the whole provider generation has one recording owner. */
 export class DiscordRealtimeRecording {
-  private readonly inputs = new Map<DiscordRealtimeRecordingInput, () => void>();
+  private readonly inputs = new Set<DiscordRealtimeRecordingInput>();
   private capture: Capture;
   private speaker: { id: string; label: string } | undefined;
   private firstStartedAt: number | undefined;
@@ -104,7 +94,7 @@ export class DiscordRealtimeRecording {
 
   constructor(
     private readonly params: {
-      entry: { guildId: string; channelId: string; voiceSessionKey: string };
+      entry: RecordingSource;
       isCurrent: () => boolean;
       warn: (message: string) => void;
     },
@@ -137,12 +127,13 @@ export class DiscordRealtimeRecording {
           return;
         }
         this.unavailable ||= input.hasAudio && input.unavailable;
-        this.inputs.get(input)?.();
+        input.onChange = undefined;
         this.inputs.delete(input);
       }
       void this.publish();
     };
-    this.inputs.set(input, input.subscribe(changed));
+    this.inputs.add(input);
+    input.onChange = changed;
     changed();
   }
 
@@ -185,8 +176,8 @@ export class DiscordRealtimeRecording {
 
   close(): void {
     this.stopped = true;
-    for (const unsubscribe of this.inputs.values()) {
-      unsubscribe();
+    for (const input of this.inputs) {
+      input.onChange = undefined;
     }
     this.inputs.clear();
     this.bytes -= this.finals.reduce((total, final) => total + final.bytes, 0);
@@ -211,21 +202,7 @@ export class DiscordRealtimeRecording {
         }
         const final = this.finals.shift()!;
         try {
-          await capture.onUtterance({
-            sessionId: capture.sessionId,
-            ...(final.startedAt !== undefined
-              ? { startedAt: new Date(final.startedAt).toISOString() }
-              : {}),
-            final: true,
-            speaker,
-            text: final.text,
-            metadata: {
-              channel: "discord",
-              guildId: this.params.entry.guildId,
-              channelId: this.params.entry.channelId,
-              voiceSessionKey: this.params.entry.voiceSessionKey,
-            },
-          });
+          await publishRecordingUtterance(capture, this.params.entry, speaker, final);
         } catch {
           this.params.warn(
             "discord voice: realtime recording publication failed; check transcript storage.",

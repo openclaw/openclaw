@@ -1,6 +1,5 @@
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
-  assertDeliveryQueueReplacement,
   replacePendingDeliveryQueueEntryInDatabase,
   movePendingDeliveryQueueEntryNamespaceInDatabase,
 } from "./delivery-queue-sqlite-namespace.kernel.js";
@@ -22,7 +21,6 @@ export function replacePendingDeliveryQueueEntry(
   },
   context?: DeliveryQueueStateContext,
 ): boolean {
-  assertDeliveryQueueReplacement(params);
   return runOpenClawStateWriteTransaction(
     (database) => replacePendingDeliveryQueueEntryInDatabase(database, params),
     { env: resolveDeliveryQueueStateEnv(params.stateDir, context) },

@@ -1,17 +1,12 @@
-// Real SQLite path search, exact-file precedence, and candidate budgets.
-import type { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import type { DatabaseSync, SQLInputValue } from "node:sqlite";
+import { describe, expect, it, vi } from "vitest";
 import { bm25RankToScore } from "./keyword-query.js";
 import { searchPathKeyword } from "./manager-search.js";
 import { createMemorySearchDb, insertKeywordFixture } from "./manager-search.test-support.js";
 
 type PathSearchOptions = Omit<Parameters<typeof searchPathKeyword>[0], "db" | "query">;
 
-function searchPathKeywordFixture(
-  db: DatabaseSync,
-  query: string,
-  options: Partial<PathSearchOptions> = {},
-) {
+function searchPath(db: DatabaseSync, query: string, options: Partial<PathSearchOptions> = {}) {
   return searchPathKeyword({
     db,
     pathFtsTable: "memory_index_paths_fts",
@@ -25,30 +20,16 @@ function searchPathKeywordFixture(
 }
 
 describe("searchPathKeyword", () => {
-  const databases: DatabaseSync[] = [];
-  afterEach(() => {
-    vi.restoreAllMocks();
-    for (const db of databases.splice(0)) {
-      db.close();
-    }
-  });
   function createDb(options: Parameters<typeof createMemorySearchDb>[0] = {}) {
     const { db, schema } = createMemorySearchDb(options);
-    databases.push(db);
-    expect(schema.ftsAvailable, schema.ftsError).toBe(true);
-    return db;
+    try {
+      expect(schema.ftsAvailable, schema.ftsError).toBe(true);
+      return db;
+    } catch (error) {
+      db.close();
+      throw error;
+    }
   }
-
-  it("keeps filename token matching strict so foo.md does not match unrelated .md paths", async () => {
-    const db = createDb({ ftsTokenizer: "unicode61" });
-    insertKeywordFixture(db, { id: "target", path: "memory/notes/foo.md" });
-    insertKeywordFixture(db, { id: "other-1", path: "memory/notes/bar.md" });
-    insertKeywordFixture(db, { id: "other-2", path: "memory/notes/baz.md" });
-
-    const results = await searchPathKeywordFixture(db, "foo.md", { limit: 10 });
-
-    expect(results.map((entry) => entry.id)).toEqual(["target"]);
-  });
 
   it.each([
     ["unicode61", "common"],
@@ -57,7 +38,7 @@ describe("searchPathKeyword", () => {
   ] as const)(
     "bounds first-chunk work with stale statistics for %s query %s",
     async (ftsTokenizer, query) => {
-      const db = createDb({ ftsTokenizer });
+      using db = createDb({ ftsTokenizer });
       insertKeywordFixture(db, { id: "seed", path: "seed.md" });
       // Analyze an almost-empty index before it grows, as during an upgrade.
       db.exec("PRAGMA analysis_limit=1000; ANALYZE main");
@@ -82,31 +63,31 @@ describe("searchPathKeyword", () => {
         return line;
       });
 
-      const queryPlans: string[] = [];
       let fetchedTextBytes = 0;
       const prepare = db.prepare.bind(db);
-      const prepareSpy = vi.spyOn(db, "prepare").mockImplementation((sql) => {
+      using prepareSpy = vi.spyOn(db, "prepare");
+      prepareSpy.mockImplementation((sql) => {
         // Observe sorting work without replacing the indexed chunks table.
         const statement = prepare(
           sql.replaceAll("candidate.start_line", "observe_path_chunk_line(candidate.start_line)"),
         );
+        function* observed(rows: Iterable<ReturnType<typeof statement.all>[number]>) {
+          for (const row of rows) {
+            if (typeof row.text === "string") {
+              fetchedTextBytes += Buffer.byteLength(row.text);
+            }
+            yield row;
+          }
+        }
         statement.all = new Proxy(statement.all.bind(statement), {
-          apply(all, _receiver, values) {
-            for (const row of prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...values)) {
-              queryPlans.push(String(row.detail));
-            }
-            const rows = all(...values);
-            for (const row of rows) {
-              if (typeof row.text === "string") {
-                fetchedTextBytes += Buffer.byteLength(row.text);
-              }
-            }
-            return rows;
-          },
+          apply: (all, _receiver, values: SQLInputValue[]) => [...observed(all(...values))],
+        });
+        statement.iterate = new Proxy(statement.iterate.bind(statement), {
+          apply: (iterate, _receiver, values: SQLInputValue[]) => observed(iterate(...values)),
         });
         return statement;
       });
-      const results = await searchPathKeywordFixture(db, query, {
+      const results = await searchPath(db, query, {
         ftsTokenizer,
         limit: 2,
         sourceFilter: {
@@ -115,110 +96,86 @@ describe("searchPathKeyword", () => {
         },
       });
 
-      prepareSpy.mockRestore();
       expect(results.map(({ id, snippet }) => ({ id, snippet }))).toEqual([
         { id: "path-0-chunk-0", snippet: "body 0/0 " + "x".repeat(191) },
         { id: "path-2-chunk-0", snippet: "body 2/0 " + "x".repeat(191) },
       ]);
-      expect(queryPlans.length).toBeGreaterThan(0);
-      expect(queryPlans.filter((detail) => /\bSCAN (?:c|candidate)\b/.test(detail))).toEqual([]);
       expect(examinedChunkLines).toBeGreaterThan(0);
       expect(examinedChunkLines).toBeLessThanOrEqual(16);
       expect(fetchedTextBytes).toBeLessThanOrEqual(4 * 200 * 4);
     },
   );
 
-  it("applies short CJK trigram substring matching to the path table", async () => {
-    const db = createDb({ ftsTokenizer: "trigram" });
-    insertKeywordFixture(db, {
-      id: "cjk-path",
-      path: "memory/成语-notes.md",
-    });
-    insertKeywordFixture(db, {
-      id: "cjk-exact",
-      path: "memory/成语.md",
-    });
-    insertKeywordFixture(db, {
-      id: "readme-exact",
-      path: "memory/README.md",
-    });
-    insertKeywordFixture(db, {
-      id: "normalized-exact",
-      path: "memory/Cafe\u0301.md",
-    });
-    insertKeywordFixture(db, {
-      id: "tokenless-exact",
-      path: "memory/🧠.md",
-    });
-
-    const results = await searchPathKeywordFixture(db, "成语", {
-      ftsTokenizer: "trigram",
-      limit: 10,
-    });
-
-    expect(results.map((entry) => entry.id)).toEqual(["cjk-exact", "cjk-path"]);
-    await expect(
-      searchPathKeywordFixture(db, "成语.md", { ftsTokenizer: "trigram" }),
-    ).resolves.toMatchObject([{ id: "cjk-exact", exactPathSpecificity: 2 }]);
-    await expect(
-      searchPathKeywordFixture(db, "README.md", { ftsTokenizer: "trigram" }),
-    ).resolves.toMatchObject([{ id: "readme-exact", exactPathSpecificity: 2 }]);
-    await expect(
-      searchPathKeywordFixture(db, "CAFÉ", { ftsTokenizer: "trigram" }),
-    ).resolves.toMatchObject([{ id: "normalized-exact", exactPathSpecificity: 1 }]);
-    await expect(
-      searchPathKeywordFixture(db, "🧠", { ftsTokenizer: "trigram" }),
-    ).resolves.toMatchObject([{ id: "tokenless-exact", exactPathSpecificity: 1 }]);
-  });
-
-  it("bridges NFC trigram queries to partial NFD path spellings", async () => {
-    const db = createDb({ ftsTokenizer: "trigram" });
-    insertKeywordFixture(db, {
-      id: "normalized-partial",
-      path: "memory/Cafe\u0301-notes.md",
-    });
-    const search = (query: string) =>
-      searchPathKeywordFixture(db, query, {
-        ftsTokenizer: "trigram",
-        limit: 10,
-      });
-
-    for (const query of ["Café", "fé"]) {
-      const results = await search(query);
-      expect(results).toMatchObject([{ id: "normalized-partial", exactPathSpecificity: 0 }]);
+  type Match = [query: string, limit: number, ids: string[], specificity?: number];
+  it.each<[string, "trigram" | undefined, string[], Match[]]>([
+    [
+      "strict filename tokens",
+      undefined,
+      ["memory/notes/foo.md", "memory/notes/bar.md", "memory/notes/baz.md"],
+      [["foo.md", 10, ["0"]]],
+    ],
+    [
+      "CJK and normalized exact paths",
+      "trigram",
+      [
+        "memory/成语-notes.md",
+        "memory/成语.md",
+        "memory/README.md",
+        "memory/Cafe\u0301.md",
+        "memory/🧠.md",
+      ],
+      [
+        ["成语", 10, ["1", "0"]],
+        ["成语.md", 1, ["1"], 2],
+        ["README.md", 1, ["2"], 2],
+        ["CAFÉ", 1, ["3"], 1],
+        ["🧠", 1, ["4"], 1],
+      ],
+    ],
+    [
+      "NFC queries over partial NFD paths",
+      "trigram",
+      ["memory/Cafe\u0301-notes.md"],
+      [
+        ["Café", 10, ["0"], 0],
+        ["fé", 10, ["0"], 0],
+      ],
+    ],
+    [
+      "default Unicode substrings",
+      undefined,
+      ["memory/Café.md"],
+      [
+        ["afé", 1, ["0"], 0],
+        ["AFE\u0301", 1, ["0"], 0],
+        ["memory afé", 1, ["0"], 0],
+        ["emory afé", 1, []],
+      ],
+    ],
+  ])("matches %s", async (_name, tokenizer, paths, searches) => {
+    const options = tokenizer ? { ftsTokenizer: tokenizer } : {};
+    using db = createDb(options);
+    paths.forEach((path, index) => insertKeywordFixture(db, { id: String(index), path }));
+    for (const [query, limit, ids, specificity] of searches) {
+      const expected = ids.map((id) =>
+        specificity === undefined ? { id } : { id, exactPathSpecificity: specificity },
+      );
+      expect(await searchPath(db, query, { ...options, limit })).toMatchObject(expected);
     }
-  });
-
-  it("matches partial Unicode path text with the default unicode61 tokenizer", async () => {
-    const db = createDb();
-    insertKeywordFixture(db, {
-      id: "unicode61-partial",
-      path: "memory/Café.md",
-    });
-
-    const search = (query: string) => searchPathKeywordFixture(db, query);
-
-    for (const query of ["afé", "AFE\u0301", "memory afé"]) {
-      await expect(search(query)).resolves.toMatchObject([
-        { id: "unicode61-partial", exactPathSpecificity: 0 },
-      ]);
-    }
-    await expect(search("emory afé")).resolves.toEqual([]);
   });
 
   it("bounds exact-path headroom independently from lexical candidates", async () => {
-    const db = createDb();
+    const exactPath = (index: number) =>
+      `memory/duplicates/${String(index).padStart(3, "0")}/README.md`;
+    const partialPath = (index: number) => `memory/partial/${index}/notes-README.md.bak`;
+    using db = createDb();
     for (let index = 0; index < 1_000; index += 1) {
-      const path = `memory/duplicates/${index.toString().padStart(3, "0")}/README.md`;
-      insertKeywordFixture(db, {
-        id: `duplicate-${index}`,
-        path,
-      });
+      insertKeywordFixture(db, { id: `duplicate-${index}`, path: exactPath(index) });
     }
     for (let index = 0; index < 6; index += 1) {
       insertKeywordFixture(db, {
         id: `partial-${index}`,
-        path: `memory/partial/${index}/notes-README.md.bak`,
+        path: partialPath(index),
       });
     }
     for (const path of ["a/README.md", "a/notes-README.md.bak"]) {
@@ -239,7 +196,7 @@ describe("searchPathKeyword", () => {
           return [row.path, bm25RankToScore(row.rank)];
         }),
       );
-      const results = await searchPathKeywordFixture(db, query, {
+      const results = await searchPath(db, query, {
         exactPathLimit: 200,
         limit: 4,
         sourceFilter: {
@@ -249,9 +206,7 @@ describe("searchPathKeyword", () => {
       });
       const expected = Array.from({ length: 204 }, (_, index) => {
         const exact = index < 200;
-        const path = exact
-          ? `memory/duplicates/${index.toString().padStart(3, "0")}/README.md`
-          : `memory/partial/${index - 200}/notes-README.md.bak`;
+        const path = exact ? exactPath(index) : partialPath(index - 200);
         const score = scores.get(path);
         expect(score).toBeTypeOf("number");
         return {

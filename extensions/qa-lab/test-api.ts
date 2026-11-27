@@ -16,7 +16,9 @@ export {
   type QaEvidenceSummaryV3Entry,
   validateQaEvidenceSummaryJson,
 } from "./src/evidence-summary.js";
+export { seedQaSessionTranscript } from "./src/suite-runtime-agent-session.js";
 export { splitQaModelRef } from "./src/model-selection.js";
+export { buildQaGatewayConfig } from "./src/qa-gateway-config.js";
 export {
   normalizeResponsesInput,
   resolveMockSubagentTurn,

@@ -10,6 +10,7 @@ import * as catalog from "./legacy-config-migrations.runtime.models.catalog.js";
 import * as codex from "./legacy-config-migrations.runtime.models.codex.js";
 import * as refs from "./legacy-config-migrations.runtime.models.refs.js";
 import * as vllm from "./legacy-config-migrations.runtime.models.vllm.js";
+import { deleteRetiredPath } from "./legacy-config-record-shared.js";
 import {
   collectLegacyDefaultModelAllowRefs,
   migrateExplicitDefaultModelAllowPolicy,
@@ -79,12 +80,9 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS: LegacyConfigMigrationSpec[
       },
     ],
     apply: (raw, changes) => {
-      const models = getRecord(raw.models);
-      if (!models || !Object.hasOwn(models, "pricing")) {
-        return;
+      if (deleteRetiredPath(raw.models, ["pricing"])) {
+        changes.push("Removed models.pricing (pricing now ships with the hosted model catalog).");
       }
-      delete models.pricing;
-      changes.push("Removed models.pricing (pricing now ships with the hosted model catalog).");
     },
   },
   {

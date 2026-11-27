@@ -1,11 +1,7 @@
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.types.js";
 import type { SessionActor } from "./session-actor-contract.js";
 import type { SessionActorMemoryHistoryReads } from "./session-actor-memory-history-contract.js";
-import {
-  captureSessionActorStorageOwner,
-  getSessionActorStorageBinding,
-} from "./session-actor-storage-binding.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { captureSessionTranscriptTargetBinding } from "./transcript-target-binding.js";
 
@@ -14,18 +10,16 @@ export function captureSessionActorTranscriptRead(
   scope: SessionTranscriptReadScope,
   signal?: AbortSignal,
 ) {
-  if (scope.sessionKey && !isIncognitoSessionKey(scope.sessionKey)) {
+  const namespace = captureSessionActorStorageOwner(scope, {
+    assertCurrent: () => signal?.throwIfAborted(),
+    authorize: () => signal?.throwIfAborted(),
+  });
+  if (!namespace) {
     return undefined;
   }
-  const selected = getSessionActorStorageBinding({});
-  if (!selected) {
-    return undefined;
-  }
-  const namespace = captureSessionActorStorageOwner(scope)!;
-  const sameOwner = namespace.agentId === selected.agentId;
-  if (sameOwner) {
-    getSessionActorStorageBinding({ ...scope, sessionKey: undefined });
-  }
+  const selected = namespace.binding;
+  const sameOwner =
+    selected && namespace.agentId === selected.agentId && namespace.path === selected.path;
   const stored = sameOwner
     ? selected.actor.storage!.readCurrent(
         { type: "session.entry.readById", input: { sessionId: scope.sessionId } },
@@ -43,10 +37,13 @@ export function captureSessionActorTranscriptRead(
   });
   const receipt = resolveSessionTranscriptReadFence(target);
   const admission = receipt && structuredClone(receipt);
+  const assertOwnerCurrent = namespace.owner?.captureSessionReadGuard(sessionKey);
   const authority = {
     ...namespace.authority,
     assertCurrent: () => {
       signal?.throwIfAborted();
+      assertOwnerCurrent?.();
+      selected?.actor.assertReadable();
       namespace.authority.assertCurrent();
     },
   };
@@ -54,6 +51,7 @@ export function captureSessionActorTranscriptRead(
     target,
     missing: !stored,
     currentEntry() {
+      authority.assertCurrent();
       return sameOwner
         ? selected.actor.storage!.readCurrent(
             { type: "session.entry.read", input: { sessionKey } },
@@ -61,16 +59,12 @@ export function captureSessionActorTranscriptRead(
           )
         : namespace.owner?.readSession(sessionKey, namespace.authority)?.entry;
     },
-    assertCurrent: () => {
-      signal?.throwIfAborted();
-      selected.actor.assertReadable();
-      namespace.authority.assertCurrent();
-    },
+    assertCurrent: authority.assertCurrent,
     async read<Key extends keyof SessionActorMemoryHistoryReads>(
       type: Key,
       input: SessionActorMemoryHistoryReads[Key]["input"],
     ): Promise<SessionActorMemoryHistoryReads[Key]["output"]> {
-      signal?.throwIfAborted();
+      authority.assertCurrent();
       if (!stored) {
         throw new Error("Session transcript window is unavailable");
       }
@@ -88,7 +82,7 @@ export function captureSessionActorTranscriptRead(
           throw new Error("Session transcript window is unavailable");
         }
         return await actor.storage!.read(
-          { type, input: { ...input, sessionId: target.sessionId, admission } },
+          { type, input: { admission, ...input, sessionId: target.sessionId } },
           authority,
         );
       } finally {

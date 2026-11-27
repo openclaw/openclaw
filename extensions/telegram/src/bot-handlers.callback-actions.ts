@@ -79,12 +79,13 @@ export function createTelegramCallbackMessageActions(params: {
     } catch (editErr) {
       const errStr = String(editErr);
       if (errStr.includes("no text in the message")) {
+        // Preserve the original controls if Telegram rejects their replacement.
+        await replyToCallbackChat(text, editParams);
         try {
           await deleteCallbackMessage();
         } catch {
           await editCallbackButtons([]).catch(() => {});
         }
-        await replyToCallbackChat(text, editParams);
       } else if (!errStr.includes("message is not modified")) {
         throw editErr;
       }
@@ -150,10 +151,9 @@ export async function handleTelegramQuestionCallback(params: {
   cfg: ResolveQuestionParams["cfg"];
   senderId: string;
   feedback: (text: string, mode: QuestionFeedbackMode) => Promise<unknown>;
-  resolveQuestion?: typeof questionGatewayRuntime.resolveOption;
 }): Promise<void> {
   try {
-    const result = await (params.resolveQuestion ?? questionGatewayRuntime.resolveOption)({
+    const result = await questionGatewayRuntime.resolveOption({
       cfg: params.cfg,
       questionId: params.callback.questionId,
       ...(params.callback.intent === "custom-input"

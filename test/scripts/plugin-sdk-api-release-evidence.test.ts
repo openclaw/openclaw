@@ -2,13 +2,17 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createPluginSdkApiDiffSet,
+  encodePluginSdkApiArtifact,
+  decodePluginSdkApiArtifact,
   expandPluginSdkApiDiffSet,
   selectPluginSdkApiReleaseEvidence,
   createPluginSdkApiReleaseEvidence,
   createPluginSdkApiReleaseEvidenceSet,
+  findPluginSdkApiReleaseNoteOmissions,
   validatePluginSdkApiReleaseEvidence,
 } from "../../scripts/plugin-sdk-api-release-evidence.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -37,13 +41,67 @@ function evidence(exports: unknown[] = []) {
 }
 
 describe("Plugin SDK API release evidence", () => {
+  it("reports release-note omissions for removed entrypoints and exports", () => {
+    const payload = {
+      entrypointsAdded: [],
+      entrypointsRemoved: [
+        {
+          entrypoint: "legacy.ts",
+          exportNames: ["legacySend"],
+          importSpecifier: "openclaw/plugin-sdk/legacy",
+        },
+      ],
+      exports: [
+        {
+          change: "removed",
+          entrypoint: "index.ts",
+          exportName: "legacyReceive",
+          importSpecifier: "openclaw/plugin-sdk",
+        },
+        { change: "added", exportName: "replacement" },
+      ],
+    };
+    const receipt = createPluginSdkApiReleaseEvidence({
+      baseRef: "v2026.8.1",
+      baseSha,
+      diff: {
+        ...payload,
+        digest: createHash("sha256").update(JSON.stringify(payload), "utf8").digest("hex"),
+      },
+      headSha,
+      workflowSha,
+    });
+
+    expect(
+      findPluginSdkApiReleaseNoteOmissions({
+        evidence: receipt,
+        releaseNotes:
+          "Removed `openclaw/plugin-sdk/legacy` and `legacyReceive`; use the supported replacements.",
+      }),
+    ).toEqual({
+      missing: [],
+      removals: ["openclaw/plugin-sdk/legacy", "legacyReceive"],
+    });
+    expect(
+      findPluginSdkApiReleaseNoteOmissions({
+        evidence: receipt,
+        releaseNotes: "Added `replacement`.",
+      }),
+    ).toEqual({
+      missing: ["openclaw/plugin-sdk/legacy", "legacyReceive"],
+      removals: ["openclaw/plugin-sdk/legacy", "legacyReceive"],
+    });
+  });
+
   it("enforces selectors acknowledgement through the release CLI", () => {
     const receipt = evidence([{ change: "added", exportName: "send" }]);
     const manifestPath = join(tempDirs.make("plugin-sdk-evidence-"), "manifest.json");
     writeFileSync(
       manifestPath,
       JSON.stringify({
-        pluginSdkApi: createPluginSdkApiReleaseEvidenceSet({ beta: evidence(), latest: receipt }),
+        pluginSdkApi: encodePluginSdkApiArtifact(
+          createPluginSdkApiReleaseEvidenceSet({ beta: evidence(), latest: receipt }),
+        ),
       }),
     );
     const run = (acknowledgement?: string) =>
@@ -105,6 +163,74 @@ describe("Plugin SDK API release evidence", () => {
         validatePluginSdkApiReleaseEvidence({ ...input, evidence: legacy }),
       );
     }
+  });
+
+  it("preserves distinct overlapping comparisons and logical digests in bounded transport", () => {
+    const declaration = "declare interface Shared { value: string; }\n".repeat(1000);
+    const beta = evidence([{ declaration, change: "added" }]);
+    const latest = evidence([{ declaration, change: "removed" }]);
+    const logical = createPluginSdkApiReleaseEvidenceSet({ beta, latest });
+    const encodedBytes = JSON.stringify(encodePluginSdkApiArtifact(logical));
+    const encoded = JSON.parse(encodedBytes);
+    expect(encodedBytes.length).toBeLessThan(JSON.stringify(logical).length / 2);
+    expect(decodePluginSdkApiArtifact(encoded)).toEqual(logical);
+    for (const npmDistTag of ["beta", "latest"] as const) {
+      const receipt = { beta, latest }[npmDistTag];
+      expect(selectPluginSdkApiReleaseEvidence({ evidence: encoded, npmDistTag })).toEqual(receipt);
+      expect(
+        validatePluginSdkApiReleaseEvidence({
+          evidence: encoded,
+          npmDistTag,
+          acknowledgement: receipt.digest.slice(0, 8),
+          expectedHeadSha: headSha,
+          expectedWorkflowSha: workflowSha,
+        }),
+      ).toMatchObject({ digest: receipt.digest });
+    }
+    const report = createPluginSdkApiDiffSet({ beta: beta.diff, latest: latest.diff });
+    expect(expandPluginSdkApiDiffSet(encodePluginSdkApiArtifact(report))).toEqual({
+      beta: beta.diff,
+      latest: latest.diff,
+    });
+    expect(
+      selectPluginSdkApiReleaseEvidence({
+        evidence: encodePluginSdkApiArtifact(beta),
+        npmDistTag: "beta",
+      }),
+    ).toEqual(beta);
+  });
+
+  it("rejects malformed transport, nested envelopes and bounded expansion bombs", () => {
+    const encoded = encodePluginSdkApiArtifact(evidence());
+    for (const invalid of [
+      { ...encoded, data: encoded.data + "!" },
+      { ...encoded, data: Buffer.from("not gzip").toString("base64") },
+      { ...encoded, encoding: "brotli+base64" },
+      { ...encoded, extra: true },
+      { ...encoded, data: "A".repeat(16 * 1024 * 1024 + 1) },
+      encodePluginSdkApiArtifact(encoded),
+    ]) {
+      expect(() => decodePluginSdkApiArtifact(invalid)).toThrow();
+    }
+    const bomb = {
+      ...encoded,
+      data: gzipSync(Buffer.alloc(64 * 1024 * 1024 + 1, 32)).toString("base64"),
+    };
+    expect(() => decodePluginSdkApiArtifact(bomb)).toThrow();
+    const beta = evidence([{ declaration: "beta" }]);
+    const latest = evidence([{ declaration: "latest" }]);
+    const logical = createPluginSdkApiReleaseEvidenceSet({ beta, latest });
+    const latestDiff = logical.diffs[latest.digest];
+    if (!latestDiff) {
+      throw new Error("Missing latest comparison fixture");
+    }
+    latestDiff.exports.push({ declaration: "tampered unselected comparison" });
+    expect(() =>
+      selectPluginSdkApiReleaseEvidence({
+        evidence: encodePluginSdkApiArtifact(logical),
+        npmDistTag: "beta",
+      }),
+    ).toThrow("digest does not match");
   });
 
   it("rejects missing, extra, redirected and modified pooled comparisons", () => {
@@ -193,6 +319,38 @@ describe("Plugin SDK API release evidence", () => {
     expect(() => validate("v2026.8.2", "c".repeat(40))).toThrow(
       "dist-tag target does not match the release SHA",
     );
+  });
+
+  it("publishes a moved predecessor only when the qualified predecessor is acknowledged", () => {
+    const receipt = evidence([{ change: "added", exportName: "newHelper" }]);
+    const reviewed = receipt.digest.slice(0, 8);
+    const validate = (acknowledgement: string, currentSelectorRef = "v2026.8.1-1") =>
+      validatePluginSdkApiReleaseEvidence({
+        acknowledgement,
+        currentSelectorRef,
+        currentSelectorSha: currentSelectorRef === "v2026.8.1" ? baseSha : "c".repeat(40),
+        evidence: receipt,
+        expectedHeadSha: headSha,
+        expectedWorkflowSha: workflowSha,
+        targetRef: "v2026.8.2",
+      });
+
+    expect(() => validate(reviewed)).toThrow(
+      "predecessor no longer matches the npm dist-tag (v2026.8.1 qualified, v2026.8.1-1 current); acknowledge <digest>@v2026.8.1",
+    );
+    expect(validate(`${reviewed}@v2026.8.1`)).toEqual({
+      acknowledgement: reviewed,
+      digest: receipt.digest,
+      hasChanges: true,
+      predecessorDrift: { qualifiedRef: "v2026.8.1", currentRef: "v2026.8.1-1" },
+      status: "checked",
+    });
+    expect(() => validate("@v2026.8.1")).toThrow(`require acknowledgement digest ${reviewed}`);
+    expect(() => validate(`${reviewed}@v2026.8.1-1`)).toThrow(
+      "names v2026.8.1-1, but the evidence compares against v2026.8.1",
+    );
+    expect(() => validate(`${reviewed}@`)).toThrow("must be <digest> or <digest>@<tag>");
+    expect(validate(`${reviewed}@v2026.8.1`, "v2026.8.1")).not.toHaveProperty("predecessorDrift");
   });
 
   it("requires the selected channel's predecessor and acknowledgement", () => {

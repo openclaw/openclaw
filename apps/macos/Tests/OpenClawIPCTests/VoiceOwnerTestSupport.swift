@@ -155,6 +155,7 @@ final class VoiceOwnerFixture {
     let bootstrap: VoiceOwnerGate<Void>
     let create: VoiceOwnerGate<Void>
     let shutdown: VoiceOwnerGate<Void>
+    let sendPreparation: VoiceOwnerGate<Void>
     private var streams: [AsyncStream<EventFrame>.Continuation] = []
     private var dismissals: [UUID: @MainActor @Sendable (VoiceWakeOverlayController.DismissalCompletion) -> Void] = [:]
     var operations: [Task<Void, Never>] = []
@@ -168,27 +169,24 @@ final class VoiceOwnerFixture {
         self.bootstrap = VoiceOwnerGate("bootstrap", value: (), log: log)
         self.create = VoiceOwnerGate("create", value: (), log: log)
         self.shutdown = VoiceOwnerGate("shutdown.buffered", value: (), log: log)
+        self.sendPreparation = VoiceOwnerGate("send.prepare", value: (), log: log)
     }
 
     func environment(appPermissionGranted: Bool = true) -> AppVoiceRuntime.Environment {
         let log = self.log
         return .init(
             appStatePermissions: .init(
-                supported: { true },
                 granted: { appPermissionGranted },
                 ensure: { [appPermission] _ in await appPermission.request() }),
             pttPermissions: .init(
-                supported: { true },
                 granted: { false },
                 ensure: { [pttPermission] _ in await pttPermission.request() }),
             wakePermissions: .init(
-                supported: { true },
                 granted: { log.record("wake.permission")
                     return false
                 },
                 ensure: { _ in false }),
             talkPermissions: .init(
-                supported: { true },
                 granted: { true },
                 ensure: { [talkPermission] _ in await talkPermission.request() }),
             talkAudioCapture: { _ in VoiceOwnerCapture(log: log) },
@@ -209,7 +207,11 @@ final class VoiceOwnerFixture {
                 return try await self.makeBootstrap()
             },
             publishTalk: { log.record("publish:\($0):\($1)") },
-            forward: { text, _ in log.record("forward:\(text)")
+            prepareForward: { [sendPreparation] text, trigger in
+                await sendPreparation.request()
+                return .init(message: text, voiceWakeTrigger: trigger)
+            },
+            forward: { invocation in log.record("forward:\(invocation.message)")
                 return .success(())
             },
             wakePresentation: .init(
@@ -308,6 +310,7 @@ final class VoiceOwnerFixture {
         await self.bootstrap.releaseAll()
         await self.create.releaseAll()
         await self.shutdown.releaseAll()
+        await self.sendPreparation.releaseAll()
         for task in self.operations {
             await task.value
         }

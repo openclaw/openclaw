@@ -15,11 +15,7 @@ type CrossOsCompanionPackage = {
   tarballPath: string;
 };
 
-type CrossOsRegistryPackage = {
-  name: string;
-  version: string;
-  tarballPath: string;
-};
+type CrossOsRegistryPackage = ReturnType<typeof resolveCrossOsPackageSet>["packages"][number];
 
 export function resolveCrossOsPackageSet(params: {
   artifactDir: string;

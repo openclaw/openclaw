@@ -25,6 +25,9 @@ export function emitCoreSemanticRunProgressDiagnosticEvent(
   event: CoreSemanticRunProgressEventInput,
   owner?: DiagnosticEmbeddedRunOwner,
 ): void {
+  if (owner?.watchdogAttempt && !owner.watchdogAttempt.progress("semantic", event.reason)) {
+    return;
+  }
   emitTrustedDiagnosticEvent(
     markCoreSemanticRunProgressDiagnosticEvent({ ...event, type: "run.progress" }, owner),
   );

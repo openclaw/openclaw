@@ -1,6 +1,7 @@
 import { vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 
 export function createRuntimeConfigStub(options?: {
@@ -16,6 +17,7 @@ export function createRuntimeConfigStub(options?: {
       lastError: null as string | null,
     },
     ensureLoaded: vi.fn(async () => undefined),
+    ensureDisplayLoaded: vi.fn(async () => undefined),
     refresh: vi.fn(async () => undefined),
     patch: options?.patch ?? vi.fn(async () => true),
     subscribe: () => () => undefined,
@@ -30,21 +32,35 @@ export function createContext(
     runtimeConfig?: ReturnType<typeof createRuntimeConfigStub>;
     /** Route query, e.g. "?skill=deploy" from a chat notice link. */
     search?: string;
+    /** A Gateway without the skill-workshop plugin advertises none of its methods. */
+    withoutPlugin?: boolean;
   },
 ): ApplicationContext {
   const client = { request } as unknown as GatewayBrowserClient;
-  const snapshot: ApplicationGatewaySnapshot = {
+  const snapshot: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
     client,
     phase: "connected",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: gatewayHelloForMethods(options?.methods ?? [], options?.scopes),
+    hello: gatewayHelloForMethods(
+      options?.withoutPlugin
+        ? (options.methods ?? [])
+        : ["skills.workshop.list", ...(options?.methods ?? [])],
+      options?.scopes,
+    ),
     assistantAgentId: "research",
     sessionKey: "global",
-    lastError: null,
-    lastErrorCode: null,
-  };
+  });
   const subscribe = () => () => undefined;
+  // Workshop pages live in the route's query (?skill= / ?draft=); keep it like the router does.
+  const location = { pathname: "/skills/workshop", search: options?.search ?? "" };
+  const routeListeners = new Set<() => void>();
+  const go = (route: string, next?: { search?: string }) => {
+    if (route === "skill-workshop") {
+      location.search = next?.search ?? "";
+      for (const listener of routeListeners) {
+        listener();
+      }
+    }
+  };
   const selectionListeners = new Set<() => void>();
   const selectionState = { selectedId: "research" };
   return {
@@ -68,18 +84,25 @@ export function createContext(
         return () => selectionListeners.delete(listener);
       },
     },
-    agentIdentity: {
-      get: () => ({ agentId: "research", name: "Research" }),
-      subscribe,
+    agentIdentity: { get: () => ({ agentId: "research", name: "Research" }), subscribe },
+    sessions: {
+      state: { result: null, loading: false },
+      presentation: {
+        result: null,
+        agentId: null,
+        resultCached: false,
+      } satisfies ApplicationContext["sessions"]["presentation"],
     },
-    sessions: { state: { result: null, loading: false } },
     runtimeConfig: options?.runtimeConfig ?? createRuntimeConfigStub(),
     chatSubmissions: { retain: vi.fn() },
-    navigate: vi.fn(),
+    navigate: vi.fn(go),
+    replace: vi.fn(go),
     router: {
-      getState: () => ({
-        location: { pathname: "/skills/workshop", search: options?.search ?? "" },
-      }),
+      subscribe: (listener: () => void) => {
+        routeListeners.add(listener);
+        return () => routeListeners.delete(listener);
+      },
+      getState: () => ({ location: { ...location } }),
     },
   } as unknown as ApplicationContext;
 }

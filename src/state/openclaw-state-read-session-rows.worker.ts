@@ -1,16 +1,14 @@
-import type { DatabaseSync } from "node:sqlite";
 import { readAcpSessionCommand } from "../acp/runtime/session-meta-read.worker.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
-import type {
-  OpenClawStateReadCommand,
-  OpenClawStateReadResult,
-} from "./openclaw-state-read.types.js";
+import { getRegistryWorktreeInDatabase } from "../agents/worktrees/registry-read.kernel.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
+import type { OpenClawStateReadCommand } from "./openclaw-state-read.types.js";
 import { findSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.kernel.js";
 
 export function readSessionRowsSharedFacts(
-  db: DatabaseSync,
+  db: EngineConnection,
   command: Extract<OpenClawStateReadCommand, { type: "sessionRows.sharedFacts" }>,
-): Extract<OpenClawStateReadResult, { type: "sessionRows.sharedFacts" }> {
+) {
   const readSharedFacts = () => {
     const acp = readAcpSessionCommand(db, {
       type: "acpSessions.metadata",
@@ -27,6 +25,9 @@ export function readSessionRowsSharedFacts(
           ? findSessionRepositoryWorkspaceInDatabase(db, entry.repositoryWorkspace)
           : undefined;
         return {
+          ...(entry.worktreeId
+            ? { worktree: getRegistryWorktreeInDatabase(db, entry.worktreeId) ?? null }
+            : {}),
           ...(entry.acp ? { acp: acp.rows[acpIndex++] ?? null } : {}),
           ...(entry.repositoryWorkspace
             ? {
@@ -40,7 +41,7 @@ export function readSessionRowsSharedFacts(
       }),
     };
   };
-  return command.entries.some((entry) => entry.repositoryWorkspace)
-    ? runSqliteDeferredTransactionSync(db, readSharedFacts)
+  return command.entries.some((entry) => entry.repositoryWorkspace || entry.worktreeId)
+    ? runSqliteReadSnapshotSync(db, readSharedFacts)
     : readSharedFacts();
 }

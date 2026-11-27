@@ -6,6 +6,7 @@ import {
   resolveGpt5SystemPromptContribution,
 } from "openclaw/plugin-sdk/provider-model-metadata";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
+import { buildOpenAIDecisionProvider } from "./decision-provider.js";
 import { buildOpenAIImageGenerationProvider } from "./image-generation-provider.js";
 import { openaiMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { openAiMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
@@ -45,6 +46,7 @@ export default definePluginEntry({
       },
     });
     api.registerEmbeddingProvider(openAiMemoryEmbeddingProviderAdapter);
+    api.registerDecisionProvider(buildOpenAIDecisionProvider());
     api.registerImageGenerationProvider(buildOpenAIImageGenerationProvider(api.runtime.modelAuth));
     api.registerRealtimeTranscriptionProvider(buildOpenAIRealtimeTranscriptionProvider);
     api.registerRealtimeVoiceProvider((context) => {

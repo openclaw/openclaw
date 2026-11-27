@@ -1,18 +1,24 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { runWithOwnedSessionTranscriptWrite } from "../../../config/sessions/transcript-write-context.js";
-import { createNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
-import { notifyToolActivity } from "../../../shared/tool-activity-heartbeat.js";
-import { raceWithAbortSignal } from "../../agent-tools.abort.js";
-import { recordStructuredReplayTrustForToolCall } from "../../agent-tools.before-tool-call.js";
-import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
 import {
   copyInternalToolResultState,
   getInternalToolExecutionPreparer,
-} from "../../runtime/internal-hooks.js";
+} from "../../../../packages/agent-core/src/internal-hooks.js";
+import { shellCallResultKey } from "../../../config/sessions/transcript-shell-receipt.js";
+import { runWithOwnedSessionTranscriptWrite } from "../../../config/sessions/transcript-write-context.js";
+import {
+  createNestedToolActivity,
+  isNestedToolActivityResultOmitted,
+} from "../../../sessions/nested-tool-activity.js";
+import { notifyToolActivity } from "../../../shared/tool-activity-heartbeat.js";
+import { raceWithAbortSignal } from "../../agent-tools.abort.js";
+import { recordStructuredReplayTrustForToolCall } from "../../agent-tools.before-tool-call.js";
+import { isCodeModeControlTool } from "../../code-mode-control-tools.js";
+import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
 import { retainToolSearchImplementation } from "../../tool-search-scheduling.js";
 import type { ToolSearchCatalogToolExecutor } from "../../tool-search.js";
+import { isToolUsageWrapper } from "../../tool-usage.js";
 import type { AnyAgentTool } from "../../tools/common.js";
 import { recordEmbeddedToolReceipt } from "../tool-send-receipts.js";
 import type { AttemptNestedToolActivityState } from "./attempt-nested-tool-activity.js";
@@ -60,6 +66,12 @@ export function createSubscribedToolSearchExecutor(params: {
     return await raceWithAbortSignal(
       subscription.runToolLifecycle({
         toolName: toolParams.toolName,
+        toolUsageId:
+          (toolParams.source === "openclaw" || toolParams.source === "mcp") &&
+          !isCodeModeControlTool(toolParams.tool) &&
+          !isToolUsageWrapper(toolParams.toolName)
+            ? toolParams.toolId
+            : undefined,
         toolCallId: toolParams.toolCallId,
         parentToolCallId: toolParams.parentToolCallId,
         args: lifecycleArgs,
@@ -68,30 +80,34 @@ export function createSubscribedToolSearchExecutor(params: {
           "hideFromChannelProgress" in toolParams.tool &&
           toolParams.tool.hideFromChannelProgress === true,
         onTerminal: async (terminal) => {
+          const nested = createNestedToolActivity({
+            runId: attempt.runId,
+            scopeId: activityScope,
+            afterEntryId,
+            startOrder,
+            parentToolCallId: toolParams.parentToolCallId,
+            toolCallId: toolParams.toolCallId,
+            toolName: toolParams.toolName,
+            input: terminal.executedArguments,
+            result: terminal.readSanitizedResult(),
+            isError: terminal.isError,
+            startedAt,
+            timestamp: Date.now(),
+          });
+          const receipt = !isNestedToolActivityResultOmitted(nested)
+            ? shellCallResultKey(terminal.result, attempt.runId, toolParams.toolCallId)
+            : undefined;
           const message = {
-            ...createNestedToolActivity({
-              runId: attempt.runId,
-              scopeId: activityScope,
-              afterEntryId,
-              startOrder,
-              parentToolCallId: toolParams.parentToolCallId,
-              toolCallId: toolParams.toolCallId,
-              toolName: toolParams.toolName,
-              input: terminal.executedArguments,
-              result: terminal.readSanitizedResult(),
-              isError: terminal.isError,
-              startedAt,
-              timestamp: Date.now(),
-            }),
-            idempotencyKey: `${activityScope}:${toolParams.toolCallId}`,
+            ...nested,
+            idempotencyKey: receipt ?? `${activityScope}:${toolParams.toolCallId}`,
           };
-          await runWithOwnedSessionTranscriptWrite(
+          const accepted = await runWithOwnedSessionTranscriptWrite(
             { sessionTarget: manager.getSessionTarget(), sessionKey: attempt.sessionKey },
             () =>
               withSessionManagerAppend(manager, async () => {
                 // Revalidate the exact attempt after awaited acceptance and writer admission.
                 if (!params.isCurrent()) {
-                  return;
+                  return false;
                 }
                 if (isRecord(terminal.result)) {
                   copyInternalToolResultState(terminal.result, message);
@@ -99,9 +115,7 @@ export function createSubscribedToolSearchExecutor(params: {
                 const target = manager.getSessionTarget();
                 const sessionId = manager.getSessionId();
                 const entryId = await manager.appendMessageAsync(message);
-                if (!params.isCurrent()) {
-                  return;
-                }
+                // Committed activity still belongs to settlement after presentation loses authority.
                 const activity = params.nestedToolActivityState;
                 if (!terminal.isError) {
                   activity.successfulToolNames.add(toolParams.toolName);
@@ -115,9 +129,14 @@ export function createSubscribedToolSearchExecutor(params: {
                   };
                   activity.accepted.lastEntryId = entryId;
                 }
+                return params.isCurrent();
               }),
           );
+          if (!accepted) {
+            return false;
+          }
           notifyToolActivity(attempt.runId);
+          return undefined;
         },
         // Acceptance belongs inside execution: observers must never see a rejected success.
         execute: async (onImplementationStart) =>

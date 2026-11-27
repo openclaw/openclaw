@@ -15,6 +15,7 @@ import {
   finiteSecondsToTimerSafeMilliseconds,
 } from "openclaw/plugin-sdk/number-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import type { PluginHookToolContext } from "openclaw/plugin-sdk/types";
 import type { CodexAppServerClient } from "./client.js";
 import { fingerprintCodexPolicy } from "./config-policy-json.js";
@@ -24,7 +25,13 @@ import { createCodexNativeHookRemoteCredential } from "./native-hook-relay-remot
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import type { CodexNativeModelInputTools } from "./native-model-input-tools.js";
 import type { CodexNativeProcessAuthority } from "./native-process-authority.js";
+import { NativeModelInputReceiverLineageError } from "./native-subagent-model-input.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
+import {
+  CODEX_NATIVE_SUBAGENT_SUBMISSION_HOOK_TOOL,
+  readCodexNativeSubagentSubmissionAcknowledgement,
+  type CodexNativeSubagentSubmissionAcknowledgement,
+} from "./native-subagent-submission.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
 import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
 
@@ -42,8 +49,6 @@ const CODEX_NATIVE_HOOK_RELAY_MIN_TTL_MS = 30 * 60_000;
 export const CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS = 5 * 60_000;
 const CODEX_NATIVE_HOOK_RELAY_COMMAND_MIN_PARENT_MARGIN_MS = 250;
 const CODEX_NATIVE_HOOK_RELAY_COMMAND_MAX_PARENT_MARGIN_MS = 1_000;
-// The relay starts a niced Node subprocess, so busy hosts can exceed the former
-// five-second relay timeout before policy and native admission work completes.
 const CODEX_NATIVE_HOOK_RELAY_DEFAULT_TIMEOUT_SEC = 10;
 const CODEX_NATIVE_HOOK_RELAY_UNREGISTER_GRACE_MS = 10_000;
 const CODEX_NATIVE_HOOK_RELAY_UNREGISTER_EXTRA_GRACE_MS = 5_000;
@@ -190,7 +195,6 @@ export function createCodexNativeHookRelay(params: {
   attemptTimeoutMs: number;
   startupTimeoutMs: number;
   turnStartTimeoutMs: number;
-  loopDetectionPreToolUseRelay: boolean;
   signal: AbortSignal;
   hostCapabilities: EmbeddedRunAttemptParams["hostCapabilities"];
   nativeProcessAuthority?: {
@@ -211,11 +215,17 @@ export function createCodexNativeHookRelay(params: {
   };
   assertCurrent?: () => void;
   assertCurrentAsync?: () => Promise<void>;
+  retainExecutionPolicy?: () => () => void;
   onPreToolUseFailure: (failure: CodexNativePreToolUseFailure) => void | Promise<void>;
+  onNativeSubagentSubmission?: (
+    receipt: CodexNativeSubagentSubmissionAcknowledgement,
+    assertCurrent: () => void,
+  ) => Promise<void>;
 }): CodexNativeHookRelay | undefined {
   if (params.options?.enabled === false) {
     return undefined;
   }
+  const onNativeSubagentSubmission = params.onNativeSubagentSubmission;
   const modelInputTools: CodexNativeModelInputTools = params.nativeModelAdmission?.tools ?? [
     "multi_agent_v1send_input",
   ];
@@ -235,11 +245,13 @@ export function createCodexNativeHookRelay(params: {
     pendingDirectChildAdmissions.clear();
   };
   let releaseProcessAdmission: (() => void) | undefined;
+  let releaseExecutionPolicy: (() => void) | undefined;
   let processAdmissionDisposed = false;
   let remoteCredential: ReturnType<typeof createCodexNativeHookRemoteCredential> | undefined;
   let remoteCleanup: Promise<void> | undefined;
   const relay = registerNativeHookRelayForBundledRuntime({
     provider: "codex",
+    requireForegroundTurn: true,
     relayId: buildCodexNativeHookRelayId({
       agentId: params.agentId,
       sessionId: params.sessionId,
@@ -260,7 +272,6 @@ export function createCodexNativeHookRelay(params: {
     ...(params.requester ? { requester: params.requester } : {}),
     ...(params.approvalContext ? { approvalContext: params.approvalContext } : {}),
     allowedEvents: params.events,
-    preToolUseLoopDetection: params.loopDetectionPreToolUseRelay,
     ttlMs: resolveCodexNativeHookRelayTtlMs({
       explicitTtlMs: params.options?.ttlMs,
       attemptTimeoutMs: params.attemptTimeoutMs,
@@ -269,6 +280,16 @@ export function createCodexNativeHookRelay(params: {
     }),
     signal: params.signal,
     runBeforeToolCall: params.hostCapabilities.runBeforeToolCall,
+    postToolUse: onNativeSubagentSubmission
+      ? {
+          toolNames: [CODEX_NATIVE_SUBAGENT_SUBMISSION_HOOK_TOOL],
+          observe: (invocation, assertCurrent) =>
+            onNativeSubagentSubmission(
+              readCodexNativeSubagentSubmissionAcknowledgement(invocation.rawPayload),
+              assertCurrent,
+            ),
+        }
+      : undefined,
     executionAdmission:
       params.nativeProcessAuthority ||
       params.nativeModelAdmission ||
@@ -294,7 +315,10 @@ export function createCodexNativeHookRelay(params: {
                       try {
                         params.hostCapabilities.assertNativeSubagentSpawnAllowed?.();
                       } catch (error) {
-                        return `${toErrorObject(error, "Native spawn participant selection failed").message} Use sessions_spawn with the requester's requester_profile.id as user.`;
+                        return toErrorObject(
+                          error,
+                          "Native subagent spawn was denied. Start a new turn to retry.",
+                        ).message;
                       }
                     }
                     return undefined;
@@ -312,21 +336,28 @@ export function createCodexNativeHookRelay(params: {
                   );
                 }
                 assertAdmissionCurrent();
-                const request = {
-                  client: admission.client(),
-                  threadId,
-                  turnId: invocation.turnId,
-                  itemId: invocation.toolUseId,
-                };
-                await codexNativeSubagentMonitorRuntime.prepareModelInput({
-                  ...request,
-                  target: targetThreadId,
-                  readQualification: admission.readQualification,
-                  signal: preparation.signal,
-                  assertCurrent: preparation.assertCurrent,
-                });
+                const denyInput = await codexNativeSubagentMonitorRuntime
+                  .prepareModelInput({
+                    client: admission.client(),
+                    threadId,
+                    turnId: invocation.turnId,
+                    itemId: invocation.toolUseId,
+                    target: targetThreadId,
+                    readQualification: admission.readQualification,
+                    signal: preparation.signal,
+                    assertCurrent: preparation.assertCurrent,
+                  })
+                  .catch((error: unknown) => {
+                    if (!(error instanceof NativeModelInputReceiverLineageError)) {
+                      throw error;
+                    }
+                    return () => {
+                      assertAdmissionCurrent();
+                      return "Cannot verify this worker belongs to the current parent. Check the original task before assigning new work.";
+                    };
+                  });
                 assertAdmissionCurrent();
-                return undefined;
+                return denyInput;
               }
               if (
                 !params.nativeProcessAuthority ||
@@ -388,22 +419,11 @@ export function createCodexNativeHookRelay(params: {
         }
         const admission = pending;
         admission.waiters++;
-        let onAbort: (() => void) | undefined;
-        const wait = new Promise<symbol>((resolve, reject) => {
-          void admission.promise.then(resolve, reject);
-          onAbort = () =>
-            reject(toErrorObject(signal?.reason, "native hook relay admission aborted"));
-          signal?.addEventListener("abort", onAbort, { once: true });
-          if (signal?.aborted) {
-            onAbort();
-          }
-        });
-        return wait
+        return racePromiseWithAbortSignal(admission.promise, signal, (aborted) =>
+          toErrorObject(aborted.reason, "native hook relay admission aborted"),
+        )
           .then((claim) => assertClaim(childThreadId, claim))
           .finally(() => {
-            if (onAbort) {
-              signal?.removeEventListener("abort", onAbort);
-            }
             // Duplicate callbacks share admission, but each owns its wait. A
             // disconnected last waiter releases capacity without revoking a child.
             admission.waiters--;
@@ -420,6 +440,7 @@ export function createCodexNativeHookRelay(params: {
         rejectPendingAdmissions("native hook relay registration closed");
         processAdmissionDisposed = true;
         releaseProcessAdmission?.();
+        releaseExecutionPolicy?.();
         if (remoteCredential) {
           remoteCleanup = remoteCredential
             .dispose()
@@ -434,9 +455,6 @@ export function createCodexNativeHookRelay(params: {
     },
     onPreToolUseFailure: params.onPreToolUseFailure,
     command: {
-      // Hook relay subprocesses are observational for most tool events; keep
-      // them lower priority so they do not compete with the active reply turn.
-      nice: 10,
       timeoutMs: params.hostCapabilities.workspaceReadiness
         ? Math.max(params.options?.gatewayTimeoutMs ?? 0, params.attemptTimeoutMs)
         : params.options?.gatewayTimeoutMs,
@@ -444,6 +462,7 @@ export function createCodexNativeHookRelay(params: {
   });
   if (!processAdmissionDisposed) {
     try {
+      releaseExecutionPolicy = params.retainExecutionPolicy?.();
       releaseProcessAdmission = params.nativeProcessAuthority?.owner.retainAdmission();
     } catch (error) {
       relay.unregister();
@@ -669,7 +688,7 @@ export function buildCodexNativeHookRelayDisabledConfig(): JsonObject {
 }
 
 function normalizeHookTimeoutSec(value: number | undefined): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
+  return value !== undefined && Number.isFinite(value) && value > 0
     ? Math.ceil(value)
     : CODEX_NATIVE_HOOK_RELAY_DEFAULT_TIMEOUT_SEC;
 }

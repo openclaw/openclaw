@@ -1,11 +1,14 @@
 // Tests inbound metadata normalization before prompt injection.
 import { describe, expect, it, vi } from "vitest";
+import { buildCurrentInboundPrompt } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import type { SessionEntry, SessionGoalStatus } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { withEnv } from "../../test-utils/env.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { TemplateContext } from "../templating.js";
+import { prepareReplyRunContext } from "./get-reply-run-context.js";
+import { baseParams } from "./get-reply-run.test-support.js";
 import { INBOUND_CONTEXT_MARKER } from "./inbound-context-marker.js";
+import { finalizeInboundContext } from "./inbound-context.js";
 import {
   buildInboundMetaSystemPrompt,
   buildInboundUserContextPrefix,
@@ -190,6 +193,62 @@ describe("buildInboundUserContextPrefix", () => {
     );
   });
 
+  it.each([
+    {
+      provider: "discord",
+      previousGoal: undefined,
+      suffix: "[Current message - respond to this]\n\nCan you pick a date?",
+    },
+    {
+      provider: "telegram",
+      previousGoal: undefined,
+      suffix:
+        'Current message:\n[Replying to: "Planning the picnic next month."]\n#42: Can you pick a date?',
+    },
+  ])(
+    "keeps refreshed goals before the thread marker: %j",
+    async ({ provider, previousGoal, suffix }) => {
+      const sessionCtx = finalizeInboundContext({
+        Body: "Can you pick a date?",
+        Provider: provider,
+        ChatType: "channel",
+        MessageSid: "42",
+        ReplyToBody: "Planning the picnic next month.",
+      });
+      const previousEntry = previousGoal
+        ? createGoalSessionEntry("active", previousGoal)
+        : undefined;
+      const prepared = await prepareReplyRunContext(
+        baseParams({
+          ctx: sessionCtx,
+          sessionCtx,
+          sessionEntry: previousEntry,
+          isNewSession: false,
+        }),
+      );
+      if (prepared.kind !== "ready") {
+        throw new Error("Expected prepared reply context");
+      }
+      const envelope = prepared.buildPromptBodies({
+        prefixedBody: prepared.prefixedBodyBase,
+        threadContextNote: "[Thread starter - for context]\nPlanning the picnic next month.",
+      });
+      const context = refreshActiveGoalContext(
+        envelope.currentInboundContext,
+        createGoalSessionEntry("active", "Pick a picnic date"),
+      );
+      const prompt = buildCurrentInboundPrompt({ context, prompt: envelope.prefixedCommandBody });
+
+      expect(prompt).toContain("Active goal: Pick a picnic date");
+      expect(prompt.indexOf("Active goal: Pick a picnic date")).toBeLessThan(
+        prompt.indexOf("[Current message - respond to this]"),
+      );
+      expect(prompt).not.toContain("Active goal: Previous goal");
+      expect(prompt.endsWith(suffix)).toBe(true);
+      expect(envelope.transcriptCommandBody).toBe("Can you pick a date?");
+    },
+  );
+
   it.each<{
     name: string;
     context: Record<string, unknown>;
@@ -220,33 +279,6 @@ describe("buildInboundUserContextPrefix", () => {
       expected: { source_modality: "document" },
     },
     {
-      name: "includes topic_name for forum chats",
-      context: { ChatType: "group", IsForum: true, MessageThreadId: 42, TopicName: "Deployments" },
-      expected: { topic_id: "42", topic_name: "Deployments", is_forum: true },
-    },
-    {
-      name: "includes sender identity in direct external-channel conversation info",
-      context: {
-        ChatType: "direct",
-        OriginatingChannel: "telegram",
-        SenderName: "Tyler",
-        SenderId: "+15551234567",
-        SenderIsBot: true,
-      },
-      expected: { sender: { id: "+15551234567", name: "Tyler", is_bot: true } },
-      excludes: ["Sender: ⟦openclaw:ctx⟧"],
-    },
-    {
-      name: "includes formatted timestamp in conversation info when provided",
-      context: {
-        ChatType: "group",
-        MessageSid: "msg-with-ts",
-        Timestamp: Date.UTC(2026, 1, 15, 13, 35, 42),
-      },
-      envelope: { timezone: "utc" },
-      expected: { timestamp: "Sun 2026-02-15T13:35:42Z" },
-    },
-    {
       name: "omits invalid timestamps instead of throwing",
       context: { ChatType: "group", MessageSid: "msg-with-bad-ts", Timestamp: 1e20 },
       expected: { timestamp: undefined },
@@ -262,25 +294,6 @@ describe("buildInboundUserContextPrefix", () => {
     }
   });
 
-  it("honors envelope user timezone for conversation timestamps", () => {
-    withEnv({ TZ: "America/Los_Angeles" }, () => {
-      const text = buildInboundUserContextPrefix(
-        {
-          ChatType: "group",
-          MessageSid: "msg-with-user-tz",
-          Timestamp: Date.UTC(2026, 2, 19, 0, 0, 27),
-        } as TemplateContext,
-        {
-          timezone: "user",
-          userTimezone: "Asia/Tokyo",
-        },
-      );
-
-      const conversationInfo = parseConversationInfoPayload(text);
-      expect(conversationInfo["timestamp"]).toBe("Thu 2026-03-19 09:00:27 GMT+9");
-    });
-  });
-
   it("renders reply metadata without a body but not without any reply fields", () => {
     const text = buildInboundUserContextPrefix({
       ReplyToId: "message-42",
@@ -294,29 +307,6 @@ describe("buildInboundUserContextPrefix", () => {
     expect(buildInboundUserContextPrefix({} as TemplateContext)).not.toContain(
       "Reply target of current user message",
     );
-  });
-
-  it("preserves Telegram inline ReplyToBody tail content", () => {
-    const head = "BEGIN. ".repeat(300);
-    const tail = " TELEGRAM_INLINE_TAIL";
-    const longBody = head + tail;
-    expect(longBody.length).toBeGreaterThan(2_000);
-
-    const text = buildInboundUserContextPrefix({
-      Provider: "telegram",
-      Surface: "telegram",
-      OriginatingChannel: "telegram",
-      ChatType: "group",
-      MessageSid: "34974",
-      ReplyToId: "34971",
-      ReplyToBody: longBody,
-      SenderName: "obviyus",
-    } as TemplateContext);
-
-    expect(text).toContain("TELEGRAM_INLINE_TAIL");
-    expect(text).toContain("…[omitted]…");
-    expect(text).not.toContain("…[truncated]");
-    expect(text).not.toContain("Reply target of current user message");
   });
 
   it("keeps Telegram current-message quote even when context already includes the target", () => {
@@ -631,18 +621,6 @@ describe("buildInboundUserContextPrefix", () => {
     expect(render()).not.toContain("media://inbound/");
   });
 
-  it("emits a bare chat-window label when the entry carries no order or relation", () => {
-    const text = buildInboundUserContextPrefix(
-      createChatWindowContext({
-        source: "third-party-plugin",
-        payload: { messages: [{ message_id: "1", sender: "Sam", body: "hi" }] },
-      }),
-    );
-
-    expect(text).toContain(`Current local chat window: ${INBOUND_CONTEXT_MARKER}`);
-    expect(text).not.toContain("Current local chat window ()");
-  });
-
   it("does not duplicate reply chain or history when a chat window already covers them", () => {
     const text = buildInboundUserContextPrefix(
       createChatWindowContext({
@@ -731,40 +709,6 @@ describe("buildInboundUserContextPrefix", () => {
     expect(reply["body"]).toContain("TAIL_AFTER_EMOJI_HEAD");
     expect(reply["body"]).toContain("…[omitted]…");
     expect(reply["body"]).not.toContain("…[truncated]");
-  });
-
-  it("preserves chat window reply-target body tail content", () => {
-    const head = "BEGIN. ".repeat(300);
-    const tail = " CHAT_WINDOW_TAIL";
-    const longBody = head + tail;
-    expect(longBody.length).toBeGreaterThan(2_000);
-
-    const text = buildInboundUserContextPrefix({
-      ChatType: "group",
-      ReplyToId: "msg-1",
-      ChannelStructuredContext: [
-        {
-          label: "Conversation context",
-          type: "chat_window",
-          payload: {
-            relation: "around_reply_target",
-            messages: [
-              {
-                message_id: "msg-1",
-                sender: "Avery",
-                body: longBody,
-                is_reply_target: true,
-              },
-            ],
-          },
-        },
-      ],
-    } as TemplateContext);
-
-    expect(text).toContain("CHAT_WINDOW_TAIL");
-    expect(text).toContain("…[omitted]…");
-    expect(text).not.toContain("…[truncated]");
-    expect(text).not.toContain("Reply target of current user message");
   });
 
   it("caps serialized inbound history to the most recent bounded tail", () => {

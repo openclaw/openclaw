@@ -2,10 +2,40 @@ import { describe, expect, it } from "vitest";
 import {
   CLAWHUB_RECOMMENDATIONS_CHANNEL_DATA_KEY,
   type ClawHubRecommendation,
+  readClawHubRecommendation,
   readClawHubRecommendations,
 } from "./clawhub-recommendations.js";
 
 describe("readClawHubRecommendations", () => {
+  it("keeps Unicode limits and normalized URLs when reading a card", () => {
+    const card = {
+      type: "clawhub",
+      id: "@openclaw/calendar",
+      name: "🦞".repeat(120),
+      installed: false,
+      official: true,
+      kind: "skill",
+      registry: " https://claw\nhub.ai ",
+      skillRef: "@openclaw/calendar",
+      iconUrl: " https://example.com/icon.svg ",
+    };
+    expect(readClawHubRecommendation(card)).toEqual({
+      ...card,
+      registry: "https://clawhub.ai",
+      iconUrl: "https://example.com/icon.svg",
+    });
+    for (const invalid of [
+      { ...card, name: "🦞".repeat(121) },
+      { ...card, description: "🦞".repeat(241) },
+      { ...card, iconUrl: "/relative.svg" },
+      { ...card, registry: "not a URL" },
+      { ...card, pluginId: "unexpected" },
+      { ...card, skillRef: "@openclaw/other" },
+    ]) {
+      expect(readClawHubRecommendation(invalid)).toBeUndefined();
+    }
+  });
+
   it("preserves accepted and rejected cards and their serialized field order", () => {
     const plugin = {
       type: "clawhub",
@@ -31,7 +61,10 @@ describe("readClawHubRecommendations", () => {
       { value: [], expected: [] },
       { value: [plugin, skill, plugin], expected: [plugin, skill, plugin] },
       { value: [plugin, skill, plugin, skill], expected: [] },
-      { value: [{ ...plugin, official: false }], expected: [] },
+      // Plugin cards carry the registry's official flag; skill cards stay official-only.
+      { value: [{ ...plugin, official: false }], expected: [{ ...plugin, official: false }] },
+      { value: [{ ...plugin, official: "yes" }], expected: [] },
+      { value: [{ ...skill, official: false }], expected: [] },
       { value: [{ ...plugin, extra: true }], expected: [] },
       { value: [{ ...skill, skillRef: "@another/calendar" }], expected: [] },
     ];

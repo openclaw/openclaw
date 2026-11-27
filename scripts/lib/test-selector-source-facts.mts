@@ -5,17 +5,17 @@ import nodeModule from "node:module";
 import { availableParallelism } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { isMainThread, parentPort, Worker, workerData } from "node:worker_threads";
+import { Worker } from "node:worker_threads";
 import { resolveNodeRuntimeExecutable } from "../../src/infra/node-runtime-executable.ts";
+import { resolveRuntimeToolingEntrypointUrl } from "../../src/infra/runtime-process-manifest.ts";
 import { createSourceTermMatcher } from "./test-source-term-matcher.mts";
 
 type SourceFile = { file: string; parseImports: boolean };
-type SourceScan = { files: SourceFile[]; terms: string[]; matchingOnly: boolean };
-const SCAN_WORKER_MARKER = "openclawTestSelectorSourceScan";
+export type SourceScan = { files: SourceFile[]; terms: string[]; matchingOnly: boolean };
 const MAX_SCAN_WORKERS = 8;
 // Worker startup costs tens of milliseconds; small scans stay on one thread.
 const MIN_FILES_PER_SCAN_WORKER = 256;
-type SourceToken = { value: string; literal?: boolean; statementEnd?: boolean };
+type SourceToken = { value: string; literal?: boolean; statementEnd?: boolean; end?: number };
 const CONSERVATIVE_IMPORT_PATTERN =
   /\b(?:import|export)\s+(?:type\s+)?(?:[^'"`]*?\s+from\s+)?["'`]([^"'`]+)["'`]|\b(?:import(?:\.meta\.resolve)?|require(?:\.resolve)?)\s*\(\s*["'`]([^"'`]+)["'`]\s*\)|\bnew\s+URL\s*\(\s*["'`]([^"'`]+)["'`]\s*,\s*import\.meta\.url\s*,?\s*\)/gu;
 
@@ -114,7 +114,7 @@ function sourceTokens(source: string): {
         continue;
       }
       if (char === '"' || char === "'") {
-        tokens.push({ value: quoted(char), literal: true });
+        tokens.push({ value: quoted(char), literal: true, end: offset });
         continue;
       }
       if (char === "`") {
@@ -836,6 +836,48 @@ function mockSpecifiers(tokens: SourceToken[]): string[] {
   return [...specifiers];
 }
 
+function leadingTypeOnlyImports(source: string, tokens: SourceToken[]): string[] {
+  let end = 0;
+  for (let index = 0; !tokens[index]?.literal && tokens[index]?.value === "import";) {
+    let cursor = index + 1;
+    if ([".", "("].includes(tokens[cursor]?.value ?? "")) {
+      break;
+    }
+    if (!tokens[cursor]?.literal) {
+      while (
+        tokens[cursor] &&
+        tokens[cursor]?.value !== ";" &&
+        !(tokens[cursor]?.value === "from" && tokens[cursor + 1]?.literal)
+      ) {
+        cursor++;
+      }
+      cursor++;
+    }
+    const specifier = tokens[cursor];
+    if (!specifier?.literal || specifier.end === undefined) {
+      break;
+    }
+    end = specifier.end;
+    index = cursor + 1 + Number(tokens[cursor + 1]?.value === ";");
+  }
+  if (
+    !end ||
+    tokens.some((token) => !token.literal && token.value === "\\") ||
+    /\b(?:import|require|from|URL|sourceWorkerName)\b/u.test(source.slice(end))
+  ) {
+    return [];
+  }
+  try {
+    const prefix = source.slice(0, end);
+    const runtime = new Set(
+      importFacts(nodeModule.stripTypeScriptTypes(prefix, { mode: "strip" }), false).imports,
+    );
+    return importFacts(prefix, false).imports.filter((specifier) => !runtime.has(specifier));
+  } catch {
+    return [];
+  }
+}
+
 function importFacts(
   source: string,
   classifyTypes = true,
@@ -954,7 +996,10 @@ function importFacts(
         imports.add(specifier);
       }
     }
-    return { imports: [...imports], typeOnlyImports: [], mocks, workerExports: [] };
+    // JSX cannot invalidate erased header imports; later runtime uses still retain the edge.
+    const typeOnlyImports =
+      classifyTypes && possibleJsx ? leadingTypeOnlyImports(source, tokens) : [];
+    return { imports: [...imports], typeOnlyImports, mocks, workerExports: [] };
   }
   if (!classifyTypes || (!needsTypeStrip && runtimeSource === undefined)) {
     return {
@@ -1171,13 +1216,13 @@ export function readTestSelectorSourceFacts(
       stdio: ["pipe", "pipe", "pipe"],
     });
   let result = scan();
-  // Recover only the observed V8 JIT-page assertion, without scan workers.
+  // Recover the observed native parser crashes once, without scan workers.
   // Node 24 has a related concurrent WASM teardown defect (nodejs/node#66366).
   // Parser errors, output overflow, and cancellation must remain fatal.
   if (
     !result.error &&
-    result.signal === "SIGTRAP" &&
-    result.stderr.includes("Check failed: jit_page.has_value()")
+    (result.signal === "SIGILL" ||
+      (result.signal === "SIGTRAP" && result.stderr.includes("Check failed: jit_page.has_value()")))
   ) {
     result = scan(true);
   }
@@ -1256,8 +1301,8 @@ async function scanSourceFactsInWorkers(scan: SourceScan, count: number) {
     stripes.map(
       (files) =>
         new Promise<unknown>((resolve, reject) => {
-          const worker = new Worker(new URL(import.meta.url), {
-            workerData: { [SCAN_WORKER_MARKER]: true, scan: { ...scan, files } },
+          const worker = new Worker(resolveRuntimeToolingEntrypointUrl("testSelectorSourceScan"), {
+            workerData: { scan: { ...scan, files } },
           });
           worker.once("message", resolve);
           worker.once("error", reject);
@@ -1284,7 +1329,7 @@ async function scanSourceFactsInWorkers(scan: SourceScan, count: number) {
   return scan.files.map((_file, index) => rows[index % count]![Math.floor(index / count)]);
 }
 
-async function scanSourceFacts({ files, terms, matchingOnly }: SourceScan) {
+export async function scanSourceFacts({ files, terms, matchingOnly }: SourceScan) {
   const matchTerms = createSourceTermMatcher(terms);
   const readFacts = async ({ file, parseImports }: SourceFile) => {
     let source: string;
@@ -1341,11 +1386,7 @@ async function scanSourceFacts({ files, terms, matchingOnly }: SourceScan) {
   return facts;
 }
 
-// Importers may themselves run in worker threads; only the marked scan worker answers.
-if (!isMainThread && workerData?.[SCAN_WORKER_MARKER] === true) {
-  const { scan }: { scan: SourceScan } = workerData;
-  parentPort?.postMessage(await scanSourceFacts(scan), []);
-} else if (isMainThread && import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   try {
     await readSourceFacts();
   } catch (error) {

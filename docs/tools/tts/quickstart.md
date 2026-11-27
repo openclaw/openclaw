@@ -83,5 +83,7 @@ The bundled **Microsoft** provider uses Microsoft Edge's online neural TTS
 service via `node-edge-tts`. It is a public web service without a published
 SLA or quota — treat it as best-effort. The legacy provider id `edge` is
 normalized to `microsoft` and `openclaw doctor --fix` rewrites persisted
-config; new configs should always use `microsoft`.
+config; new configs should always use `microsoft`. Speech synthesis connects to
+`api.msedgeservices.com`, and voice discovery uses `speech.platform.bing.com`;
+deployments with an outbound hostname allowlist must permit both.
 </Warning>

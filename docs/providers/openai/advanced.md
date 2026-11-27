@@ -10,23 +10,16 @@ sidebarTitle: "Advanced configuration"
 
 ## GPT-5 prompt contribution
 
-OpenClaw adds a shared GPT-5 prompt contribution to matching GPT-5 and GPT-6
-OpenClaw-assembled prompts (`gpt-5*` and `gpt-6*`, such as the default
-`gpt-6-astra`). The OpenAI plugin setting below controls the friendly style on
-OpenAI-family routes. Older GPT-4.x, `gpt-oss`, o-series, and `codex-mini` model
-ids do not match.
+OpenClaw adds the legacy behavior contract and optional friendly style only to
+GPT-5 prompts. GPT-6 models, including Astra and Sol, receive the shared
+OpenClaw instructions without either addition. The same rule applies to bare
+and provider-qualified model IDs. The OpenAI plugin setting below controls
+the friendly style on OpenAI-family GPT-5 routes.
 
-The native Codex app-server harness does not receive the persona/tool-
-discipline behavior contract or the friendly interaction-style overlay through
-developer instructions; native Codex keeps Codex-owned base, model, and
-project-doc behavior, and OpenClaw disables Codex's built-in personality for
-native threads so agent workspace personality files stay authoritative.
-OpenClaw contributes only runtime context to native Codex threads: channel
-delivery, OpenClaw dynamic tools, ACP delegation, workspace context, and
-OpenClaw skills. The heartbeat-guidance text from this same contribution is the
-one exception: native Codex heartbeat turns do get it, injected as dedicated
-collaboration instructions rather than through the shared prompt-contribution
-hook.
+Ordinary native Codex threads also use OpenClaw's assembled base instructions.
+If you supply your own Codex base instructions, OpenClaw keeps them and sends
+its policy in developer instructions instead. Neither placement changes which
+models receive the GPT-5 contribution.
 
 The GPT-5 contribution adds a tagged behavior contract for persona
 persistence, execution safety, tool discipline, output shape, completion
@@ -101,11 +94,17 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     request and response still match the current history, OpenClaw sends only
     the new input and references the prior response with
     `previous_response_id`. Otherwise it sends full history without that
-    reference.
+    reference. Idle cached connections expire after five minutes; keeping a
+    connection warm does not retain the completed run's execution context.
+    Only the run that writes the conversation keeps this connection and its
+    continuation. Background runs on the same conversation (session forks such
+    as skill reviews, memory flush, `/btw` side questions, compaction summaries)
+    share its prompt-cache key but send full history on their own connection, so
+    they never replace the conversation's continuation.
 
     A setup or handshake failure before request dispatch falls back to SSE; it
     is not retried or reconnected first. After dispatch, failures with an
-    unknown outcome remain replay-unsafe and fail closed. The explicit server
+    unknown outcome stop without replaying the request. The explicit server
     rejections `previous_response_not_found`,
     `websocket_connection_limit_reached`, and the Zero Data Retention
     `unsupported_parameter` rejection of `previous_response_id` are safe
@@ -159,6 +158,16 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     Fast mode (formerly Priority processing) and sends
     `service_tier = "priority"`. Explicit `/fast ultrafast` or
     `params.fastMode: "ultrafast"` sends `service_tier = "ultrafast"` instead.
+    While Ultrafast is requested, OpenClaw caps the embedded runtime's context
+    budget and Responses server-compaction threshold at **260,000 tokens**. This
+    leaves headroom below the tier's serving boundary for output and tool rounds.
+    Smaller configured budgets or `responsesCompactThreshold` values still win;
+    larger thresholds are capped for Ultrafast. Fast, Standard, and other explicit
+    service tiers keep their configured budgets. Client-side compaction uses the
+    same capped budget even when `responsesServerCompaction: false`; its reserve
+    can make it run earlier. This helps long conversations stay on Ultrafast,
+    though the provider still chooses the served tier.
+
     The selected account and model must support that tier; the provider can
     reject it or return a different effective tier. Fast mode does not rewrite `reasoning` or
     `text.verbosity`. `fastMode: "auto"` starts new model calls fast until the
@@ -169,22 +178,36 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     For the embedded OpenClaw runtime, the Control UI uses provider model and
     route limits when offering Standard, Fast, and Ultrafast. This works for
     auth profiles, environment keys, and provider config (including SecretRefs).
-    Models limited to Standard or Fast keep those restrictions. Custom endpoints
-    and ChatGPT account catalogs retain their own tier policy.
+    With an OpenAI API key, OpenClaw also reads each model's tiers from the same
+    account model listing Codex uses for that key, and offers only those: for
+    example, GPT-6 Cyber advertises no Fast or Ultrafast tier, so the picker
+    shows Standard only. When that listing is unavailable, every tier stays
+    offered. Models limited to Standard or Fast keep those restrictions. Custom
+    endpoints and ChatGPT account catalogs retain their own tier policy.
 
     If a response to an Ultrafast request echoes a different `service_tier`,
     OpenClaw records a temporary observation for that credential, model, and route.
     Ultrafast stays selectable, and the composer's Speed tooltip shows the requested
-    and served tiers. Later calls keep requesting the selected tier. A response
-    honoring it clears the hint immediately; otherwise the observation expires
-    five minutes after its latest occurrence.
+    and served tiers. Later calls keep requesting the selected tier unless repeated explicit rejections
+    trigger the run-local cooldown below. The hint clears one minute after the
+    latest downgrade. Responses honoring the requested tier do not clear it early,
+    so intermittent capacity changes do not repeatedly refresh the model catalog.
 
     If the native OpenAI API explicitly rejects `service_tier` before output,
     tool activity, or active-response steering, OpenClaw automatically retries
     that request at a slower tier: Ultrafast → Fast → Standard. The hint records
-    that recovery without changing saved preferences or later requests. It does
-    not retry tier errors after cancellation or an ambiguous connection failure.
-    Explicit low-level tier overrides are still sent as configured.
+    that recovery without changing saved preferences. After two consecutive
+    Ultrafast rejections for the same account/model route, later model requests
+    on that route, including later turns and runs, use Fast directly for ten
+    minutes or twenty model requests, whichever ends first. The next Ultrafast
+    request probes the tier again: a rejection renews the cooldown, while a
+    successful Ultrafast request resets the rejection count. The cooldown is
+    kept in memory and starts fresh after a Gateway restart. A successful
+    response served at a different tier does not itself trigger a cooldown.
+
+    The cooldown also applies to explicit Ultrafast request overrides; other
+    tiers remain as configured. OpenClaw does not retry tier errors after
+    cancellation or an ambiguous connection failure.
 
     Observations also clear on credential replacement, profile discovery refresh,
     or retirement of the prepared runtime, and are not persisted across restarts.
@@ -249,6 +272,14 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
 
     Supported values: `auto`, `default`, `flex`, `priority`, `ultrafast`.
     Availability depends on the selected provider route, account, and model.
+    `serviceTier` and `service_tier` set an inherited default, not a lock.
+    A session or per-message speed selection takes precedence: Standard sends
+    `default`, Fast sends `priority`, and Ultrafast sends `ultrafast` when supported.
+    Without a speed override, configured tiers such as `flex` and `auto` remain
+    unchanged. `/fast default` clears the session override.
+
+    Speed controls remain editable while a response runs. Changes apply to later
+    requests; they do not interrupt or rewrite a request already in flight.
 
     <Warning>
     `params.serviceTier` is an authored embedded-provider setting, not native
@@ -263,14 +294,15 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
   </Accordion>
 
   <Accordion title="Server-side compaction (Responses API)">
-    For store-capable direct OpenAI Responses models (`openai/*` resolved to
-    `api.openai.com`), the OpenAI plugin's OpenClaw stream wrapper auto-enables
-    server-side compaction:
+    With the built-in `legacy` context engine, the OpenAI plugin's OpenClaw
+    stream wrapper auto-enables server-side compaction for store-capable direct
+    OpenAI Responses models (`openai/*` resolved to `api.openai.com`):
 
-    - Forces `store: true` (unless model compat sets `supportsStore: false`)
+    - Uses `store: true` until input contains a compaction checkpoint, then uses
+      `store: false` for replay (unless model compat sets `supportsStore: false`)
     - Injects `context_management: [{ type: "compaction", compact_threshold: ... }]`
-    - Default `compact_threshold`: 70% of `contextWindow` (or `80000` when
-      unavailable)
+    - Default `compact_threshold`: 85% of `contextWindow` (or `80000` when
+      unavailable), the same fraction as client compaction
 
     The same resolved route and effective threshold gate the client preflight,
     so OpenClaw does not delay local compaction unless the transport will inject
@@ -278,6 +310,53 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     custom proxies, and routes with `compat.supportsStore: false`. It applies to
     the built-in OpenClaw runtime and embedded OpenAI provider hooks. The native
     Codex app-server harness continues to own its own compaction.
+
+    On direct API-key `openai-responses` routes, defaults, explicit opt-in, and
+    stored checkpoint replay follow
+    [context-engine compaction ownership](/concepts/context-engine#provider-compaction-ownership).
+
+    Checkpoint replay is stateless: OpenAI can reject repeated stored checkpoint
+    input with `item_conflict`, even when item IDs are removed. OpenClaw preserves
+    the checkpoint and retained context and sends `store: false`, without a stored
+    `previous_response_id`. This also lets an already-affected session recover on
+    its next turn without editing its history. Requests without checkpoints retain
+    stored continuation. The transport enforces stateless checkpoint replay after
+    payload hooks, so a hook cannot re-enable storage or retain a stale
+    `previous_response_id` for that input. This prevents a conflict without
+    replaying a request after output or tool work has started. Azure and custom
+    endpoint storage policies are unchanged.
+
+    On the native OpenAI endpoint, replayed reasoning that carries encrypted
+    content is sent without its item ID, and the message and tool-call IDs that
+    depend on it are omitted too. A turn
+    sent with `store: false` (for example, one that carries a compaction
+    checkpoint) returns item IDs that name no stored record. A later stored
+    request records that reasoning under its ID, and the next stored request fails
+    with `item_conflict` after output has started. Prompt caching is unchanged.
+
+    If the server rejects saved items with `item_conflict` before output starts,
+    OpenClaw automatically retries once using saved conversation text and tool
+    results, without the rejected item IDs, reasoning, or compaction checkpoint.
+    Opening a stream, reporting compaction progress, or receiving an un-emitted
+    text/reasoning snapshot inside a failed response does not count as output.
+    Tool calls and results receive matching replacement IDs. The recovery is
+    recorded in the transcript so later turns and reloads retain the repair.
+    Completed tool calls retain their original argument JSON for exact replay after
+    a restart, including whitespace and large integers. Intentional argument edits
+    use the edited value. Older transcripts without those bytes use the recovery
+    above when rejected. Unaffected sessions keep their prompt prefix and continuation.
+    Gateway logs record `item_conflict_recovery`, a session hash, and the outcome
+    (`started`, `recovered`, `failed`, or `deferred`). If recovery fails, the reply offers
+    retry, `/compact`, and model-switch guidance. After output starts, the transport
+    saves the repair for the next request (`deferred`). The active runtime retries
+    once in the same turn only when its execution evidence proves the entire run
+    is replay-safe, with no potential tool side effects and no pending or committed delivery.
+    Otherwise the visible failure remains, and the saved repair applies to a later
+    request, including a new run or an internal session-effects fork of that history.
+    Successful requests that apply a saved repair also log `recovered`. Subagent completion deliveries with a
+    deferred repair retry automatically, up to three delivery attempts, without
+    waiting for another user message. Encrypted checkpoints remain bound to their
+    original session.
 
     On the native ChatGPT sign-in route, the built-in runtime instead uses
     **Codex V2 compaction** by default for context-budget pressure before a model
@@ -289,12 +368,29 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     The saved checkpoint remains active on later tool rounds and user turns,
     including after the session is restored.
 
+    V2 starts when the known or projected request occupancy reaches
+    `min(context window - effective reserve, floor(0.85 × context window))`,
+    the same trigger as client maintenance on every other route.
+    With a 500,000-token window and 20,000-token reserve, this is 425,000 tokens.
+    It uses completed-request usage when available and prices pending content at
+    the next normal request boundary. This earlier trigger leaves room for tool
+    output and the compaction request; it does not lower the model's physical
+    context limit or change the public API-key route's 85% inline threshold.
+
+    The entire outgoing request must still fit that physical window. If one
+    pending message or tool result crosses it before V2 can run, OpenClaw falls
+    back to client compaction. It does not checkpoint only the old prefix and
+    silently discard the pending suffix.
+
     `params.responsesServerCompaction: false` or
     `params.responsesCompactEndpoint: false` disables this V2 path. Disabling
     automatic compaction also disables V2. On this route, manual `/compact`
     (with or without focus instructions) and provider-confirmed overflow use
-    client-side compaction, not V2. A V2 failure before persistence
-    returns to the existing compactor and logs its reason; explicit compact-endpoint
+    client-side compaction, not V2. If V2 is unavailable or fails before
+    persistence while the request still fits the reserve-based budget, OpenClaw
+    sends the normal request without compacting and does not retry a failed V2
+    attempt in the same run. Once that budget is exceeded, the existing client
+    compactor handles the fallback and logs its reason; explicit compact-endpoint
     opt-ins still apply there. Cancellation
     does not start a fallback, and a committed checkpoint is not compacted again
     because a later observer fails. Context engines that own compaction retain
@@ -391,8 +487,8 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     separate endpoint. `/compact <focus>`, provider-confirmed overflow, and
     endpoint failures use client-side summarization.
 
-    Direct OpenAI Responses models still force `store: true` unless compat
-    sets `supportsStore: false`.
+    Direct OpenAI Responses models use `store: false` when replaying a compaction
+    checkpoint, as described above.
     </Note>
 
   </Accordion>
@@ -463,6 +559,22 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     - Accept `params.chat_template_kwargs` for OpenAI-compatible Completions
       proxies such as vLLM
     - Do not force strict tool schemas or native-only headers
+
+    Both native OpenAI and compatible `openai-completions` routes accept
+    `params.extraBody` (alias `extra_body`). For example, to send an explicit
+    [OpenAI safety identifier](https://developers.openai.com/api/docs/guides/safety-best-practices#implement-safety-identifiers),
+    configure a model with `api: "openai-completions"` and set its per-model
+    params:
+
+    ```json5
+    { extraBody: { safety_identifier: "<stable-user-id-hash>" } }
+    ```
+
+    Supply a stable, non-PII hash yourself; OpenClaw does not derive this value
+    from channel senders or other user identity. A shared static value identifies
+    the shared scope, not each person using it. This passthrough belongs to the
+    embedded OpenClaw runtime; it does not apply to models configured directly
+    with `api: "openai-responses"` or to the native Codex runtime.
 
     If a usable tool schema is incompatible with requested strict mode, the request uses
     `strict: false`. Debug logs report the downgrade under `openai-transport`,

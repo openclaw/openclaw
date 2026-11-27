@@ -1,47 +1,60 @@
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { runWithSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { resolveStateDir } from "../paths.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
+import { withActor } from "./session-actor-worker.test-support.js";
 import { bindSqliteWorkerBackend } from "./session-lifecycle-projection.worker.js";
 
-it("keeps upsert preparation current without a read transaction and retains removal snapshots", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const database = openOpenClawAgentDatabase({ agentId: "main" });
-    const sessionKey = "agent:main:lifecycle-planning";
-    writeSessionEntry(database, sessionKey, { sessionId: "original", updatedAt: 1 });
+it("prepares current lifecycle facts and removal snapshots across competing writes and restart", async () => {
+  await withActor(async (f) => {
+    const sessionKey = f.target.sessionKey;
+    const original = f.read().entry!;
     const backend = runWithSqliteWorkerStateContext(
-      { environment: { ...state.env, OPENCLAW_STATE_DIR: state.stateDir } },
+      { environment: { ...process.env, OPENCLAW_STATE_DIR: resolveStateDir() } },
       () =>
         bindSqliteWorkerBackend(
           { agentId: "main" },
-          { database: database.db, databasePath: database.path },
+          {
+            database: f.database.db,
+            databasePath: f.database.path,
+          },
         ),
     );
-    const input = { removals: [], upsertSessionKeys: [sessionKey], archiveDirectory: state.root };
-    backend.execute({ type: "prepare", input });
-    writeSessionEntry(database, sessionKey, { sessionId: "current", updatedAt: 2 });
-    const exec = vi.spyOn(database.db, "exec");
-    try {
-      const prepared = backend.execute({ type: "prepare", input });
-      expect(prepared).toMatchObject({
-        store: { [sessionKey]: { sessionId: "current", updatedAt: 2 } },
+    const input = {
+      removals: [],
+      upserts: [{ sessionKey, relatedSessionKeys: [] }],
+      archiveDirectory: "/synthetic/archives",
+    };
+    const expectPrepared = (entry: Partial<typeof original>) =>
+      expect(backend.execute({ type: "prepare", input })).toMatchObject({
+        store: { [sessionKey]: entry },
         archiveRecovery: { pending: false },
       });
-      expect(exec.mock.calls).toEqual([]);
-      const removal = backend.execute({
-        type: "prepare",
-        input: { ...input, removals: [{ sessionKey, expectedSessionId: "current" }] },
-      });
-      expect(removal).toMatchObject({
+    try {
+      expectPrepared(original);
+
+      const winner = {
+        ...original,
+        sessionId: "current",
+        updatedAt: 2,
+        label: "concurrent winner",
+      };
+      writeSessionEntry(f.database, sessionKey, winner);
+      expectPrepared(winner);
+      expect(
+        backend.execute({
+          type: "prepare",
+          input: { ...input, removals: [{ sessionKey, expectedSessionId: winner.sessionId }] },
+        }),
+      ).toMatchObject({
         selected: {
-          projectedRemovals: [{ sessionKey, expectedEntry: { sessionId: "current" } }],
+          projectedRemovals: [{ sessionKey, expectedEntry: { sessionId: winner.sessionId } }],
         },
       });
-      expect(exec.mock.calls.map(([sql]) => sql)).toEqual(["BEGIN", "COMMIT"]);
+      f.restartActor();
+      expectPrepared(winner);
       backend.assertSettled?.();
     } finally {
-      exec.mockRestore();
       await backend.close();
     }
   });

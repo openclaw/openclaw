@@ -13,6 +13,20 @@ import { SessionTranscriptWriterClaimReboundError } from "./session-transcript-w
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import type { InternalSessionEntry } from "./types.js";
 
+/** Like the SQLite projection: the leaf or an active ancestor; `null` only when empty. */
+function readActivePathFacts(
+  window: SessionActorMemoryWindow,
+  entryId: string | null,
+): Pick<SessionTranscriptAnchorFacts, "onActivePath"> {
+  const navigation = createSessionActorMemoryHistoryNavigation(window);
+  return {
+    onActivePath:
+      (navigation.tree.leafId ?? null) === entryId ||
+      (entryId !== null &&
+        navigation.active.some(({ event }) => isRecord(event) && event.id === entryId)),
+  };
+}
+
 /** Current logical authority is separate from the selected, possibly historical transcript. */
 export function readSessionActorMemoryAnchors(
   window: SessionActorMemoryWindow,
@@ -25,6 +39,7 @@ export function readSessionActorMemoryAnchors(
     ? {
         entry: current && {
           sessionId: current.sessionId,
+          updatedAt: current.updatedAt,
           lifecycleRevision: current.lifecycleRevision,
           activeWriterRunId: current.activeWriterRunId,
           cliHistoryBoundary: current.cliHistoryBoundary,
@@ -100,6 +115,9 @@ export function readSessionActorMemoryAnchors(
   const selected = selection.entryIds.flatMap((entryId) => available.get(entryId) ?? []);
   const facts: SessionTranscriptAnchorFacts = {
     anchors: selected,
+    ...(selection.activePathEntryId !== undefined
+      ? readActivePathFacts(window, selection.activePathEntryId)
+      : {}),
     ...(contextAuthority ? { contextAuthority } : {}),
     ...(context ? { contextValidated: true } : {}),
     ...(replayValidated ? { replayValidated } : {}),

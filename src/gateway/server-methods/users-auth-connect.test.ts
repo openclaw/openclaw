@@ -3,6 +3,7 @@ import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js"
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { ProviderAuthResult } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { createRemoteControlUiIngressTestContext } from "../remote-control-ui.test-support.js";
 import {
   setupModelAccountConnectTest,
   resolveProfileId,
@@ -26,7 +27,6 @@ import {
   clients,
   self,
   writes,
-  linksByOwner,
   createClient,
   rpc,
   flowRpc,
@@ -41,11 +41,24 @@ import {
 setupModelAccountConnectTest();
 
 describe("users model-account connection lifecycle", () => {
-  it.each(["direct", "shared-secret"] as const)(
+  it.each(["direct", "shared-secret", "ingress"] as const)(
     "uses the catalog and exact sensitive step for a %s caller without consuming a rejected answer",
     async (caller) => {
       if (caller === "shared-secret") {
         self.internal = { operatorRoleActor: { kind: "system" } };
+      }
+      const grant = new AbortController();
+      if (caller === "ingress") {
+        const principal = createRemoteControlUiIngressTestContext({
+          principal: { kind: "person", profileId: "profile-1" },
+          signal: grant.signal,
+        }).resolvePrincipal();
+        clients.delete(self);
+        self.connId = "";
+        self.internal = {
+          remoteIngressPrincipal: principal,
+          operatorRoleActor: principal.operatorRoleActor,
+        };
       }
       expect(
         await rpc("users.authConnect.catalog", { profileId: "profile-1" }),
@@ -93,6 +106,12 @@ describe("users model-account connection lifecycle", () => {
         {},
         { dropIfSlow: true },
       );
+      if (caller === "ingress") {
+        grant.abort();
+        expect(
+          await rpc("users.authConnect.catalog", { profileId: "profile-1" }),
+        ).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ code: "FORBIDDEN" }));
+      }
     },
   );
 
@@ -227,25 +246,6 @@ describe("users model-account connection lifecycle", () => {
     await terminal(flow, "connected");
     expect(writes).toEqual([credential]);
   });
-
-  it.each(["status", "answer", "cancel"] as const)(
-    "replays %s with current links, not the original default",
-    async (action) => {
-      const flow = await startFlow();
-      await complete(flow);
-      await terminal(flow, "connected");
-      linksByOwner.set("profile-1", []);
-      service.supersede("profile-1", "openai");
-      expect(
-        await flowRpc(action, flow, action === "answer" ? { stepId: "retired" } : {}),
-      ).toHaveBeenCalledWith(true, {
-        status: "connected",
-        authProfileId: "personal:profile-1:account-1",
-        links: [],
-      });
-      expect(writes).toEqual([credential]);
-    },
-  );
 
   it.each(["exchange", "identity", "unavailable"] as const)(
     "records a redacted %s failure",

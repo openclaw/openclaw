@@ -2,17 +2,16 @@
 // near-simultaneous caption, keeping later discussion as ordinary inbound messages.
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-const DEFAULT_COMMENT_WINDOW_MS = 15_000;
+const COMMENT_WINDOW_MS = 15_000;
 
 type SeenPoll = { atMs: number; sender: string };
 
-export function createPollCommentFolder(options?: { windowMs?: number }) {
-  const windowMs = options?.windowMs ?? DEFAULT_COMMENT_WINDOW_MS;
+export function createPollCommentFolder() {
   const seenPolls = new Map<string, SeenPoll>();
 
   function prune(referenceMs: number): void {
     for (const [key, seen] of seenPolls) {
-      if (referenceMs - seen.atMs > windowMs) {
+      if (referenceMs - seen.atMs > COMMENT_WINDOW_MS) {
         seenPolls.delete(key);
       }
     }
@@ -37,7 +36,7 @@ export function createPollCommentFolder(options?: { windowMs?: number }) {
         return false;
       }
       const seen = seenPolls.get(key);
-      if (!seen || atMs < seen.atMs || atMs - seen.atMs > windowMs) {
+      if (!seen || atMs < seen.atMs || atMs - seen.atMs > COMMENT_WINDOW_MS) {
         return false;
       }
       const replySender = normalizeLowercaseStringOrEmpty(sender);

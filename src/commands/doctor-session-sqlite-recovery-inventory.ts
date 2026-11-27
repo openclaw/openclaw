@@ -1,7 +1,7 @@
 /** Read-only recovery inventory and dependency classification; never deletion authority. */
 import fs from "node:fs";
 import path from "node:path";
-import { listAgentIds } from "../agents/agent-scope-config.js";
+import { listAgentIds, resolveEffectiveAgentDir } from "../agents/agent-scope-config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { isMigrationArchiveArtifactName } from "../config/sessions/artifacts.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPathInside } from "../infra/path-guards.js";
 import {
   isPendingMigrationArtifactClaim,
+  readMigrationArtifactIdentity,
   sameMigrationArtifact,
   statMigrationPath,
   type MigrationArtifact,
@@ -27,12 +28,29 @@ import {
   type SessionSqliteMigrationMove,
   type SessionSqliteMigrationTargetManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
-import { withSynchronousArtifactPreservingStateSnapshot } from "../state/openclaw-state-db-readonly.js";
+import {
+  withArtifactPreservingStateReads,
+  withOpenClawStateDatabaseReadSnapshot,
+  getActiveOpenClawStateDatabaseReadSnapshotAsync,
+  withCurrentOpenClawStateReadScope,
+} from "../state/openclaw-state-db-readonly.js";
+import { classifyDoctorMigrationBackupPath } from "./doctor-migration-backup-names.js";
+import type { RecoveryInventoryScan } from "./recovery-inventory-scan.js";
 import {
   collectUpdateCaptureInventory,
   readCompletedUpdateHistory,
 } from "./update-capture-cleanup.js";
 import type { RecoveryCleanupArtifact } from "./update-cleanup-types.js";
+import { collectUpdateDatabaseSnapshots } from "./update-database-snapshot-cleanup.js";
+import {
+  classifyDisplacedDatabases,
+  scanDisplacedDatabases,
+} from "./update-displaced-database-cleanup.js";
+import {
+  createUpdateRunArtifactOwnership,
+  type IntactUpdateBackup,
+  type UpdateRunArtifactOwnership,
+} from "./update-run-artifact-ownership.js";
 
 type Outcome = RecoveryCleanupArtifact["outcome"];
 export type RecoveryCleanupReport = ReturnType<typeof summarizeRecoveryCleanup>;
@@ -53,7 +71,16 @@ export function resolveRecoveryArtifact(
   );
 }
 
-export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: NodeJS.ProcessEnv }) {
+export function collectRecoveryInventory(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  scan?: RecoveryInventoryScan;
+  readHistory?: boolean;
+  /** Rollback receipts exist, so their runs' outcomes must be read even without manifests. */
+  updateReceipts?: boolean;
+}) {
+  const entries = (directory: string) =>
+    params.scan?.directory(directory) ?? fs.readdirSync(directory, { withFileTypes: true });
   const stateDir = canonicalMigrationFilePath(path.join(resolveStateDir(params.env), "anchor"));
   const root = path.dirname(stateDir);
   const stores = new Set<string>();
@@ -61,7 +88,7 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
   const agentIds = new Set(listAgentIds(params.cfg));
   const agentsRoot = path.join(root, "agents");
   if (statMigrationPath(agentsRoot)?.isDirectory() && !hasSymbolicLinkInDirectoryPath(agentsRoot)) {
-    for (const item of fs.readdirSync(agentsRoot, { withFileTypes: true })) {
+    for (const item of entries(agentsRoot)) {
       if (item.isDirectory()) {
         agentIds.add(item.name);
         stores.add(path.join(agentsRoot, item.name, "sessions", "sessions.json"));
@@ -84,12 +111,14 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
     }
   }
   const references = new Map<string, RecoveryArtifactReference[]>();
-  const manifestPaths: string[] = [];
+  let manifestPaths: string[] = [];
   const artifacts: RecoveryCleanupArtifact[] = [];
+  const missingOriginals = new Set<string>();
   const protectUnmanifested = (filePath: string, bytes: number, reason: string) => {
     artifacts.push({ path: filePath, runs: [], bytes, outcome: "protected", reason });
   };
-  let laterUpdateStartedAt = 0;
+  // Originals completed before this instant are superseded by a later or verified update.
+  let supersededBefore = 0;
   const manifestsDir = resolveSessionSqliteMigrationRunsDir(params.env);
   if (hasSymbolicLinkInDirectoryPath(manifestsDir)) {
     artifacts.push({
@@ -100,8 +129,15 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
       reason: "manifest-directory-alias",
     });
   } else {
-    manifestPaths.push(...listSessionSqliteMigrationManifestPaths(params.env));
+    manifestPaths = params.scan
+      ? [...params.scan.directory(manifestsDir)]
+          .filter((entry) => entry.name.endsWith(".json") && !entry.name.endsWith(".failure.json"))
+          .map((entry) => path.join(manifestsDir, entry.name))
+      : listSessionSqliteMigrationManifestPaths(params.env);
     for (const manifestPath of manifestPaths) {
+      if (params.scan && !params.scan.metadata(manifestPath)) {
+        continue;
+      }
       const stat = statMigrationPath(manifestPath);
       const manifest =
         stat?.isFile() && stat.nlink === 1
@@ -120,6 +156,9 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
       const run = { manifest, manifestPath };
       const consumed = collectRecordedConsumedArchives(manifest);
       for (const target of manifest.targets) {
+        if (params.scan && !params.scan.available()) {
+          break;
+        }
         const expected = resolveUnsuffixedSqliteTargetFromSessionStorePath(target.storePath);
         const trusted =
           isPathInside(root, target.sqlitePath) &&
@@ -145,23 +184,88 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
       }
     }
   }
-  if ([...references.values()].some((refs) => refs.some((ref) => ref.target.databaseIdentity))) {
-    laterUpdateStartedAt = readCompletedUpdateHistory(params.env)?.latestCompletedStartedAt ?? 0;
+  const updateRunIdOf = (ref: RecoveryArtifactReference) =>
+    ref.target.databaseIdentity ? ref.run.manifest.updateRunId : undefined;
+  let ownership: UpdateRunArtifactOwnership | undefined;
+  if (
+    params.readHistory !== false &&
+    ([...references.values()].some((refs) => refs.some((ref) => ref.target.databaseIdentity)) ||
+      params.updateReceipts)
+  ) {
+    const history = readCompletedUpdateHistory(params.env);
+    supersededBefore = Math.max(
+      history?.latestCompletedStartedAt ?? 0,
+      history?.latestVerifiedFinishedAt ?? 0,
+    );
+    ownership = createUpdateRunArtifactOwnership(
+      history,
+      // Each intact backup stands in only for its own database; a changed or missing
+      // backup never makes an older backup of any database "superseded".
+      [...references.entries()].flatMap(([archivePath, refs]) => {
+        const current = statMigrationPath(archivePath, { bigint: true });
+        const identity = refs[0]?.move.artifact?.identity;
+        // A table-scoped backup covers only the tables one migration touched, so only a
+        // full image of the same database can stand in for an older one.
+        const intact =
+          refs.every(
+            (ref) =>
+              classifyDoctorMigrationBackupPath(ref.target.sqlitePath, archivePath) === "full",
+          ) &&
+          current?.isFile() === true &&
+          current.nlink === 1n &&
+          identity !== undefined &&
+          refs.every(
+            (ref) =>
+              ref.move.artifact !== undefined &&
+              sameMigrationArtifact(ref.move.artifact.identity, identity),
+          ) &&
+          (["ino", "mtimeNs", "size"] as const).every(
+            (key) => String(current[key]) === String(identity[key]),
+          );
+        // Releasing an older backup re-proves this one's recorded content first.
+        // Bounded status and read-only Doctor scans never hash a backup; eligibility that
+        // depends on content stays unverified there and is decided when cleanup runs.
+        const verify = () => {
+          if (params.scan) {
+            return false;
+          }
+          try {
+            return sameMigrationArtifact(readMigrationArtifactIdentity(archivePath), identity!);
+          } catch {
+            return false;
+          }
+        };
+        return intact
+          ? refs.flatMap((ref): IntactUpdateBackup[] => {
+              const runId = updateRunIdOf(ref);
+              return runId ? [{ runId, database: ref.target.sqlitePath, verify }] : [];
+            })
+          : [];
+      }),
+      params.env,
+    );
   }
   for (const [archivePath, refs] of references) {
     const evidence = resolveRecoveryArtifact(refs);
     const stat = refs.every((ref) => ref.trusted)
-      ? fs.lstatSync(archivePath, { bigint: true, throwIfNoEntry: false })
+      ? statMigrationPath(archivePath, { bigint: true })
       : undefined;
     const claim =
       refs.every((ref) => ref.trusted) && evidence?.disposal.state === "pending-disposal"
-        ? fs.lstatSync(evidence.disposal.claimPath, { bigint: true, throwIfNoEntry: false })
+        ? statMigrationPath(evidence.disposal.claimPath, { bigint: true })
         : undefined;
     const current = stat ?? claim;
+    if (
+      refs.every((ref) => ref.trusted) &&
+      !current &&
+      evidence?.disposal.state !== "pending-disposal"
+    ) {
+      missingOriginals.add(archivePath);
+    }
     const item: RecoveryCleanupArtifact = {
       path: archivePath,
       runs: [...new Set(refs.map((ref) => ref.run.manifest.runId))],
-      bytes: current?.isFile() ? Number(current.size) : (evidence?.identity.size ?? 0),
+      bytes: current?.isFile() ? Number(current.size) : 0,
       outcome: "candidate",
       reason: "producer-verified-original",
       consequence:
@@ -171,6 +275,23 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
       item.outcome = outcome;
       item.reason = reason;
     };
+    // Backups an update's Doctor took are released by that run's outcome, not by the live
+    // file's identity: the updater's own rollback and the startup swap replace that file.
+    const ownerRunIds = [...new Set(refs.map(updateRunIdOf))];
+    // Once any manifest names an update run, only one owner's outcome may decide; the
+    // inode-based rules never apply to it, because retirement skips that live-file check.
+    const runOutcome = ownerRunIds.some((runId) => runId !== undefined)
+      ? ownerRunIds.length === 1
+        ? (ownership?.classify(ownerRunIds[0]!, refs[0]!.target.sqlitePath) ?? {
+            outcome: "protected" as const,
+            reason: "unreadable-update-history",
+          })
+        : { outcome: "protected" as const, reason: "conflicting-update-run-owners" }
+      : undefined;
+    item.runs.push(...ownerRunIds.filter((runId): runId is string => runId !== undefined));
+    if (runOutcome?.outcome === "candidate") {
+      item.reason = runOutcome.reason;
+    }
     if (refs.some((ref) => !ref.trusted)) {
       classify("protected", "unsupported-target-ownership");
     } else if (refs.every((ref) => ref.move.artifact?.disposal.state === "disposed")) {
@@ -187,11 +308,13 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
           (stat.nlink !== 1n && !isPendingMigrationArtifactClaim(archivePath, evidence))))
     ) {
       classify("blocked", "artifact-alias-or-nonregular");
+    } else if (runOutcome && runOutcome.outcome !== "candidate") {
+      classify(runOutcome.outcome, runOutcome.reason);
     } else if (
       refs.some(
         ({ run, target }) =>
-          !run.manifest.completedAt ||
-          target.validationBeforeArchive !== "passed" ||
+          (!runOutcome &&
+            (!run.manifest.completedAt || target.validationBeforeArchive !== "passed")) ||
           target.issues.some((issue) => !isSessionSqliteMigrationWarning(issue)),
       )
     ) {
@@ -203,10 +326,10 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
           .reason,
       );
     } else if (
+      !runOutcome &&
       refs.some(
         ({ target, run }) =>
-          target.databaseIdentity &&
-          !(laterUpdateStartedAt > Date.parse(run.manifest.completedAt!)),
+          target.databaseIdentity && !(supersededBefore > Date.parse(run.manifest.completedAt!)),
       )
     ) {
       classify("protected", "awaiting-later-completed-update");
@@ -268,11 +391,18 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
     ) {
       continue;
     }
-    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    for (const entry of entries(directory)) {
       if (
         !isMigrationArchiveArtifactName(entry.name) &&
         !entry.name.includes(".pre-doctor-") &&
-        !/^.+\.pre-startup-migration-.+\.bak$/.test(entry.name)
+        !/^.+\.pre-startup-migration-.+\.bak$/.test(entry.name) &&
+        // Older cron repairs had no manifest. Naming reveals an original, never completion.
+        !(
+          directory === path.join(root, "state") &&
+          /^openclaw\.sqlite\.doctor-cron-\d{13}-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.bak$/.test(
+            entry.name,
+          )
+        )
       ) {
         continue;
       }
@@ -288,26 +418,25 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
     }
   }
   // Unknown files in known archive directories are visible, with no authority inferred from names.
+  const knownArchivePaths = new Set(artifacts.map((item) => item.path));
+  const pendingClaims = new Set<string>();
+  for (const refs of references.values()) {
+    for (const { move } of refs) {
+      if (move.artifact?.disposal.state === "pending-disposal") {
+        pendingClaims.add(move.artifact.disposal.claimPath);
+      }
+    }
+  }
   for (const directory of archiveDirs) {
     if (!statMigrationPath(directory)?.isDirectory() || hasSymbolicLinkInDirectoryPath(directory)) {
       continue;
     }
-    for (const item of fs.readdirSync(directory, { withFileTypes: true })) {
+    for (const item of entries(directory)) {
       const filePath = path.join(directory, item.name);
-      if (references.has(filePath) || artifacts.some((artifact) => artifact.path === filePath)) {
+      if (knownArchivePaths.has(filePath) || pendingClaims.has(filePath)) {
         continue;
       }
-      if (
-        [...references.values()].some((refs) =>
-          refs.some(
-            ({ move }) =>
-              move.artifact?.disposal.state === "pending-disposal" &&
-              move.artifact.disposal.claimPath === filePath,
-          ),
-        )
-      ) {
-        continue;
-      }
+      knownArchivePaths.add(filePath);
       protectUnmanifested(
         filePath,
         item.isFile() ? fs.lstatSync(filePath).size : 0,
@@ -327,11 +456,29 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
       }
     }
   }
+  if (params.scan?.incomplete) {
+    // A skipped manifest may protect an original already seen in another run.
+    // Diagnostics retain observed bytes, never infer eligibility from a partial graph.
+    for (const item of artifacts) {
+      if (item.outcome === "candidate" || item.outcome === "verification-required") {
+        item.outcome = "protected";
+        item.reason = "incomplete-recovery-inventory";
+      }
+    }
+  }
   protectRecoveryDependencies(artifacts, references);
   return {
+    // Doctor still needs absent receipts to reconcile interrupted duplicate retirement.
+    artifacts,
     references,
     manifestPaths,
-    report: summarizeRecoveryCleanup(root, artifacts, "preview"),
+    ...(ownership ? { ownership } : {}),
+    report: summarizeRecoveryCleanup(
+      root,
+      artifacts.filter((item) => !missingOriginals.has(item.path)),
+      "preview",
+      missingOriginals.size,
+    ),
   };
 }
 
@@ -414,6 +561,7 @@ export function summarizeRecoveryCleanup(
   stateDir: string,
   artifacts: RecoveryCleanupArtifact[],
   status: "preview" | "refused" | "complete" | "blocked",
+  missingOriginals = 0,
 ) {
   const totals = {
     candidateBytes: 0,
@@ -440,38 +588,88 @@ export function summarizeRecoveryCleanup(
       totals.removedFiles += 1;
     }
   }
-  return { stateDir, artifacts, totals, status };
+  return { stateDir, artifacts, totals, status, missingOriginals };
 }
 
 /** Update cleanup also reviews original-state captures; Doctor's session repair does not. */
-export function collectUpdateCleanupInventory(params: {
+function readUpdateCleanupInventory(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  scan?: RecoveryInventoryScan;
+  readHistory?: boolean;
 }) {
-  return withSynchronousArtifactPreservingStateSnapshot(
-    () => {
-      const inventory = collectRecoveryInventory(params);
-      const captures = collectUpdateCaptureInventory({
-        stateDir: inventory.report.stateDir,
-        env: params.env,
-      });
-      return {
-        ...inventory,
-        captureIdentities: captures.identities,
-        report: summarizeRecoveryCleanup(
-          inventory.report.stateDir,
-          [...inventory.report.artifacts, ...captures.artifacts],
-          "preview",
-        ),
-      };
-    },
-    { current: { env: params.env } },
+  const stateDir = path.dirname(
+    canonicalMigrationFilePath(path.join(resolveStateDir(params.env), "anchor")),
   );
+  // Configured agent directories inside the state directory hold their own databases.
+  const agentDirectories = listAgentIds(params.cfg).map((agentId) =>
+    resolveEffectiveAgentDir(params.cfg, agentId, { env: params.env }),
+  );
+  const families = scanDisplacedDatabases(stateDir, params.scan, agentDirectories);
+  // A moved-aside family carries no content checksum, so it never stands in for an older
+  // backup; only a verified update or a content-verified Doctor backup does.
+  const inventory = collectRecoveryInventory({
+    ...params,
+    updateReceipts: families.some((family) => family.receipt !== undefined),
+  });
+  const captures = collectUpdateCaptureInventory({
+    stateDir: inventory.report.stateDir,
+    env: params.env,
+    scan: params.scan,
+    readHistory: params.readHistory,
+  });
+  const snapshots = collectUpdateDatabaseSnapshots(params);
+  const displaced = classifyDisplacedDatabases(families, inventory.ownership);
+  if (params.scan?.incomplete) {
+    for (const item of displaced.artifacts) {
+      if (item.outcome === "candidate") {
+        item.outcome = "protected";
+        item.reason = "incomplete-recovery-inventory";
+        displaced.retirement.delete(item.path);
+      }
+    }
+  }
+  return {
+    ...inventory,
+    captureIdentities: new Map([...captures.identities, ...snapshots.identities]),
+    displacedRetirement: displaced.retirement,
+    report: summarizeRecoveryCleanup(
+      inventory.report.stateDir,
+      [
+        ...inventory.report.artifacts,
+        ...captures.artifacts,
+        ...snapshots.artifacts,
+        ...displaced.artifacts,
+      ],
+      "preview",
+      inventory.report.missingOriginals,
+    ),
+  };
 }
 
-export function inspectSessionSqliteRecovery(params: {
+/** Descriptive reads share their image; effect guards request current rows outside that image. */
+export async function collectUpdateCleanupInventoryAsync(
+  params: Parameters<typeof readUpdateCleanupInventory>[0] & { current?: true },
+) {
+  if (params.readHistory === false) {
+    return readUpdateCleanupInventory(params);
+  }
+  const read = () =>
+    withArtifactPreservingStateReads(() =>
+      withOpenClawStateDatabaseReadSnapshot(
+        async () => {
+          await getActiveOpenClawStateDatabaseReadSnapshotAsync({ env: params.env });
+          return readUpdateCleanupInventory(params);
+        },
+        { env: params.env },
+      ),
+    );
+  return params.current ? withCurrentOpenClawStateReadScope({ env: params.env }, read) : read();
+}
+
+export async function inspectSessionSqliteRecovery(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-}): RecoveryCleanupReport {
-  return collectUpdateCleanupInventory(params).report;
+}): Promise<RecoveryCleanupReport> {
+  return (await collectUpdateCleanupInventoryAsync({ ...params, current: true })).report;
 }

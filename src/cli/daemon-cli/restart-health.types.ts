@@ -5,7 +5,8 @@ import type { PortUsage } from "../../infra/ports.js";
 
 export const GATEWAY_RESTART_WAIT_OUTCOMES = [
   "healthy",
-  "plugin-errors",
+  "auth-rejected",
+  "connected-no-operator-scope",
   "channel-errors",
   "version-mismatch",
   "build-id-mismatch",
@@ -39,6 +40,9 @@ export type GatewayRestartSnapshot = {
   gatewayBootId?: string;
   gatewayBuildId?: string | null;
   probeError?: string;
+  authenticationError?: string;
+  operatorScopeWarning?: string;
+  protocolMismatch?: string;
   staleConnection?: GatewayStaleConnectionReason;
   activatedPluginErrors?: PluginHealthErrorSummary[];
   unavailablePlugins?: UnavailablePluginHealthSummary[];
@@ -50,7 +54,6 @@ export type GatewayRestartSnapshot = {
     expected: string;
     actual: string | null;
   };
-  expectedBuildId?: string;
   buildIdMismatch?: {
     expected: string;
     actual: string | null;

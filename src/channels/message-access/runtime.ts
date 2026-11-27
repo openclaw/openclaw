@@ -2,9 +2,9 @@ import {
   normalizeStringEntries,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
-import { prepareCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
+import { prepareChannelSenderAdmission } from "../../gateway/operator-admission.js";
+import { wrapCurrentPluginInstance } from "../../plugins/plugin-instance-scope.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/account-id.js";
-import { prepareUserChannelIdentityAuthority } from "../../state/user-channel-identity-operations.js";
 import { recordChannelIngressResolution } from "./admission-evidence.js";
 import { decideChannelIngress } from "./decision.js";
 import { resolveChannelIngressEffectiveAllowFromLists } from "./effective-allow-from.js";
@@ -157,78 +157,6 @@ export async function resolveStableChannelIngressPolicy(
   }).message(params);
 }
 
-function projectSenderAccess(params: {
-  ingress: ResolvedChannelMessageIngress["ingress"];
-  isGroup: boolean;
-  effectiveAllowFrom: string[];
-  effectiveGroupAllowFrom: string[];
-  providerMissingFallbackApplied?: boolean;
-}): ChannelIngressSenderAccess {
-  const gate = params.ingress.graph.gates.find(
-    (entry) =>
-      entry.phase === "sender" && entry.kind === (params.isGroup ? "groupSender" : "dmSender"),
-  );
-  const reasonCode =
-    !gate &&
-    params.isGroup &&
-    params.ingress.reasonCode === "route_sender_empty" &&
-    params.effectiveGroupAllowFrom.length === 0
-      ? "group_policy_empty_allowlist"
-      : (gate?.reasonCode ?? params.ingress.reasonCode);
-  const decision =
-    reasonCode === "dm_policy_pairing_required"
-      ? "pairing"
-      : gate?.allowed === true
-        ? "allow"
-        : "block";
-  return {
-    allowed: decision === "allow",
-    decision,
-    reasonCode,
-    ...(gate ? { gate } : {}),
-    effectiveAllowFrom: params.effectiveAllowFrom,
-    effectiveGroupAllowFrom: params.effectiveGroupAllowFrom,
-    providerMissingFallbackApplied: params.providerMissingFallbackApplied ?? false,
-  };
-}
-
-function projectCommandAccess(params: {
-  ingress: ResolvedChannelMessageIngress["ingress"];
-  policy: ChannelIngressPolicyInput;
-}): ChannelIngressCommandAccess {
-  const gate = params.ingress.graph.gates.find(
-    (entry) => entry.phase === "command" && entry.kind === "command",
-  );
-  return {
-    requested: params.policy.command != null,
-    authorized: params.policy.command != null && gate?.allowed === true,
-    shouldBlockControlCommand: gate?.command?.shouldBlockControlCommand === true,
-    reasonCode: gate?.reasonCode ?? params.ingress.reasonCode,
-    ...(gate ? { gate } : {}),
-  };
-}
-
-function projectActivationAccess(params: {
-  ingress: ResolvedChannelMessageIngress["ingress"];
-}): ChannelIngressActivationAccess {
-  const gate = params.ingress.graph.gates.find(
-    (entry) => entry.phase === "activation" && entry.kind === "mention",
-  );
-  return {
-    ran: gate != null,
-    allowed: gate?.allowed === true,
-    shouldSkip: gate?.activation?.shouldSkip === true,
-    reasonCode: gate?.reasonCode ?? params.ingress.reasonCode,
-    ...(gate?.activation?.effectiveWasMentioned !== undefined
-      ? { effectiveWasMentioned: gate.activation.effectiveWasMentioned }
-      : {}),
-    ...(gate?.activation?.shouldBypassMention !== undefined
-      ? { shouldBypassMention: gate.activation.shouldBypassMention }
-      : {}),
-    ...(gate ? { gate } : {}),
-  };
-}
-
 function commandOwnerAllowFrom(params: {
   command?: ChannelMessageIngressCommandInput;
   isGroup: boolean;
@@ -375,16 +303,59 @@ async function resolveChannelMessageIngressForOwner(
     allowlist: state.allowlists.group,
     matchedEntry: matchedAccessGroupEntry,
   });
-  const senderAccess = projectSenderAccess({
-    ingress,
-    isGroup,
+  const providerMissingFallbackApplied = params.providerMissingFallbackApplied;
+  const senderGate = ingress.graph.gates.find(
+    (entry) => entry.phase === "sender" && entry.kind === (isGroup ? "groupSender" : "dmSender"),
+  );
+  const senderReasonCode =
+    !senderGate &&
+    isGroup &&
+    ingress.reasonCode === "route_sender_empty" &&
+    effectiveGroupAllowFrom.length === 0
+      ? "group_policy_empty_allowlist"
+      : (senderGate?.reasonCode ?? ingress.reasonCode);
+  const senderDecision =
+    senderReasonCode === "dm_policy_pairing_required"
+      ? "pairing"
+      : senderGate?.allowed === true
+        ? "allow"
+        : "block";
+  const senderAccess: ChannelIngressSenderAccess = {
+    allowed: senderDecision === "allow",
+    decision: senderDecision,
+    reasonCode: senderReasonCode,
+    ...(senderGate ? { gate: senderGate } : {}),
     effectiveAllowFrom,
     effectiveGroupAllowFrom,
-    providerMissingFallbackApplied: params.providerMissingFallbackApplied,
-  });
+    providerMissingFallbackApplied: providerMissingFallbackApplied ?? false,
+  };
   const routeAccess = projectRouteAccess({ ingress, route: params.route });
-  const commandAccess = projectCommandAccess({ ingress, policy });
-  const activationAccess = projectActivationAccess({ ingress });
+  const commandGate = ingress.graph.gates.find(
+    (entry) => entry.phase === "command" && entry.kind === "command",
+  );
+  const commandAccess: ChannelIngressCommandAccess = {
+    requested: policy.command != null,
+    authorized: policy.command != null && commandGate?.allowed === true,
+    shouldBlockControlCommand: commandGate?.command?.shouldBlockControlCommand === true,
+    reasonCode: commandGate?.reasonCode ?? ingress.reasonCode,
+    ...(commandGate ? { gate: commandGate } : {}),
+  };
+  const activationGate = ingress.graph.gates.find(
+    (entry) => entry.phase === "activation" && entry.kind === "mention",
+  );
+  const activationAccess: ChannelIngressActivationAccess = {
+    ran: activationGate != null,
+    allowed: activationGate?.allowed === true,
+    shouldSkip: activationGate?.activation?.shouldSkip === true,
+    reasonCode: activationGate?.reasonCode ?? ingress.reasonCode,
+    ...(activationGate?.activation?.effectiveWasMentioned !== undefined
+      ? { effectiveWasMentioned: activationGate.activation.effectiveWasMentioned }
+      : {}),
+    ...(activationGate?.activation?.shouldBypassMention !== undefined
+      ? { shouldBypassMention: activationGate.activation.shouldBypassMention }
+      : {}),
+    ...(activationGate ? { gate: activationGate } : {}),
+  };
   const result: ResolvedChannelMessageIngress = {
     state,
     ingress,
@@ -411,17 +382,22 @@ async function resolveChannelMessageIngressForOwner(
             senderId: subject.identifiers[0].value,
           }
         : undefined;
-    const requester =
-      verifiedPrincipal && participantGatewayContext
-        ? await prepareUserChannelIdentityAuthority(verifiedPrincipal)
+    const gateway = participantGatewayContext;
+    const sender = verifiedPrincipal
+      ? ({ ...verifiedPrincipal, authentication: "verified" } as const)
+      : subject.identifiers[0]?.authentication === "asserted" && senderId
+        ? ({
+            channelId,
+            accountId: params.accountId ?? DEFAULT_ACCOUNT_ID,
+            senderId,
+            authentication: "asserted",
+          } as const)
         : undefined;
-    const commandOwnerAuthority =
-      verifiedPrincipal && participantGatewayContext
-        ? await prepareCommandOwnerAuthority(participantGatewayContext.getRuntimeConfig(), {
-            identity: verifiedPrincipal,
-            prepared: requester,
-          })
+    const admitted =
+      sender && gateway
+        ? await prepareChannelSenderAdmission(sender, () => gateway.getRuntimeConfig())
         : undefined;
+    const requester = admitted?.requester;
     participantInput = {
       identity: participant
         ? {
@@ -439,17 +415,20 @@ async function resolveChannelMessageIngressForOwner(
             id: senderId!,
           },
       binding: participantBinding,
-      childSessionPublication: params.childSessionPublication,
+      // Tools run later, often inside the provider plugin's stream consumer.
+      // Retained channel callbacks must re-enter their own plugin instance.
+      childSessionPublication: wrapCurrentPluginInstance(params.childSessionPublication),
       verifiedPrincipal,
-      requesterProfile:
-        requester && ownerIsCurrent()
-          ? {
-              id: requester.linked.profileId,
-              displayName: requester.linked.displayName,
-              isCurrent: requester.isCurrent,
-            }
-          : undefined,
-      commandOwnerAuthority: ownerIsCurrent() ? commandOwnerAuthority : undefined,
+      requesterProfile: requester
+        ? {
+            id: requester.linked.profileId,
+            displayName: requester.linked.displayName,
+            isCurrent: requester.isCurrent,
+          }
+        : undefined,
+      operatorAuthority: admitted?.operatorAuthority,
+      commandOwnerAuthority: admitted?.commandOwnerAuthority,
+      commandOwnerPrincipal: admitted?.commandOwnerPrincipal,
       promptedAt,
       owner: participantOwner,
       gatewayContext: participantGatewayContext,

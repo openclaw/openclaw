@@ -1,3 +1,5 @@
+import { isRemoteControlUiIngress } from "./app/remote-ingress.ts";
+
 /** Logical Gateway identity stays separate from its development-server transport. */
 export type ControlUiDevGateway = {
   gatewayUrl: string;
@@ -6,10 +8,11 @@ export type ControlUiDevGateway = {
 
 declare global {
   var OPENCLAW_UI_DEV_GATEWAY: ControlUiDevGateway | undefined;
+  var OPENCLAW_UI_DEV_SERVER: boolean | undefined;
 }
 
 export function configuredUiDevGateway(): ControlUiDevGateway | undefined {
-  return globalThis.OPENCLAW_UI_DEV_GATEWAY;
+  return isRemoteControlUiIngress() ? undefined : globalThis.OPENCLAW_UI_DEV_GATEWAY;
 }
 
 export function isConfiguredUiDevGateway(url: string): boolean {

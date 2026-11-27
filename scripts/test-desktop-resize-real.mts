@@ -20,7 +20,11 @@ import {
   readDesktopProofTestReport,
   withDesktopProofCleanup,
 } from "./lib/desktop-resize-proof.mts";
-import { hasUnjoinedWork, runManagedCommand } from "./lib/managed-child-process.mts";
+import {
+  type ManagedCommandTimeoutObservation,
+  hasUnjoinedWork,
+  runManagedCommand,
+} from "./lib/managed-child-process.mts";
 
 const root = process.cwd();
 const output = path.join(root, ".artifacts/control-ui-e2e/real-gateway/desktop-resize");
@@ -68,7 +72,12 @@ const receipt = {
     packages: [] as Array<{ name: string; version: string; sha256: string }>,
     serverBinarySha256: "",
   },
-  commands: [] as Array<{ label: string; exitCode: number | null; elapsedMs: number }>,
+  commands: [] as Array<{
+    label: string;
+    exitCode: number | null;
+    elapsedMs: number;
+    timeoutObservation?: ManagedCommandTimeoutObservation | null;
+  }>,
   carriers: [] as string[],
   testDiagnostics: [] as Array<{
     carrier: "node" | "ssh";
@@ -132,6 +141,7 @@ async function run(
   const log: Buffer[] = [];
   let bytes = 0;
   let exitCode: number | null = null;
+  let timeoutObservation: ManagedCommandTimeoutObservation | null = null;
   const started = Date.now();
   return withDesktopProofCleanup(
     async () => {
@@ -150,6 +160,12 @@ async function run(
         timeoutMs: options.timeoutMs ?? 30_000,
         signal: options.cleanup ? cap.signal : AbortSignal.any([lifetime.signal, cap.signal]),
         requireProcessTreeExit: true,
+        onTimeout:
+          label === "apt-install"
+            ? (observation) => {
+                timeoutObservation = observation;
+              }
+            : undefined,
         onReady(child) {
           const append = (data: Buffer, target?: Buffer[]) => {
             bytes += data.length;
@@ -169,7 +185,12 @@ async function run(
       return Buffer.concat(stdout);
     },
     async () => {
-      receipt.commands.push({ label, exitCode, elapsedMs: Date.now() - started });
+      receipt.commands.push({
+        label,
+        exitCode,
+        elapsedMs: Date.now() - started,
+        ...(label === "apt-install" ? { timeoutObservation } : {}),
+      });
       await withDesktopProofCleanup(
         async () => {
           if (label === "sshd-config" && exitCode !== 0) {
@@ -310,7 +331,7 @@ async function main() {
   for (const signal of signals) {
     process.once(signal, interrupt);
   }
-  const deadline = setTimeout(interrupt, 12 * 60_000);
+  const deadline = setTimeout(interrupt, 20 * 60_000);
   const watchdog = setInterval(() => void requireSpace(5).catch(interrupt), 10_000);
   let failure: unknown;
   try {
@@ -350,7 +371,8 @@ async function main() {
         "--no-install-recommends",
         ...packages,
       ],
-      { timeoutMs: 300_000 },
+      // Hosted APT mirrors can exceed five minutes before any desktop assertion runs.
+      { timeoutMs: 480_000 },
     );
     for (const name of packages) {
       const version = (await run(`version-${name}`, "dpkg-query", ["-W", "-f=${Version}", name]))
@@ -586,6 +608,7 @@ async function main() {
               "--configLoader",
               "runner",
               "--reporter=json",
+              "--reporter=./scripts/lib/vitest-resource-reporter.mts",
               "--outputFile",
               reportFile,
               "--includeTaskLocation",
@@ -619,7 +642,10 @@ async function main() {
                   checkpoint.owners.endpointTap !== "owned",
               );
               try {
-                diagnostic.report = await readDesktopProofTestReport(reportFile);
+                diagnostic.report = await readDesktopProofTestReport(
+                  reportFile,
+                  path.join(privateRoot, `test-${carrier}.log`),
+                );
                 diagnostic.status = "available";
                 for (const file of diagnostic.report.files) {
                   for (const test of file.assertions) {

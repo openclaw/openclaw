@@ -14,11 +14,7 @@ export function createLazyWorkboardPage(load: () => Promise<ControlUiView>): Con
     let loadingElement: HTMLDivElement | undefined;
     const alive = () => !disposed && !context.signal.aborted;
     const focus = () => {
-      if (handle?.focus) {
-        handle.focus();
-      } else {
-        container.querySelector<HTMLElement>("textarea, input, [contenteditable=true]")?.focus();
-      }
+      handle?.focus?.();
     };
     const update = () => {
       if (!alive()) {

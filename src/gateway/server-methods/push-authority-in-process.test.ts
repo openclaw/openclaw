@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { registerWebPushSubscription } from "../../infra/push-web.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
@@ -47,6 +48,7 @@ vi.mock("../session-sharing.js", async () => ({
 let state: Awaited<ReturnType<typeof createOpenClawTestState>> | undefined;
 beforeEach(async () => {
   state = await createOpenClawTestState({ scenario: "minimal" });
+  setRuntimeConfigSnapshot({});
   vi.clearAllMocks();
   resetGatewayWorkAdmission();
 });

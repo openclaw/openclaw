@@ -4,10 +4,13 @@ export function createCronScheduledRunId(
   storeKey: string,
   jobId: string,
   scheduledSlotMs: number,
+  attemptId?: string,
 ): string {
   return (
     SCHEDULED_RUN_PREFIX +
-    Buffer.from(JSON.stringify([storeKey, jobId, scheduledSlotMs])).toString("base64url")
+    Buffer.from(
+      JSON.stringify([storeKey, jobId, scheduledSlotMs, ...(attemptId ? [attemptId] : [])]),
+    ).toString("base64url")
   );
 }
 
@@ -23,7 +26,7 @@ export function parseCronScheduledRunId(
     );
     if (
       Array.isArray(value) &&
-      value.length === 3 &&
+      (value.length === 3 || (value.length === 4 && typeof value[3] === "string")) &&
       typeof value[0] === "string" &&
       typeof value[1] === "string" &&
       typeof value[2] === "number" &&

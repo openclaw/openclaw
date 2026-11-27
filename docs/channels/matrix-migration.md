@@ -63,14 +63,14 @@ The previous public Matrix plugin did **not** automatically create Matrix room-k
 
 ## Recommended upgrade flow
 
-1. Update OpenClaw and the Matrix plugin normally.
+1. Use the normal [`openclaw update` flow](/install/updating). It updates the official npm Matrix plugin with OpenClaw and restarts the managed Gateway. For independent installations sharing encrypted account state, follow the [crypto-store upgrade precautions](/channels/matrix/encryption#encryption-and-verification), including the older version's final-save limitation.
 2. Run:
 
    ```bash
    openclaw doctor --fix
    ```
 
-3. Start or restart the gateway.
+3. If the updater did not restart your Gateway, start or restart it.
 4. Check current verification and backup state:
 
    ```bash

@@ -5,6 +5,7 @@ import {
   estimateTokensFromChars,
 } from "@openclaw/normalization-core/cjk-chars";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { ResponseInput } from "openai/resources/responses/responses.js";
 import type {
   OpenAIResponsesCompactEndpointResult,
@@ -15,10 +16,8 @@ import { isOpenAIResponsesCompactionOutput } from "./openai-responses-compaction
 import {
   RESPONSES_RETAINED_USER,
   type OpenAIResponsesOptions,
-  type OpenAIResponsesRequestParams,
 } from "./openai-responses-contracts.js";
 import type { CompletedResponse } from "./openai-responses-stream-types-internal.js";
-import { sanitizeResponsesImagePayload } from "./responses-image-payload-sanitizer.js";
 import { sha256Hex } from "./transport-utils.js";
 
 /** Request-local collection; no partial checkpoint may survive a provider retry. */
@@ -38,17 +37,6 @@ export function createResponsesV2CompactionCollector(replayBudget?: OpenAIRespon
       if (replayBudget.estimateTokens(output, 1) > replayBudget.maxTokens) {
         throw new Error("ChatGPT V2 retained window exceeds the next request budget");
       }
-    },
-    sanitizeImages(request: OpenAIResponsesRequestParams) {
-      const sanitized = sanitizeResponsesImagePayload(request);
-      // Image normalization preserves order but copies only JSON fields.
-      sanitized.input?.forEach((inputItem, index) => {
-        const source = request.input?.[index];
-        if (source && Reflect.get(source, RESPONSES_RETAINED_USER)) {
-          Object.assign(inputItem, { [RESPONSES_RETAINED_USER]: true });
-        }
-      });
-      return sanitized;
     },
     preserveUsers(input: ResponseInput) {
       // Payload hooks may clone their input. Match unchanged authored items by
@@ -171,7 +159,7 @@ function retainV2Users(input: ResponseInput): ResponseInput {
             }
           }
           if (low > 0) {
-            content.push({ ...part, text: part.text.slice(0, low) });
+            content.push({ ...part, text: truncateUtf16Safe(part.text, low) });
           }
         }
         remaining = 0;

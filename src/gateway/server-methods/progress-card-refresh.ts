@@ -26,6 +26,9 @@ export async function requestProgressCardRefresh(
   idempotencyKey: string,
   readCard: () => Promise<ProgressCard | null>,
 ): Promise<void> {
+  // Chat admission takes the request's reference; refresh still checks authority after it returns.
+  const releaseAuthorization = invocation.sessionMutationAuthorization?.retain?.();
+  using _ = { [Symbol.dispose]: () => releaseAuthorization?.() };
   const runId = `progress-card-refresh:${sha256Hex(JSON.stringify([target.agentId, target.sessionKey, idempotencyKey]))}`;
   const receiptKey = `progressCard.refresh:${runId}`;
   let response: Parameters<RespondFn> | undefined;

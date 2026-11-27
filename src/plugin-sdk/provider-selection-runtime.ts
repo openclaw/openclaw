@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 
 /** Provider descriptor fields needed for explicit or automatic selection. */
 export type AutoSelectableProvider = {
@@ -127,6 +128,8 @@ type ProviderConfiguredContext<TProvider, TFullConfig, TConfig> = {
   provider: TProvider;
   cfg: TFullConfig | undefined;
   providerConfig: TConfig;
+  /** True when an explicit provider id was configured; false during automatic selection. */
+  selectedExplicitly: boolean;
 };
 
 function prepareProviderCandidates<TFullConfig, TProvider extends AutoSelectableProvider>(
@@ -163,7 +166,7 @@ function providerConfigContext<TFullConfig, TProvider extends AutoSelectableProv
   };
 }
 
-/** @deprecated Use resolveConfiguredCapabilityProviderAsync when providers resolve stored credentials. */
+/** @deprecated Use resolveConfiguredCapabilityProviderAsync when providers resolve stored credentials. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function resolveConfiguredCapabilityProvider<
   TConfig,
   TFullConfig,
@@ -176,7 +179,13 @@ export function resolveConfiguredCapabilityProvider<
     ) => boolean;
   },
 ): ResolvedConfiguredProvider<TProvider, TConfig> {
+  warnPluginSdkDeprecation({
+    family: "provider-selection",
+    method: "resolveConfiguredCapabilityProvider",
+    replacement: "await resolveConfiguredCapabilityProviderAsync()",
+  });
   const { configuredProviderId, providers } = prepareProviderCandidates(params);
+  const selectedExplicitly = configuredProviderId !== undefined;
   if (providers.length === 0) {
     return {
       ok: false,
@@ -199,7 +208,9 @@ export function resolveConfiguredCapabilityProvider<
     const providerConfig = params.resolveProviderConfig(
       providerConfigContext(params, provider, configuredProviderId),
     );
-    if (params.isProviderConfigured({ provider, cfg: params.cfg, providerConfig })) {
+    if (
+      params.isProviderConfigured({ provider, cfg: params.cfg, providerConfig, selectedExplicitly })
+    ) {
       return { ok: true, configuredProviderId, provider, providerConfig };
     }
     if (configuredProviderId) {
@@ -232,6 +243,7 @@ export async function resolveConfiguredCapabilityProviderAsync<
   },
 ): Promise<ResolvedConfiguredProvider<TProvider, TConfig>> {
   const { configuredProviderId, providers } = prepareProviderCandidates(params);
+  const selectedExplicitly = configuredProviderId !== undefined;
   if (providers.length === 0) {
     return {
       ok: false,
@@ -254,7 +266,14 @@ export async function resolveConfiguredCapabilityProviderAsync<
     const providerConfig = await params.resolveProviderConfig(
       providerConfigContext(params, provider, configuredProviderId),
     );
-    if (await params.isProviderConfigured({ provider, cfg: params.cfg, providerConfig })) {
+    if (
+      await params.isProviderConfigured({
+        provider,
+        cfg: params.cfg,
+        providerConfig,
+        selectedExplicitly,
+      })
+    ) {
       return { ok: true, configuredProviderId, provider, providerConfig };
     }
     if (configuredProviderId) {

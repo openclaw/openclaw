@@ -1,5 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
+import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import {
   getSqliteDatabaseAdmission,
   publishSqliteDatabaseAdmission,
@@ -7,17 +8,21 @@ import {
 } from "../infra/sqlite-database-admission.js";
 import { schemaAdmission } from "../infra/sqlite-schema-admission.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
+import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { classifySqliteTableReadError, tableExists } from "./openclaw-state-db-schema-helpers.js";
 
 export type ExistingAgentSchemaMeta = {
   agentId: string | null;
   role: string | null;
   schemaVersion: number | null;
+  /** Absent for the implicit floor derived from the writer's version markers. */
+  minReader?: number;
 };
 
-const metadataKey: SqliteDatabaseAdmissionKey<ExistingAgentSchemaMeta> = {
+export const agentSchemaMetadataKey: SqliteDatabaseAdmissionKey<ExistingAgentSchemaMeta> = {
   // Fixed ownership is reusable until tracked DDL can remove or rebuild its storage.
   name: "agent.schema-metadata",
+  lifetime: "process",
   schemaDependent: true,
   read(value) {
     if (
@@ -28,56 +33,51 @@ const metadataKey: SqliteDatabaseAdmissionKey<ExistingAgentSchemaMeta> = {
       !("role" in value) ||
       (value.role !== null && typeof value.role !== "string") ||
       !("schemaVersion" in value) ||
-      (value.schemaVersion !== null && typeof value.schemaVersion !== "number")
+      (value.schemaVersion !== null && typeof value.schemaVersion !== "number") ||
+      ("minReader" in value && value.minReader != null && typeof value.minReader !== "number")
     ) {
       return undefined;
     }
-    return { agentId: value.agentId, role: value.role, schemaVersion: value.schemaVersion };
+    return {
+      agentId: value.agentId,
+      role: value.role,
+      schemaVersion: value.schemaVersion,
+      ...("minReader" in value && typeof value.minReader === "number"
+        ? { minReader: value.minReader }
+        : {}),
+    };
   },
 };
 
 function schemaMetadataKey(
   admissionId: string,
 ): SqliteDatabaseAdmissionKey<ExistingAgentSchemaMeta> {
-  return { name: `agent.schema-metadata:${admissionId}`, read: metadataKey.read };
+  return { name: `agent.schema-metadata:${admissionId}`, read: agentSchemaMetadataKey.read };
 }
 
 /** The metadata writer publishes its committed format facts without a readback. */
 export function publishAgentSchemaMetadata(
-  db: DatabaseSync,
+  db: EngineConnection,
   metadata: ExistingAgentSchemaMeta,
 ): void {
-  publishSqliteDatabaseAdmission(db, metadataKey, metadata);
+  publishSqliteDatabaseAdmission(db, agentSchemaMetadataKey, metadata);
   const schema = getAdmittedSqliteSchemaFacts(db);
   if (schema) {
     publishSqliteDatabaseAdmission(db, schemaMetadataKey(schema.admissionId), metadata);
   }
 }
 
-type AgentSchemaMetaWithAppVersion = ExistingAgentSchemaMeta & { appVersion: string | null };
-
 /** Read ownership metadata without loading runtime schema or migration owners. */
-export function readExistingAgentSchemaMeta(
-  db: DatabaseSync,
-  options: { includeAppVersion: true },
-): AgentSchemaMetaWithAppVersion | null;
-export function readExistingAgentSchemaMeta(db: DatabaseSync): ExistingAgentSchemaMeta | null;
-export function readExistingAgentSchemaMeta(
-  db: DatabaseSync,
-  options?: { includeAppVersion: true },
-): ExistingAgentSchemaMeta | AgentSchemaMetaWithAppVersion | null {
+export function readExistingAgentSchemaMeta(db: EngineConnection): ExistingAgentSchemaMeta | null {
   const schema = getAdmittedSqliteSchemaFacts(db);
   const historical =
-    !options?.includeAppVersion &&
-    schema &&
-    getSqliteDatabaseAdmission(db, schemaMetadataKey(schema.admissionId));
+    schema && getSqliteDatabaseAdmission(db, schemaMetadataKey(schema.admissionId));
   if (historical) {
     return historical;
   }
   const admitted =
-    !options?.includeAppVersion &&
-    (!schema || getSqliteDatabaseAdmission(db, schemaAdmission)?.admissionId === schema.admissionId)
-      ? getSqliteDatabaseAdmission(db, metadataKey)
+    !schema || getSqliteDatabaseAdmission(db, schemaAdmission)?.admissionId === schema.admissionId
+      ? getSqliteDatabaseAdmission(db, agentSchemaMetadataKey)
       : undefined;
   if (admitted) {
     if (schema) {
@@ -93,9 +93,7 @@ export function readExistingAgentSchemaMeta(
   try {
     row = db
       .prepare(
-        options?.includeAppVersion
-          ? "SELECT role, schema_version, agent_id, app_version FROM schema_meta WHERE meta_key = 'primary'"
-          : "SELECT role, schema_version, agent_id FROM schema_meta WHERE meta_key = 'primary'",
+        "SELECT role, schema_version, agent_id, schema_meta.* FROM schema_meta WHERE meta_key = 'primary'",
       )
       .get();
   } catch (error) {
@@ -109,20 +107,40 @@ export function readExistingAgentSchemaMeta(
   if (!row) {
     return null;
   }
+  const schemaVersion = typeof row.schema_version === "number" ? row.schema_version : null;
+  const physical = isPostgresSqlConnection(db) ? getPostgresPhysicalFacts(db) : undefined;
+  const minReader = isPostgresSqlConnection(db)
+    ? physical && physical.minReader !== physical.version
+      ? physical.minReader
+      : undefined
+    : row.min_reader;
+  if (
+    minReader != null &&
+    (typeof minReader !== "number" ||
+      !Number.isSafeInteger(minReader) ||
+      minReader < (schemaVersion === 0 ? 0 : 1) ||
+      schemaVersion === null ||
+      minReader > schemaVersion)
+  ) {
+    throw new SqliteSchemaMismatchError(
+      "OpenClaw agent database min_reader must be a safe integer between 1 and schema_version (or 0 for schema version 0). Run openclaw doctor --fix before using it.",
+    );
+  }
   const metadata = {
     agentId: normalizeNullableString(row.agent_id),
     role: typeof row.role === "string" ? row.role : null,
-    schemaVersion: typeof row.schema_version === "number" ? row.schema_version : null,
+    schemaVersion,
+    ...(minReader != null ? { minReader } : {}),
   };
+  const schemaStillCurrent = schema && getAdmittedSqliteSchemaFacts(db) === schema;
   if (
-    schema &&
-    getAdmittedSqliteSchemaFacts(db) === schema &&
-    getSqliteDatabaseAdmission(db, schemaAdmission)?.admissionId === schema.admissionId
+    isPostgresSqlConnection(db) ||
+    (schemaStillCurrent &&
+      getSqliteDatabaseAdmission(db, schemaAdmission)?.admissionId === schema.admissionId)
   ) {
     publishAgentSchemaMetadata(db, metadata);
+  } else if (schemaStillCurrent) {
+    publishSqliteDatabaseAdmission(db, schemaMetadataKey(schema.admissionId), metadata);
   }
-  // App version can change without DDL; write admission must read it from the current row.
-  return options?.includeAppVersion
-    ? { ...metadata, appVersion: typeof row.app_version === "string" ? row.app_version : null }
-    : metadata;
+  return metadata;
 }

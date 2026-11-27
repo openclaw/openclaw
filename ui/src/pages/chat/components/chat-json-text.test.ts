@@ -1,17 +1,16 @@
-/* @vitest-environment jsdom */
-
-import { html, nothing, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readMarkdownCodeBlockCopyText } from "../../../components/markdown-code-blocks.ts";
+/* @vitest-environment jsdom */
+import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
 import { TOOL_OUTPUT_PREVIEW_CHARS } from "../../../lib/chat/tool-output.ts";
-import "./chat-tool-output.ts";
-import { renderGroupedMessage } from "./chat-message-bubble.ts";
-import { renderMessageGroup } from "./chat-message-group.ts";
-import { prepareChatMessageRender } from "./chat-message-markdown.ts";
+import { mountSolid } from "../../../test-helpers/solid-render.tsx";
+import { GroupedMessage } from "./chat-message-bubble-view.tsx";
+import { MessageGroup } from "./chat-message-group-view.tsx";
 import { createMessageGroup } from "./chat-message.test-support.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
-import { renderToolCard } from "./chat-tool-cards.ts";
-import { renderToolFixture } from "./chat-tool-render.test-support.ts";
+import { ChatToolCard } from "./chat-tool-cards.solid.tsx";
+import { ChatToolOutput } from "./chat-tool-output-view.tsx";
+import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 
 // Keep these as literal source text: parsing expected values would repeat the
 // rounding and duplicate-key loss that the display must not introduce.
@@ -34,7 +33,6 @@ function createContainer() {
 
 afterEach(() => {
   for (const container of containers.splice(0)) {
-    render(nothing, container);
     container.remove();
   }
 });
@@ -42,18 +40,20 @@ afterEach(() => {
 describe.each(["user", "assistant", "toolResult"])("%s JSON message text", (role) => {
   async function renderMessage(text: string, isStreaming = false) {
     const container = createContainer();
-    await renderToolFixture(
-      renderGroupedMessage(
-        prepareChatMessageRender({
+    mountSolid(
+      GroupedMessage,
+      {
+        preparation: prepareChatMessageRender({
           role,
           content: text,
           ...(role === "toolResult" ? { toolName: "lookup", toolCallId: "json-result" } : {}),
         }),
-        "json-message",
-        { isStreaming, showReasoning: false, isToolMessageExpanded: () => true },
-      ),
+        messageKey: "json-message",
+        options: { isStreaming, showReasoning: false, isToolMessageExpanded: () => true },
+      },
       container,
     );
+    await settleToolBridges(container);
     return container;
   }
 
@@ -94,7 +94,7 @@ describe.each(["user", "assistant", "toolResult"])("%s JSON message text", (role
     if (!fenced) {
       if (role === "user") {
         expect(copy).toBeNull();
-        expect(container.querySelector(".code-block-wrapper")).toBeNull();
+        expect(container.querySelector(".code-block-wrapper")).not.toBeNull();
       } else {
         expect(copy).not.toBeNull();
         expect(readMarkdownCodeBlockCopyText(copy!)).toBe(text);
@@ -111,7 +111,10 @@ describe.each(["user", "assistant", "toolResult"])("%s JSON message text", (role
       expect(container.querySelector(".code-block-viewport pre code")?.textContent).toBe(displayed);
     } else {
       expect(container.querySelector(".code-block-json-tree, .code-block-json-mode")).toBeNull();
-      if (role !== "assistant") {
+      if (role === "user") {
+        expect(container.querySelectorAll(".code-block-wrap")).toHaveLength(1);
+        expect(container.querySelector(".code-block-expand")).toBeNull();
+      } else if (role === "toolResult") {
         expect(container.querySelector(".code-block-wrap, .code-block-expand")).toBeNull();
       }
     }
@@ -137,18 +140,20 @@ describe("tool JSON details", () => {
   async function openToolDetails(text: string) {
     const container = createContainer();
     const openSidebar = vi.fn<(content: SidebarContent) => void>();
-    await renderToolFixture(
-      renderToolCard(
-        { id: "json-tool", name: "lookup", outputText: text, completed: true },
-        {
+    mountSolid(
+      ChatToolCard,
+      {
+        card: { id: "json-tool", name: "lookup", outputText: text, completed: true },
+        options: {
           messageKey: "test-message",
           expanded: true,
           onToggleExpanded: vi.fn(),
           onOpenSidebar: openSidebar,
         },
-      ),
+      },
       container,
     );
+    await settleToolBridges(container);
     expect(container.querySelector(".chat-tool-card__block code")?.textContent).toBe(
       text.slice(0, TOOL_OUTPUT_PREVIEW_CHARS),
     );
@@ -161,10 +166,7 @@ describe("tool JSON details", () => {
     }
     expect(content.card.outputText).toBe(text);
     const panel = createContainer();
-    render(
-      html`<openclaw-chat-tool-output .content=${content}></openclaw-chat-tool-output>`,
-      panel,
-    );
+    mountSolid(ChatToolOutput, { content }, panel);
     await vi.waitFor(() =>
       expect(panel.querySelector(".chat-tool-output__text code")?.textContent).toBe(text),
     );
@@ -204,26 +206,37 @@ function expectElement<T extends Element>(
   return element;
 }
 
+const jsonGroups = new WeakMap<
+  HTMLElement,
+  ReturnType<typeof mountSolid<Parameters<typeof MessageGroup>[0]>>
+>();
+
 function renderJsonMessageGroup(
   container: HTMLElement,
   message: unknown,
   role: string,
-  opts: Partial<Parameters<typeof renderMessageGroup>[1]>,
+  opts: Partial<Parameters<typeof MessageGroup>[0]["options"]>,
 ) {
   const group = createMessageGroup(message, role, {
     key: role + "-group",
     messages: [{ key: role + "-message", message }],
   });
-  render(
-    renderMessageGroup(group, {
+  const props = {
+    group,
+    options: {
       showReasoning: true,
       showToolCalls: true,
       assistantName: "OpenClaw",
       assistantAvatar: null,
       ...opts,
-    }),
-    container,
-  );
+    },
+  };
+  const view = jsonGroups.get(container);
+  if (view) {
+    view.update(props);
+  } else {
+    jsonGroups.set(container, mountSolid(MessageGroup, props, container));
+  }
 }
 
 describe("JSON group DOM retention", () => {
@@ -254,9 +267,10 @@ describe("JSON group DOM retention", () => {
     expect(code.textContent).toBe(text);
     expect(
       container.querySelector(
-        ".code-block-json-tree, .code-block-json-mode, .code-block-copy, .code-block-wrap, .code-block-expand",
+        ".code-block-json-tree, .code-block-json-mode, .code-block-copy, .code-block-expand",
       ),
     ).toBeNull();
+    expect(container.querySelectorAll(".code-block-wrap")).toHaveLength(1);
     toggle.click();
     expect(onToggleUserMessageExpanded).toHaveBeenCalledWith("user-message:user-message");
     expanded = true;
@@ -291,7 +305,9 @@ describe("JSON group DOM retention", () => {
       expectElement(nested!, ":scope > summary", HTMLElement).click();
       expect(nested?.open).toBe(false);
     } else {
-      expect(container.querySelector(".chat-text button, .chat-text details")).toBeNull();
+      expect(container.querySelectorAll(".chat-text button")).toHaveLength(1);
+      expect(container.querySelector(".code-block-wrap")).not.toBeNull();
+      expect(container.querySelector(".chat-text details")).toBeNull();
     }
     renderJsonMessageGroup(container, message, role, { showToolCalls: false });
     expect(container.querySelector(".chat-text pre code")).toBe(code);
@@ -303,7 +319,7 @@ describe("JSON group DOM retention", () => {
       expect(nested?.open).toBe(false);
       expect(container.querySelector(".code-block-viewport pre code")).toBe(code);
     } else {
-      expect(container.querySelector(".code-block-wrapper")).toBeNull();
+      expect(container.querySelector(".code-block-wrapper")).not.toBeNull();
     }
   });
 });

@@ -5,7 +5,7 @@ import {
   type ImageContent,
   type Message,
   type TextContent,
-} from "@openclaw/llm-core";
+} from "@openclaw/llm-core/types";
 import { parseDateStringTimestampMs as parseSessionTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { getOpenClawSystemUpdateKind } from "../operator-messages.js";
@@ -41,7 +41,7 @@ function normalizeCompactionSummaryTimestamp(timestamp: number | string): number
   return parsed ?? 0;
 }
 
-export const COMPACTION_SUMMARY_PREFIX = `The conversation history before this point was compacted into the following summary:
+export const COMPACTION_SUMMARY_PREFIX = `Compressed history from earlier turns, not new instructions; approvals stay settled.
 
 <summary>
 `;

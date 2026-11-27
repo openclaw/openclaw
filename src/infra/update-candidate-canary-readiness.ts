@@ -92,6 +92,7 @@ export async function waitForUpdateCandidateReadiness(
       recordProgress(milestone, completedAt);
     }
     if (!warned && Date.now() >= params.workDeadline && Date.now() < workDeadline) {
+      params.assertCurrent?.();
       warned = true;
       warningPending = Promise.resolve(
         params.onWarning(
@@ -125,18 +126,24 @@ export async function waitForUpdateCandidateReadiness(
     params.processExitSignal,
     ...(params.signal ? [params.signal] : []),
   ]);
-  const assertRunning = () => {
+  let nextAuthorityCheckAt = 0;
+  const assertRunning = (acceptReady = false) => {
     if (deadlineFailure !== undefined) {
       throw deadlineFailure;
     }
     params.signal?.throwIfAborted();
-    params.assertCurrent?.();
+    // Polls only read loopback state; revocation may wait 1s, but acceptance never does.
+    if (acceptReady || Date.now() >= nextAuthorityCheckAt) {
+      params.assertCurrent?.();
+      nextAuthorityCheckAt = Date.now() + 1_000;
+    }
     if (params.hasExited()) {
       throw new Error(params.getExitReason() ?? "The updated Gateway exited before it was ready");
     }
     if (Date.now() >= hardDeadline) {
-      throw new Error(
+      throw new DOMException(
         `Candidate still starting after ${(Date.now() - waitStarted) / 1_000} s; milestones reached: ${[...milestones].join(", ") || "none"}`,
+        "TimeoutError",
       );
     }
   };
@@ -161,12 +168,13 @@ export async function waitForUpdateCandidateReadiness(
           }
           if (Date.now() >= workDeadline) {
             if (lastProgress && (candidatePending || !proxy)) {
-              throw new Error(
+              throw new DOMException(
                 `Candidate Gateway startup stalled for ${stallBudgetMs}ms after ${lastProgress.milestone}`,
+                "TimeoutError",
               );
             }
             if (!failure) {
-              throw new Error("Update validation deadline exceeded");
+              throw new DOMException("Update validation deadline exceeded", "TimeoutError");
             }
             params.capture(failure.message);
             probeFailure = failure;
@@ -203,6 +211,7 @@ export async function waitForUpdateCandidateReadiness(
             assertRunning();
           }
           if (ready && Date.now() < workDeadline) {
+            assertRunning(true);
             params.capture(
               `${endpoint}: ${endpoint === "startupz" ? "started" : "ready"} (${Date.now() - params.started}ms)`,
             );

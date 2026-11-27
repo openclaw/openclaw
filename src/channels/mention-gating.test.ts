@@ -5,35 +5,29 @@ import {
   type InboundMentionPolicy,
   resolveBotThreadMentionPolicy,
   resolveInboundMentionDecision,
-  type InboundImplicitMentionKind,
 } from "./mention-gating.js";
 
+const defaultFacts = { canDetectMention: true, wasMentioned: false, implicitMentionKinds: [] };
+const defaultPolicy = {
+  isGroup: true,
+  requireMention: true,
+  allowTextCommands: true,
+  hasControlCommand: false,
+  commandAuthorized: false,
+};
 function decide(facts: Partial<InboundMentionFacts>, policy: Partial<InboundMentionPolicy> = {}) {
   return resolveInboundMentionDecision({
-    facts: { canDetectMention: true, wasMentioned: false, implicitMentionKinds: [], ...facts },
-    policy: {
-      isGroup: true,
-      requireMention: true,
-      allowTextCommands: true,
-      hasControlCommand: false,
-      commandAuthorized: false,
-      ...policy,
-    },
+    facts: { ...defaultFacts, ...facts },
+    policy: { ...defaultPolicy, ...policy },
   });
 }
 
 describe("resolveInboundMentionDecision", () => {
   it("translates positive implicit mention config inside the evaluator", () => {
     const res = decide(
+      { implicitMentionKinds: ["reply_to_bot", "quoted_bot", "bot_thread_participant", "native"] },
       {
-        implicitMentionKinds: ["reply_to_bot", "quoted_bot", "bot_thread_participant", "native"],
-      },
-      {
-        implicitMentions: {
-          replyToBot: false,
-          quotedBot: true,
-          threadParticipation: false,
-        },
+        implicitMentions: { replyToBot: false, quotedBot: true, threadParticipation: false },
       },
     );
     expect(res.matchedImplicitMentionKinds).toEqual(["quoted_bot", "native"]);
@@ -41,80 +35,44 @@ describe("resolveInboundMentionDecision", () => {
 
   it("keeps the flat call shape for compatibility", () => {
     const res = resolveInboundMentionDecision({
-      isGroup: true,
-      requireMention: true,
-      canDetectMention: true,
-      wasMentioned: false,
+      ...defaultFacts,
+      ...defaultPolicy,
       implicitMentionKinds: ["reply_to_bot"],
-      allowTextCommands: true,
-      hasControlCommand: false,
-      commandAuthorized: false,
     });
     expect(res.effectiveWasMentioned).toBe(true);
   });
 });
 
 describe("bot-owned thread mention policy", () => {
-  it.each<{
-    name: string;
-    isBotOwnedThread: boolean;
-    requireMentionInBotThreads?: boolean;
-    requireMention: boolean;
-    implicitMentionKinds?: readonly InboundImplicitMentionKind[];
-    wasMentioned?: boolean;
-    commandAuthorized?: boolean;
-    shouldSkip: boolean;
-  }>([
-    {
-      name: "admits an unmentioned reply when mentions are disabled for owned threads",
-      isBotOwnedThread: true,
-      requireMentionInBotThreads: false,
-      requireMention: true,
-      shouldSkip: false,
+  it.each([
+    ["disabled for owned threads", false, true, false, false],
+    ["unset override", undefined, true, false, true],
+    ["required despite ordinary gate", true, false, false, true],
+    ["authorized command bypass", true, true, true, false],
+  ] as const)(
+    "%s",
+    (_name, requireMentionInBotThreads, requireMention, commandAuthorized, skip) => {
+      const threadPolicy = resolveBotThreadMentionPolicy({
+        isBotOwnedThread: true,
+        requireMentionInBotThreads,
+        requireMention,
+        implicitMentionKinds:
+          requireMentionInBotThreads && !requireMention
+            ? ["reply_to_bot", "quoted_bot", "bot_thread_participant"]
+            : undefined,
+      });
+      expect(
+        decide(
+          { implicitMentionKinds: threadPolicy.implicitMentionKinds },
+          {
+            requireMention: threadPolicy.requireMention,
+            hasControlCommand: commandAuthorized,
+            commandAuthorized,
+          },
+        ).shouldSkip,
+      ).toBe(skip);
     },
-
-    {
-      name: "preserves the existing requirement when the override is unset",
-      isBotOwnedThread: true,
-      requireMention: true,
-      shouldSkip: true,
-    },
-
-    {
-      name: "requires mentions in owned threads even when the ordinary gate is disabled",
-      isBotOwnedThread: true,
-      requireMentionInBotThreads: true,
-      requireMention: false,
-      implicitMentionKinds: ["reply_to_bot", "quoted_bot", "bot_thread_participant"],
-      shouldSkip: true,
-    },
-
-    {
-      name: "preserves authorized command bypass under the owned-thread requirement",
-      isBotOwnedThread: true,
-      requireMentionInBotThreads: true,
-      requireMention: true,
-      commandAuthorized: true,
-      shouldSkip: false,
-    },
-  ])("$name", ({ wasMentioned = false, commandAuthorized = false, shouldSkip, ...input }) => {
-    const threadPolicy = resolveBotThreadMentionPolicy(input);
-    const decision = resolveInboundMentionDecision({
-      facts: {
-        canDetectMention: true,
-        wasMentioned,
-        implicitMentionKinds: threadPolicy.implicitMentionKinds,
-      },
-      policy: {
-        isGroup: true,
-        requireMention: threadPolicy.requireMention,
-        allowTextCommands: true,
-        hasControlCommand: commandAuthorized,
-        commandAuthorized,
-      },
-    });
-    expect(decision.shouldSkip).toBe(shouldSkip);
-  });
+  );
 });
 
 describe("allowedImplicitMentionKindsFromConfig", () => {

@@ -1,460 +1,517 @@
 import assert from "node:assert/strict";
-import { endianness } from "node:os";
-import { constants, DatabaseSync } from "node:sqlite";
+import { constants, DatabaseSync, type SQLInputValue } from "node:sqlite";
 import {
   encodeMemoryEmbedding,
   ensureMemoryIndexSchema,
   loadSqliteVecExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { runSqliteImmediateTransactionSync } from "openclaw/plugin-sdk/sqlite-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
-import { MemorySourceIndexKernel } from "./manager-source-index-kernel.js";
-import type {
-  MemorySourceIndexReplacement,
-  MemorySourceIndexRow,
+import {
+  MemorySourceIndexKernel,
+  memoryChunkRowId,
+  readMemorySourceChunks,
+  type MemorySourceIndexReplacement as Replacement,
+  type MemorySourceIndexRow,
 } from "./manager-source-index-kernel.js";
+import { markMemoryVectorIndexClean } from "./manager-vector-rebuild-state.js";
 
-const databases: MemoryIndexDatabase[] = [];
-
-afterEach(() => {
-  for (const database of databases.splice(0)) {
-    database.release();
+const readVectors = () =>
+  select("chunks_vec", "id, hex(embedding) AS embedding", "ORDER BY id").all();
+const readDebt = () => select("meta", "value", "WHERE key = 'memory_vector_rebuild_v1'").get();
+const embeddingHex = (embedding: number[]) =>
+  Buffer.from(new Float32Array(embedding).buffer).toString("hex").toUpperCase();
+let store: MemoryIndexDatabase;
+let conn: DatabaseSync;
+function select(table: string, columns: string, suffix = "") {
+  return conn.prepare(`SELECT ${columns} FROM memory_index_${table} ${suffix}`);
+}
+const all = (sql: string, ...params: SQLInputValue[]) => conn.prepare(sql).all(...params);
+const currentPath = "memory/current.md";
+const siblingPath = "memory/sibling.md";
+const vectorX = [1, 0, 0];
+const vectorY = [0, 1, 0];
+const chunkId = (value: Replacement, chunk: Replacement["chunks"][number]) =>
+  memoryChunkRowId(value.source, value.entry.path, chunk, value.model);
+const sourceTables = ["sources", "chunks", "chunks_fts", "paths_fts"];
+const metadataTables = ["chunk_recall_metadata", "chunk_provenance"];
+const derivedTables = [...metadataTables, "chunks_vec"];
+const recallMetadata = { importance: 7, triggers: "indexed", projectKey: "project" };
+function expectCounts(tables: string[], count: number) {
+  for (const table of tables) {
+    expect(select(table, "COUNT(*) AS n").get(), table).toEqual({ n: count });
   }
-});
-
-async function createDatabase(): Promise<MemoryIndexDatabase> {
-  const db = new DatabaseSync(":memory:", { allowExtension: true });
-  const database = new MemoryIndexDatabase(db);
-  databases.push(database);
-  const schema = ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: true });
+}
+function expectedVectors(value: Replacement) {
+  return value.chunks.map((chunk, index) => ({
+    id: chunkId(value, chunk),
+    embedding: embeddingHex(value.embeddings[index]!),
+  }));
+}
+function interruptVectorDeletes(failAt: number) {
+  let count = 0;
+  conn.setAuthorizer((action, table) =>
+    action === constants.SQLITE_DELETE &&
+    table === "memory_index_chunks_vec_rowids" &&
+    ++count === failAt
+      ? constants.SQLITE_DENY
+      : constants.SQLITE_OK,
+  );
+  return () => count;
+}
+beforeEach(async () => {
+  conn = new DatabaseSync(":memory:", { allowExtension: true });
+  store = new MemoryIndexDatabase(conn);
+  const schema = ensureMemoryIndexSchema({ db: conn, cacheEnabled: false, ftsEnabled: true });
   expect(schema.ftsAvailable).toBe(true);
-  const vector = await loadSqliteVecExtension({ db });
-  expect(vector.ok).toBe(true);
-  db.exec(
+  expect((await loadSqliteVecExtension({ db: conn })).ok).toBe(true);
+  conn.exec(
     "CREATE VIRTUAL TABLE memory_index_chunks_vec USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[3])",
   );
-  database.fts.enabled = true;
-  database.fts.available = true;
-  database.vector.enabled = true;
-  database.vector.available = true;
-  return database;
-}
+  Object.assign(store.fts, { enabled: true, available: true });
+  Object.assign(store.vector, { enabled: true, available: true });
+});
 
-function replacement(
-  path: string,
-  hash = "original",
-  chunkCount = 1,
-): MemorySourceIndexReplacement {
+afterEach(() => store.release());
+
+function replacement(path: string, hash = "original", chunkCount = 1): Replacement {
   return {
     source: "memory",
     entry: { path, hash, mtimeMs: 100.25, size: 12 },
     model: "test-model",
     now: 100,
     vectorReady: true,
-    embeddings: Array.from({ length: chunkCount }, () => [1, 0, 0]),
+    embeddings: Array.from({ length: chunkCount }, () => [...vectorX]),
     chunks: Array.from({ length: chunkCount }, (_, index) => ({
       startLine: index + 1,
       endLine: index + 1,
       text: `${hash} indexed text`,
       hash,
-      importance: 7,
-      triggers: "indexed",
-      projectKey: "project",
+      ...recallMetadata,
       provenance: { originClass: "owner", sessionKind: "interactive", observedAt: 90 },
     })),
   };
 }
 
-function write(database: MemoryIndexDatabase, value: MemorySourceIndexReplacement) {
-  return runSqliteImmediateTransactionSync(database.db, () =>
-    new MemorySourceIndexKernel(database.db, database).replaceRows(
-      value,
-      value.chunks.map((chunk, index) => ({ chunk, embedding: value.embeddings[index] ?? [] })),
-    ),
+function mutate<T>(action: (kernel: MemorySourceIndexKernel) => T): T {
+  return runSqliteImmediateTransactionSync(conn, () =>
+    action(new MemorySourceIndexKernel(conn, store)),
+  );
+}
+const replacementRows = (value: Replacement) =>
+  value.chunks.map((chunk, index) => ({ chunk, embedding: value.embeddings[index] ?? [] }));
+const write = (value: Replacement) =>
+  mutate((kernel) => kernel.replaceRows(value, replacementRows(value)));
+function writeGroup(values: Replacement[]) {
+  return mutate((kernel) =>
+    kernel.replaceGroup(values.map((value) => ({ header: value, rows: replacementRows(value) }))),
   );
 }
 
-function remove(database: MemoryIndexDatabase, pathname: string, expectedHash: string) {
-  return runSqliteImmediateTransactionSync(database.db, () =>
-    new MemorySourceIndexKernel(database.db, database).deleteIfCurrent({
-      path: pathname,
-      source: "memory",
-      expectedHash,
-    }),
+function indexedSource(chunks: number, clean = true) {
+  const value = replacement(currentPath, "original", chunks);
+  const sibling = replacement(siblingPath);
+  write(value);
+  write(sibling);
+  if (clean) {
+    markMemoryVectorIndexClean(store.db);
+  }
+  return { value, sibling };
+}
+
+function remove(pathname: string, expectedHash: string) {
+  return mutate((kernel) =>
+    kernel.deleteIfCurrent({ path: pathname, source: "memory", expectedHash }),
   );
 }
 
-function snapshot(db: DatabaseSync) {
-  return [
-    "memory_index_sources",
-    "memory_index_chunks",
-    "memory_index_chunk_recall_metadata",
-    "memory_index_chunk_provenance",
-    "memory_index_chunks_fts",
-    "memory_index_paths_fts",
-    "memory_index_state",
-  ]
-    .map((table) => db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all())
-    .concat([
-      db
-        .prepare("SELECT id, hex(embedding) AS embedding FROM memory_index_chunks_vec ORDER BY id")
-        .all(),
-    ]);
+function snapshot() {
+  return [...sourceTables, ...metadataTables, "state"]
+    .map((table) => select(table, "*", "ORDER BY rowid").all())
+    .concat([readVectors()]);
 }
 
 describe("memory source index native kernel", () => {
-  it.each([0, 2048])("bounds statement preparations for %s chunks", async (chunks) => {
-    const database = await createDatabase();
-    const tables = [
-      "memory_index_chunks",
-      "memory_index_chunk_recall_metadata",
-      "memory_index_chunk_provenance",
-      "memory_index_chunks_fts",
-    ];
-    const prepare = vi.spyOn(database.db, "prepare");
+  it("repairs, appends and removes changed, missing, empty and stale vectors", () => {
+    const { value } = indexedSource(4);
+    const ids = value.chunks.map((chunk) => chunkId(value, chunk));
+    const [, changedId, missingId, emptyId] = ids;
+    assert.ok(changedId && missingId && emptyId);
+    conn.prepare("DELETE FROM memory_index_chunks_vec WHERE id = ?").run(missingId);
+    const appended = replacement(value.entry.path, "original", 5);
+    appended.embeddings[1] = vectorY;
+    appended.embeddings[3] = [];
+    write(appended);
+    expect(
+      select("chunks_vec", "id, hex(embedding) AS embedding", "WHERE id = ?").get(changedId),
+    ).toEqual({ id: changedId, embedding: embeddingHex(vectorY) });
+    expect(select("chunks_vec", "id", "WHERE id = ?").get(missingId)).toEqual({ id: missingId });
+    expect(select("chunks_vec", "id", "WHERE id = ?").get(emptyId)).toBeUndefined();
+    write({
+      ...appended,
+      chunks: appended.chunks.slice(0, 2),
+      embeddings: appended.embeddings.slice(0, 2),
+    });
+    expectCounts(["chunks", "chunks_fts", ...derivedTables], 3);
+  });
+
+  it.each([32, 2163])(
+    "replaces %i stale vectors but keeps retained, appended and sibling vectors",
+    (staleCount) => {
+      const { value, sibling } = indexedSource(staleCount + 1);
+      const appended = replacement(value.entry.path, "new");
+      const next = {
+        ...value,
+        chunks: [value.chunks[0]!, appended.chunks[0]!],
+        embeddings: [vectorX, vectorY],
+      };
+      write(next);
+      const expected = [...expectedVectors(next), ...expectedVectors(sibling)].toSorted((a, b) =>
+        a.id.localeCompare(b.id),
+      );
+      expect(readVectors()).toEqual(expected);
+      expect(select("chunks", "count(*) AS n").get()).toEqual({ n: 3 });
+      expect(readDebt()).toEqual({ value: "clean" });
+    },
+  );
+
+  it.each([5, 2164])("rolls back stale-vector cleanup with rebuild debt (%i chunks)", (chunks) => {
+    const { value } = indexedSource(chunks);
+    const vectors = select("chunks_vec", "id", "ORDER BY id").all();
+    const deletes = interruptVectorDeletes(4);
     try {
-      write(database, replacement("memory/current.md", "original", chunks));
-      const prepared = prepare.mock.calls.flatMap(([sql]) => {
-        const table = /^\s*INSERT INTO "?(\w+)"?\s*\(/i.exec(sql)?.[1];
-        return table && tables.includes(table) ? [table] : [];
+      write({
+        ...value,
+        chunks: value.chunks.slice(0, 2),
+        embeddings: value.embeddings.slice(0, 2),
       });
-      for (const table of tables) {
-        expect(
-          prepared.filter((value) => value === table),
-          table,
-        ).toHaveLength(chunks && table !== "memory_index_chunks_fts" ? 1 : 0);
-      }
     } finally {
-      prepare.mockRestore();
+      conn.setAuthorizer(null);
     }
+    expect(deletes()).toBe(4);
+    expect(select("chunks_vec", "id", "ORDER BY id").all()).toEqual(vectors);
+    expect(select("chunks", "count(*) AS n").get()).toEqual({ n: 3 });
+    expect(readDebt()).toEqual({ value: "1" });
   });
 
-  it("uses native vector point lookups for sparse replacement and source deletion", async () => {
-    const database = await createDatabase();
-    const pathname = "memory/current.md";
-    write(database, replacement(pathname, "original", 3));
-    write(database, replacement("memory/sibling.md"));
-    write(database, {
-      ...replacement(pathname),
-      source: "sessions",
-      agentId: "main",
-      sessionId: "sibling-session",
-    });
-    const siblings = database.db
-      .prepare("SELECT id FROM memory_index_chunks WHERE path != ? OR source != ? ORDER BY id")
-      .all(pathname, "memory");
-    for (const phase of ["replace", "delete"] as const) {
-      const prepare = vi.spyOn(database.db, "prepare");
-      let deletes: string[];
-      try {
-        if (phase === "replace") {
-          write(database, replacement(pathname, "updated", 3));
-        } else {
-          remove(database, pathname, "updated");
-        }
-        deletes = prepare.mock.calls
-          .map(([sql]) => sql)
-          .filter((sql) => /^DELETE FROM memory_index_chunks_vec\b/.test(sql));
-      } finally {
-        prepare.mockRestore();
-      }
-      const vectorPlans = deletes.flatMap((sql) =>
-        database.db
-          .prepare(`EXPLAIN QUERY PLAN ${sql}`)
-          .all()
-          .map((row) => String(row.detail))
-          .filter((detail) => detail.includes("memory_index_chunks_vec VIRTUAL TABLE INDEX")),
-      );
-      expect(vectorPlans.length).toBeGreaterThan(0);
-      // sqlite-vec's native plan 2 uses the primary key; plan 1 scans every vector.
-      expect(vectorPlans.every((detail) => /VIRTUAL TABLE INDEX \d+:2\b/.test(detail))).toBe(true);
-      const vectors = database.db
-        .prepare("SELECT id FROM memory_index_chunks_vec ORDER BY id")
-        .all();
-      expect(vectors).toEqual(expect.arrayContaining(siblings));
-      expect(vectors).toHaveLength(phase === "replace" ? 5 : 2);
-      expect(
-        database.db
-          .prepare("SELECT id FROM memory_index_chunks WHERE hash = 'original' ORDER BY id")
-          .all(),
-      ).toEqual(siblings);
-      expect(
-        database.db.prepare("SELECT rowid, id FROM memory_index_chunks_fts ORDER BY rowid").all(),
-      ).toEqual(
-        database.db
-          .prepare("SELECT chunk_rowid AS rowid, id FROM memory_index_chunks ORDER BY chunk_rowid")
-          .all(),
-      );
-    }
-  });
-
-  it("removes a large source in one native vector delete while retaining siblings", async () => {
-    const database = await createDatabase();
-    const db = database.db;
-    const pathname = "memory/current.md";
-    write(database, replacement(pathname, "original", 2048));
-    write(database, replacement("memory/sibling.md"));
-    write(database, {
-      ...replacement(pathname),
-      source: "sessions",
-      agentId: "main",
-      sessionId: "sibling-session",
-    });
-    const siblings = db
-      .prepare("SELECT id FROM memory_index_chunks WHERE path != ? OR source != ? ORDER BY id")
-      .all(pathname, "memory");
-    const prepare = db.prepare.bind(db);
-    const deletes: Array<{ calls: () => number; restore: () => void }> = [];
-    const reads: Array<{ rows: () => number[]; restore: () => void }> = [];
-    const spy = vi.spyOn(db, "prepare").mockImplementation((sql) => {
-      const statement = prepare(sql);
-      if (/^DELETE FROM memory_index_chunks_vec\b/.test(sql)) {
-        const run = vi.spyOn(statement, "run");
-        deletes.push({ calls: () => run.mock.calls.length, restore: () => run.mockRestore() });
-      }
-      if (/^select "id" from "memory_index_chunks"(?:\s|$)/i.test(sql)) {
-        const all = vi.spyOn(statement, "all");
-        const iterate = statement.iterate.bind(statement);
-        const iteration = vi.spyOn(statement, "iterate").mockImplementation((...params) => {
-          const iterator = iterate(...params);
-          const next = vi.spyOn(iterator, "next");
-          reads.push({
-            rows: () => [
-              next.mock.results.filter((result) => result.type === "return" && !result.value.done)
-                .length,
-            ],
-            restore: () => next.mockRestore(),
-          });
-          return iterator;
-        });
-        reads.push({
-          rows: () =>
-            all.mock.results.flatMap((result) =>
-              result.type === "return" ? [result.value.length] : [],
-            ),
-          restore: () => {
-            all.mockRestore();
-            iteration.mockRestore();
+  it.each([
+    { count: 2, retainedLast: false },
+    { count: 129, retainedLast: false },
+    { count: 2, retainedLast: true },
+  ])(
+    "keeps last-write values for repeated IDs ($count, retained=$retainedLast)",
+    ({ count, retainedLast }) => {
+      const value = replacement(currentPath);
+      write(value);
+      markMemoryVectorIndexClean(conn);
+      const chunk = value.chunks[0];
+      assert.ok(chunk);
+      const rows: MemorySourceIndexRow[] = Array.from({ length: count }, (_, index) => {
+        const last = index === count - 1;
+        return {
+          chunk: {
+            ...chunk,
+            text: last ? "latest text" : "earlier text",
+            importance: last ? 9 : 1,
+            triggers: last ? "latest" : "earlier",
+            projectKey: last ? "latest-project" : "earlier-project",
+            provenance: {
+              originClass: last ? "owner" : "untrusted",
+              sessionKind: last ? "interactive" : "unknown",
+              observedAt: last ? 200 : 100,
+              supersedesKey: last ? "latest-source" : "earlier-source",
+            },
           },
-        });
-      }
-      return statement;
-    });
-    let deleteCalls: number;
-    let selectedRows: number[];
-    try {
-      expect(remove(database, pathname, "original")).toBe(true);
-      deleteCalls = deletes.reduce((count, statement) => count + statement.calls(), 0);
-      selectedRows = reads.flatMap((statement) => statement.rows());
-    } finally {
-      spy.mockRestore();
-      for (const statement of [...deletes, ...reads]) {
-        statement.restore();
-      }
+          embedding: last && !retainedLast ? vectorX : vectorY,
+          ...(last && retainedLast ? { retained: true } : {}),
+        };
+      });
+      mutate((kernel) => kernel.replaceRows({ ...value, now: 200 }, rows));
+      expect(
+        conn
+          .prepare(`SELECT c.text, hex(c.embedding) AS embedding, c.updated_at,
+      m.importance, m.triggers, m.project_key, p.origin_class, p.session_kind,
+      p.observed_at, p.supersedes_key
+      FROM memory_index_chunks c
+      JOIN memory_index_chunk_recall_metadata m ON m.chunk_id = c.id
+      JOIN memory_index_chunk_provenance p ON p.chunk_id = c.id`)
+          .all(),
+      ).toEqual([
+        {
+          text: retainedLast ? "earlier text" : "latest text",
+          embedding: retainedLast
+            ? "0000000000000000000000000000F03F0000000000000000"
+            : "000000000000F03F00000000000000000000000000000000",
+          updated_at: 200,
+          importance: 9,
+          triggers: "latest",
+          project_key: "latest-project",
+          origin_class: "owner",
+          session_kind: "interactive",
+          observed_at: 200,
+          supersedes_key: "latest-source",
+        },
+      ]);
+      expect(select("chunks_vec", "hex(embedding) AS embedding").all()).toEqual([
+        { embedding: embeddingHex(retainedLast ? vectorY : vectorX) },
+      ]);
+    },
+  );
+
+  it.each(["unverified", "incomplete"])("repairs stale same-ID vectors: %s", (state) => {
+    const value = replacement(currentPath);
+    write(value);
+    const chunk = value.chunks[0];
+    assert.ok(chunk);
+    const id = chunkId(value, chunk);
+    value.embeddings[0] = vectorY;
+    conn
+      .prepare("UPDATE memory_index_chunks SET embedding = ? WHERE id = ?")
+      .run(encodeMemoryEmbedding(vectorY), id);
+    if (state === "incomplete") {
+      conn
+        .prepare(
+          "INSERT INTO memory_index_meta (key,value) VALUES ('memory_vector_rebuild_v1','1')",
+        )
+        .run();
     }
-    expect(db.prepare("SELECT id FROM memory_index_chunks_vec ORDER BY id").all()).toEqual(
-      siblings,
+    write(value);
+    expect(select("chunks_vec", "hex(embedding) AS embedding", "WHERE id = ?").get(id)).toEqual({
+      embedding: embeddingHex(vectorY),
+    });
+  });
+
+  it.each([
+    { clean: false, chunks: 4 },
+    { clean: true, chunks: 4 },
+    { clean: true, chunks: 2164 },
+  ])("rolls back the source and vectors (clean: $clean, chunks: $chunks)", ({ clean, chunks }) => {
+    const { value } = indexedSource(chunks, clean);
+    const before = snapshot();
+    conn.exec(
+      "CREATE TRIGGER fail_source_update AFTER UPDATE ON memory_index_sources BEGIN SELECT RAISE(ABORT, 'source update failed'); END",
     );
-    expect(db.prepare("SELECT id FROM memory_index_chunks ORDER BY id").all()).toEqual(siblings);
-    expect(db.prepare("SELECT id FROM memory_index_chunks_fts ORDER BY id").all()).toEqual(
-      siblings,
+    expect(() =>
+      write({
+        ...value,
+        chunks: value.chunks.slice(0, 2),
+        embeddings: [vectorY, vectorX],
+      }),
+    ).toThrow("source update failed");
+    expect(snapshot()).toEqual(before);
+  });
+
+  it("publishes across a source-header batch boundary with fallback provenance", () => {
+    const values = Array.from({ length: 129 }, (_, index) => {
+      const value = replacement(`memory/group-${index}.md`);
+      for (const chunk of value.chunks) {
+        chunk.provenance = undefined;
+      }
+      return value;
+    });
+    writeGroup(values);
+    expectCounts([...sourceTables, ...derivedTables], 129);
+    expect(
+      select("chunk_provenance", "DISTINCT origin_class, session_kind, observed_at").all(),
+    ).toEqual([{ origin_class: "untrusted", session_kind: "unknown", observed_at: 100 }]);
+  });
+
+  it("bounds large source headers and keeps the final empty-source replacement", () => {
+    const first = replacement(`memory/${"界".repeat(12_000)}.md`, "first", 0);
+    const second = replacement(`memory/${"語".repeat(12_000)}.md`, "second", 0);
+    const last = { ...second, entry: { ...second.entry, hash: "last", size: 0 } };
+    writeGroup([first, second, last]);
+    expect(select("sources", "hash, size", "WHERE path = ?").get(second.entry.path)).toEqual({
+      hash: "last",
+      size: 0,
+    });
+    expectCounts(["sources"], 2);
+    expectCounts(["chunks"], 0);
+  });
+
+  it("keeps later replacements and retained metadata authoritative within a group", () => {
+    const source = { source: "sessions" as const, agentId: "main", sessionId: "repeated" };
+    const initial = { ...replacement("sessions/repeated.jsonl"), ...source };
+    write(initial);
+    markMemoryVectorIndexClean(conn);
+    const first = { ...replacement(initial.entry.path, "discarded"), ...source, now: 200 };
+    const last = { ...replacement(initial.entry.path, "searchable"), ...source, now: 300 };
+    const chunk = last.chunks[0];
+    assert.ok(chunk);
+    const sibling = replacement(siblingPath, "sibling");
+    mutate((kernel) =>
+      kernel.replaceGroup([
+        ...[first, sibling, last].map((value) => ({
+          header: value,
+          rows: value.chunks.map((row) => ({ chunk: row, embedding: vectorY })),
+        })),
+        {
+          header: { ...last, delta: true, now: 400 },
+          rows: [{ chunk: { ...chunk, text: "", importance: 9 }, embedding: [], retained: true }],
+        },
+      ]),
     );
-    expect(deleteCalls).toBe(1);
-    expect(selectedRows).toEqual([33]);
+    expect(
+      all(
+        `SELECT c.text, c.updated_at, r.importance FROM memory_index_chunks c
+           JOIN memory_index_chunk_recall_metadata r ON r.chunk_id = c.id
+           WHERE c.path = ?`,
+        initial.entry.path,
+      ),
+    ).toEqual([{ text: "searchable indexed text", updated_at: 300, importance: 9 }]);
+    expect(
+      select("chunks_fts", "path", "WHERE memory_index_chunks_fts MATCH ?").all(
+        "discarded OR original OR searchable",
+      ),
+    ).toEqual([{ path: initial.entry.path }]);
+    expect(
+      all(`SELECT c.path, hex(v.embedding) AS embedding FROM memory_index_chunks_vec v
+           JOIN memory_index_chunks c ON c.id = v.id ORDER BY c.path`),
+    ).toEqual(
+      [sibling.entry.path, initial.entry.path].map((path) => ({
+        path,
+        embedding: embeddingHex(vectorY),
+      })),
+    );
+    expect(select("sources", "hash", "WHERE path = ?").get(initial.entry.path)).toEqual({
+      hash: "searchable",
+    });
+    expectCounts(["chunks_vec"], 2);
+  });
+
+  it("applies later removals to chunks published by an intermediate removal flush", () => {
+    const initial = {
+      ...replacement("sessions/ordered.jsonl", "obsolete", 128),
+      source: "sessions" as const,
+      agentId: "main",
+      sessionId: "ordered",
+    };
+    write(initial);
+    const temporary = replacement(initial.entry.path, "temporary").chunks[0];
+    const survivor = replacement(initial.entry.path, "survivor").chunks[0];
+    assert.ok(temporary && survivor);
+    mutate((kernel) =>
+      kernel.replaceRows({ ...initial, delta: true }, [
+        { chunk: temporary, embedding: vectorX },
+        ...initial.chunks.map((chunk) => ({
+          removedId: chunkId(initial, chunk),
+        })),
+        {
+          removedId: chunkId(initial, temporary),
+        },
+        { chunk: survivor, embedding: vectorY },
+      ]),
+    );
+    expect(select("chunks", "text").all()).toEqual([{ text: "survivor indexed text" }]);
+    expect(
+      select("chunks_fts", "text", "WHERE memory_index_chunks_fts MATCH ?").all(
+        "temporary OR obsolete OR survivor",
+      ),
+    ).toEqual([{ text: "survivor indexed text" }]);
+    expectCounts(derivedTables, 1);
+  });
+
+  it("rolls back grouped sources and vectors when a buffered provenance write fails", () => {
+    write(replacement("memory/first.md"));
+    write(replacement("memory/last.md"));
+    markMemoryVectorIndexClean(conn);
+    const before = snapshot();
+    conn.exec(`CREATE TRIGGER fail_group_provenance BEFORE INSERT ON memory_index_chunk_provenance
+      WHEN NEW.observed_at = 999 BEGIN SELECT RAISE(ABORT, 'group provenance failed'); END`);
+    const first = replacement("memory/first.md", "changed");
+    const last = replacement("memory/last.md", "changed");
+    last.chunks = last.chunks.map((chunk) => ({
+      ...chunk,
+      provenance: { originClass: "owner", sessionKind: "interactive", observedAt: 999 },
+    }));
+    expect(() => writeGroup([first, last])).toThrow("group provenance failed");
+    expect(snapshot()).toEqual(before);
   });
 
   it.each([
     { chunks: 3, failAt: 2, rollback: false },
-    { chunks: 3, failAt: 3, rollback: true },
-    { chunks: 2048, failAt: 2, rollback: false },
     { chunks: 2048, failAt: 3, rollback: true },
   ])(
-    "rolls back partial native vector deletes at $failAt of $chunks (outer rollback: $rollback)",
-    async ({ chunks, failAt, rollback }) => {
-      const database = await createDatabase();
-      const db = database.db;
-      const pathname = "memory/current.md";
-      write(database, replacement(pathname, "original", chunks));
-      write(database, replacement("memory/sibling.md"));
-      const readVectors = () =>
-        db
-          .prepare(
-            "SELECT id, hex(embedding) AS embedding FROM memory_index_chunks_vec ORDER BY id",
-          )
-          .all();
-      const readDebt = () =>
-        db
-          .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_vector_rebuild_v1'")
-          .get();
+    "rolls back $failAt/$chunks vector deletes (outer: $rollback)",
+    ({ chunks, failAt, rollback }) => {
+      const pathname = currentPath;
+      write(replacement(pathname, "original", chunks));
+      write(replacement(siblingPath));
       const before = readVectors();
       const previousDebt = readDebt();
       if (rollback) {
-        db.exec(`CREATE TRIGGER fail_cleanup_commit BEFORE DELETE ON memory_index_chunks
+        conn.exec(`CREATE TRIGGER fail_cleanup_commit BEFORE DELETE ON memory_index_chunks
         BEGIN SELECT RAISE(ABORT, 'forced outer cleanup rollback'); END`);
       }
-      let nativeDeletes = 0;
-      db.setAuthorizer((action, table) => {
-        if (
-          action === constants.SQLITE_DELETE &&
-          table === "memory_index_chunks_vec_rowids" &&
-          ++nativeDeletes === failAt
-        ) {
-          return constants.SQLITE_DENY;
-        }
-        return constants.SQLITE_OK;
-      });
+      const nativeDeletes = interruptVectorDeletes(failAt);
       try {
-        const removeCurrent = () => remove(database, pathname, "original");
+        const removeCurrent = () => remove(pathname, "original");
         if (rollback) {
           expect(removeCurrent).toThrow("forced outer cleanup rollback");
         } else {
           expect(removeCurrent()).toBe(true);
         }
       } finally {
-        db.setAuthorizer(null);
+        conn.setAuthorizer(null);
       }
-      expect(nativeDeletes).toBe(failAt);
-      expect(db.isTransaction).toBe(false);
+      expect(nativeDeletes()).toBe(failAt);
+      expect(conn.isTransaction).toBe(false);
       expect(readVectors()).toEqual(before);
       expect(readDebt()).toEqual(rollback ? previousDebt : { value: "1" });
-      expect(
-        db
-          .prepare("SELECT COUNT(*) AS count FROM memory_index_chunks WHERE path = ?")
-          .get(pathname),
-      ).toEqual({ count: rollback ? chunks : 0 });
-      expect(db.prepare("SELECT path FROM memory_index_sources ORDER BY path").all()).toEqual(
-        rollback
-          ? [{ path: pathname }, { path: "memory/sibling.md" }]
-          : [{ path: "memory/sibling.md" }],
+      expect(select("chunks", "COUNT(*) AS count", "WHERE path = ?").get(pathname)).toEqual({
+        count: rollback ? chunks : 0,
+      });
+      expect(select("sources", "path", "ORDER BY path").all()).toEqual(
+        rollback ? [{ path: pathname }, { path: siblingPath }] : [{ path: siblingPath }],
       );
     },
   );
 
-  it("rolls back every index representation when the final source upsert fails", async () => {
-    const database = await createDatabase();
-    const beforeValue = replacement("memory/current.md");
-    beforeValue.chunks.push({
-      startLine: 3,
-      endLine: 4,
-      text: "second indexed text",
-      hash: "second",
-      importance: 4,
-      triggers: "second",
-      projectKey: "second-project",
-      provenance: { originClass: "agent", sessionKind: "interactive", observedAt: 95 },
-    });
-    beforeValue.embeddings.push([0.25, -0.5, 2]);
-    const sibling = replacement("memory/sibling.md");
-    const updated: MemorySourceIndexReplacement = {
-      ...beforeValue,
-      entry: { ...beforeValue.entry, hash: "updated", mtimeMs: 200.5, size: 24 },
-      now: 200,
-      chunks: beforeValue.chunks.map((chunk, index) => ({
-        ...chunk,
-        text: `updated indexed text ${index}`,
-        hash: `updated-${index}`,
-      })),
-      embeddings: [
-        [0.5, -0.25, 0.75],
-        [-1.25, 2, 0.125],
-      ],
-    };
-    const readRows = () =>
-      database.db
-        .prepare(`
-        SELECT chunk.path, chunk.start_line, chunk.end_line, chunk.text, chunk.embedding,
-               metadata.importance, metadata.triggers, metadata.project_key,
-               provenance.origin_class, provenance.session_kind, provenance.observed_at,
-               hex(vector.embedding) AS vector
-        FROM memory_index_chunks AS chunk
-        JOIN memory_index_chunks_vec AS vector ON vector.id = chunk.id
-        JOIN memory_index_chunk_recall_metadata AS metadata ON metadata.chunk_id = chunk.id
-        JOIN memory_index_chunk_provenance AS provenance ON provenance.chunk_id = chunk.id
-        ORDER BY chunk.path, chunk.start_line
-      `)
-        .all();
-    const expectedRows = (values: MemorySourceIndexReplacement[]) =>
-      values.flatMap((value) =>
-        value.chunks.map((chunk, index) => {
-          const embedding = value.embeddings[index];
-          assert.ok(embedding, "each fixture chunk must have an embedding");
-          const view = new DataView(new ArrayBuffer(embedding.length * 4));
-          embedding.forEach((number, offset) =>
-            view.setFloat32(offset * 4, number, endianness() === "LE"),
-          );
-          return {
-            path: value.entry.path,
-            start_line: chunk.startLine,
-            end_line: chunk.endLine,
-            text: chunk.text,
-            embedding: encodeMemoryEmbedding(embedding),
-            importance: chunk.importance,
-            triggers: chunk.triggers,
-            project_key: chunk.projectKey,
-            origin_class: chunk.provenance?.originClass,
-            session_kind: chunk.provenance?.sessionKind,
-            observed_at: chunk.provenance?.observedAt,
-            vector: Buffer.from(view.buffer).toString("hex").toUpperCase(),
-          };
-        }),
-      );
-    write(database, beforeValue);
-    write(database, sibling);
-    expect(readRows()).toEqual(expectedRows([beforeValue, sibling]));
-    const before = snapshot(database.db);
-    database.db.exec(`CREATE TRIGGER fail_source_update
-      AFTER UPDATE ON memory_index_sources
-      BEGIN SELECT RAISE(FAIL, 'source upsert failed'); END`);
-    expect(() => write(database, updated)).toThrow("source upsert failed");
-    expect(snapshot(database.db)).toEqual(before);
-    database.db.exec("DROP TRIGGER fail_source_update");
-    write(database, updated);
-    expect(readRows()).toEqual(expectedRows([updated, sibling]));
-    expect(
-      database.db
-        .prepare("SELECT path, hash, mtime, size FROM memory_index_sources ORDER BY path")
-        .all(),
-    ).toEqual([
-      { path: beforeValue.entry.path, hash: "updated", mtime: 200.5, size: 24 },
-      { path: sibling.entry.path, hash: "original", mtime: 100.25, size: 12 },
-    ]);
+  it("conditionally removes all source representations while retaining a sibling", () => {
+    write(replacement(currentPath));
+    write(replacement(siblingPath));
+    const before = snapshot();
+    expect(remove(currentPath, "stale")).toBe(false);
+    expect(snapshot()).toEqual(before);
+    expect(remove(currentPath, "original")).toBe(true);
+    for (const table of sourceTables) {
+      expect(select(table, "path").all()).toEqual([{ path: siblingPath }]);
+    }
+    expectCounts(derivedTables, 1);
   });
 
-  it("conditionally removes all source representations while retaining a sibling", async () => {
-    const database = await createDatabase();
-    write(database, replacement("memory/current.md"));
-    write(database, replacement("memory/sibling.md"));
-    const before = snapshot(database.db);
-    expect(remove(database, "memory/current.md", "stale")).toBe(false);
-    expect(snapshot(database.db)).toEqual(before);
-    expect(remove(database, "memory/current.md", "original")).toBe(true);
-    for (const table of [
-      "memory_index_sources",
-      "memory_index_chunks",
-      "memory_index_chunks_fts",
-      "memory_index_paths_fts",
-    ]) {
-      expect(database.db.prepare(`SELECT path FROM ${table}`).all()).toEqual([
-        { path: "memory/sibling.md" },
-      ]);
+  it("aborts source removal when reading vector cleanup targets fails", () => {
+    const pathname = currentPath;
+    write(replacement(pathname));
+    const before = snapshot();
+    let refused = false;
+    conn.setAuthorizer((action, table, column) => {
+      if (
+        !refused &&
+        action === constants.SQLITE_READ &&
+        table === "memory_index_chunks" &&
+        column === "id"
+      ) {
+        refused = true;
+        return constants.SQLITE_DENY;
+      }
+      return constants.SQLITE_OK;
+    });
+    try {
+      expect(() => remove(pathname, "original")).toThrow();
+    } finally {
+      conn.setAuthorizer(null);
     }
-    for (const table of [
-      "memory_index_chunk_recall_metadata",
-      "memory_index_chunk_provenance",
-      "memory_index_chunks_vec",
-    ]) {
-      expect(database.db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual({
-        count: 1,
-      });
-    }
+    expect(refused).toBe(true);
+    expect(snapshot()).toEqual(before);
   });
 });
 
 describe("memory source index session delta", () => {
   const pathname = "sessions/main/delta.jsonl";
 
-  function session(hash: string, lines: number[]): MemorySourceIndexReplacement {
+  function session(hash: string, lines: number[]): Replacement {
     const value = replacement(pathname, hash, lines.length);
     return {
       ...value,
@@ -466,9 +523,7 @@ describe("memory source index session delta", () => {
         endLine: line,
         text: `turn ${line}`,
         hash: `turn-${line}`,
-        importance: 7,
-        triggers: "indexed",
-        projectKey: "project",
+        ...recallMetadata,
         provenance: { originClass: "owner", sessionKind: "interactive", observedAt: 90 },
       })),
     };
@@ -476,16 +531,19 @@ describe("memory source index session delta", () => {
 
   // Mirrors the publication producer: retained rows precede written rows.
   function writeDelta(
-    database: MemoryIndexDatabase,
-    value: MemorySourceIndexReplacement,
+    value: Replacement,
     retainedLines: number[],
     origin: "owner" | "untrusted" = "owner",
   ) {
-    assert.equal(value.source, "sessions");
+    assert.ok(value.source === "sessions");
     const retained = value.chunks.filter((chunk) => retainedLines.includes(chunk.startLine));
     const written = value.chunks.filter((chunk) => !retainedLines.includes(chunk.startLine));
+    const desiredIds = new Set(value.chunks.map((chunk) => chunkId(value, chunk)));
     const { chunks: _chunks, embeddings: _embeddings, ...header } = value;
     const rows: MemorySourceIndexRow[] = [
+      ...readMemorySourceChunks(conn, value.source, value.entry.path)
+        .filter((row) => !desiredIds.has(row.id))
+        .map((row) => ({ removedId: row.id })),
       ...retained.map((chunk) => ({
         chunk: {
           ...chunk,
@@ -495,134 +553,66 @@ describe("memory source index session delta", () => {
         embedding: [],
         retained: true,
       })),
-      ...written.map((chunk) => ({ chunk, embedding: [1, 0, 0] })),
+      ...written.map((chunk) => ({ chunk, embedding: vectorX })),
     ];
-    return runSqliteImmediateTransactionSync(database.db, () =>
-      new MemorySourceIndexKernel(database.db, database).replaceRows(
-        { ...header, delta: retained.length > 0 },
-        rows,
-      ),
-    );
+    return mutate((kernel) => kernel.replaceRows({ ...header, delta: retained.length > 0 }, rows));
   }
 
-  const readChunks = (db: DatabaseSync) =>
-    db
-      .prepare(
-        "SELECT chunk_rowid, start_line, text, updated_at FROM memory_index_chunks ORDER BY start_line",
-      )
-      .all();
-  const readHash = (db: DatabaseSync) =>
-    db.prepare("SELECT hash FROM memory_index_sources WHERE path = ?").get(pathname);
+  const readChunks = () =>
+    select("chunks", "chunk_rowid, start_line, text, updated_at", "ORDER BY start_line").all();
 
-  it("keeps unchanged rows, writes new rows, and removes stale rows with derived data", async () => {
-    const database = await createDatabase();
-    const db = database.db;
-    write(database, session("v1", [1, 2, 3]));
-    const [first, second] = readChunks(db);
+  it.each([2, 129])(
+    "removes %i session chunks and derived data, retaining unchanged content",
+    (removedCount) => {
+      write(session("v1", [1, 2, ...Array.from({ length: removedCount }, (_, i) => i + 7)]));
+      const [first, second] = readChunks();
 
-    // Line 3 was rewritten into line 4; lines 1-2 are unchanged.
-    expect(writeDelta(database, { ...session("v2", [1, 2, 4]), now: 500 }, [1, 2])).toEqual({
-      retainedDrift: false,
-    });
+      writeDelta({ ...session("v2", [1, 2, 5, 6]), now: 500 }, [1, 2]);
 
-    expect(readChunks(db)).toEqual([
-      first,
-      second,
-      expect.objectContaining({ start_line: 4, text: "turn 4", updated_at: 500 }),
-    ]);
-    expect(readHash(db)).toEqual({ hash: "v2" });
-    for (const table of [
-      "memory_index_chunk_recall_metadata",
-      "memory_index_chunk_provenance",
-      "memory_index_chunks_vec",
-    ]) {
-      const idColumn = table === "memory_index_chunks_vec" ? "id" : "chunk_id";
-      expect(db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get(), table).toEqual(
-        db.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks").get(),
+      expect(readChunks()).toEqual([
+        first,
+        second,
+        expect.objectContaining({ start_line: 5, text: "turn 5", updated_at: 500 }),
+        expect.objectContaining({ start_line: 6, text: "turn 6", updated_at: 500 }),
+      ]);
+      expect(select("sources", "hash", "WHERE path = ?").get(pathname)).toEqual({ hash: "v2" });
+      for (const table of derivedTables) {
+        const idColumn = table === "chunks_vec" ? "id" : "chunk_id";
+        expect(select(table, "COUNT(*) AS count").get(), table).toEqual(
+          select("chunks", "COUNT(*) AS count").get(),
+        );
+        expect(
+          select(
+            table,
+            "COUNT(*) AS count",
+            `WHERE ${idColumn} NOT IN (SELECT id FROM memory_index_chunks)`,
+          ).get(),
+          table,
+        ).toEqual({ count: 0 });
+      }
+      expect(select("chunks_fts", "rowid, text", "ORDER BY rowid").all()).toEqual(
+        select("chunks", "chunk_rowid AS rowid, text", "ORDER BY chunk_rowid").all(),
       );
-      expect(
-        db
-          .prepare(
-            `SELECT COUNT(*) AS count FROM ${table} WHERE ${idColumn} NOT IN (SELECT id FROM memory_index_chunks)`,
-          )
-          .get(),
-        table,
-      ).toEqual({ count: 0 });
-    }
+    },
+  );
+
+  it("refreshes retained metadata and provenance without changing content", () => {
+    write(session("v1", [1, 2]));
+    const before = readChunks();
+    const changed = session("v2", [1, 2]);
+    changed.chunks = changed.chunks.map((chunk) => ({
+      ...chunk,
+      importance: 9,
+      projectKey: "changed-project",
+      triggers: "changed",
+    }));
+    writeDelta(changed, [1, 2], "untrusted");
+    expect(readChunks()).toEqual(before);
+    expect(select("chunk_provenance", "DISTINCT origin_class").all()).toEqual([
+      { origin_class: "untrusted" },
+    ]);
     expect(
-      db.prepare("SELECT rowid, text FROM memory_index_chunks_fts ORDER BY rowid").all(),
-    ).toEqual(
-      db
-        .prepare("SELECT chunk_rowid AS rowid, text FROM memory_index_chunks ORDER BY chunk_rowid")
-        .all(),
-    );
-  });
-
-  it("removes truncated rows without rewriting retained rows", async () => {
-    const database = await createDatabase();
-    const db = database.db;
-    write(database, session("v1", [1, 2, 3]));
-    const [first, second] = readChunks(db);
-    expect(writeDelta(database, session("v2", [1, 2]), [1, 2])).toEqual({ retainedDrift: false });
-    expect(readChunks(db)).toEqual([first, second]);
-    expect(db.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_vec").get()).toEqual({
-      count: 2,
-    });
-  });
-
-  it("refreshes only changed provenance on retained rows", async () => {
-    const database = await createDatabase();
-    const db = database.db;
-    write(database, session("v1", [1, 2]));
-    const before = readChunks(db);
-    db.exec(`CREATE TEMP TABLE provenance_updates (chunk_id TEXT);
-      CREATE TEMP TRIGGER log_provenance_update AFTER UPDATE ON main.memory_index_chunk_provenance
-      BEGIN INSERT INTO provenance_updates VALUES (NEW.chunk_id); END`);
-    const updates = () => db.prepare("SELECT COUNT(*) AS count FROM provenance_updates").get();
-
-    expect(writeDelta(database, session("v2", [1, 2]), [1, 2], "untrusted")).toEqual({
-      retainedDrift: false,
-    });
-    expect(updates()).toEqual({ count: 2 });
-    expect(readChunks(db)).toEqual(before);
-    expect(
-      db.prepare("SELECT DISTINCT origin_class FROM memory_index_chunk_provenance").all(),
-    ).toEqual([{ origin_class: "untrusted" }]);
-
-    writeDelta(database, session("v3", [1, 2]), [1, 2], "untrusted");
-    expect(updates()).toEqual({ count: 2 });
-  });
-
-  it("reports drift and writes nothing when a retained row vanished before the write lock", async () => {
-    const database = await createDatabase();
-    const db = database.db;
-    write(database, session("v1", [1, 2]));
-    // A concurrent writer removed line 2 after planning.
-    db.prepare("DELETE FROM memory_index_chunks WHERE start_line = 2").run();
-    const before = snapshot(db);
-    expect(writeDelta(database, session("v2", [1, 2, 3]), [1, 2])).toEqual({
-      retainedDrift: true,
-    });
-    expect(snapshot(db)).toEqual(before);
-    expect(readHash(db)).toEqual({ hash: "v1" });
-  });
-
-  it("rejects retained rows staged after written rows", async () => {
-    const database = await createDatabase();
-    const value = session("v1", [1, 2]);
-    assert.equal(value.source, "sessions");
-    const { chunks, embeddings: _embeddings, ...header } = value;
-    const [first, second] = chunks;
-    assert.ok(first && second);
-    expect(() =>
-      runSqliteImmediateTransactionSync(database.db, () =>
-        new MemorySourceIndexKernel(database.db, database).replaceRows({ ...header, delta: true }, [
-          { chunk: first, embedding: [1, 0, 0] },
-          { chunk: second, embedding: [], retained: true },
-        ]),
-      ),
-    ).toThrow("retained rows must precede written rows");
-    expect(readChunks(database.db)).toEqual([]);
-    expect(readHash(database.db)).toBeUndefined();
+      select("chunk_recall_metadata", "DISTINCT importance, triggers, project_key").all(),
+    ).toEqual([{ importance: 9, triggers: "changed", project_key: "changed-project" }]);
   });
 });

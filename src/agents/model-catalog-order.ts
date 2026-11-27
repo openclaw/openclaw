@@ -1,6 +1,7 @@
+import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getRemoteModelCatalogProviderOverlay } from "../model-catalog/remote-overlay.js";
+import { getRemoteModelCatalogProviderRecommendations } from "../model-catalog/remote-overlay.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 
@@ -68,12 +69,11 @@ export function createModelPickerRecommendationRank(
 ): ModelPickerRecommendationRank {
   const keyOf = createModelCatalogIdentityKeyResolver();
   const ranksByProvider = new Map<string, Map<string, number>>();
-  return (entry) => {
-    const provider = normalizeProviderId(entry.provider);
+  const ranksFor = (provider: string) => {
     let ranks = ranksByProvider.get(provider);
     if (!ranks) {
       ranks = new Map();
-      const recommended = getRemoteModelCatalogProviderOverlay(config, provider)?.recommendedModels;
+      const recommended = getRemoteModelCatalogProviderRecommendations(config, provider);
       for (const [rank, id] of (recommended ?? []).entries()) {
         const key = keyOf({ provider, id });
         if (!ranks.has(key)) {
@@ -82,7 +82,24 @@ export function createModelPickerRecommendationRank(
       }
       ranksByProvider.set(provider, ranks);
     }
-    return ranks.size > 0 ? ranks.get(keyOf(entry)) : undefined;
+    return ranks;
+  };
+  return (entry) => {
+    const provider = normalizeProviderId(entry.provider);
+    const ranks = ranksFor(provider);
+    if (ranks.size > 0) {
+      return ranks.get(keyOf(entry));
+    }
+    // ClawRouter discovers its account's inventory at runtime, outside the hosted
+    // catalog. Match its qualified IDs against the original provider's shortlist.
+    const routed = provider === "clawrouter" ? parseModelCatalogRef(entry.id) : null;
+    if (routed) {
+      const upstreamRanks = ranksFor(routed.provider);
+      return upstreamRanks.size > 0
+        ? upstreamRanks.get(keyOf({ provider: routed.provider, id: routed.modelId }))
+        : undefined;
+    }
+    return undefined;
   };
 }
 

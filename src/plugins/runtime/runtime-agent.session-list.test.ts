@@ -1,6 +1,7 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs";
-import { expect, it } from "vitest";
+import { assert, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import { recordSessionParticipant } from "../../config/sessions/session-accessor.sqlite-participants.native.js";
 import {
@@ -8,16 +9,20 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { withPluginRuntimePluginScope } from "./gateway-request-scope.js";
 import { createRuntimeAgent } from "./runtime-agent.js";
+
+const fields = (name: string) => ({ sessionId: name, category: "Team", execCwd: `/work/${name}` });
 
 it("lists exact selected keys without losing full entry fields", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const runtime = createRuntimeAgent();
+    setRuntimeConfigSnapshot({});
+    const { session } = createRuntimeAgent();
     for (const name of ["selected", "other", "alpha"]) {
-      await runtime.session.upsertSessionEntry({
+      await session.upsertSessionEntry({
         agentId: "main",
         sessionKey: `agent:main:${name}`,
-        entry: { sessionId: name, updatedAt: 1, category: "Team", execCwd: `/work/${name}` },
+        entry: { ...fields(name), updatedAt: 1 },
       });
     }
     const identity = { type: "agent", id: "observer" } as const;
@@ -25,52 +30,32 @@ it("lists exact selected keys without losing full entry fields", async () => {
       { agentId: "main", sessionKey: "agent:main:selected" },
       { identity, promptedAt: 1 },
     );
-    expect(
-      runtime.session.listSessionEntries({
-        agentId: "main",
-        readOnly: true,
-        sessionKeys: ["agent:main:selected", "agent:main:missing", "agent:main:alpha"],
-      }),
-    ).toEqual([
+    const list = (options: Parameters<typeof session.listSessionEntries>[0]) =>
+      session.listSessionEntries({ agentId: "main", readOnly: true, ...options });
+    const expected = ["alpha", "selected"].map((name) =>
       expect.objectContaining({
-        sessionKey: "agent:main:alpha",
+        sessionKey: `agent:main:${name}`,
         entry: expect.objectContaining({
-          sessionId: "alpha",
-          execCwd: "/work/alpha",
-          category: "Team",
+          ...fields(name),
+          ...(name === "selected" ? { participants: [{ identity }], participantCount: 1 } : {}),
         }),
       }),
-      expect.objectContaining({
-        sessionKey: "agent:main:selected",
-        entry: expect.objectContaining({
-          sessionId: "selected",
-          execCwd: "/work/selected",
-          category: "Team",
-          participants: [{ identity }],
-          participantCount: 1,
-        }),
-      }),
-    ]);
-    expect(
-      runtime.session.listSessionEntries({ agentId: "main", readOnly: true, sessionKeys: [] }),
-    ).toEqual([]);
+    );
+    expect(list({ sessionKeys: [] })).toEqual([]);
     const assertions: Array<() => void> = [];
     for (const readOnly of [true, false]) {
-      const selected = runtime.session.listSessionEntries({
-        agentId: "main",
+      const selected = list({
         readOnly,
-        sessionKeys: ["agent:main:selected", "agent:main:alpha"],
+        sessionKeys: ["agent:main:selected", "agent:main:missing", "agent:main:alpha"],
         captureSource: (assertCurrent) => assertions.push(assertCurrent),
       });
+      expect(selected).toEqual(expected);
       expect(selected).toEqual(
-        runtime.session
-          .listSessionEntries({ agentId: "main", readOnly })
-          .filter(({ sessionKey }) =>
-            ["agent:main:selected", "agent:main:alpha"].includes(sessionKey),
-          ),
+        list({ readOnly }).filter(({ sessionKey }) =>
+          ["agent:main:selected", "agent:main:alpha"].includes(sessionKey),
+        ),
       );
-      const metadata = runtime.session.listSessionEntries({
-        agentId: "main",
+      const metadata = list({
         readOnly,
         sessionKeys: ["agent:main:selected"],
         includeParticipants: false,
@@ -91,14 +76,13 @@ it("lists exact selected keys without losing full entry fields", async () => {
 
 it("refreshes asynchronous descriptive reads after a native session replacement", async () => {
   await withOpenClawTestState({ label: "plugin-runtime-async-session-read" }, async () => {
-    const runtime = createRuntimeAgent();
+    setRuntimeConfigSnapshot({});
+    const { session } = createRuntimeAgent();
     const scope = { agentId: "main", sessionKey: "agent:main:clickclack:channel:discussion" };
-    const read = runtime.session.getSessionEntryAsync;
-    if (!read) {
-      throw new Error("Expected the current runtime's asynchronous session reader");
-    }
+    const read = session.getSessionEntryAsync;
+    assert(read, "Expected the current runtime's asynchronous session reader");
     const initial = { sessionId: "original", updatedAt: 100, displayName: "Original title" };
-    await runtime.session.upsertSessionEntry({ ...scope, entry: initial });
+    await session.upsertSessionEntry({ ...scope, entry: initial });
     expect(await read({ ...scope, readConsistency: "latest" })).toMatchObject(initial);
 
     const replacement = {
@@ -108,5 +92,24 @@ it("refreshes asynchronous descriptive reads after a native session replacement"
     };
     replaceSessionEntrySync(scope, replacement);
     expect(await read({ ...scope, readConsistency: "latest" })).toMatchObject(replacement);
+
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    try {
+      await withPluginRuntimePluginScope({ pluginId: "session-runtime-read-warning" }, async () => {
+        expect(await read(scope)).toMatchObject(replacement);
+        expect(warning).not.toHaveBeenCalled();
+        for (let index = 0; index < 2; index++) {
+          expect(session.getSessionEntry(scope)).toMatchObject(replacement);
+        }
+      });
+      expect(warning).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining(
+          "runtime.agent.session.getSessionEntry is deprecated; use runtime.agent.session.getSessionEntryAsync",
+        ),
+        { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
+      );
+    } finally {
+      warning.mockRestore();
+    }
   });
 });

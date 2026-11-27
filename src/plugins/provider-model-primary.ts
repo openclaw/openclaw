@@ -1,4 +1,3 @@
-// Resolves primary model metadata for plugin-owned providers.
 import {
   normalizeAgentModelMapForConfig,
   normalizeAgentModelRefForConfig,

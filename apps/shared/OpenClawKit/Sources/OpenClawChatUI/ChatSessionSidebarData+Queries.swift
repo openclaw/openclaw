@@ -1,4 +1,5 @@
 import Foundation
+import struct OpenClawKit.GatewayResponseError
 import OpenClawProtocol
 
 extension OpenClawChatSidebarStatus {
@@ -23,6 +24,7 @@ struct ChatSidebarQueryState {
     let transport: any OpenClawChatSidebarTransport
     var query: OpenClawChatSidebarQuery
     var page: OpenClawChatSessionsListResponse?
+    var rosterClock: OpenClawChatSessionSnooze.RosterClock?
     var owners: [OpenClawChatSessionEntry.CreatedActor]?
     var pageIDs: [String] = []
     var readRevision = 0
@@ -36,7 +38,6 @@ struct ChatSidebarQueryState {
     var excluded = 0
     var didLoad = false
     var failedAppend = false
-    var refreshPending = false
 }
 
 extension OpenClawChatSessionSidebarData {
@@ -181,15 +182,14 @@ extension OpenClawChatSessionSidebarData {
     }
 
     public func invalidateQuery(clear: Bool = false) {
-        self.queryTask?.cancel()
-        self.queryTask = nil
+        self.refreshCoordinator.cancel()
         self.queryState?.generation += 1
         self.queryState?.loading = false
         self.queryState?.error = nil
         self.queryState?.indexing = false
         self.queryState?.excluded = 0
         self.queryState?.didLoad = false
-        self.queryState?.refreshPending = false
+        self.queryState?.rosterClock = nil
         if clear {
             self.queryState?.searchIDs = nil
             self.queryState?.metadataIDs = []
@@ -202,21 +202,17 @@ extension OpenClawChatSessionSidebarData {
         self.invalidateQueryProjection()
     }
 
-    public func scheduleLoad(debounce: Bool = false, coalescing: Bool = false) {
-        // ui/src/lib/sessions/event-refresh-coordinator.ts:18 retains one trailing invalidation.
-        if coalescing, self.isLoading {
-            self.queryState?.refreshPending = true
-            return
+    public func scheduleLoad(debounce: Bool = false, coalescing: Bool = false, afterRosterExpiry: Bool = false) {
+        self.refreshCoordinator.scheduleLoad(isLoading: self.isLoading, coalescing: coalescing) { [weak self] in
+            await self?.load(debounce: debounce, afterRosterExpiry: afterRosterExpiry)
         }
-        self.queryTask?.cancel()
-        self.queryTask = Task { [weak self] in await self?.load(debounce: debounce) }
     }
 
     public func retry() async {
         await self.load(append: self.queryState?.failedAppend == true)
     }
 
-    public func load(append: Bool = false, debounce: Bool = false) async {
+    public func load(append: Bool = false, debounce: Bool = false, afterRosterExpiry: Bool = false) async {
         guard let state = self.queryState, !append || (!state.loading && self.nextOffset != nil) else { return }
         self.queryState?.generation += 1
         let generation = self.queryState?.generation
@@ -229,10 +225,7 @@ extension OpenClawChatSessionSidebarData {
         defer {
             if generation == self.queryState?.generation {
                 self.queryState?.loading = false
-                if self.queryState?.refreshPending == true {
-                    self.queryState?.refreshPending = false
-                    self.scheduleLoad()
-                }
+                self.refreshCoordinator.finishLoad()
             }
         }
         do {
@@ -247,6 +240,8 @@ extension OpenClawChatSessionSidebarData {
             let read = self.beginRead()
             async let transcript = Self.searchTranscripts(query: query, request: request)
             var page = append && offset > 0 ? state.page : nil
+            // The clock belongs to the first page's membership, not a later append or another agent's roster.
+            var rosterClock = page == nil ? nil : state.rosterClock
             var incoming: [OpenClawChatSessionEntry] = []
             var ids = page != nil ? state.pageIDs : []
             var seen = Set(ids)
@@ -261,6 +256,9 @@ extension OpenClawChatSessionSidebarData {
                     offset: offset))
                 let next = try OpenClawChatGatewayPayloadCodec.decodeSessionsList(payload, agentID: query.agentID)
                 guard generation == self.queryState?.generation, !Task.isCancelled else { return }
+                if rosterClock == nil { rosterClock = .init(
+                    timestamp: next.ts,
+                    activityExpiresAt: next.activityExpiresAt) }
                 // ui/src/lib/sessions/session-managed-list-refresh.ts:128 discards duplicate page facts.
                 incoming += next.sessions.filter { seen.insert(Self.identity($0)).inserted }
                 page = Self.appendPage(next, previous: page, count: seen.count)
@@ -269,6 +267,7 @@ extension OpenClawChatSessionSidebarData {
             }
             let search = await transcript
             guard generation == self.queryState?.generation, !Task.isCancelled, var page else { return }
+            self.queryState?.rosterClock = rosterClock
             // Search and browsing share the complete facet, independently of retained page membership.
             self.queryState?.owners = page.owners
             if !query.search.isEmpty {
@@ -293,6 +292,16 @@ extension OpenClawChatSessionSidebarData {
         } catch {
             guard generation == self.queryState?.generation, !Task.isCancelled else { return }
             self.queryState?.error = error.localizedDescription
+            // A failed expiry read leaves old page membership visible. Give it one paced replacement;
+            // a manual read, changed query, or disconnected route supersedes it.
+            if afterRosterExpiry, let response = error as? GatewayResponseError,
+               response.method == "sessions.list", response.code == "UNAVAILABLE", response.retryable != false
+            {
+                self.refreshCoordinator.scheduleLoad(isLoading: false, debounce: .seconds(1)) { [weak self] in
+                    guard let self, self.queryState?.generation == generation else { return }
+                    await self.load()
+                }
+            }
         }
     }
 

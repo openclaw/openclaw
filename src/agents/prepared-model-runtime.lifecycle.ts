@@ -1,10 +1,17 @@
 /** Process close owns every admitted model runtime and native catalog worker. */
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import type {
-  PreparedModelRuntimeOwner,
-  PreparedModelRuntimeReplacement,
+import {
+  PREPARED_MODEL_RUNTIME_LIFETIMES_KEY,
+  type PreparedModelRuntimeOwner,
+  type PreparedModelRuntimeReplacement,
 } from "./prepared-model-runtime.types.js";
+
+export class PreparedModelRuntimeClosedError extends Error {
+  constructor() {
+    super("prepared model runtime process lifetime closed");
+  }
+}
 
 /** Notifications supplement the owner's generation and registration checks. */
 export function capturePreparedModelRuntimeGeneration(
@@ -25,6 +32,29 @@ export function retirePreparedModelRuntimeGeneration(
   }
 }
 
+// A remote catalog commit may replace rows without revoking the request's authority.
+// Key by the captured generation predicate, which catalog projections preserve.
+const catalogReplacements = new WeakMap<() => boolean, () => boolean>();
+
+export function recordPreparedModelCatalogReplacement(
+  previous: { isCurrent: () => boolean },
+  replacement: { isCurrent: () => boolean },
+): void {
+  catalogReplacements.set(previous.isCurrent, replacement.isCurrent);
+}
+
+export function hasCurrentPreparedModelCatalogReplacement(
+  owner: { isCurrent: () => boolean },
+  expected?: { isCurrent: () => boolean },
+): boolean {
+  const replacement = catalogReplacements.get(owner.isCurrent);
+  return (
+    !owner.isCurrent() &&
+    (!expected || expected.isCurrent === replacement) &&
+    replacement?.() === true
+  );
+}
+
 type ModelRuntimeClose = (error: Error) => Promise<void>;
 class ProcessModelRuntimeLifetimes {
   readonly closeCallbacks = new Set<ModelRuntimeClose>();
@@ -34,7 +64,7 @@ class ProcessModelRuntimeLifetimes {
 }
 
 const lifetimes = resolveGlobalSingleton(
-  Symbol.for("openclaw.preparedModelRuntimeLifetimes"),
+  PREPARED_MODEL_RUNTIME_LIFETIMES_KEY,
   () => new ProcessModelRuntimeLifetimes(),
   () => closePreparedModelRuntimeSnapshots(),
 );
@@ -43,7 +73,7 @@ export function capturePreparedModelRuntimeLifetime(): () => void {
   const epoch = lifetimes.epoch;
   const assertCurrent = () => {
     if (lifetimes.closing || epoch !== lifetimes.epoch) {
-      throw new Error("prepared model runtime process lifetime closed");
+      throw new PreparedModelRuntimeClosedError();
     }
   };
   assertCurrent();
@@ -70,7 +100,7 @@ export function closePreparedModelRuntimeSnapshots(): Promise<void> {
   const closed = createDeferredCore();
   lifetimes.closing = closed.promise;
   lifetimes.epoch += 1;
-  const error = new Error("prepared model runtime process lifetime closed");
+  const error = new PreparedModelRuntimeClosedError();
   void Promise.allSettled(
     [...lifetimes.closeCallbacks].map(async (close) => await close(error)),
   ).then(async (results) => {
@@ -150,27 +180,13 @@ export function createPreparedModelRuntimePluginDrain(
       run: () => Promise<void>,
     ): Promise<void> {
       const assertCurrent = capturePreparedModelRuntimeLifetime();
-      for (;;) {
-        const reservation = pending;
-        if (reservation) {
-          await reservation.promise;
-          continue;
-        }
+      // A reload starting after this wait is best effort; its own publication owns recovery.
+      await pending?.promise;
+      assertCurrent();
+      await queue.enqueue(async () => {
         assertCurrent();
-        let started = false;
-        await queue.enqueue(async () => {
-          assertCurrent();
-          if (pending) {
-            return;
-          }
-          started = true;
-          await run();
-        });
-        if (started) {
-          return;
-        }
-        // A newer reservation must release the queue before waiting for its drain.
-      }
+        await run();
+      });
     },
   };
 }

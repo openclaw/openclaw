@@ -1,5 +1,4 @@
 // Parses and normalizes the persisted exec approval policy.
-import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
@@ -446,26 +445,4 @@ export function normalizeExecApprovalsInternal(file: ExecApprovalsFile): ExecApp
     defaults: sanitizedDefaults,
     agents,
   };
-}
-
-export function mergeExecApprovalsSocketDefaults(params: {
-  normalized: ExecApprovalsFile;
-  current?: ExecApprovalsFile;
-}): ExecApprovalsFile {
-  const currentSocketPath = params.current?.socket?.path?.trim();
-  const currentToken = params.current?.socket?.token?.trim();
-  const socketPath =
-    params.normalized.socket?.path?.trim() ?? currentSocketPath ?? resolveExecApprovalsSocketPath();
-  const token = params.normalized.socket?.token?.trim() ?? currentToken ?? generateToken();
-  return {
-    ...params.normalized,
-    socket: {
-      path: socketPath,
-      token,
-    },
-  };
-}
-
-export function generateToken(): string {
-  return randomBytes(24).toString("base64url");
 }

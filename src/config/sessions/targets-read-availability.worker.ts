@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { NativeErrorResponse } from "../../infra/native-error-response-schema.js";
+import { serializeNativeErrorResponse } from "../../infra/native-error-response.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   withOpenClawAgentDatabaseReadOnly,
@@ -23,17 +25,15 @@ import {
   dedupeSessionStoreTargetsBySqliteTarget,
   type SessionStoreTarget,
 } from "./targets-collision.js";
-import {
-  isPerAgentSessionStoreConfig,
-  resolveConfiguredSessionStoreTargets,
-  resolveExistingAgentSessionStoreTargetsSync,
-} from "./targets.js";
+import { resolveExistingAgentSessionStoreTargetsSync } from "./targets-discovery.native.js";
+import { isPerAgentSessionStoreConfig, resolveConfiguredSessionStoreTargets } from "./targets.js";
 
 export type SessionStoreTargetsReadResult =
   | { available: true; targets: SessionStoreTarget[] }
   | {
       available: false;
       reason: "database-missing" | "schema-missing" | "read-failed";
+      error?: NativeErrorResponse;
     };
 type SessionStoreReadSnapshot<T> =
   | {
@@ -106,9 +106,13 @@ function readSessionStoreTargetSnapshot<T>(
             value: result.value,
           }
         : { available: false, reason: result.reason };
-    } catch {
+    } catch (error) {
       // An unreadable candidate cannot prove absence for cleanup or placement.
-      snapshot = { available: false, reason: "read-failed" };
+      snapshot = {
+        available: false,
+        reason: "read-failed",
+        error: serializeNativeErrorResponse(error),
+      };
     }
   }
   params.cache?.set(cacheKey, snapshot);
@@ -195,7 +199,7 @@ function resolveFixedSessionStoreTargetsReadOnly(
     if (error instanceof SessionStoreRegistryReadRequired) {
       throw error;
     }
-    return { available: false, reason: "read-failed" };
+    return { available: false, reason: "read-failed", error: serializeNativeErrorResponse(error) };
   }
 }
 

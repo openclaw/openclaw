@@ -3,8 +3,8 @@
 export { extractKeywords } from "./host/query-expansion.js";
 export {
   buildSessionEntry,
+  buildSessionEntries,
   listSessionTranscriptCorpusEntriesForAgent,
-  matchesSessionEntryPrefixHash,
   parseCanonicalSessionSyncTargetFromPath,
   readTranscriptStatsBatchReadOnlyAsync,
   readTranscriptStatsBatchReadOnlySync,
@@ -12,6 +12,11 @@ export {
   sessionPathForSessionIdentity,
   statSessionEntry,
   statSessionEntrySync,
+  streamSessionEntries,
+  streamSessionEntry,
+  type SessionEntryPage,
+  type SessionEntryStream,
+  type SessionEntrySummary,
   type SessionFileEntry,
   type SessionFileState,
   type SessionTranscriptCorpusEntry,

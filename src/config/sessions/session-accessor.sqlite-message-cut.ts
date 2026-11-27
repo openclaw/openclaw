@@ -1,6 +1,7 @@
 import { isMainThread } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import {
   openOpenClawAgentDatabase,
@@ -10,7 +11,6 @@ import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.pa
 import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { invalidateSessionBranchCache } from "./session-accessor.sqlite-branches.js";
 import {
-  commitSqliteSessionDeletion,
   runSqliteSessionDeletionTransaction,
   withSqliteSessionContextReset,
 } from "./session-accessor.sqlite-deletion.js";
@@ -21,14 +21,12 @@ import {
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
-import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
 import {
   resolveSqliteScope,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
   type ResolvedSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
-import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import type {
   SessionBranchSwitchMutationParams,
@@ -36,28 +34,36 @@ import type {
   SessionMessageCutMutationParams,
   SessionMessageCutMutationResult,
 } from "./session-accessor.types.js";
-import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import {
-  captureIncognitoSessionSource,
-  publishIncognitoSessionEntry,
-} from "./session-incognito-binding.js";
-import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
-import { planSessionMessageCut } from "./session-message-cut-plan.js";
+  inPlaceSessionMessageCutPreflightNeedsWrite,
+  installInPlaceSessionMessageCut,
+  refuseInPlaceSessionMessageCutInDatabase,
+} from "./session-message-cut-in-place.kernel.js";
+import { prepareMessageCutLocalWorkspace } from "./session-message-cut-local-workspace.js";
+import {
+  createMemorySessionMessageCutReader,
+  planInPlaceSessionMessageCut,
+  planSessionMessageCut,
+} from "./session-message-cut-plan.js";
+import {
+  readSessionMessageCut,
+  SESSION_MESSAGE_CUT_MAX_BYTES,
+} from "./session-message-cut-read.js";
 import type {
   SessionMessageCutIntent,
   SessionMessageCutPreconditions,
   SessionMessageCutResult,
 } from "./session-message-cut.types.js";
-import {
-  markSessionTranscriptIndexDirtyInTransaction,
-  reconcileSessionTranscriptIndexInTransaction,
-  SYNC_REBUILD_MAX_BYTES,
-  SYNC_REBUILD_MAX_ROWS,
-} from "./session-transcript-index.js";
-import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
+import { loadSessionTranscriptEvents } from "./session-transcript-events.js";
+import { withSessionTranscriptHydrationCaller } from "./session-transcript-hydration-caller.js";
 import { collectSessionEntryLookupKeys, normalizeStoreSessionKey } from "./store-entry.js";
-import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
+import {
+  captureSessionTranscriptStorageEnvironment,
+  captureSessionTranscriptTargetBinding,
+} from "./transcript-target-binding.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 type SessionTranscriptMutationMode = "fork" | "rewind" | "switch";
@@ -77,16 +83,6 @@ export async function forkSessionAtMessage(
   return await mutateSqliteSessionAtMessage(params, "fork", expectedState);
 }
 
-/** Gateway-owned source predicates are checked beside the transaction's fresh session row. */
-export async function mutateSessionAtMessageWithPreconditions(
-  params: SessionMessageCutMutationParams,
-  mode: SessionTranscriptMutationMode,
-  expectedState: SessionEntryExpectedState | undefined,
-  preconditions: SessionMessageCutPreconditions,
-): Promise<SessionMessageCutResult> {
-  return mutateSqliteSessionAtMessage(params, mode, expectedState, preconditions);
-}
-
 export async function switchSessionBranch(
   params: SessionBranchSwitchMutationParams,
   expectedState?: SessionEntryExpectedState,
@@ -98,26 +94,27 @@ export async function switchSessionBranch(
   );
 }
 
-function mutateSqliteSessionAtMessage(
+export function mutateSqliteSessionAtMessage(
   params: SessionMessageCutMutationParams,
   mode: "fork" | "rewind",
   expectedState?: SessionEntryExpectedState,
   preconditions?: SessionMessageCutPreconditions,
 ): Promise<SessionMessageCutMutationResult | { status: "conflict" }>;
-function mutateSqliteSessionAtMessage(
+export function mutateSqliteSessionAtMessage(
   params: SessionMessageCutMutationParams,
   mode: "switch",
   expectedState?: SessionEntryExpectedState,
   preconditions?: SessionMessageCutPreconditions,
 ): Promise<SessionBranchSwitchMutationResult | { status: "conflict" }>;
-function mutateSqliteSessionAtMessage(
+export function mutateSqliteSessionAtMessage(
   params: SessionMessageCutMutationParams,
   mode: SessionTranscriptMutationMode,
   expectedState?: SessionEntryExpectedState,
   preconditions?: SessionMessageCutPreconditions,
 ): Promise<SessionMessageCutResult>;
 
-async function mutateSqliteSessionAtMessage(
+/** Gateway-owned source predicates are checked beside the transaction's fresh session row. */
+export async function mutateSqliteSessionAtMessage(
   params: SessionMessageCutMutationParams,
   mode: SessionTranscriptMutationMode,
   expectedState?: SessionEntryExpectedState,
@@ -138,33 +135,145 @@ async function mutateSqliteSessionAtMessage(
     sourceKey,
     targetKey,
   };
-  const memory = getSessionActorStorageBinding({ ...params, sessionKey: sourceKey });
-  if (memory) {
-    let authorityError: unknown;
-    const outcome = await memory.actor.storage!.mutate(
-      {
-        type: "session.messageCut",
-        input: { intent, sourceRepositoryWorkspaceId: preconditions?.sourceRepositoryWorkspaceId },
-      },
-      {
-        authorize: (stage, facts, publication) =>
-          memory.authority.authorize(stage, facts, publication),
-        assertCurrent() {
-          try {
-            memory.authority.assertCurrent();
-            params.commitGuard?.();
-            preconditions?.assertUpstreamCurrent?.();
-          } catch (error) {
-            authorityError = error;
-            throw error;
-          }
+  const memoryScope = { ...params, sessionKey: sourceKey };
+  let forkVisibility: SessionEntry["visibility"];
+  const assertCurrent = () => {
+    params.commitGuard?.();
+    preconditions?.assertUpstreamCurrent?.();
+  };
+  const authority = { assertCurrent, authorize() {} };
+  const owner = captureSessionActorStorageOwner(memoryScope, authority);
+  if (owner) {
+    return (
+      (await withSessionActorStorage(
+        memoryScope,
+        {
+          authority,
+          lifetime: { assertCurrent, assertReadable: assertCurrent },
         },
-      },
+        async (memory) => {
+          const mutate = async (
+            assertResetCurrent = () => {},
+            capture?: Parameters<Parameters<typeof withSqliteSessionContextReset>[2]>[1],
+          ) => {
+            let authorityError: unknown;
+            const companions: { settlement?: ReturnType<NonNullable<typeof capture>> } = {};
+            const outcome = await memory.actor.storage.mutate(
+              {
+                type: "session.messageCut",
+                input: {
+                  intent,
+                  sourceRepositoryWorkspaceId: preconditions?.sourceRepositoryWorkspaceId,
+                },
+              },
+              {
+                authorize: (stage, facts, publication) =>
+                  memory.authority.authorize(stage, facts, publication),
+                assertCurrent() {
+                  try {
+                    memory.authority.assertCurrent();
+                    assertResetCurrent();
+                    if (mode === "fork") {
+                      preconditions?.assertForkVisibilityAllowed?.(forkVisibility);
+                    }
+                  } catch (error) {
+                    authorityError = error;
+                    throw error;
+                  }
+                },
+              },
+              {
+                beforeCommit(receipt) {
+                  if (mode === "fork" && receipt.value.status === "created") {
+                    // The actor rechecks authority after this observer's await, before install.
+                    forkVisibility = receipt.value.entry.visibility;
+                  }
+                  const entry = receipt.changes.find((change) => change.sessionKey === sourceKey)
+                    ?.before?.entry;
+                  if (capture && receipt.value.status === "created" && entry) {
+                    companions.settlement = capture([{ sessionKey: sourceKey, entry }]);
+                    return companions.settlement.beforeCommit();
+                  }
+                  return undefined;
+                },
+                settled: (settledOutcome) => companions.settlement?.settle(settledOutcome.kind),
+              },
+            );
+            if (outcome.kind === "rolled-back" && authorityError) {
+              throw toErrorObject(
+                authorityError,
+                "Session message cut authority rejected the operation",
+              );
+            }
+            return readSessionActorStorageResult(outcome);
+          };
+          if (mode === "fork") {
+            return mutate();
+          }
+          const entry = await memory.actor.storage.read(
+            { type: "session.entry.read", input: {} },
+            memory.authority,
+          );
+          if (!entry) {
+            return { status: "missing-session" } as const;
+          }
+          if (entry.worktree) {
+            intent.expectedState ??= {
+              sessionId: entry.sessionId,
+              lifecycleRevision: entry.lifecycleRevision,
+            };
+            // A memory-resident transcript is already whole in the actor's state,
+            // so its own reader validates the cut before the workspace retires.
+            const events = await withSessionTranscriptHydrationCaller("history-mutation", () =>
+              loadSessionTranscriptEvents({
+                ...memoryScope,
+                maxEventBytes: SESSION_MESSAGE_CUT_MAX_BYTES,
+                agentId: memory.agentId,
+                storePath: memory.path,
+                sessionId: entry.sessionId,
+              }),
+            );
+            memory.authority.assertCurrent();
+            const planned = planInPlaceSessionMessageCut(
+              entry,
+              createMemorySessionMessageCutReader(events),
+              { ...intent, mode },
+              preconditions?.sourceRepositoryWorkspaceId,
+            );
+            if (planned.status !== "prepared") {
+              return planned;
+            }
+          }
+          const target = captureSessionTranscriptTargetBinding({
+            agentId: memory.agentId,
+            storePath: memory.path,
+            env: params.env,
+          });
+          intent.settledLocalWorkspace = await prepareMessageCutLocalWorkspace(
+            {
+              agentId: memory.agentId,
+              sessionKey: sourceKey,
+              storePath: memory.path,
+              env: target.env,
+            },
+            entry,
+            () => memory.authority.assertCurrent(),
+          );
+          return withSqliteSessionContextReset(
+            {
+              agentId: memory.agentId,
+              path: memory.path,
+              env: target.env,
+              ownerStorePath: params.storePath,
+            },
+            { sessionKey: sourceKey, entry },
+            mutate,
+            preconditions?.assertUpstreamCurrent,
+            owner.owner,
+          );
+        },
+      )) ?? { status: "missing-session" }
     );
-    if (outcome.kind === "rolled-back" && authorityError) {
-      throw toErrorObject(authorityError, "Session message cut authority rejected the operation");
-    }
-    return readSessionActorStorageResult(outcome);
   }
   const resolved = resolveSqliteScope({
     ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -173,120 +282,6 @@ async function mutateSqliteSessionAtMessage(
     ...(params.storePath ? { storePath: params.storePath } : {}),
   });
   const options = toDatabaseOptions(resolved);
-  const binding = isMainThread ? captureIncognitoSessionSource(params) : undefined;
-  if (binding && "kind" in binding) {
-    binding.assertCurrent();
-    return { status: "missing-session" };
-  }
-  if (binding) {
-    const { actor } = binding;
-    binding.admissionSignal?.throwIfAborted();
-    return actor.sessions.withSharedState(async () => {
-      const authority = {
-        assertCurrent() {
-          actor.assertCurrent();
-          params.commitGuard?.();
-        },
-      };
-      const { entry } = await actor.sessions.read(
-        authority,
-        { sessionKey: sourceKey },
-        binding.admissionSignal,
-      );
-      binding.admissionSignal?.throwIfAborted();
-      if (!entry) {
-        return { status: "missing-session" };
-      }
-      intent.expectedState ??= {
-        sessionId: entry.sessionId,
-        lifecycleRevision: entry.lifecycleRevision,
-      };
-      const target = { sessionKey: sourceKey, entry };
-      const mutate = async (
-        assertResetCurrent: () => void,
-        capture?: Parameters<Parameters<typeof withSqliteSessionContextReset>[2]>[1],
-      ) => {
-        // Preparation can be cancelled; an admitted native write must settle.
-        binding.admissionSignal?.throwIfAborted();
-        let transactionSessionId: string | undefined;
-        let changed = false;
-        const current: IncognitoSessionAuthority = {
-          assertCurrent() {
-            authority.assertCurrent();
-            assertResetCurrent();
-          },
-          authorize(stage, facts) {
-            if (facts.sessionKey === sourceKey) {
-              if (stage === "transaction") {
-                transactionSessionId = facts.sharing?.entry?.sessionId;
-              } else {
-                changed = facts.sharing?.entry?.sessionId !== transactionSessionId;
-              }
-            }
-          },
-        };
-        const settlement = capture?.([target]);
-        return actor.sessions.lifecycle(
-          current,
-          {
-            type: "session.lifecycle.messageCut",
-            input: {
-              intent,
-              sourceRepositoryWorkspaceId: preconditions?.sourceRepositoryWorkspaceId,
-              ...(mode !== "fork" ? { target } : {}),
-            },
-          },
-          undefined,
-          settlement
-            ? () => ({
-                beforeCommit() {
-                  if (changed) {
-                    settlement.beforeCommit();
-                  }
-                },
-                settle: (outcome) => settlement.settle(outcome),
-              })
-            : undefined,
-          ({ result }) => {
-            if (result.status === "created") {
-              invalidateSessionBranchCache(actor.path, [entry.sessionId, result.entry.sessionId]);
-              publishIncognitoSessionEntry(
-                actor,
-                result.key,
-                mode === "fork" ? undefined : entry,
-                result.entry,
-              );
-            }
-          },
-        );
-      };
-      const { result, projectionNeedsReconcile } =
-        mode === "fork"
-          ? await mutate(() => {})
-          : await withSqliteSessionContextReset(
-              { ...resolved, path: actor.path },
-              target,
-              mutate,
-              preconditions?.assertUpstreamCurrent,
-              actor,
-            );
-      if (result.status === "created" && projectionNeedsReconcile) {
-        startSessionTranscriptIndexReconcile(
-          { ...options, path: actor.path, preferredSessionId: result.entry.sessionId },
-          {
-            actor,
-            authority,
-            target: {
-              sessionKey: result.key,
-              sessionId: result.entry.sessionId,
-              lifecycleRevision: result.entry.lifecycleRevision,
-            },
-          },
-        );
-      }
-      return result;
-    });
-  }
   if (isMainThread && supportsOpenClawAgentDatabaseExecution(options)) {
     const pathname = resolveOpenClawAgentSqlitePath(options);
     const source = readDatabasePathIdentitySync(pathname);
@@ -306,12 +301,12 @@ async function mutateSqliteSessionAtMessage(
         { ...resolved, env, path: pathname },
         { ...intent, mode },
         source,
-        (prepared, assertCurrent) =>
+        (prepared, assertPreparedCurrent) =>
           mutatePreparedSqliteSessionAtMessage(
             { ...params, env },
             { ...resolved, env },
             prepared,
-            assertCurrent,
+            assertPreparedCurrent,
             preconditions,
           ),
         selection,
@@ -321,10 +316,10 @@ async function mutateSqliteSessionAtMessage(
       selection?.release();
     }
   }
-  const preparedEntry = readSessionEntryRow(
-    openOpenClawAgentDatabase(toDatabaseOptions(resolved)),
-    sourceKey,
-  )?.entry;
+  // This route runs without agent-database execution: inside a worker thread, or
+  // for a store the execution owner does not serve. Both own their handle here.
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  const preparedEntry = readSessionEntryRow(database, sourceKey)?.entry;
   const preparedExpectedState =
     expectedState ??
     (preparedEntry?.sessionId
@@ -350,6 +345,40 @@ async function mutateSqliteSessionAtMessage(
       assertPreparedCurrent,
       preconditions,
     );
+  if (mode !== "fork" && preparedEntry) {
+    if (preparedEntry.worktree) {
+      const refuse = () =>
+        refuseInPlaceSessionMessageCutInDatabase(
+          database,
+          preparedEntry.sessionId,
+          preparedEntry,
+          { ...intent, mode, expectedState: preparedExpectedState },
+          preconditions?.sourceRepositoryWorkspaceId,
+        );
+      // A lagging projection is reconciled through its owner before this answer is
+      // trusted, so an invalid selection refuses while the workspace is intact.
+      const refused = inPlaceSessionMessageCutPreflightNeedsWrite(database, preparedEntry.sessionId)
+        ? runSqliteImmediateTransactionSync(database.db, refuse, {
+            databaseLabel: "agent sessions",
+            operationLabel: "session.transcript.message-cut-preflight",
+          })
+        : refuse();
+      assertCurrent();
+      if (refused) {
+        return refused;
+      }
+    }
+    intent.settledLocalWorkspace = await prepareMessageCutLocalWorkspace(
+      {
+        agentId: resolved.agentId,
+        sessionKey: sourceKey,
+        storePath: resolved.path,
+        env: resolved.env,
+      },
+      preparedEntry,
+      assertCurrent,
+    );
+  }
   return mode !== "fork" && preparedEntry
     ? await withSqliteSessionContextReset(
         resolved,
@@ -387,6 +416,9 @@ function mutatePreparedSqliteSessionAtMessage(
             intent,
             { sourceRepositoryWorkspaceId: preconditions?.sourceRepositoryWorkspaceId },
           );
+          if (intent.mode === "fork" && mutationResult.status === "created") {
+            preconditions?.assertForkVisibilityAllowed?.(mutationResult.entry.visibility);
+          }
           const currentIdentity = readSessionIdentitySnapshot(database, identityKeys);
           const publishIdentity = prepareSessionIdentityPublication(
             database,
@@ -430,40 +462,37 @@ export function mutateSqliteSessionAtMessageInTransaction(
   },
 ): SessionMessageCutResult {
   const currentEntry = readSessionEntryRow(database, params.sourceKey)?.entry;
+  if (params.mode !== "fork") {
+    return installInPlaceSessionMessageCut(
+      database,
+      resolved,
+      { ...params, mode: params.mode },
+      currentEntry,
+      projection,
+    );
+  }
+  // Fork still copies its prefix, so it streams the retained rows one at a time
+  // instead of materializing the transcript in the shared worker heap.
+  const source = currentEntry?.sessionId
+    ? readSessionMessageCut(database, currentEntry.sessionId, params.entryId)
+    : undefined;
   const plan = planSessionMessageCut(
     currentEntry,
-    currentEntry?.sessionId
-      ? loadTranscriptEventsFromDatabase(database, currentEntry.sessionId)
-      : [],
-    params,
+    source?.events ?? [],
+    { ...params, mode: "fork" },
     projection?.sourceRepositoryWorkspaceId,
   );
   if (plan.status !== "prepared") {
     return plan;
   }
-  if (params.mode !== "fork" && currentEntry) {
-    commitSqliteSessionDeletion(params.sourceKey, currentEntry);
-  }
   const nextSessionId = plan.result.entry.sessionId;
   const targetScope = { ...resolved, sessionId: nextSessionId, sessionKey: params.targetKey };
-  let copiedBytes = 0;
-  const rebuildSynchronously =
-    params.mode !== "fork" &&
-    plan.events.length <= SYNC_REBUILD_MAX_ROWS &&
-    plan.events.every((event) => {
-      copiedBytes += JSON.stringify(event).length;
-      return copiedBytes <= SYNC_REBUILD_MAX_BYTES;
-    });
-  if (params.mode !== "fork" && !rebuildSynchronously) {
-    ensureTranscriptSessionRoot(database, targetScope, Date.parse(plan.header.timestamp));
-    markSessionTranscriptIndexDirtyInTransaction(database.db, nextSessionId);
-  }
-  appendTranscriptEventsInTransaction(database, targetScope, plan.events, projection);
-  if (rebuildSynchronously) {
-    reconcileSessionTranscriptIndexInTransaction(database.db, nextSessionId);
-  } else if (params.mode !== "fork") {
-    projection?.onProjectionReconcileNeeded?.();
-  }
+  appendTranscriptEventsInTransaction(
+    database,
+    targetScope,
+    source!.hydrate(plan.events),
+    projection,
+  );
   writeSessionEntry(database, params.targetKey, plan.result.entry);
   return plan.result;
 }

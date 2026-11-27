@@ -3,19 +3,22 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contra
 import { readSessionEntryStore } from "./session-accessor.sqlite-entry-store.js";
 import {
   assertPlannedLifecycleArtifactEntriesUnchanged,
-  collectProjectedReferencedSessionIds,
-  collectSessionStateIdsForEntry,
   deleteMaterializedSessionStatePlans,
   deletePlannedLifecycleArtifactEntries,
   planSessionStateAfterEntryRemoval,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import type { SessionEntryMaintenancePlan } from "./session-accessor.sqlite-lifecycle-types.js";
+import {
+  collectProjectedReferencedSessionIds,
+  collectSessionStateIdsForEntry,
+} from "./session-accessor.sqlite-references.js";
 import type {
   SessionAgentPurgeCommit,
   SessionAgentPurgePlan,
   SessionAgentPurgeResult,
   SessionAgentPurgeSelection,
 } from "./session-agent-purge.types.js";
+import { deleteAgentToolUsageInDatabase } from "./tool-usage.kernel.js";
 
 function isDeletedAgentEntry(input: SessionAgentPurgeSelection, sessionKey: string): boolean {
   return (
@@ -31,9 +34,8 @@ export function prepareSessionAgentPurgeInDatabase(
   database: OpenClawAgentDatabase,
   input: SessionAgentPurgeSelection,
 ): SessionAgentPurgePlan {
-  const store = readSessionEntryStore(database);
-  const remainingStore = { ...store };
-  const entryRemovals = Object.entries(store).flatMap(([sessionKey, entry]) => {
+  const remainingStore = readSessionEntryStore(database);
+  const entryRemovals = Object.entries(remainingStore).flatMap(([sessionKey, entry]) => {
     if (!isDeletedAgentEntry(input, sessionKey)) {
       return [];
     }
@@ -54,7 +56,6 @@ export function prepareSessionAgentPurgeInDatabase(
       archiveDirectory: input.archiveDirectory,
       database,
       entry,
-      reason: "deleted",
       referencedSessionIds,
     }),
   );
@@ -84,5 +85,8 @@ export function commitSessionAgentPurgeInDatabase(
     new Set(plannedSessionKeys),
   );
   deletePlannedLifecycleArtifactEntries(database, input.entryRemovals);
+  if (database.agentId === input.agentId) {
+    deleteAgentToolUsageInDatabase(database.db);
+  }
   return { archivedTranscripts, maintenancePlans: [applyMaintenance(database)] };
 }

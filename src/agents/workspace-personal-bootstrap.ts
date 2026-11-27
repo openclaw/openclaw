@@ -2,6 +2,8 @@ import path from "node:path";
 import { isRootFileMissingFailure } from "../infra/boundary-file-read.js";
 import {
   hasMultipleSessionSharingIdentities,
+  isUserProfileCatalogReady,
+  prepareUserProfileCatalog,
   readUserProfileIdentity,
 } from "../state/user-profile-list.js";
 import { resolveUserPath } from "../utils.js";
@@ -17,29 +19,43 @@ export async function loadPersonalUserBootstrapFile(
   profileId?: string,
   warn?: (message: string) => void,
 ): Promise<WorkspaceBootstrapFile | undefined> {
-  if (!profileId || !hasMultipleSessionSharingIdentities()) {
+  if (!profileId) {
     return undefined;
   }
-  const canonicalId = readUserProfileIdentity(profileId)?.profileId;
-  // IDs are opaque, single path segments, not display names or caller-selected paths.
-  if (!canonicalId || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(canonicalId)) {
-    return undefined;
-  }
-  const workspaceDir = resolveUserPath(dir);
-  const filePath = path.join(workspaceDir, "users", canonicalId, DEFAULT_USER_FILENAME);
-  const loaded = await readWorkspaceFileWithGuards({ filePath, workspaceDir, rejectAliases: true });
-  if (!loaded.ok) {
-    if (!isRootFileMissingFailure(loaded)) {
-      warn?.("Personal USER.md could not be read safely; using shared defaults.");
+  const catalog = isUserProfileCatalogReady() ? undefined : await prepareUserProfileCatalog();
+  try {
+    if (!hasMultipleSessionSharingIdentities()) {
+      return undefined;
     }
-    return undefined;
+    const canonicalId = readUserProfileIdentity(profileId)?.profileId;
+    // IDs are opaque, single path segments, not display names or caller-selected paths.
+    if (!canonicalId || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(canonicalId)) {
+      return undefined;
+    }
+    const workspaceDir = resolveUserPath(dir);
+    const filePath = path.join(workspaceDir, "users", canonicalId, DEFAULT_USER_FILENAME);
+    const loaded = await readWorkspaceFileWithGuards({
+      filePath,
+      workspaceDir,
+      rejectAliases: true,
+    });
+    if (!loaded.ok) {
+      if (!isRootFileMissingFailure(loaded)) {
+        warn?.("Personal USER.md could not be read safely; using shared defaults.");
+      }
+      return undefined;
+    }
+    // A merge while the file was being read must not inject a retired profile's overlay.
+    if (
+      !hasMultipleSessionSharingIdentities() ||
+      readUserProfileIdentity(profileId)?.profileId !== canonicalId
+    ) {
+      return undefined;
+    }
+    const file = createLoadedWorkspaceBootstrapFile(DEFAULT_USER_FILENAME, filePath, loaded, true);
+    file.origin = { kind: "personal", rootPath: path.dirname(filePath) };
+    return file;
+  } finally {
+    catalog?.release();
   }
-  // A merge while the file was being read must not inject a retired profile's overlay.
-  if (
-    !hasMultipleSessionSharingIdentities() ||
-    readUserProfileIdentity(profileId)?.profileId !== canonicalId
-  ) {
-    return undefined;
-  }
-  return createLoadedWorkspaceBootstrapFile(DEFAULT_USER_FILENAME, filePath, loaded, true);
 }

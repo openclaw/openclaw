@@ -1,47 +1,186 @@
-import path from "node:path";
-import { expect, it } from "vitest";
+import fs from "node:fs";
+import { expect, it, vi } from "vitest";
+import { withinTest } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import * as worker from "../../infra/sqlite-worker-store.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import * as admission from "../../state/agent-database-admission.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
+import * as execution from "../../state/openclaw-agent-execution.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
+import { migrateLegacyMainSessionKeys } from "./legacy-main-session-migration.js";
 import { replaceSessionEntry } from "./session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { runSessionStartupMigration } from "./startup-migration-runtime.js";
 import {
-  listKnownSessionStoreAgentIdsAsync,
-  resolveAllAgentSessionStoreTargetsAsync,
-  resolveExistingAgentSessionStoreTargetsAsync,
+  listKnownSessionStoreAgentIdsAsync as knownOwners,
+  resolveAllAgentSessionStoreTargetsAsync as allTargets,
+  resolveExistingAgentSessionStoreTargetsAsync as existingTargets,
 } from "./targets-runtime.js";
+
+type Entries = NonNullable<OpenClawConfig["agents"]>["entries"];
+const config = (entries: Entries, store?: string): OpenClawConfig => ({
+  agents: { ownership: "explicit", defaults: { sessionStore: { agentId: "main" } }, entries },
+  ...(store ? { session: { store } } : {}),
+});
+type Scope = Parameters<typeof replaceSessionEntry>[0];
+const write = (agentId: string, scope: Omit<Scope, "agentId" | "sessionKey">) =>
+  replaceSessionEntry(
+    { ...scope, agentId, sessionKey: `agent:${agentId}:main` },
+    { sessionId: `${agentId}-session`, updatedAt: 1 },
+  );
 
 it("discovers committed owners and stores without executing host SQL", async () => {
   await withOpenClawTestState({ label: "target-discovery-worker" }, async (state) => {
-    const storePath = path.join(state.root, "shared.sqlite");
-    const cfg: OpenClawConfig = {
-      session: { store: storePath },
-      agents: {
-        ownership: "explicit",
-        defaults: { sessionStore: { agentId: "main" } },
-        entries: { main: {}, ops: {} },
-      },
-    };
-    const write = (agentId: string) =>
-      replaceSessionEntry(
-        { agentId, env: state.env, storePath, sessionKey: `agent:${agentId}:main` },
-        { sessionId: `${agentId}-session`, updatedAt: 1 },
-      );
-    await write("main");
-    expect(await resolveExistingAgentSessionStoreTargetsAsync(cfg, "ops", state)).toEqual([]);
-    await write("ops");
+    const storePath = state.path("shared.sqlite");
+    const cfg = config({ main: {}, ops: {} }, storePath);
+    const existing = () => existingTargets(cfg, "ops");
+    await write("main", { env: state.env, storePath });
+    expect(await existing()).toEqual([]);
+    await write("ops", { env: state.env, storePath });
     const observed = observeHostDataSql();
-    try {
-      expect(await resolveExistingAgentSessionStoreTargetsAsync(cfg, "ops", state)).toEqual([
-        { agentId: "ops", storePath },
-      ]);
-      expect(await listKnownSessionStoreAgentIdsAsync(cfg, state)).toEqual(["main", "ops"]);
-      expect(await resolveAllAgentSessionStoreTargetsAsync(cfg, state)).toContainEqual({
-        agentId: "main",
-        storePath,
+    using _ = { [Symbol.dispose]: observed.restore };
+    expect(await existing()).toEqual([{ agentId: "ops", storePath }]);
+    expect(await knownOwners(cfg, state)).toEqual(["main", "ops"]);
+    expect(await allTargets(cfg, state)).toContainEqual({ agentId: "main", storePath });
+    expect(observed.queries).toEqual([]);
+  });
+});
+it.for(["canonical", "refused unsuffixed", "refused suffixed"] as const)(
+  "discovers healthy stores while a refused agent's native database open is pending (%s)",
+  async (layout, { signal }) => {
+    await withOpenClawTestState({ label: "target-discovery-pending-open" }, async (state) => {
+      const storePath = layout === "canonical" ? undefined : state.statePath("shared.json");
+      const cfg = config({ slow: {}, main: {}, ...(storePath ? { fresh: {} } : {}) }, storePath);
+      const discover = () => allTargets(cfg, state);
+      const targets = ["slow", "main"].map((agentId) => ({
+        agentId,
+        storePath: storePath ?? state.statePath("agents", agentId, "sessions", "sessions.json"),
+      }));
+      for (const target of targets) {
+        await write(target.agentId, {
+          storePath: target.storePath,
+          defaultAgentId: layout === "refused unsuffixed" ? "slow" : "main",
+          env: state.env,
+        });
+      }
+      await closeOpenClawAgentDatabasesAsync(state.stateDir);
+      const dbScope = { agentId: "slow", env: state.env };
+      const db = resolveSqliteTargetFromSessionStorePath(targets[0]!.storePath, dbScope).path;
+      const refusal = admission.createAgentDatabaseInspectionRefusal({
+        agentId: dbScope.agentId,
+        paths: [db],
+        reason: "Database integrity check is running",
+        pending: true,
       });
-      expect(observed.queries).toEqual([]);
-    } finally {
-      observed.restore();
+      admission.recordAgentDatabaseAdmissions([refusal], state);
+      const [entered, release] = [createDeferredCore(), createDeferredCore()];
+      const open = worker.openAgentDatabaseSqliteWorkerStore;
+      const gate = vi.spyOn(worker, "openAgentDatabaseSqliteWorkerStore");
+      gate.mockImplementationOnce(async (...args) => {
+        entered.resolve();
+        await release.promise;
+        return open(...args);
+      });
+      const opening = admission.preparePendingAgentDatabase(
+        refusal,
+        { env: state.env, assertCurrent() {} },
+        async () => {
+          await execution.prepareOpenClawAgentDatabaseExecution({ ...dbScope, path: db }, () => {});
+          expect(await discover()).toEqual(expect.arrayContaining(targets));
+        },
+      );
+      try {
+        await withinTest(entered.promise, signal);
+        expect(execution.getPendingOpenClawAgentDatabasePreparation(db)).toBeDefined();
+        expect(await withinTest(discover(), signal)).toEqual(targets.slice(1));
+        expect(fs.existsSync(state.statePath("shared.fresh.sqlite"))).toBe(false);
+      } finally {
+        release.resolve();
+        gate.mockRestore();
+        await opening;
+      }
+      expect(await discover()).toEqual(expect.arrayContaining(targets));
+      expect(fs.existsSync(state.statePath("shared.fresh.sqlite"))).toBe(false);
+    });
+  },
+);
+
+it("prepares a healthy custom agent while a sibling database is still opening", async ({
+  signal,
+}) => {
+  await withOpenClawTestState({ label: "startup-migration-pending-sibling" }, async (state) => {
+    const cfg: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { healthy: {}, slow: {} } },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    for (const agentId of ["healthy", "slow"]) {
+      await write(agentId, { env: state.env });
     }
+    await closeOpenClawAgentDatabasesAsync(state.stateDir);
+    const dbScope = { agentId: "slow", env: state.env };
+    const db = state.statePath("agents", "slow", "agent", "openclaw-agent.sqlite");
+    const refusal = admission.createAgentDatabaseInspectionRefusal({
+      agentId: "slow",
+      paths: [db],
+      reason: "Database integrity check is running",
+      pending: true,
+    });
+    admission.recordAgentDatabaseAdmissions([refusal], state);
+    const [entered, release] = [createDeferredCore(), createDeferredCore()];
+    const open = worker.openAgentDatabaseSqliteWorkerStore;
+    const gate = vi.spyOn(worker, "openAgentDatabaseSqliteWorkerStore");
+    gate.mockImplementationOnce(async (...args) => {
+      entered.resolve();
+      await release.promise;
+      return open(...args);
+    });
+    const opening = admission.preparePendingAgentDatabase(
+      refusal,
+      { env: state.env, assertCurrent() {} },
+      () => execution.prepareOpenClawAgentDatabaseExecution({ ...dbScope, path: db }, () => {}),
+    );
+    let migration: Promise<void> | undefined;
+    try {
+      await withinTest(entered.promise, signal);
+      const handoffDatabase = vi.fn(async () => {});
+      migration = runSessionStartupMigration({
+        cfg,
+        env: state.env,
+        agentIds: new Set(["healthy"]),
+        log: { info() {}, warn() {} },
+        handoffDatabase,
+      });
+      await withinTest(migration, signal);
+      expect(handoffDatabase).toHaveBeenCalledOnce();
+      expect(handoffDatabase).toHaveBeenCalledWith(expect.objectContaining({ agentId: "healthy" }));
+      expect(admission.readAgentDatabaseAdmissionRefusal("slow", state)).toBe(refusal);
+      expect(
+        await migrateLegacyMainSessionKeys({ cfg, env: state.env, mode: "detect" }),
+      ).toMatchObject({
+        complete: false,
+        ledgerComplete: false,
+      });
+      expect(
+        await migrateLegacyMainSessionKeys({
+          cfg: {
+            ...cfg,
+            agents: { ...cfg.agents, defaults: { sessionStore: { agentId: "healthy" } } },
+          },
+          env: state.env,
+          mode: "detect",
+        }),
+      ).toMatchObject({ armed: true, complete: false, ledgerComplete: false });
+    } finally {
+      release.resolve();
+      gate.mockRestore();
+      await opening;
+      await migration;
+    }
+    expect(
+      await migrateLegacyMainSessionKeys({ cfg, env: state.env, mode: "detect" }),
+    ).toMatchObject({ complete: true });
   });
 });

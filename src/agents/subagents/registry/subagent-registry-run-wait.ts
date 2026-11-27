@@ -1,6 +1,6 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { getRuntimeConfig } from "../../../config/config.js";
-import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context-store.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { callGateway } from "../../../gateway/call.js";
 import {
@@ -16,6 +16,7 @@ import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-w
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
 import { waitForAgentRun } from "../../run-wait.js";
 import { withSubagentOutcomeTiming } from "../announce/subagent-announce-output.js";
+import { hasSubagentKill } from "./subagent-control-kill-intent.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_KILLED,
@@ -28,6 +29,7 @@ import {
   mutateSubagentRuns,
 } from "./subagent-registry-persistence.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import {
   compareSubagentRunGeneration,
   getSubagentRunRuntimeKey,
@@ -48,6 +50,7 @@ const WAIT_TIMEOUT_DEADLINE_SKEW_MS = 250;
 
 export type SubagentManagerOptions = {
   runs: Map<string, SubagentRunRecord>;
+  getChildSessionCandidates: (childSessionKey: string) => Iterable<SubagentRunRecord>;
   getRunsForChildSession: (
     childSessionKey: string,
     childAgentId?: string,
@@ -139,7 +142,7 @@ export abstract class SubagentWaitManager {
           return;
         }
         void this.waitForSubagentCompletion(runId, entry, waitTimeoutMs, true);
-      }, RECOVERABLE_WAIT_RETRY_DELAY_MS).unref?.();
+      }, RECOVERABLE_WAIT_RETRY_DELAY_MS).unref();
       log.info(reason, {
         runId,
         childSessionKey: entry.childSessionKey,
@@ -324,8 +327,7 @@ export abstract class SubagentWaitManager {
               }
               if (
                 typeof current.execution.endedAt === "number" ||
-                current.killIntent ||
-                current.killReconciliation ||
+                hasSubagentKill(current) ||
                 current.execution.startedAt === observedStartedAt
               ) {
                 return { value: undefined };
@@ -374,7 +376,7 @@ export abstract class SubagentWaitManager {
       if (!isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)) {
         return;
       }
-      let current = this.options.runs.get(runId);
+      const current = this.options.runs.get(runId);
       if (!current || !isSameSubagentRunOwner(current, waitedEntry)) {
         return;
       }
@@ -385,16 +387,9 @@ export abstract class SubagentWaitManager {
         error,
       });
       if (
-        !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) ||
-        !isSameSubagentRunOwner(this.options.runs.get(runId), current)
-      ) {
-        return;
-      }
-      current = currentEntry();
-      if (
         typeof current.execution.endedAt === "number" &&
         !current.cleanupCompletedAt &&
-        current.pauseReason !== "sessions_yield"
+        !isSubagentPausedByYield(current)
       ) {
         const resume = await mutateSubagentRuns(
           [runId],
@@ -406,7 +401,7 @@ export abstract class SubagentWaitManager {
             if (
               typeof latest.execution.endedAt !== "number" ||
               latest.cleanupCompletedAt ||
-              latest.pauseReason === "sessions_yield"
+              isSubagentPausedByYield(latest)
             ) {
               return { value: false };
             }

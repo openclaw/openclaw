@@ -8,6 +8,7 @@ import type {
   PluginManifestProviderRequestProvider,
 } from "../plugins/manifest.js";
 import {
+  isPluginProviderEndpointClass,
   matchesPluginProviderEndpoint,
   normalizePluginProviderBaseUrl,
 } from "../plugins/plugin-metadata-provider-facts.js";
@@ -20,23 +21,15 @@ import { asBoolean } from "../utils/boolean.js";
 import type { RuntimeVersionEnv } from "../version.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 
-type ProviderAttributionVerification =
-  | "vendor-documented"
-  | "vendor-hidden-api-spec"
-  | "vendor-sdk-hook-only"
-  | "internal-runtime";
-
-type ProviderAttributionHook =
-  | "request-headers"
-  | "default-headers"
-  | "user-agent-extra"
-  | "custom-user-agent";
-
 export type ProviderAttributionPolicy = {
   provider: string;
   enabledByDefault: boolean;
-  verification: ProviderAttributionVerification;
-  hook?: ProviderAttributionHook;
+  verification:
+    | "vendor-documented"
+    | "vendor-hidden-api-spec"
+    | "vendor-sdk-hook-only"
+    | "internal-runtime";
+  hook?: "request-headers" | "default-headers" | "user-agent-extra" | "custom-user-agent";
   docsUrl?: string;
   reviewNote?: string;
   product: string;
@@ -60,6 +53,7 @@ export type ProviderEndpointClass =
   | "minimax-native"
   | "moonshot-native"
   | "modelstudio-native"
+  | "novita-native"
   | "nvidia-native"
   | "openai-public"
   | "openai"
@@ -327,7 +321,12 @@ function resolveProviderAttributionPolicy(
         headers: { "X-Pplx-Integration": userAgent },
       };
     case "openai":
-    case "xai":
+    case "xai": {
+      // ChatGPT gates models on this header and on the /models `client_version` that reads it
+      // (extensions/openai/base-url.ts). Send the numeric release; prerelease or build suffixes are
+      // untested, and placeholders such as "unknown" fail the gate. User-Agent keeps the full build.
+      const release = /^(\d{4})\.\d+\.\d+/u.exec(version);
+      const gateVersion = release && Number(release[1]) >= 2026 ? release[0] : "99.0.0";
       return {
         ...policy,
         verification: "vendor-hidden-api-spec",
@@ -337,10 +336,11 @@ function resolveProviderAttributionPolicy(
             : "xAI api.x.ai accepts a standard openclaw User-Agent. Companion originator/version headers mirror the OpenAI attribution shape for consistency; they are not validated against an xAI-specific spec and are expected to be ignored by xAI's OpenAI-compatible surface.",
         headers: {
           originator: OPENCLAW_ATTRIBUTION_ORIGINATOR,
-          version,
+          version: normalized === "openai" ? gateVersion : version,
           "User-Agent": userAgent,
         },
       };
+    }
     case "opencode":
       return {
         ...policy,
@@ -456,6 +456,21 @@ export function resolveProviderRequestPolicy(
   };
 }
 
+/** Catalog speed policy needs endpoint facts, without constructing request attribution. */
+export function resolveProviderFastModeRequestCapabilities(
+  input: ProviderRequestPolicyInput,
+  endpointClass = resolveProviderEndpoint(input.baseUrl, input.providerMetadataOwners)
+    .endpointClass,
+) {
+  return {
+    endpointClass,
+    allowsAnthropicServiceTier:
+      normalizeProviderId(input.provider ?? "") === "anthropic" &&
+      normalizeOptionalLowercaseString(input.api) === "anthropic-messages" &&
+      (endpointClass === "default" || endpointClass === "anthropic-public"),
+  };
+}
+
 export function resolveProviderRequestCapabilities(
   input: ProviderRequestCapabilitiesInput,
   env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
@@ -465,29 +480,7 @@ export function resolveProviderRequestCapabilities(
   const api = normalizeOptionalLowercaseString(input.api);
   const endpointClass = policy.endpointClass;
   const isKnownNativeEndpoint =
-    endpointClass === "anthropic-public" ||
-    endpointClass === "cerebras-native" ||
-    endpointClass === "chutes-native" ||
-    endpointClass === "deepseek-native" ||
-    endpointClass === "github-copilot-native" ||
-    endpointClass === "groq-native" ||
-    endpointClass === "meta-native" ||
-    endpointClass === "mistral-public" ||
-    endpointClass === "minimax-native" ||
-    endpointClass === "moonshot-native" ||
-    endpointClass === "modelstudio-native" ||
-    endpointClass === "nvidia-native" ||
-    endpointClass === "openai-public" ||
-    endpointClass === "openai" ||
-    endpointClass === "opencode-native" ||
-    endpointClass === "opencode-go-native" ||
-    endpointClass === "azure-openai" ||
-    endpointClass === "openrouter" ||
-    endpointClass === "xai-native" ||
-    endpointClass === "xiaomi-native" ||
-    endpointClass === "zai-native" ||
-    endpointClass === "google-generative-ai" ||
-    endpointClass === "google-vertex";
+    isPluginProviderEndpointClass(endpointClass) && endpointClass !== "vercel-ai-gateway";
 
   const manifestProviderRequest = resolveManifestProviderRequest(
     provider,
@@ -531,10 +524,7 @@ export function resolveProviderRequestCapabilities(
         api === "openai-responses" ||
         api === "openai-chatgpt-responses" ||
         api === "azure-openai-responses"),
-    allowsAnthropicServiceTier:
-      provider === "anthropic" &&
-      api === "anthropic-messages" &&
-      (endpointClass === "default" || endpointClass === "anthropic-public"),
+    ...resolveProviderFastModeRequestCapabilities(input, endpointClass),
     // This is intentionally the gate for emitting `store: false` on Responses
     // transports, not just a statement about vendor support in the abstract.
     supportsResponsesStoreField:
@@ -554,55 +544,4 @@ export function resolveProviderRequestCapabilities(
       manifestProviderRequest?.openAICompletions?.supportsStreamingUsage === true,
     compatibilityFamily,
   };
-}
-
-function describeProviderRequestRoutingPolicy(
-  policy: ProviderRequestPolicyResolution,
-): "hidden" | "documented" | "none" {
-  if (!policy.attributionProvider) {
-    return "none";
-  }
-  switch (policy.policy?.verification) {
-    case "vendor-hidden-api-spec":
-      return "hidden";
-    case "vendor-documented":
-      return "documented";
-    default:
-      return "none";
-  }
-}
-
-function describeProviderRequestRouteClass(
-  policy: ProviderRequestPolicyResolution,
-): "default" | "native" | "proxy-like" | "local" | "invalid" {
-  switch (policy.endpointClass) {
-    case "default":
-    case "invalid":
-    case "local":
-      return policy.endpointClass;
-    case "custom":
-    case "openrouter":
-      return "proxy-like";
-    default:
-      return "native";
-  }
-}
-
-export function describeProviderRequestRoutingSummary(
-  input: ProviderRequestPolicyInput,
-  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
-): string {
-  const policy = resolveProviderRequestPolicy(input, env);
-  const api = normalizeOptionalLowercaseString(input.api) ?? "unknown";
-  const provider = policy.provider ?? "unknown";
-  const routeClass = describeProviderRequestRouteClass(policy);
-  const routingPolicy = describeProviderRequestRoutingPolicy(policy);
-
-  return [
-    `provider=${provider}`,
-    `api=${api}`,
-    `endpoint=${policy.endpointClass}`,
-    `route=${routeClass}`,
-    `policy=${routingPolicy}`,
-  ].join(" ");
 }

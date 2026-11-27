@@ -1,9 +1,11 @@
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSet, resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 type SignalExitBarrier = () => Promise<void>;
-type CliExitSignal = "SIGINT" | "SIGTERM";
+const cliSignalExitCodes = { SIGINT: 130, SIGTERM: 143, SIGHUP: 129 };
+type CliExitSignal = keyof typeof cliSignalExitCodes;
 
-type SignalExitOwner = (code: number | string) => void;
+type SignalExitOwner = (code: number | string, reason?: string) => void;
 // Process custody outlives the Gateway generations that reset ordinary barriers.
 const processExitOwner = resolveGlobalSingleton<{ current?: SignalExitOwner }>(
   Symbol.for("openclaw.signalExitOwner"),
@@ -16,16 +18,13 @@ export function registerSignalExitOwner(owner: SignalExitOwner): () => void {
     throw new Error("A process signal exit owner is already registered");
   }
   processExitOwner.current = owner;
-  let active = true;
-  return () => {
-    if (!active) {
-      return;
-    }
-    active = false;
+  const lifetime = new DisposableStack();
+  lifetime.defer(() => {
     if (processExitOwner.current === owner) {
       processExitOwner.current = undefined;
     }
-  };
+  });
+  return () => lifetime.dispose();
 }
 
 // Gates let bounded mutations finish before signal cleanup begins; barriers
@@ -36,16 +35,33 @@ const activeBarriers = resolveGlobalSet<SignalExitBarrier>(
 );
 const activeGates = resolveGlobalSet<{
   finished: Promise<void>;
-  interrupt?: (signal?: CliExitSignal) => void;
+  interrupt?: (signal?: CliExitSignal, reason?: string) => void;
 }>(Symbol.for("openclaw.signalExitGates"), "close-and-restart");
 const activeFinalizers = resolveGlobalSet<SignalExitBarrier>(
   Symbol.for("openclaw.signalExitFinalizers"),
   "close-and-restart",
 );
+const signalObservers = resolveGlobalSet<unknown>(
+  Symbol.for("openclaw.signalExitObservers"),
+  "close-and-restart",
+);
+
+/** SIGINT/SIGTERM listeners added by `start` only redraw; the CLI owner keeps the exit. */
+export function startSignalObserver(start: () => void): () => void {
+  const before = new Set([...process.listeners("SIGINT"), ...process.listeners("SIGTERM")]);
+  start();
+  const added = [...process.listeners("SIGINT"), ...process.listeners("SIGTERM")].filter(
+    (listener) => !before.has(listener),
+  );
+  for (const listener of added) {
+    signalObservers.add(listener);
+  }
+  return () => added.forEach((listener) => signalObservers.delete(listener));
+}
 
 export function registerSignalExitGate(
   finished: Promise<void>,
-  interrupt?: (signal?: CliExitSignal) => void,
+  interrupt?: (signal?: CliExitSignal, reason?: string) => void,
 ): () => void {
   const gate = { finished, interrupt };
   activeGates.add(gate);
@@ -67,9 +83,9 @@ let pendingSignalExitDrain: Promise<void> | undefined;
 let pendingProcessExit: Promise<number | string> | undefined;
 
 /** Broken output must not bypass a maintenance owner's asynchronous recovery. */
-export function exitAfterSignalExitBarriers(code: number | string): void {
+export function exitAfterSignalExitBarriers(code: number | string, reason?: string): void {
   if (processExitOwner.current) {
-    processExitOwner.current(code);
+    processExitOwner.current(code, reason);
     return;
   }
   if (pendingProcessExit) {
@@ -80,7 +96,7 @@ export function exitAfterSignalExitBarriers(code: number | string): void {
     pendingProcessExit = Promise.resolve(code);
     return;
   }
-  pendingProcessExit = waitForSignalExitBarriers()
+  pendingProcessExit = waitForSignalExitBarriers(undefined, reason)
     .then(() => code)
     // The output stream may itself be broken; cleanup owners report their own failures.
     .catch(() => (code === 0 || code === "0" ? 1 : code))
@@ -89,7 +105,7 @@ export function exitAfterSignalExitBarriers(code: number | string): void {
       const finalCode =
         (exitCode === 0 || exitCode === "0") && outcome != null ? outcome : exitCode;
       if (processExitOwner.current) {
-        processExitOwner.current(finalCode);
+        processExitOwner.current(finalCode, reason);
       } else {
         process.exitCode = finalCode;
       }
@@ -97,12 +113,13 @@ export function exitAfterSignalExitBarriers(code: number | string): void {
     });
 }
 
-export function waitForSignalExitBarriers(signal?: CliExitSignal): Promise<void> {
-  pendingSignalExitDrain ??= drainSignalExitBarriers(signal).finally(() => {
+export function waitForSignalExitBarriers(signal?: CliExitSignal, reason?: string): Promise<void> {
+  // The first drain owns cancellation's cause; a later signal can still own the exit code.
+  pendingSignalExitDrain ??= drainSignalExitBarriers(signal, reason).finally(() => {
     pendingSignalExitDrain = undefined;
   });
   if (signal && !cliSignalExit) {
-    const code = signal === "SIGINT" ? 130 : 143;
+    const code = cliSignalExitCodes[signal];
     // Specialized update owners share this accepted outcome with the outer
     // finalizer, even when cancellation unwinds through a later command error.
     cliSignalExit = pendingSignalExitDrain.then(
@@ -113,10 +130,10 @@ export function waitForSignalExitBarriers(signal?: CliExitSignal): Promise<void>
   return pendingSignalExitDrain;
 }
 
-async function drainSignalExitBarriers(signal?: CliExitSignal): Promise<void> {
+async function drainSignalExitBarriers(signal?: CliExitSignal, reason?: string): Promise<void> {
   const gates = [...activeGates];
   for (const gate of gates) {
-    gate.interrupt?.(signal);
+    gate.interrupt?.(signal, reason);
   }
   const gateResults = await Promise.allSettled(gates.map((gate) => gate.finished));
   const barrierResults = await Promise.allSettled(
@@ -141,15 +158,20 @@ function handleCliSignal(signal: CliExitSignal): void {
   if (cliSignalExit) {
     return;
   }
-  const listener = signal === "SIGINT" ? onCliSigint : onCliSigterm;
   if (
     !cliDoctorSignalOwner &&
-    process.listeners(signal).some((existing) => existing !== listener)
+    process
+      .listeners(signal)
+      .some((existing) => existing !== cliSignalListeners[signal] && !signalObservers.has(existing))
   ) {
     // Run first and relinquish the fallback synchronously: signal-exit observers
     // must see their original listener count, and custom owners retain their drain.
     detachCliSignalExitHandlers();
     return;
+  }
+  process.stderr.write(`Command interrupted by ${signal}. Waiting for cleanup before exiting.\n`);
+  if (cliDoctorSignalOwner) {
+    process.exitCode = cliSignalExitCodes[signal];
   }
   cliSignalExit = waitForSignalExitBarriers(signal)
     .catch(() => {
@@ -158,55 +180,107 @@ function handleCliSignal(signal: CliExitSignal): void {
       );
     })
     .then(() => {
-      const code = signal === "SIGINT" ? 130 : 143;
+      const code = cliSignalExitCodes[signal];
       process.exitCode = code;
       return code;
     });
 }
 
-const onCliSigint = () => handleCliSignal("SIGINT");
-const onCliSigterm = () => handleCliSignal("SIGTERM");
-const onCliSigpipe = () => {
-  if (cliSignalOwners > 0) {
-    exitAfterSignalExitBarriers(141);
+const cliSignalListeners = {
+  SIGINT: () => handleCliSignal("SIGINT"),
+  SIGTERM: () => handleCliSignal("SIGTERM"),
+  SIGHUP: () => handleCliSignal("SIGHUP"),
+};
+// Any EPIPE write raises SIGPIPE, including a child's closed stdin, so the
+// signal only keeps Node's ignore disposition; EPIPE on our output decides exit.
+const onCliSigpipe = () => {};
+const onCliOutputError = (error: NodeJS.ErrnoException) => {
+  if (error.code === "EPIPE" && cliSignalOwners > 0) {
+    exitAfterSignalExitBarriers(141, "output pipe closed (EPIPE)");
   }
 };
 
 /** Doctor keeps termination custody when progress spinners observe signals.
  * Retain SIGPIPE until exit: removing its last listener restores SIG_DFL, not SIG_IGN. */
 export function installCliDoctorSignalExitHandlers(): void {
-  if (cliSignalOwners === 0) {
+  if (cliSignalOwners === 0 || cliDoctorSignalOwner) {
     return;
   }
   cliDoctorSignalOwner = true;
+  process.prependListener("SIGHUP", cliSignalListeners.SIGHUP);
   if (!process.listeners("SIGPIPE").includes(onCliSigpipe)) {
     process.on("SIGPIPE", onCliSigpipe);
+    // Run before console capture's generic EPIPE exit so closed output reports 141.
+    process.stdout.prependListener("error", onCliOutputError);
+    process.stderr.prependListener("error", onCliOutputError);
   }
 }
 
 function detachCliSignalExitHandlers(): void {
-  process.off("SIGINT", onCliSigint);
-  process.off("SIGTERM", onCliSigterm);
+  for (const [signal, listener] of Object.entries(cliSignalListeners)) {
+    process.off(signal, listener);
+  }
 }
 
 /** Executable CLI commands share one signal owner; Gateway and update handlers
  * keep their specialized lifecycle and use these same barriers. */
 export function installCliSignalExitHandlers(): () => void {
   if (cliSignalOwners++ === 0) {
-    process.prependListener("SIGINT", onCliSigint);
-    process.prependListener("SIGTERM", onCliSigterm);
+    process.prependListener("SIGINT", cliSignalListeners.SIGINT);
+    process.prependListener("SIGTERM", cliSignalListeners.SIGTERM);
   }
-  let active = true;
-  return () => {
-    if (!active) {
-      return;
-    }
-    active = false;
+  const lifetime = new DisposableStack();
+  lifetime.defer(() => {
     if (--cliSignalOwners === 0) {
       cliDoctorSignalOwner = false;
       detachCliSignalExitHandlers();
     }
+  });
+  return () => lifetime.dispose();
+}
+
+// Gateway run keeps its run loop's signal handling, which needs state custody. Until that
+// loop holds custody and installs its handlers, startup shares the CLI owner: a stop then
+// unwinds startup instead of taking the default action with state locks still held.
+const gatewayStartupSignals = resolveGlobalSingleton<{
+  stop?: CliExitSignal;
+  handOff?: () => void;
+}>(Symbol.for("openclaw.gatewayStartupSignals"), () => ({}));
+
+export async function withGatewayStartupSignalOwner<T>(run: () => T | Promise<T>): Promise<T> {
+  const finished = createDeferredCore();
+  const releaseSignals = installCliSignalExitHandlers();
+  const releaseGate = registerSignalExitGate(finished.promise, (signal) => {
+    gatewayStartupSignals.stop ??= signal;
+  });
+  const handOff = () => {
+    if (gatewayStartupSignals.handOff !== handOff) {
+      return;
+    }
+    gatewayStartupSignals.handOff = undefined;
+    gatewayStartupSignals.stop = undefined;
+    releaseGate();
+    releaseSignals();
+    finished.resolve();
   };
+  gatewayStartupSignals.handOff = handOff;
+  gatewayStartupSignals.stop = undefined;
+  try {
+    return await run();
+  } finally {
+    handOff();
+  }
+}
+
+/** Exit status of a stop accepted before the Gateway run loop owned signals. */
+export function getGatewayStartupStopExitCode(): number | undefined {
+  const stop = gatewayStartupSignals.handOff ? gatewayStartupSignals.stop : undefined;
+  return stop ? cliSignalExitCodes[stop] : undefined;
+}
+
+/** Call in the same turn the run loop installs its handlers, so no stop goes unowned. */
+export function handOffGatewayStartupSignals(): void {
+  gatewayStartupSignals.handOff?.();
 }
 
 /** Command error/output finalization cannot race an accepted signal's cleanup. */

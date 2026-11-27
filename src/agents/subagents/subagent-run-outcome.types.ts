@@ -1,5 +1,7 @@
+import type { AgentInternalEventStatus } from "../internal-event-contract.js";
+
 export type SubagentRunOutcome = {
-  status: "ok" | "error" | "timeout" | "unknown";
+  status: AgentInternalEventStatus;
   error?: string;
   startedAt?: number;
   endedAt?: number;

@@ -4,18 +4,14 @@ import type {
   SessionActivitySummaryBatchInput,
   SessionActivitySummaryBatchResult,
 } from "../config/sessions/activity-summary-source.types.js";
-import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";
 import {
   SessionTranscriptProjectionUnavailableError,
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.js";
-import { readSessionTranscriptBoundedMessageTailPageFromProjection } from "../config/sessions/session-accessor.sqlite-active-events-read.js";
-import { withCurrentProjectionSnapshot } from "../config/sessions/session-accessor.sqlite-active-projection.js";
 import {
   prepareSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
-import { readActivePathEntryRelationFromProjection } from "../config/sessions/session-accessor.sqlite-transcript-anchor.js";
 import { resolveSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import { startSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
@@ -24,68 +20,33 @@ import {
   extractAssistantTextForPhase,
 } from "../shared/chat-message-content.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { readActivitySummaryBatchFromReplica } from "./session-activity-summary-replica.js";
 
-/** Runs in the existing transcript worker; only byte-bounded bodies leave it. */
-export function readActivitySummaryBatch(
-  params: SessionActivitySummaryBatchInput,
-): SessionActivitySummaryBatchResult {
-  return withCurrentProjectionSnapshot(
-    params.scope,
-    (projection) => {
-      const snapshot = readSessionTranscriptBoundedMessageTailPageFromProjection(projection, {
-        maxBytes: 0,
-        maxMessages: 0,
-        offset: 0,
-      });
-      let previous = params.previous;
-      if (
-        previous &&
-        (previous.generation !== (snapshot.snapshot.generation ?? null) ||
-          previous.coveredMessages > snapshot.totalMessages ||
-          (previous.leafEntryId &&
-            !["exact", "ancestor"].includes(
-              readActivePathEntryRelationFromProjection(projection, previous.leafEntryId),
-            )))
-      ) {
-        previous = undefined;
-      }
-      const watermark = {
-        generation: projection.version.generation,
-        maxSeq: projection.version.rawSeq,
-      };
-      const covered = previous?.coveredMessages ?? 0;
-      let batchSize = Math.min(64, snapshot.totalMessages - covered);
-      const readPage = (maxMessages: number, includeEarlier = false) =>
-        readSessionTranscriptBoundedMessageTailPageFromProjection(projection, {
-          maxBytes: 128 * 1024,
-          maxMessages,
-          offset: snapshot.totalMessages - covered - maxMessages,
-          oversizedMessageCheck: {
-            roles: ["user", "assistant"],
-            includeEarlier,
-          },
-        });
-      const earlierOmission =
-        previous?.omittedContent &&
-        (previous.formatRevision === ACTIVITY_SUMMARY_FORMAT_REVISION ||
-          readPage(0, true).hasOversizedMessages);
-      let page = readPage(batchSize);
-      while (batchSize > 1 && page.events.length < page.scannedMessages) {
-        batchSize = Math.max(1, Math.floor(batchSize / 2));
-        page = readPage(batchSize);
-      }
-      // Shrinking leaves only individually oversized omissions; recheck legacy flags by role.
-      return {
-        previous,
-        snapshot,
-        watermark,
-        covered,
-        page,
-        omitted: earlierOmission === true || page.hasOversizedMessages === true,
-      };
-    },
-    { readOnly: true },
-  );
+function withActivitySummaryNotes(source: SessionActivitySummaryBatchResult) {
+  if (!source) {
+    return undefined;
+  }
+  const notes = source.page.events.flatMap(({ event }) => {
+    const message = isRecord(event) ? event.message : undefined;
+    if (!isRecord(message) || (message.role !== "user" && message.role !== "assistant")) {
+      return [];
+    }
+    const text =
+      message.role === "assistant"
+        ? (extractAssistantPhaseText(message) ??
+          extractAssistantTextForPhase(message, { phase: "commentary" }))
+        : extractTextFromChatContent(message.content);
+    const cleaned = (text ?? "").replace(/\s+/gu, " ").trim();
+    if (!cleaned) {
+      return [];
+    }
+    const excerpt =
+      cleaned.length <= 800
+        ? cleaned
+        : `${sliceUtf16Safe(cleaned, 0, 395)} … ${sliceUtf16Safe(cleaned, -400)}`;
+    return [`${message.role}: ${excerpt}`];
+  });
+  return { ...source, notes };
 }
 
 export async function readActivitySummarySource(
@@ -93,10 +54,6 @@ export async function readActivitySummarySource(
     assertCurrent: () => void;
   },
 ) {
-  const { readRestoredSessionTranscript } =
-    await import("../config/sessions/session-cold-storage-read.js");
-  const { withSessionHistoryWorkerDatabase } =
-    await import("../config/sessions/session-transcript-worker-runtime.js");
   const resolved = await prepareSqliteTranscriptReadScope(params.scope);
   params.assertCurrent();
   const options = toDatabaseOptions(resolved);
@@ -106,6 +63,15 @@ export async function readActivitySummarySource(
     storePath: resolveOpenClawAgentSqlitePath(options),
   };
   const admission = resolveSessionTranscriptReadFence(resolved);
+  const resident =
+    !admission && readActivitySummaryBatchFromReplica({ scope, previous: params.previous });
+  if (resident) {
+    return withActivitySummaryNotes(resident);
+  }
+  const { readRestoredSessionTranscript } =
+    await import("../config/sessions/session-cold-storage-read.js");
+  const { withSessionHistoryWorkerDatabase } =
+    await import("../config/sessions/session-transcript-worker-runtime.js");
   return withSessionHistoryWorkerDatabase(options, async (owner) => {
     const read = async () => {
       params.assertCurrent();
@@ -115,30 +81,7 @@ export async function readActivitySummarySource(
         admission,
       });
       params.assertCurrent();
-      if (!source) {
-        return undefined;
-      }
-      const notes = source.page.events.flatMap(({ event }) => {
-        const message = isRecord(event) ? event.message : undefined;
-        if (!isRecord(message) || (message.role !== "user" && message.role !== "assistant")) {
-          return [];
-        }
-        const text =
-          message.role === "assistant"
-            ? (extractAssistantPhaseText(message) ??
-              extractAssistantTextForPhase(message, { phase: "commentary" }))
-            : extractTextFromChatContent(message.content);
-        const cleaned = (text ?? "").replace(/\s+/gu, " ").trim();
-        if (!cleaned) {
-          return [];
-        }
-        const excerpt =
-          cleaned.length <= 800
-            ? cleaned
-            : `${sliceUtf16Safe(cleaned, 0, 395)} … ${sliceUtf16Safe(cleaned, -400)}`;
-        return [`${message.role}: ${excerpt}`];
-      });
-      return { ...source, notes };
+      return withActivitySummaryNotes(source);
     };
     for (let retry = false; ; retry = true) {
       try {

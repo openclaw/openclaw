@@ -12,7 +12,7 @@ import { chunkMarkdownText, type ReplyPayload } from "openclaw/plugin-sdk/reply-
 import { classifyTransientNetworkErrorCode } from "openclaw/plugin-sdk/retry-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import type { FlexContainer } from "./flex-templates/types.js";
-import { processLineMessage } from "./markdown-to-line.js";
+import { chunkLineText, processLineMessage } from "./markdown-to-line.js";
 import { buildLineMediaMessage } from "./outbound-media.js";
 import { buildLineQuickReplyFallbackText } from "./quick-reply-fallback.js";
 import {
@@ -27,13 +27,12 @@ import {
   findLineHttpError,
   resolveLineNonDispatchRetryable,
 } from "./send-retry.js";
+import { pushMessagesLine, replyMessageLine } from "./send.js";
 import {
+  buildTemplateMessageFromPayload,
   createFlexMessage,
   createLocationMessage,
-  pushMessagesLine,
-  replyMessageLine,
-} from "./send.js";
-import { buildTemplateMessageFromPayload } from "./template-messages.js";
+} from "./template-messages.js";
 import type { LineChannelData, LineQuickReplyItem } from "./types.js";
 
 type LineAutoReplyDeliveryResult =
@@ -80,15 +79,8 @@ function canFallbackAfterLineReplyFailure(error: unknown): boolean {
 
 function markLineVisibleDeliveryError(error: unknown): Error {
   const deliveryError = toLineDeliveryError(error);
-  if (Object.isExtensible(deliveryError)) {
-    Object.assign(deliveryError, { sentBeforeError: true, visibleReplySent: true });
-    return deliveryError;
-  }
-  const visibleError = new Error("LINE message send failed", {
-    cause: deliveryError,
-  });
-  Object.assign(visibleError, { sentBeforeError: true, visibleReplySent: true });
-  return visibleError;
+  Object.assign(deliveryError, { sentBeforeError: true, visibleReplySent: true });
+  return deliveryError;
 }
 
 export async function deliverLineAutoReply(params: {
@@ -132,7 +124,7 @@ export async function deliverLineAutoReply(params: {
     }
   >();
   const pushLineMessages = async (
-    messages: messagingApi.Message[],
+    messages: readonly messagingApi.Message[],
     allowFailedBatchTextRecovery: boolean,
     externalTail: messagingApi.Message[] = [],
   ): Promise<void> => {
@@ -159,7 +151,7 @@ export async function deliverLineAutoReply(params: {
   };
 
   const sendLineMessages = async (
-    messages: messagingApi.Message[],
+    messages: readonly messagingApi.Message[],
     allowReplyToken: boolean,
   ): Promise<void> => {
     if (messages.length === 0) {
@@ -238,7 +230,7 @@ export async function deliverLineAutoReply(params: {
     (segment) =>
       segment.type === "flex"
         ? [createFlexMessage(segment.message.altText, segment.message.contents)]
-        : chunkMarkdownText(segment.text, textLimit).map((text) => ({
+        : chunkLineText(segment, textLimit, chunkMarkdownText).map(({ text }) => ({
             type: "text" as const,
             text,
           })),

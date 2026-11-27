@@ -1,7 +1,9 @@
-import { listSessionTranscriptArchivesReadOnly } from "./session-accessor.sqlite-history.js";
 import { listSessionParticipantsReadOnly } from "./session-accessor.sqlite-participant-read.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
-import { listSessionTranscriptInstances } from "./session-history.js";
+import {
+  listSessionTranscriptArchivesReadOnly,
+  listSessionTranscriptInstances,
+} from "./session-history-read.js";
 import { selectMemorySessionTargets } from "./session-memory-targets-policy.js";
 import type {
   MemorySessionSelectors,
@@ -22,8 +24,9 @@ export function readMemorySessionTargets(
   if (!params.sessionIds?.length && !params.hookSources?.length && !params.participants?.length) {
     return [];
   }
+  const scope = { ...params, projection: "list" } as const;
   return selectMemorySessionTargets(params, {
-    instances: listSessionTranscriptInstances(params, { includeAllWindows: true }, continuation),
+    instances: listSessionTranscriptInstances(scope, { includeAllWindows: true }, continuation),
     participants: new Map(
       [...listSessionParticipantsReadOnly(params)].map(([key, rows]) => [
         key,

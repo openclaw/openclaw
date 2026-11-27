@@ -1,6 +1,8 @@
+import { SettingsList } from "@earendil-works/pi-tui";
 import { modelKey } from "../../agents/model-ref-shared.js";
-import { searchableSelectListTheme } from "../theme/theme.js";
+import { searchableSelectListTheme, settingsListTheme } from "../theme/theme.js";
 import type { TuiModelChoice } from "../tui-backend.js";
+import type { TuiStateAccess } from "../tui-types.js";
 import { SearchableSelectList, type SearchableSelectItem } from "./searchable-select-list.js";
 
 export function createSearchableSelectList(items: SearchableSelectItem[], maxVisible = 7) {
@@ -43,4 +45,26 @@ export function modelSelectItems(
     { value: "all-models", label: `All models (${collapsed.length})`, expandsCollapsed: true },
     ...collapsed,
   ];
+}
+
+export function createTuiSettingsList(
+  state: Pick<TuiStateAccess, "toolsExpanded" | "showThinking">,
+  onChange: ConstructorParameters<typeof SettingsList>[3],
+  onCancel: ConstructorParameters<typeof SettingsList>[4],
+) {
+  const items = [
+    {
+      id: "tools",
+      label: "Tool output",
+      currentValue: state.toolsExpanded ? "expanded" : "collapsed",
+      values: ["collapsed", "expanded"],
+    },
+    {
+      id: "thinking",
+      label: "Show thinking",
+      currentValue: state.showThinking ? "on" : "off",
+      values: ["off", "on"],
+    },
+  ];
+  return new SettingsList(items, 7, settingsListTheme, onChange, onCancel);
 }

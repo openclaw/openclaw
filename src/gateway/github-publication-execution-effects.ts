@@ -1,3 +1,5 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 
 type GitHubPublicationMutableFacts = {
@@ -24,51 +26,59 @@ export type GitHubPublicationEffectTransition =
 export function githubPublicationEffectFacts(
   transition: GitHubPublicationEffectTransition,
   interruptedStatus: "requested" | "needs_confirmation",
-): { values: GitHubPublicationMutableFacts; requireAction: boolean } {
+): GitHubPublicationMutableFacts {
   switch (transition.operation) {
     case "updateHead":
-      return { values: { head_commit: transition.headCommit }, requireAction: true };
+      return { head_commit: transition.headCommit };
     case "complete": {
       const { result } = transition;
       if (result.status === "published") {
         return {
-          values: {
-            status: "published",
-            head_commit: result.headCommit,
-            pull_request_url: result.url,
-            error_code: null,
-            next_action: null,
-          },
-          requireAction: false,
+          status: "published",
+          head_commit: result.headCommit,
+          pull_request_url: result.url,
+          error_code: null,
+          next_action: null,
         };
       }
       if (result.status !== "failed") {
         throw new Error("GitHub publication result is not terminal.");
       }
       return {
-        values: { status: "failed", error_code: result.code, next_action: result.nextAction },
-        requireAction:
-          result.code !== "session_changed" &&
-          (result.code !== "identity_changed" || interruptedStatus === "needs_confirmation"),
+        status: "failed",
+        error_code: result.code,
+        next_action: result.nextAction,
       };
     }
     case "recordEffect": {
       const { effect, observed } = transition;
       return {
-        values: {
-          last_effect: effect,
-          effect_state: observed?.headCommit || observed?.url ? "observed" : "dispatched",
-          ...(observed?.headCommit ? { head_commit: observed.headCommit } : {}),
-          ...(observed?.url ? { pull_request_url: observed.url } : {}),
-        },
-        requireAction: !observed,
+        last_effect: effect,
+        effect_state: observed?.headCommit || observed?.url ? "observed" : "dispatched",
+        ...(observed?.headCommit ? { head_commit: observed.headCommit } : {}),
+        ...(observed?.url ? { pull_request_url: observed.url } : {}),
       };
     }
     case "interrupt":
       return {
-        values: { status: interruptedStatus, error_code: null, next_action: null },
-        requireAction: false,
+        status: interruptedStatus,
+        error_code: null,
+        next_action: null,
       };
   }
   throw new Error("Unknown GitHub publication effect transition.");
+}
+
+/** Decode the creation response before recording the observed PR effect. */
+export function readCreatedGitHubPullRequestUrl(stdout: string): string | undefined {
+  let value: unknown;
+  try {
+    value = JSON.parse(stdout);
+  } catch (error) {
+    throw new Error("GitHub pull request creation returned invalid JSON", { cause: error });
+  }
+  if (!isRecord(value)) {
+    throw new Error("GitHub pull request creation returned an invalid response");
+  }
+  return readNonBlankString(value.html_url);
 }

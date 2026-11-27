@@ -1,9 +1,9 @@
 /** Sends committed cron notifications through the live host and records delivery. */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { DEFAULT_AGENT_TIMEOUT_MS } from "../../agents/timeout.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { noteCronJobsStoreCommit } from "../store.js";
-import { cronStoreKey } from "../store/key.js";
 import type { CronFailureNotificationDelivery } from "../types.js";
 import { locked } from "./locked.js";
 import {
@@ -52,38 +52,44 @@ export async function dispatchCronNotification(
 }
 
 /**
- * Starts the repair turn in the conversation that owns the job. Request failures are logged;
- * terminal one-shots send their fallback alert, while recurring jobs alert on the next failure.
+ * Sends the failure notice to the agent in the conversation that owns the job. If that turn
+ * cannot start, the plain alert goes to the job's route instead.
  */
 async function requestFailureRepair(
   state: CronServiceState,
   notification: Extract<CronNotificationIntent, { kind: "failure-repair" }>,
 ): Promise<void> {
   const jobId = notification.job.id;
-  const owner = state.store?.jobs.find((job) => job.id === jobId)?.owner;
+  const owner = state.store?.jobs.find((candidate) => candidate.id === jobId)?.owner;
   const sessionKey = owner?.sessionKey?.trim();
-  const repairId = notification.job.state.lastFailureNotificationId;
+  const cycle: FailureAlertCycle = {
+    jobId,
+    alertAtMs: notification.job.state.lastFailureAlertAtMs,
+    runAtMs: notification.job.state.lastRunAtMs,
+    notificationId: notification.job.state.lastFailureNotificationId,
+    lifecycleGeneration: state.lifecycleGeneration,
+  };
   const failed = async (err: unknown) => {
     state.deps.log.warn({ jobId, err: String(err) }, "cron: failure repair request failed");
-    if (notification.fallback) {
-      await dispatchCronNotification(state, {
-        ...notification.fallback,
-        routing: notification.routing,
-      });
-    }
+    await dispatchCronNotification(state, {
+      ...notification.fallback,
+      routing: notification.routing,
+    });
   };
-  if (!sessionKey || !repairId || !state.deps.runCronFailureRepair) {
-    await failed(new Error("Missing failure repair runner, owner session, or repair ID"));
+  if (!sessionKey || !cycle.notificationId || !state.deps.runCronFailureRepair) {
+    await failed(new Error("Missing failure repair runner, owner session, or notice ID"));
     return;
   }
   void state.deps
     .runCronFailureRepair({
       jobId,
-      repairId,
+      repairId: cycle.notificationId,
+      timeoutMs: state.deps.failureRepairTimeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS,
       agentId: owner?.agentId,
       sessionKey,
       message: notification.text,
     })
+    .then(() => recordFailureAlertOutcome(state, cycle, { delivered: true, status: "delivered" }))
     .catch(failed)
     .catch((err: unknown) =>
       state.deps.log.warn({ jobId, err: String(err) }, "cron: failure repair fallback failed"),
@@ -114,7 +120,7 @@ async function recordFailureAlertOutcome(
         return "stale";
       }
       const context = captureOpenClawStateWorkerContext();
-      const storeKey = cronStoreKey(state.deps.storePath);
+      const storeKey = state.deps.storeKey;
       let result: FailureAlertRecordResult = "stale";
       await runCronRuntimeMutation({
         context,
@@ -190,6 +196,8 @@ async function transportFailureAlert(
       payload: params.payload,
       runAtMs: params.runAtMs,
       channel: params.route.channel,
+      target: params.route.target,
+      directPolicy: params.route.directPolicy,
       to: params.route.to,
       mode: params.route.mode,
       accountId: params.route.accountId,
@@ -208,6 +216,10 @@ async function transportFailureAlert(
             params.payload.text ?? "",
             "failure-alert",
             routing,
+            {
+              privateFallback:
+                params.route.target === "owner" || params.route.directPolicy === "block",
+            },
           );
         }
       },

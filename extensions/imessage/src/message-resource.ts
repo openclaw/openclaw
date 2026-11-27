@@ -1,4 +1,3 @@
-// Imessage plugin module binds provider message ids to one authorized chat.
 import { createActionGate } from "openclaw/plugin-sdk/channel-actions";
 import type { ResolvedIMessageAccount } from "./accounts.js";
 import { chatContextFromIMessageTarget } from "./chat-context.js";
@@ -14,17 +13,6 @@ import {
 import type { IMessageService, IMessageTarget } from "./targets.js";
 
 const MAX_REPLY_TO_ID_LENGTH = 256;
-
-type IMessageResourceAuthorizationParams = {
-  accountId: string;
-  chatContext: IMessageChatContext;
-  cliPath: string;
-  dbPath?: string;
-  remoteHost?: string;
-  hasExclusiveLocalDatabase: boolean;
-  messageId: string;
-  conversationReadOrigin?: string;
-};
 
 function sanitizeReplyToId(rawReplyToId?: string): string | undefined {
   const trimmed = rawReplyToId?.trim();
@@ -62,7 +50,6 @@ export async function resolveAuthorizedIMessageReplyReference(params: {
   }
   const chatContext = chatContextFromIMessageTarget(params.target, params.service);
   const messageId = await resolveIMessageMessageId(rawReplyToId, {
-    requireKnownShortId: true,
     chatContext,
   });
   await authorizeIMessageResourceReference({
@@ -78,9 +65,16 @@ export async function resolveAuthorizedIMessageReplyReference(params: {
   return messageId;
 }
 
-export async function authorizeIMessageResourceReference(
-  params: IMessageResourceAuthorizationParams,
-): Promise<void> {
+export async function authorizeIMessageResourceReference(params: {
+  accountId: string;
+  chatContext: IMessageChatContext;
+  cliPath: string;
+  dbPath?: string;
+  remoteHost?: string;
+  hasExclusiveLocalDatabase: boolean;
+  messageId: string;
+  conversationReadOrigin?: string;
+}): Promise<void> {
   const cacheContext = {
     ...params.chatContext,
     accountId: params.accountId,

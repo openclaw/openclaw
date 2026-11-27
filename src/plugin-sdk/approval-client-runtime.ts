@@ -1,5 +1,6 @@
 export {
   createChannelExecApprovalProfile,
+  createChannelExecApprovalProfileAsync,
   getExecApprovalReplyMetadata,
   isChannelExecApprovalClientEnabledFromConfig,
   isChannelExecApprovalTargetRecipient,

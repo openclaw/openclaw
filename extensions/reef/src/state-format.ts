@@ -77,5 +77,5 @@ export function parseReefKeys(value: unknown): ReefKeys {
   ) {
     throw new Error("invalid Reef keys");
   }
-  return structuredClone(keys);
+  return keys;
 }

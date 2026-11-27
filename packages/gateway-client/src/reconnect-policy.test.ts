@@ -11,10 +11,25 @@ function shouldPause(details?: unknown): boolean {
 
 describe("shouldPauseGatewayReconnect", () => {
   it.each([
+    ["access-record-inactive", true],
+    ["profile-invalidated", true],
+    ["grant-revoked", true],
+    ["policy-check-failed", true],
+    ["unknown-cause", true],
+    ["policy-unavailable", false],
+    ["plugin-lifetime-retired", false],
+    ["policy-set-changed", false],
+  ])("uses only the closed access cause %s for retry", (accessCause, pause) => {
+    expect(shouldPause({ code: "OPERATOR_ACCESS_DENIED", accessCause, retryable: true })).toBe(
+      pause,
+    );
+  });
+  it.each([
     "AUTH_IDENTITY_HEADER_REQUIRED",
-    ConnectErrorDetailCodes.AUTH_VERIFIED_USER_REQUIRED,
-    ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH,
-    ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+    "OPERATOR_ACCESS_DENIED",
+    "CONTROL_UI_ORIGIN_NOT_ALLOWED",
+    "AUTH_TOKEN_NOT_CONFIGURED",
+    "AUTH_PASSWORD_NOT_CONFIGURED",
   ])("pauses reconnect for %s", (code) => {
     expect(shouldPause({ code })).toBe(true);
   });
@@ -43,11 +58,7 @@ describe("shouldPauseGatewayReconnect", () => {
     ).toBe(false);
   });
 
-  it("keeps generic unauthorized failures reconnecting", () => {
-    expect(shouldPause({ code: ConnectErrorDetailCodes.AUTH_UNAUTHORIZED })).toBe(false);
-  });
-
-  it.each([undefined, {}, { code: "SOME_FUTURE_CODE" }])(
+  it.each([{}, { code: "SOME_FUTURE_CODE" }, { code: "AUTHENTICATED_PROFILE_UNAVAILABLE" }])(
     "keeps reconnect active for recoverable details",
     (details) => {
       expect(shouldPause(details)).toBe(false);

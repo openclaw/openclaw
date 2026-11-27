@@ -2,6 +2,9 @@ import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { prepareAcpSessionEntryRead } from "../acp/runtime/session-meta-read.js";
 import { readSessionRuntimeOwnershipAsync } from "../agents/harness/session-runtime-ownership.js";
 import { listSubagentSessionListRunsForControllers } from "../agents/subagents/registry/subagent-registry-read.js";
+import { readRegistryWorktree } from "../agents/worktrees/registry-read.js";
+import { captureWorktreeRunEndContext } from "../agents/worktrees/run-end-lifecycle.js";
+import { reconcileSessionWorktreeAvailability } from "../agents/worktrees/session-lifecycle.js";
 import { resolveSessionParentSessionKey } from "../channels/plugins/session-conversation.js";
 import { readSessionActivitySummary } from "../config/sessions/activity-summary.js";
 import {
@@ -24,13 +27,19 @@ import { withGatewaySessionStoreTarget } from "./session-utils-store-lookup.js";
 
 /** Private rows are detached display facts; membership is read at presentation. */
 export async function withMemorySessionRows<T>(
-  binding: SessionActorStorageBinding,
+  binding: SessionActorStorageBinding | undefined,
   cfg: OpenClawConfig,
   queries: readonly { key: string; agentId: string; storePath?: string }[],
   consume: (rows: ReadonlyMap<string, Row | undefined>) => T,
   env: NodeJS.ProcessEnv,
 ): Promise<T> {
   let active = true;
+  const assertActive = () => {
+    if (!active) {
+      throw new Error("Memory row consumer is no longer active");
+    }
+  };
+  const authority = binding?.authority ?? { assertCurrent: assertActive, authorize: assertActive };
   const releases: Array<() => void | Promise<void>> = [];
   const presentations: Array<{
     key: string;
@@ -44,36 +53,29 @@ export async function withMemorySessionRows<T>(
       if (!isIncognitoSessionKey(query.key)) {
         continue;
       }
-      const namespace = captureSessionActorStorageOwner({
-        ...query,
-        sessionKey: query.key,
-        sessionActor: binding,
-      })!;
+      const namespace = captureSessionActorStorageOwner(
+        { ...query, sessionKey: query.key, sessionActor: binding, env },
+        authority,
+      )!;
       const { owner } = namespace;
-      const actor =
-        query.agentId === binding.agentId && query.key === binding.actor.target.sessionKey
-          ? binding.actor
-          : await owner?.acquireExisting(query.key, {
-              assertCurrent: () => binding.actor.assertReadable(),
-              assertReadable: () => binding.actor.assertReadable(),
-            });
+      // Queued publications outlive the turn handle, but never the session or caller's authority.
+      const actor = await owner?.acquireExisting(query.key, {
+        assertCurrent: () => authority.assertCurrent(),
+        assertReadable: () => authority.assertCurrent(),
+      });
       if (!actor) {
         presentations.push({ ...query, present: () => undefined, relatedRows: {}, durable: [] });
         continue;
       }
-      if (actor !== binding.actor) {
-        releases.push(() => actor.release());
-      }
-      const selected = { ...binding, actor, agentId: namespace.agentId, path: namespace.path };
+      releases.push(() => actor.release());
+      const selected = { actor, authority, agentId: namespace.agentId, path: namespace.path };
       const assertCurrent = () => {
-        if (!active) {
-          throw new Error("Memory row consumer is no longer active");
-        }
+        assertActive();
         actor.assertReadable();
-        binding.authority.assertCurrent();
+        authority.assertCurrent();
       };
       await runWithSessionActorStorage(selected, async () => {
-        const snapshot = actor.snapshot(binding.authority);
+        const snapshot = actor.snapshot(authority);
         if (!snapshot?.entry) {
           presentations.push({ ...query, present: () => undefined, relatedRows: {}, durable: [] });
           return;
@@ -110,7 +112,7 @@ export async function withMemorySessionRows<T>(
           : [];
         const title = actor.storage!.readCurrent(
           { type: "session.history.title", input: { sessionId: entry.sessionId } },
-          binding.authority,
+          authority,
         );
         const tail =
           entry.status === "done" && entry.lastRunId && entry.fallbackNotice
@@ -122,19 +124,32 @@ export async function withMemorySessionRows<T>(
                     options: { maxBytes: 256 * 1024, maxMessages: 1, offset: 0, readOnly: true },
                   },
                 },
-                binding.authority,
+                authority,
               )
             : undefined;
         const facts: PreparedSessionRowDatabaseFacts = {
           sessionKey: query.key,
           entry,
           hasBoard: snapshot.hasBoard,
+          transcriptHasMessages:
+            actor.storage!.readCurrent(
+              { type: "session.history.count", input: { sessionId: entry.sessionId } },
+              authority,
+            ) > 0,
+          transcriptAssistantMessage: "unknown",
           activitySummaryWatermark: readSessionActivitySummary(entry)
             ? snapshot.transcript.watermark
             : undefined,
           acpMeta: acp.session?.acp ?? null,
           runtimeOwnership: runtime.value ?? null,
           runtimeOwnershipDependencies: runtime.dependencies,
+          worktree: entry.worktree
+            ? await reconcileSessionWorktreeAvailability(
+                await readRegistryWorktree(captureWorktreeRunEndContext(env), entry.worktree.id),
+                env,
+                assertCurrent,
+              )
+            : null,
           repositoryWorkspace:
             workspaces.find((workspace) => workspace.workspaceId === entry.repositoryWorkspaceId) ??
             null,
@@ -146,7 +161,7 @@ export async function withMemorySessionRows<T>(
             (run) => run.childSessionKey,
           ),
         ]);
-        for (const related of owner?.listSessions(binding.authority) ?? []) {
+        for (const related of owner?.listSessions(authority) ?? []) {
           if (!related.entry || related.target.sessionKey === query.key) {
             continue;
           }
@@ -164,11 +179,11 @@ export async function withMemorySessionRows<T>(
           if (!key || !isIncognitoSessionKey(key) || relatedRows[key]) {
             continue;
           }
-          const relatedOwner = captureSessionActorStorageOwner({
-            sessionKey: key,
-            sessionActor: binding,
-          })!;
-          const related = relatedOwner.owner?.readSession(key, binding.authority);
+          const relatedOwner = captureSessionActorStorageOwner(
+            { sessionKey: key, sessionActor: binding, env },
+            authority,
+          )!;
+          const related = relatedOwner.owner?.readSession(key, authority);
           if (related?.entry) {
             relatedRows[key] = {
               key,
@@ -202,7 +217,7 @@ export async function withMemorySessionRows<T>(
           present() {
             acp.assertCurrent();
             runtime.assertCurrent();
-            const current = actor.snapshot(binding.authority);
+            const current = actor.snapshot(authority);
             if (!current?.entry) {
               return undefined;
             }
@@ -274,4 +289,37 @@ export async function withMemorySessionRows<T>(
       await release();
     }
   }
+}
+
+/** Exact incognito acquisition never admits an ephemeral store to the resident roster. */
+export function readIncognitoSessionRow(params: {
+  assertCurrent: () => void;
+  cfg: OpenClawConfig;
+  key: string;
+  agentId: string;
+  storePath?: string;
+}) {
+  const { key, agentId, storePath } = params;
+  const memory = captureSessionActorStorageOwner(
+    { agentId, sessionKey: key, storePath },
+    { assertCurrent: params.assertCurrent, authorize: params.assertCurrent },
+  );
+  const current = memory?.owner?.readSession(key, memory.authority);
+  if (!current?.entry || !memory) {
+    return undefined;
+  }
+  const assertSessionCurrent = memory.owner?.captureSessionReadGuard(key);
+  return createIncognitoSessionRow({
+    ...params,
+    storePath: memory.path,
+    entry: current.entry,
+    membership: new Set(current.members.map((member) => member.identityId)),
+    source: {
+      identity: current.version.epoch,
+      assertCurrent() {
+        assertSessionCurrent?.();
+        memory.authority.assertCurrent();
+      },
+    },
+  });
 }

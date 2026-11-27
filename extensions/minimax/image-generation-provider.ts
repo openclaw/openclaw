@@ -1,23 +1,25 @@
 import {
+  generatedImageAssetFromBase64,
   resolveInlineImageJsonResponseMaxBytes,
+  toImageDataUrl,
   type ImageGenerationProvider,
 } from "openclaw/plugin-sdk/image-generation";
-import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
-import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
+import { resolveGeneratedImageDownloadMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
-import {
-  assertOkOrThrowHttpError,
-  postJsonRequest,
-  readProviderJsonResponse,
-} from "openclaw/plugin-sdk/provider-http";
+import type { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { postJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { resolveMinimaxMediaRequestConfig } from "./media-provider-runtime.js";
 
 const DEFAULT_MINIMAX_IMAGE_BASE_URL = "https://api.minimax.io";
 const CN_MINIMAX_IMAGE_BASE_URL = "https://api.minimaxi.com";
 const DEFAULT_MODEL = "image-01";
-const DEFAULT_OUTPUT_MIME = "image/png";
+// H3 models use the Images API (/v1/images/*); image-01 keeps /v1/image_generation.
+const H3_MODELS: readonly string[] = ["MiniMax-H3-Image", "MiniMax-H3-Image-Highspeed"];
+const H3_RESOLUTIONS: Array<"1K" | "2K" | "4K"> = ["1K", "2K", "4K"];
 const MINIMAX_MAX_IMAGE_RESULTS = 9;
+const H3_MAX_INPUT_IMAGES = 16;
+// A single 4K H3 request can take minutes; MiniMax documents a 600s client timeout.
+const H3_TIMEOUT_MS = 610_000;
 const MINIMAX_SUPPORTED_ASPECT_RATIOS = [
   "1:1",
   "16:9",
@@ -28,21 +30,6 @@ const MINIMAX_SUPPORTED_ASPECT_RATIOS = [
   "9:16",
   "21:9",
 ] as const;
-
-type MinimaxImageApiResponse = {
-  data?: {
-    image_base64?: string[];
-  };
-  metadata?: {
-    success_count?: number;
-    failed_count?: number;
-  };
-  id?: string;
-  base_resp?: {
-    status_code?: number;
-    status_msg?: string;
-  };
-};
 
 function isMinimaxCnHost(value: string | undefined): boolean {
   const trimmed = value?.trim();
@@ -80,56 +67,59 @@ export function buildMinimaxImageGenerationProvider(
     id: providerId,
     label: "MiniMax",
     defaultModel: DEFAULT_MODEL,
-    models: [DEFAULT_MODEL],
+    models: [DEFAULT_MODEL, ...H3_MODELS],
     isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: providerId, ...ctx }),
     capabilities: {
       generate: {
         maxCount: MINIMAX_MAX_IMAGE_RESULTS,
         supportsSize: false,
         supportsAspectRatio: true,
-        supportsResolution: false,
+        supportsResolution: true,
       },
       edit: {
         enabled: true,
         maxCount: MINIMAX_MAX_IMAGE_RESULTS,
         maxInputImages: 1,
+        maxInputImagesByModel: Object.fromEntries(
+          H3_MODELS.map((model) => [model, H3_MAX_INPUT_IMAGES]),
+        ),
         supportsSize: false,
         supportsAspectRatio: true,
-        supportsResolution: false,
+        supportsResolution: true,
       },
       geometry: {
         aspectRatios: [...MINIMAX_SUPPORTED_ASPECT_RATIOS],
+        // H3 accepts any X:Y ratio between 1:3 and 3:1.
+        aspectRatiosByModel: Object.fromEntries(H3_MODELS.map((model) => [model, []])),
+        // Only H3 accepts a resolution (sent as `area`); image-01 reports it as ignored.
+        resolutions: [],
+        resolutionsByModel: Object.fromEntries(
+          H3_MODELS.map((model) => [model, [...H3_RESOLUTIONS]]),
+        ),
       },
     },
     async generateImage(req) {
-      const auth = await resolveApiKeyForProvider({
-        provider: providerId,
-        cfg: req.cfg,
-        agentDir: req.agentDir,
-        store: req.authStore,
-      });
-      if (!auth.apiKey) {
-        throw new Error("MiniMax API key missing");
-      }
-
       const baseUrl = resolveMinimaxImageBaseUrl(req.cfg, providerId);
       const {
         baseUrl: resolvedBaseUrl,
         allowPrivateNetwork,
         headers,
         dispatcherPolicy,
-      } = resolveMinimaxMediaRequestConfig({
+      } = await resolveMinimaxMediaRequestConfig({
         cfg: req.cfg,
         providerId,
-        apiKey: auth.apiKey,
+        agentDir: req.agentDir,
+        authStore: req.authStore,
         baseUrl,
         capability: "image",
       });
 
+      const model = req.model || DEFAULT_MODEL;
+      const isH3 = H3_MODELS.includes(model);
       const body: Record<string, unknown> = {
-        model: req.model || DEFAULT_MODEL,
+        model,
         prompt: req.prompt,
-        response_format: "base64",
+        response_format: isH3 ? "b64_json" : "base64",
         n: req.count ?? 1,
       };
 
@@ -137,75 +127,96 @@ export function buildMinimaxImageGenerationProvider(
         body.aspect_ratio = req.aspectRatio.trim();
       }
 
-      const ref = req.inputImages?.at(0);
-      if (ref) {
-        const mime = ref.mimeType || "image/jpeg";
-        const dataUrl = `data:${mime};base64,${ref.buffer.toString("base64")}`;
-        body.subject_reference = [{ type: "character", image_file: dataUrl }];
+      const references = (req.inputImages ?? []).map((ref) =>
+        toImageDataUrl({ ...ref, defaultMimeType: "image/jpeg" }),
+      );
+      if (isH3) {
+        if (req.resolution) {
+          body.area = req.resolution;
+        }
+        if (references.length) {
+          body.images = references.map((image_url) => ({ image_url }));
+        }
+      } else if (references[0]) {
+        body.subject_reference = [{ type: "character", image_file: references[0] }];
       }
-      const { response, release } = await postJsonRequest({
-        url: `${resolvedBaseUrl}/v1/image_generation`,
+      const path = isH3
+        ? req.inputImages?.length
+          ? "/v1/images/edits"
+          : "/v1/images/generations"
+        : "/v1/image_generation";
+      const data = await postJsonResponse<{
+        data?:
+          | { image_base64?: string[] }
+          | Array<{ b64_json?: string; error?: { code?: string; message?: string } }>;
+        metadata?: {
+          success_count?: number;
+          failed_count?: number;
+        };
+        id?: string;
+        base_resp?: {
+          status_code?: number;
+          status_msg?: string;
+        };
+      }>({
+        url: `${resolvedBaseUrl}${path}`,
         headers,
         body,
-        timeoutMs: req.timeoutMs,
+        timeoutMs: req.timeoutMs ?? (isH3 ? H3_TIMEOUT_MS : undefined),
         fetchFn: fetch,
         allowPrivateNetwork,
         ssrfPolicy: req.ssrfPolicy,
         dispatcherPolicy,
+        errorLabel: "MiniMax image generation failed",
+        responseLabel: "minimax.image-generation",
+        readOptions: {
+          maxBytes: resolveInlineImageJsonResponseMaxBytes(
+            MINIMAX_MAX_IMAGE_RESULTS,
+            resolveGeneratedImageDownloadMaxBytes(req.cfg),
+          ),
+        },
       });
-      try {
-        await assertOkOrThrowHttpError(response, "MiniMax image generation failed");
 
-        const data = await readProviderJsonResponse<MinimaxImageApiResponse>(
-          response,
-          "minimax.image-generation",
-          {
-            maxBytes: resolveInlineImageJsonResponseMaxBytes(
-              MINIMAX_MAX_IMAGE_RESULTS,
-              resolveGeneratedMediaMaxBytes(req.cfg, "image"),
-            ),
-          },
-        );
-
-        const baseResp = data.base_resp;
-        if (baseResp && typeof baseResp.status_code === "number" && baseResp.status_code !== 0) {
-          const msg = baseResp.status_msg ?? "";
-          throw new Error(`MiniMax image generation API error (${baseResp.status_code}): ${msg}`);
-        }
-
-        const base64Images = data.data?.image_base64 ?? [];
-        const failedCount = data.metadata?.failed_count ?? 0;
-
-        if (base64Images.length === 0) {
-          const reason =
-            failedCount > 0 ? `${failedCount} image(s) failed to generate` : "no images returned";
-          throw new Error(`MiniMax image generation returned no images: ${reason}`);
-        }
-
-        const images = base64Images
-          .map((b64, index) => {
-            if (!b64) {
-              return null;
-            }
-            const canonicalBase64 = canonicalizeBase64(b64);
-            if (!canonicalBase64) {
-              throw new Error("MiniMax image generation returned malformed image base64");
-            }
-            return {
-              buffer: Buffer.from(canonicalBase64, "base64"),
-              mimeType: DEFAULT_OUTPUT_MIME,
-              fileName: `image-${index + 1}.png`,
-            };
-          })
-          .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
-
-        return {
-          images,
-          model: req.model || DEFAULT_MODEL,
-        };
-      } finally {
-        await release();
+      const baseResp = data.base_resp;
+      if (baseResp && typeof baseResp.status_code === "number" && baseResp.status_code !== 0) {
+        const msg = baseResp.status_msg ?? "";
+        throw new Error(`MiniMax image generation API error (${baseResp.status_code}): ${msg}`);
       }
+
+      // H3 returns one entry per requested image; failed entries carry only `error`.
+      const entries = Array.isArray(data.data)
+        ? data.data
+        : (data.data?.image_base64 ?? []).map((b64_json) => ({ b64_json, error: undefined }));
+      const images = entries.flatMap((entry, index) => {
+        if (!entry.b64_json) {
+          return [];
+        }
+        const image = generatedImageAssetFromBase64({
+          base64: entry.b64_json,
+          index,
+          sniffMimeType: true,
+        });
+        if (!image) {
+          throw new Error("MiniMax image generation returned malformed image base64");
+        }
+        return [image];
+      });
+
+      if (images.length === 0) {
+        const errors = entries.flatMap(({ error }) =>
+          error ? [`${error.code}: ${error.message}`] : [],
+        );
+        const failedCount = data.metadata?.failed_count ?? 0;
+        const reason =
+          errors.join("; ") ||
+          (failedCount > 0 ? `${failedCount} image(s) failed to generate` : "no images returned");
+        throw new Error(`MiniMax image generation returned no images: ${reason}`);
+      }
+
+      return {
+        images,
+        model,
+      };
     },
   };
 }

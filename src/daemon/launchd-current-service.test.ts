@@ -28,8 +28,10 @@ describe("isCurrentProcessLaunchdServiceLabel", () => {
 });
 
 const probe = vi.hoisted(() => vi.fn());
-vi.mock("./service-process-membership.js", () => ({
-  inspectServiceProcessMembershipSync: () => "outside",
+const membership = vi.hoisted(() => vi.fn());
+vi.mock("./service-process-membership.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./service-process-membership.js")>()),
+  inspectServiceProcessMembershipSync: membership,
 }));
 const ancestors = vi.hoisted(() => vi.fn<() => Set<number>>());
 vi.mock("../infra/restart-stale-pids.js", () => ({ getSelfAndAncestorPidsSync: ancestors }));
@@ -42,6 +44,7 @@ describe("launchd membership with unavailable process evidence", () => {
   beforeEach(() => {
     probe.mockReset();
     ancestors.mockReset();
+    membership.mockReset().mockReturnValue("absent");
   });
   it.each([
     { pids: [900, 901], inside: undefined },

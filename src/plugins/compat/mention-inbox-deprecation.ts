@@ -2,7 +2,7 @@ import { warnSessionPersistenceDeprecation } from "../../agents/sessions/session
 import { pluginInstanceInvocation } from "../plugin-instance-invocation.js";
 
 export function warnMentionInboxDeprecation(
-  method: "list" | "dismiss" | "recordCommittedInput" | "invalidate",
+  method: "list" | "dismiss" | "recordCommittedInput" | "invalidate" | "validateRecipients",
 ): void {
   const pluginId = pluginInstanceInvocation.getStore()?.instance.pluginId;
   warnSessionPersistenceDeprecation(`mentionInbox.${method}`, `mentionInbox.${method}Async`, {

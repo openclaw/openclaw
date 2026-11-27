@@ -20,7 +20,7 @@ Signal is a downloadable channel plugin (`@openclaw/signal`). The gateway talks 
 openclaw plugins install @openclaw/signal
 ```
 
-`@openclaw/signal` installs from npm first, then falls back to its declared ClawHub package only when the npm target is unavailable. Use `npm:` or `clawhub:` to force a source. `plugins install` registers and enables the plugin; no separate `enable` step is needed. See [Plugins](/tools/plugin) for general install rules.
+`@openclaw/signal` installs from ClawHub by default. Use `npm:@openclaw/signal` to install directly from npm. `plugins install` registers and enables the plugin; no separate `enable` step is needed. See [Plugins](/tools/plugin) for general install rules.
 
 ## Quick setup
 
@@ -116,6 +116,8 @@ signal-cli --version
 
 If you use the JVM build (`signal-cli-${VERSION}.tar.gz`), install a JRE first. Keep `signal-cli` updated; upstream notes old releases can break as Signal server APIs change.
 
+A managed `signal-cli` daemon gets only an allowlisted environment; see [Managed daemon environment](#managed-daemon-environment).
+
 3. Register and verify the number:
 
 ```bash
@@ -183,6 +185,25 @@ openclaw channels add --channel signal --signal-number +15551234567 \
 
 This skips auto-spawn and OpenClaw's startup wait. For a managed daemon with a slow start, set `channels.signal.transport.startupTimeoutMs`.
 
+## Managed daemon environment
+
+A managed `signal-cli` daemon gets only process essentials from the Gateway environment: `PATH`, `HOME`, user, locale (`LANG`, `LC_*`), `TZ`, temp directories, `XDG_*`, the Java launcher inputs (`JAVA_HOME`, `JAVA_OPTS`, `JAVA_TOOL_OPTIONS`, `JDK_JAVA_OPTIONS`, `_JAVA_OPTIONS`, `SIGNAL_CLI_OPTS`), signal-cli's own `SIGNAL_CLI_CONFIG` and `SIGNAL_CLI_USER_AGENT`, the native library path (`LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`, `DYLD_FALLBACK_LIBRARY_PATH`), and common Windows system variables. Provider keys, Gateway tokens and other secrets in the Gateway environment do not reach it.
+
+Proxy and trust-store variables (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `ALL_PROXY` in either case, `SSL_CERT_FILE`, `SSL_CERT_DIR`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`) are not inherited. When any of them is set, the Gateway logs a one-time warning naming them (names only, never values) when it starts the daemon, and `openclaw doctor` reports the same.
+
+`signal-cli` runs on the JVM, which takes proxy and trust-store settings from Java system properties. Pick one:
+
+- Pass Java properties through `JAVA_TOOL_OPTIONS`, which the daemon inherits:
+
+  ```bash
+  JAVA_TOOL_OPTIONS="-Dhttps.proxyHost=proxy.example -Dhttps.proxyPort=3128 -Dhttp.nonProxyHosts=localhost|127.0.0.1"
+  ```
+
+  For a private CA, add `-Djavax.net.ssl.trustStore=/path/to/truststore.p12 -Djavax.net.ssl.trustStoreType=PKCS12`.
+
+- Point `channels.signal.transport.cliPath` at a wrapper script that sets what it needs (for example, turns your proxy variables into Java properties), then runs `signal-cli "$@"`.
+- Run the daemon yourself and use [external native daemon mode](#external-native-daemon-mode).
+
 ## Container mode (bbernhard/signal-cli-rest-api)
 
 Instead of running `signal-cli` natively, use the [bbernhard/signal-cli-rest-api](https://github.com/bbernhard/signal-cli-rest-api) Docker container, which wraps `signal-cli` behind a REST + WebSocket interface.
@@ -243,6 +264,7 @@ Operational notes:
 
 - Use `MODE=json-rpc` for receiving. `MODE=normal` can make `/v1/about` look healthy, but `/v1/receive/{account}` will not WebSocket-upgrade, so container receive streaming will fail its check.
 - Set `kind: "container"` for the bbernhard REST API and `kind: "external-native"` for native `signal-cli` JSON-RPC/SSE.
+- The receive WebSocket sends standard ping frames. When the container stops answering them (for example after a network drop that never closed the connection), OpenClaw drops the socket and reconnects. A quiet account alone never triggers a reconnect.
 - Container attachment downloads honor the same media byte limits as native mode. Oversized responses are rejected before being fully buffered when the server sends `Content-Length`, and while streaming otherwise.
 - Health and missing-attachment results do not wait for an unused response body's cancellation to finish.
 
@@ -310,6 +332,7 @@ Groups:
 - Use `channels.signal.accounts.<id>.groups` for per-account overrides in multi-account setups.
 - Allowlisting a Signal group through `groupAllowFrom` does not disable mention gating by itself. A specifically configured `channels.signal.groups["<group-id>"]` entry processes every group message unless `requireMention=true` is set.
 - With `requireMention=true`, Signal native @mentions are matched from structured mention metadata against the bot account phone or `accountUuid`. Plain-text matching uses `agents.entries.*.groupChat.mentionPatterns`, then `messages.groupChat.mentionPatterns`; when neither is set, it derives patterns from the routed agent's `identity.name` and `identity.emoji`. An explicit `mentionPatterns: []` at the selected level disables this text fallback without disabling native @mentions.
+- Quote-only replies stay quiet in mention-gated groups by default. To let an allowed sender's native reply to an OpenClaw message count as a mention, set `channels.signal.implicitMentions.quotedBot: true` for the `default` account or `channels.signal.accounts.<id>.implicitMentions.quotedBot: true` for a named account. OpenClaw must have a record of sending the quoted message from that account in the same group. Use an explicit @mention when quoting a human message from a shared account or when the send record is unavailable, for example after it expires. Setting `channels.defaults.implicitMentions.quotedBot: false` disables this trigger for all Signal accounts.
 - Runtime note: if `channels.signal` is completely missing, runtime falls back to `groupPolicy="allowlist"` for group checks (even if `channels.defaults.groupPolicy` is set).
 
 Mention-gated group with bounded context:
@@ -336,7 +359,11 @@ Mention-gated group with bounded context:
 }
 ```
 
-Allowed group messages that do not mention the bot stay silent and are kept only in the bounded pending history window. When a later native @mention or fallback text mention triggers the bot, OpenClaw includes that recent context and replies to the same group. Skipped attachment bodies are not downloaded; they may appear only as compact media placeholders in the pending context.
+Allowed group messages that do not address the bot stay silent and are kept in the bounded pending history window. A later native @mention, fallback text mention, or opted-in native reply to a verified OpenClaw message can include recent photos from the sender. A message that mentions the bot and replies to a photo can also include that photo if it is still available in the same window.
+
+To include other members' photos in an unquoted mention, set `includeOtherMembersHistoryImages: true` on that specific group. For example, set `channels.signal.groups["<signal-group-id>"]` to `{ requireMention: true, includeOtherMembersHistoryImages: true }` for a mention-gated group. Named accounts can configure this under `channels.signal.accounts.<id>.groups`. The setting defaults to off and only exact group entries can enable it.
+
+OpenClaw reads up to four photos when it handles the mention. It prioritizes the photo being replied to and looks back up to 30 minutes for unquoted photos. It applies the account's [context visibility policy](/channels/groups#context-visibility-and-allowlists), `ignoreAttachments`, and the media size limit. View-once and disappearing images are excluded. Attachments that cannot be retrieved remain as media placeholders.
 
 ## How it works (behavior)
 
@@ -398,15 +425,27 @@ Config:
 
 Signal exec and plugin approval prompts use the top-level `approvals.exec` and `approvals.plugin` routing blocks. Signal has no `channels.signal.execApprovals` block.
 
+Use forwarding mode `session` or `both` for native reaction prompts. Keep the configured agent/session filters and explicit approver allowlists in place.
+
 - `👍` approves once.
 - `👎` denies.
 - Use `/approve <id> allow-always` when a request offers persistent approval.
 
+Approval responses and supported inspection/interrupt commands can be handled while
+an earlier turn is waiting. Ordinary messages and session-mutating commands keep
+their conversation order. Approval decisions still require the configured sender
+and approval authorization.
+
 Approval reaction resolution requires explicit Signal approvers from `channels.signal.allowFrom`, `channels.signal.defaultTo`, or the matching account-level fields. Direct same-chat exec approval prompts can still suppress the duplicate local `/approve` fallback without explicit approvers; no-approver group approvals keep the local fallback visible.
 
-## Question reactions
+<a id="question-reactions" />
 
-For an `ask_user` prompt with one non-secret, single-select question and one to four options, Signal shows `1️⃣` through `4️⃣` beside the option labels. React to the delivered prompt with the matching number to answer it. OpenClaw verifies the reaction targets the bot-authored message, then maps the number to the stored option through the Gateway. Stale or duplicate taps are ignored. Multi-question, multi-select, and free-text prompts remain text-reply-only; normal Signal DM/group admission rules authorize the sender.
+## Agent questions
+
+Signal does not expose the [`ask_user`](/tools/ask-user) tool. When the agent
+needs your input, it asks in an ordinary message and you reply in plain text.
+Numbered reactions do not answer questions. Approval reactions described above
+are unchanged.
 
 ## Delivery targets (CLI/cron)
 
@@ -484,6 +523,7 @@ openclaw pairing list signal
 Common failures:
 
 - Daemon reachable but no replies: verify `account`, `transport.kind`, the transport URL, and receive mode.
+- Event stream repeatedly closes: inspect the daemon or proxy; a healthy idle stream stays open, and unexpected closure appears as a lost connection in logs and channel status.
 - DMs ignored: sender is pending pairing approval.
 - Group messages ignored: group sender/mention gating blocks delivery.
 - Config validation errors after edits: run `openclaw doctor --fix`.
@@ -534,6 +574,7 @@ Provider options:
 - `channels.signal.groups`: per-group overrides keyed by Signal group ID (or `"*"`). Supported fields: `requireMention`, `tools`, `toolsBySender`.
 - `channels.signal.accounts.<id>.groups`: per-account version of `channels.signal.groups` for multi-account setups.
 - `channels.signal.accounts.<id>.aliases`: per-account aliases, merged with top-level aliases.
+- `channels.signal.implicitMentions.quotedBot`, `channels.signal.accounts.<id>.implicitMentions.quotedBot`: opt in to quote-reply activation for the `default` or named Signal account (default: disabled).
 - `channels.signal.replyToMode`: native reply quote mode, `off | first | all | batched` (default: `all`).
 - `channels.signal.replyToModeByChatType.direct`, `channels.signal.replyToModeByChatType.group`: per-chat-type native reply quote overrides.
 - `channels.signal.accounts.<id>.replyToMode`, `channels.signal.accounts.<id>.replyToModeByChatType.direct`, `channels.signal.accounts.<id>.replyToModeByChatType.group`: per-account reply quote overrides.

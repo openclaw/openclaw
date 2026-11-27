@@ -3,15 +3,15 @@ import type {
   DiscordGatewayAdapterLibraryMethods,
 } from "@discordjs/voice";
 import type { GatewaySendPayload } from "discord-api-types/v10";
-import { Plugin, type Client } from "./client.js";
+import type { Client } from "./client.js";
 import type { GatewayPluginContract, VoicePluginContract } from "./plugin-contract.js";
 
-export class VoicePlugin extends Plugin implements VoicePluginContract {
+export class VoicePlugin implements VoicePluginContract {
   readonly id = "voice";
   readonly adapters = new Map<string, DiscordGatewayAdapterLibraryMethods>();
   private gatewayPlugin?: GatewayPluginContract;
 
-  override registerClient(client: Client): void {
+  registerClient(client: Client): void {
     this.gatewayPlugin = client.getPlugin("gateway");
     if (!this.gatewayPlugin) {
       throw new Error("Discord voice cannot be used without a gateway connection.");

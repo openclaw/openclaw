@@ -18,6 +18,7 @@ export function registerSubagentDismissedRetentionCases({
       const run = createSubagentRunRecord({
         runId: "run-dismissed-delivery",
         childSessionKey: "agent:main:subagent:dismissed-delivery",
+        childSessionIdentity: { sessionId: "sess-dismissed-delivery" },
         task: "retain no delivery obligation",
         spawnMode: "session",
         createdAt: now - 10 * 60_000,
@@ -29,7 +30,6 @@ export function registerSubagentDismissedRetentionCases({
         completion: { required: true, resultText: "done", capturedAt: now - 8 * 60_000 },
         delivery: {
           status: "discarded",
-          disposition: "intentional_non_delivery",
           dismissedAt: now - 6 * 60_000,
         },
         cleanupHandled: true,

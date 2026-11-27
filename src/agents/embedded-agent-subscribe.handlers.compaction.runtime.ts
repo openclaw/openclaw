@@ -1,6 +1,3 @@
-/**
- * Runtime helpers for reconciling compaction counts after subscribe events.
- */
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { updateSessionEntry } from "../config/sessions/session-accessor.js";
 

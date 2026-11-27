@@ -323,7 +323,9 @@ pub async fn observe_navigation_events(
             platform.inner().connect_load_failed(move |_, _, _, error| {
                 // WebKit emits Finished after failure, including cancellation.
                 failed.set(Some(true));
-                if !error.matches(webkit2gtk::NetworkError::Cancelled) {
+                if !error.matches(webkit2gtk::NetworkError::Cancelled)
+                    && !error.matches(webkit2gtk::PolicyError::FrameLoadInterruptedByPolicyChange)
+                {
                     changed(NavigationEvent::Failed);
                 }
                 // Preserve WebKit's default error-page handling.

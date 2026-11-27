@@ -14,6 +14,7 @@ import {
   writeOpenAiResponsesSse,
   writeOpenAiResponsesText,
 } from "../test/helpers/openai-responses-sse.ts";
+import { createBuildSmokeEnv } from "./lib/build-smoke-env.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import {
   hashFile,
@@ -105,17 +106,12 @@ function isolatedEnvironment(root) {
     }
   }
   return {
-    ...env,
+    ...createBuildSmokeEnv(home, env),
     CI: "1",
-    HOME: home,
-    USERPROFILE: home,
     APPDATA: path.join(home, "AppData", "Roaming"),
     LOCALAPPDATA: path.join(home, "AppData", "Local"),
     TMP: path.join(root, "tmp"),
     TEMP: path.join(root, "tmp"),
-    OPENCLAW_HOME: home,
-    OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
-    OPENCLAW_CONFIG_PATH: path.join(home, ".openclaw", "openclaw.json"),
     NODE_DISABLE_COMPILE_CACHE: "1",
   };
 }

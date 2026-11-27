@@ -2,7 +2,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
-import { getChatCommands } from "../../auto-reply/commands-registry.data.js";
 import type { ExplicitSkillSelection, SkillCommandSpec } from "../types.js";
 import { resolveSkillReadPath } from "../workspace-skill-read-path.js";
 import {
@@ -39,30 +38,6 @@ export function mergeExplicitSkillSelections(
     );
   }
   return merged.size > 0 ? [...merged.values()] : undefined;
-}
-
-/** Lists slash command names reserved by built-in chat commands and callers. */
-export function listReservedChatSlashCommandNames(extraNames: string[] = []): Set<string> {
-  const reserved = new Set<string>();
-  for (const command of getChatCommands()) {
-    if (command.nativeName) {
-      reserved.add(normalizeOptionalLowercaseString(command.nativeName) ?? "");
-    }
-    for (const alias of command.textAliases) {
-      const trimmed = alias.trim();
-      if (!trimmed.startsWith("/")) {
-        continue;
-      }
-      reserved.add(normalizeLowercaseStringOrEmpty(trimmed.slice(1)));
-    }
-  }
-  for (const name of extraNames) {
-    const trimmed = normalizeOptionalLowercaseString(name);
-    if (trimmed) {
-      reserved.add(trimmed);
-    }
-  }
-  return reserved;
 }
 
 // Skill commands allow spaces/underscores in names but compare through dash-normalized lookup.

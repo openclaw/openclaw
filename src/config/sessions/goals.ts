@@ -74,7 +74,7 @@ export function formatSessionGoalStatus(goal: SessionGoal | undefined): string {
     goal.tokenBudget === undefined
       ? ""
       : `Token budget: ${formatTokenCount(goal.tokensUsed)}/${formatTokenCount(goal.tokenBudget)}`;
-  const note = goal.lastStatusNote ? `Note: ${goal.lastStatusNote}` : "";
+  const note = goal.lastStatusNote ? `Last status note: ${goal.lastStatusNote}` : "";
   const commands = resolveGoalCommandHint(goal.status);
   return [
     "Goal",
@@ -82,6 +82,7 @@ export function formatSessionGoalStatus(goal: SessionGoal | undefined): string {
     `Objective: ${goal.objective}`,
     `Tokens used: ${formatTokenCount(goal.tokensUsed)}`,
     ...(budget ? [budget] : []),
+    `Settled automatic turns: ${goal.continuationTurns}`,
     ...(note ? [note] : []),
     "",
     `Commands: ${commands}`,
@@ -98,7 +99,7 @@ function resolveGoalCommandHint(status: SessionGoalStatus): string {
     case "budget_limited":
       return "/goal resume, /goal edit <objective>, /goal clear";
     case "complete":
-      return "/goal clear";
+      return "/goal resume, /goal clear";
   }
   return "/goal";
 }
@@ -129,7 +130,7 @@ export async function getSessionGoal(
     { sessionKey: options.sessionKey, storePath: options.storePath },
     (entry) => {
       const accounted = accountSessionGoalUsage(entry, now);
-      goal = accounted ? { ...accounted } : undefined;
+      goal = accounted;
       if (!accounted || JSON.stringify(accounted) === JSON.stringify(entry.goal)) {
         return null;
       }

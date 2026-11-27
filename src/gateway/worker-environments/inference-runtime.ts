@@ -1,3 +1,4 @@
+import { PROVIDER_STATE_SCOPE } from "@openclaw/ai/provider-types";
 import { normalizeCodexResponsesBaseUrlForOpenAISdk } from "@openclaw/ai/transports";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TSchema } from "typebox";
@@ -15,7 +16,13 @@ import { mapThinkingLevel } from "../../agents/embedded-agent-runner/utils.js";
 import { resolveFastModeForElapsed, resolveFastModeState } from "../../agents/fast-mode.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { registerProviderStreamForModel } from "../../agents/provider-stream.js";
-import { normalizeUsage, hasObservedModelUsage, toDiagnosticUsage } from "../../agents/usage.js";
+import { withPreparedSessionCapabilityRead } from "../../agents/subagents/spawn/subagent-session-store.js";
+import {
+  hasObservedModelUsage,
+  hasRecordedUsageCost,
+  normalizeUsage,
+  toDiagnosticUsage,
+} from "../../agents/usage.js";
 import { emitAgentEventForRunContext } from "../../infra/agent-events.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
@@ -33,8 +40,9 @@ import type {
   Tool,
   Usage,
 } from "../../llm/types.js";
+import { resolveModelCostConfig } from "../../model-catalog/usage-pricing.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
-import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
+import { estimateUsageCost } from "../../utils/usage-format.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
 import type { WorkerInferenceExecutor } from "./connection-identity.js";
 import type { PreparedWorkerInference } from "./inference-model.js";
@@ -49,7 +57,7 @@ import {
   getWorkerTurnToolSurface,
   readWorkerTurnPromptCacheContext,
 } from "./placement-turn-claim-events.js";
-import { formatWorkerInferenceError } from "./worker-error.js";
+import { projectWorkerInferenceError } from "./worker-error.js";
 
 type WorkerInferenceStreamEvent = WorkerInferenceEventParams["event"];
 export type WorkerInferenceExecutionParams = Parameters<WorkerInferenceExecutor>[0];
@@ -208,45 +216,50 @@ export const executePreparedWorkerInference = async (
       agentId: target.agentId,
       sessionEntry: target.sessionEntry,
     });
-    const fastModeSetting = promptCacheContext.fastMode ?? fastMode.mode;
+    const fastModeSetting = promptCacheContext.fastMode ?? fastMode.requestMode;
     const fastModeStartedAtMs =
       promptCacheContext.fastModeStartedAtMs ??
       runContext?.lifecycleStartedAt ??
       runContext?.registeredAt ??
       Date.now();
-    applyExtraParamsToAgent(
-      streamAgent,
-      config,
-      approved.provider,
-      approved.model,
-      {
-        ...structuredClone(streamPolicyOptions),
-        fastMode:
-          fastModeSetting === "auto"
-            ? () =>
-                resolveFastModeForElapsed({
-                  mode: "auto",
-                  startedAtMs: fastModeStartedAtMs,
-                  fastAutoOnSeconds:
-                    promptCacheContext.fastModeAutoOnSeconds ?? fastMode.fastAutoOnSeconds,
-                }).enabled
-            : fastModeSetting,
-      },
-      streamPolicyOptions.reasoning,
-      target.agentId,
-      approved.workspaceDir,
-      providerModel,
-      agentDir,
-      undefined,
-      {
-        nativeWebSearchPolicyContext: {
-          sessionKey: target.sessionKey,
-          webSearchEnabled:
-            (await getWorkerTurnToolSurface(identity)?.getSurface(identity))?.tools.some(
-              ({ definition }) => definition.name === "web_search",
-            ) === true,
+    const admittedWebSearch =
+      (await getWorkerTurnToolSurface(identity)?.getSurface(identity))?.tools.some(
+        ({ definition }) => definition.name === "web_search",
+      ) === true;
+    // Capability preparation only catches the synchronous policy read.
+    // An async callback lets SessionCapabilityReadRequired escape before the store is loaded.
+    await withPreparedSessionCapabilityRead(() =>
+      applyExtraParamsToAgent(
+        streamAgent,
+        config,
+        approved.provider,
+        approved.model,
+        {
+          ...structuredClone(streamPolicyOptions),
+          fastMode:
+            fastModeSetting === "auto"
+              ? () =>
+                  resolveFastModeForElapsed({
+                    mode: "auto",
+                    startedAtMs: fastModeStartedAtMs,
+                    fastAutoOnSeconds:
+                      promptCacheContext.fastModeAutoOnSeconds ?? fastMode.fastAutoOnSeconds,
+                  }).enabled
+              : fastModeSetting,
         },
-      },
+        streamPolicyOptions.reasoning,
+        target.agentId,
+        approved.workspaceDir,
+        providerModel,
+        agentDir,
+        undefined,
+        {
+          nativeWebSearchPolicyContext: {
+            sessionKey: target.sessionKey,
+            webSearchEnabled: admittedWebSearch,
+          },
+        },
+      ),
     );
     const recordServiceTierObservation = prepared.recordServiceTierObservation;
     const scopedStream = recordServiceTierObservation
@@ -262,6 +275,14 @@ export const executePreparedWorkerInference = async (
               baseUrl: model.baseUrl,
               ...observation,
             }),
+          {
+            runId: request.runId,
+            sessionId: request.sessionId,
+            authScope: agentDir,
+            accountRoute: prepared.auth.profileId
+              ? `profile:${prepared.auth.profileId}`
+              : "direct:openai",
+          },
         )
       : streamAgent.streamFn;
     const model = providerModel;
@@ -272,6 +293,13 @@ export const executePreparedWorkerInference = async (
     ) {
       return inferenceError("invalid-context");
     }
+    if (signal.aborted || !params.isCurrent()) {
+      return inferenceError("cancelled");
+    }
+
+    const costConfig = isDiagnosticsEnabled(config)
+      ? await resolveModelCostConfig({ provider: model.provider, model: model.id, config })
+      : undefined;
     if (signal.aborted || !params.isCurrent()) {
       return inferenceError("cancelled");
     }
@@ -301,16 +329,10 @@ export const executePreparedWorkerInference = async (
       if (!hasObservedModelUsage(usage)) {
         return;
       }
-      const costUsd =
-        usage.cost?.total ??
-        estimateUsageCost({
-          usage,
-          cost: resolveModelCostConfig({
-            provider: model.provider,
-            model: model.id,
-            config,
-          }),
-        });
+      // One call prices exactly in any tier; an all-zero transport cost is only a placeholder.
+      const costUsd = hasRecordedUsageCost(usage.cost)
+        ? usage.cost?.total
+        : estimateUsageCost({ usage, cost: costConfig });
       emitTrustedDiagnosticEvent({
         type: "model.usage",
         trace: freezeDiagnosticTraceContext(trace),
@@ -348,6 +370,9 @@ export const executePreparedWorkerInference = async (
         ...(reasoning !== undefined ? { reasoning: mapThinkingLevel(reasoning) } : {}),
         signal: providerSignal,
         sessionId: request.sessionId,
+        ...(promptCacheContext.providerStateScope
+          ? { [PROVIDER_STATE_SCOPE]: promptCacheContext.providerStateScope }
+          : {}),
         ...(authValue ? { apiKey: authValue } : {}),
         promptCacheKey: resolveSessionBoundaryPromptCacheKey({
           ...promptCacheContext,
@@ -427,17 +452,21 @@ export const executePreparedWorkerInference = async (
         }
         if (event.type === "error") {
           recordUsage(event.error.usage);
-          return inferenceError(
-            event.reason === "aborted" ? "cancelled" : "provider-error",
-            event.error.usage,
+          const failure =
             event.reason === "aborted"
               ? undefined
-              : formatWorkerInferenceError({
+              : projectWorkerInferenceError({
                   message: event.error.errorMessage ?? ERROR_MESSAGES["provider-error"],
                   errorCode: event.error.errorCode,
                   errorType: event.error.errorType,
                   errorBody: event.error.errorBody,
-                }),
+                  retryAfterMs: event.error.retryAfterMs,
+                });
+          return inferenceError(
+            event.reason === "aborted" ? "cancelled" : "provider-error",
+            event.error.usage,
+            failure?.message,
+            failure?.retryAfterMs,
           );
         }
         if (signal.aborted || !params.isCurrent()) {
@@ -469,10 +498,12 @@ export const executePreparedWorkerInference = async (
       }
       return inferenceError(signal.aborted ? "cancelled" : "provider-error");
     } catch (error) {
+      const failure = signal.aborted ? undefined : projectWorkerInferenceError(error);
       return inferenceError(
         signal.aborted ? "cancelled" : "provider-error",
         undefined,
-        signal.aborted ? undefined : formatWorkerInferenceError(error),
+        failure?.message,
+        failure?.retryAfterMs,
       );
     } finally {
       providerAbort.abort();

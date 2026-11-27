@@ -43,7 +43,19 @@ export function appendTranscriptText(base: string | undefined, fragment: string)
   }
   const overlap = findTextOverlap(currentLower, nextLower);
   if (overlap >= 6 || (overlap >= 3 && next.length <= 12)) {
-    return `${current}${next.slice(overlap)}`.trim();
+    // Lowercasing may expand code points; slice only at an original code point boundary.
+    let originalOffset = 0;
+    let foldedOffset = 0;
+    for (const character of next) {
+      originalOffset += character.length;
+      foldedOffset += character.toLowerCase().length;
+      if (foldedOffset === overlap) {
+        return `${current}${next.slice(originalOffset)}`.trim();
+      }
+      if (foldedOffset > overlap) {
+        break;
+      }
+    }
   }
   const separator = /[([{"']$/.test(current) || /^[,.;:!?)]/.test(next) ? "" : " ";
   return `${current}${separator}${next}`.trim();

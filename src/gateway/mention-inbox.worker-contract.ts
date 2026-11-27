@@ -13,10 +13,3 @@ export type MentionMutation = {
 export type MentionMutationResult =
   | { kind: "conflict"; snapshot: MentionStoreSnapshot }
   | { kind: "committed"; head: MentionStoreHead };
-
-export type MentionReadOperations = {
-  "mentions.snapshot": {
-    input: number;
-    output: { type: "mentions.snapshot"; snapshot: MentionStoreSnapshot | undefined };
-  };
-};

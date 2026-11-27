@@ -1,44 +1,31 @@
 // @vitest-environment node
-// Control UI tests cover browser redact behavior.
 import { describe, expect, it } from "vitest";
 import { redactToolDetail } from "./browser-redact.ts";
 
 describe("browser tool detail redaction", () => {
   it("redacts credentials while preserving diagnostic paths", () => {
-    const redacted = redactToolDetail(
+    const cases = [
+      ["Authorization: Basic dXNlcjpzdXBlcnNlY3JldHBhc3N3b3Jk", "Authorization: [redacted]"],
       [
-        "Authorization: Basic dXNlcjpzdXBlcnNlY3JldHBhc3N3b3Jk",
         "curl 'https://example.test?refresh_token=ya29.longOAuthRefreshTokenValue&ok=1'",
-        "client_secret=clientSecretValueThatShouldNotRender",
-        "AIzaSyDUMMYGoogleApiKeyValue1234567890",
-        `bare Fireworks key fw-${"C".repeat(40)}`,
+        "curl 'https://example.test?refresh_token=ya29.l...alue&ok=1'",
+      ],
+      ["client_secret=clientSecretValueThatShouldNotRender", "client_secret=client...nder"],
+      ["AIzaSyDUMMYGoogleApiKeyValue1234567890", "AIzaSy...7890"],
+      [`bare Fireworks key fw-${"C".repeat(40)}`, "bare Fireworks key fw-CCC...CCCC"],
+      [
         `https://example.test?debug=fw_${"A".repeat(40)}&ok=1`,
-        `X-Debug: fpk_${"B".repeat(40)}`,
-        "-----BEGIN PRIVATE KEY-----\nabc123\n-----END PRIVATE KEY-----",
-        'cookie: "sessionid=verySensitiveCookieValue"',
-        "Bearer abcdefghijkl",
-        "/Users/alice/private/config.json",
-      ].join("\n"),
+        "https://example.test?debug=fw_AAA...AAAA&ok=1",
+      ],
+      [`X-Debug: fpk_${"B".repeat(40)}`, "X-Debug: fpk_BB...BBBB"],
+      ["-----BEGIN PRIVATE KEY-----\nabc123\n-----END PRIVATE KEY-----", "[redacted private key]"],
+      ['cookie: "sessionid=verySensitiveCookieValue"', "cookie: [redacted]"],
+      ["Bearer abcdefghijkl", "Bearer [redacted]"],
+      ["/Users/alice/private/config.json", "/Users/alice/private/config.json"],
+    ];
+    expect(redactToolDetail(cases.map(([input]) => input).join("\n")).split("\n")).toEqual(
+      cases.map(([, expected]) => expected),
     );
-
-    expect(redacted).toContain("Authorization: [redacted]");
-    expect(redacted).toContain("refresh_token=ya29.l...alue");
-    expect(redacted).toContain("client_secret=client...nder");
-    expect(redacted).toContain("AIzaSy...7890");
-    expect(redacted).toContain("[redacted private key]");
-    expect(redacted).toContain("cookie: [redacted]");
-    expect(redacted).toContain("Bearer [redacted]");
-    expect(redacted).not.toContain("supersecretpassword");
-    expect(redacted).not.toContain("longOAuthRefreshTokenValue");
-    expect(redacted).not.toContain("clientSecretValueThatShouldNotRender");
-    expect(redacted).not.toContain("DUMMYGoogleApiKeyValue1234567890");
-    expect(redacted).toContain("bare Fireworks key fw-CCC...CCCC");
-    expect(redacted).toContain("https://example.test?debug=fw_AAA...AAAA&ok=1");
-    expect(redacted).toContain("X-Debug: fpk_BB...BBBB");
-    expect(redacted).not.toContain("abc123");
-    expect(redacted).not.toContain("verySensitiveCookieValue");
-    expect(redacted).not.toContain("abcdefghijkl");
-    expect(redacted).toContain("/Users/alice/private/config.json");
     for (const masked of ["fw-CCC...CCCC", "fw_AAA...AAAA", "fpk_BB...BBBB"]) {
       expect(redactToolDetail(masked)).toBe(masked);
     }

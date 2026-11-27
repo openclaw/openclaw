@@ -1,12 +1,15 @@
 import { isMainThread } from "node:worker_threads";
 import {
+  getSqliteDatabaseAdmissionSourceForPath,
+  hasSqliteDatabaseSchemaAdmissionForIdentity,
+} from "../../infra/sqlite-database-admission.js";
+import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
 } from "../../infra/sqlite-worker-identity.js";
 import { assertAgentSessionWriteAdmission } from "../../sessions/session-agent-work-admission.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
-  isIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -28,10 +31,13 @@ import type {
 } from "./session-entry-patch.types.js";
 import { assertCapturedSessionEntryReadSource } from "./session-entry-read-source.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
-import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type SqliteSessionEntryPatchOptions = SessionEntryPatchOptions & {
+  /** Cancel waiting admission; a started writer still owns its complete settlement. */
+  signal?: AbortSignal;
+  /** Closed operations can acknowledge completion without returning the entry. */
+  result?: "none";
   /** Exact captured writer under its caller's foreground reservation; never a new owner. */
   retainedExecution?: OpenClawAgentDatabaseExecution;
   /** Audited internal updaters: no nested writer admission; guards retain only host authority. */
@@ -63,6 +69,7 @@ export type SqliteSessionEntrySnapshotPatchParams = {
   ) => SqliteLifecycleTargetSnapshot;
   resolved: ResolvedSqliteScope;
   sessionKey: string;
+  sharedWriteReserved?: boolean;
   storePath: string;
   // Callback preparation precedes BEGIN; fixed operations evaluate the transaction's current rows.
   update: SessionEntryUpdater | SessionEntryPatchOperation;
@@ -70,7 +77,7 @@ export type SqliteSessionEntrySnapshotPatchParams = {
 
 /** Bind entry preparation and commit checks to the original physical store before yielding. */
 export function captureSessionEntryPatchSource(params: SqliteSessionEntrySnapshotPatchParams) {
-  const { resolved: scope, sessionKey, capturedSource: captured, options } = params;
+  const { resolved: scope, capturedSource: captured, options } = params;
   const { retainedExecution } = options;
   // Queueing and either cold open must retain the same registration and lease owner.
   const resolved = {
@@ -81,19 +88,23 @@ export function captureSessionEntryPatchSource(params: SqliteSessionEntrySnapsho
   const databaseOptions = toDatabaseOptions(resolved);
   assertAgentSessionWriteAdmission(databaseOptions, resolved.agentId);
   const databasePath = resolveOpenClawAgentSqlitePath(databaseOptions);
-  const targetIdentity = readDatabasePathIdentitySync(databasePath);
+  const useWorker = isMainThread && supportsOpenClawAgentDatabaseExecution(databaseOptions);
+  const admitted =
+    useWorker && typeof captured?.databaseIdentity !== "string"
+      ? getSqliteDatabaseAdmissionSourceForPath(databasePath)
+      : undefined;
+  const targetIdentity =
+    typeof captured?.databaseIdentity === "string"
+      ? {
+          key: `file:${captured.databaseIdentity}`,
+          canonicalPath: databasePath,
+          birthtime: captured.databaseBirthtime,
+        }
+      : admitted && hasSqliteDatabaseSchemaAdmissionForIdentity(admitted.identity)
+        ? { ...admitted.identity, canonicalPath: admitted.canonicalPath }
+        : readDatabasePathIdentitySync(databasePath);
   resolved.path = databasePath;
   databaseOptions.path = databasePath;
-  const incognito = isIncognitoOpenClawAgentSqlitePath(databasePath, databaseOptions);
-  const incognitoBinding = captureIncognitoSessionBinding({
-    agentId: databaseOptions.agentId,
-    env: resolved.env,
-    sessionKey,
-    storePath: databasePath,
-  });
-  // Offline maintenance and process-held incognito stores retain native ownership.
-  const useWorker =
-    !incognitoBinding && isMainThread && supportsOpenClawAgentDatabaseExecution(databaseOptions);
   const ensure = options.workerGuard?.ensureIdentitySource;
   if (
     ensure &&
@@ -106,7 +117,7 @@ export function captureSessionEntryPatchSource(params: SqliteSessionEntrySnapsho
   }
   if (
     ensure &&
-    (targetIdentity.key !== `file:${String(ensure.source.databaseIdentity)}` ||
+    (targetIdentity.key !== `file:${ensure.source.databaseIdentity}` ||
       targetIdentity.birthtime !== ensure.source.databaseBirthtime)
   ) {
     throw new Error("Transaction-local entry authority differs from its writer");
@@ -114,26 +125,6 @@ export function captureSessionEntryPatchSource(params: SqliteSessionEntrySnapsho
   const assertCapturedSource = (database?: OpenClawAgentDatabase) => {
     if (!captured) {
       return;
-    }
-    if (incognitoBinding) {
-      const { actor } = incognitoBinding;
-      actor.assertCurrent();
-      if (
-        captured.agentId !== actor.agentId ||
-        captured.path !== actor.path ||
-        captured.databaseIdentity !== actor.identity.incarnation ||
-        captured.databaseBirthtime !== undefined
-      ) {
-        throw new Error("Captured session database changed before entry patch");
-      }
-      return;
-    }
-    if (!database && typeof captured.databaseIdentity === "string") {
-      assertExistingDatabaseIdentity(
-        captured.path,
-        `file:${captured.databaseIdentity}`,
-        captured.databaseBirthtime,
-      );
     }
     assertCapturedSessionEntryReadSource(
       captured,
@@ -154,10 +145,12 @@ export function captureSessionEntryPatchSource(params: SqliteSessionEntrySnapsho
         throw new Error("Retained session writer differs from its acknowledged source");
       }
     }
-    if (targetIdentity.key.startsWith("file:")) {
-      assertExistingDatabaseIdentity(databasePath, targetIdentity.key, targetIdentity.birthtime);
+    if (!useWorker) {
+      if (targetIdentity.key.startsWith("file:")) {
+        assertExistingDatabaseIdentity(databasePath, targetIdentity.key, targetIdentity.birthtime);
+      }
+      assertCapturedSource();
     }
-    assertCapturedSource();
   };
   if (retainedExecution) {
     assertCurrent();
@@ -167,8 +160,6 @@ export function captureSessionEntryPatchSource(params: SqliteSessionEntrySnapsho
     databaseOptions,
     databasePath,
     targetIdentity,
-    incognito,
-    incognitoBinding,
     useWorker,
     ensureIdentitySource: ensure
       ? { source: ensure.source, agentId: ensure.agentId, sessionKey: ensure.sessionKey }

@@ -8,7 +8,7 @@ class GatewayErrorDetailsTest {
   @Test
   fun readsStructuredMissingScopeWithoutMessageParsing() {
     val error =
-      GatewaySession.ErrorShape(
+      ErrorShape(
         code = "FORBIDDEN",
         message = "permission denied",
         details =
@@ -35,18 +35,16 @@ class GatewayErrorDetailsTest {
   fun legacyFallbackRequiresAnAuthorizationErrorCode() {
     assertEquals(
       "operator.read",
-      GatewaySession
-        .ErrorShape(
-          code = "INVALID_REQUEST",
-          message = "missing scope: operator.read",
-        ).missingScope(),
+      ErrorShape(
+        code = "INVALID_REQUEST",
+        message = "missing scope: operator.read",
+      ).missingScope(),
     )
     assertNull(
-      GatewaySession
-        .ErrorShape(
-          code = "UNAVAILABLE",
-          message = "missing scope: operator.read",
-        ).missingScope(),
+      ErrorShape(
+        code = "UNAVAILABLE",
+        message = "missing scope: operator.read",
+      ).missingScope(),
     )
   }
 }

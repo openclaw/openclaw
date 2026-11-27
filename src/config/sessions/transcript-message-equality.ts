@@ -7,12 +7,12 @@ import {
 
 export function messagesMatchForIdempotentReplay(stored: unknown, candidate: unknown): boolean {
   const storedDelivery = isRecord(stored) ? stored.openclawDelivery : undefined;
-  // v2026.9.4 mirrors did not retain URLs. Compare their original representation
+  // Shipped core and SDK mirrors did not retain URLs. Compare their original representation
   // without rewriting accepted bytes; an explicit mediaUrls field stays strict.
   const legacyMediaMirror =
     isRecord(stored) &&
     isOpenClawDeliveryMirrorAssistantMessage(stored) &&
-    stored.api === OPENCLAW_TRANSCRIPT_ARTIFACT_API &&
+    (stored.api === OPENCLAW_TRANSCRIPT_ARTIFACT_API || stored.api === "openai-responses") &&
     (storedDelivery === undefined ||
       (isRecord(storedDelivery) && !Object.hasOwn(storedDelivery, "mediaUrls")));
   const serializedShape = (message: unknown, projectLegacyMedia = false): unknown => {

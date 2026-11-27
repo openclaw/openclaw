@@ -21,12 +21,26 @@ export type SessionStoreEntry = {
   delivery?: SessionDeliveryState;
 };
 
+export function createExternalRequesterSessionEntry(): SessionStoreEntry {
+  return {
+    sessionId: "sess-main",
+    updatedAt: 1,
+    delivery: {
+      kind: "external",
+      route: { channel: "discord", accountId: "default", target: { to: "user-1" } },
+      context: { channel: "discord", to: "user-1", accountId: "default" },
+      origin: { provider: "discord", to: "user-1", accountId: "default" },
+    },
+  };
+}
+
 type GatewayAgentRequestParams = {
   sessionKey?: string;
   idempotencyKey?: string;
   message?: string;
   inputProvenance?: {
     sourceSessionKey?: string;
+    sourceTool?: string;
   };
   internalEvents?: Array<{ status?: string; statusLabel?: string; result?: string }>;
 };
@@ -34,18 +48,6 @@ type GatewayAgentRequestParams = {
 export type GatewayRequest = Omit<CallGatewayOptions, "params"> & {
   params?: GatewayAgentRequestParams;
 };
-
-export function getAgentResultsForChildSession(
-  requests: readonly GatewayRequest[],
-  childSessionKey: string,
-): string[] {
-  return requests
-    .filter((request) => request.params?.inputProvenance?.sourceSessionKey === childSessionKey)
-    .flatMap((request) => {
-      const result = request.params?.internalEvents?.[0]?.result;
-      return result === undefined ? [] : [result];
-    });
-}
 
 export async function settleYieldedCliTurn(params: {
   requesterSessionKey: string;

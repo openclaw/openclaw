@@ -1,18 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
-import {
-  CommandProcessCleanupError,
-  hasCommandProcessCleanupError,
-} from "../process/exec-result.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
-import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
-import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
-import { hasSqliteWorkerOutcomeUnknown } from "./sqlite-worker-contract.js";
-import { createSqliteWorkerWriteAdmission } from "./sqlite-worker-store.js";
 import { createUpdateErrorFact } from "./update-failure-facts.js";
-import { captureUpdateRunRedactionFacts, type UpdateRunLedgerOptions } from "./update-run-codec.js";
-import type { UpdateRunPhasePatch, UpdateRunWriteCommand } from "./update-run-mutation.types.js";
+import { readUpdateResultPolicy, sendUpdateResultTelemetry } from "./update-result-telemetry.js";
+import {
+  recordUpdateRunMutationAsync,
+  type UpdateRunWriteOptions,
+} from "./update-run-mutation.async.js";
+import type { UpdateRunPhasePatch } from "./update-run-mutation.types.js";
 import type {
   CreateUpdateRunInput,
   FinishUpdateRunInput,
@@ -21,130 +16,20 @@ import type {
   UpdateRunRecord,
   UpdateRunStep,
 } from "./update-run-record.js";
-import { UpdateRecoveryRequiredError } from "./update-run-recovery-schema.js";
+import { hasUpdateRunDiagnostics } from "./update-run-write.js";
 
-export type UpdateRunWriteOptions = UpdateRunLedgerOptions & {
-  context?: OpenClawStateWorkerContext;
-  signal?: AbortSignal;
-  /** Live caller custody only; recovery policy is checked in the worker transaction. */
-  assertCurrent?: () => void;
-  /** Closing admission does not revoke writes that were already accepted. */
-  assertAccepting?: () => void;
-  retainSettlement?: (settled: Promise<void>) => void;
-  requireNoRecovery?: true;
-};
-
-/** Capture the receipt before yielding and join its writer through native settlement. */
-async function recordUpdateRunMutationAsync(
-  runId: string,
-  mutation:
-    | { kind: "step"; step: UpdateRunStep & { reason?: string } }
-    | { kind: "phase"; phase: UpdateRunPhase; patch: UpdateRunPhasePatch }
-    | { kind: "create"; run: CreateUpdateRunInput }
-    | { kind: "finish"; result: FinishUpdateRunInput }
-    | { kind: "verification"; verification: UpdateRunRecord["verification"]; onlyIfRunning?: true }
-    | { kind: "diagnostics"; diagnostics: UpdateRunDiagnostics; preserveRecovery?: true },
-  options: UpdateRunWriteOptions = {},
-): Promise<UpdateRunRecord | undefined> {
-  options.assertAccepting?.();
-  if (options.database || options.readOnly) {
-    throw new Error("Existing-state writes require their own tracked writable connection.");
-  }
-  const captured = {
-    ...options,
-    env: cloneEnvWithPlatformSemantics(options.env ?? process.env),
-    ...(options.redactPaths ? { redactPaths: [...options.redactPaths] } : {}),
-  };
-  const context = captured.context ?? captureOpenClawStateWorkerContext(captured);
-  const assertCurrent = () => {
-    context.admission.assertCurrent();
-    captured.signal?.throwIfAborted();
-    captured.assertCurrent?.();
-  };
-  assertCurrent();
-  const input = {
-    runId,
-    redactionFacts: captureUpdateRunRedactionFacts(captured.env),
-    requireNoRecovery: captured.requireNoRecovery,
-    busyTimeoutMs: captured.busyTimeoutMs,
-    redactPaths: captured.redactPaths,
-  };
-  let command: UpdateRunWriteCommand;
-  switch (mutation.kind) {
-    case "step":
-      command = { type: "updateRuns.recordStep", input: { ...input, step: mutation.step } };
-      break;
-    case "phase":
-      command = {
-        type: "updateRuns.recordPhase",
-        input: { ...input, phase: mutation.phase, patch: mutation.patch },
-      };
-      break;
-    case "create":
-      command = { type: "updateRuns.create", input: { ...input, run: mutation.run } };
-      break;
-    case "finish":
-      command = { type: "updateRuns.finish", input: { ...input, result: mutation.result } };
-      break;
-    case "verification":
-      command = {
-        type: "updateRuns.recordVerification",
-        input: {
-          ...input,
-          verification: mutation.verification,
-          onlyIfRunning: mutation.onlyIfRunning,
-        },
-      };
-      break;
-    case "diagnostics":
-      command = {
-        type: "updateRuns.recordDiagnostics",
-        input: {
-          ...input,
-          diagnostics: mutation.diagnostics,
-          preserveRecovery: mutation.preserveRecovery,
-        },
-      };
-      break;
-  }
-  command = structuredClone(command);
-  const pending = runOpenClawStateWorkerOperation(context, (scope) => scope.execute(command), {
-    existingOnly: mutation.kind !== "create",
-    assertCurrent,
-    createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
-      context.admission.databasePath,
-    ]),
-  });
-  const completion = pending.catch((error: unknown) => {
-    if (hasSqliteWorkerOutcomeUnknown(error) && !hasCommandProcessCleanupError(error)) {
-      throw new CommandProcessCleanupError({ cause: error });
-    }
-    throw error;
-  });
-  captured.retainSettlement?.(completion.then(() => undefined));
-  const reply = await completion;
-  assertCurrent();
-  if (!reply) {
-    throw new Error("Update history disappeared before recording its outcome");
-  }
-  if (reply.kind === "recovery-required") {
-    throw new UpdateRecoveryRequiredError(reply.recovery);
-  }
-  if (reply.kind === "bookkeeping-skipped") {
-    console.warn(
-      "[update] History database is locked; bookkeeping was not recorded. The update will continue.",
-    );
-    return undefined;
-  }
-  return reply.record;
-}
+export type { UpdateRunWriteOptions } from "./update-run-mutation.async.js";
 
 export function recordUpdateRunStepAsync(
   runId: string,
   step: UpdateRunStep & { reason?: string },
   options: UpdateRunWriteOptions = {},
 ): Promise<UpdateRunRecord | undefined> {
-  return recordUpdateRunMutationAsync(runId, { kind: "step", step }, options);
+  return recordUpdateRunMutationAsync(
+    runId,
+    (input) => ({ type: "updateRuns.recordStep", input: { ...input, step } }),
+    options,
+  ).then((reply) => reply?.record);
 }
 
 export async function recordUpdateRunPhaseAsync(
@@ -153,27 +38,35 @@ export async function recordUpdateRunPhaseAsync(
   patch: UpdateRunPhasePatch = {},
   options: UpdateRunWriteOptions = {},
 ): Promise<UpdateRunRecord> {
-  const record = await recordUpdateRunMutationAsync(
+  const reply = await recordUpdateRunMutationAsync(
     runId,
-    { kind: "phase", phase, patch },
+    (input) => ({ type: "updateRuns.recordPhase", input: { ...input, phase, patch } }),
     options,
   );
-  if (!record) {
+  if (!reply) {
     throw new Error("Required update phase was not recorded");
   }
-  return record;
+  return reply.record;
 }
 
 export async function createUpdateRunAsync(
   input: CreateUpdateRunInput,
   options: UpdateRunWriteOptions = {},
 ): Promise<UpdateRunRecord> {
-  const run = { ...input, runId: input.runId ?? randomUUID() };
-  const record = await recordUpdateRunMutationAsync(run.runId, { kind: "create", run }, options);
-  if (!record) {
+  const run = {
+    ...input,
+    runId: input.runId ?? randomUUID(),
+    reportResult: !input.preview && (await readUpdateResultPolicy(options.env)),
+  };
+  const reply = await recordUpdateRunMutationAsync(
+    run.runId,
+    (mutation) => ({ type: "updateRuns.create", input: { ...mutation, run } }),
+    options,
+  );
+  if (!reply) {
     throw new Error("Update run was not created");
   }
-  return record;
+  return reply.record;
 }
 
 export async function finishUpdateRunAsync(
@@ -181,11 +74,18 @@ export async function finishUpdateRunAsync(
   result: FinishUpdateRunInput,
   options: UpdateRunWriteOptions = {},
 ): Promise<UpdateRunRecord> {
-  const record = await recordUpdateRunMutationAsync(runId, { kind: "finish", result }, options);
-  if (!record) {
+  const reply = await recordUpdateRunMutationAsync(
+    runId,
+    (input) => ({ type: "updateRuns.finish", input: { ...input, result } }),
+    options,
+  );
+  if (!reply) {
     throw new Error("Update run outcome was not recorded");
   }
-  return record;
+  if (reply.updateResult) {
+    void sendUpdateResultTelemetry(reply.updateResult, { env: options.env });
+  }
+  return reply.record;
 }
 
 export async function recordUpdateRunVerificationAsync(
@@ -193,15 +93,19 @@ export async function recordUpdateRunVerificationAsync(
   verification: UpdateRunRecord["verification"],
   options: UpdateRunWriteOptions & { onlyIfRunning?: true } = {},
 ): Promise<UpdateRunRecord> {
-  const record = await recordUpdateRunMutationAsync(
+  const { onlyIfRunning } = options;
+  const reply = await recordUpdateRunMutationAsync(
     runId,
-    { kind: "verification", verification, onlyIfRunning: options.onlyIfRunning },
+    (input) => ({
+      type: "updateRuns.recordVerification",
+      input: { ...input, verification, onlyIfRunning },
+    }),
     options,
   );
-  if (!record) {
+  if (!reply) {
     throw new Error("Update verification was not recorded");
   }
-  return record;
+  return reply.record;
 }
 
 export async function recordUpdateRunDiagnosticsAsync(
@@ -210,22 +114,20 @@ export async function recordUpdateRunDiagnosticsAsync(
   warn: (message: string) => void,
   options: UpdateRunWriteOptions & { preserveRecovery?: true } = {},
 ): Promise<UpdateRunRecord | undefined> {
-  if (
-    !(
-      diagnostics.failure ||
-      diagnostics.recovery ||
-      diagnostics.rollbackOutcome ||
-      diagnostics.verification
-    )
-  ) {
+  if (!hasUpdateRunDiagnostics(diagnostics)) {
     return undefined;
   }
   try {
-    return await recordUpdateRunMutationAsync(
+    const { preserveRecovery } = options;
+    const reply = await recordUpdateRunMutationAsync(
       runId,
-      { kind: "diagnostics", diagnostics, preserveRecovery: options.preserveRecovery },
+      (input) => ({
+        type: "updateRuns.recordDiagnostics",
+        input: { ...input, diagnostics, preserveRecovery },
+      }),
       options,
     );
+    return reply?.record;
   } catch (error) {
     if (hasCommandProcessCleanupError(error)) {
       throw error;

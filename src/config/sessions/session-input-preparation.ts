@@ -21,7 +21,8 @@ export function prepareSessionInputFromReplica(
     return undefined;
   }
   const kernel = createSessionTranscriptTurnKernel(scope, plan.options);
-  if (!kernel.resolveExpectedEntry(hot.entry ? { entry: hot.entry } : undefined)) {
+  const expectedEntry = kernel.resolveExpectedEntry(hot.entry ? { entry: hot.entry } : undefined);
+  if (!expectedEntry) {
     return undefined;
   }
   for (const source of plan.ownerSources ?? []) {
@@ -64,7 +65,9 @@ export function prepareSessionInputFromReplica(
       return undefined;
     }
     const pending = key ? hot.pendingInputs.find((row) => row.idempotency_key === key) : undefined;
-    if (!pending && key === plan.custody?.idempotencyKey) {
+    // A missing active row may still be a consumed source. Let the worker
+    // perform the exact-key history lookup before deciding this is fresh.
+    if (!pending && key) {
       return undefined;
     }
     if (

@@ -7,7 +7,6 @@ import {
 // Voice wake config stores trigger words used by local voice integrations.
 type VoiceWakeConfig = {
   triggers: string[];
-  updatedAtMs: number;
 };
 
 const DEFAULT_TRIGGERS = ["openclaw", "claude", "computer"];
@@ -35,11 +34,10 @@ export async function loadVoiceWakeConfig(baseDir?: string): Promise<VoiceWakeCo
     stateDatabaseOptions(baseDir),
   );
   if (!state) {
-    return { triggers: defaultVoiceWakeTriggers(), updatedAtMs: 0 };
+    return { triggers: defaultVoiceWakeTriggers() };
   }
   return {
     triggers: sanitizeTriggers(state.value),
-    updatedAtMs: Math.max(0, state.updatedAtMs),
   };
 }
 
@@ -48,10 +46,10 @@ export async function setVoiceWakeTriggers(
   baseDir?: string,
 ): Promise<VoiceWakeConfig> {
   const sanitized = sanitizeTriggers(triggers);
-  const updatedAtMs = await writeConfigMachineStateAsync(
+  await writeConfigMachineStateAsync(
     VOICEWAKE_TRIGGERS_STATE_KEY,
     sanitized,
     stateDatabaseOptions(baseDir),
   );
-  return { triggers: sanitized, updatedAtMs };
+  return { triggers: sanitized };
 }

@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 // Claude's native transcript augments display history, never canonical model context.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
@@ -11,6 +10,7 @@ import type {
 } from "../config/sessions/session-history-types.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { registerNodeSqliteDisposeCallback } from "../infra/kysely-sync-cache-state.js";
+import { sqlPublicationAnchor, type EngineConnection } from "../infra/sql-connection.js";
 import {
   resolveHistoryAnchorPageRange,
   resolveTranscriptPageEnd,
@@ -21,12 +21,13 @@ import {
   dropPreSessionStartAnnouncePairs,
   isPreSessionStartAssistantMessage,
 } from "./chat-display-projection.history.js";
+import { MemoryCliSessionHistoryIndex } from "./cli-session-history-index-memory.js";
+import type { CliHistoryIndex } from "./cli-session-history-index-policy.js";
 import { CliSessionHistoryIndex } from "./cli-session-history-index.worker.js";
 import {
   resolveClaudeCliHistorySource,
   visitClaudeCliSessionMessages,
 } from "./cli-session-history.claude-snapshot.js";
-import { cleanClaudeCliImportedUserDisplay } from "./cli-session-history.claude.js";
 import {
   readChatHistoryMessageId,
   readChatHistoryMessageSeq,
@@ -41,8 +42,9 @@ import type {
 } from "./session-transcript-read.types.js";
 
 export type CliHistoryRevision = {
-  database: DatabaseSync;
+  database: EngineConnection;
   generation?: string;
+  updatedAt: number | null;
   indexedSeq: number;
   leafEventId: string | null;
 };
@@ -52,9 +54,9 @@ export type CliHistoryReaders = SessionTranscriptPageReader & {
 };
 type Readers = CliHistoryReaders;
 type CachedIndex = {
-  database?: DatabaseSync;
+  database?: EngineConnection;
   key: string;
-  index: CliSessionHistoryIndex;
+  index: CliHistoryIndex;
   release: () => void;
   readWindow?: TranscriptReadWindow;
   displaySource?: string;
@@ -106,6 +108,8 @@ export async function prepareCliSessionHistoryReader(
       offset: params.offset,
       readOnly: true,
       deferProfileDisplay: true,
+      // The history worker prepares current cron labels after selecting the page.
+      resolveCronJobName: () => undefined,
     });
     if (tail.rawMessages.length) {
       return undefined;
@@ -113,7 +117,7 @@ export async function prepareCliSessionHistoryReader(
   }
   const native = {
     cliSessionId: binding.sessionId,
-    homeDir: params.cliHistoryHomeDir,
+    projectsDir: params.cliHistoryProjectsDir,
     localSessionId: params.sessionId,
     reseedReceipt: binding.reseedReceipt,
   };
@@ -123,8 +127,9 @@ export async function prepareCliSessionHistoryReader(
     retire(identity);
     return undefined;
   }
+  // A confirmed steer can acquire native identity without appending or rotating admission.
   const revisionKey = (value: CliHistoryRevision) =>
-    JSON.stringify([value.generation, value.indexedSeq, value.leafEventId]);
+    JSON.stringify([value.generation, value.updatedAt, value.indexedSeq, value.leafEventId]);
   const localRevision = revision ? revisionKey(revision) : undefined;
   const key = JSON.stringify([localRevision, source[1], params.entry?.sessionStartedAt]);
   let cached = revision?.database ? indexes.get(identity) : undefined;
@@ -145,7 +150,10 @@ export async function prepareCliSessionHistoryReader(
     }
   };
   if (!cached) {
-    const index = new CliSessionHistoryIndex(!revision?.database);
+    const index =
+      params.entry?.incognito === true
+        ? new MemoryCliSessionHistoryIndex()
+        : new CliSessionHistoryIndex();
     try {
       await visitClaudeCliSessionMessages(
         source[0],
@@ -229,7 +237,9 @@ export async function prepareCliSessionHistoryReader(
           readWindow,
           displaySource,
           leafEventId,
-          release: registerNodeSqliteDisposeCallback(revision?.database, () => retire(identity)),
+          release: registerNodeSqliteDisposeCallback(sqlPublicationAnchor(revision.database), () =>
+            retire(identity),
+          ),
         };
         indexes.set(identity, cached);
         while (indexes.size > MAX_INDEXES) {
@@ -316,12 +326,8 @@ export async function prepareCliSessionHistoryReader(
     }
     const messages: unknown[] = [];
     for (const row of window) {
-      // The merge matched on original text; only an import that found no canonical row
-      // is served from the index, so its generated prefixes can leave the display copy here.
       const message =
-        row.local_seq === null
-          ? cleanClaudeCliImportedUserDisplay(index.message(row.id))
-          : localMessages.get(row.local_seq);
+        row.local_seq === null ? index.message(row.id) : localMessages.get(row.local_seq);
       const record = asOptionalRecord(message);
       if (!record) {
         throw new SessionTranscriptProjectionUnavailableError(params.sessionId!, "window-changed");

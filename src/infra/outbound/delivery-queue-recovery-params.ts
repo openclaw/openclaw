@@ -1,14 +1,21 @@
-import { prepareCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
-import { assertSessionWriterDeliveryAuthorized } from "../../auto-reply/reply/session-writer-delivery-authority.js";
+import {
+  prepareCommandOwnerAuthority,
+  type PreparedCommandOwnerAuthority,
+} from "../../auto-reply/command-owner-facts.js";
+import {
+  assertSessionWriterDeliveryAuthorized,
+  prepareSessionWriterDeliveryAuthority,
+} from "../../auto-reply/reply/session-writer-delivery-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GatewayOperatorAccessDeniedError } from "../../gateway/operator-access-policy.js";
-import { parseCommandOwnerReference } from "../../state/user-channel-identities.js";
+import { parseCommandOwnerReference } from "../../state/user-channel-authorization-reference.js";
 import {
   resolveDeliveryQueueStateEnv,
   type DeliveryQueueStateContext,
 } from "../delivery-queue-sqlite.js";
-import type { DeliverOutboundPayloadsParams } from "./deliver-contracts.js";
+import type { InternalDeliverOutboundPayloadsParams } from "./deliver-contracts.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
+import { preparePluginNoticeOwnerCheck } from "./delivery-completion.js";
 import { projectQueuedDeliveryOptions } from "./delivery-queue-projection.js";
 import type { QueuedDelivery } from "./delivery-queue-types.js";
 import { preparedOutboundPayloads } from "./prepared-batch.js";
@@ -24,13 +31,19 @@ export async function buildRecoveryDeliverParams(
     entry.deliveryCompletion?.kind === "conversation" ? entry.deliveryCompletion : undefined;
   const pendingFinal =
     entry.deliveryCompletion?.kind === "pending-final" ? entry.deliveryCompletion : undefined;
-  let owner: Awaited<ReturnType<typeof prepareCommandOwnerAuthority>> | undefined;
+  const pluginNotice =
+    entry.deliveryCompletion?.kind === "plugin-notice" ? entry.deliveryCompletion : undefined;
+  // The initial owner check precedes awaited recovery preparation; recheck the plugin at I/O.
+  const assertPluginOwner = pluginNotice
+    ? await preparePluginNoticeOwnerCheck(pluginNotice.pluginId)
+    : undefined;
   const rejection = (error: unknown) =>
     new PlatformMessageNotDispatchedError(
       "Original channel owner authorization could not be checked",
       { cause: error, retryable: !(error instanceof GatewayOperatorAccessDeniedError) },
     );
   if (pendingFinal?.commandOwnerReference !== undefined) {
+    let owner: PreparedCommandOwnerAuthority;
     const reference = parseCommandOwnerReference(pendingFinal.commandOwnerReference);
     if (!reference) {
       throw rejection(new GatewayOperatorAccessDeniedError());
@@ -49,19 +62,35 @@ export async function buildRecoveryDeliverParams(
     if (!owner.source) {
       throw rejection(new GatewayOperatorAccessDeniedError());
     }
-  }
-  const assertCurrent = () => {
+    // Recovered work admits the original owner's policy once. Later callbacks
+    // retain only data-owner and transport lifecycle fences for this batch.
     try {
-      if (pendingFinal?.commandOwnerReference !== undefined && !owner?.isCurrent(cfg)) {
+      if (!owner.isCurrent(cfg)) {
         // A stale capture is not proof that the durable reference was retired.
         throw new Error("Original channel owner capture changed during delivery");
       }
     } catch (error) {
       throw rejection(error);
     }
-    assertSessionWriterDeliveryAuthorized(pendingFinal?.sessionWriterDeliveryAuthority);
+  }
+  const writer = await prepareSessionWriterDeliveryAuthority(
+    pendingFinal?.sessionWriterDeliveryAuthority,
+    pendingFinal?.storePath,
+    resolveDeliveryQueueStateEnv(stateDir, stateContext),
+  );
+  const assertCurrent = () => {
+    assertSessionWriterDeliveryAuthorized(writer.authority);
+    try {
+      assertPluginOwner?.();
+    } catch (error) {
+      throw new PlatformMessageNotDispatchedError("Posting plugin is no longer active", {
+        cause: error,
+        retryable: false,
+      });
+    }
   };
   return {
+    release: writer.release,
     cfg,
     ...projectQueuedDeliveryOptions(entry),
     ...(entry.queuePolicy !== undefined ? { queuePolicy: entry.queuePolicy } : {}),
@@ -87,8 +116,8 @@ export async function buildRecoveryDeliverParams(
           },
         }
       : {}),
-    // Recovery retains completion settlement and reconstructs its original authority at I/O.
-    ...(pendingFinal
+    // Recovery retains completion settlement and fences its data/transport owners at I/O.
+    ...(pendingFinal || pluginNotice
       ? {
           onDirectAdapterHandoff: async () => assertCurrent(),
           assertDirectAdapterHandoff: assertCurrent,
@@ -102,5 +131,5 @@ export async function buildRecoveryDeliverParams(
     skipQueue: true, // Prevent re-enqueueing during recovery.
     deferredDeliveryAdmissionPassed: true,
     deferCommitHooks: true,
-  } satisfies DeliverOutboundPayloadsParams;
+  } satisfies InternalDeliverOutboundPayloadsParams & { release: () => void };
 }

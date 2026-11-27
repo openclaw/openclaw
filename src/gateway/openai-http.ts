@@ -23,8 +23,7 @@ import {
   IMAGE_ONLY_USER_MESSAGE,
   renderConversationToolCall,
 } from "./agent-prompt.js";
-import { sendInvalidRequest, sendJson, sendUnauthorized, setSseHeaders } from "./http-common.js";
-import { assertGatewayHttpRequestCurrent } from "./http-request-authority.js";
+import { sendInvalidRequest, sendJson, setSseHeaders } from "./http-common.js";
 import { rejectDisabledGatewayUpload } from "./http-upload-policy.js";
 import {
   authorizeOpenAiCompatibleHttpSession,
@@ -52,6 +51,7 @@ import { resolveOpenAiChatCompletionsLimits } from "./openai-compatible-input-li
 import { extractImageUrls, resolveImagesForRequest } from "./openai-http-images.js";
 import { applyToolChoice, resolveChatToolChoice } from "./openai-tool-choice.js";
 import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
+import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { areGatewayUploadsEnabled, GATEWAY_UPLOADS_DISABLED_MESSAGE } from "./upload-policy.js";
 
 const OpenAiChatCompletionRequestSchema = z.object({
@@ -361,10 +361,6 @@ function buildAgentPrompt(
   };
 }
 
-function resolveChatCompletionUsage(result: unknown): OpenAiChatCompletionsUsage {
-  return toOpenAiChatCompletionsUsage(resolveAgentRunUsage(result));
-}
-
 export async function handleOpenAiHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -380,7 +376,7 @@ export async function handleOpenAiHttpRequest(
   if (!handled) {
     return handled !== false;
   }
-  const { payload, abortController, senderIsOwner } = handled;
+  const { payload, abortController } = handled;
   const hasMedia = (payload.messages ?? []).some((message) => {
     const content = asOptionalObjectRecord(message)?.content;
     return (
@@ -438,7 +434,7 @@ export async function handleOpenAiHttpRequest(
   let sessionKey: string;
   let messageChannel: string;
   try {
-    ({ agentId, sessionKey, messageChannel } = resolveGatewayRequestContext({
+    ({ agentId, sessionKey, messageChannel } = await resolveGatewayRequestContext({
       req,
       model,
       user,
@@ -453,9 +449,11 @@ export async function handleOpenAiHttpRequest(
   }
   const creationAuth = authorizeGatewaySessionCreation({
     cfg: getRuntimeConfig(),
-    ...(handled.requestAuth.operatorRoleActor
-      ? { actor: handled.requestAuth.operatorRoleActor }
-      : { profileId: handled.requestAuth.authenticatedUserProfile?.profileId }),
+    client: createSyntheticPluginRuntimeClient({
+      authenticatedUserProfile: handled.requestAuth.authenticatedUserProfile,
+      operatorRoleActor: handled.requestAuth.operatorRoleActor,
+      openclawIdPrincipal: handled.requestAuth.openclawIdPrincipal,
+    }),
     agentId,
   });
   if (creationAuth) {
@@ -464,11 +462,11 @@ export async function handleOpenAiHttpRequest(
     });
     return true;
   }
-  const sessionAuth = authorizeOpenAiCompatibleHttpSession({
+  const sessionAuth = await authorizeOpenAiCompatibleHttpSession({
     agentId,
     sessionKey,
     requestAuth: handled.requestAuth,
-    senderIsOwner,
+    senderIsOwner: handled.grant.owner,
   });
   if (!sessionAuth.allowed) {
     sendJson(res, 403, { error: { message: sessionAuth.message, type: "forbidden" } });
@@ -495,13 +493,11 @@ export async function handleOpenAiHttpRequest(
   }
   let images: ImageContent[];
   try {
-    assertGatewayHttpRequestCurrent(handled.requestAuth);
     images = await resolveImagesForRequest(
       activeTurnContext,
       limits,
       abortController.signal,
       () => {
-        assertGatewayHttpRequestCurrent(handled.requestAuth);
         if (hasMedia && !areGatewayUploadsEnabled(getRuntimeConfig())) {
           throw new Error(GATEWAY_UPLOADS_DISABLED_MESSAGE);
         }
@@ -509,10 +505,6 @@ export async function handleOpenAiHttpRequest(
     );
   } catch (err) {
     if (abortController.signal.aborted) {
-      return true;
-    }
-    if (handled.requestAuth.hasCurrentClientAuthority?.() === false) {
-      sendUnauthorized(res);
       return true;
     }
     if (rejectDisabledGatewayUpload(res, hasMedia)) {
@@ -548,7 +540,6 @@ export async function handleOpenAiHttpRequest(
       sessionKey,
       runId,
       messageChannel,
-      senderIsOwner,
       requestAuth: handled.requestAuth,
       operatorScopes: handled.operatorScopes,
       abortSignal: abortController.signal,
@@ -566,7 +557,7 @@ export async function handleOpenAiHttpRequest(
       run: runAgentCommand,
       failureLabel: "openai-compat: chat completion failed",
       complete: ({ result, stopReason, toolCalls, text, toolChoiceError }) => {
-        const usage = resolveChatCompletionUsage(result);
+        const usage = toOpenAiChatCompletionsUsage(resolveAgentRunUsage(result));
 
         if (toolChoiceError) {
           sendJson(res, 502, {
@@ -611,7 +602,7 @@ export async function handleOpenAiHttpRequest(
 
   setSseHeaders(res);
   writeChatCompletionChoice(res, streamIdentity, { role: "assistant" });
-  handled.onDisconnect = startOpenAiCompatibleStream({
+  startOpenAiCompatibleStream({
     protocol: "chat",
     res,
     runId,
@@ -632,11 +623,9 @@ export async function handleOpenAiHttpRequest(
         {},
         toolCalls ? "tool_calls" : stopReason === "length" ? "length" : "stop",
       );
-      if (streamIncludeUsage) {
-        writeChatCompletionChunk(res, streamIdentity, {
-          choices: [],
-          usage: resolveChatCompletionUsage(result),
-        });
+      const usage = toOpenAiChatCompletionsUsage(resolveAgentRunUsage(result));
+      if (streamIncludeUsage && usage) {
+        writeChatCompletionChunk(res, streamIdentity, { choices: [], usage });
       }
     },
     fail: (error) => writeSse(res, { error }),

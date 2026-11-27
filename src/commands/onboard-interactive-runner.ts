@@ -31,19 +31,24 @@ export async function runInteractiveOnboarding(
 }
 
 async function launchHatchTui(workspace: string, local: boolean, agentId?: string): Promise<void> {
-  const [{ launchTuiCli }, { DEFAULT_BOOTSTRAP_FILENAME }, fs] = await Promise.all([
-    import("../tui/tui-launch.js"),
-    import("../agents/workspace.js"),
-    import("node:fs"),
-  ]);
+  const [{ launchTuiCli }, { DEFAULT_BOOTSTRAP_FILENAME }, fs, { readActiveGatewayLockIdentity }] =
+    await Promise.all([
+      import("../tui/tui-launch.js"),
+      import("../agents/workspace.js"),
+      import("node:fs"),
+      import("../infra/gateway-lock.js"),
+    ]);
   const hasBootstrap = fs.existsSync(path.join(workspace, DEFAULT_BOOTSTRAP_FILENAME));
+  // A configured rerun asks for local mode because its Gateway may be stopped. A running
+  // Gateway owns agent state and refuses `--local`, so the hatch connects to it instead.
+  const useLocal = local && !(await readActiveGatewayLockIdentity());
   restoreTerminalState("guided hatch tui", { resumeStdinIfPaused: false });
   try {
     // Fresh setup already started the Gateway; local mode would contend for its state lock.
     // No timeoutMs: the run-level TUI timeout overrides the configured agent
     // timeout for every turn in the session, not just the hatch message.
     await launchTuiCli({
-      ...(local ? { local: true } : {}),
+      ...(useLocal ? { local: true } : {}),
       deliver: false,
       ...(agentId ? { session: `agent:${agentId}:main` } : {}),
       // Seed the first-run hatch only when the workspace bootstrap exists;
@@ -56,8 +61,8 @@ async function launchHatchTui(workspace: string, local: boolean, agentId?: strin
 }
 
 export type GuidedOnboardingHandoff =
-  | { workspace: string; next: "browser" }
-  | { workspace: string; next: "foreground-gateway"; agentId?: string }
+  | { next: "browser" }
+  | { next: "foreground-gateway"; agentId?: string }
   | { workspace: string; next: "hatch"; local: boolean; agentId?: string }
   | { workspace: string; next: "chat"; agentName?: string };
 
@@ -68,8 +73,6 @@ export type GuidedOnboardingHandoffDeps = {
     acceptRisk: boolean,
     agentName?: string,
   ) => Promise<void>;
-  launchHatchTui?: (workspace: string) => Promise<void>;
-  runForegroundGateway?: typeof import("./onboard-quickstart-host.js").runQuickstartForegroundGateway;
 };
 
 export async function runGuidedOnboardingHandoff(
@@ -82,10 +85,8 @@ export async function runGuidedOnboardingHandoff(
     return;
   }
   if (handoff.next === "foreground-gateway") {
-    const runForegroundGateway =
-      deps.runForegroundGateway ??
-      (await import("./onboard-quickstart-host.js")).runQuickstartForegroundGateway;
-    await runForegroundGateway({
+    const { runQuickstartForegroundGateway } = await import("./onboard-quickstart-host.js");
+    await runQuickstartForegroundGateway({
       runtime,
       ...(handoff.agentId ? { agentId: handoff.agentId } : {}),
       ...(opts.suppressGatewayTokenOutput ? { suppressTokenOutput: true } : {}),
@@ -95,11 +96,7 @@ export async function runGuidedOnboardingHandoff(
   // Interactive surfaces start only after the wizard lifecycle restores stdin
   // so the TUI (or recovery chat) receives a clean TTY.
   if (handoff.next === "hatch") {
-    if (deps.launchHatchTui) {
-      await deps.launchHatchTui(handoff.workspace);
-    } else {
-      await launchHatchTui(handoff.workspace, handoff.local, handoff.agentId);
-    }
+    await launchHatchTui(handoff.workspace, handoff.local, handoff.agentId);
     return;
   }
   if (handoff.next === "browser") {

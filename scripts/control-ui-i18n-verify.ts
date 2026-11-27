@@ -4,7 +4,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import {
   loadControlUiTranslationMemory,
   materializePreparedControlUiLocaleCatalog,
@@ -16,12 +16,16 @@ import {
   readControlUiSourceCatalog,
 } from "./lib/control-ui-i18n-catalog.ts";
 import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";
-import { syncControlUiRawCopyBaseline } from "./lib/control-ui-i18n-raw-copy.ts";
+import {
+  CONTROL_UI_TEST_FILE_PATTERN,
+  syncControlUiRawCopyBaseline,
+} from "./lib/control-ui-i18n-raw-copy.ts";
 import {
   compareStringArrays,
   extractTranslationPlaceholders,
 } from "./lib/control-ui-i18n-sync-plan.ts";
 import { loadControlUiPluginCatalogs } from "./lib/control-ui-plugin-i18n-catalog.ts";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { collectSourceFileContents } from "./lib/source-file-scan-cache.mts";
 
@@ -35,9 +39,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const I18N_ASSETS_DIR = path.join(ROOT, "ui", "src", "i18n", ".i18n");
 const FALLBACK_BASELINE_PATH = path.join(I18N_ASSETS_DIR, "catalog-fallbacks.json");
 const FALLBACK_BASELINE_VERSION = 1;
-const CONTROL_UI_TEST_FILE_PATTERN = /\.(?:test|browser\.test|node\.test)\.tsx?$/u;
 const AUTOMATIONS_FEATURE_KEYS =
-  `sessionsView.showCronSessions sessionsView.subagentPrefix sessionsView.automationPrefix agents.cronPanel.schedulerSubtitle agents.cronPanel.agentJobsTitle configForm.sections.cron.label configView.sections.cron subtitles.automation memoryPage.dreaming.intro attention.cronFailed attention.cronOverdue palette.items.scheduled`.split(
+  `sessionsView.showCronSessions sessionsView.subagentPrefix sessionsView.automationPrefix agents.cronPanel.schedulerSubtitle agents.cronPanel.agentJobsTitle configForm.sections.cron.label configView.sections.cron subtitles.automation memoryPage.dreaming.intro nav.automationFailure palette.items.scheduled`.split(
     " ",
   );
 
@@ -213,6 +216,12 @@ async function buildCatalogFallbackBaseline(
     for (const [index, entry] of CONTROL_UI_LOCALE_ENTRIES.entries()) {
       const memoryPath = path.join(I18N_ASSETS_DIR, `${entry.locale}.tm.jsonl`);
       if (!existsSync(memoryPath)) {
+        // A newly registered source-only locale has no memory until its own refresh
+        // worker creates it; sibling workers must not block that bootstrap. The
+        // aggregate sync and check still require every locale's memory.
+        if (options.allowCatalogDrift) {
+          continue;
+        }
         throw new Error(`${toRepoPath(memoryPath)} does not contain ${entry.locale} translations`);
       }
       const memory = loadControlUiTranslationMemory(memoryPath);
@@ -293,9 +302,16 @@ async function verifyControlUiSourceCatalogShape() {
 
 export async function verifyControlUiPluginCatalogs(repoRoot = ROOT) {
   const summaries = [];
+  const sharedSource = flattenControlUiCatalog(loadControlUiSourceCatalog(), "en");
   const supportedLocales = new Set<string>(CONTROL_UI_LOCALE_ENTRIES.map(({ locale }) => locale));
   for (const plugin of await loadControlUiPluginCatalogs(repoRoot)) {
     const sourceFlat = flattenControlUiCatalog(plugin.source, `${plugin.id}:en`);
+    for (const [key, text] of sourceFlat) {
+      const shared = sharedSource.get(key);
+      if (shared !== undefined && shared !== text) {
+        throw new Error(`${plugin.id}:${key} disagrees with the shared English catalog`);
+      }
+    }
     const localeFlats = new Map<string, Map<string, string>>();
     let unusedTranslations = 0;
     for (const [locale, translations] of Object.entries(plugin.translations)) {
@@ -371,7 +387,7 @@ export async function syncControlUiCatalogFallbackBaseline(options: {
 }
 
 export async function verifyRuntimeLocaleConfig() {
-  const registryPath = path.join(ROOT, "ui", "src", "i18n", "lib", "registry.ts");
+  const registryPath = path.join(ROOT, "src", "shared", "control-ui-locale.ts");
   const registry = (await import(pathToFileURL(registryPath).href)) as {
     SUPPORTED_LOCALES: readonly string[];
   };
@@ -429,7 +445,7 @@ async function main() {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   await main().catch((error: unknown) => {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);

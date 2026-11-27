@@ -26,11 +26,7 @@ type MatrixHttpRequestParams = {
 };
 
 export class MatrixAuthedHttpClient {
-  private readonly params: MatrixAuthedHttpClientParams;
-
-  constructor(params: MatrixAuthedHttpClientParams) {
-    this.params = { ...params };
-  }
+  constructor(private readonly params: MatrixAuthedHttpClientParams) {}
 
   private async request(params: MatrixHttpRequestParams) {
     const { captureRequestAuthority, captureSendCurrentness, ...auth } = this.params;

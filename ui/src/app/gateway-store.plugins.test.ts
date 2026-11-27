@@ -1,5 +1,6 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginsUiDescriptorsResult } from "../../../packages/gateway-protocol/src/schema/plugins.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
@@ -14,14 +15,38 @@ import type { ApplicationGatewayConnectOptions } from "./gateway.ts";
 import { createMentionsCapability } from "./mentions.ts";
 import { loadSettings } from "./settings.ts";
 
+function capabilities(
+  generation: number,
+  overrides: Partial<Required<PluginsUiDescriptorsResult>> = {},
+) {
+  return {
+    ok: true,
+    generation,
+    descriptors: [],
+    methods: ["plugins.reload"],
+    controlUiTabs: [],
+    controlUiWidgetKinds: [],
+    pluginSurfaceUrls: {},
+    ...overrides,
+  };
+}
+
 describe("plugin capabilities", () => {
-  beforeEach(stubGatewayStoreTestGlobals);
-  afterEach(() => vi.unstubAllGlobals());
+  let gateway: ReturnType<typeof createGatewayStoreTestStore>["gateway"];
+  let current: ReturnType<typeof createGatewayStoreTestStore>["current"];
+  let clients: ReturnType<typeof createGatewayStoreTestStore>["clients"];
+  beforeEach(() => {
+    stubGatewayStoreTestGlobals();
+    ({ gateway, current, clients } = createGatewayStoreTestStore());
+    gateway.start();
+  });
+  afterEach(() => {
+    gateway.stop();
+    vi.unstubAllGlobals();
+  });
 
   it("refreshes plugin methods and surfaces on the existing connection", async () => {
-    const { gateway, clients, current } = createGatewayStoreTestStore();
-    gateway.start();
-    current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
+    current().testOptions.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
     const sessionKey = gateway.snapshot.sessionKey;
     const before = gateway.snapshot;
     const publications = new Map<number, boolean>();
@@ -33,31 +58,21 @@ describe("plugin capabilities", () => {
         );
       }
     });
-    const capabilities = {
-      ok: true,
-      generation: 7,
-      descriptors: [],
+    const published = capabilities(7, {
       methods: ["plugins.reload", "plugin.notes.read"],
       controlUiTabs: [{ pluginId: "notes", id: "notes", label: "Notes" }],
       controlUiWidgetKinds: [{ pluginId: "notes", kind: "notes:card", label: "Note" }],
-      pluginSurfaceUrls: {},
-    };
-    current().request.mockResolvedValue(capabilities);
-    current().opts.onEvent?.(createGatewayEvent("plugins.changed", { generation: 7 }));
+    });
+    current().request.mockResolvedValue(published);
+    current().testOptions.onEvent?.(createGatewayEvent("plugins.changed", { generation: 7 }));
     await vi.waitFor(() => expect(gateway.snapshot.pluginCapabilities?.generation).toBe(7));
     expect(gateway.snapshot.hello).toMatchObject({
-      features: { methods: capabilities.methods },
-      controlUiTabs: capabilities.controlUiTabs,
-      controlUiWidgetKinds: capabilities.controlUiWidgetKinds,
+      features: { methods: published.methods },
+      controlUiTabs: published.controlUiTabs,
+      controlUiWidgetKinds: published.controlUiWidgetKinds,
     });
-    current().request.mockResolvedValue({
-      ...capabilities,
-      generation: 8,
-      methods: ["plugins.reload"],
-      controlUiTabs: [],
-      controlUiWidgetKinds: [],
-    });
-    current().opts.onEvent?.(createGatewayEvent("plugins.changed", { generation: 8 }));
+    current().request.mockResolvedValue(capabilities(8));
+    current().testOptions.onEvent?.(createGatewayEvent("plugins.changed", { generation: 8 }));
     await vi.waitFor(() => expect(gateway.snapshot.hello?.controlUiTabs).toEqual([]));
     expect(gateway.snapshot).not.toBe(before);
     expect(gateway.snapshot.hello).toBe(before.hello);
@@ -70,23 +85,16 @@ describe("plugin capabilities", () => {
     expect(gateway.snapshot.phase).toBe("connected");
     expect(clients).toHaveLength(1);
     expect(current().stopped).toBe(0);
-    gateway.stop();
   });
 
   it.each([
     { boundary: "replacement", event: "plugins.changed" },
     { boundary: "same-client reconnect", event: "plugins.controlUi.changed" },
   ])("discards a $event capability response after $boundary", async ({ boundary, event }) => {
-    const { gateway, current } = createGatewayStoreTestStore();
-    gateway.start();
-    current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
-    let resolve!: (value: unknown) => void;
-    current().request.mockReturnValue(
-      new Promise((done) => {
-        resolve = done;
-      }),
-    );
-    current().opts.onEvent?.(
+    current().testOptions.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
+    const pending = createDeferred<unknown>();
+    current().request.mockReturnValue(pending.promise);
+    current().testOptions.onEvent?.(
       createGatewayEvent(
         event,
         event === "plugins.changed" ? { generation: 7 } : { revision: "off" },
@@ -98,47 +106,25 @@ describe("plugin capabilities", () => {
     if (boundary === "replacement") {
       gateway.connect();
     } else {
-      current().opts.onClose?.({ code: 1006, reason: "disconnected", willRetry: true });
+      current().testOptions.onClose?.({ code: 1006, reason: "disconnected", willRetry: true });
     }
-    current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
-    resolve({
-      ok: true,
-      generation: 7,
-      descriptors: [],
-      methods: ["plugin.retired.read"],
-      controlUiTabs: [],
-      controlUiWidgetKinds: [],
-      pluginSurfaceUrls: {},
-    });
+    current().testOptions.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
+    pending.resolve(capabilities(7, { methods: ["plugin.retired.read"] }));
     await vi.dynamicImportSettled();
     expect(gateway.snapshot.pluginCapabilities).toBeNull();
     expect(gateway.snapshot.hello?.features?.methods).toBeUndefined();
-    gateway.stop();
   });
 
   it("ignores malformed plugin change events", async () => {
-    const { gateway, current } = createGatewayStoreTestStore();
-    gateway.start();
-    current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
-    const pending: Array<{ resolve: (value: unknown) => void; reject: (error: Error) => void }> =
-      [];
-    current().request.mockImplementation(
-      () =>
-        new Promise((resolve, reject) => {
-          pending.push({ resolve, reject });
-        }),
-    );
-    const capabilities = (generation: number) => ({
-      ok: true,
-      generation,
-      descriptors: [],
-      methods: ["plugins.reload"],
-      controlUiTabs: [],
-      controlUiWidgetKinds: [],
-      pluginSurfaceUrls: {},
+    current().testOptions.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
+    const pending: ReturnType<typeof createDeferred<unknown>>[] = [];
+    current().request.mockImplementation(() => {
+      const request = createDeferred<unknown>();
+      pending.push(request);
+      return request.promise;
     });
     const changed = (generation: unknown) =>
-      current().opts.onEvent?.(createGatewayEvent("plugins.changed", { generation }));
+      current().testOptions.onEvent?.(createGatewayEvent("plugins.changed", { generation }));
 
     changed(7);
     await vi.waitFor(() => expect(pending).toHaveLength(1));
@@ -148,22 +134,23 @@ describe("plugin capabilities", () => {
     pending[0]!.resolve(capabilities(7));
     await vi.waitFor(() => expect(gateway.snapshot.pluginCapabilities?.generation).toBe(7));
 
-    current().opts.onEvent?.(createGatewayEvent("plugins.controlUi.changed", { revision: "off" }));
+    current().testOptions.onEvent?.(
+      createGatewayEvent("plugins.controlUi.changed", { revision: "off" }),
+    );
     await vi.waitFor(() => expect(pending).toHaveLength(2));
-    current().opts.onEvent?.(createGatewayEvent("plugins.controlUi.changed", { revision: 42 }));
+    current().testOptions.onEvent?.(
+      createGatewayEvent("plugins.controlUi.changed", { revision: 42 }),
+    );
     await vi.dynamicImportSettled();
     expect(pending).toHaveLength(2);
     pending[1]!.resolve(capabilities(8));
     await vi.waitFor(() => expect(gateway.snapshot.pluginCapabilities?.generation).toBe(8));
-    gateway.stop();
   });
 
   it("preserves an in-flight Inbox read across capability publication", async () => {
-    const { gateway, current } = createGatewayStoreTestStore();
-    gateway.start();
     const auth = { role: "operator", scopes: ["operator.read"] };
     const server = { bootId: "inbox-boot", connId: "inbox-connection" };
-    current().opts.onHello?.({
+    current().testOptions.onHello?.({
       ...GATEWAY_STORE_TEST_HELLO,
       auth,
       server,
@@ -171,6 +158,7 @@ describe("plugin capabilities", () => {
       snapshot: {
         presence: [
           {
+            ts: 0,
             instanceId: current().instanceId,
             user: { id: "reader", identity: { type: "profile", id: "reader" } },
           },
@@ -183,22 +171,19 @@ describe("plugin capabilities", () => {
         return inboxRead.promise;
       }
       if (method === "plugins.uiDescriptors") {
-        return Promise.resolve({
-          ok: true,
-          generation: 1,
-          descriptors: [],
-          methods: ["mentions.list", "plugin.notes.read"],
-          controlUiTabs: [{ pluginId: "notes", id: "notes", label: "Notes" }],
-          controlUiWidgetKinds: [],
-          pluginSurfaceUrls: {},
-        });
+        return Promise.resolve(
+          capabilities(1, {
+            methods: ["mentions.list", "plugin.notes.read"],
+            controlUiTabs: [{ pluginId: "notes", id: "notes", label: "Notes" }],
+          }),
+        );
       }
       throw new Error(`Unexpected request: ${method}`);
     });
     const inbox = createMentionsCapability(gateway);
     try {
       await vi.waitFor(() => expect(current().request).toHaveBeenCalledWith("mentions.list", {}));
-      current().opts.onEvent?.(createGatewayEvent("plugins.changed", { generation: 1 }));
+      current().testOptions.onEvent?.(createGatewayEvent("plugins.changed", { generation: 1 }));
       await vi.waitFor(() => expect(gateway.snapshot.pluginCapabilities?.generation).toBe(1));
       expect(gateway.snapshot.hello?.auth).toBe(auth);
       expect(gateway.snapshot.hello?.server).toBe(server);
@@ -223,7 +208,6 @@ describe("plugin capabilities", () => {
       ).toHaveLength(1);
     } finally {
       inbox.dispose();
-      gateway.stop();
     }
   });
 });
@@ -269,9 +253,9 @@ describe("warm admission ownership", () => {
     window.dispatchEvent(new Event("pagehide"));
     const { gateway, current } = createGatewayStoreTestStore({ settings });
     gateway.connect();
-    expect(current().opts.offlineRecoveryScope).toBe("account-a");
-    expect(current().opts.password).toBeUndefined();
-    expect(current().opts.token).toBeUndefined();
+    expect(current().testOptions.offlineRecoveryScope).toBe("account-a");
+    expect(current().testOptions.password).toBeUndefined();
+    expect(current().testOptions.token).toBeUndefined();
     expect(gateway.snapshot.phase).toBe("connecting");
     gateway.stop();
   });
@@ -302,14 +286,14 @@ describe("warm admission ownership", () => {
       const bytes = localStorage.getItem(key);
       try {
         gateway.connect(overrides);
-        expect(current().opts.offlineRecoveryScope).toBe(admitted ? "account-a" : undefined);
+        expect(current().testOptions.offlineRecoveryScope).toBe(admitted ? "account-a" : undefined);
         const replacement = { ...saved, recoveryScope: replacementScope };
         if (admitted) {
           persistBootRecord(replacement);
           window.dispatchEvent(new Event("pagehide"));
           persistBootRecord(replacement);
         }
-        current().opts.onClose?.({
+        current().testOptions.onClose?.({
           code: 4008,
           reason: "rejected",
           willRetry: false,
@@ -341,7 +325,7 @@ describe("warm admission ownership", () => {
         const { gateway, current } = createGatewayStoreTestStore({ settings });
         try {
           gateway.connect();
-          current().opts.onHello?.({
+          current().testOptions.onHello?.({
             type: "hello-ok",
             protocol: 1,
             auth: { method: "token", role: "operator", scopes: [], recoveryScope: "live-owner" },
@@ -354,7 +338,7 @@ describe("warm admission ownership", () => {
           localStorage.setItem(key, JSON.stringify(replacement));
           persistBootRecord(replacement);
           if (transition === "rejection") {
-            current().opts.onClose?.({
+            current().testOptions.onClose?.({
               code: 4008,
               reason: "rejected",
               willRetry: false,

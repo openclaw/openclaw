@@ -1,13 +1,12 @@
 import path from "node:path";
-import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   resolveAgentWorkspaceDir,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
-  buildSessionEntry,
   listSessionTranscriptCorpusEntriesForAgent,
   resolveMemorySessionTargetsAsync,
+  streamSessionEntry,
 } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
   isFileMissingError,
@@ -46,6 +45,7 @@ import { collectTranscriptWrites } from "./memory-forget-curated-writes.js";
 import { planMemoryIndex } from "./memory-forget-index-sources.js";
 import { summarizeParticipantMatches, type MemoryForgetReport } from "./memory-forget-report.js";
 import { withMemoryForgetWorker } from "./memory-forget-worker.js";
+import { commitMemoryRewrite } from "./memory-rewrite.js";
 import {
   listWorkspaceDirectory,
   listWorkspaceMemoryFiles,
@@ -54,7 +54,7 @@ import {
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import { isMemorySessionIndexable } from "./memory/manager-session-sync-state.js";
 import { SESSION_CORPUS_RELATIVE_DIR } from "./session-ingestion.js";
-import { commitMemoryContent, hashMemoryContent } from "./short-term-promotion-memory-write.js";
+import { hashMemoryContent } from "./short-term-promotion-memory-write.js";
 import { readPhaseSignalStore, writePhaseSignalStore } from "./short-term-promotion-store.js";
 import type { ShortTermRecallEntry } from "./short-term-promotion-types.js";
 
@@ -242,6 +242,7 @@ async function forgetWorkspaceMemory(
     readMemoryPreimages(workspaceDir),
     listMemoryArtifactProvenance({ workspaceDir }),
     listSessionTranscriptCorpusEntriesForAgent(params.agentId, {
+      config: params.cfg,
       readOnly: true,
       includeContentRevision: false,
     }),
@@ -315,7 +316,10 @@ async function forgetWorkspaceMemory(
       (entry.artifactKind === "archive-artifact" &&
         (!entry.sessionKind || entry.sessionKind === "unknown"))
     ) {
-      const parsed = await buildSessionEntry(entry.sessionFile, {
+      // Summaries carry provenance and observe messages without retaining the export.
+      const parsed = await streamSessionEntry(entry.sessionFile, {
+        generatedByDreamingNarrative: entry.generatedByDreamingNarrative === true,
+        generatedByCronRun: entry.generatedByCronRun === true,
         ...(entry.transcriptSource === "sqlite"
           ? { agentId: entry.agentId, sessionId: entry.sessionId, storePath: entry.storePath }
           : {}),
@@ -408,10 +412,6 @@ async function forgetWorkspaceMemory(
     return false;
   };
   const chunkIds = indexPlan.chunks.map((chunk) => chunk.id);
-  const extensionPath =
-    chunkIds.length > 0 && indexPlan.hasVectorTable
-      ? expectDefined(indexPlan.extensionPath, "memory forget vector preparation")
-      : undefined;
   const lineage = {
     agentId: params.agentId,
     sessionIds: [...sessionIds],
@@ -421,7 +421,11 @@ async function forgetWorkspaceMemory(
   const purged = await withMemoryForgetWorker(
     context.databaseOptions,
     execution,
-    { kind: "forget", prepareTombstones: !context.tombstoned, extensionPath },
+    {
+      kind: "forget",
+      prepareTombstones: !context.tombstoned,
+      extensionPath: indexPlan.extensionPath,
+    },
     async (scope) => {
       if (!context.tombstoned) {
         const marked = await scope.execute({ type: "forget.mark", input: lineage });
@@ -481,9 +485,10 @@ async function forgetWorkspaceMemory(
     });
   }
   for (const rewrite of [...memoryRewrites, ...corpusRewrites]) {
-    await commitMemoryContent({
+    await commitMemoryRewrite({
       workspaceDir,
       filePath: rewrite.absolutePath,
+      relativePath: rewrite.relativePath,
       tempPrefix: `${path.basename(rewrite.absolutePath)}.forget`,
       expectedHash: hashMemoryContent(rewrite.expectedContent),
       expectedContent: rewrite.expectedContent,

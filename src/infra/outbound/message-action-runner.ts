@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -8,6 +9,7 @@ import type { AgentToolResult } from "../../agents/runtime/index.js";
 import {
   readStringArrayParam,
   readToolStringParam,
+  jsonResult,
   textResult,
 } from "../../agents/tools/common.js";
 import {
@@ -18,7 +20,6 @@ import { isFencedProviderReadAction } from "../../channels/plugins/message-actio
 import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
@@ -48,7 +49,7 @@ import {
 } from "./message-action-contracts.js";
 import { MessageActionDeniedError } from "./message-action-denial.js";
 import {
-  assertMessageDeliveryCurrent,
+  captureMessageDeliveryAuthority,
   beforeMessageDeliveryAttempt,
   executeMessagePlugin,
   executeMessagePoll,
@@ -59,6 +60,7 @@ import {
   waitForLocalMessageMedia,
   normalizeSandboxMediaParams,
   parseJsonMessageParam,
+  requirePresentationTableCaptions,
   resolveAttachmentMediaPolicy,
   resolveExtraActionMediaSourceParamKeysAsync,
 } from "./message-action-params.js";
@@ -79,7 +81,16 @@ const loadClawHubRecommendations = createLazyRuntimeModule(
 );
 
 export function getToolResult(result: MessageActionResult): AgentToolResult<unknown> | undefined {
-  return "toolResult" in result ? result.toolResult : undefined;
+  const toolResult = "toolResult" in result ? result.toolResult : undefined;
+  if (result.kind !== "send" || !result.accountId) {
+    return toolResult;
+  }
+  const response = toolResult ?? jsonResult(result.payload);
+  // Successful-send extraction must see the routed account, including bindings.
+  return {
+    ...response,
+    details: { ...asOptionalRecord(response.details), accountId: result.accountId },
+  };
 }
 
 function withMessageTargetPreparation<T>(
@@ -316,7 +327,13 @@ async function handleInternalSourceReplySendAction(
         input.workspaceDir ?? (agentId ? resolveAgentWorkspaceDir(input.cfg, agentId) : undefined),
     });
     throwIfAborted(input.abortSignal);
-    if (!normalizeOptionalString(params.message)) {
+    // Successful cards speak for themselves. Keep lookup failures visible, and
+    // preserve any explicit message or media caption supplied by the caller.
+    if (
+      recommendations.cards.length === 0 &&
+      !normalizeOptionalString(params.message) &&
+      !normalizeOptionalString(params.caption)
+    ) {
       params.message = recommendations.text;
     }
   }
@@ -357,17 +374,15 @@ async function handleInternalSourceReplySendAction(
     actionParams: params,
     input,
     agentId,
+    // Only verified Gateway-authored cards may satisfy a card-only send.
+    resolvedChannelData: recommendations?.cards.length
+      ? {
+          ...asOptionalRecord(params.channelData),
+          [CLAWHUB_RECOMMENDATIONS_CHANNEL_DATA_KEY]: recommendations.cards,
+        }
+      : undefined,
   });
   let sourceReplyPayload = sourceReply.payload;
-  if (recommendations) {
-    sourceReplyPayload = {
-      ...sourceReplyPayload,
-      channelData: {
-        ...sourceReplyPayload.channelData,
-        [CLAWHUB_RECOMMENDATIONS_CHANNEL_DATA_KEY]: recommendations.cards,
-      },
-    };
-  }
   const requestedMediaCount =
     resolveSendableOutboundReplyParts(sourceReplyPayload).mediaUrls.length;
   if (!dryRun && requestedMediaCount > 0) {
@@ -392,6 +407,7 @@ async function handleInternalSourceReplySendAction(
       requesterSenderE164: input.requesterSenderE164 ?? undefined,
       mediaAccess,
       workspaceMediaAccess: input.workspaceMediaAccess,
+      htmlPublication: "explicit",
       sandboxRoot: input.sandboxRoot,
       sandboxContainerWorkdir: input.sandboxContainerWorkdir,
     })(sourceReplyPayload);
@@ -446,7 +462,7 @@ async function handleInternalSourceReplySendAction(
           sessionId: input.sessionId,
           storePath: resolveSessionStorePathCore(input.cfg.session?.store, { agentId }),
         },
-        () => assertMessageDeliveryCurrent(input),
+        captureMessageDeliveryAuthority(input),
         persist,
       );
     } else {
@@ -470,12 +486,12 @@ async function handleInternalSourceReplySendAction(
     dryRun,
   };
   const sink = payload.sourceReplySink ? ` via ${payload.sourceReplySink}` : "";
-  // A WebChat user turn shows this transcript to its user. An inter-session result turn may
-  // have no viewer here, so claim no visible delivery.
+  // A WebChat transcript shows this reply to its user. An inter-session turn in a session bound
+  // to an external chat may have no viewer here, so claim no visible delivery.
   const receipt = input.sourceReplyTranscriptOnly
     ? payload.dryRun
-      ? "Prepared reply for the current session transcript."
-      : `Recorded reply in the current session transcript${sink}. This send did not deliver it to an external channel.`
+      ? "Prepared reply for the current chat history."
+      : `Recorded reply in the current chat history${sink}. This send did not deliver it to an external channel.`
     : `${payload.dryRun ? "Prepared" : "Sent"} visible reply to the current source conversation${sink}.`;
   const cards = readClawHubRecommendations(payload.sourceReply.channelData);
   // The model sees content, not private details. Report verified state even when it supplied prose.
@@ -517,6 +533,7 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
       ? resolveSessionAgentId({ sessionKey: input.sessionKey, config: cfg })
       : undefined);
   parseJsonMessageParam(params, "presentation");
+  requirePresentationTableCaptions(params);
   parseJsonMessageParam(params, "delivery");
   parseJsonMessageParam(params, "interactive");
 
@@ -618,10 +635,10 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
           const preserveSendBuffer =
             action === "send" &&
             Boolean(gateway) &&
-            (channelPlugin?.actions?.resolveExecutionMode?.({
+            (channelPlugin.actions?.resolveExecutionMode?.({
               action: "send",
             }) === "gateway" ||
-              channelPlugin?.outbound?.deliveryMode === "gateway");
+              channelPlugin.outbound?.deliveryMode === "gateway");
 
           const hydrateActionAttachmentParams = () =>
             hydrateAttachmentParamsForAction({
@@ -636,7 +653,8 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
               extraParamKeys: extraActionMediaSourceParamKeys,
             });
 
-          if (action !== "send") {
+          const stagesBuffer = action === "send" || action === "thread-reply";
+          if (!stagesBuffer) {
             await hydrateActionAttachmentParams();
           }
 
@@ -652,7 +670,7 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
             plugin: channelPlugin,
           });
 
-          if (action === "send") {
+          if (stagesBuffer) {
             // Target validation must finish before buffer staging, which can perform
             // filesystem reads and mutate the outbound action payload.
             await hydrateActionAttachmentParams();
@@ -689,15 +707,7 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
           const deliveryInput = context.input;
           context.input = {
             ...deliveryInput,
-            assertDirectAdapterHandoff: composeSessionSourceAssertion(
-              [deliveryInput.assertDirectAdapterHandoff],
-              (assertSource) => {
-                throwIfAborted(deliveryInput.abortSignal);
-                assertSource();
-                deliveryInput.messageActionAuthorization?.scheduled?.assertCurrent();
-                deliveryInput.messageActionAuthorization?.deliveryAttempt?.assertCurrent();
-              },
-            ),
+            assertDirectAdapterHandoff: captureMessageDeliveryAuthority(deliveryInput),
           };
         }
       }

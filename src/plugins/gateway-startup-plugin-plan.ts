@@ -13,13 +13,16 @@ import {
   normalizePluginsConfigWithResolverCore,
   type NormalizePluginId,
 } from "./config-normalization-shared.js";
-import { resolveEffectivePluginActivationState } from "./config-state.js";
+import {
+  resolveEffectivePluginActivationState,
+  resolveSelectedContextEnginePluginIdFromConfig,
+  withContextEngineOwner,
+} from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import type { PluginDiscoveryResult } from "./discovery.js";
 import { canStartGatewayStartupPlugin } from "./gateway-startup-plugin-activation.js";
 import {
   resolveAuthorizedGatewayStartupDreamingPluginIds,
-  resolveContextEngineSlotStartupPluginId,
   resolveMemorySlotStartupPluginId,
   shouldConsiderForGatewayStartup,
 } from "./gateway-startup-plugin-config.js";
@@ -30,9 +33,11 @@ import {
   collectConfiguredMemoryEmbeddingProviderIds,
   collectConfiguredVoiceProviderIds,
   collectConfiguredWebSearchProviderIds,
+  isWebSearchProviderAutoSelected,
 } from "./gateway-startup-plugin-providers.js";
 import { collectConfiguredSpeechProviderIds } from "./gateway-startup-speech-providers.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
+import { resolveMemoryBackendPolicyIds } from "./memory-backend.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { createPluginRegistryIdNormalizer } from "./plugin-registry-contributions.js";
 import type { PluginRegistrySnapshot } from "./plugin-registry-snapshot.js";
@@ -40,7 +45,7 @@ import { collectConfiguredStorageProviderIds } from "./storage-provider-manifest
 import { collectConfiguredWorkerProviderIds } from "./worker-provider-config.js";
 import { normalizeWorkerProviderIds } from "./worker-provider-id.js";
 
-export function resolveChannelPluginIdsFromRegistry(params: {
+function resolveChannelPluginIdsFromRegistry(params: {
   manifestRegistry: PluginManifestRegistry;
 }): string[] {
   const { manifestRegistry } = params;
@@ -78,15 +83,17 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   const normalizePluginId =
     params.normalizePluginId ??
     createPluginRegistryIdNormalizer(params.index, { manifestRegistry: params.manifestRegistry });
-  const pluginsConfig = normalizePluginsConfigWithResolverCore(
-    params.config.plugins,
+  const pluginsConfig = withContextEngineOwner(
+    normalizePluginsConfigWithResolverCore(params.config.plugins, normalizePluginId),
+    params.index.plugins,
     normalizePluginId,
   );
   // Startup must classify allowlist exceptions against the raw config snapshot,
   // not the auto-enabled effective snapshot, or configured-only channels can be
   // misclassified as explicit enablement.
-  const activationSourcePlugins = normalizePluginsConfigWithResolverCore(
-    activationSourceConfig.plugins,
+  const activationSourcePlugins = withContextEngineOwner(
+    normalizePluginsConfigWithResolverCore(activationSourceConfig.plugins, normalizePluginId),
+    params.index.plugins,
     normalizePluginId,
   );
   const activationSource = {
@@ -99,6 +106,7 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   const explicitlyDisabledChannelIds = new Set(
     listExplicitlyDisabledChannelIdsForConfig(params.config),
   );
+  const configuredSpeechProviderIds = collectConfiguredSpeechProviderIds(activationSourceConfig);
   const startupParams = {
     config: params.config,
     pluginsConfig,
@@ -107,8 +115,10 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
     requiredAgentHarnessRuntimes: new Set(
       collectConfiguredAgentHarnessRuntimes(activationSourceConfig),
     ),
-    configuredSpeechProviderIds: collectConfiguredSpeechProviderIds(activationSourceConfig),
+    configuredSpeechProviderIds,
+    autoSelectSpeechProvider: configuredSpeechProviderIds.size === 0,
     configuredWebSearchProviderIds: collectConfiguredWebSearchProviderIds(activationSourceConfig),
+    autoSelectWebSearchProvider: isWebSearchProviderAutoSelected(activationSourceConfig),
     configuredModelProviderIds: collectConfiguredAgentModelProviderIds(
       activationSourceConfig,
       params.manifestRegistry,
@@ -134,6 +144,18 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
     activationSourcePlugins,
     normalizePluginId,
   });
+  const memoryBackendStartupPolicyIds = new Set(
+    memorySlotStartupPluginId
+      ? resolveMemoryBackendPolicyIds({
+          ownerId: memorySlotStartupPluginId,
+          entries: activationSourcePlugins.entries,
+          allow: activationSourcePlugins.allow,
+          deny: activationSourcePlugins.deny,
+          manifests: params.manifestRegistry.plugins,
+          normalizeId: normalizePluginPolicyId,
+        })
+      : [],
+  );
   const startupDreamingPluginIds = resolveAuthorizedGatewayStartupDreamingPluginIds({
     config: params.config,
     pluginsConfig,
@@ -143,11 +165,12 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
     index: params.index,
     platform: params.platform,
   });
-  const contextEngineSlotStartupPluginId = resolveContextEngineSlotStartupPluginId({
-    activationSourceConfig,
+  const contextEngineSlotStartupPluginId = resolveSelectedContextEnginePluginIdFromConfig(
     activationSourcePlugins,
+    activationSourcePlugins.slots.contextEngine,
+    params.index.plugins,
     normalizePluginId,
-  });
+  );
   const pluginIds: string[] = [];
   for (const plugin of params.index.plugins) {
     const policyId = normalizePluginPolicyId(plugin.pluginId);
@@ -197,6 +220,7 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
         manifest,
         startupDreamingPluginIds,
         memorySlotStartupPluginId,
+        memoryBackendStartupPolicyIds,
         contextEngineSlotStartupPluginId,
       })
     ) {

@@ -73,6 +73,7 @@ describe("deprecated Mention Inbox signatures", () => {
           expect(transaction).toThrow(rollback);
           expect(f.broadcast).not.toHaveBeenCalled();
           expect(f.push).not.toHaveBeenCalled();
+          expect((await read(f.inbox, f.bobClient)).items).toEqual([]);
         }
         expect((await read(f.inbox, f.bobSecond)).items).toHaveLength(commit ? 1 : 0);
       }

@@ -13,11 +13,14 @@ import type {
 export function prepareMemoryPendingInputStore(
   binding: SessionActorStorageBinding,
   assertCurrent: () => void,
+  releaseActor?: () => Promise<void>,
 ) {
   const storage = binding.actor.storage!;
   const pending = new Set<Promise<unknown>>();
   const failures: unknown[] = [];
   let active = true;
+  let actorRelease: Promise<void> | undefined;
+  const releaseOwner = () => (actorRelease ??= releaseActor?.() ?? Promise.resolve());
   let revokeCustody = () => {};
   const assertOpen = () => {
     if (!active) {
@@ -59,7 +62,9 @@ export function prepareMemoryPendingInputStore(
     },
   };
   return {
+    sessionActor: binding,
     assertCurrent: assertOpen,
+    assertReadCurrent: assertOpen,
     withAdmission<T>(operation: () => Promise<T>, _reentrant: boolean): Promise<T> {
       assertOpen();
       return operation();
@@ -73,13 +78,22 @@ export function prepareMemoryPendingInputStore(
     },
     settled,
     retire(operation: Promise<void>) {
-      void track(operation);
+      void track(
+        (async () => {
+          try {
+            await operation;
+          } finally {
+            await releaseOwner();
+          }
+        })(),
+      );
     },
     async release() {
       try {
         await settled();
       } finally {
         active = false;
+        await releaseOwner();
       }
     },
     read(input: PendingInputRead) {
@@ -103,8 +117,11 @@ export function prepareMemoryPendingInputStore(
             { type: "session.pendingInput.mutate", input },
             {
               ...authority,
+              ...(input.kind === "finish" ? { assertCurrent: assertOpen } : {}),
               authorize(stage, hot, publication) {
-                binding.authority.authorize(stage, hot, publication);
+                if (input.kind !== "finish") {
+                  binding.authority.authorize(stage, hot, publication);
+                }
                 if (
                   isRecord(publication) &&
                   publication.kind === "pending-input-settlement-custody"

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { projectAnthropicTools } from "./anthropic-tool-projection.js";
+import { publishRuntimeToolInputSchema } from "./tool-schema-json-projection.js";
 
 describe("projectAnthropicTools", () => {
   it("retains same-original duplicates while sorting their descriptions", () => {
@@ -42,16 +43,20 @@ describe("projectAnthropicTools", () => {
     },
   );
 
-  it.each([
-    { name: "implicit dialect", dialect: undefined, definitionsKey: "$defs" },
-    {
-      name: "explicit draft-07",
-      dialect: "http://json-schema.org/draft-07/schema#",
-      definitionsKey: "definitions",
-    },
-  ])(
-    "preserves root constraints and tuple definitions for $name",
-    ({ dialect, definitionsKey }) => {
+  it.each(
+    [
+      { name: "implicit dialect", dialect: undefined, definitionsKey: "$defs" },
+      {
+        name: "explicit draft-07",
+        dialect: "http://json-schema.org/draft-07/schema#",
+        definitionsKey: "definitions",
+      },
+    ].flatMap(({ name, dialect, definitionsKey }) =>
+      ["runtime", "published"].map((mode) => ({ name, dialect, definitionsKey, mode })),
+    ),
+  )(
+    "preserves root constraints and tuple definitions for $name ($mode)",
+    ({ dialect, definitionsKey, mode }) => {
       const parameters = {
         ...(dialect ? { $schema: dialect } : {}),
         type: "object",
@@ -74,10 +79,10 @@ describe("projectAnthropicTools", () => {
         },
       };
       const original = structuredClone(parameters);
-      const projection = projectAnthropicTools(
-        [{ name: "select_range", description: "Select a range", parameters }],
-        (name) => name,
-      );
+      const source =
+        mode === "published" ? publishRuntimeToolInputSchema(parameters).schema : parameters;
+      const tools = [{ name: "select_range", description: "Select a range", parameters: source }];
+      const projection = projectAnthropicTools(tools, (name) => name);
 
       expect(projection.tools[0]?.inputSchema).toEqual({
         type: "object",
@@ -95,6 +100,12 @@ describe("projectAnthropicTools", () => {
         },
       });
       expect(parameters).toEqual(original);
+      if (mode === "published") {
+        expect(projectAnthropicTools(tools, (name) => name).tools[0]?.inputSchema).toBe(
+          projection.tools[0]?.inputSchema,
+        );
+        expect(source).toEqual(original);
+      }
     },
   );
 

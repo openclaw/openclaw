@@ -3,11 +3,10 @@ import { getEnvironmentData, setEnvironmentData } from "node:worker_threads";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
 import * as workerCpu from "../../src/infra/worker-cpu.js";
 
-type SqliteWorkerFault = {
-  name: string;
-  match: RegExp;
-  sql: string;
-};
+type SqliteWorkerFault = { match: RegExp } & (
+  | { name: string; sql: string }
+  | { exitOnMatch: number }
+);
 
 /** Register before fixture setup so retained workers inherit the disabled fault controls. */
 export function useSqliteWorkerFault(rules: readonly SqliteWorkerFault[]) {
@@ -58,7 +57,8 @@ export function useSqliteWorkerFault(rules: readonly SqliteWorkerFault[]) {
   afterAll(() => restore?.());
   return {
     enable(index = 0) {
-      Atomics.store(enabled, index, 1);
+      const rule = rules[index];
+      Atomics.store(enabled, index, rule && "exitOnMatch" in rule ? rule.exitOnMatch : 1);
     },
     disable,
   };

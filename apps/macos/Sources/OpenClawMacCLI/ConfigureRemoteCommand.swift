@@ -284,7 +284,7 @@ private func normalizeDirectURL(_ raw: String) -> URL? {
     let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     guard !host.isEmpty else { return nil }
     if scheme == "ws",
-       !isLoopbackHost(host),
+       !LoopbackHost.isLoopbackHost(host),
        !isTrustedPlaintextRemoteHost(host)
     {
         return nil
@@ -309,11 +309,6 @@ private func defaultPort(for url: URL) -> Int? {
     default:
         return nil
     }
-}
-
-private func isLoopbackHost(_ host: String) -> Bool {
-    let lower = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-    return lower == "localhost" || lower == "127.0.0.1" || lower == "::1"
 }
 
 private func isTrustedPlaintextRemoteHost(_ host: String) -> Bool {

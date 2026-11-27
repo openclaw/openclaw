@@ -1,17 +1,14 @@
 import { afterEach, expect, test, vi } from "vitest";
+import { awaitGateBeforeSettlement as beforeReply } from "../../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
-import {
-  resolveSqliteScope,
-  toDatabaseOptions,
-} from "../../config/sessions/session-accessor.sqlite-scope.js";
 import * as categories from "../../config/sessions/session-group-categories.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission-state.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { readSessionGroupCatalog } from "../session-group-catalog.js";
 import * as groups from "../session-groups.js";
 import { disposeSessionReadContexts } from "../session-read-contexts.test-support.js";
+import { loadGatewayTestConfig } from "../test-helpers.config-runtime.js";
 import { testState } from "../test-helpers.runtime-state.js";
 import {
   directSessionReq,
@@ -21,15 +18,23 @@ import { sessionLog } from "./sessions-shared.js";
 
 const { createSessionStoreDir, createSelectedGlobalSessionStore } =
   setupGatewaySessionsHandlerTestHarness();
+const key = "agent:main:dashboard:category";
+const groupNames = () => readSessionGroupCatalog().groups.map(({ name }) => name);
+const categoryAt = (storePath: string, sessionKey: string, agentId = "main") =>
+  loadSessionEntry({ agentId, storePath, sessionKey })?.category;
+async function expectOk<T = unknown>(...args: Parameters<typeof directSessionReq<T>>) {
+  const response = await directSessionReq<T>(...args);
+  expect(response.ok).toBe(true);
+  return response;
+}
 
 test.each(["create", "patch"] as const)(
   "keeps %s registration ahead of group deletion",
   async (operation) => {
     const { storePath } = await createSessionStoreDir();
-    const key = `agent:main:dashboard:registration-delete-${operation}`;
-    expect((await directSessionReq("sessions.groups.put", { names: ["Race"] })).ok).toBe(true);
+    await expectOk("sessions.groups.put", { names: ["Race"] });
     if (operation === "patch") {
-      expect((await directSessionReq("sessions.create", { agentId: "main", key })).ok).toBe(true);
+      await expectOk("sessions.create", { agentId: "main", key });
     }
     const entered = createDeferredCore();
     const release = createDeferredCore();
@@ -42,51 +47,28 @@ test.each(["create", "patch"] as const)(
       order.push("registered");
       return changed;
     });
-    const writing = directSessionReq(
-      operation === "create" ? "sessions.create" : "sessions.patch",
-      { agentId: "main", key, category: "Race" },
-    );
-    await Promise.race([
-      entered.promise,
-      writing.then(() => {
-        throw new Error("write did not enter registration");
-      }),
-    ]);
+    const writing = expectOk(`sessions.${operation}`, { agentId: "main", key, category: "Race" });
+    await beforeReply(entered.promise, writing, "write did not enter registration");
     const queued = createDeferredCore();
     const sweep = categories.updateSessionGroupCategoriesInWorker;
-    let waitingBehindRegistration = false;
     vi.spyOn(categories, "updateSessionGroupCategoriesInWorker").mockImplementation((params) => {
       const deleting = sweep(params);
-      const path = resolveOpenClawAgentSqlitePath(
-        toDatabaseOptions(resolveSqliteScope(params.scope)),
-      );
-      waitingBehindRegistration = (SQLITE_SESSION_WRITER_QUEUES.get(path)?.pending.length ?? 0) > 0;
       queued.resolve();
       return deleting;
     });
-    const deleting = directSessionReq("sessions.groups.delete", { name: "Race" }).then((result) => {
+    const deleting = expectOk("sessions.groups.delete", { name: "Race" }).then((result) => {
       order.push("deleted");
       return result;
     });
     try {
-      await Promise.race([
-        queued.promise,
-        deleting.then(() => {
-          throw new Error("delete did not enqueue its member sweep");
-        }),
-      ]);
+      await beforeReply(queued.promise, deleting, "delete did not enqueue its member sweep");
     } finally {
       release.resolve();
       await Promise.all([writing, deleting]);
     }
-    expect(waitingBehindRegistration).toBe(true);
-    expect((await writing).ok).toBe(true);
-    expect((await deleting).ok).toBe(true);
     expect(order).toEqual(["registered", "deleted"]);
-    expect(
-      loadSessionEntry({ agentId: "main", storePath, sessionKey: key })?.category,
-    ).toBeUndefined();
-    expect(readSessionGroupCatalog().groups.map(({ name }) => name)).not.toContain("Race");
+    expect(categoryAt(storePath, key)).toBeUndefined();
+    expect(groupNames()).not.toContain("Race");
   },
 );
 afterEach(async () => {
@@ -102,106 +84,68 @@ test("creates and patches first-use groups before publishing their invalidation"
     getSessionEventSubscriberConnIds: () => new Set(["group-observer"]),
     broadcastToConnIds: (_event: string, payload: { reason?: string }) => {
       if (payload.reason === "groups") {
-        observedGroups.push(readSessionGroupCatalog().groups.map(({ name }) => name));
+        observedGroups.push(groupNames());
       }
     },
   };
-  const key = "agent:main:dashboard:group-publication";
-  const created = await directSessionReq(
-    "sessions.create",
-    { agentId: "main", key, category: "Created" },
-    { context },
-  );
-  expect(created.ok).toBe(true);
+  await expectOk("sessions.create", { agentId: "main", key, category: "Created" }, { context });
   expect(observedGroups).toEqual([expect.arrayContaining(["Created"])]);
 
-  const patched = await directSessionReq(
-    "sessions.patch",
-    { key, category: "Patched" },
-    { context },
-  );
-  expect(patched.ok).toBe(true);
+  await expectOk("sessions.patch", { key, category: "Patched" }, { context });
   expect(observedGroups).toEqual([
     expect.arrayContaining(["Created"]),
     expect.arrayContaining(["Created", "Patched"]),
   ]);
-  expect(
-    (await directSessionReq("sessions.patch", { key, category: "Patched" }, { context })).ok,
-  ).toBe(true);
+  await expectOk("sessions.patch", { key, category: "Patched" }, { context });
   expect(observedGroups).toHaveLength(2);
 });
 
 test("joins rejected post-commit group registration before reporting durable create success", async () => {
   const { storePath } = await createSessionStoreDir();
-  const key = "agent:main:dashboard:group-warning";
   const entered = createDeferredCore();
   const registration = createDeferredCore<boolean>();
-  let registering = false;
-  vi.spyOn(groups, "ensureSessionGroupRegistered").mockImplementation(() => {
-    registering = true;
+  const register = vi.spyOn(groups, "ensureSessionGroupRegistered").mockImplementation(() => {
     entered.resolve();
     return registration.promise;
   });
   const warn = vi.spyOn(sessionLog, "warn").mockImplementation(() => {});
-  let replied = false;
-  const creating = directSessionReq(
+  const reply = vi.fn((payload: unknown) => payload);
+  const creating = expectOk(
     "sessions.create",
     { agentId: "main", key, category: "Retained" },
-    {
-      coercePayload: (payload) => {
-        replied = true;
-        return payload;
-      },
-    },
+    { coercePayload: reply },
   );
   try {
-    await Promise.race([
-      entered.promise,
-      creating.then(() => {
-        throw new Error("create finished before category registration");
-      }),
-    ]);
-    expect(loadSessionEntry({ agentId: "main", storePath, sessionKey: key })?.category).toBe(
-      "Retained",
-    );
-    expect(replied).toBe(false);
+    await beforeReply(entered.promise, creating, "create finished before category registration");
+    expect(categoryAt(storePath, key)).toBe("Retained");
+    expect(reply).not.toHaveBeenCalled();
   } finally {
-    if (registering) {
+    if (register.mock.calls.length) {
       registration.reject(new Error("registration unavailable"));
     } else {
       registration.resolve(false);
     }
     await creating;
   }
-  expect((await creating).ok).toBe(true);
-  expect(loadSessionEntry({ agentId: "main", storePath, sessionKey: key })?.category).toBe(
-    "Retained",
-  );
-  expect(warn).toHaveBeenCalledWith(
-    expect.stringContaining(
-      "retry the same category assignment to repair the catalog: registration unavailable",
-    ),
-  );
-  vi.mocked(groups.ensureSessionGroupRegistered).mockRestore();
-  expect((await directSessionReq("sessions.patch", { key, category: "Retained" })).ok).toBe(true);
-  expect(readSessionGroupCatalog().groups.map(({ name }) => name)).toContain("Retained");
+  expect(categoryAt(storePath, key)).toBe("Retained");
+  const warning =
+    "retry the same category assignment to repair the catalog: registration unavailable";
+  expect(warn).toHaveBeenCalledWith(expect.stringContaining(warning));
+  register.mockRestore();
+  await expectOk("sessions.patch", { key, category: "Retained" });
+  expect(groupNames()).toContain("Retained");
 });
 
 test("does not register an unapplied category on the reset-main creation path", async () => {
   await createSessionStoreDir();
   testState.sessionConfig = { dmScope: "main" };
-  expect(
-    (await directSessionReq("sessions.create", { agentId: "main", key: "agent:main:main" })).ok,
-  ).toBe(true);
-  const reset = await directSessionReq<{ key: string; entry: { category?: string } }>(
-    "sessions.create",
-    {
-      parentSessionKey: "agent:main:main",
-      emitCommandHooks: true,
-      category: "Unapplied",
-    },
-  );
-  expect(reset.ok).toBe(true);
+  setRuntimeConfigSnapshot(loadGatewayTestConfig());
+  await expectOk("sessions.create", { agentId: "main", key: "agent:main:main" });
+  const reset = await expectOk<{ key: string; entry: { category?: string } }>("sessions.create", {
+    parentSessionKey: "agent:main:main",
+    emitCommandHooks: true,
+    category: "Unapplied",
+  });
   expect(reset.payload?.key).toBe("agent:main:main");
   expect(reset.payload?.entry.category).toBeUndefined();
   const listed = await directSessionReq<{ groups: Array<{ name: string }> }>(
@@ -213,29 +157,17 @@ test("does not register an unapplied category on the reset-main creation path", 
 
 test("registers committed patchMany categories across physical stores", async () => {
   const stores = await createSelectedGlobalSessionStore();
-  const targets = ["main", "work"].map((agentId) => ({
+  const targets = (["main", "work"] as const).map((agentId) => ({
     agentId,
     key: `agent:${agentId}:dashboard:batch-category`,
   }));
   for (const target of targets) {
-    expect((await directSessionReq("sessions.create", target)).ok).toBe(true);
+    await expectOk("sessions.create", target);
   }
-  expect(
-    (
-      await directSessionReq("sessions.patchMany", {
-        targets,
-        patch: { category: "Shared category" },
-      })
-    ).ok,
-  ).toBe(true);
-  for (const target of targets) {
-    expect(
-      loadSessionEntry({
-        agentId: target.agentId,
-        sessionKey: target.key,
-        storePath: target.agentId === "main" ? stores.mainStorePath : stores.workStorePath,
-      })?.category,
-    ).toBe("Shared category");
+  await expectOk("sessions.patchMany", { targets, patch: { category: "Shared category" } });
+  const paths = { main: stores.mainStorePath, work: stores.workStorePath };
+  for (const { agentId, key: targetKey } of targets) {
+    expect(categoryAt(paths[agentId], targetKey, agentId)).toBe("Shared category");
   }
-  expect(readSessionGroupCatalog().groups.map(({ name }) => name)).toContain("Shared category");
+  expect(groupNames()).toContain("Shared category");
 });

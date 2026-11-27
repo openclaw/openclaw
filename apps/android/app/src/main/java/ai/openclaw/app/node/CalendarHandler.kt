@@ -1,6 +1,6 @@
 package ai.openclaw.app.node
 
-import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.InvokeResult
 import ai.openclaw.app.hasPermission
 import android.Manifest
 import android.content.ContentResolver
@@ -12,7 +12,11 @@ import android.provider.CalendarContract
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
+import java.time.DateTimeException
 import java.time.Instant
+import java.time.OffsetDateTime
+import java.time.ZoneOffset
+import java.time.format.DateTimeParseException
 import java.time.temporal.ChronoUnit
 import java.util.TimeZone
 
@@ -199,7 +203,7 @@ class CalendarHandler internal constructor(
   appContext: Context,
   private val dataSource: CalendarDataSource = SystemCalendarDataSource(appContext),
 ) {
-  fun handleCalendarEvents(paramsJson: String?): GatewaySession.InvokeResult {
+  fun handleCalendarEvents(paramsJson: String?): InvokeResult {
     if (!dataSource.hasReadPermission()) {
       return nodeInvokeError("CALENDAR_PERMISSION_REQUIRED", "grant Calendar permission")
     }
@@ -211,7 +215,7 @@ class CalendarHandler internal constructor(
     }
   }
 
-  fun handleCalendarAdd(paramsJson: String?): GatewaySession.InvokeResult {
+  fun handleCalendarAdd(paramsJson: String?): InvokeResult {
     if (!dataSource.hasWritePermission()) {
       return nodeInvokeError("CALENDAR_PERMISSION_REQUIRED", "grant Calendar permission")
     }
@@ -226,11 +230,11 @@ class CalendarHandler internal constructor(
     }
     return try {
       val event = dataSource.add(request)
-      GatewaySession.InvokeResult.ok(Json.encodeToString(mapOf("event" to event)))
+      InvokeResult.ok(Json.encodeToString(mapOf("event" to event)))
     } catch (err: IllegalArgumentException) {
       val msg = err.message ?: "CALENDAR_INVALID: invalid request"
       val code = if (msg.startsWith("CALENDAR_NOT_FOUND")) "CALENDAR_NOT_FOUND" else "CALENDAR_INVALID"
-      GatewaySession.InvokeResult.error(code = code, message = msg)
+      InvokeResult.error(code = code, message = msg)
     } catch (err: Throwable) {
       nodeInvokeError("CALENDAR_UNAVAILABLE", err.message ?: "calendar add failed")
     }
@@ -238,8 +242,8 @@ class CalendarHandler internal constructor(
 
   private fun parseEventsRequest(paramsJson: String?): CalendarEventsRequest? {
     val params = if (paramsJson.isNullOrBlank()) null else parseJsonParamsObject(paramsJson) ?: return null
-    val start = parseISO(parseJsonString(params, "startISO"))
-    val end = parseISO(parseJsonString(params, "endISO"))
+    val start = parseInstant(parseJsonString(params, "startISO"))
+    val end = parseInstant(parseJsonString(params, "endISO"))
     val resolvedStart = start ?: Instant.now()
     val resolvedEnd = end ?: resolvedStart.plus(7, ChronoUnit.DAYS)
     // Keep model-driven calendar reads bounded.
@@ -253,17 +257,17 @@ class CalendarHandler internal constructor(
 
   private fun parseAddRequest(paramsJson: String?): CalendarAddRequest? {
     val params = parseJsonParamsObject(paramsJson) ?: return null
-    var start =
-      parseISO((params["startISO"] as? JsonPrimitive)?.content)
-        ?: return null
-    var end =
-      parseISO((params["endISO"] as? JsonPrimitive)?.content)
-        ?: return null
+    val rawStart = (params["startISO"] as? JsonPrimitive)?.content
+    val rawEnd = (params["endISO"] as? JsonPrimitive)?.content
     val isAllDay = (params["isAllDay"] as? JsonPrimitive)?.content?.toBooleanStrictOrNull() ?: false
-    if (isAllDay && end > start) {
-      start = start.truncatedTo(ChronoUnit.DAYS)
-      end = maxOf(end.truncatedTo(ChronoUnit.DAYS), start.plus(1, ChronoUnit.DAYS))
-    }
+    val (start, end) =
+      if (isAllDay) {
+        parseAllDayRange(rawStart, rawEnd) ?: return null
+      } else {
+        val start = parseInstant(rawStart) ?: return null
+        val end = parseInstant(rawEnd) ?: return null
+        start to end
+      }
     return CalendarAddRequest(
       title = parseJsonString(params, "title")?.trim().orEmpty(),
       startMs = start.toEpochMilli(),
@@ -277,12 +281,47 @@ class CalendarHandler internal constructor(
     )
   }
 
-  private fun parseISO(raw: String?): Instant? {
+  private fun parseAllDayRange(
+    rawStart: String?,
+    rawEnd: String?,
+  ): Pair<Instant, Instant>? {
+    val startAt = parseAllDayBound(rawStart) ?: return null
+    val endAt = parseAllDayBound(rawEnd) ?: return null
+    if (!endAt.isAfter(startAt)) return startAt.toInstant() to endAt.toInstant()
+    // Android stores all-day events as UTC midnights. Keep the calendar date the caller wrote,
+    // so "2026-07-05T00:00:00+10:00" stays July 5 instead of falling back to July 4 in UTC.
+    val start = startAt.toLocalDate().atStartOfDay(ZoneOffset.UTC).toInstant()
+    val end = endAt.toLocalDate().atStartOfDay(ZoneOffset.UTC).toInstant()
+    return start to maxOf(end, start.plus(1, ChronoUnit.DAYS))
+  }
+
+  private fun parseAllDayBound(raw: String?): OffsetDateTime? {
+    val value = raw?.trim() ?: return null
+    return try {
+      // Keep an ordinary offset's civil date. ISO_INSTANT also accepts 24:00 and UTC leap seconds.
+      parseOffsetDateTime(value) ?: Instant.parse(value).atOffset(ZoneOffset.UTC)
+    } catch (_: DateTimeException) {
+      null
+    }
+  }
+
+  private fun parseInstant(raw: String?): Instant? {
     val value = raw?.trim().orEmpty()
     if (value.isEmpty()) return null
-    // Gateway calendar payloads use UTC ISO-8601 instants for unambiguous Android storage.
     return try {
       Instant.parse(value)
+    } catch (_: DateTimeParseException) {
+      // Older Android releases require OffsetDateTime for numeric offsets.
+      parseOffsetDateTime(value)?.toInstant()
+    }
+  }
+
+  private fun parseOffsetDateTime(raw: String?): OffsetDateTime? {
+    val value = raw?.trim().orEmpty()
+    if (value.isEmpty()) return null
+    // Accepts "Z" and numeric offsets such as "+10:00", on every supported Android version.
+    return try {
+      OffsetDateTime.parse(value)
     } catch (_: Throwable) {
       null
     }

@@ -1,9 +1,5 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { loadExactSessionEntryCandidates } from "../../config/sessions/session-accessor.sqlite-exact-read.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
-import { captureSessionTranscriptStorageEnvironment } from "../../config/sessions/transcript-target-binding.js";
-import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
-import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { operatorSessionCap, resolveGatewayOperatorRoleActor } from "../operator-role-policy.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
@@ -22,10 +18,7 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 
 /** Bind the caller and sharing facts once; each consumer applies its own operation policy. */
 export async function prepareSessionSharingAccess(
-  params: Pick<
-    GatewayRequestHandlerOptions,
-    "client" | "context" | "respond" | "signal" | "hasCurrentClientAuthority"
-  > & {
+  params: Pick<GatewayRequestHandlerOptions, "client" | "context" | "respond" | "signal"> & {
     sessionKey: string;
     agentId?: string;
     prepareMembership?: boolean;
@@ -45,14 +38,7 @@ export async function prepareSessionSharingAccess(
   const runAuthority = client?.internal?.operatorRunAuthority;
   const assertCaller = () => {
     params.signal?.throwIfAborted();
-    if (
-      params.hasCurrentClientAuthority?.() === false ||
-      client?.invalidated ||
-      client?.connectionSignal?.aborted ||
-      gatewayClientSessionCreator(client)?.id !== actorId ||
-      getSessionRowProjection(context) !== projection ||
-      client?.internal?.operatorRunAuthority !== runAuthority
-    ) {
+    if (client?.connectionSignal?.aborted || getSessionRowProjection(context) !== projection) {
       callerChanged();
     }
   };
@@ -76,6 +62,7 @@ export async function prepareSessionSharingAccess(
         cfg: policyConfig,
         client,
         isMember: (_target, identityId) => current.membership.has(identityId),
+        memberAccess: (_target, identityId) => current.memberAccess?.[identityId],
       });
       // Synthetic profile and role preparation may invoke authority callbacks.
       const preparedProfile = client?.preparedSessionProfile;
@@ -115,12 +102,7 @@ export async function prepareSessionSharingAccess(
 export async function prepareManagedSessionAccess(
   params: Pick<
     GatewayRequestHandlerOptions,
-    | "client"
-    | "context"
-    | "respond"
-    | "signal"
-    | "hasCurrentClientAuthority"
-    | "sessionMutationAuthorization"
+    "client" | "context" | "respond" | "signal" | "sessionMutationAuthorization"
   > & {
     sessionKey: string;
     agentId?: string;
@@ -128,10 +110,9 @@ export async function prepareManagedSessionAccess(
   },
 ) {
   const { respond } = params;
-  const env = captureSessionTranscriptStorageEnvironment(process.env);
   const operation = params.operation ?? "mutation";
   const access = await prepareSessionSharingAccess(params, () => {
-    throw new Error(`session ownership changed before sharing ${operation}`);
+    throw new Error(`The session sharing ${operation} ended. Start a new request to retry.`);
   });
   if (!access) {
     return null;
@@ -162,26 +143,6 @@ export async function prepareManagedSessionAccess(
       access[Symbol.dispose]();
       return null;
     }
-    const readSource = {
-      agentId: selected.readSource?.agentId ?? initial.sourceAgentId ?? selected.agentId,
-      path: selected.readSource?.path ?? initial.sourcePath ?? selected.storePath,
-    };
-    const expectedSource =
-      selected.readSource ??
-      (() => {
-        if (isIncognitoOpenClawAgentSqlitePath(readSource.path, { ...readSource, env })) {
-          return undefined;
-        }
-        const identity = readDatabasePathIdentitySync(readSource.path);
-        if (!identity.key.startsWith("file:")) {
-          throw new SessionMutationFactsUnavailableError();
-        }
-        return {
-          ...readSource,
-          databaseIdentity: identity.key.slice("file:".length),
-          databaseBirthtime: identity.birthtime,
-        };
-      })();
     const requireManageable = (
       { target, sharing }: ReturnType<typeof readCurrent>,
       entry?: SessionSharingTarget["entry"],
@@ -202,8 +163,6 @@ export async function prepareManagedSessionAccess(
     const prepareCurrent = (
       assertRequest = () => params.sessionMutationAuthorization?.assertCurrent(),
     ) => {
-      // Refuse dirty membership before invoking any additional request authority guard.
-      readCurrent(selected);
       assertRequest();
       return readCurrent(selected);
     };
@@ -214,23 +173,6 @@ export async function prepareManagedSessionAccess(
       // Lifecycle peers still fence the logical locator; worker I/O retains the physical source.
       lifecycleStorePath: access.storageTarget.storePath,
       current,
-      currentStored: () => {
-        // Request/profile callbacks may reenter writers; finish them before the final row read.
-        const prepared = prepareCurrent();
-        const stored = loadExactSessionEntryCandidates({
-          env,
-          readSource,
-          expectedSource,
-          readOnly: true,
-          sessionKeys: [selected.storeKey],
-          projection: "list",
-        })[0];
-        if (!stored || !prepared.target) {
-          throw new Error(`session changed before sharing ${operation}`);
-        }
-        const target = { ...prepared.target, entry: stored.entry };
-        return requireManageable({ ...prepared, target }, stored.entry);
-      },
       assertCurrent: composeSessionSourceAssertion(
         [params.sessionMutationAuthorization?.assertCurrent],
         (assertSources) => {

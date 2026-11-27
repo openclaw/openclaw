@@ -1,53 +1,40 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import {
-  readOpenClawAgentDatabaseIdentity,
-  type OpenClawAgentDatabaseIdentity,
-} from "../../state/openclaw-agent-db-identity.js";
-import {
-  withFreshOpenClawAgentDatabaseReadOnly,
-  type OpenClawAgentReadOnlyDatabase,
-} from "../../state/openclaw-agent-db-readonly-open.js";
-import {
-  adoptOpenClawAgentDatabaseValidation,
-  type OpenClawAgentDatabaseValidation,
-} from "../../state/openclaw-agent-db-validation-cache.js";
-import { readSessionBranchSummaries } from "./session-accessor.sqlite-branch-summaries.js";
-import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
-import {
-  readSessionTranscriptHotWatermark,
-  type SessionTranscriptWatermark,
-} from "./session-accessor.sqlite-transcript-watermark-read.js";
+  readSqliteDatabaseScopedWriteTokenForPath,
+  readSqliteDatabaseWriteTokenForPath,
+  sqliteSessionIdWriteScope,
+} from "../../infra/sqlite-database-admission.js";
 import type { SessionBranchSummary } from "./session-accessor.types.js";
-import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
-import type {
-  SessionBranchSummaryReadResult,
-  SessionBranchSummarySnapshot,
-} from "./session-history-read.types.js";
+import type { SessionBranchSummarySnapshot } from "./session-history-read.types.js";
+import { collectSessionEntryLookupKeys } from "./store-entry.js";
 
 export type { SessionBranchSummaryReadResult } from "./session-history-read.types.js";
 
 const SESSION_BRANCH_CACHE_MAX_ENTRIES = 64;
 
 type SessionBranchCacheEntry = SessionBranchSummarySnapshot & {
-  identity: OpenClawAgentDatabaseIdentity;
+  writeToken: string;
+  scopedWriteToken?: string;
 };
 
 export type SessionBranchSummaryReadRequest = {
   database: { agentId: string; path: string };
-  databaseIdentity: string;
-  validation?: OpenClawAgentDatabaseValidation;
   sessionKey: string;
-  sessionId: string;
-  lifecycleRevision?: string;
   previous?: SessionBranchSummarySnapshot;
 };
 // The host retains compact summaries across read-worker retirement.
 const sessionBranchCache = new Map<string, SessionBranchCacheEntry>();
 
-function sessionBranchCacheKey(databasePath: string, sessionId: string): string {
-  return `${databasePath}\0${sessionId}`;
+function sessionBranchCacheKey(databasePath: string, sessionKey: string): string {
+  return `${databasePath}\0${sessionKey}`;
+}
+
+function branchWriteToken(databasePath: string, sessionKey: string, sessionId: string) {
+  return readSqliteDatabaseScopedWriteTokenForPath(databasePath, [
+    ...collectSessionEntryLookupKeys(sessionKey),
+    sqliteSessionIdWriteScope(sessionId),
+  ]);
 }
 
 export function cloneSessionBranchSummaries(branches: readonly SessionBranchSummary[]) {
@@ -55,20 +42,23 @@ export function cloneSessionBranchSummaries(branches: readonly SessionBranchSumm
 }
 
 export function readCachedSessionBranchSummaries(
-  database: OpenClawAgentReadOnlyDatabase,
-  sessionId: string,
-  watermark: SessionTranscriptWatermark,
+  databasePath: string,
+  sessionKey: string,
+  writeToken?: string,
 ): SessionBranchCacheEntry | undefined {
-  const cacheKey = sessionBranchCacheKey(database.path, sessionId);
+  const cacheKey = sessionBranchCacheKey(databasePath, sessionKey);
   const cached = sessionBranchCache.get(cacheKey);
-  if (
-    !cached ||
-    cached.identity !== readOpenClawAgentDatabaseIdentity(database).identity ||
-    cached.generation !== watermark.generation ||
-    (cached.maxSeq !== watermark.maxSeq &&
-      !(cached.maxSeq !== null && watermark.maxSeq !== null && cached.maxSeq < watermark.maxSeq))
-  ) {
+  if (!cached) {
     return undefined;
+  }
+  if (
+    writeToken !== undefined &&
+    cached.writeToken !== writeToken &&
+    cached.scopedWriteToken !== undefined &&
+    cached.source &&
+    branchWriteToken(databasePath, sessionKey, cached.source.sessionId) === cached.scopedWriteToken
+  ) {
+    cached.writeToken = writeToken;
   }
   sessionBranchCache.delete(cacheKey);
   sessionBranchCache.set(cacheKey, cached);
@@ -76,92 +66,43 @@ export function readCachedSessionBranchSummaries(
 }
 
 export function cacheSessionBranchSummaries(
-  database: OpenClawAgentReadOnlyDatabase,
-  sessionId: string,
+  databasePath: string,
+  sessionKey: string,
+  writeToken: string | undefined,
   snapshot: SessionBranchSummarySnapshot,
 ): void {
-  const cacheKey = sessionBranchCacheKey(database.path, sessionId);
+  if (writeToken === undefined) {
+    return;
+  }
+  const scopedWriteToken = snapshot.source
+    ? branchWriteToken(databasePath, sessionKey, snapshot.source.sessionId)
+    : undefined;
+  const cacheKey = sessionBranchCacheKey(databasePath, sessionKey);
   sessionBranchCache.delete(cacheKey);
   sessionBranchCache.set(cacheKey, {
     ...snapshot,
-    identity: readOpenClawAgentDatabaseIdentity(database).identity,
+    writeToken,
+    // A write during the read must not certify an older snapshot with a newer scoped token.
+    scopedWriteToken:
+      readSqliteDatabaseWriteTokenForPath(databasePath) === writeToken
+        ? scopedWriteToken
+        : undefined,
   });
   pruneMapToMaxSize(sessionBranchCache, SESSION_BRANCH_CACHE_MAX_ENTRIES);
-}
-
-export function readSessionBranchSnapshot(
-  database: OpenClawAgentReadOnlyDatabase,
-  expected: Pick<
-    SessionBranchSummaryReadRequest,
-    "sessionKey" | "sessionId" | "lifecycleRevision" | "previous"
-  > & {
-    databaseIdentity?: string;
-  },
-): SessionBranchSummaryReadResult {
-  return runSqliteDeferredTransactionSync<SessionBranchSummaryReadResult>(
-    database.db,
-    () => {
-      if (
-        expected.databaseIdentity !== undefined &&
-        readOpenClawAgentDatabaseIdentity(database).identity !== expected.databaseIdentity
-      ) {
-        return { status: "failed" };
-      }
-      const entry = readSessionEntryRow(database, expected.sessionKey, "list")?.entry;
-      if (!entry?.sessionId) {
-        return { status: "missing-session" };
-      }
-      if (
-        entry.sessionId !== expected.sessionId ||
-        entry.lifecycleRevision !== expected.lifecycleRevision
-      ) {
-        return { status: "failed" };
-      }
-      assertSessionTranscriptHot(database.db, expected.sessionId);
-      // The watermark and rows must describe the same snapshot, even when a peer appends.
-      const watermark = readSessionTranscriptHotWatermark(database, expected.sessionId);
-      const previous = expected.previous;
-      const cached =
-        previous?.generation === watermark.generation &&
-        previous.maxSeq !== null &&
-        watermark.maxSeq !== null &&
-        previous.maxSeq <= watermark.maxSeq
-          ? previous
-          : undefined;
-      const summaries =
-        cached?.maxSeq === watermark.maxSeq
-          ? cached
-          : readSessionBranchSummaries(database, expected.sessionId, cached);
-      return {
-        status: "ok",
-        ...watermark,
-        appendSafe: summaries.appendSafe,
-        branches: cloneSessionBranchSummaries(summaries.branches),
-      };
-    },
-    { operationLabel: "session branch summaries read" },
-  );
-}
-
-/** The transcript worker opens and closes its own read-only handle; only summaries leave it. */
-export function readSessionBranchSummariesInWorker(
-  request: SessionBranchSummaryReadRequest,
-): SessionBranchSummaryReadResult {
-  const result = withFreshOpenClawAgentDatabaseReadOnly(
-    (database) =>
-      request.validation && !adoptOpenClawAgentDatabaseValidation(database, request.validation)
-        ? { status: "failed" as const }
-        : readSessionBranchSnapshot(database, request),
-    request.database,
-  );
-  return result.found ? result.value : { status: "missing-session" };
 }
 
 export function invalidateSessionBranchCache(
   databasePath: string,
   sessionIds: readonly string[],
 ): void {
-  for (const sessionId of uniqueStrings(sessionIds)) {
-    sessionBranchCache.delete(sessionBranchCacheKey(databasePath, sessionId));
+  const selected = new Set(uniqueStrings(sessionIds));
+  for (const [key, snapshot] of sessionBranchCache) {
+    if (
+      key.startsWith(`${databasePath}\0`) &&
+      snapshot.source &&
+      selected.has(snapshot.source.sessionId)
+    ) {
+      sessionBranchCache.delete(key);
+    }
   }
 }

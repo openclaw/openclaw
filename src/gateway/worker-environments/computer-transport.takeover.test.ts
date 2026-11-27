@@ -32,6 +32,7 @@ import {
   createDesktopSessionRegistry,
   type DesktopSessionRegistry,
 } from "../desktop/session-registry.js";
+import { workerProtocolError } from "../server/ws-connection/worker-connection-frames.js";
 import { createWorkerComputerService } from "./computer-service.js";
 import {
   createHarness,
@@ -65,12 +66,22 @@ async function setup() {
   const transport = prepared.bind(h.run, h.workerSource);
   await desktopRegistry.activate({ sourceKey: "environment-1", ownerEpoch: 7 });
   const close = vi.fn();
-  desktopRegistry.attachObserver("environment-1", {
-    control: true,
-    ownerEpoch: 7,
+  desktopRegistry.attachObserver("environment-1", { control: true, ownerEpoch: 7, close });
+  const cleanups: Array<(reason: string) => Promise<void>> = [];
+  return {
+    h,
+    desktopRegistry,
+    service,
+    prepared,
+    transport,
     close,
-  });
-  return { h, desktopRegistry, service, prepared, transport, close };
+    registerRunCleanup: (cleanup: (reason: string) => Promise<void>) => cleanups.push(cleanup),
+    async [Symbol.asyncDispose]() {
+      await Promise.all(cleanups.map((cleanup) => cleanup("test-complete")));
+      await service.close();
+      await desktopRegistry.stopAll();
+    },
+  };
 }
 
 describe("agent desktop takeover", () => {
@@ -154,7 +165,7 @@ describe("agent desktop takeover", () => {
   });
 
   it("takes control through the worker RPC and preserves a later human takeover on replay", async () => {
-    const f = await setup();
+    await using f = await setup();
     const viewer = await connectViewer(f.desktopRegistry);
     const originalInvoke = f.h.privateInvoke.getMockImplementation()!;
     f.h.privateInvoke.mockImplementation(async (invocation) => {
@@ -174,9 +185,6 @@ describe("agent desktop takeover", () => {
           }
         : result;
     });
-    const cleanups: Array<(reason: string) => Promise<void>> = [];
-    const registerRunCleanup = (cleanup: (reason: string) => Promise<void>) =>
-      cleanups.push(cleanup);
     const rpc = createWorkerComputerRpc({
       execute: f.service.execute,
       validate: () => ({ ok: true }),
@@ -186,7 +194,7 @@ describe("agent desktop takeover", () => {
     const tool = createWorkerComputerTool({
       descriptor: f.prepared.descriptor,
       runId: f.h.claim.runId,
-      registerRunCleanup,
+      registerRunCleanup: f.registerRunCleanup,
       requestComputer: async (request) => {
         if (JSON.parse(request.paramsJson).action === "__take_control") {
           takeoverRequest = request;
@@ -198,73 +206,63 @@ describe("agent desktop takeover", () => {
               type: "res",
               id: "computer",
               ok: false,
-              error: {
+              error: workerProtocolError("gateway-unavailable", {
                 code: "UNAVAILABLE",
                 message:
                   "message" in result
                     ? (result.message ?? "Computer request rejected")
                     : "Computer request rejected",
-                details: { reason: "gateway-unavailable" },
-              },
+              }),
             };
       },
     });
-    try {
-      const result = await tool.execute("resume", { action: "take_control" });
-      expect(result.details).toMatchObject({
-        action: "take_control",
-        frameId: expect.any(String),
-      });
-      expect(result.content.some((block) => block.type === "image")).toBe(true);
-      const [code, reason] = await viewer.closed;
-      expect([code, reason.toString()]).toEqual([4000, "control-taken:Agent"]);
-      expect(viewer.stream.destroyed).toBe(true);
-      expect(f.desktopRegistry.hasController("environment-1", 7)).toBe(false);
-      const reclaimed = await connectViewer(f.desktopRegistry);
-      f.prepared.bind(f.h.run, f.h.workerSource);
-      await expect(tool.execute("resume", { action: "take_control" })).rejects.toThrow(
-        "operator took control again",
-      );
-      await expect(
-        tool.execute("still-human", { action: "type", text: "must not type" }),
-      ).rejects.toThrow("operator has control");
-      await expectViewerConnected(reclaimed);
-      expect(takeoverRequest).toBeDefined();
-      const keyless = {
-        command: takeoverRequest!.command,
-        paramsJson: takeoverRequest!.paramsJson,
-      };
-      for (const request of [keyless, { ...keyless, idempotencyKey: "" }]) {
-        await expect(
-          rpc(connectionIdentity(f.h), request, connection.signal),
-        ).resolves.toMatchObject({
+    const result = await tool.execute("resume", { action: "take_control" });
+    expect(result.details).toMatchObject({ action: "take_control", frameId: expect.any(String) });
+    expect(result.content.some((block) => block.type === "image")).toBe(true);
+    const [code, reason] = await viewer.closed;
+    expect([code, reason.toString()]).toEqual([4000, "control-taken:Agent"]);
+    expect(viewer.stream.destroyed).toBe(true);
+    expect(f.desktopRegistry.hasController("environment-1", 7)).toBe(false);
+    const reclaimed = await connectViewer(f.desktopRegistry);
+    f.prepared.bind(f.h.run, f.h.workerSource);
+    await expect(tool.execute("resume", { action: "take_control" })).rejects.toThrow(
+      "operator took control again",
+    );
+    await expect(
+      tool.execute("still-human", { action: "type", text: "must not type" }),
+    ).rejects.toThrow("operator has control");
+    await expectViewerConnected(reclaimed);
+    expect(takeoverRequest).toBeDefined();
+    const keyless = {
+      command: takeoverRequest!.command,
+      paramsJson: takeoverRequest!.paramsJson,
+    };
+    for (const request of [keyless, { ...keyless, idempotencyKey: "" }]) {
+      await expect(rpc(connectionIdentity(f.h), request, connection.signal)).resolves.toMatchObject(
+        {
           ok: false,
           message: expect.stringContaining("requires an idempotency key"),
-        });
-        await expectViewerConnected(reclaimed);
-      }
-      await tool.execute("resume-again", { action: "take_control" });
-      const [nextCode, nextReason] = await reclaimed.closed;
-      expect([nextCode, nextReason.toString()]).toEqual([4000, "control-taken:Agent"]);
-      expect(reclaimed.stream.destroyed).toBe(true);
-      const afterRevocation = await connectViewer(f.desktopRegistry);
-      expect(releaseAgentRunDelegatedAuthority(f.h.workerSource.authority)).toBe(true);
-      await expect(
-        rpc(connectionIdentity(f.h), { ...keyless, idempotencyKey: "revoked" }, connection.signal),
-      ).resolves.toMatchObject({
-        ok: false,
-        message: expect.stringContaining("run authority closed"),
-      });
-      await expectViewerConnected(afterRevocation);
-    } finally {
-      await Promise.all(cleanups.map((cleanup) => cleanup("test-complete")));
-      await f.service.close();
-      await f.desktopRegistry.stopAll();
+        },
+      );
+      await expectViewerConnected(reclaimed);
     }
+    await tool.execute("resume-again", { action: "take_control" });
+    const [nextCode, nextReason] = await reclaimed.closed;
+    expect([nextCode, nextReason.toString()]).toEqual([4000, "control-taken:Agent"]);
+    expect(reclaimed.stream.destroyed).toBe(true);
+    const afterRevocation = await connectViewer(f.desktopRegistry);
+    expect(releaseAgentRunDelegatedAuthority(f.h.workerSource.authority)).toBe(true);
+    await expect(
+      rpc(connectionIdentity(f.h), { ...keyless, idempotencyKey: "revoked" }, connection.signal),
+    ).resolves.toMatchObject({
+      ok: false,
+      message: expect.stringContaining("run authority closed"),
+    });
+    await expectViewerConnected(afterRevocation);
   });
 
   it("does not let a pre-takeover screenshot unlock input", async () => {
-    const f = await setup();
+    await using f = await setup();
     const viewerClose = vi.fn();
     f.desktopRegistry.attachObserver("environment-1", {
       control: false,
@@ -290,15 +288,13 @@ describe("agent desktop takeover", () => {
       await expect(f.transport.invoke(input)).resolves.toEqual({ ok: true });
     } finally {
       resume.resolve();
-      await f.service.close();
-      await f.desktopRegistry.stopAll();
     }
   });
 
   it.each(["placement", "grant", "deny", "epoch"] as const)(
     "does not evict a controller after %s revocation",
     async (reason) => {
-      const f = await setup();
+      await using f = await setup();
       const assertAuthorized = () => {
         if (reason === "grant") {
           throw new Error("grant revoked");
@@ -313,14 +309,9 @@ describe("agent desktop takeover", () => {
       if (reason === "epoch") {
         f.desktopRegistry.claimOwnerEpoch("environment-1", 8);
       }
-      try {
-        await expect(f.transport.invoke(takeover, assertAuthorized)).rejects.toThrow();
-        expect(f.close).not.toHaveBeenCalled();
-        expect(f.desktopRegistry.hasController("environment-1", 7)).toBe(true);
-      } finally {
-        await f.service.close();
-        await f.desktopRegistry.stopAll();
-      }
+      await expect(f.transport.invoke(takeover, assertAuthorized)).rejects.toThrow();
+      expect(f.close).not.toHaveBeenCalled();
+      expect(f.desktopRegistry.hasController("environment-1", 7)).toBe(true);
     },
   );
 });

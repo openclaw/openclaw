@@ -1,5 +1,5 @@
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
-import { isHeartbeatLifecycleRunKind } from "../../bootstrap-mode.js";
+import { clearBoundaryMaintenanceDeferral } from "../../context-pressure.js";
 import { createContextEngineLogicalTurnLease } from "../../harness/context-engine-logical-turn.js";
 import { beginContextEngineLogicalTurn } from "../../harness/context-engine-turn-begin.js";
 import type { AgentHarness } from "../../harness/types.js";
@@ -37,6 +37,9 @@ export async function admitEmbeddedContextEngine(
       { config: params.config },
     ));
   try {
+    contextEngineLogicalTurnLease.onDispose("boundary-maintenance-deferral", async () => {
+      clearBoundaryMaintenanceDeferral(params.runId);
+    });
     const effective = await beginContextEngineLogicalTurn({
       lease: contextEngineLogicalTurnLease,
       host: {
@@ -45,7 +48,6 @@ export async function admitEmbeddedContextEngine(
         capabilities: harness.contextEngineHostCapabilities ?? [],
       },
       recorder: params.userTurnTranscriptRecorder,
-      isHeartbeat: isHeartbeatLifecycleRunKind(params.bootstrapContextRunKind),
       sessionTarget: params.sessionTarget,
     });
     return {

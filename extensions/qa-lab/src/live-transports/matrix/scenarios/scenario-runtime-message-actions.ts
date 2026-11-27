@@ -49,7 +49,6 @@ export async function runPublicMessageActionsScenario(context: MatrixQaScenarioC
           accessToken: context.observerAccessToken,
           baseUrl: context.baseUrl,
           endpoint: `${roomPath}/${suffix}`,
-          fetchImpl: fetch,
           method: "GET",
         })
       ).body,
@@ -74,7 +73,12 @@ export async function runPublicMessageActionsScenario(context: MatrixQaScenarioC
       `Matrix ${name} result`,
     );
     remaining();
-    assert.equal(result.ok, true, `Matrix ${name} must succeed`);
+    if (name === "send") {
+      assert.equal(result.channel, "matrix", "Matrix send must identify its channel");
+      assert.equal(result.deliveryStatus, "sent", "Matrix send must succeed");
+    } else {
+      assert.equal(result.ok, true, `Matrix ${name} must succeed`);
+    }
     return result;
   };
   const observe = async (predicate: (event: MatrixQaObservedEvent) => boolean) =>
@@ -111,7 +115,9 @@ export async function runPublicMessageActionsScenario(context: MatrixQaScenarioC
     const sendResult = record(sent.result, "Matrix send payload");
     const messageId = acceptedEventId(sendResult.messageId, "Matrix send");
     completed.push(`send accepted=${messageId}`);
-    assert.equal(sendResult.roomId, room.roomId, "send result must identify the requested room");
+    const sendTarget = record(sendResult.target, "Matrix send target");
+    assert.equal(sendTarget.kind, "room");
+    assert.equal(sendTarget.id, room.roomId, "send result must identify the requested room");
     await observe((event) => event.eventId === messageId && event.type === "m.room.message");
     const original = await eventContent(messageId, "m.room.message");
     assert.equal(original.body, marker);
@@ -174,18 +180,6 @@ export async function runPublicMessageActionsScenario(context: MatrixQaScenarioC
     completed.push(`pin=${pinId}->${messageId}`);
 
     return {
-      artifacts: {
-        accountId: context.sutAccountId,
-        roomKey: room.key,
-        roomId: room.roomId,
-        rootEventId: messageId,
-        editEventId: editId,
-        reactionEventId: reactionId,
-        reactionTargetEventId: messageId,
-        reactionEmoji: emoji,
-        token: marker,
-        editedToken: editedMarker,
-      },
       details: [
         "Five public Gateway message.action operations independently observed on Matrix.",
         `SUT room power=${sutPower}; pin requirement=${pinPower}`,

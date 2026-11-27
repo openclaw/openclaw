@@ -6,6 +6,7 @@ import {
   type PluginLifecycleLeaseContext,
 } from "../plugins/plugin-lifecycle-lease.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { observeSettlement } from "./server-plugin-reload.active-call.test-support.js";
 import type { RecoveryFixtureFactory } from "./server-plugin-reload.recovery.test-support.js";
 
 export async function verifyCancelledDrainRollbackLease(
@@ -44,25 +45,14 @@ export async function verifyCancelledDrainRollbackLease(
     drainEntered.resolve();
     return pending;
   });
-  let settled = false;
-  const reloading = withPluginLifecycleLease(
-    { env, waitMs: 0, signal: cancellation.signal },
-    async (lease) => {
+  const reloading = observeSettlement(
+    withPluginLifecycleLease({ env, waitMs: 0, signal: cancellation.signal }, async (lease) => {
       reloadLease = lease;
       return await fixture.reload();
-    },
-  ).then(
-    (result) => {
-      settled = true;
-      return result;
-    },
-    (error: unknown) => {
-      settled = true;
-      return error;
-    },
+    }),
   );
   try {
-    await Promise.race([drainEntered.promise, reloading]);
+    await Promise.race([drainEntered.promise, reloading.promise]);
     expect(fixture.owner.getReloadStatus()?.reason).toBeTruthy();
     cancellation.abort(new Error("operator cancelled reload"));
     await rollbackStarted.promise;
@@ -70,7 +60,7 @@ export async function verifyCancelledDrainRollbackLease(
     const cancelledLease = reloadLease;
     expect(() => cancelledLease.assertOwned()).toThrow();
     expect(cancelledLease.signal.aborted).toBe(true);
-    expect(settled).toBe(false);
+    expect(reloading.settled).toBe(false);
     // Cancellation ends the wait, not the writer's custody of pending rollback.
     await expect(
       withPluginLifecycleLease({ env, waitMs: 0 }, async () => "competing owner"),
@@ -78,7 +68,7 @@ export async function verifyCancelledDrainRollbackLease(
     expect(fixture.candidates).toHaveLength(0);
     expect(fixture.firstStop).not.toHaveBeenCalled();
     finishRollback.resolve();
-    expect(await reloading).toBeInstanceOf(Error);
+    expect(await reloading.promise).toBeInstanceOf(Error);
     expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
     expect(fixture.owner.getReloadStatus()).toBeUndefined();
     expect(instance.run(() => "still serving")).toBe("still serving");
@@ -95,7 +85,7 @@ export async function verifyCancelledDrainRollbackLease(
   } finally {
     finishRollback.resolve();
     releaseWork();
-    await reloading;
+    await reloading.promise;
     observation.mockRestore();
   }
 }

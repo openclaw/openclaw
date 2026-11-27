@@ -12,7 +12,10 @@ export type FeishuReplyDeliverySource = {
 
 export type FeishuReplyDeliveryResult = NonNullable<
   Parameters<typeof createAcceptedChannelDeliveryResult>[0]["deliveryResults"]
->[number];
+>[number] & {
+  /** False when a streaming card rejected the final text and only a stale preview is visible. */
+  finalTextAccepted?: boolean;
+};
 
 export type FeishuReplyDeliveryResultWithFinalization = FeishuReplyDeliveryResult & {
   finalization: Promise<FeishuReplyDeliveryResult>;

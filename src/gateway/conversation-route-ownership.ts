@@ -22,7 +22,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { PlatformMessageNotDispatchedError } from "../infra/outbound/deliver-types.js";
 import {
   type inspectSessionBindingByConversation,
-  inspectSessionBindingsByConversations,
   prepareSessionBindingInspections,
 } from "../infra/outbound/session-binding-service.js";
 import { getGlobalPluginRegistry } from "../plugins/hook-runner-global.js";
@@ -293,36 +292,6 @@ export async function prepareConversationRouteEligibilitiesForAgent(params: {
       }
       return { channel, plugin };
     });
-    for (const [index, input] of inputs.entries()) {
-      const messaging = plugins[index]?.plugin?.messaging;
-      if (
-        messaging?.prepareConversationRouteOwners &&
-        !messaging.prepareConversationRouteOwnersAsync
-      ) {
-        warnPluginSdkDeprecation({
-          family: "conversation-route-ownership",
-          method: "ChannelMessagingAdapter.prepareConversationRouteOwners",
-          replacement: "ChannelMessagingAdapter.prepareConversationRouteOwnersAsync",
-        });
-        let preparing = true;
-        try {
-          const [resolver] = messaging.prepareConversationRouteOwners(
-            [pluginRouteOwnerInput(params.config, input.conversation)],
-            (refs) => {
-              if (!preparing) {
-                throw new Error("Conversation route preparation is no longer active");
-              }
-              return inspectSessionBindingsByConversations(refs);
-            },
-          );
-          if (resolver) {
-            resolvers.set(index, resolver);
-          }
-        } finally {
-          preparing = false;
-        }
-      }
-    }
     for (const [prepare, indexes] of groups) {
       let preparing = true;
       let selected: readonly PluginRouteOwnerResolver[];

@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { sqlPublicationAnchor } from "../infra/sql-connection.js";
 import {
   getSqliteDatabaseAdmission,
   publishSqliteDatabaseAdmission,
@@ -19,7 +20,7 @@ export function stageOpenClawAgentDatabaseSchemaExtension(db: DatabaseSync): voi
   }
   const metadata = readExistingAgentSchemaMeta(db);
   if (
-    !stageSqliteTransactionState(db, {
+    !stageSqliteTransactionState(sqlPublicationAnchor(db), {
       stage: () => {},
       rollback: () => {},
       commit: () => {

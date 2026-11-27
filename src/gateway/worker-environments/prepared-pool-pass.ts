@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
-import { readWorkerProjectPreparation } from "./preparation-identity.js";
+import { workerPreparationSourceKey } from "./preparation-identity.schema.js";
 import type { Generations, PassContext, PoolOptions } from "./prepared-pool-admission.js";
 import * as pool from "./prepared-pool-admission.js";
 import { isSupersededPresenceReserve } from "./prepared-pool-presence.js";
@@ -20,7 +20,6 @@ function reconcileAll(ctx: PassContext, eligible: Generations, records: Environm
       signal.throwIfAborted();
       const key = pool.groupKey(record);
       const generation = key ? eligible.get(key) : undefined;
-      const limits = pool.poolPolicy(options, record.profileId, record.providerId);
       const before = () => {
         signal.throwIfAborted();
         if (record.destroyRequestedAtMs === null && generation) {
@@ -31,7 +30,7 @@ function reconcileAll(ctx: PassContext, eligible: Generations, records: Environm
           if (
             !store.isPreparedIntentWithinCapacity({
               environmentId: record.environmentId,
-              ...limits,
+              ...pool.poolPolicy(options, record.profileId, record.providerId),
             })
           ) {
             throw new Error("Prepared worker no longer satisfies its maintenance policy");
@@ -91,11 +90,13 @@ async function retain(
     const expired =
       record.preparation.expiresAtMs <= now() ||
       (generation !== undefined && generation.expiresAtMs <= now());
+    const reconstructing = ctx.preserveReconstructing?.(record) === true;
     const valid =
-      !isSupersededPresenceReserve(record, ctx.activeDemand) &&
       !expired &&
-      generation?.preparationKey === record.preparation.key &&
-      (!requireRetention || generation.retention !== undefined || generation.deferred) &&
+      (reconstructing ||
+        (!isSupersededPresenceReserve(record, ctx.activeDemand) &&
+          generation?.preparation.key === record.preparation.key &&
+          (!requireRetention || generation.retention !== undefined || generation.deferred))) &&
       ((record.preparation.purpose === "build" && record.state !== "ready") ||
         count < limits.target) &&
       totalKept < limits.maxTotal;
@@ -112,8 +113,9 @@ async function retain(
         cleanup.push(latest);
       }
     } else if (
+      !reconstructing &&
       !generation?.deferred &&
-      (!generation?.presenceOwned || generation.activationEligible || ctx.presence.isPresent())
+      (!generation?.presenceOwned || generation.activationEligible || ctx.presence.isDemandActive())
     ) {
       work.push(latest);
     }
@@ -124,11 +126,21 @@ async function planRefill(ctx: PassContext, eligible: Generations): Promise<Gene
   const { options, presence, activeDemand: demand, presenceDeferred: deferred } = ctx;
   const { store, signal, now } = options;
   for (const [key, generation] of eligible) {
+    // The foreground request owns repository preparation. Maintenance may still
+    // expire/destroy it, but cannot reacquire its user-bound source or allocate.
+    if (pool.isRequestScopedRepositoryBuild(generation.source)) {
+      continue;
+    }
     if (deferred && generation.presenceOwned && !generation.activationEligible) {
       continue;
     }
     try {
-      generation.retention = await options.prepareRetention(generation.source, signal);
+      generation.retention = await options.prepareRetention(
+        generation.source,
+        generation.preparation,
+        signal,
+        (reason) => pool.skipRefill(ctx, generation.source, reason),
+      );
       signal.throwIfAborted();
       if (!generation.retention) {
         eligible.delete(key);
@@ -146,37 +158,56 @@ async function planRefill(ctx: PassContext, eligible: Generations): Promise<Gene
     }
     const { source } = generation;
     const limits = pool.poolPolicy(options, source.profileId, source.providerId);
-    const project = readWorkerProjectSnapshot(source.profileSnapshot.project)!;
-    const slots = store.preparedCapacity({
+    const project = readWorkerProjectSnapshot(source.profileSnapshot.project);
+    const capacity = {
       profileId: source.profileId,
-      projectKey: project.key,
+      projectKey: workerPreparationSourceKey(source.profileSnapshot)!,
       ...limits,
+    };
+    const slots = store.preparedCapacity({
+      ...capacity,
       maxTotal: Math.max(0, limits.maxTotal - plannedTotal),
     });
     if (
-      slots === 0 ||
       generation.expiresAtMs <= now() ||
-      (!presence.isPresent() &&
+      (!presence.isDemandActive() &&
         demand &&
-        generation.preparationKey === demand.preparationKey &&
+        generation.preparation.key === demand.preparationKey &&
         !generation.activationEligible)
     ) {
+      pool.skipRefill(ctx, source, "prepared capacity demand expired or ended");
+      continue;
+    }
+    if (slots === 0) {
+      if (store.preparedCapacity({ ...capacity, maxTotal: Number.MAX_SAFE_INTEGER }) > 0) {
+        pool.skipRefill(ctx, source, "shared prepared capacity reached");
+      }
       continue;
     }
     try {
-      const preparation = readWorkerProjectPreparation(source.profileSnapshot.project)!;
+      const preparation = generation.preparation;
+      const projectPreparation = "source" in preparation ? undefined : preparation;
       const intent = await options.prepareIntent(source.profileId, {
-        ...("source" in project
-          ? { projectRepository: project }
-          : { projectPath: project.root, projectCommit: project.baseCommit }),
+        ...(workerPreparationSourceKey(source.profileSnapshot) === "image"
+          ? { imageReserve: true as const }
+          : project
+            ? "source" in project
+              ? { projectRepository: project }
+              : { projectPath: project.root, projectCommit: project.baseCommit }
+            : { emptyWorkspace: true }),
         ...readWorkerProfileSelection(source.profileSnapshot),
         setupAuthorized:
-          preparation.setupRecipe !== undefined && preparation.runSetupScript !== false,
-        runSetupScript: preparation.runSetupScript,
+          projectPreparation?.setupRecipe !== undefined &&
+          projectPreparation.runSetupScript !== false,
+        runSetupScript: projectPreparation?.runSetupScript,
+        assertCurrent: generation.assertImagePolicyCurrent,
         signal,
       });
       signal.throwIfAborted();
-      if (intent.providerId !== source.providerId || intent.preparationKey !== preparation.key) {
+      const admittedPreparation =
+        intent.profileSnapshot.runtimePreparation ?? intent.profileSnapshot.project?.preparation;
+      if (intent.providerId !== source.providerId || admittedPreparation?.key !== preparation.key) {
+        pool.skipRefill(ctx, source, "refill intent no longer matches the activated preparation");
         eligible.delete(key);
         continue;
       }
@@ -185,8 +216,8 @@ async function planRefill(ctx: PassContext, eligible: Generations): Promise<Gene
       plannedTotal += slots;
     } catch (error) {
       signal.throwIfAborted();
-      options.warn(
-        `Prepared worker refill deferred (${source.profileId}): ${boundedWorkerError(error)}`,
+      ctx.reportRefill(
+        `Prepared worker refill deferred (${source.profileId}, ${source.environmentId}): ${boundedWorkerError(error)}`,
       );
     }
   }
@@ -205,7 +236,6 @@ async function launchReserves(
       continue;
     }
     const limits = pool.poolPolicy(options, source.profileId, source.providerId);
-    const project = readWorkerProjectSnapshot(intent.profileSnapshot.project)!;
     for (let index = 0; index < generation.slots!; index += 1) {
       signal.throwIfAborted();
       const admitted = await store.ensurePreparedIntent({
@@ -214,9 +244,15 @@ async function launchReserves(
           providerId: intent.providerId,
           profileId: source.profileId,
           profileSnapshot: intent.profileSnapshot,
-          preparation: { purpose: "reserve", key: intent.preparationKey!, demandAtMs, expiresAtMs },
+          preparation: {
+            purpose: "reserve",
+            key: generation.preparation.key,
+            demandAtMs,
+            expiresAtMs,
+          },
         },
-        projectKey: project.key,
+        projectKey:
+          intent.profileSnapshot.runtimePreparation?.source ?? intent.profileSnapshot.project!.key,
         ...limits,
         assertCurrent: () => pool.assertGenerationCurrent(ctx, generation),
       });
@@ -233,6 +269,7 @@ export async function runPreparedPoolPass(
   presence: PassContext["presence"],
   preparations: Map<string, AbortController>,
   isAdmitted: () => boolean,
+  reportRefill: (message: string) => void,
 ): Promise<void> {
   const { store, signal } = options;
   await store.ready();
@@ -247,8 +284,10 @@ export async function runPreparedPoolPass(
     isAdmitted,
     activeDemand,
     presenceDeferred,
+    preserveReconstructing: presence.captureReconstruction(),
     inventory,
     oldestFirst: inventory.toSorted((a, b) => a.createdAtMs - b.createdAtMs),
+    reportRefill,
   };
   const eligible = pool.admitSources(ctx);
   // Expiry and disabled/surplus capacity need no source or artifact admission.

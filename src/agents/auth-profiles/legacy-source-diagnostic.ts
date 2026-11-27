@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { materializeErrorStack } from "../../infra/error-graph-internal.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { shortenHomePath } from "../../utils.js";
 import {
@@ -8,6 +9,7 @@ import {
   hasUnresolvedProviderAuthEndpoint,
   resolveProviderIdForAuth,
 } from "../provider-auth-aliases.js";
+import { authProfileSourceExists, prepareAuthProfileLegacySources } from "./file-state.js";
 import {
   coerceLegacyFlatCredential,
   parseLegacyCredentialEntry,
@@ -45,13 +47,27 @@ function isCredentialSource(source: LegacyAuthProfileSource): boolean {
 export function readLegacyAuthProfileProviders(
   sources: readonly LegacyAuthProfileSource[],
 ): string[] | null {
+  return parseLegacyAuthProfileProviders(
+    sources.filter(isCredentialSource).map((source) => {
+      try {
+        return source.kind === "auth-profiles" ? fs.readFileSync(source.path, "utf8") : undefined;
+      } catch {
+        return undefined;
+      }
+    }),
+  );
+}
+
+function parseLegacyAuthProfileProviders(
+  contents: readonly (string | undefined)[],
+): string[] | null {
   const providers = new Set<string>();
-  for (const source of sources.filter(isCredentialSource)) {
-    if (source.kind !== "auth-profiles") {
+  for (const content of contents) {
+    if (content === undefined) {
       return null;
     }
     try {
-      const raw: unknown = JSON.parse(fs.readFileSync(source.path, "utf8"));
+      const raw: unknown = JSON.parse(content);
       if (!isRecord(raw)) {
         return null;
       }
@@ -94,6 +110,17 @@ export function hasLegacyAuthProfileCredentialSource(
   env?: NodeJS.ProcessEnv,
 ): boolean {
   return listLegacyAuthProfileSources({ agentDir, env }).some(isCredentialSource);
+}
+
+export async function hasLegacyAuthProfileCredentialSourceAsync(
+  agentDir?: string,
+  env?: NodeJS.ProcessEnv,
+): Promise<boolean> {
+  const candidates = resolveLegacyAuthProfileSourceCandidates({ agentDir, env });
+  await prepareAuthProfileLegacySources(candidates.map((source) => source.path));
+  return candidates.some(
+    (source) => isCredentialSource(source) && authProfileSourceExists(source.path),
+  );
 }
 
 /**
@@ -159,7 +186,11 @@ export function hasLegacyAuthProfileSourcesForStartup(params: {
     if (unmigratedCredentialSources.length > 0) {
       markAuthProfileMigrationRequired(
         agentDir,
-        new AuthProfileMigrationRequiredError({ agentDir, sources: unmigratedCredentialSources }),
+        new AuthProfileMigrationRequiredError({
+          agentDir,
+          sources: unmigratedCredentialSources,
+          affectedProviders: readLegacyAuthProfileProviders(unmigratedCredentialSources),
+        }),
       );
     }
   }
@@ -180,6 +211,7 @@ export class AuthProfileMigrationRequiredError extends Error {
           agentDir?: string;
           env?: NodeJS.ProcessEnv;
           sources: readonly LegacyAuthProfileSource[];
+          affectedProviders?: string[] | null;
         }
       | AuthProfileMigrationRequiredError,
     previous?: AuthProfileMigrationRequiredError,
@@ -192,7 +224,7 @@ export class AuthProfileMigrationRequiredError extends Error {
               params.databasePath ?? resolveAuthProfileOwnerPath(params.agentDir, params.env),
             ),
             sourceKinds: params.sources.map((candidate) => candidate.kind),
-            affectedProviders: readLegacyAuthProfileProviders(params.sources),
+            affectedProviders: params.affectedProviders ?? null,
           };
     const { ownerId, affectedProviders: providers } = source;
     const sourceKinds = [
@@ -262,6 +294,7 @@ function recordAuthProfileMigrationRequired(
   const previous = migrationRequiredByDatabase.get(databasePath);
   // Scoped reads may discover more providers, but only lifecycle clear may release any.
   const retained = previous ? new AuthProfileMigrationRequiredError(error, previous) : error;
+  materializeErrorStack(retained);
   migrationRequiredByDatabase.set(databasePath, retained);
   if (previous?.message !== retained.message) {
     log.warn(retained.message, {
@@ -337,23 +370,24 @@ export function assertAuthProfileMigrationCandidates(params: {
     params.config,
     params.deferScopedRefusals,
   );
-  // Older shipped processes and restores can recreate these three fixed files
-  // after startup, so this credential boundary deliberately rechecks their names.
+  // External restores invalidate the owner's source facts through directory observation.
   const sources = params.candidates.filter(
-    (source) => isCredentialSource(source) && fs.existsSync(source.path),
+    (source) => isCredentialSource(source) && authProfileSourceExists(source.path),
   );
   if (sources.length === 0) {
     return;
   }
-  // The store read only happens once a retired file actually exists, so the
-  // healthy majority keeps the plain name check on this hot path.
   if (params.hasCredentials()) {
     warnLegacyAuthProfileSourcesIgnored({ databasePath: params.databasePath, sources });
     return;
   }
   const migrationError = recordAuthProfileMigrationRequired(
     params.databasePath,
-    new AuthProfileMigrationRequiredError({ databasePath: params.databasePath, sources }),
+    new AuthProfileMigrationRequiredError({
+      databasePath: params.databasePath,
+      sources,
+      affectedProviders: readLegacyAuthProfileProviders(sources),
+    }),
   );
   if (
     !(params.deferScopedRefusals && migrationError.affectedProviders !== null) &&
@@ -361,6 +395,49 @@ export function assertAuthProfileMigrationCandidates(params: {
   ) {
     throw migrationError;
   }
+}
+
+/** Admit provider metadata off-thread; synchronous effects consume the retained refusal. */
+export async function prepareAuthProfileMigrationCandidates(params: {
+  databasePath: string;
+  candidates: readonly LegacyAuthProfileSource[];
+  hasCredentials: boolean;
+  assertCurrent: () => void | false;
+  sourcePresence?: ReadonlyMap<string, boolean>;
+}): Promise<void> {
+  await prepareAuthProfileLegacySources(params.candidates.map((source) => source.path));
+  const sources = params.candidates.filter(
+    (source) =>
+      isCredentialSource(source) &&
+      (params.sourcePresence?.get(source.path) ?? authProfileSourceExists(source.path)),
+  );
+  const contents = params.hasCredentials
+    ? []
+    : await Promise.all(
+        sources.map(async (source) =>
+          source.kind === "auth-profiles"
+            ? fs.promises.readFile(source.path, "utf8").catch(() => undefined)
+            : undefined,
+        ),
+      );
+  if (params.assertCurrent() === false) {
+    return;
+  }
+  if (!sources.length) {
+    return;
+  }
+  if (params.hasCredentials) {
+    warnLegacyAuthProfileSourcesIgnored({ databasePath: params.databasePath, sources });
+    return;
+  }
+  recordAuthProfileMigrationRequired(
+    params.databasePath,
+    new AuthProfileMigrationRequiredError({
+      databasePath: params.databasePath,
+      sources,
+      affectedProviders: parseLegacyAuthProfileProviders(contents),
+    }),
+  );
 }
 
 export function assertAuthProfileMigrationReady(

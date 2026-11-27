@@ -14,6 +14,7 @@ import {
   type RelayCommandBody,
   type RelayTabInfo,
   type RelayToExtensionMessage,
+  toErrorPayload,
 } from "./relay-protocol.js";
 import { RelaySessionOwner, type RelaySessionClient } from "./relay-session-owner.js";
 
@@ -70,15 +71,6 @@ type ExtensionIdentity = {
   extensionVersion: string;
 };
 
-function toErrorPayload(
-  id: number | null,
-  sessionId: string | undefined,
-  message: string,
-  code = -32000,
-): string {
-  return JSON.stringify({ id, ...(sessionId ? { sessionId } : {}), error: { code, message } });
-}
-
 /**
  * One relay bridge per extension-driver profile. Accepts at most one extension
  * connection (a newer one replaces the old — MV3 workers restart freely) and
@@ -105,16 +97,7 @@ export class ExtensionRelayBridge {
   private latestPromotedCandidateOrdinal = 0;
   private pingTimer: NodeJS.Timeout | null = null;
   private missedPongs = 0;
-  private readonly onStateChange?: () => void;
   private readonly connectionEvents = new EventTarget();
-
-  constructor(
-    opts: {
-      onStateChange?: () => void;
-    } = {},
-  ) {
-    this.onStateChange = opts.onStateChange;
-  }
 
   /** True once an extension socket completed its hello handshake. */
   get extensionConnected(): boolean {
@@ -126,21 +109,18 @@ export class ExtensionRelayBridge {
     if (this.extensionConnected) {
       return true;
     }
-    const timeout = new AbortController();
-    const timer = setTimeout(() => timeout.abort(), timeoutMs);
+    const timeout = AbortSignal.timeout(timeoutMs);
     try {
       await once(this.connectionEvents, "ready", {
-        signal: AbortSignal.any([signal, timeout.signal]),
+        signal: AbortSignal.any([signal, timeout]),
       });
       return this.extensionConnected;
     } catch (error) {
       signal.throwIfAborted();
-      if (timeout.signal.aborted) {
+      if (timeout.aborted) {
         return false;
       }
       throw error;
-    } finally {
-      clearTimeout(timer);
     }
   }
 
@@ -204,8 +184,8 @@ export class ExtensionRelayBridge {
     const candidateOrdinal = this.nextExtensionCandidateOrdinal++;
     let candidateState: "awaiting-hello" | "active" | "rejected" = "awaiting-hello";
     this.extensionCandidates.add(socket);
-    const helloTimer = onHelloTimeout && setTimeout(onHelloTimeout, EXTENSION_HELLO_TIMEOUT_MS);
-    helloTimer?.unref?.();
+    const helloTimer =
+      onHelloTimeout && setTimeout(onHelloTimeout, EXTENSION_HELLO_TIMEOUT_MS).unref();
     const rejectCandidate = (code: number, reason: string) => {
       candidateState = "rejected";
       this.extensionCandidates.delete(socket);
@@ -253,7 +233,6 @@ export class ExtensionRelayBridge {
         this.syncTabs(msg.tabs);
         this.startPing();
         this.connectionEvents.dispatchEvent(new Event("ready"));
-        this.onStateChange?.();
         return;
       }
       if (this.extension?.socket !== socket) {
@@ -271,7 +250,6 @@ export class ExtensionRelayBridge {
       this.extensionCandidates.delete(socket);
       if (this.extension?.socket === socket) {
         this.handleExtensionGone();
-        this.onStateChange?.();
       }
     };
     return { onMessage, onClose };
@@ -363,13 +341,11 @@ export class ExtensionRelayBridge {
         owner.socket.close(4000, "extension heartbeat timeout");
         if (this.extension === owner) {
           this.handleExtensionGone();
-          this.onStateChange?.();
         }
         return;
       }
       this.sendToExtension({ type: "ping" });
-    }, EXTENSION_PING_INTERVAL_MS);
-    this.pingTimer.unref?.();
+    }, EXTENSION_PING_INTERVAL_MS).unref();
   }
 
   private stopPing(): void {
@@ -395,8 +371,7 @@ export class ExtensionRelayBridge {
       const timer = setTimeout(() => {
         this.pendingExtension.delete(seq);
         reject(new Error(`extension relay command timed out: ${command.type}`));
-      }, resolveExtensionRelayCommandTimeoutMs(command));
-      timer.unref?.();
+      }, resolveExtensionRelayCommandTimeoutMs(command)).unref();
       this.pendingExtension.set(seq, { resolve, reject, timer });
       if (signal) {
         abortListener = addAbortListener(signal, () => {
@@ -576,6 +551,16 @@ export class ExtensionRelayBridge {
         },
       );
       current.restoreAttachment = false;
+      // Chrome stops requestAnimationFrame in a hidden tab, and Playwright's click
+      // waits on it. Playwright's default bootstrap sent this; noDefaults drops it
+      // together with the forced light color scheme. It runs after the target is set
+      // so a failure leaves a known attachment that detachUnusedAttachments releases.
+      await this.callExtension({
+        type: "cdp",
+        tabId,
+        method: "Emulation.setFocusEmulationEnabled",
+        params: { enabled: true },
+      });
       return attached;
     });
     tab.attaching = attaching;
@@ -647,7 +632,9 @@ export class ExtensionRelayBridge {
               error instanceof Error &&
               (error.message === "The extensions gallery cannot be scripted." ||
                 error.message === "Cannot access a chrome:// URL" ||
-                error.message === "Cannot access a chrome-extension:// URL of different extension")
+                error.message ===
+                  "Cannot access a chrome-extension:// URL of different extension" ||
+                error.message === "Cannot attach to this target.")
             ) {
               skipped.set(tab, { url, reason: error.message });
             }

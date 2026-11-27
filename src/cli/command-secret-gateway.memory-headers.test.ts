@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { coerceConfig, resolveConfigForRead } from "../config/io.read-helpers.js";
 import { setConfigResolutionFacts } from "../config/resolution-facts.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPath } from "../secrets/path-utils.js";
 import { resolveCommandSecretRefsViaGateway } from "./command-secret-gateway.js";
 import { getMemoryEmbeddingCommandSecretTargetIds } from "./command-secret-targets.js";
@@ -84,3 +85,35 @@ describe.each([
     expect(callGateway).toHaveBeenCalledOnce();
   });
 });
+
+it.each(["llama-cpp", "llmman"])(
+  "preserves the %s provider's auth contract in command-local memory preparation",
+  async (provider) => {
+    callGateway.mockRejectedValue(new Error("Gateway unavailable"));
+    const apiKey = { source: "env", provider: "default", id: "MISSING_LOCAL_MEMORY_KEY" } as const;
+    vi.stubEnv(apiKey.id, undefined);
+    const config: OpenClawConfig = {
+      memory: { search: { provider: "local" } },
+      models: {
+        providers: {
+          [provider]: {
+            baseUrl: "http://127.0.0.1:35063/v1",
+            apiKey,
+            models: [],
+            localService: { command: "/fixture/server" },
+          },
+        },
+      },
+    };
+    const prepared = resolveCommandSecretRefsViaGateway({
+      config,
+      commandName: "memory index",
+      targetIds: getMemoryEmbeddingCommandSecretTargetIds(),
+    });
+    if (provider === "llmman") {
+      await expect(prepared).rejects.toThrow("models.providers.llmman.apiKey is unresolved");
+    } else {
+      expect((await prepared).resolvedConfig.models?.providers?.[provider]?.apiKey).toEqual(apiKey);
+    }
+  },
+);

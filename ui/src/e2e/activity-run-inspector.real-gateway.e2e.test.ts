@@ -2,21 +2,23 @@ import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import { expect, it } from "vitest";
 import type { AuditRunInspectResult } from "../../../packages/gateway-protocol/src/schema/audit-run.js";
-import type {
-  ErrorShape,
-  GatewayFrame,
-} from "../../../packages/gateway-protocol/src/schema/frames.js";
+import type { GatewayFrame } from "../../../packages/gateway-protocol/src/schema/frames.js";
 import { reserveTestPortListener } from "../../../src/test-utils/port-claims.js";
 import { writeOpenAiResponsesText } from "../../../test/helpers/openai-responses-sse.ts";
-import {
-  createOpenClawTestInstance,
-  type OpenClawTestInstance,
-} from "../../../test/helpers/openclaw-test-instance.ts";
+import type { OpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { pairControlUiPage } from "../test-helpers/control-ui-browser-pairing.ts";
+import {
+  captureControlUiE2eFailureDiagnostics,
+  installControlUiE2ePageDiagnosticRing,
+  installControlUiE2eUnhandledRejectionRing,
+} from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { installControlUiE2eRendererStallProbe } from "../test-helpers/control-ui-e2e-renderer-stall.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { withControlUiRunInspector } from "../test-helpers/control-ui-run-inspector.ts";
+import { showHeading, showText } from "./activity-assertions.test-support.ts";
+import { connectChatGateway, createChatGatewayInstance } from "./chat-real-gateway.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -24,9 +26,18 @@ import {
 
 const replyText = "Inspector pairing fixture completed.";
 let instance: OpenClawTestInstance;
+let client: Awaited<ReturnType<typeof connectChatGateway>> | undefined;
 const suite = createControlUiE2eSuite({
   name: "Run Inspector with real browser pairing",
   startServerBeforeBrowser: true,
+  resources: {
+    async run(signal) {
+      client = await connectChatGateway(instance, signal);
+    },
+    async close() {
+      await client?.stopAndWait();
+    },
+  },
   async startServer() {
     const provider = await reserveTestPortListener({
       offsets: [0],
@@ -55,33 +66,17 @@ const suite = createControlUiE2eSuite({
         () => provider.claim.release(),
       );
     try {
-      instance = await createOpenClawTestInstance({
+      instance = await createChatGatewayInstance({
         name: "inspector-pairing",
-        env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined, VITEST: undefined },
+        provider: "inspector-fixture",
+        identity: "Inspector fixture",
+        model: "echo",
+        apiKey: "synthetic-unused-key",
+        baseUrl: `http://127.0.0.1:${provider.claim.port}/v1`,
+        models: [{ id: "echo", name: "Echo" }],
+        agents: { ownership: "explicit" },
         config: {
-          gateway: { controlUi: { enabled: true } },
           logging: { audit: { executionIdentity: true } },
-          cron: { enabled: false },
-          agents: {
-            ownership: "explicit",
-            defaults: {
-              model: "inspector-fixture/echo",
-              modelPolicy: { allow: ["inspector-fixture/*"] },
-            },
-            entries: { main: { identity: { name: "Inspector fixture" } } },
-          },
-          models: {
-            catalogRefresh: { enabled: false },
-            providers: {
-              "inspector-fixture": {
-                api: "openai-responses",
-                apiKey: "synthetic-unused-key",
-                baseUrl: `http://127.0.0.1:${provider.claim.port}/v1`,
-                models: [{ id: "echo", name: "Echo" }],
-              },
-            },
-          },
-          plugins: { allow: [] },
         },
       });
       await instance.startGateway();
@@ -96,14 +91,8 @@ const suite = createControlUiE2eSuite({
 
 async function runCli(args: string[]): Promise<string> {
   const result = await instance.cli(args);
-  expect(result.code, result.stderr).toBe(0);
+  expect(result.code, `${result.stderr}\n${result.stdout}`).toBe(0);
   return result.stdout;
-}
-
-async function rpc(method: string, params: Record<string, unknown>) {
-  return JSON.parse(
-    await runCli(["gateway", "call", method, "--params", JSON.stringify(params), "--json"]),
-  );
 }
 
 suite.define(() => {
@@ -111,19 +100,28 @@ suite.define(() => {
     await suite.runScenario(test, {
       retainedState: () => instance.stateDir,
       run: async () => {
+        const gateway = client;
+        if (!gateway) {
+          throw new Error("Gateway fixture client is not connected");
+        }
         const sessionKey = "agent:main:inspector-pairing";
-        await rpc("sessions.create", { key: sessionKey, agentId: "main" });
+        await gateway.request("sessions.create", { key: sessionKey, agentId: "main" });
         const runId = randomUUID();
-        await rpc("chat.send", {
+        await gateway.request("chat.send", {
           sessionKey,
           message: "Complete the fixture.",
           idempotencyKey: runId,
         });
-        expect(await rpc("agent.wait", { runId, timeoutMs: 30_000 })).toMatchObject({
+        // Let the requested server wait finish before the client deadline expires.
+        expect(
+          await gateway.request("agent.wait", { runId, timeoutMs: 30_000 }, { timeoutMs: 40_000 }),
+        ).toMatchObject({
           status: "ok",
           terminalReply: { disposition: "visible", text: replyText },
         });
-        const inspected: AuditRunInspectResult = await rpc("audit.run.inspect", { runId });
+        const inspected = await gateway.request<AuditRunInspectResult>("audit.run.inspect", {
+          runId,
+        });
         if (inspected.identity.state !== "present") {
           throw new Error(`Fixture identity is ${inspected.identity.state}`);
         }
@@ -148,11 +146,11 @@ suite.define(() => {
         }
         const chat = await context.newPage();
         // Keep this handoff only for the explicit replay rejection below.
-        await chat.goto(browserUrl);
-        await waitForControlUiGatewayReady(chat);
-        await chat.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        await waitForControlUiGatewayReady(chat);
-        await chat.getByText(replyText, { exact: true }).waitFor();
+        for (const url of [browserUrl, controlUiSessionUrl(suite.server.baseUrl, sessionKey)]) {
+          await chat.goto(url);
+          await waitForControlUiGatewayReady(chat);
+        }
+        await showText(chat, replyText);
         const composer = chat.getByRole("textbox", { name: "Chat composer", exact: true });
         const draft = "Keep this unsent Inspector draft";
         await composer.fill(draft);
@@ -160,21 +158,19 @@ suite.define(() => {
 
         // Explicit replay must fail even when this context already has a paired device.
         const replay = await context.newPage();
-        const rejections: ErrorShape[] = [];
+        const rejectionDetails: unknown[] = [];
         replay.on("websocket", (socket) => {
           socket.on("framereceived", ({ payload }) => {
             const frame: GatewayFrame = JSON.parse(String(payload));
             if (frame.type === "res" && !frame.ok && frame.error) {
-              rejections.push(frame.error);
+              rejectionDetails.push(frame.error.details);
             }
           });
         });
         await replay.goto(browserUrl);
-        await replay.getByText("Pairing link is no longer valid", { exact: false }).waitFor();
-        expect(rejections).toContainEqual(
-          expect.objectContaining({
-            details: expect.objectContaining({ code: "AUTH_BOOTSTRAP_TOKEN_INVALID" }),
-          }),
+        await showText(replay, "Pairing link is no longer valid", false);
+        expect(rejectionDetails).toContainEqual(
+          expect.objectContaining({ code: "AUTH_BOOTSTRAP_TOKEN_INVALID" }),
         );
         expect(await replay.locator("#activity-run-panel").count()).toBe(0);
         await replay.close();
@@ -186,26 +182,39 @@ suite.define(() => {
               baseUrl: suite.server.baseUrl,
               selector: { kind: "execution", id: executionId },
               receipt: { id: receipt.selectorId },
-              preparePage: (page) => pairControlUiPage(page, runCli),
+              preparePage: async (page) => {
+                installControlUiE2ePageDiagnosticRing(page);
+                await installControlUiE2eUnhandledRejectionRing(page);
+                await installControlUiE2eRendererStallProbe(page);
+                await pairControlUiPage(page, runCli);
+              },
             },
             async (page, inspector) => {
-              const assertIdentity = async () => {
-                await inspector.waitFor({ state: "visible" });
-                await page.getByRole("heading", { name: "Identity and authority" }).waitFor();
-                expect(await inspector.getAttribute("data-execution-id")).toBe(executionId);
-                expect(await inspector.getAttribute("data-run-id")).toBe(runId);
-                const detail = inspector.locator(
-                  '[aria-labelledby="run-inspector-receipt-detail"]',
-                );
-                await detail.waitFor({ state: "visible" });
-                expect(await detail.getAttribute("data-receipt-selector-id")).toBe(
-                  receipt.selectorId,
-                );
-                expect(await detail.textContent()).toContain(receipt.decision.reasonCode);
-              };
-              await assertIdentity();
-              await page.reload();
-              await assertIdentity();
+              try {
+                for (const reload of [false, true]) {
+                  if (reload) {
+                    await page.reload();
+                  }
+                  await inspector.waitFor({ state: "visible" });
+                  await showHeading(page, "Identity and authority");
+                  expect(await inspector.getAttribute("data-execution-id")).toBe(executionId);
+                  expect(await inspector.getAttribute("data-run-id")).toBe(runId);
+                  const detail = inspector.locator(
+                    '[aria-labelledby="run-inspector-receipt-detail"]',
+                  );
+                  await detail.waitFor({ state: "visible" });
+                  expect(await detail.getAttribute("data-receipt-selector-id")).toBe(
+                    receipt.selectorId,
+                  );
+                  expect(await detail.textContent()).toContain(receipt.decision.reasonCode);
+                }
+              } catch (error) {
+                await captureControlUiE2eFailureDiagnostics(page, {
+                  error: error instanceof Error ? error : new Error(String(error)),
+                  label: "Run Inspector identity retention",
+                });
+                throw error;
+              }
             },
           );
           expect(context.pages()).toEqual([chat]);
@@ -215,7 +224,7 @@ suite.define(() => {
         }
         await chat.reload();
         await waitForControlUiGatewayReady(chat);
-        await chat.getByText(replyText, { exact: true }).waitFor();
+        await showText(chat, replyText);
       },
     });
   }, 90_000);

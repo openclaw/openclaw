@@ -2,25 +2,53 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { loadDeviceIdentityIfPresent, loadOrCreateDeviceIdentity } from "./device-identity.js";
 
 afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
 });
 
 describe("device identity state dir defaults", () => {
-  it("writes the default identity to the shared state database", async () => {
+  it.each(["writer-identity.sqlite", "state/openclaw.sqlite"])(
+    "refuses unsupported identity path %s before creating state",
+    async (relativePath) => {
+      await withTempDir("openclaw-identity-path-", async (rootDir) => {
+        const databasePath = path.join(rootDir, "fixtures", relativePath);
+        expect(() => loadDeviceIdentityIfPresent({ path: databasePath })).toThrow(
+          "client/credentials.sqlite",
+        );
+        expect(() => loadOrCreateDeviceIdentity({ path: databasePath })).toThrow(
+          "client/credentials.sqlite",
+        );
+        expect(fs.readdirSync(rootDir)).toEqual([]);
+      });
+    },
+  );
+
+  it("keeps explicit canonical client roots independent", async () => {
+    await withTempDir("openclaw-identity-roots-", async (rootDir) => {
+      const firstPath = path.join(rootDir, "first", "client", "credentials.sqlite");
+      const secondPath = path.join(rootDir, "second", "client", "credentials.sqlite");
+      const first = loadOrCreateDeviceIdentity({ path: firstPath });
+      const second = loadOrCreateDeviceIdentity({ path: secondPath });
+
+      expect(first.deviceId).not.toBe(second.deviceId);
+      expect(loadDeviceIdentityIfPresent({ path: firstPath })).toEqual(first);
+      expect(loadDeviceIdentityIfPresent({ path: secondPath })).toEqual(second);
+      expect(fs.readdirSync(rootDir).toSorted()).toEqual(["first", "second"]);
+    });
+  });
+
+  it("writes the default identity to the local credential database", async () => {
     await withStateDirEnv("openclaw-identity-state-", async ({ stateDir }) => {
       const identity = loadOrCreateDeviceIdentity();
-      const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+      const databasePath = path.join(stateDir, "client", "credentials.sqlite");
 
       expect(loadDeviceIdentityIfPresent()).toEqual(identity);
       expect(fs.existsSync(databasePath)).toBe(true);
-      expect(fs.readdirSync(stateDir)).toEqual(["state"]);
+      expect(fs.readdirSync(stateDir)).toEqual(["client"]);
       expect(fs.existsSync(path.join(stateDir, "identity", "device.json"))).toBe(false);
     });
   });
@@ -34,7 +62,7 @@ describe("device identity state dir defaults", () => {
     });
   });
 
-  it("uses the supplied state environment and removes its schema ownership marker", async () => {
+  it("uses the supplied client root without touching the default home", async () => {
     await withTempDir("openclaw-identity-env-state-", async (rootDir) => {
       const stateDir = path.join(rootDir, "selected-state");
       const fakeHome = path.join(rootDir, "home");
@@ -50,14 +78,14 @@ describe("device identity state dir defaults", () => {
       const identity = loadOrCreateDeviceIdentity({ env });
 
       expect(loadDeviceIdentityIfPresent({ env })).toEqual(identity);
-      expect(fs.readdirSync(stateDir)).toEqual(["state"]);
+      expect(fs.readdirSync(stateDir)).toEqual(["client"]);
       expect(fs.existsSync(path.join(fakeHome, ".openclaw"))).toBe(false);
     });
   });
 
   it("keeps read-only lookup non-creating when the default database is absent", async () => {
     await withStateDirEnv("openclaw-identity-state-", async ({ stateDir }) => {
-      const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+      const databasePath = path.join(stateDir, "client", "credentials.sqlite");
 
       expect(loadDeviceIdentityIfPresent()).toBeNull();
       expect(fs.existsSync(databasePath)).toBe(false);

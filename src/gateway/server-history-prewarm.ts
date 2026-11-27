@@ -2,14 +2,11 @@ import fs from "node:fs/promises";
 import { resolveSessionStoreCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { prepareSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import { maintenanceLane } from "../config/sessions/session-transcript-worker-resources.js";
-import {
-  isSessionHistoryWorkerCold,
-  prewarmSessionHistoryWorker,
-} from "../config/sessions/session-transcript-worker-runtime.js";
+import { prewarmSessionHistoryWorker } from "../config/sessions/session-transcript-worker-runtime.js";
 import { listConfiguredSessionStoreAgentIds } from "../config/sessions/targets-configured-agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasErrnoCode } from "../infra/errno.js";
+import { isMemoryPressureHigh } from "../infra/host-memory.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const log = createSubsystemLogger("gateway");
@@ -17,21 +14,14 @@ const log = createSubsystemLogger("gateway");
 export async function prewarmGatewaySessionHistory(
   config: OpenClawConfig,
   options: {
-    onlyIfCold?: boolean;
-    includeMaintenance?: boolean;
     isCancelled?: () => boolean;
   } = {},
 ): Promise<void> {
+  // Operator attach can also request this warmup independently of the startup scheduler.
+  const shouldStop = () => options.isCancelled?.() || isMemoryPressureHigh();
   try {
-    if (
-      options.onlyIfCold &&
-      !isSessionHistoryWorkerCold() &&
-      (!options.includeMaintenance || !isSessionHistoryWorkerCold(maintenanceLane))
-    ) {
-      return;
-    }
     for (const agentId of listConfiguredSessionStoreAgentIds(config)) {
-      if (options.isCancelled?.()) {
+      if (shouldStop()) {
         return;
       }
       try {
@@ -49,12 +39,8 @@ export async function prewarmGatewaySessionHistory(
             throw error;
           },
         );
-        if (exists && !options.isCancelled?.()) {
-          const target = { ...database, agentId: database.agentId ?? agentId };
-          await prewarmSessionHistoryWorker(target);
-          if (options.includeMaintenance && !options.isCancelled?.()) {
-            await prewarmSessionHistoryWorker(target, maintenanceLane);
-          }
+        if (exists && !shouldStop()) {
+          await prewarmSessionHistoryWorker({ ...database, agentId: database.agentId ?? agentId });
         }
       } catch (error) {
         log.debug(`Session history prewarm failed for ${agentId}: ${String(error)}`);

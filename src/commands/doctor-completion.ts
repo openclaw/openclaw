@@ -1,11 +1,12 @@
 import { spawnSync } from "node:child_process";
-import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { resolveOpenClawCliInvocation } from "../../cli-invocation.mjs";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { CLI_NAME } from "../cli/cli-name.js";
 import {
   completionCacheExists,
   COMPLETION_SKIP_PLUGIN_COMMANDS_ENV,
-  findCompletionProfileWriteError,
+  findOptionalCompletionInstallFailure,
   formatCompletionReloadCommand,
   installCompletion,
   isCompletionInstalled,
@@ -18,7 +19,9 @@ import {
 } from "../cli/completion-runtime.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
+import { resolveExternalPackageRuntimeEntrypointUrl } from "../infra/runtime-process-url.js";
 import { resolveRuntimeArgs } from "../infra/runtime-worker-url.js";
+import type { DoctorMaintenancePending } from "./doctor-maintenance-pending.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
 const COMPLETION_CACHE_WRITE_TIMEOUT_MS = 30_000;
@@ -43,15 +46,22 @@ async function installCompletionForDoctor(
       "Shell completion",
     );
   } catch (err) {
-    // Completion is optional, but only profile permission failures are safe to downgrade.
-    const writeError = findCompletionProfileWriteError(err);
-    if (!writeError) {
+    // Completion is optional; permission and encoding failures stay nonfatal with session recovery.
+    const failure = findOptionalCompletionInstallFailure(err);
+    if (!failure) {
       throw err;
     }
-    const failedPath = writeError.path ?? resolveCompletionProfilePath(shell);
     const command = formatCompletionReloadCommand(shell, cachePath);
+    if (failure.kind === "write") {
+      const failedPath = failure.error.path ?? resolveCompletionProfilePath(shell);
+      note(
+        `Shell completion could not be ${action} (permission or read-only error at ${failedPath}). For this ${shell} session only, run:\n${command}`,
+        "Shell completion",
+      );
+      return;
+    }
     note(
-      `Shell completion could not be ${action} (permission or read-only error at ${failedPath}). For this ${shell} session only, run:\n${command}`,
+      `Shell completion could not be ${action} (profile is not valid UTF-8 at ${failure.profilePath}). The file was left untouched. For this ${shell} session only, run:\n${command}`,
       "Shell completion",
     );
   }
@@ -69,8 +79,8 @@ async function generateCompletionCache(
     return false;
   }
 
-  const binPath = path.join(root, "openclaw.mjs");
-  const args = [...resolveRuntimeArgs(), binPath, "completion", "--write-state"];
+  const binPath = fileURLToPath(resolveExternalPackageRuntimeEntrypointUrl("cliLauncher", root));
+  const args = ["completion", "--write-state"];
   if (options.shell) {
     args.push("--shell", options.shell);
   }
@@ -81,7 +91,12 @@ async function generateCompletionCache(
   } else {
     delete env[COMPLETION_SKIP_PLUGIN_COMMANDS_ENV];
   }
-  const result = spawnSync(process.execPath, args, {
+  const invocation = resolveOpenClawCliInvocation({
+    entryPath: binPath,
+    execArgv: resolveRuntimeArgs(),
+    args,
+  });
+  const result = spawnSync(invocation.command, invocation.args, {
     cwd: root,
     env,
     encoding: "utf-8",
@@ -164,13 +179,33 @@ export function shellCompletionStatusToRepairEffects(
  * Slow dynamic profiles are upgraded to cached completion; configured profiles with a missing
  * cache regenerate it; missing completion prompts unless non-interactive mode is active.
  */
+/** A finding is repaired; a missing profile is offered only when Doctor can ask. */
+function planShellCompletionRepair(
+  status: ShellCompletionStatus,
+  options: { nonInteractive?: boolean },
+): { finding?: HealthFinding; offerInstall: boolean } {
+  const [finding] = shellCompletionStatusToHealthFindings(status);
+  return {
+    finding,
+    offerInstall: !finding && !status.profileInstalled && options.nonInteractive !== true,
+  };
+}
+
+/** Read-only: whether `doctorShellCompletion` would write the cache or a shell profile. */
+export async function checkShellCompletionRepairPending(
+  options: { nonInteractive?: boolean } = {},
+): Promise<DoctorMaintenancePending> {
+  const plan = planShellCompletionRepair(await checkShellCompletionStatus(CLI_NAME), options);
+  return plan.finding || plan.offerInstall ? "work" : "none";
+}
+
 export async function doctorShellCompletion(
   prompter: DoctorPrompter,
   options: { nonInteractive?: boolean } = {},
 ): Promise<void> {
   const status = await checkShellCompletionStatus(CLI_NAME);
   const regenerate = !status.usesSlowPattern && status.profileInstalled;
-  const [finding] = shellCompletionStatusToHealthFindings(status);
+  const { finding, offerInstall } = planShellCompletionRepair(status, options);
 
   // Slow dynamic completion runs the CLI during shell startup; cache it to keep login shells fast.
   if (finding) {
@@ -179,8 +214,7 @@ export async function doctorShellCompletion(
       "Shell completion",
     );
   } else if (
-    status.profileInstalled ||
-    options.nonInteractive ||
+    !offerInstall ||
     !(await prompter.confirm({
       message: `Enable ${status.shell} shell completion for ${CLI_NAME}?`,
       initialValue: true,

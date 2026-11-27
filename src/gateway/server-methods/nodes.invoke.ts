@@ -1,7 +1,7 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
-  errorShape,
   missingScopeErrorShape,
   validateNodeInvokeParams,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -34,13 +34,11 @@ import {
   respondUnavailableOnNodeInvokeErrorWithProvenance,
   parseGatewayPayload,
 } from "./nodes.helpers.js";
-import {
-  isForwardedNodeInvokeApprovalAuthorityActive,
-  resolveNodeInvokeRuntimeAuthorityError,
-} from "./nodes.invoke-authority.js";
+import { captureNodeSystemRunEventSource } from "./nodes.invoke-authority.js";
 import { shouldQueueAsPendingForegroundAction } from "./nodes.invoke-foreground.js";
 import { emitTalkPttNodeEvent } from "./nodes.invoke-talk-events.js";
 import { toPendingParamsJSON } from "./nodes.pending.js";
+import { publishNodePermissionMissing } from "./nodes.permission-missing.js";
 import {
   isNodePairingWorkCurrent,
   resolveDispatchableNodeSession,
@@ -48,12 +46,20 @@ import {
 } from "./nodes.shared.js";
 import { wakeNodeForReconnect } from "./nodes.wake-reconnect.js";
 import { maybeSendNodeWakeNudge, maybeWakeNodeWithApns } from "./nodes.wake.js";
-import { respondUnavailableOnThrow } from "./response.js";
+import { respondError, respondUnavailableOnThrow } from "./response.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const nodeInvokeHandlers: GatewayRequestHandlers = {
-  "node.invoke": async ({ params, respond, context, client, req, signal }) => {
+  "node.invoke": async ({
+    params,
+    respond,
+    context,
+    client,
+    req,
+    signal,
+    hasCurrentClientAuthority,
+  }) => {
     if (!assertValidParams(params, validateNodeInvokeParams, "node.invoke", respond)) {
       return;
     }
@@ -92,13 +98,9 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
       if (isUploadAllowed()) {
         return false;
       }
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.FORBIDDEN, GATEWAY_UPLOADS_DISABLED_MESSAGE, {
-          details: { code: GATEWAY_UPLOADS_DISABLED_CODE },
-        }),
-      );
+      respondError(respond, ErrorCodes.FORBIDDEN, GATEWAY_UPLOADS_DISABLED_MESSAGE, {
+        details: { code: GATEWAY_UPLOADS_DISABLED_CODE },
+      });
       return true;
     };
     if (rejectDisabledUpload()) {
@@ -109,32 +111,26 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
         ? client.internal.nodeInvokeStream
         : undefined;
     if (!nodeId || !command) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "nodeId and command required"),
-      );
+      respondError(respond, ErrorCodes.INVALID_REQUEST, "nodeId and command required");
       return;
     }
     if (isPrivateNodeInvokeCommand(command)) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "node.invoke does not allow private node controls", {
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "node.invoke does not allow private node controls",
+        {
           details: { command },
-        }),
+        },
       );
       return;
     }
     if (command === "system.execApprovals.get" || command === "system.execApprovals.set") {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "node.invoke does not allow system.execApprovals.*; use exec.approvals.node.*",
-          { details: { command } },
-        ),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "node.invoke does not allow system.execApprovals.*; use exec.approvals.node.*",
+        { details: { command } },
       );
       return;
     }
@@ -142,14 +138,11 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
       return;
     }
     if (isBrowserProxyNodeInvokeCommand(command) && isForbiddenBrowserProxyMutation(p.params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `node.invoke cannot mutate persistent browser profiles via ${command}`,
-          { details: { command } },
-        ),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        `node.invoke cannot mutate persistent browser profiles via ${command}`,
+        { details: { command } },
       );
       return;
     }
@@ -305,17 +298,13 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
               `node wake done node=${nodeId} req=${wakeReqId} connected=false ` +
                 `reason=not_connected totalMs=${totalDurationMs}`,
             );
-            respond(
-              false,
-              undefined,
-              errorShape(ErrorCodes.UNAVAILABLE, "node not connected", {
-                details: {
-                  code: "NOT_CONNECTED",
-                  nodeError: { code: "NOT_CONNECTED", message: "node not connected" },
-                  nodeCommandDispatched: false,
-                },
-              }),
-            );
+            respondError(respond, ErrorCodes.UNAVAILABLE, "node not connected", {
+              details: {
+                code: "NOT_CONNECTED",
+                nodeError: { code: "NOT_CONNECTED", message: "node not connected" },
+                nodeCommandDispatched: false,
+              },
+            });
             return;
           }
 
@@ -344,13 +333,9 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
               session,
               authorizationCfg,
             );
-            respond(
-              false,
-              undefined,
-              errorShape(ErrorCodes.INVALID_REQUEST, hint, {
-                details: { reason: allowed.reason, command },
-              }),
-            );
+            respondError(respond, ErrorCodes.INVALID_REQUEST, hint, {
+              details: { reason: allowed.reason, command },
+            });
             return false;
           }
           return true;
@@ -372,13 +357,9 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           execApprovalManager: context.execApprovalManager,
         });
         if (!forwardedParams.ok) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, forwardedParams.message, {
-              details: forwardedParams.details ?? null,
-            }),
-          );
+          respondError(respond, ErrorCodes.INVALID_REQUEST, forwardedParams.message, {
+            details: forwardedParams.details ?? null,
+          });
           return;
         }
         if (respondIfInvokeExpired()) {
@@ -389,30 +370,15 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           releaseApprovalHandoff =
             context.execApprovalManager?.retainForHandoff(authority.recordId) ?? undefined;
           if (!releaseApprovalHandoff) {
-            respond(
-              false,
-              undefined,
-              errorShape(
-                ErrorCodes.INVALID_REQUEST,
-                "approved runtime authority closed before node dispatch",
-                { details: { code: "APPROVAL_AUTHORITY_CLOSED" } },
-              ),
+            respondError(
+              respond,
+              ErrorCodes.INVALID_REQUEST,
+              "approved runtime authority closed before node dispatch",
+              { details: { code: "APPROVAL_AUTHORITY_CLOSED" } },
             );
             return;
           }
         }
-        const runtimeAuthorityError = () =>
-          resolveNodeInvokeRuntimeAuthorityError({
-            context,
-            client,
-            approvalAuthority: forwardedParams.approvalAuthority,
-          });
-        const isForwardedApprovalAuthorityActive = () =>
-          isUploadAllowed() &&
-          isForwardedNodeInvokeApprovalAuthorityActive({
-            manager: context.execApprovalManager,
-            authority: forwardedParams.approvalAuthority,
-          });
         if (rejectDisabledUpload()) {
           return;
         }
@@ -446,7 +412,8 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
                 generation,
                 lifecycle: wakeLifecycle,
               })) && isUploadAllowed(),
-            isApprovalAuthorityActive: isForwardedApprovalAuthorityActive,
+            // Carry the upload gate through to the policy's final send.
+            isApprovalAuthorityActive: isUploadAllowed,
             ...(nodeInvokeStream ? { nodeInvokeStream } : {}),
           }),
         );
@@ -461,19 +428,24 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           // Plugin policies can satisfy an invocation without crossing the raw
           // node command channel; still emit mirrored Talk events for UI state.
           if (!policyResult.ok) {
+            const permission = publishNodePermissionMissing({
+              error: asOptionalObjectRecord(policyResult.details)?.nodeError,
+              nodeId,
+              nodeName: nodeSession.displayName,
+              command,
+              client,
+              context,
+            });
             const errorCode = policyResult.unavailable
               ? ErrorCodes.UNAVAILABLE
               : ErrorCodes.INVALID_REQUEST;
-            respond(
-              false,
-              undefined,
-              errorShape(errorCode, policyResult.message, {
-                details: {
-                  ...policyResult.details,
-                  ...(policyResult.code ? { code: policyResult.code } : {}),
-                },
-              }),
-            );
+            respondError(respond, errorCode, permission?.message ?? policyResult.message, {
+              details: {
+                ...policyResult.details,
+                ...(policyResult.code ? { code: policyResult.code } : {}),
+                ...(permission ? { permissionMissing: permission.permissionMissing } : {}),
+              },
+            });
             return;
           }
           respondWithInvocationResult(policyResult, "original");
@@ -483,14 +455,10 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           context.nodeRegistry.getForPairingGeneration(nodeId, generation.key),
         );
         if (!dispatchSession || dispatchSession.connId !== nodeSession.connId) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.UNAVAILABLE, "node connection changed before dispatch", {
-              retryable: true,
-              details: { code: "ROUTE_CHANGED" },
-            }),
-          );
+          respondError(respond, ErrorCodes.UNAVAILABLE, "node connection changed before dispatch", {
+            retryable: true,
+            details: { code: "ROUTE_CHANGED" },
+          });
           return;
         }
         if (!authorizeNodeCommand(dispatchSession, context.getRuntimeConfig())) {
@@ -499,19 +467,6 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
         const dispatchTimeoutMs = resolveRemainingInvokeTimeoutMs();
         if (invokeDeadlineAtMs !== undefined && dispatchTimeoutMs === 0) {
           respondIfInvokeExpired();
-          return;
-        }
-        // Policy, pairing, and approval checks above may await. Revalidate the
-        // exact runtime capability at the final raw transport handoff.
-        const authorityError = runtimeAuthorityError();
-        if (authorityError) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, authorityError, {
-              details: { code: "APPROVAL_AUTHORITY_CLOSED" },
-            }),
-          );
           return;
         }
         if (rejectDisabledUpload()) {
@@ -524,6 +479,8 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           command,
           params: forwardedParams.params,
           turnSource,
+          prepareSystemRunEventSource: (key) =>
+            captureNodeSystemRunEventSource({ client, context, hasCurrentClientAuthority }, key),
           timeoutMs: dispatchTimeoutMs,
           deadlineAtMs: invokeDeadlineAtMs,
           signal: invocationLifecycle,
@@ -534,9 +491,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
             idleTimeoutMs: nodeInvokeStream.idleTimeoutMs,
           }),
           isDispatchAuthorized: () =>
-            isUploadAllowed() &&
-            (nodeInvokeStream?.isRuntimeCurrent() ?? true) &&
-            runtimeAuthorityError() === undefined,
+            isUploadAllowed() && (nodeInvokeStream?.isRuntimeCurrent() ?? true),
           onDispatchReady: (invokeId) => {
             nodeCommandDispatched = true;
             nodeInvokeStream?.onDispatchReady(invokeId);
@@ -555,6 +510,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
             // Pending actions outlive this RPC. Closure-bound agent or approval
             // authority cannot be transferred to a later device pull.
             !client?.internal?.agentRuntimeIdentity &&
+            !client?.internal?.operatorRunAuthority &&
             !forwardedParams.approvalAuthority
           ) {
             // Foreground-only iOS commands become pullable pending actions instead
@@ -566,6 +522,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
               command,
               paramsJSON,
               idempotencyKey: p.idempotencyKey,
+              openclawIdPrincipal: client?.internal?.openclawIdPrincipal,
               ttlMs: nodeInvokePolicy.pendingActionTtlMs,
               maxPerNode: nodeInvokePolicy.pendingActionMaxPerNode,
             });
@@ -594,35 +551,40 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
               `node pending queued node=${nodeId} req=${req.id} command=${command} ` +
                 `queuedId=${queued.action.id} wakePath=${wake.path} wakeAvailable=${wake.available}`,
             );
-            respond(
-              false,
-              undefined,
-              errorShape(
-                ErrorCodes.UNAVAILABLE,
-                "node command queued until iOS returns to foreground",
-                {
-                  retryable: true,
-                  details: {
-                    code: "QUEUED_UNTIL_FOREGROUND",
-                    queuedActionId: queued.action.id,
-                    nodeId,
-                    command,
-                    wake: {
-                      path: wake.path,
-                      available: wake.available,
-                      throttled: wake.throttled,
-                      apnsStatus: wake.apnsStatus,
-                      apnsReason: wake.apnsReason,
-                    },
-                    nodeError: res.error ?? null,
+            respondError(
+              respond,
+              ErrorCodes.UNAVAILABLE,
+              "node command queued until iOS returns to foreground",
+              {
+                retryable: true,
+                details: {
+                  code: "QUEUED_UNTIL_FOREGROUND",
+                  queuedActionId: queued.action.id,
+                  nodeId,
+                  command,
+                  wake: {
+                    path: wake.path,
+                    available: wake.available,
+                    throttled: wake.throttled,
+                    apnsStatus: wake.apnsStatus,
+                    apnsReason: wake.apnsReason,
                   },
+                  nodeError: res.error ?? null,
                 },
-              ),
+              },
             );
             return;
           }
           respondUnavailableOnNodeInvokeErrorWithProvenance(respond, res, {
             nodeCommandDispatched,
+            ...publishNodePermissionMissing({
+              error: res.error,
+              nodeId,
+              nodeName: nodeSession.displayName,
+              command,
+              client,
+              context,
+            }),
           });
           return;
         }

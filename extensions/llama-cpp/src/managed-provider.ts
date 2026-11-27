@@ -5,41 +5,31 @@ import type {
   ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
-import llamaCppProviderDiscovery from "../provider-discovery.js";
+import { llamaCppProviderDiscovery } from "../provider-discovery.js";
 import { LLAMA_CPP_PROVIDER_ID, LLAMA_CPP_PROVIDER_LABEL } from "./defaults.js";
-import { LLAMA_SERVER_DEFAULT_ORIGIN } from "./external-server/defaults.js";
-import { prepareLlamaServerDynamicModel } from "./external-server/provider.js";
-import {
-  configureLlamaServerNonInteractive,
-  detectLlamaServerSetup,
-  prepareLlamaServerSetup,
-  runLlamaServerSetup,
-  validateLlamaServerNonInteractive,
-} from "./external-server/setup.js";
-import { wrapLlamaServerStream } from "./external-server/stream.js";
-import { ensureManagedLlamaServerForChat, reconcileManagedLlamaServer } from "./managed-server.js";
-import { detectLlamaCppSetup, prepareLlamaCppSetup, runLlamaCppSetup } from "./setup.js";
+import { LLAMA_CPP_SERVER, LLAMA_SERVER_DEFAULT_ORIGIN } from "./external-server/defaults.js";
+import { createLlamaServerAuthMethod } from "./external-server/registration.js";
 
 function wrapLlamaCppStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
-  const inner = wrapLlamaServerStream(ctx);
   const providerConfig = ctx.config?.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
-  if (!providerConfig?.localService) {
-    return inner;
-  }
   const selectedModel = ctx.model;
-  if (!selectedModel) {
+  if (providerConfig?.localService && !selectedModel) {
     return undefined;
   }
-  return async (...args: Parameters<typeof inner>) => {
-    const signal = args[2]?.signal;
-    signal?.throwIfAborted();
-    await ensureManagedLlamaServerForChat({
-      provider: providerConfig,
-      model: selectedModel,
-      ...(signal ? { signal } : {}),
-    });
-    signal?.throwIfAborted();
-    return inner(...args);
+  return async (...args) => {
+    const { wrapLlamaServerStream } = await import("./external-server/stream.js");
+    if (providerConfig?.localService && selectedModel) {
+      const { ensureManagedLlamaServerForChat } = await import("./managed-server.js");
+      const signal = args[2]?.signal;
+      signal?.throwIfAborted();
+      await ensureManagedLlamaServerForChat({
+        provider: providerConfig,
+        model: selectedModel,
+        ...(signal ? { signal } : {}),
+      });
+      signal?.throwIfAborted();
+    }
+    return wrapLlamaServerStream(ctx)(...args);
   };
 }
 
@@ -66,33 +56,14 @@ export function registerLlamaCppProvider(
           methodId: "local",
         },
         appGuidedSetup: {
-          detect: detectLlamaCppSetup,
-          prepare: prepareLlamaCppSetup,
+          detect: async (ctx) => (await import("./setup.js")).detectLlamaCppSetup(ctx),
+          prepare: async (ctx) => (await import("./setup.js")).prepareLlamaCppSetup(ctx),
         },
-        run: runLlamaCppSetup,
+        run: async (ctx) => (await import("./setup.js")).runLlamaCppSetup(ctx),
+        runNonInteractive: async (ctx) =>
+          (await import("./setup.js")).configureLlamaCppNonInteractive(ctx),
       },
-      {
-        id: "existing-server",
-        label: "Existing llama-server",
-        hint: "Connect to an existing local, private, or remote llama.cpp server",
-        kind: "custom",
-        wizard: {
-          choiceId: "llama-cpp-existing-server",
-          choiceLabel: "Existing llama-server",
-          choiceHint: "Connect to a llama.cpp server managed outside OpenClaw",
-          groupId: LLAMA_CPP_PROVIDER_ID,
-          groupLabel: "Local llama.cpp",
-          groupHint: "Managed or external llama.cpp server",
-          methodId: "existing-server",
-        },
-        appGuidedSetup: {
-          detect: detectLlamaServerSetup,
-          prepare: prepareLlamaServerSetup,
-        },
-        run: runLlamaServerSetup,
-        validateNonInteractive: validateLlamaServerNonInteractive,
-        runNonInteractive: configureLlamaServerNonInteractive,
-      },
+      createLlamaServerAuthMethod(LLAMA_CPP_SERVER),
       {
         id: "local-media",
         label: "Managed local OCR and vision",
@@ -104,11 +75,15 @@ export function registerLlamaCppProvider(
         },
       },
     ],
-    prepareDynamicModel: async (ctx) =>
-      ctx.config?.models?.providers?.[LLAMA_CPP_PROVIDER_ID]?.localService
-        ? undefined
-        : await prepareLlamaServerDynamicModel(ctx),
-    reconcileLocalService: reconcileManagedLlamaServer,
+    prepareDynamicModel: async (ctx) => {
+      if (ctx.config?.models?.providers?.[LLAMA_CPP_PROVIDER_ID]?.localService) {
+        return undefined;
+      }
+      const { prepareLlamaServerDynamicModel } = await import("./external-server/provider.js");
+      return prepareLlamaServerDynamicModel(ctx);
+    },
+    reconcileLocalService: async (ctx) =>
+      (await import("./managed-server.js")).reconcileManagedLlamaServer(ctx),
     wrapSimpleCompletionStreamFn: wrapLlamaCppStream,
     wrapStreamFn: wrapLlamaCppStream,
     ...buildProviderToolCompatFamilyHooks("llamacpp-gbnf"),

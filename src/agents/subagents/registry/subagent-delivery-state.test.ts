@@ -1,6 +1,9 @@
 // Subagent delivery-state tests cover current registry record normalization.
 import { describe, expect, it } from "vitest";
-import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
+import {
+  completeRequesterSettleWakeState,
+  normalizeSubagentRunState,
+} from "./subagent-delivery-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 function baseRun(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
@@ -51,32 +54,6 @@ describe("normalizeSubagentRunState", () => {
     expect(entry.suppressCompletionDelivery).toBe(true);
   });
 
-  it("keeps only complete interrupted-recovery terminal ownership", () => {
-    const terminal = {
-      endedReason: "subagent-error" as const,
-      execution: {
-        status: "terminal" as const,
-        startedAt: 100,
-        endedAt: 200,
-        outcome: { status: "error" as const, error: "restart interrupted run" },
-      },
-      terminalOwner: "interrupted-recovery" as const,
-    };
-    const valid = normalizeSubagentRunState(baseRun(terminal));
-    const malformed = [
-      baseRun({ ...terminal, execution: { ...terminal.execution, endedAt: undefined } }),
-      baseRun({
-        ...terminal,
-        execution: { ...terminal.execution, outcome: { status: "ok" } },
-      }),
-      baseRun({ ...terminal, endedReason: "subagent-complete" }),
-      baseRun({ ...terminal, pauseReason: "sessions_yield" }),
-    ].map((entry) => normalizeSubagentRunState(entry));
-
-    expect(valid.terminalOwner).toBe("interrupted-recovery");
-    expect(malformed.every((entry) => entry.terminalOwner === undefined)).toBe(true);
-  });
-
   it("clears stale cleanupHandled locks after delivered notification if cleanup did not finish", () => {
     const entry = normalizeSubagentRunState(
       baseRun({
@@ -89,5 +66,49 @@ describe("normalizeSubagentRunState", () => {
     );
 
     expect(entry.cleanupHandled).toBe(false);
+  });
+});
+
+describe("subagent retirement rule", () => {
+  it("folds retire intent from rows written by older builds into the row fact", () => {
+    const fromWake = normalizeSubagentRunState(
+      baseRun({
+        requesterSettleWake: { status: "pending", attemptCount: 0, retireAfterSettle: true },
+      } as Partial<SubagentRunRecord>),
+    );
+    const fromRow = normalizeSubagentRunState(
+      baseRun({ retireAfterRequesterTurn: true } as Partial<SubagentRunRecord>),
+    );
+
+    expect(fromWake.retireAfterSettle).toBe(true);
+    expect(fromWake.requesterSettleWake).toEqual({ status: "pending", attemptCount: 0 });
+    expect(fromRow.retireAfterSettle).toBe(true);
+    expect(fromRow).not.toHaveProperty("retireAfterRequesterTurn");
+  });
+
+  it("keeps retire intent while the requester turn still awaits the result", () => {
+    const entry = baseRun({
+      retireAfterSettle: true,
+      requesterTurnRunId: "requester-turn",
+      requesterSettleWake: { status: "dispatching", attemptCount: 1 },
+    });
+
+    expect(completeRequesterSettleWakeState(entry)).toBe(false);
+    expect(entry.retireAfterSettle).toBe(true);
+    entry.requesterTurnRunId = undefined;
+    expect(completeRequesterSettleWakeState(entry)).toBe(true);
+  });
+
+  it("keeps a paused child's retire intent until its next settle", () => {
+    const entry = baseRun({
+      retireAfterSettle: true,
+      pauseReason: "sessions_yield",
+      requesterSettleWake: { status: "pending", attemptCount: 0 },
+    });
+
+    expect(completeRequesterSettleWakeState(entry)).toBe(false);
+    expect(entry.retireAfterSettle).toBe(true);
+    entry.pauseReason = undefined;
+    expect(completeRequesterSettleWakeState(entry)).toBe(true);
   });
 });

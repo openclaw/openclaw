@@ -14,7 +14,7 @@ export type CronListPageOptions = {
   offset?: number;
   query?: string;
   enabled?: "all" | "enabled" | "disabled";
-  scheduleKind?: "all" | "at" | "every" | "cron" | "on-exit" | "stream";
+  scheduleKind?: "all" | "at" | "every" | "cron" | "on-exit" | "stream" | "event";
   lastRunStatus?: "all" | CronRunStatus | "unknown";
   trigger?: "all" | "conditional" | "unconditional";
   sortBy?: CronJobsSortBy;

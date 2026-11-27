@@ -18,9 +18,11 @@ import ai.openclaw.app.chat.ChatComposerOwner
 import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.chat.ChatDiffStat
 import ai.openclaw.app.chat.ChatFastMode
+import ai.openclaw.app.chat.ChatHistoryPaging
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatMessageCost
+import ai.openclaw.app.chat.ChatOutboxAttachment
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.ChatPendingToolCall
@@ -62,7 +64,9 @@ import ai.openclaw.app.operatorScopesAllowAdmin
 import ai.openclaw.app.operatorScopesAllowRead
 import ai.openclaw.app.operatorScopesAllowWrite
 import ai.openclaw.app.providerDisplayName
+import ai.openclaw.app.providerQualifiedRef
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
+import ai.openclaw.app.selectedChatModelSendBlockingReason
 import ai.openclaw.app.ui.AppModalBottomSheet
 import ai.openclaw.app.ui.FoldAwareDropdownMenu
 import ai.openclaw.app.ui.FoldAwareMenuItem
@@ -85,6 +89,7 @@ import ai.openclaw.app.ui.relativeSessionTime
 import ai.openclaw.app.ui.rememberWindowDisplayFeatureState
 import ai.openclaw.app.ui.sessionPresentationTitle
 import ai.openclaw.app.ui.sidebarCatalogHosts
+import android.icu.text.BreakIterator
 import android.os.SystemClock
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -133,6 +138,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -197,6 +203,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.autoSaver
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.AbsoluteAlignment
@@ -236,6 +243,7 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -297,15 +305,15 @@ private enum class ChatComposerPickerPage { Models, Permissions }
 internal object ChatUserMessageDisclosurePolicy {
   const val collapsedLineLimit = 12
   const val collapsedCharacterLimit = 700
+  private val loneCarriageReturn = Regex("""\r(?!\n)""")
 
   fun collapsedPreview(text: String): String? {
     var end = minOf(text.length, collapsedCharacterLimit)
-    if (end in 1 until text.length && text[end - 1].isHighSurrogate() && text[end].isLowSurrogate()) {
-      end -= 1
-    }
     var lineCount = 1
     for (index in 0 until end) {
-      if (text[index] != '\n') continue
+      val char = text[index]
+      if (char != '\r' && char != '\n') continue
+      if (char == '\n' && index > 0 && text[index - 1] == '\r') continue
       if (lineCount == collapsedLineLimit) {
         end = index
         break
@@ -313,7 +321,12 @@ internal object ChatUserMessageDisclosurePolicy {
       lineCount += 1
     }
     if (end == text.length) return null
-    return text.substring(0, end).trimEnd() + "…"
+    // One code point beyond the cutoff lets ICU recognize a cluster that crosses it.
+    val boundaries = BreakIterator.getCharacterInstance(Locale.ROOT)
+    boundaries.setText(text.substring(0, text.offsetByCodePoints(end, 1)))
+    if (!boundaries.isBoundary(end)) end = boundaries.preceding(end)
+    // Compose Text needs LF to display a lone CR as a line break in the folded preview.
+    return text.substring(0, end).trimEnd().replace(loneCarriageReturn, "\n") + "…"
   }
 }
 
@@ -388,9 +401,11 @@ internal fun ChatScreen(
   val sourcePreviewConfig by viewModel.gatewaySourcePreviewConfig.collectAsState()
   val transcriptAnchor by viewModel.chatTranscriptAnchor.collectAsState()
   val historyLoading by viewModel.chatHistoryLoading.collectAsState()
+  val historyPaging by viewModel.chatHistoryPaging.collectAsState()
   val sessionCreating by viewModel.chatSessionCreating.collectAsState()
   val errorText by viewModel.chatError.collectAsState()
   val talkStatusText by viewModel.talkModeStatusText.collectAsState()
+  val talkMicrophoneMuted by viewModel.talkMicrophoneMuted.collectAsState()
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
   val selectedActiveRun by viewModel.chatSelectedActiveRunPresentation.collectAsState()
   val healthOk by viewModel.chatHealthOk.collectAsState()
@@ -411,7 +426,7 @@ internal fun ChatScreen(
   val gatewayAgents by viewModel.gatewayAgents.collectAsState()
   val thinkingLevel by viewModel.chatThinkingLevel.collectAsState()
   val thinkingLevelSelection by viewModel.chatThinkingLevelSelection.collectAsState()
-  val streamingAssistantText by viewModel.chatStreamingAssistantText.collectAsState()
+  val streamingAssistant by viewModel.chatStreamingAssistant.collectAsState()
   val pendingToolCalls by viewModel.chatToolActivities.collectAsState()
   val questions by viewModel.chatQuestions.collectAsState()
   val progressCard by viewModel.chatProgressCard.collectAsState()
@@ -569,7 +584,7 @@ internal fun ChatScreen(
     )
 
   fun canChangeThinking() =
-    operatorScopesAllowAdmin(viewModel.operatorScopes.value) &&
+    operatorScopesAllowWrite(viewModel.operatorScopes.value) &&
       chatThinkingSupported(
         selection = viewModel.chatThinkingLevelSelection.value,
         fallbackSupported = thinkingSupportedForSelection(viewModel.chatSelectedModelRef.value, viewModel.chatModelCatalog.value),
@@ -582,13 +597,13 @@ internal fun ChatScreen(
           requestSupported = currentFastModeRequestSupported(),
           hasConfiguredFastModeOverride = currentEffortSession()?.fastMode != null,
         ),
-      adminAuthorized = operatorScopesAllowAdmin(viewModel.operatorScopes.value),
+      writeAuthorized = operatorScopesAllowWrite(viewModel.operatorScopes.value),
       connected = viewModel.gatewayConnectionDisplay.value.isConnected,
       gatewayAvailable = viewModel.chatHealthOk.value,
       loading = viewModel.chatHistoryLoading.value || viewModel.chatSessionCreating.value,
       sending = expected in composerState.sendStates.value,
       activeRun = viewModel.pendingRunCount.value > 0,
-      streaming = viewModel.chatStreamingAssistantText.value != null,
+      streaming = viewModel.chatStreamingAssistant.value?.text != null,
       settingsMutationPending = viewModel.chatSessionKey.value in viewModel.chatPendingSessionSettingsKeys.value,
     )
 
@@ -617,7 +632,7 @@ internal fun ChatScreen(
     selectionGeneration,
     thinkingLevel,
     thinkingLevelSelection.options,
-    canAdminSessionSettings,
+    canWriteSessionSettings,
   ) { mutableStateOf<String?>(null) }
   val reviewDiff = rememberChatPicker(viewModel)
   val attachmentPicker = rememberChatPicker(viewModel)
@@ -958,20 +973,28 @@ internal fun ChatScreen(
       )
     }
     if (talkActive) {
-      ChatNotice(title = nativeString("Talk"), body = talkStatusText)
+      ChatNotice(
+        title = if (talkMicrophoneMuted) nativeString("Talk · Microphone muted") else nativeString("Talk"),
+        body = talkStatusText,
+      ) {
+        TalkMicrophoneButton(
+          muted = talkMicrophoneMuted,
+          onClick = { viewModel.setTalkMicrophoneMuted(!talkMicrophoneMuted) },
+        )
+      }
     }
     ChatSwarmProgress(groups = swarmGroups)
   }
   val fastModeEnabled =
     chatFastModeControlEnabled(
       supported = fastModeSupported,
-      adminAuthorized = canAdminSessionSettings,
+      writeAuthorized = canWriteSessionSettings,
       connected = gatewayConnectionDisplay.isConnected,
       gatewayAvailable = healthOk,
       loading = historyLoading || sessionCreating,
       sending = sendInFlight,
       activeRun = pendingRunCount > 0,
-      streaming = streamingAssistantText != null,
+      streaming = streamingAssistant != null,
       settingsMutationPending = sessionSettingsPending,
     )
   ChatMessageList(
@@ -997,13 +1020,18 @@ internal fun ChatScreen(
       },
     transcriptAnchor = transcriptAnchor,
     historyLoading = historyLoading,
+    historyPaging = historyPaging,
+    onLoadHistoryPage = { older ->
+      if (viewModel.isCurrentChatSelection(composerOwner, selectionGeneration)) viewModel.loadChatHistoryPage(older)
+    },
+    localSendAdmission = pendingSendAdmissionIds.lastOrNull(),
     activeRunCount = selectedActiveRun.count,
     activeRunId = selectedActiveRun.runId,
     activeRunClockKey = selectedActiveRun.clockKey,
     activeRunOutputTokens = selectedActiveRun.outputTokens,
     pendingToolCalls = pendingToolCalls,
     questions = questionsForSession(questions, sessionKey, mainSessionKey, activeAgentId),
-    streamingAssistantText = streamingAssistantText,
+    streamingAssistant = streamingAssistant,
     healthOk = healthOk,
     gatewayOffline = gatewayOffline,
     outboxItems = currentSessionOutboxItems,
@@ -1047,6 +1075,7 @@ internal fun ChatScreen(
     loadSourceFavicon = viewModel::loadChatSourceFavicon,
     loadImageArtifact = viewModel::loadChatImageArtifact,
     loadMediaArtifact = viewModel::loadChatMediaArtifact,
+    loadOutboxImagePreview = viewModel::loadChatOutboxImagePreview,
     modifier = Modifier.fillMaxSize().imePadding(),
     tabletopPanes = tabletopPanes,
     features = features,
@@ -1095,7 +1124,7 @@ internal fun ChatScreen(
       thinkingLevel = effortPreview ?: thinkingLevel,
       thinkingOptions = thinkingLevelSelection.options,
       thinkingSupported = thinkingSupported,
-      thinkingLevelEnabled = canAdminSessionSettings,
+      thinkingLevelEnabled = canWriteSessionSettings,
       fastMode = fastMode,
       fastModeEnabled = fastModeEnabled,
       selectedModelLabel = selectedModelLabel,
@@ -1303,7 +1332,7 @@ internal fun ChatScreen(
         options = options,
         selectedId = selectedId,
         thinkingSupported = thinkingSupported,
-        thinkingLevelEnabled = canAdminSessionSettings,
+        thinkingLevelEnabled = canWriteSessionSettings,
         fastMode = fastMode,
         fastModeEnabled = canChangeFastMode(opening.composerOwner),
         onPreviewChange = { level ->
@@ -1736,13 +1765,16 @@ private fun ChatMessageList(
   onReact: ((String, String, Boolean) -> Unit)?,
   transcriptAnchor: ChatTranscriptAnchorState?,
   historyLoading: Boolean,
+  historyPaging: ChatHistoryPaging,
+  onLoadHistoryPage: (Boolean) -> Unit,
+  localSendAdmission: String?,
   activeRunCount: Int,
   activeRunId: String?,
   activeRunClockKey: String?,
   activeRunOutputTokens: Long?,
   pendingToolCalls: List<ChatPendingToolCall>,
   questions: List<ChatQuestionPrompt>,
-  streamingAssistantText: String?,
+  streamingAssistant: ChatController.StreamingAssistant?,
   healthOk: Boolean,
   gatewayOffline: Boolean,
   outboxItems: List<ChatOutboxItem>,
@@ -1765,6 +1797,7 @@ private fun ChatMessageList(
   loadSourceFavicon: suspend (GatewaySourcePreviewConfig, String) -> GatewayLoadedImage?,
   loadImageArtifact: suspend (String) -> GatewayLoadedImage?,
   loadMediaArtifact: suspend (String, GatewayMediaKind, Boolean) -> GatewayLoadedMedia?,
+  loadOutboxImagePreview: suspend (ChatOutboxAttachment) -> ByteArray?,
   modifier: Modifier = Modifier,
   tabletopPanes: TabletopPaneBounds?,
   features: List<DisplayFeature>,
@@ -1773,6 +1806,7 @@ private fun ChatMessageList(
   header: @Composable ((() -> Unit)?, Boolean, Boolean) -> Unit,
   composer: @Composable ((() -> Unit)?, Boolean, Boolean) -> Unit,
 ) {
+  val streamingAssistantText = streamingAssistant?.text
   val history = remember(messages, sessionKey, mainSessionKey) { prepareChatHistory(messages, sessionKey, mainSessionKey) }
   val indicatorVisible = activeRunCount > 0
   val workingRunTracker = remember(sessionKey) { ChatWorkingRunTracker(sessionKey) }
@@ -1789,17 +1823,14 @@ private fun ChatMessageList(
       sessionKey = sessionKey,
       indicatorVisible = indicatorVisible,
       row = session,
-      transcript =
-        TurnRecapTranscriptState(
-          sessionKey = transcriptAnchor?.sessionKey,
-          newestItemId = transcriptAnchor?.newestItemId,
-          completedEndedAt = transcriptAnchor?.completedEndedAt,
-          completedNewestItemId = transcriptAnchor?.completedNewestItemId,
-        ),
+      transcript = transcriptAnchor,
     )
   val toolBridge = remember(sessionKey) { LiveToolActivityBridge() }
   val presentedTools = remember(toolBridge, history.toolScope, pendingToolCalls) { toolBridge.update(history.toolScope, pendingToolCalls) }
-  var expandedWorkKeys by remember(sessionKey) { mutableStateOf(emptySet<String>()) }
+  var expandedWorkKeys by rememberSaveable(
+    fullMessageOwner,
+    stateSaver = listSaver<Set<String>, String>(save = { it.toList() }, restore = { it.toSet() }),
+  ) { mutableStateOf(emptySet()) }
   val timeline =
     remember(history, turnRecap, expandedWorkKeys, activeRunCount, activeRunId, presentedTools, questions, streamingAssistantText, outboxItems, recoveryOutboxItems) {
       history
@@ -1816,9 +1847,11 @@ private fun ChatMessageList(
     }
   val readerScroll =
     rememberChatReaderScrollController(
-      sessionKey = sessionKey,
+      sessionKey = listOf(fullMessageOwner.gatewayStableId, fullMessageOwner.agentId, sessionKey).joinToString("|"),
       timeline = timeline,
       historyLoading = historyLoading,
+      localSendAdmission = localSendAdmission,
+      itemIndexOffset = if (historyPaging.hasNewer) 1 else 0,
     )
   DisposableEffect(sessionKey, turnRecapResolver) {
     onDispose { turnRecapResolver.abandonActiveWatch(sessionKey) }
@@ -1856,6 +1889,10 @@ private fun ChatMessageList(
           catalogRevision = gatewayCatalogRevision,
           prepareRead = prepareFullMessageRead,
         ) { visibleContent, disclosure ->
+          val codeReaderFor =
+            key(fullMessageOwner, selectionGeneration, sessionKey) {
+              rememberChatCodeReaderForRow(messages, streamingAssistant, fullMessageOwner, activeRunCount, visibleContent)
+            }
           ChatBrowserLayout(browser = browser, modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
             LazyColumn(
               modifier = Modifier.fillMaxSize().nestedScroll(readerScroll.nestedScrollConnection).onGloballyPositioned(readerScroll.navigation.anchors::viewportPlaced),
@@ -1864,12 +1901,21 @@ private fun ChatMessageList(
               verticalArrangement = Arrangement.spacedBy(12.dp),
               contentPadding = PaddingValues(top = 6.dp, bottom = 3.dp),
             ) {
+              if (historyPaging.hasNewer) {
+                item(key = "history-newer") {
+                  HistoryPageControl(historyPaging, older = false, enabled = !gatewayOffline) {
+                    readerScroll.navigation.pause()
+                    onLoadHistoryPage(false)
+                  }
+                }
+              }
               itemsIndexed(items = timeline.items, key = { _, item -> chatTimelineItemKey(item) }) { _, item ->
                 ChatReaderItem(chatTimelineItemKey(item)) {
                   when (item) {
                     is ChatTimelineItem.Message -> {
                       key(fullMessageOwner, selectionGeneration) {
                         ChatBubble(
+                          codeReaders = codeReaderFor(item),
                           messageId = item.message.id,
                           entryId = item.message.entryId,
                           role = item.message.role,
@@ -1914,6 +1960,7 @@ private fun ChatMessageList(
                     is ChatTimelineItem.OutboxCommand -> {
                       ChatOutboxBubble(
                         item = item.item,
+                        loadImagePreview = loadOutboxImagePreview,
                         onRetry = { onRetryOutbox(item.item.id) },
                         onDelete = { onDeleteOutbox(item.item.id) },
                       )
@@ -1922,6 +1969,7 @@ private fun ChatMessageList(
                     is ChatTimelineItem.RecoveryOutboxCommand -> {
                       ChatOutboxBubble(
                         item = item.item,
+                        loadImagePreview = loadOutboxImagePreview,
                         retryEnabled = false,
                         onRetry = { onRetryOutbox(item.item.id) },
                         onDelete = { onDeleteOutbox(item.item.id) },
@@ -1967,6 +2015,7 @@ private fun ChatMessageList(
 
                     is ChatTimelineItem.StreamingAssistant -> {
                       ChatBubble(
+                        codeReaders = codeReaderFor(item),
                         messageId = null,
                         entryId = null,
                         role = "assistant",
@@ -2000,9 +2049,15 @@ private fun ChatMessageList(
                   }
                 }
               }
+              item(key = "history-older") {
+                ChatHistoryOlderBoundary(historyPaging, enabled = !gatewayOffline, showBoundary = timeline.items.isNotEmpty() && !historyLoading) {
+                  readerScroll.navigation.pause()
+                  onLoadHistoryPage(true)
+                }
+              }
             }
 
-            if (timeline.items.isEmpty()) {
+            if (timeline.items.isEmpty() && !historyPaging.hasOlder && !historyPaging.hasNewer) {
               if (showChatLoadingPlaceholder(historyLoading = historyLoading, healthOk = healthOk, gatewayOffline = gatewayOffline)) {
                 ClawLoadingState(title = nativeString("Loading thread"), modifier = Modifier.align(Alignment.Center))
               } else {
@@ -2019,6 +2074,41 @@ private fun ChatMessageList(
       }
     },
   )
+}
+
+@Composable
+internal fun ChatHistoryOlderBoundary(
+  paging: ChatHistoryPaging,
+  enabled: Boolean,
+  showBoundary: Boolean,
+  onLoad: () -> Unit,
+) {
+  if (paging.hasOlder) {
+    HistoryPageControl(paging, older = true, enabled = enabled, onClick = onLoad)
+  } else if (showBoundary && paging.olderComplete) {
+    Text(nativeString("Beginning of conversation"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+  }
+}
+
+@Composable
+private fun HistoryPageControl(
+  paging: ChatHistoryPaging,
+  older: Boolean,
+  enabled: Boolean,
+  onClick: () -> Unit,
+) {
+  Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+    if (paging.failed) Text(nativeString("Could not load messages. Try again."), style = ClawTheme.type.caption, color = ClawTheme.colors.warning)
+    TextButton(onClick = onClick, enabled = enabled && !paging.loading) {
+      Text(
+        when {
+          paging.loading -> nativeString("Loading messages…")
+          older -> nativeString("Load older messages")
+          else -> nativeString("Load newer messages")
+        },
+      )
+    }
+  }
 }
 
 internal data class ChatWorkingRun(
@@ -2193,6 +2283,7 @@ internal fun ChatBubble(
   resolveInlineWidgetResource: suspend (String, ChatWidgetResource?) -> ChatWidgetResource?,
   loadImageArtifact: suspend (String) -> GatewayLoadedImage?,
   loadMediaArtifact: suspend (String, GatewayMediaKind, Boolean) -> GatewayLoadedMedia?,
+  codeReaders: ChatCodeReaderRow? = null,
   sourcePreviews: List<ChatSourcePreview> = emptyList(),
   sourcePreviewConfig: GatewaySourcePreviewConfig? = null,
   loadSourceFavicon: suspend (GatewaySourcePreviewConfig, String) -> GatewayLoadedImage? = { _, _ -> null },
@@ -2219,7 +2310,7 @@ internal fun ChatBubble(
       peerSenderLabel != null -> peerSenderLabel
       else -> null
     }
-  val displayableContent =
+  val visibleContent =
     content.filter { part ->
       when (part.type) {
         "text" -> {
@@ -2239,9 +2330,19 @@ internal fun ChatBubble(
         }
       }
     }
-  if (displayableContent.isEmpty()) return
+  // User turns keep one shape across composer, sent and transcribed states: attachments,
+  // the author's text without the "See attached." placeholder, then the voice transcript.
+  val attachmentMessage =
+    remember(visibleContent, isUser) {
+      if (isUser) splitChatAttachmentMessage(visibleContent) else ChatAttachmentMessageParts(visibleContent, null)
+    }
+  val displayableContent = attachmentMessage.content
+  val transcript = attachmentMessage.transcript
+  if (displayableContent.isEmpty() && transcript == null) return
 
   val messageText = chatMessagePlainText(displayableContent)
+  // Copy, Select text, Share and Reply act on what the bubble shows, transcript included.
+  val actionText = listOfNotNull(messageText.takeIf(String::isNotBlank), transcript).joinToString("\n\n")
   val reactionMessageId = entryId?.takeIf { !live && (isUser || normalizedRole == "assistant") }
   val canReact = reactionMessageId != null && onReact != null
   var reactionPickerOpen by remember(reactionMessageId, canReact) { mutableStateOf(false) }
@@ -2263,7 +2364,7 @@ internal fun ChatBubble(
     separateContent = true,
     messageActions = { modifier, body ->
       ChatMessageActionHost(
-        text = messageText,
+        text = actionText,
         onReply = onReplyMessage,
         showSessionActions = isUser && entryId != null && sessionActionsEnabled,
         onRewind = entryId?.let { value -> { onRewindMessage(value) } },
@@ -2294,10 +2395,12 @@ internal fun ChatBubble(
       }
     val groups = remember(orderedContent) { chatMessageContentGroups(orderedContent) }
     var imageOffset = 0
+    var transcriptShown = false
+    val firstTextGroup = if (codeReaders == null) -1 else groups.indexOfFirst { parts -> parts.any { it.type == "text" } }
     caption?.let {
       Text(it, modifier = Modifier.padding(horizontal = CHAT_MESSAGE_TEXT_INSET_DP.dp), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
     }
-    groups.forEach { parts ->
+    groups.forEachIndexed { groupIndex, parts ->
       if (parts.first().isDetachedChatAttachment()) {
         val groupImageOffset = imageOffset
         imageOffset += parts.count { it.type == "image" }
@@ -2307,7 +2410,9 @@ internal fun ChatBubble(
           firstImageIndex = groupImageOffset,
           imagePage = currentImagePage,
           resolverReady = inlineWidgetResolverReady,
+          inboundMediaBasePath = sourcePreviewConfig?.basePath,
           loadImage = loadImageArtifact,
+          loadMedia = loadMediaArtifact,
         )
       } else {
         ChatMessageTextSurface(isUser) {
@@ -2319,15 +2424,18 @@ internal fun ChatBubble(
               onExpandedChange = { userMessageExpanded = it },
             )
           }
-          parts.forEach { part ->
+          val firstTextIndex = if (groupIndex == firstTextGroup) parts.indexOfFirst { it.type == "text" } else -1
+          parts.forEachIndexed { partIndex, part ->
             when {
               part.type == "text" && !collapsibleUserText -> {
-                ChatMarkdown(
-                  text = part.text.orEmpty(),
-                  textColor = ClawTheme.colors.text,
-                  isStreaming = live,
-                  bodyStyle = ClawTheme.type.body.copy(fontWeight = FontWeight.Normal),
-                )
+                CompositionLocalProvider(LocalChatCodeReaderHandoff provides codeReaders.takeIf { partIndex == firstTextIndex }) {
+                  ChatMarkdown(
+                    text = part.text.orEmpty(),
+                    textColor = ClawTheme.colors.text,
+                    isStreaming = live,
+                    bodyStyle = ClawTheme.type.body.copy(fontWeight = FontWeight.Normal),
+                  )
+                }
               }
 
               part.type == "text" -> {}
@@ -2358,31 +2466,28 @@ internal fun ChatBubble(
               }
             }
           }
+          if (transcript != null && !transcriptShown) {
+            transcriptShown = true
+            ChatVoiceTranscriptBlock(transcript = transcript, stateKey = messageId)
+          }
         }
       }
     }
-    if (imageCount > CHAT_MESSAGE_IMAGE_WINDOW) {
-      val imageNavigation = rememberChatReaderAction()
-      FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        TextButton(onClick = {
-          imageNavigation.pause()
-          imagePage = currentImagePage - 1
-        }, enabled = currentImagePage > 0) { Text(nativeString("Previous images")) }
-        TextButton(onClick = {
-          imageNavigation.pause()
-          imagePage = currentImagePage + 1
-        }, enabled = currentImagePage < lastImagePage) { Text(nativeString("Next images")) }
-        Text(
-          nativeString("Images \$first–\$last of \$count", currentImagePage * CHAT_MESSAGE_IMAGE_WINDOW + 1, minOf((currentImagePage + 1) * CHAT_MESSAGE_IMAGE_WINDOW, imageCount), imageCount),
-          style = ClawTheme.type.caption,
-          color = ClawTheme.colors.textMuted,
-        )
+    if (transcript != null && !transcriptShown) {
+      ChatMessageTextSurface(isUser) {
+        ChatVoiceTranscriptBlock(transcript = transcript, stateKey = messageId)
       }
     }
+    ChatImagePageControls(
+      imageCount = imageCount,
+      currentPage = currentImagePage,
+      lastPage = lastImagePage,
+      onPageChange = { imagePage = it },
+    )
     Column(Modifier.padding(horizontal = CHAT_MESSAGE_TEXT_INSET_DP.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
       if (messageId != null) {
         ChatSourcePreviews(sourcePreviews, sourcePreviewConfig, loadSourceFavicon)
-        ChatMessageLinkPreview(messageId = messageId, role = normalizedRole, content = displayableContent, excludedUrls = sourcePreviews.flatMap { it.aliases }.toSet())
+        ChatMessageLinkPreview(messageId = messageId, role = normalizedRole, content = attachmentMessage.linkPreviewContent, excludedUrls = sourcePreviews.flatMap { it.aliases }.toSet())
       }
       disclosure()
       messageSpeech?.let { speech ->
@@ -2454,6 +2559,32 @@ private fun FullChatSpeechIndicator(
         color = ClawTheme.colors.textMuted,
       )
     }
+  }
+}
+
+/** Transcript of a voice note: a light quote under the voice row, collapsed only when tall. */
+@Composable
+internal fun ChatVoiceTranscriptBlock(
+  transcript: String,
+  stateKey: String?,
+) {
+  var expanded by rememberSaveable(stateKey, transcript) { mutableStateOf(false) }
+  val barColor = ClawTheme.colors.textMuted.copy(alpha = 0.35f)
+  Column(
+    modifier =
+      Modifier
+        .fillMaxWidth()
+        .testTag("chat-voice-transcript")
+        .drawBehind { drawRect(barColor, size = Size(2.dp.toPx(), size.height)) }
+        .padding(start = 10.dp),
+    verticalArrangement = Arrangement.spacedBy(4.dp),
+  ) {
+    ChatUserMessageText(
+      textParts = listOf(transcript),
+      plainText = transcript,
+      expanded = expanded,
+      onExpandedChange = { expanded = it },
+    )
   }
 }
 
@@ -2919,6 +3050,7 @@ private fun DiffStatChip(
 private fun ChatNotice(
   title: String,
   body: String,
+  trailingContent: (@Composable () -> Unit)? = null,
 ) {
   Surface(
     modifier = Modifier.fillMaxWidth(),
@@ -2937,6 +3069,7 @@ private fun ChatNotice(
         Text(text = title, style = ClawTheme.type.section, color = ClawTheme.colors.text)
         Text(text = body, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
       }
+      trailingContent?.invoke()
     }
   }
 }
@@ -3328,6 +3461,7 @@ private fun ChatComposer(
               BasicTextField(
                 value = textFieldValue,
                 enabled = inputEnabled,
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                 // A pending IME callback must not edit the draft behind Details.
                 onValueChange = { if (inputEnabled) updateTextFieldValue(it) },
                 textStyle = draftStyle.copy(color = ClawTheme.colors.text),
@@ -3377,16 +3511,15 @@ private fun ChatComposer(
         )
         BoxWithConstraints(Modifier.fillMaxWidth()) {
           val toolbarInset = if (maxWidth >= 360.dp) 4.dp else 0.dp
-          val iconWidth = if (onOpenDetails != null) 36.dp else ClawTheme.spacing.touchTarget
           val showEffort = thinkingSupported || fastModeEnabled || fastMode
           val primaryAction = resolveChatComposerPrimaryAction(talkActive, pendingRunCount > 0, hasContent)
           Row(Modifier.fillMaxWidth().padding(horizontal = toolbarInset), verticalAlignment = Alignment.CenterVertically) {
             if (onOpenDetails != null) {
-              IconButton(onClick = onOpenDetails, modifier = Modifier.size(width = 36.dp, height = ClawTheme.spacing.touchTarget)) {
+              IconButton(onClick = onOpenDetails, modifier = Modifier.size(ClawTheme.spacing.touchTarget)) {
                 Icon(Icons.Default.MoreVert, contentDescription = nativeString("Details"))
               }
             }
-            IconButton(onClick = onOpenAttachments, enabled = inputEnabled, modifier = Modifier.size(width = iconWidth, height = ClawTheme.spacing.touchTarget)) {
+            IconButton(onClick = onOpenAttachments, enabled = inputEnabled, modifier = Modifier.size(ClawTheme.spacing.touchTarget)) {
               Icon(Icons.Default.Add, contentDescription = nativeString("Add attachment"), tint = ClawTheme.colors.textMuted, modifier = Modifier.size(24.dp))
             }
             Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
@@ -3414,7 +3547,6 @@ private fun ChatComposer(
               } else {
                 Box {
                   ChatComposerMicButton(
-                    modifier = Modifier.width(iconWidth),
                     dictationState = dictationState,
                     dictationEnabled = ownerReady && dictationEnabled,
                     voiceNoteEnabled = ownerReady && recordVoiceNoteEnabled,
@@ -3923,6 +4055,7 @@ private fun BranchSwitcherSheet(
         Surface(
           onClick = { if (!branch.active) onSelect(branch.leafEntryId) },
           enabled = selectionEnabled && !branch.active,
+          modifier = Modifier.semantics { selected = branch.active },
           color = if (branch.active) ClawTheme.colors.surfacePressed else Color.Transparent,
           contentColor = ClawTheme.colors.text,
         ) {
@@ -4367,7 +4500,7 @@ private fun ChatPermissionPicker(
             )
             if (!selectable) {
               Text(
-                text = nativeString("Full access requires operator.admin access."),
+                text = nativeString("You don’t have permission to turn on Full access."),
                 style = ClawTheme.type.caption,
                 color = ClawTheme.colors.warning,
               )
@@ -4717,7 +4850,7 @@ internal fun chatThinkingSupported(
 
 internal fun chatFastModeControlEnabled(
   supported: Boolean,
-  adminAuthorized: Boolean,
+  writeAuthorized: Boolean,
   connected: Boolean,
   gatewayAvailable: Boolean,
   loading: Boolean,
@@ -4727,7 +4860,7 @@ internal fun chatFastModeControlEnabled(
   settingsMutationPending: Boolean,
 ): Boolean =
   supported &&
-    adminAuthorized &&
+    writeAuthorized &&
     connected &&
     gatewayAvailable &&
     !loading &&
@@ -4759,4 +4892,31 @@ internal fun chatThinkingOptionLabel(
       rawLabel
     }
   return localizedUppercase(localizedLabel.take(1), languageTag) + localizedLabel.drop(1)
+}
+
+/** Previous/next controls for one message's image window; shown only past a single window. */
+@Composable
+internal fun ChatImagePageControls(
+  imageCount: Int,
+  currentPage: Int,
+  lastPage: Int,
+  onPageChange: (Int) -> Unit,
+) {
+  if (imageCount <= CHAT_MESSAGE_IMAGE_WINDOW) return
+  val imageNavigation = rememberChatReaderAction()
+  FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    TextButton(onClick = {
+      imageNavigation.pause()
+      onPageChange(currentPage - 1)
+    }, enabled = currentPage > 0) { Text(nativeString("Previous images")) }
+    TextButton(onClick = {
+      imageNavigation.pause()
+      onPageChange(currentPage + 1)
+    }, enabled = currentPage < lastPage) { Text(nativeString("Next images")) }
+    Text(
+      nativeString("Images \$first–\$last of \$count", currentPage * CHAT_MESSAGE_IMAGE_WINDOW + 1, minOf((currentPage + 1) * CHAT_MESSAGE_IMAGE_WINDOW, imageCount), imageCount),
+      style = ClawTheme.type.caption,
+      color = ClawTheme.colors.textMuted,
+    )
+  }
 }

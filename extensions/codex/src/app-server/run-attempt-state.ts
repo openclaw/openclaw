@@ -3,8 +3,11 @@ import {
   formatErrorMessage,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { CodexAppServerRpcError } from "./client.js";
+import { hasCodexAppServerSiblingThreadWork } from "./client-runtime.js";
+import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
 import { neutralizeCodexExplicitMentionSigils } from "./context-engine-projection.js";
+import { isCodexInferenceTransportFailure } from "./inference-transport.js";
+import { CODEX_INFERENCE_REQUEST_TOO_LARGE } from "./inference-upload.js";
 import { isJsonObject } from "./protocol.js";
 import {
   assertCodexBindingMayBeReplaced,
@@ -13,7 +16,41 @@ import {
   type CodexAppServerBindingStore,
   type CodexBindingAuthority,
 } from "./session-binding.js";
+import { retireSharedCodexAppServerClientIfCurrent } from "./shared-client-lifecycle.js";
 import type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle-types.js";
+
+/** Called only after a native failure and its output projection have settled. */
+export function retireCodexTransportAfterFailure(
+  {
+    client,
+    thread,
+  }: { client: CodexAppServerClient; thread: CodexAppServerThreadLifecycleBinding },
+  error: unknown,
+): void {
+  if (
+    thread.connectionScope === "supervision" ||
+    thread.ringZeroClientInstanceId !== undefined ||
+    thread.ringZeroConfigFingerprint !== undefined ||
+    !isCodexInferenceTransportFailure(error)
+  ) {
+    return;
+  }
+  // Optional recovery must preserve process-only Incognito history and sibling
+  // ownership, even when no shared-client lease keeps that history alive.
+  if (hasCodexAppServerSiblingThreadWork(client, thread.threadId)) {
+    return;
+  }
+  // Detach future acquisitions without replaying completed tools.
+  const retired = retireSharedCodexAppServerClientIfCurrent(client);
+  if (retired) {
+    embeddedAgentLog.warn("codex inference transport retired after settled failure", {
+      reason: "parent_local_transport_failure",
+      stage: "turn_settled",
+      activeLeases: retired.activeLeases,
+      closed: retired.closed,
+    });
+  }
+}
 
 export function canClearCodexBindingForRecovery(
   thread: NonNullable<Parameters<typeof assertCodexBindingMayBeReplaced>[0]>,
@@ -56,17 +93,22 @@ export async function clearCodexBindingAfterInvalidImagePayload(
   });
 }
 
-export function shouldUseFreshCodexThreadAfterContextEngineOverflow(params: {
+export function shouldUseFreshCodexThreadAfterContextOverflow(params: {
   error: unknown;
   contextEngineActive: boolean;
   thread: CodexAppServerThreadLifecycleBinding;
 }): boolean {
+  const message = formatErrorMessage(params.error);
+  // A byte-limit rejection does not fill Codex's token window, so native auto-
+  // compaction never runs. The next turn must use the host's bounded history seed.
+  // Keep this exact to the local relay; unrelated upstream errors retain their thread.
+  if (message.includes(CODEX_INFERENCE_REQUEST_TOO_LARGE)) {
+    return true;
+  }
   if (!params.contextEngineActive || params.thread.lifecycle.action !== "resumed") {
     return false;
   }
-  return /context (?:window|length)|maximum context|too many tokens/iu.test(
-    formatErrorMessage(params.error),
-  );
+  return /context (?:window|length)|maximum context|too many tokens/iu.test(message);
 }
 
 export function isCodexActiveCompactTurnError(error: unknown): boolean {

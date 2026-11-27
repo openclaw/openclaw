@@ -3,8 +3,10 @@ import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
+  readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { NodePermissionDetails } from "../../packages/gateway-protocol/src/node-permissions.js";
 import { validateSystemRunExecutionContext } from "../../packages/gateway-protocol/src/system-run-execution-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { describeInterpreterInlineEval } from "../infra/command-analysis/inline-eval.js";
@@ -31,7 +33,6 @@ import {
   EXEC_AUTO_REVIEW_SHELL_STARTUP_WARNING,
   formatExecAutoReviewAssessment,
   resolveExecAutoReviewDecision,
-  type ExecAutoReviewer,
 } from "../infra/exec-auto-review.js";
 import {
   requestExecHostViaSocket,
@@ -54,20 +55,16 @@ import {
 } from "../infra/host-env-security.js";
 import { buildExecRoutingEnv, SUBAGENT_EXEC_ENV_VAR } from "../infra/openclaw-exec-env.js";
 import {
-  APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
   prepareSystemRunExecutableIdentityBinding,
-  revalidateSystemRunMutableFileBinding,
-  resolveMutableFileOperandSnapshotSync,
+  resolveMutableFileOperandSnapshot,
   type SystemRunMutableFileBinding,
 } from "../infra/system-run-approval-binding.js";
 import { normalizeSystemRunApprovalPlan } from "../infra/system-run-approval-plan.js";
 import { formatExecCommand, resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import {
   APPROVAL_CWD_DRIFT_DENIED_MESSAGE,
-  captureApprovedCwdSnapshotSync,
-  revalidateApprovedCwdSnapshot,
+  captureApprovedCwdSnapshot,
 } from "../infra/system-run-cwd-binding.js";
-import { revalidateApprovedMutableFileOperand } from "../infra/system-run-file-snapshot.js";
 import { logWarn } from "../logger.js";
 import {
   evaluateSystemRunPolicy,
@@ -82,34 +79,20 @@ import {
   resolveSystemRunExecArgv,
 } from "./invoke-system-run-allowlist.js";
 import {
+  normalizeDeniedReason,
+  sendSystemRunDenied,
+  type SystemRunDeniedReason,
+  type SystemRunInvokeResult,
+} from "./invoke-system-run-denied.js";
+import {
   buildEnvOverrideRejectionMessage,
   hardenApprovedExecutionPaths,
+  revalidateApprovedExecutionPaths,
 } from "./invoke-system-run-plan.js";
-import type {
-  ExecEventPayload,
-  RunResult,
-  SkillBinsProvider,
-  SystemRunParams,
-} from "./invoke-types.js";
+import type { ExecEventPayload, RunResult, SystemRunParams } from "./invoke-types.js";
+import type { SkillBinsProvider } from "./runtime-skill-bins.js";
 
 const OUTPUT_EVENT_TAIL = 20_000;
-
-type SystemRunInvokeResult = {
-  ok: boolean;
-  payloadJSON?: string | null;
-  error?: { code?: string; message?: string } | null;
-};
-
-type SystemRunDeniedReason =
-  | "security=deny"
-  | "approval-required"
-  | "auto-review-denied"
-  | "approval-state-write-failed"
-  | "allowlist-miss"
-  | "execution-plan-miss"
-  | "companion-unavailable"
-  | "cwd-unavailable"
-  | "permission:screenRecording";
 
 type SystemRunExecutionContext = SystemRunParsePhase["execution"];
 
@@ -130,21 +113,6 @@ function warnWritableTrustedDirOnce(message: string): void {
     return;
   }
   logWarn(message);
-}
-
-function normalizeDeniedReason(reason: string | null | undefined): SystemRunDeniedReason {
-  switch (reason) {
-    case "security=deny":
-    case "approval-required":
-    case "allowlist-miss":
-    case "execution-plan-miss":
-    case "companion-unavailable":
-    case "cwd-unavailable":
-    case "permission:screenRecording":
-      return reason;
-    default:
-      return "approval-required";
-  }
 }
 
 export async function resolveEffectiveSystemRunExecPolicy(params: {
@@ -178,35 +146,7 @@ type HandleSystemRunInvokeOptions = {
   sendNodeEvent?: (event: string, payload: ExecEventPayload) => Promise<void>;
   sendInvokeResult: (result: SystemRunInvokeResult) => Promise<void>;
   preferMacAppExecHost: boolean;
-  getRuntimeConfig?: () => OpenClawConfig;
-  autoReviewer?: ExecAutoReviewer;
-  commitExecAuthorization?: typeof commitExecAuthorizationLocked;
 };
-
-async function sendSystemRunDenied(
-  opts: Pick<HandleSystemRunInvokeOptions, "sendNodeEvent" | "sendInvokeResult">,
-  execution: SystemRunExecutionContext,
-  message: string,
-  reason: SystemRunDeniedReason = "approval-required",
-): Promise<null> {
-  await opts.sendNodeEvent?.("exec.denied", {
-    sessionKey: execution.sessionKey,
-    runId: execution.runId,
-    host: "node",
-    command: execution.commandText,
-    reason,
-    suppressNotifyOnExit: execution.suppressNotifyOnExit,
-  });
-  await opts.sendInvokeResult({
-    ok: false,
-    // A missing companion reply can follow execution; it is not a policy denial.
-    error: {
-      code: reason === "companion-unavailable" ? "UNAVAILABLE" : "SYSTEM_RUN_DENIED",
-      message,
-    },
-  });
-  return null;
-}
 
 async function sendSystemRunCompleted(
   opts: Pick<HandleSystemRunInvokeOptions, "sendNodeEvent" | "sendInvokeResult">,
@@ -276,7 +216,8 @@ async function parseSystemRunPhase(opts: HandleSystemRunInvokeOptions) {
   const requestedSessionKey = normalizeOptionalString(opts.params.sessionKey);
   const sessionKey = requestedSessionKey ?? "node";
   const runId = normalizeOptionalString(opts.params.runId) ?? crypto.randomUUID();
-  const cwd = normalizeOptionalString(opts.params.cwd);
+  const cwd = readNonBlankString(opts.params.cwd);
+  // Node-host cwd preserves whitespace; see resolveExecWorkdir.
   const suppressNotifyOnExit = opts.params.suppressNotifyOnExit === true;
   const approvalSource = opts.params.approvalSource;
   if (
@@ -301,7 +242,7 @@ async function parseSystemRunPhase(opts: HandleSystemRunInvokeOptions) {
       approvalPlan !== null &&
       argvArraysMatch(approvalPlan.argv, command.argv) &&
       approvalPlan.commandText === commandText &&
-      normalizeOptionalString(approvalPlan.cwd) === cwd &&
+      approvalPlan.cwd === cwd &&
       normalizeOptionalString(approvalPlan.agentId) === agentId &&
       normalizeOptionalString(approvalPlan.sessionKey) === requestedSessionKey;
     if (!planMatchesRequest) {
@@ -370,8 +311,11 @@ async function parseSystemRunPhase(opts: HandleSystemRunInvokeOptions) {
     sessionKey,
     runId,
     execution,
-    deny: (message: string, reason?: SystemRunDeniedReason): Promise<null> =>
-      sendSystemRunDenied(opts, execution, message, reason),
+    deny: (
+      message: string,
+      reason?: SystemRunDeniedReason,
+      permissionDetails?: NodePermissionDetails,
+    ): Promise<null> => sendSystemRunDenied(opts, execution, message, reason, permissionDetails),
     approvalDecision,
     approvalSource: validatedApprovalSource,
     delayedApprovalPolicySnapshot,
@@ -388,7 +332,7 @@ async function evaluateSystemRunPolicyPhase(
   opts: HandleSystemRunInvokeOptions,
   parsed: SystemRunParsePhase,
 ) {
-  const cfg = opts.getRuntimeConfig?.() ?? (await import("../config/config.js")).getRuntimeConfig();
+  const cfg = (await import("../config/config.js")).getRuntimeConfig();
   const effectivePolicy = await resolveEffectiveSystemRunExecPolicy({
     cfg,
     agentId: parsed.agentId,
@@ -410,14 +354,13 @@ async function evaluateSystemRunPolicyPhase(
   }
   const evaluationPolicySnapshot = parsed.delayedApprovalPolicySnapshot ?? currentPolicySnapshot;
   const baseSecurity = effectivePolicy.security;
-  const baseAsk = effectivePolicy.ask;
   const fallbackRequest = parsed.approvalSource === "ask-fallback";
   const security = fallbackRequest
     ? minSecurity(baseSecurity, approvals.agent.askFallback)
     : baseSecurity;
-  const ask = fallbackRequest ? "off" : baseAsk;
+  const ask = fallbackRequest ? "off" : effectivePolicy.ask;
   const autoAllowSkills = approvals.agent.autoAllowSkills;
-  const { safeBins, safeBinProfiles, trustedSafeBinDirs } = resolveExecSafeBinRuntimePolicy({
+  const { safeBins, safeBinProfiles, trustedSafeBinDirs } = await resolveExecSafeBinRuntimePolicy({
     global: cfg.tools?.exec,
     local: agentExec,
     onWarning: warnWritableTrustedDirOnce,
@@ -510,7 +453,7 @@ async function evaluateSystemRunPolicyPhase(
       security === "allowlist" ||
       effectivePolicy.autoReview)
   ) {
-    const prepared = prepareSystemRunExecutableIdentityBinding({
+    const prepared = await prepareSystemRunExecutableIdentityBinding({
       segments,
       cwd: parsed.cwd,
       env: parsed.env,
@@ -528,7 +471,7 @@ async function evaluateSystemRunPolicyPhase(
     );
     const autoReviewEligibility = resolveUnpinnedAutoApprovalEligibility({
       authorizationPlan: await planExecAuthorization({
-        analysis: analyzeArgvCommand({ argv: parsed.argv, cwd: parsed.cwd, env: parsed.env }),
+        analysis: await analyzeArgvCommand({ argv: parsed.argv, cwd: parsed.cwd, env: parsed.env }),
         command: parsed.commandText,
         cwd: parsed.cwd,
         env: parsed.env,
@@ -569,13 +512,13 @@ async function evaluateSystemRunPolicyPhase(
       autoReviewEligibility.eligible &&
       policy.eventReason !== "security=deny";
     if (canAutoReviewApprovalMiss) {
-      const reviewer =
-        opts.autoReviewer ??
-        (await import("../agents/exec-auto-reviewer.js")).createModelExecAutoReviewer({
-          cfg,
-          agentId: parsed.agentId,
-          reviewer: agentExec?.reviewer ?? globalExec?.reviewer,
-        });
+      const reviewer = (
+        await import("../agents/exec-auto-reviewer.js")
+      ).createModelExecAutoReviewer({
+        cfg,
+        agentId: parsed.agentId,
+        reviewer: agentExec?.reviewer ?? globalExec?.reviewer,
+      });
       const decision = await resolveExecAutoReviewDecision(reviewer, {
         command: parsed.commandText,
         argv: autoReviewArgv,
@@ -645,7 +588,7 @@ async function evaluateSystemRunPolicyPhase(
   });
 
   const approvalContextBound = policy.approvedByAsk || fallbackRequest;
-  const hardenedPaths = hardenApprovedExecutionPaths({
+  const hardenedPaths = await hardenApprovedExecutionPaths({
     approvedByAsk: approvalContextBound,
     argv: parsed.argv,
     shellCommand: parsed.shellPayload,
@@ -657,7 +600,7 @@ async function evaluateSystemRunPolicyPhase(
   let executionCwd = hardenedPaths.cwd;
   let approvedCwdSnapshot = approvalContextBound ? hardenedPaths.approvedCwdSnapshot : undefined;
   if (security === "allowlist" && !approvedCwdSnapshot) {
-    const capturedCwd = captureApprovedCwdSnapshotSync(executionCwd ?? process.cwd());
+    const capturedCwd = await captureApprovedCwdSnapshot(executionCwd ?? process.cwd());
     if (!capturedCwd.ok) {
       return parsed.deny(capturedCwd.message);
     }
@@ -707,35 +650,19 @@ async function evaluateSystemRunPolicyPhase(
 async function revalidateSystemRunApprovedPathBindings(
   phase: SystemRunPolicyPhase,
 ): Promise<boolean> {
-  if (phase.approvedCwdSnapshot && !revalidateApprovedCwdSnapshot(phase.approvedCwdSnapshot)) {
-    logWarn(`security: system.run approval cwd drift blocked (runId=${phase.runId})`);
-    await phase.deny(APPROVAL_CWD_DRIFT_DENIED_MESSAGE);
-    return false;
+  const failure = await revalidateApprovedExecutionPaths({
+    argv: phase.argv,
+    cwd: phase.cwd,
+    approvedCwdSnapshot: phase.approvedCwdSnapshot,
+    executableBinding: phase.executableBinding,
+    mutableFileOperand: phase.approvalPlan?.mutableFileOperand,
+  });
+  if (!failure) {
+    return true;
   }
-  if (
-    phase.approvalPlan?.mutableFileOperand &&
-    !revalidateApprovedMutableFileOperand({
-      snapshot: phase.approvalPlan.mutableFileOperand,
-      argv: phase.argv,
-      cwd: phase.cwd,
-    })
-  ) {
-    logWarn(`security: system.run approval script drift blocked (runId=${phase.runId})`);
-    await phase.deny(APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE);
-    return false;
-  }
-  if (phase.executableBinding) {
-    const revalidated = await revalidateSystemRunMutableFileBinding({
-      binding: phase.executableBinding,
-      cwd: phase.cwd,
-    });
-    if (!revalidated.ok) {
-      logWarn(`security: system.run approval executable drift blocked (runId=${phase.runId})`);
-      await phase.deny(revalidated.message);
-      return false;
-    }
-  }
-  return true;
+  logWarn(`security: system.run approval ${failure.kind} drift blocked (runId=${phase.runId})`);
+  await phase.deny(failure.message);
+  return false;
 }
 
 async function executeSystemRunPhase(
@@ -750,7 +677,7 @@ async function executeSystemRunPhase(
     (phase.policy.approvedByAsk ||
       phase.approvalSource !== undefined ||
       phase.security === "allowlist")
-      ? resolveMutableFileOperandSnapshotSync({
+      ? await resolveMutableFileOperandSnapshot({
           argv: phase.argv,
           cwd: phase.cwd,
           shellCommand: phase.shellPayload,
@@ -823,7 +750,11 @@ async function executeSystemRunPhase(
       return;
     }
     if (!response.ok) {
-      await phase.deny(response.error.message, normalizeDeniedReason(response.error.reason));
+      await phase.deny(
+        response.error.message,
+        normalizeDeniedReason(response.error.reason),
+        response.error.code === "PERMISSION_MISSING" ? response.error.details : undefined,
+      );
       return;
     }
     const result: ExecHostRunResult = response.payload;
@@ -832,13 +763,16 @@ async function executeSystemRunPhase(
   }
 
   if (phase.needsScreenRecording) {
-    await phase.deny("PERMISSION_MISSING: screenRecording", "permission:screenRecording");
+    await phase.deny("PERMISSION_MISSING: screenRecording", "permission:screenRecording", {
+      capabilities: ["screenRecording"],
+      state: "not-determined",
+    });
     return;
   }
 
   const allowAlwaysDecision =
     phase.policy.approvalDecision === "allow-always"
-      ? resolveAllowAlwaysPersistenceDecision({
+      ? await resolveAllowAlwaysPersistenceDecision({
           segments: phase.segments,
           cwd: phase.cwd,
           env: phase.env,
@@ -870,13 +804,14 @@ async function executeSystemRunPhase(
 
   let assertCommittedAuthorization: () => void;
   try {
-    assertCommittedAuthorization = await (
-      opts.commitExecAuthorization ?? commitExecAuthorizationLocked
-    )({
+    assertCommittedAuthorization = await commitExecAuthorizationLocked({
       agentId: phase.agentId,
       matches: phase.allowlistMatches,
       command: phase.commandText,
-      resolvedPath: resolveApprovalAuditTrustPath(phase.segments[0]?.resolution ?? null, phase.cwd),
+      resolvedPath: await resolveApprovalAuditTrustPath(
+        phase.segments[0]?.resolution ?? null,
+        phase.cwd,
+      ),
       authorization,
       ...(allowAlwaysDecision ? { allowAlwaysDecision } : {}),
     });

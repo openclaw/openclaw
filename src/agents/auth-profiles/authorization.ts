@@ -1,0 +1,360 @@
+import { createHash } from "node:crypto";
+import path from "node:path";
+import { resolveStateDir } from "../../config/paths.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
+import { enqueueKeyedTask } from "../../plugin-sdk/keyed-async-queue.js";
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
+import {
+  AuthProfileAuthorizationError,
+  type AuthProfileAuthorization,
+} from "./authorization-contract.js";
+import { enrollOwnedAuthProfileAuthorization } from "./authorization-enrollment-runtime.js";
+import { readAuthProfileAuthorizationLifetime } from "./authorization-lifetime.js";
+import { retainAuthProfileAuthorizationObservation } from "./authorization-observation.js";
+import { AUTH_STORE_VERSION, authProfilesLog } from "./constants.js";
+import {
+  assertAuthProfileMigrationStateAtDatabasePath,
+  prepareAuthProfileMigrationCandidates,
+} from "./legacy-source-diagnostic.js";
+import { resolveLegacyAuthProfileSourceCandidates } from "./legacy-source-files.js";
+import {
+  resolveSharedAuthStoreOwnershipAsync,
+  resolveSharedAuthStorePath,
+} from "./path-resolve.js";
+import { capturePersonalAuthProfileAuthorization } from "./personal-authorization.js";
+import { mergeLocalAuthProfileStoreWithInheritedStore } from "./runtime-snapshot-owner.js";
+import {
+  loadPersistedAuthProfileStoreFromRows,
+  prepareAgentAuthProfileRowsRead,
+  readSharedAuthProfileRows,
+} from "./sqlite-read.js";
+import { resolveAuthProfileDatabasePath } from "./sqlite.js";
+import {
+  getScopedAuthProfileEnv,
+  getScopedSharedAuthStore,
+  isEnvOnlyAuthProfileRuntime,
+  resolveRuntimeAuthProfileAgentDir,
+} from "./store.js";
+
+export type { AuthProfileAuthorization } from "./authorization-contract.js";
+
+const authorizationCaptureTails = new Map<string, Promise<void>>();
+
+/**
+ * Capture a persisted credential lifetime through its canonical owner, without bearer material.
+ * Personal accounts keep their own owner; env-only and bounded shared-store scopes never
+ * substitute an ambient admin credential.
+ */
+export async function captureAuthProfileAuthorization(params: {
+  profileId: string;
+  agentDir?: string;
+  cfg?: OpenClawConfig;
+  /** Identify a private upgrade copy by its publication destination; reads stay on the copy. */
+  publishedStateDir?: string;
+  /** Doctor only: prove a saved digest using the same live lifetime at a retained swap path. */
+  upgradeRecovery?: { recordedId: string; shadowRoots: readonly string[] };
+  assertCurrent: () => void;
+}): Promise<AuthProfileAuthorization> {
+  if (isUserModelAuthProfileId(params.profileId)) {
+    if (params.upgradeRecovery) {
+      throw new AuthProfileAuthorizationError("unavailable");
+    }
+    return capturePersonalAuthProfileAuthorization(params);
+  }
+  let cleanup: (() => Promise<void>) | undefined;
+  const sanitize = (error: unknown): Error =>
+    error instanceof AuthProfileAuthorizationError
+      ? error
+      : new AuthProfileAuthorizationError("unavailable");
+  try {
+    const { profileId, assertCurrent: assertCaller, cfg } = params;
+    const agentDir = resolveRuntimeAuthProfileAgentDir(params.agentDir);
+    const env = { ...(getScopedAuthProfileEnv() ?? process.env) };
+    let disposed = false;
+    let retired = false;
+    const assertSource = () => {
+      if (disposed || retired) {
+        throw new AuthProfileAuthorizationError("retired");
+      }
+      try {
+        assertCaller();
+      } catch {
+        retired = true;
+        throw new AuthProfileAuthorizationError("retired");
+      }
+    };
+    assertSource();
+    // These have separate or bounded owners. Never substitute the ambient shared/admin store.
+    if (isEnvOnlyAuthProfileRuntime() || getScopedSharedAuthStore()) {
+      throw new AuthProfileAuthorizationError("unavailable");
+    }
+    const context = captureOpenClawStateWorkerContext({ env });
+    const assertRoot = () => {
+      assertSource();
+      try {
+        context.admission.assertCurrent();
+        context.maintenanceScope?.assertAdmission();
+      } catch {
+        retired = true;
+        throw new AuthProfileAuthorizationError("retired");
+      }
+    };
+    const ownership = await resolveSharedAuthStoreOwnershipAsync(context);
+    assertRoot();
+    const sharedPath = resolvePathViaExistingAncestorSync(resolveSharedAuthStorePath(env));
+    const requestedPath = agentDir
+      ? resolvePathViaExistingAncestorSync(resolveAuthProfileDatabasePath(agentDir))
+      : sharedPath;
+    const paths = [...new Set([requestedPath, sharedPath])];
+    type Target = {
+      databasePath: string;
+      agentId?: string;
+      agentDir?: string;
+      observation: ReturnType<typeof retainAuthProfileAuthorizationObservation>;
+      reader?: Awaited<ReturnType<typeof prepareAgentAuthProfileRowsRead>>;
+      incarnation?: string;
+    };
+    const targets: Target[] = paths.map((databasePath) => ({
+      databasePath,
+      agentDir: databasePath === sharedPath ? undefined : agentDir,
+      observation: retainAuthProfileAuthorizationObservation(databasePath, profileId),
+    }));
+    const closeReaders = async () => {
+      await Promise.all(
+        targets.map(async (target) => {
+          const reader = target.reader;
+          target.reader = undefined;
+          await reader?.dispose();
+        }),
+      );
+    };
+    const release = () => {
+      disposed = true;
+      for (const target of targets) {
+        target.observation.dispose();
+      }
+    };
+    cleanup = async () => {
+      release();
+      await closeReaders();
+    };
+    const assertOwners = () => {
+      assertRoot();
+      if (resolvePathViaExistingAncestorSync(resolveSharedAuthStorePath(env)) !== sharedPath) {
+        retired = true;
+        throw new AuthProfileAuthorizationError("retired");
+      }
+      try {
+        for (const target of targets) {
+          target.reader?.assertCurrent();
+        }
+      } catch {
+        retired = true;
+        throw new AuthProfileAuthorizationError("retired");
+      }
+    };
+    const readCanonical = async () => {
+      assertOwners();
+      // The credential writer fences pending, changed, or uncertain publications. Physical
+      // admission generations may change on every cold read without a credential write.
+      const publishers = targets.map((target) => target.observation.prepareRead());
+      const rows = await Promise.all(
+        targets.map(async (target) => {
+          if (target.databasePath === sharedPath && ownership.location === "state-db") {
+            return readSharedAuthProfileRows(context, undefined, "canonical");
+          }
+          target.reader ??= await prepareAgentAuthProfileRowsRead({
+            databasePath: target.databasePath,
+            agentId: target.agentId,
+            env,
+            // Runtime credential projections omit private authorization incarnations.
+            source: "canonical",
+          });
+          target.agentId = target.reader.agentId;
+          return target.reader.read();
+        }),
+      );
+      assertOwners();
+      const stores = [];
+      for (const [index, row] of rows.entries()) {
+        const target = targets[index]!;
+        const store = loadPersistedAuthProfileStoreFromRows(row, target.databasePath) ?? {
+          version: AUTH_STORE_VERSION,
+          profiles: {},
+        };
+        await prepareAuthProfileMigrationCandidates({
+          databasePath: target.databasePath,
+          candidates: resolveLegacyAuthProfileSourceCandidates({ agentDir: target.agentDir, env }),
+          hasCredentials: Object.keys(store.profiles).length > 0,
+          assertCurrent: assertOwners,
+        });
+        assertAuthProfileMigrationStateAtDatabasePath(
+          target.databasePath,
+          store.profiles[profileId]?.provider,
+          cfg,
+        );
+        publishers[index]!(row.store.status === "readable" ? row.store.raw : undefined);
+        stores.push(store);
+      }
+      const local = stores[0]!;
+      const shared = stores[paths.indexOf(sharedPath)]!;
+      const effective = mergeLocalAuthProfileStoreWithInheritedStore(
+        local,
+        requestedPath === sharedPath ? undefined : shared,
+      );
+      const selected = effective.profiles[profileId];
+      if (!Object.hasOwn(effective.profiles, profileId) || !selected) {
+        retired = true;
+        throw new AuthProfileAuthorizationError("retired");
+      }
+      // Legacy reconciliation can replace a local profile with the shared credential.
+      const selectedPath =
+        selected === local.profiles[profileId] &&
+        effective.runtimeLocalProfileIds?.includes(profileId)
+          ? requestedPath
+          : sharedPath;
+      const lineagePaths =
+        selectedPath === requestedPath && selected.type !== "oauth" ? [requestedPath] : paths;
+      return { rows, selectedPath, lineagePaths };
+    };
+    // First-use enrollment writes owner rows. Overlapping captures must finish enrollment
+    // before another capture reads them; every caller still receives its own live authority.
+    return await enqueueKeyedTask({
+      tails: authorizationCaptureTails,
+      keys: paths,
+      task: async () => {
+        const assertFacts = () => {
+          assertOwners();
+          for (const target of targets) {
+            if (!target.incarnation) {
+              continue;
+            }
+            const fact = target.observation.readFact();
+            if (!fact || fact.incarnation !== target.incarnation) {
+              retired = true;
+              throw new AuthProfileAuthorizationError("retired");
+            }
+            if (target.databasePath === selectedPath) {
+              if (
+                fact.status === "retired" ||
+                fact.status === "absent" ||
+                (fact.expires !== undefined && fact.expires <= Date.now())
+              ) {
+                retired = true;
+                throw new AuthProfileAuthorizationError("retired");
+              }
+              if (fact.status === "pending") {
+                throw new AuthProfileAuthorizationError("unavailable");
+              }
+            }
+          }
+        };
+        let initial = await readCanonical();
+        const enrollment = initial.rows.flatMap(({ store }, index) =>
+          initial.lineagePaths.includes(targets[index]!.databasePath) &&
+          !readAuthProfileAuthorizationLifetime(
+            store.status === "readable" ? store.raw : undefined,
+            profileId,
+          )
+            ? [{ target: targets[index]!, store }]
+            : [],
+        );
+        if (enrollment.length) {
+          if (params.upgradeRecovery) {
+            throw new AuthProfileAuthorizationError("unavailable");
+          }
+          // Release absent-file readers before the actual agent owner creates its first-use row.
+          await closeReaders();
+          for (const { target, store } of enrollment) {
+            await enrollOwnedAuthProfileAuthorization({
+              databasePath: target.databasePath,
+              agentId: target.agentId,
+              env,
+              context,
+              input: { profileId, expected: store },
+              assertCurrent: assertRoot,
+            });
+            assertRoot();
+          }
+          initial = await readCanonical();
+        }
+        const selectedPath = initial.selectedPath;
+        const lineage = targets.filter((target) =>
+          initial.lineagePaths.includes(target.databasePath),
+        );
+        for (const target of lineage) {
+          target.incarnation = target.observation.readFact()?.incarnation;
+          if (!target.incarnation) {
+            throw new AuthProfileAuthorizationError("unavailable");
+          }
+        }
+        assertFacts();
+        // State-upgrade Doctor runs on a private copy that is then published at the live state
+        // directory. Identify its databases by where they will be published, or every binding
+        // recorded during the upgrade names paths that no longer exist after it.
+        const { publishedStateDir, upgradeRecovery } = params;
+        const copyStateDir =
+          (publishedStateDir || upgradeRecovery) &&
+          resolvePathViaExistingAncestorSync(resolveStateDir(env));
+        const identityAt = (root?: string) => {
+          const published = (databasePath: string) => {
+            const relative =
+              root && copyStateDir ? path.relative(copyStateDir, databasePath) : "..";
+            return root && !relative.startsWith("..") && !path.isAbsolute(relative)
+              ? resolvePathViaExistingAncestorSync(path.join(root, relative))
+              : databasePath;
+          };
+          // Only opaque owner-issued incarnations. Keep the existing MCP and scheduler namespace.
+          return createHash("sha256")
+            .update(
+              JSON.stringify([
+                "mcp-auth-profile-v1",
+                profileId,
+                published(selectedPath),
+                ...lineage.map((target) => [published(target.databasePath), target.incarnation]),
+              ]),
+            )
+            .digest("hex");
+        };
+        const authorizationId = identityAt(publishedStateDir);
+        if (
+          upgradeRecovery &&
+          authorizationId !== upgradeRecovery.recordedId &&
+          !upgradeRecovery.shadowRoots.some(
+            (root) => identityAt(root) === upgradeRecovery.recordedId,
+          )
+        ) {
+          throw new AuthProfileAuthorizationError("retired");
+        }
+        return {
+          authorizationId,
+          assertCurrent: assertFacts,
+          async revalidate() {
+            // The credential writer publishes replacement, refresh, and revocation facts.
+            // External writers require exclusive offline custody; no foreign-commit probe.
+            assertFacts();
+          },
+          dispose() {
+            if (disposed) {
+              return;
+            }
+            release();
+            void trackAsyncWork(closeReaders).catch(() => {
+              authProfilesLog.warn("Auth-profile reader cleanup failed");
+            });
+          },
+        };
+      },
+    });
+  } catch (error) {
+    try {
+      await cleanup?.();
+    } catch (cleanupError) {
+      throw sanitize(cleanupError);
+    }
+    throw sanitize(error);
+  }
+}

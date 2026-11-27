@@ -2,14 +2,13 @@
 import { onSettled } from "solid-js";
 import { icons } from "../../components/icons.tsx";
 import { t } from "../../i18n/index.ts";
-import { getWorkboardState } from "../../lib/workboard/index.ts";
-import type { WorkboardProps } from "./view-helpers.tsx";
+import { workboardViewState, type WorkboardProps } from "./view-helpers.tsx";
 
-export function WorkboardSearch(props: { workboard: WorkboardProps }) {
-  const state = () => {
-    void props.workboard.revision;
-    return getWorkboardState(props.workboard.host);
-  };
+export function WorkboardSearch(props: {
+  workboard: WorkboardProps;
+  onFocusTarget?: (element: HTMLElement) => void;
+}) {
+  const state = workboardViewState(() => props.workboard);
   let pendingFocus: { target: "input" | "trigger"; previous: Element | null } | undefined;
   const focusMounted = (target: "input" | "trigger", element: HTMLElement) => {
     if (pendingFocus?.target !== target) {
@@ -36,7 +35,10 @@ export function WorkboardSearch(props: { workboard: WorkboardProps }) {
   };
   function SearchField() {
     let input!: HTMLInputElement;
-    onSettled(() => focusMounted("input", input));
+    onSettled(() => {
+      props.onFocusTarget?.(input);
+      focusMounted("input", input);
+    });
     return (
       <div class="workboard-search">
         <span aria-hidden="true">{icons.search}</span>
@@ -76,7 +78,10 @@ export function WorkboardSearch(props: { workboard: WorkboardProps }) {
   }
   function SearchTrigger() {
     let trigger!: HTMLButtonElement;
-    onSettled(() => focusMounted("trigger", trigger));
+    onSettled(() => {
+      props.onFocusTarget?.(trigger);
+      focusMounted("trigger", trigger);
+    });
     return (
       <button
         ref={(element) => {

@@ -1,11 +1,12 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
+import { getOpenClawStateFeatureSchemaSql } from "../../state/openclaw-state-feature-schema.js";
 import type {
   WorkerEnvironmentIntentInput,
   WorkerEnvironmentRecord,
@@ -14,6 +15,7 @@ import type {
   WorkerEnvironmentAttachmentRecord,
   WorkerEnvironmentSessionIdentity,
 } from "./session-attachment.js";
+import { executeWorkerEnvironmentWrite } from "./store-write.js";
 import type { WorkerEnvironmentMutationMethods } from "./store.types.js";
 
 type AttachmentTable = {
@@ -30,24 +32,11 @@ type AttachmentTable = {
 type AttachmentDatabase = Pick<StateDatabase, "worker_environments"> & {
   worker_environment_session_attachments: AttachmentTable;
 };
-const query = (db: DatabaseSync) => getNodeSqliteKysely<AttachmentDatabase>(db);
+const query = (db: EngineConnection) => getNodeSqliteKysely<AttachmentDatabase>(db);
 
-export const WORKER_ENVIRONMENT_SESSION_ATTACHMENTS_SCHEMA_SQL = `
-CREATE TABLE IF NOT EXISTS worker_environment_session_attachments (
-  session_id TEXT PRIMARY KEY,
-  session_key TEXT NOT NULL,
-  agent_id TEXT NOT NULL,
-  session_lifecycle_revision TEXT,
-  environment_id TEXT NOT NULL UNIQUE,
-  generation INTEGER NOT NULL CHECK (generation >= 1),
-  created_at_ms INTEGER NOT NULL,
-  last_used_at_ms INTEGER NOT NULL,
-  closed_at_ms INTEGER,
-  FOREIGN KEY (environment_id) REFERENCES worker_environments(environment_id) ON DELETE CASCADE
-) STRICT;
-CREATE INDEX IF NOT EXISTS worker_environment_session_attachments_session_key
-ON worker_environment_session_attachments(agent_id, session_key);
-`;
+export const WORKER_ENVIRONMENT_SESSION_ATTACHMENTS_SCHEMA_SQL = getOpenClawStateFeatureSchemaSql(
+  "worker_environment_session_attachments",
+);
 
 function fromRow(row: Selectable<AttachmentTable>): WorkerEnvironmentAttachmentRecord {
   return {
@@ -65,7 +54,7 @@ function fromRow(row: Selectable<AttachmentTable>): WorkerEnvironmentAttachmentR
   };
 }
 
-function get(db: DatabaseSync, sessionId: string) {
+function get(db: EngineConnection, sessionId: string) {
   const row = executeSqliteQueryTakeFirstSync(
     db,
     query(db)
@@ -76,7 +65,10 @@ function get(db: DatabaseSync, sessionId: string) {
   return row ? fromRow(row) : undefined;
 }
 
-export function readWorkerEnvironmentSessionAttachments(db: DatabaseSync, ids?: readonly string[]) {
+export function readWorkerEnvironmentSessionAttachments(
+  db: EngineConnection,
+  ids?: readonly string[],
+) {
   if (ids?.length === 0) {
     return [];
   }
@@ -87,7 +79,7 @@ export function readWorkerEnvironmentSessionAttachments(db: DatabaseSync, ids?: 
 }
 
 export function hasWorkerEnvironmentSessionAttachment(
-  db: DatabaseSync,
+  db: EngineConnection,
   environmentId: string,
 ): boolean {
   return Boolean(
@@ -102,10 +94,13 @@ export function hasWorkerEnvironmentSessionAttachment(
 }
 
 export function createWorkerEnvironmentSessionAttachmentStore(options: {
-  db: DatabaseSync;
+  db: EngineConnection;
   now: () => number;
   createIntent: (input: WorkerEnvironmentIntentInput) => WorkerEnvironmentRecord;
-  getEnvironment: (db: DatabaseSync, environmentId: string) => WorkerEnvironmentRecord | undefined;
+  getEnvironment: (
+    db: EngineConnection,
+    environmentId: string,
+  ) => WorkerEnvironmentRecord | undefined;
 }) {
   const { db, now } = options;
   const assertIdentity = (
@@ -151,7 +146,7 @@ export function createWorkerEnvironmentSessionAttachmentStore(options: {
         last_used_at_ms: at,
         closed_at_ms: null,
       };
-      const row = executeSqliteQueryTakeFirstSync(
+      const row = executeWorkerEnvironmentWrite(
         db,
         query(db)
           .insertInto("worker_environment_session_attachments")
@@ -163,7 +158,7 @@ export function createWorkerEnvironmentSessionAttachmentStore(options: {
           })
           .onConflict((oc) => oc.column("session_id").doUpdateSet(values))
           .returningAll(),
-      );
+      ).rows[0];
       return { attachment: fromRow(row!), environment };
     },
     closeSessionAttachment(this: void, sessionId) {
@@ -171,14 +166,14 @@ export function createWorkerEnvironmentSessionAttachmentStore(options: {
       if (!current || current.closedAtMs !== null) {
         return current;
       }
-      const row = executeSqliteQueryTakeFirstSync(
+      const row = executeWorkerEnvironmentWrite(
         db,
         query(db)
           .updateTable("worker_environment_session_attachments")
           .set({ closed_at_ms: now() })
           .where("session_id", "=", sessionId)
           .returningAll(),
-      );
+      ).rows[0];
       return row ? fromRow(row) : undefined;
     },
     cancelSessionAttachmentReservation(this: void, record) {
@@ -195,7 +190,7 @@ export function createWorkerEnvironmentSessionAttachmentStore(options: {
         throw new Error("Conversation environment reservation changed before cancellation");
       }
       const at = now();
-      executeSqliteQuerySync(
+      executeWorkerEnvironmentWrite(
         db,
         query(db)
           .updateTable("worker_environment_session_attachments")
@@ -204,7 +199,7 @@ export function createWorkerEnvironmentSessionAttachmentStore(options: {
       );
       // Closing and cancelling the intent commit together: recovery must never allocate an
       // environment whose required requester presentation was rejected before provisioning.
-      executeSqliteQuerySync(
+      executeWorkerEnvironmentWrite(
         db,
         query(db)
           .updateTable("worker_environments")
@@ -218,7 +213,7 @@ export function createWorkerEnvironmentSessionAttachmentStore(options: {
       );
     },
     touchSessionAttachment(this: void, record) {
-      const result = executeSqliteQuerySync(
+      const result = executeWorkerEnvironmentWrite(
         db,
         query(db)
           .updateTable("worker_environment_session_attachments")

@@ -4,6 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { registerInternalHook, unregisterInternalHook } from "../../hooks/internal-hooks.js";
 import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
 import * as fsSafe from "../../infra/fs-safe.js";
@@ -14,9 +19,9 @@ import {
 } from "../../plugins/hook-runner-global.js";
 import type { PluginHookName } from "../../plugins/hook-types.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
+import type { UserTurnInput } from "../../sessions/user-turn-input.types.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createSqliteTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
-import type { UserTurnInput } from "../../sessions/user-turn-transcript.types.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import {
@@ -26,12 +31,14 @@ import {
 } from "../admitted-run-context.js";
 import { runEmbeddedAttemptWithBackend } from "../embedded-agent-runner/run/backend.js";
 import { prepareEmbeddedAttemptPromptExecution } from "../embedded-agent-runner/run/prompt-image-preparation.js";
+import { prepareParticipationTestRun } from "../participation-ceiling.test-support.js";
 import { makeEmbeddedRunnerAttempt } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { attachToolAllowlistIntersection } from "../tool-policy.js";
 import { registerAgentWorkspaceAccess } from "../workspace-access.js";
 import * as builtinOpenClaw from "./builtin-openclaw.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "./hook-helpers.js";
 import { createAgentHarnessHostCapabilities } from "./host-capability.js";
+import * as harnessLifecycle from "./lifecycle.js";
 import { clearAgentHarnesses, registerAgentHarness } from "./registry.js";
 import { runAgentHarnessAttempt } from "./selection.js";
 import { createHarnessAttemptParams } from "./selection.test-support.js";
@@ -53,7 +60,10 @@ beforeEach(async () => {
     operationalRunInstance: createOperationalRunInstanceRef("attachment-test"),
   });
   const context = await admission.admit("plugin-harness", "attachment-test");
-  createAttemptParams = (config) => createHarnessAttemptParams(context, config);
+  createAttemptParams = (config) => {
+    setRuntimeConfigSnapshot(config ?? {}, config);
+    return createHarnessAttemptParams(context, config);
+  };
 });
 afterEach(async () => {
   resetGlobalHookRunner();
@@ -64,6 +74,96 @@ afterEach(async () => {
   await closeStateDatabaseForTest();
   vi.unstubAllEnvs();
   trajectoryTempDirs.cleanup();
+  clearRuntimeConfigSnapshot();
+});
+// Owner turn, unset chat modes, remembered setup consent.
+async function prepareRememberedOwnerConsent() {
+  const storePath = path.join(trajectoryTempDirs.make("harness-native-consent-"), "sessions.json");
+  const config: OpenClawConfig = {
+    session: { store: storePath },
+    agents: { entries: { main: { nativeRuntimeConsent: ["codex"] } } },
+    tools: { fs: { workspaceOnly: true } },
+  };
+  const attempt = createAttemptParams(config);
+  attempt.agentId = "main";
+  attempt.sessionKey = "agent:main:remembered-owner";
+  attempt.senderIsOwner = true;
+  await replaceSessionEntry(
+    { agentId: "main", sessionKey: attempt.sessionKey, storePath },
+    { sessionId: attempt.sessionId, updatedAt: 1 },
+  );
+  const nativeStart = vi.fn<AgentHarness["runAttempt"]>(async () =>
+    makeEmbeddedRunnerAttempt({ agentHarnessId: "codex" }),
+  );
+  const supports = () => ({ supported: true, priority: 100 });
+  const harness = { id: "codex", label: "Codex", executionEnvironment: "host-only" as const };
+  registerAgentHarness(
+    { ...harness, supports, runAttempt: nativeStart },
+    { ownerPluginId: "codex" },
+  );
+  const revoked = { ...config, agents: { entries: { main: { nativeRuntimeConsent: [] } } } };
+  return {
+    revoked,
+    attempt,
+    nativeStart,
+    staleHarness: { ...harness, supports, runAttempt: nativeStart },
+  };
+}
+
+it("runs a native harness in full mode under remembered owner consent", async () => {
+  const { attempt, nativeStart } = await prepareRememberedOwnerConsent();
+  await runAgentHarnessAttempt(attempt);
+  // Native harnesses choose their own approval mode from this field.
+  expect(nativeStart.mock.calls[0]?.[0].permissionMode).toBe("full");
+});
+
+it("refuses remembered consent revoked after admission before native dispatch", async () => {
+  const { revoked, attempt, nativeStart } = await prepareRememberedOwnerConsent();
+  const original = harnessLifecycle.runAgentHarnessLifecycleAttempt;
+  using dispatch = vi
+    .spyOn(harnessLifecycle, "runAgentHarnessLifecycleAttempt")
+    .mockImplementation(async (harness, prepared, execute) => {
+      setRuntimeConfigSnapshot(revoked);
+      return original(harness, prepared, execute);
+    });
+
+  await expect(runAgentHarnessAttempt(attempt)).rejects.toThrow(/workspace-only|revoked/);
+  expect(dispatch).toHaveBeenCalledOnce();
+  expect(nativeStart).not.toHaveBeenCalled();
+});
+
+it.each(["consent", "binding"])("keeps public guidance after native %s changes", async (kind) => {
+  const { revoked, attempt, nativeStart, staleHarness } = await prepareRememberedOwnerConsent();
+  const original = harnessLifecycle.runAgentHarnessLifecycleAttempt;
+  using dispatch = vi
+    .spyOn(harnessLifecycle, "runAgentHarnessLifecycleAttempt")
+    .mockImplementation(async (harness, prepared, execute) => {
+      if (kind === "consent") {
+        setRuntimeConfigSnapshot({ ...revoked, tools: { fs: { workspaceOnly: false } } });
+      }
+      return original(harness, prepared, execute);
+    });
+  const message =
+    kind === "consent"
+      ? "Native runtime consent was revoked before dispatch. Review this chat's permissions before retrying."
+      : "Native session runtime changed before dispatch. Reattach the original native session before retrying.";
+  const runtime =
+    kind === "binding"
+      ? {
+          harness: staleHarness,
+          auth: "host" as const,
+          modelRef: { provider: attempt.provider, model: attempt.modelId },
+          assertCurrent: async () => {},
+        }
+      : undefined;
+  await expect(runAgentHarnessAttempt(attempt, runtime)).rejects.toMatchObject({
+    name: "AgentHarnessPreflightError",
+    message,
+    desktopMessage: message,
+    userMessage: undefined,
+  });
+  expect(dispatch).toHaveBeenCalledTimes(kind === "consent" ? 1 : 0);
+  expect(nativeStart).not.toHaveBeenCalled();
 });
 
 function createAttributionRecorder(registered = true) {
@@ -95,7 +195,6 @@ describe("registered harness input attachment preparation", () => {
         "tool_result_persist",
         "before_compaction",
         "after_compaction",
-        "heartbeat_prompt_contribution",
       ] as const
     ).map((hook) => ({ name: hook, hook, waits: true })),
     { name: "internal bootstrap", bootstrap: true, waits: true },
@@ -125,8 +224,7 @@ describe("registered harness input attachment preparation", () => {
     const pending = runAgentHarnessAttempt({
       ...createAttemptParams(),
       agentHarnessId: "openclaw",
-      trigger:
-        scenario.hook === "heartbeat_prompt_contribution" && scenario.waits ? "heartbeat" : "user",
+      trigger: "user",
       awaitSessionDiffBaseline: awaitBaseline,
     });
     try {
@@ -591,4 +689,17 @@ describe("registered harness input attachment preparation", () => {
       openSpy?.mockRestore();
     }
   });
+});
+
+it("refuses a participating native turn even with remembered unrestricted consent", async () => {
+  const { attempt, nativeStart } = await prepareRememberedOwnerConsent();
+  attempt.admittedRunContext = await prepareParticipationTestRun({
+    kind: "send",
+    profileId: "guest",
+    sessionKey: attempt.sessionKey!,
+  }).preparedRunAdmission.admit("embedded");
+  await expect(runAgentHarnessAttempt(attempt)).rejects.toThrow(
+    "Participating inputs require the OpenClaw runtime",
+  );
+  expect(nativeStart).not.toHaveBeenCalled();
 });

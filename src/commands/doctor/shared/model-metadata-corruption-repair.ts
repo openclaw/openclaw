@@ -8,12 +8,6 @@ import {
   resolveConfiguredModelCatalogOwnership,
 } from "./legacy-config-migrations.runtime.models.catalog.js";
 
-export type ModelMetadataCorruptionRepair = {
-  config: OpenClawConfig;
-  changes: string[];
-  warnings: string[];
-};
-
 const GENERATED_MODEL_FALLBACK = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   input: ["text"],
@@ -23,7 +17,6 @@ const GENERATED_MODEL_FALLBACK = {
 // The old writer persisted this complete generic-default tuple into untouched rows.
 // Requiring every field avoids reclassifying ordinary explicit capability overrides.
 const GENERATED_MODEL_FIELDS = ["cost", "input", "maxTokens", "reasoning"] as const;
-export const MODEL_METADATA_CORRUPTION_AUDIT_LIMIT = 2048;
 
 type ConfigWriteRecord = Extract<ConfigAuditRecord, { event: "config.write" }>;
 
@@ -33,23 +26,6 @@ function hasGeneratedFallbackFingerprint(model: Record<string, unknown>): boolea
       Object.hasOwn(model, field) &&
       isDeepStrictEqual(model[field], GENERATED_MODEL_FALLBACK[field]),
   );
-}
-
-function directlyAuthoredModel(params: {
-  authoredRoot: unknown;
-  providerId: string;
-  modelIndex: number;
-  modelId: string;
-}): Record<string, unknown> | undefined {
-  const provider = getRecord(getRecord(getRecord(params.authoredRoot)?.models)?.providers)?.[
-    params.providerId
-  ];
-  const models = getRecord(provider)?.models;
-  if (!Array.isArray(models)) {
-    return undefined;
-  }
-  const model = getRecord(models[params.modelIndex]);
-  return model?.id === params.modelId ? model : undefined;
 }
 
 function isHistoricalMaterializingWriter(record: ConfigWriteRecord): boolean {
@@ -66,15 +42,10 @@ function isHistoricalMaterializingWriter(record: ConfigWriteRecord): boolean {
 function hasAuditProvenance(params: {
   auditRecords: readonly ConfigAuditRecord[];
   configPath: string;
-  currentHash: string | null;
-  providerId: string;
-  modelIndex: number;
+  currentHash: string;
+  modelPath: string;
 }): boolean {
-  if (!params.currentHash) {
-    return false;
-  }
   const configPath = path.resolve(params.configPath);
-  const prefix = `models.providers.${params.providerId}.models[${params.modelIndex}].`;
   return params.auditRecords.some(
     (record) =>
       record.event === "config.write" &&
@@ -85,7 +56,8 @@ function hasAuditProvenance(params: {
       GENERATED_MODEL_FIELDS.every((field) =>
         record.changedPaths?.some(
           (changedPath) =>
-            changedPath === `${prefix}${field}` || changedPath.startsWith(`${prefix}${field}.`),
+            changedPath === `${params.modelPath}.${field}` ||
+            changedPath.startsWith(`${params.modelPath}.${field}.`),
         ),
       ),
   );
@@ -97,26 +69,27 @@ export function repairGeneratedModelMetadataCorruption(params: {
   authoredRoot: unknown;
   configPath: string;
   currentHash: string | null;
-  auditRecords: readonly ConfigAuditRecord[];
-}): ModelMetadataCorruptionRepair {
-  const next: OpenClawConfig = structuredClone(params.config);
-  const providers = getRecord(getRecord(next.models)?.providers);
-  if (!providers) {
-    return { config: params.config, changes: [], warnings: [] };
-  }
+  loadAuditRecords: () => readonly ConfigAuditRecord[];
+}): { config: OpenClawConfig; changes: string[]; warnings: string[] } {
+  let next: OpenClawConfig | undefined;
+  let auditRecords: readonly ConfigAuditRecord[] | undefined;
   const changes: string[] = [];
   const warnings: string[] = [];
-  for (const { providerId, provider, modelIndex, model } of providerModelEntries(providers)) {
+  for (const { providerId, provider, modelIndex, model } of providerModelEntries(
+    params.config.models?.providers,
+  )) {
     const modelId = typeof model.id === "string" ? model.id : "";
     if (!modelId || !hasGeneratedFallbackFingerprint(model)) {
       continue;
     }
-    const authoredModel = directlyAuthoredModel({
-      authoredRoot: params.authoredRoot,
-      providerId,
-      modelIndex,
-      modelId,
-    });
+    const authoredProvider = getRecord(
+      getRecord(getRecord(params.authoredRoot)?.models)?.providers,
+    )?.[providerId];
+    const authoredModels = getRecord(authoredProvider)?.models;
+    const authoredCandidate = Array.isArray(authoredModels)
+      ? getRecord(authoredModels[modelIndex])
+      : undefined;
+    const authoredModel = authoredCandidate?.id === modelId ? authoredCandidate : undefined;
     const catalog = resolveConfiguredModelCatalogOwnership({ providerId, provider, model });
     if (
       !catalog ||
@@ -133,25 +106,30 @@ export function repairGeneratedModelMetadataCorruption(params: {
       );
       continue;
     }
-    const auditProven = hasAuditProvenance({
-      auditRecords: params.auditRecords,
-      configPath: params.configPath,
-      currentHash: params.currentHash,
-      providerId,
-      modelIndex,
-    });
-    if (!authoredModel || !hasGeneratedFallbackFingerprint(authoredModel) || !auditProven) {
+    const auditProven =
+      authoredModel &&
+      hasGeneratedFallbackFingerprint(authoredModel) &&
+      params.currentHash &&
+      hasAuditProvenance({
+        auditRecords: (auditRecords ??= params.loadAuditRecords()),
+        configPath: params.configPath,
+        currentHash: params.currentHash,
+        modelPath,
+      });
+    if (!auditProven) {
       warnings.push(
         `${modelPath} matches the historical generated model-metadata fingerprint, but Doctor could not prove the responsible config write. It was left unchanged. If the provider catalog should own these capabilities, remove cost, input, maxTokens, and reasoning from this model entry.`,
       );
       continue;
     }
+    const repairedModel = (next ??= structuredClone(params.config)).models!.providers![providerId]!
+      .models[modelIndex]!;
     for (const field of GENERATED_MODEL_FIELDS) {
-      delete model[field];
+      Reflect.deleteProperty(repairedModel, field);
     }
     changes.push(
       `Removed audit-proven generated model metadata from ${modelPath}: cost, input, maxTokens, reasoning.`,
     );
   }
-  return { config: changes.length > 0 ? next : params.config, changes, warnings };
+  return { config: next ?? params.config, changes, warnings };
 }

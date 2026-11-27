@@ -1,16 +1,13 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { UI_RAIL_SHORTCUTS_PREFERENCE_KEY } from "../../../../packages/gateway-protocol/src/schema/ui-navigation-preferences.js";
+import { isConversationConfigChange } from "../../../../src/config/read-dependencies.js";
+import type { createDeferredCore } from "../../../../src/shared/deferred.js";
 import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
+import { SESSIONS_LIST_OWNER_LIMIT } from "../../../../src/shared/session-list-limits.js";
+import type { GatewayEventFrame } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { createSessionEventRefreshCoordinator } from "./event-refresh-coordinator.ts";
-import { sessionMatchesArchivedFilter } from "./navigation.ts";
-import type {
-  SessionGateway,
-  SessionListOptions,
-  SessionListScope,
-  SessionListSnapshot,
-  SessionRefreshOptions,
-  SessionRefreshOutcome,
-} from "./session-capability.ts";
+import { compareSessionRowsByUpdatedAt, sessionMatchesArchivedFilter } from "./navigation.ts";
 import {
   normalizeAgentId,
   areUiSessionKeysEquivalent,
@@ -21,16 +18,36 @@ import {
   buildSessionListParams,
   DEFAULT_SESSION_LIST_QUERY,
   normalizeManagedSessionListQuery,
+  type SessionWindowExpiry,
 } from "./session-requests.ts";
 import {
   hasSessionChangedAncestorCoverage,
   matchesExistingSession,
   parseSessionChangedEvent,
-  reconcileSessionChangedRow,
+  reconcileParsedSessionChangedRow,
   sessionChangedSnapshots,
 } from "./session-row-reconcile.ts";
+import type {
+  SessionGateway,
+  SessionConnectionScope,
+  SessionListOptions,
+  SessionListScope,
+  SessionListSnapshot,
+  SessionRefreshOptions,
+  SessionRefreshOutcome,
+} from "./session-types.ts";
 
 type SessionListRowLookup = (key: string, agentId?: string | null) => GatewaySessionRow | undefined;
+
+/** Config and profile-targeted pin writes can move a window boundary without a row event. */
+export function isSessionListInvalidation(event: GatewayEventFrame): boolean {
+  if (event.event !== "users.prefs.changed") {
+    return isConversationConfigChange(event);
+  }
+  // The Gateway targets the authenticated connection, including aliases of the canonical profile.
+  const keys = asOptionalRecord(event.payload)?.keys;
+  return Array.isArray(keys) && keys.includes(UI_RAIL_SHORTCUTS_PREFERENCE_KEY);
+}
 
 /** Held members and certified query exclusions can replace a list read. */
 export function canApplySessionListSnapshot(
@@ -39,6 +56,7 @@ export function canApplySessionListSnapshot(
   options: SessionListOptions,
   sortBy: "updatedAt" | "activity" = "updatedAt",
   observedRow?: SessionListRowLookup,
+  viewerProfileId?: string,
 ): boolean {
   const parsed = parseSessionChangedEvent(payload);
   const countsOnly = options.includeOwnerSessionCounts === true;
@@ -57,6 +75,8 @@ export function canApplySessionListSnapshot(
       boardFace: undefined,
       spawnedBy: undefined,
       includeOwnerSessionCounts: false,
+      involvingMe: false,
+      ownerId: undefined,
       excludeCron: countsOnly ? false : options.excludeCron,
       excludeSystem: countsOnly ? false : options.excludeSystem,
     })
@@ -90,7 +110,7 @@ export function canApplySessionListSnapshot(
       continue;
     }
     // The owner-count adapter consumes the aggregate, not the single sampled row.
-    const existing =
+    let existing =
       result.sessions.find((row) =>
         matchesExistingSession(row, info.key, info.agentId ?? options.agentId ?? null),
       ) ?? (countsOnly ? observedRow?.(info.key, info.agentId) : undefined);
@@ -144,32 +164,73 @@ export function canApplySessionListSnapshot(
       covered = true;
       continue;
     }
+    // Owner totals cover the full roster, not just this sampled page.
+    // Without the prior row, exclusion cannot prove its contribution is unchanged.
+    if (countsOnly && !existing) {
+      return false;
+    }
     const excluded =
       !existing &&
       complete &&
-      (info.isAncestorReference
-        ? reconcileSessionChangedRow(observedRow?.(info.key, info.agentId), snapshot, {
-            resultAgentId: options.agentId,
-            archivedFilter: "all",
-          }).admittedRow
-        : source);
+      reconcileParsedSessionChangedRow(observedRow?.(info.key, info.agentId), parsedSnapshot, {
+        resultAgentId: options.agentId,
+        archivedFilter: "all",
+        admitSnapshot: true,
+      }).admittedRow;
     if (
       excluded &&
       ((parent &&
-        Array.isArray(excluded.childOwnerSessionKeys) &&
+        excluded.childOwnerSessionKeys !== undefined &&
         !excluded.childOwnerSessionKeys.includes(parent)) ||
         (options.hasBoard !== undefined &&
-          typeof excluded.hasBoard === "boolean" &&
+          excluded.hasBoard !== undefined &&
           excluded.hasBoard !== options.hasBoard) ||
         (options.boardFace !== undefined && excluded.boardFace !== options.boardFace) ||
         (options.includeGlobal === false && excluded.kind === "global") ||
         (options.excludeDock !== false && excluded.isDock === true) ||
-        (options.includeUnknown === false && excluded.kind === "unknown"))
+        (options.includeUnknown === false && excluded.kind === "unknown") ||
+        !sessionMatchesArchivedFilter(excluded, options.archivedFilter ?? "active") ||
+        (options.involvingMe === true && excluded.hiddenFromInvolvingMe === true))
     ) {
       covered = true;
       continue;
     }
-    const next = reconcileSessionChangedRow(existing, snapshot, {
+    const windowSize =
+      result.nextOffset ?? result.limitApplied ?? options.limit ?? DEFAULT_SESSION_LIST_QUERY.limit;
+    if (excluded && result.hasMore === true && sortBy === "updatedAt") {
+      const newerRows = result.sessions.filter(
+        (row) =>
+          sessionMatchesArchivedFilter(row, options.archivedFilter ?? "active") &&
+          compareSessionRowsByUpdatedAt(row, excluded) < 0,
+      );
+      if (
+        newerRows.length >= windowSize &&
+        (options.ownerFirst !== true ||
+          (viewerProfileId &&
+            (!(
+              excluded.owner?.actor.identity?.type === "profile" &&
+              excluded.owner.actor.identity.id === viewerProfileId
+            ) ||
+              // Owned ancestors below both bounded windows cannot enter either page.
+              newerRows.filter(
+                (row) =>
+                  row.owner?.actor.identity?.type === "profile" &&
+                  row.owner.actor.identity.id === viewerProfileId,
+              ).length >= Math.min(windowSize, SESSIONS_LIST_OWNER_LIMIT))))
+      ) {
+        covered = true;
+        continue;
+      }
+    }
+    // A known nonowner can prove unchanged exclusion, but still needs every
+    // ownership/lineage check below: owner changes also invalidate picker facets.
+    if (!existing && options.ownerId && complete) {
+      const observed = observedRow?.(info.key, info.agentId);
+      if (observed?.owner?.actor.id && observed.owner.actor.id !== options.ownerId.trim()) {
+        existing = observed;
+      }
+    }
+    const next = reconcileParsedSessionChangedRow(existing, parsedSnapshot, {
       resultAgentId: options.agentId,
       archivedFilter: "all",
     }).admittedRow;
@@ -183,12 +244,25 @@ export function canApplySessionListSnapshot(
       (existing.archived === true) !== (next.archived === true) ||
       (existing.pinned === true) !== (next.pinned === true) ||
       existing.pinnedAt !== next.pinnedAt ||
+      // A row event cannot replace the Gateway wake deadline for the whole list.
+      existing.snoozedUntil !== next.snoozedUntil ||
       JSON.stringify(existing.owner) !== JSON.stringify(next.owner) ||
       JSON.stringify(existing.createdActor) !== JSON.stringify(next.createdActor) ||
       existing.spawnedBy !== next.spawnedBy ||
       existing.controlOwnerSessionKey !== next.controlOwnerSessionKey ||
       existing.parentSessionKey !== next.parentSessionKey ||
       existing.sidebarRoot !== next.sidebarRoot ||
+      (options.involvingMe === true &&
+        (!viewerProfileId ||
+          next.hiddenFromInvolvingMe !== false ||
+          (!info.isAncestorReference && source.hiddenFromInvolvingMe !== false) ||
+          !(
+            (next.owner?.actor.identity?.type === "profile" &&
+              next.owner.actor.identity.id === viewerProfileId) ||
+            next.participants?.some(
+              ({ identity }) => identity.type === "profile" && identity.id === viewerProfileId,
+            )
+          ))) ||
       (countsOnly &&
         (existing.hasActiveRun !== next.hasActiveRun ||
           existing.hasActiveSubagentRun !== next.hasActiveSubagentRun ||
@@ -226,17 +300,10 @@ export function canApplySessionListSnapshot(
     ) {
       return false;
     }
-    // Owner-first and retained selection can add rows outside the shared page.
-    // Promoting one can displace its boundary despite already being displayed.
+    // Only a retained row crossing into the shared page can displace its boundary.
     if (
       !info.isAncestorReference &&
-      info.updatedAt !== existing.updatedAt &&
-      result.hasMore !== false &&
-      result.sessions.length >
-        (result.nextOffset ??
-          result.limitApplied ??
-          options.limit ??
-          DEFAULT_SESSION_LIST_QUERY.limit)
+      crossesSharedSessionWindow(result, existing, next, windowSize)
     ) {
       return false;
     }
@@ -245,13 +312,30 @@ export function canApplySessionListSnapshot(
   return covered;
 }
 
+function crossesSharedSessionWindow(
+  result: SessionsListResult,
+  existing: GatewaySessionRow,
+  next: GatewaySessionRow,
+  windowSize: number,
+): boolean {
+  return (
+    next.updatedAt !== existing.updatedAt &&
+    result.hasMore !== false &&
+    result.sessions.length > windowSize &&
+    result.sessions.filter((row) => compareSessionRowsByUpdatedAt(row, existing) <= 0).length >
+      windowSize &&
+    result.sessions.filter((row) => compareSessionRowsByUpdatedAt(row, next) <= 0).length <
+      windowSize
+  );
+}
+
 export function isForegroundReplacement(options: SessionRefreshOptions): boolean {
   return options.append !== true && options.backgroundHydrate !== true;
 }
 
 export function sessionListAgentMatcher(agentId?: string | null) {
   const normalized = agentId ? normalizeAgentId(agentId) : null;
-  return (queryAgentId?: string) =>
+  return (queryAgentId?: string | null) =>
     !normalized || !queryAgentId?.trim() || normalizeAgentId(queryAgentId) === normalized;
 }
 
@@ -391,6 +475,39 @@ export type ManagedSessionListRefresh = {
   background?: true;
 };
 
+export type PrimarySessionListPresentation = {
+  isCurrent: () => boolean;
+  finishWindowRead: (error?: unknown) => void;
+  accept: (
+    result: SessionsListResult | null,
+    failure?: { error: unknown },
+  ) => SessionRefreshAttempt | null;
+};
+export type PrimarySessionListRead = {
+  options: SessionRefreshOptions;
+  completion: ReturnType<typeof createDeferredCore<SessionRefreshAttempt | null>>;
+  queued: QueuedSessionRefresh | null;
+  snapshot: SessionGateway["snapshot"];
+  presentation?: PrimarySessionListPresentation;
+};
+type ManagedRead = {
+  refresh: ManagedSessionListRefresh;
+  finishWindowRead: (error?: unknown) => void;
+  completion: ReturnType<typeof createDeferredCore<void>>;
+};
+/** One admitted transport attempt, independent of either consumer's publication lifetime. */
+export type SessionListRead = {
+  entry: ManagedSessionList;
+  issuedAt: number;
+  expiry?: SessionWindowExpiry;
+  params: Readonly<ReturnType<typeof buildSessionListParams> & { pageSize?: number }>;
+  scope: SessionConnectionScope;
+  revision: number;
+  generation: number;
+  managed?: ManagedRead;
+  primary: Set<PrimarySessionListRead>;
+};
+
 export type ObservedSessionList = {
   scope: SessionListScope;
   connectionEpoch: number | null;
@@ -399,6 +516,8 @@ export type ObservedSessionList = {
 };
 
 export type ManagedSessionList = ObservedSessionList & {
+  /** Managed refreshes retain their snapshot until a subscriber or warm lease retires it. */
+  retainSnapshot: boolean;
   /** A live primary window may be reused for selection until its next invalidation. */
   warmPrimary?: boolean;
   key: string;
@@ -407,10 +526,14 @@ export type ManagedSessionList = ObservedSessionList & {
   /** Raw page identities, scoped to this window, for completeness despite hidden rows. */
   receivedKeys: Set<string>;
   startupRetryAttempt: number;
+  deniedConnectionEpoch: number | null;
   /** Invalidation retires remaining pages without cancelling the correlated RPC. */
   readGeneration: number;
+  readRevision: number;
   coordinator: ReturnType<typeof createSessionEventRefreshCoordinator>;
   pending: Promise<void> | null;
+  /** Admitted reads may serve primary presentation and observed membership independently. */
+  reads: Set<SessionListRead>;
   queued: ManagedSessionListRefresh | null;
 };
 
@@ -419,12 +542,14 @@ export function sessionListsNeedingEventRefresh(
   payload: unknown,
   matches: ReturnType<typeof sessionListEventMatcher>,
   observedRow: SessionListRowLookup,
+  connectionEpoch: number | null,
+  viewerProfileId?: string,
 ): Set<ManagedSessionList> {
   const invalidated = new Set<ManagedSessionList>();
   for (const entry of lists) {
     if (
       matches(entry.query, entry.snapshot.result) &&
-      (entry.pending !== null ||
+      (entry.connectionEpoch !== connectionEpoch ||
         entry.snapshot.error !== null ||
         !canApplySessionListSnapshot(
           entry.snapshot.result,
@@ -432,12 +557,47 @@ export function sessionListsNeedingEventRefresh(
           entry.scope,
           "updatedAt",
           observedRow,
+          viewerProfileId,
         ))
     ) {
       invalidated.add(entry);
     }
   }
   return invalidated;
+}
+
+/** Recheck overlapping row facts against the membership accepted by the read. */
+export function sessionListReadNeedsEventRefresh(
+  previous: SessionsListResult | null,
+  response: SessionsListResult | null,
+  result: SessionsListResult | null,
+  issuedRevision: number,
+  options: SessionListOptions,
+  rowRevision: (row: GatewaySessionRow) => number,
+): boolean {
+  const windowSize =
+    response?.nextOffset ??
+    response?.limitApplied ??
+    options.limit ??
+    DEFAULT_SESSION_LIST_QUERY.limit;
+  return (
+    previous?.sessions.some((row) => {
+      if (rowRevision(row) <= issuedRevision) {
+        return false;
+      }
+      const matches = (candidate: GatewaySessionRow) =>
+        candidate.sessionId === row.sessionId &&
+        matchesExistingSession(candidate, row.key, options.agentId ?? row.agentId ?? null);
+      const accepted = response?.sessions.find(matches);
+      const latest = result?.sessions.find(matches);
+      return (
+        !response ||
+        !accepted ||
+        !latest ||
+        crossesSharedSessionWindow(response, accepted, latest, windowSize)
+      );
+    }) ?? false
+  );
 }
 
 export function isPrimarySessionListQuery(options: SessionListScope): boolean {
@@ -487,6 +647,7 @@ export function prepareSessionRefreshOptions(
   // must inherit the UI default in both the request and its query identity.
   const prepared = {
     ...options,
+    rowMode: options.rowMode ?? "sidebar",
     source: options.source ?? "sidebar",
     excludeDock: options.excludeDock ?? true,
     includeDerivedTitles: options.includeDerivedTitles ?? true,
@@ -544,7 +705,7 @@ export function retainSessionPaginationWindow(
   const ownerFirstPage =
     Boolean(snapshot.selfUser?.id.trim()) && isPrimarySessionListQuery(options);
   const retainedListLimit =
-    ownerFirstPage && result && typeof offset === "number"
+    ownerFirstPage && result && offset !== undefined
       ? offset + result.sessions.length
       : nextResult.sessions.length;
   // Retain the shared pagination window, excluding owner rows merged ahead of it.

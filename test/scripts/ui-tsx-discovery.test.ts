@@ -18,6 +18,7 @@ import {
   nonBrowserTestBasenamePattern,
 } from "../vitest/vitest.include-patterns.ts";
 import { matchesVitestGlob } from "../vitest/vitest.pattern-file.ts";
+import { createUiIsolatedVitestConfig } from "../vitest/vitest.ui-isolated.config.ts";
 import {
   controlUiTestGlobs,
   controlUiE2eTestGlobs,
@@ -182,6 +183,7 @@ describe("TSX discovery", () => {
     for (const [file, expected] of [
       ["src/component.test.tsx", "unit"],
       ["src/component.node.test.tsx", "unit-node"],
+      ["src/pages/chat/chat-pane-session-controls.permissions.node.test.ts", "unit-node"],
       ["src/component.browser.test.tsx", "browser"],
       ["../extensions/example/browser/view.test.tsx", "unit"],
     ] as const) {
@@ -207,16 +209,21 @@ describe("TSX discovery", () => {
           filterFilesByPatterns([file], uiNodeConfig.test?.include ?? [], [], matchesVitestGlob),
         ).toEqual([file]);
       }
-      const root = createUiVitestConfig({}).test!;
       const repositoryFile = path.posix.normalize(`ui/${file}`);
+      const rootProjects = [createUiVitestConfig({}).test!, createUiIsolatedVitestConfig({}).test!];
       expect(
-        filterFilesByPatterns(
-          [repositoryFile],
-          root.include ?? [],
-          root.exclude ?? [],
-          matchesVitestGlob,
-        ),
-      ).toEqual(expected === "browser" ? [] : [repositoryFile]);
+        rootProjects
+          .filter(
+            (test) =>
+              filterFilesByPatterns(
+                [repositoryFile],
+                test.include ?? [],
+                test.exclude ?? [],
+                matchesVitestGlob,
+              ).length,
+          )
+          .map((test) => test.name),
+      ).toEqual(expected === "browser" ? [] : ["ui"]);
     }
   });
 
@@ -260,6 +267,43 @@ describe("TSX discovery", () => {
     expect(resolveUiTypeScriptPath("ui/src/view.ts", cwd)).toBe("ui/src/view.tsx");
     expect(resolveUiTypeScriptPath("ui/src/helper.ts", cwd)).toBe("ui/src/helper.ts");
     expect(resolveUiTypeScriptPath("ui/src/missing.ts", cwd)).toBe("ui/src/missing.ts");
+  });
+
+  it("shares the UI source inventory while keeping unrelated owners scoped", () => {
+    const cwd = fixture({
+      "ui/src/pages/chat/view.tsx": "export {};",
+      "ui/src/pages-extra/view.tsx": "export {};",
+      "src/other/view.tsx": "export {};",
+    });
+    const options = { cwd, env: createNestedGitEnv(), encoding: "utf8" } as const;
+    execFileSync("git", ["init", "-q"], options);
+    execFileSync("git", ["add", "."], options);
+    const owner = new URL("../vitest/vitest.ui-paths.mjs", import.meta.url).href;
+    const result = execFileSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `import cp from 'node:child_process';
+         import { syncBuiltinESMExports } from 'node:module';
+         const { resolveUiTypeScriptPath } = await import(${JSON.stringify(owner)});
+         const spawn = cp.spawnSync;
+         let queries = 0;
+         cp.spawnSync = (...args) => { queries++; return spawn(...args); };
+         syncBuiltinESMExports();
+         const child = resolveUiTypeScriptPath('ui/src/pages/chat/view.ts', process.cwd());
+         const sibling = resolveUiTypeScriptPath('ui/src/pages-extra/view.ts', process.cwd());
+         const unrelated = resolveUiTypeScriptPath('src/other/view.ts', process.cwd());
+         console.log(JSON.stringify({ child, sibling, unrelated, queries }));`,
+      ],
+      options,
+    );
+    expect(JSON.parse(result)).toEqual({
+      child: "ui/src/pages/chat/view.tsx",
+      sibling: "ui/src/pages-extra/view.tsx",
+      unrelated: "src/other/view.tsx",
+      queries: 2,
+    });
   });
 
   it("preserves explicit extension bounds through overlapping and unioned globs", () => {

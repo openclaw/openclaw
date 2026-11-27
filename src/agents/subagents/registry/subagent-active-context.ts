@@ -1,5 +1,5 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
+import { preparePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { sanitizeForPromptLiteral } from "../../sanitize-for-prompt.js";
@@ -9,12 +9,13 @@ import {
 } from "../../tools/sessions-helpers.js";
 import { resolveSubagentCompletionResultText } from "../completion/subagent-completion-result.js";
 import { isSubagentRunVisibleToSession } from "./subagent-control-scope.js";
+import { isSubagentDeliveryWithheld } from "./subagent-delivery-state.js";
 import { buildSubagentList, captureSubagentListReadContext } from "./subagent-list.js";
-import { subagentRuns } from "./subagent-registry-memory.js";
-import { buildSubagentRunReadIndexFromRuns } from "./subagent-registry-queries.js";
+import { withSubagentSessionListRead } from "./subagent-registry-read-index.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
-import { withSubagentRunReadSnapshot } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isRequesterSettleWakeForRun } from "./subagent-requester-settle-identity.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 
 // Prompt data is sanitized then JSON-quoted so active subagent state cannot add
 // executable prompt instructions through labels or task text.
@@ -32,18 +33,19 @@ function hasOutstandingCompletion(entry: SubagentRunRecord): boolean {
   if (
     entry.execution.status !== "terminal" ||
     !Number.isFinite(entry.execution.endedAt) ||
-    entry.suppressCompletionDelivery === true ||
-    entry.killReconciliation?.suppressTaskDelivery === true ||
-    entry.killIntent?.suppressTaskDelivery === true
+    isSubagentDeliveryWithheld(entry)
   ) {
     return false;
   }
   if (entry.requesterSettleWake) {
     return true;
   }
+  // Give-up cleanup is terminal unless a requester settle wake still owns delivery.
+  if (entry.delivery?.status === "failed" && typeof entry.cleanupCompletedAt === "number") {
+    return false;
+  }
   return (
     entry.completion?.required === true &&
-    entry.delivery?.disposition !== "intentional_non_delivery" &&
     ["pending", "in_progress", "failed", "suspended"].includes(entry.delivery?.status ?? "pending")
   );
 }
@@ -56,7 +58,7 @@ function formatPendingResult(entry: SubagentRunRecord): string {
     `session_json=${quotePromptData(entry.childSessionKey)};`,
     `outcome=${entry.execution.outcome?.status ?? "unknown"};`,
     `delivery=${entry.delivery?.status ?? "pending"};`,
-    `requester_continuation=${entry.requesterSettleWake?.status ?? "none"};`,
+    `requester_continuation=${entry.requesterSettleWake ? "pending" : "none"};`,
     `task_json=${quotePromptData(truncateUtf16Safe(entry.task, 96))};`,
     `result_json=${sanitizeForPromptLiteral(JSON.stringify(truncateUtf16Safe(result, PENDING_RESULT_MAX_CHARS)))};`,
     `result_truncated=${result.length > PENDING_RESULT_MAX_CHARS}`,
@@ -68,7 +70,7 @@ export async function buildActiveSubagentRuntimeContext(params: {
   cfg: OpenClawConfig;
   controllerSessionKey?: string;
   controllerAgentId?: string;
-  recentMinutes?: number;
+  runId?: string;
   includeSpawnContext?: boolean;
 }): Promise<string | undefined> {
   const rawControllerSessionKey = params.controllerSessionKey?.trim();
@@ -81,7 +83,7 @@ export async function buildActiveSubagentRuntimeContext(params: {
   if (!agentId) {
     return undefined;
   }
-  const storePath = resolvePhysicalSessionStorePath(
+  const storePath = await preparePhysicalSessionStorePath(
     { sessionKey: controllerSessionKey, agentId },
     params.cfg,
   );
@@ -91,24 +93,19 @@ export async function buildActiveSubagentRuntimeContext(params: {
       entry.controllerStorePath === storePath) ||
       (entry.requesterSessionKey.trim() === controllerSessionKey &&
         entry.requesterStorePath === storePath));
-  return withSubagentRunReadSnapshot(
-    subagentRuns,
-    (snapshot) => {
-      const index = buildSubagentRunReadIndexFromRuns({
-        runs: snapshot,
-        inMemoryRuns: [...snapshot.keys()].flatMap((id) => subagentRuns.get(id) ?? []),
-      });
-      const yielded = [...index.latestRunsByChildSessionKey.values()].filter(
-        (entry) => isVisible(entry) && entry.pauseReason === "sessions_yield",
+  return withSubagentSessionListRead(
+    [controllerSessionKey],
+    ({ latestRunsByChildSessionKey: latest }) => {
+      const yielded = [...latest.values()].filter(
+        (entry) => isVisible(entry) && isSubagentPausedByYield(entry),
       );
       return {
-        index,
+        latest,
         runIds: [],
         sessionKeys: [controllerSessionKey, ...yielded.map((entry) => entry.childSessionKey)],
       };
     },
-    ({ index }, snapshot) => {
-      const latest = index.latestRunsByChildSessionKey;
+    ({ latest }, snapshot, readIndex) => {
       const visible = [...snapshot.values()].filter(isVisible);
       const runs = visible.filter(
         (entry) => latest.get(entry.childSessionKey.trim())?.runId === entry.runId,
@@ -117,6 +114,22 @@ export async function buildActiveSubagentRuntimeContext(params: {
       // execution or a recent-history cutoff cannot acknowledge an older result.
       const pending = visible
         .filter(hasOutstandingCompletion)
+        // Only the exact dispatching turn already carries this batch as input.
+        .filter(
+          (entry) =>
+            !(
+              params.runId &&
+              entry.requesterSettleWake?.status === "dispatching" &&
+              entry.requesterSettleWake.nextAttemptAt === undefined &&
+              isRequesterSettleWakeForRun({
+                entry,
+                runId: params.runId,
+                requesterSessionKey: controllerSessionKey,
+                requesterAgentId: agentId,
+                runsById: snapshot,
+              })
+            ),
+        )
         .toSorted(
           (left, right) =>
             (left.execution.endedAt ?? 0) - (right.execution.endedAt ?? 0) ||
@@ -125,29 +138,27 @@ export async function buildActiveSubagentRuntimeContext(params: {
       if (runs.length === 0 && pending.length === 0) {
         return undefined;
       }
-      const recentMinutes = params.recentMinutes ?? 30;
-      const context = captureSubagentListReadContext(runs, index, snapshot, recentMinutes);
-      const list = buildSubagentList({
-        context,
-        // Prompt fields are registry-owned; model and usage enrichment belongs to visible lists.
-        sessionEntries: new Map(),
-        taskMaxChars: 96,
-      });
+      const recentMinutes = 30;
+      const list =
+        params.includeSpawnContext === false
+          ? undefined
+          : buildSubagentList({
+              context: captureSubagentListReadContext(runs, readIndex(), snapshot, recentMinutes),
+              // Prompt fields are registry-owned; enrichment belongs to visible lists.
+              sessionEntries: new Map(),
+              taskMaxChars: 96,
+            });
       // buildSubagentList returns recent runs in registry order, so sort before
       // capping to keep the prompt block deterministic across turns.
       const pendingIds = new Set(pending.map((entry) => entry.runId));
-      const recentForPrompt = list.recent
+      const recentForPrompt = (list?.recent ?? [])
         .filter((entry) => !pendingIds.has(entry.runId))
         .toSorted((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0))
         .slice(0, RECENT_PROMPT_MAX_ENTRIES);
-      if (
-        pending.length === 0 &&
-        (params.includeSpawnContext === false ||
-          (list.active.length === 0 && recentForPrompt.length === 0))
-      ) {
+      if (pending.length === 0 && !list?.active.length && recentForPrompt.length === 0) {
         return undefined;
       }
-      const formatEntry = (entry: (typeof list.active)[number]) =>
+      const formatEntry = (entry: ReturnType<typeof buildSubagentList>["active"][number]) =>
         [
           "-",
           entry.taskName
@@ -168,7 +179,7 @@ export async function buildActiveSubagentRuntimeContext(params: {
           .filter(Boolean)
           .join(" ");
       const sections: string[][] = [];
-      if (params.includeSpawnContext !== false && list.active.length > 0) {
+      if (list && list.active.length > 0) {
         sections.push([
           "## Active Subagents",
           ...list.active
@@ -178,7 +189,7 @@ export async function buildActiveSubagentRuntimeContext(params: {
           ...(list.active.length > 16 ? [`- additional_runs=${list.active.length - 16}`] : []),
         ]);
       }
-      if (params.includeSpawnContext !== false && recentForPrompt.length > 0) {
+      if (recentForPrompt.length > 0) {
         sections.push([
           "## Recently Completed Subagents",
           `Children that ended in the last ${recentMinutes}m, newest first:`,
@@ -196,6 +207,5 @@ export async function buildActiveSubagentRuntimeContext(params: {
       }
       return sections.map((lines) => lines.join("\n")).join("\n\n");
     },
-    { sessionKeys: [controllerSessionKey], descendants: true },
   );
 }

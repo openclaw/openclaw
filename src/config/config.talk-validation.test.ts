@@ -1,10 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  getRuntimeConfig,
+  loadConfig,
   clearConfigCache,
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshot,
 } from "./config.js";
+import {
+  resolveConfiguredTalkRealtimeProviderId,
+  resolveConfiguredTalkSpeechProviderId,
+} from "./talk.js";
 import { withTempHomeConfig } from "./test-helpers.js";
 
 describe("talk config validation fail-closed behavior", () => {
@@ -16,14 +20,35 @@ describe("talk config validation fail-closed behavior", () => {
 
   it("can load an unpinned runtime config without replacing the process snapshot", async () => {
     await withTempHomeConfig({ gateway: { port: 19002 } }, async () => {
-      const unpinned = getRuntimeConfig({ skipPluginValidation: true, pin: false });
+      const unpinned = loadConfig({ skipPluginValidation: true, pin: false });
       expect(unpinned.gateway?.port).toBe(19002);
       expect(getRuntimeConfigSnapshot()).toBeNull();
-      const pinned = getRuntimeConfig();
+      const pinned = loadConfig();
       expect(pinned.gateway?.port).toBe(19002);
       expect(getRuntimeConfigSnapshot()).toBe(pinned);
     });
   });
+
+  it.each(["speech", "realtime"] as const)(
+    "loads a %s provider whose key differs in case and surrounding whitespace",
+    async (scope) => {
+      const selection = {
+        provider: " ACME ",
+        providers: { " Acme ": { voiceId: "synthetic-voice" } },
+      };
+      const talk = scope === "speech" ? selection : { realtime: selection };
+      await withTempHomeConfig({ agents: { entries: { main: {} } }, talk }, async () => {
+        const config = loadConfig({ skipPluginValidation: true, pin: false });
+        const resolveProvider =
+          scope === "speech"
+            ? resolveConfiguredTalkSpeechProviderId
+            : resolveConfiguredTalkRealtimeProviderId;
+        expect(resolveProvider(config)).toBe("Acme");
+        const selected = scope === "speech" ? config.talk : config.talk?.realtime;
+        expect(selected?.providers?.Acme).toEqual({ voiceId: "synthetic-voice" });
+      });
+    },
+  );
 
   it.each([
     {
@@ -43,7 +68,7 @@ describe("talk config validation fail-closed behavior", () => {
       const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       let thrown: unknown;
       try {
-        getRuntimeConfig();
+        loadConfig();
       } catch (error) {
         thrown = error;
       }

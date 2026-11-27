@@ -3,8 +3,10 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
+import { resolveRuntimeScriptPosition } from "../daemon/runtime-binary.js";
 import { hasNodeErrorCode, isPathInside } from "../infra/path-guards.js";
 import { tightenPrivateDirRootSync } from "../infra/private-dir-mode.js";
+import type { OpenClawPluginNodeWorkspaceLease } from "../plugins/types.node-host.js";
 import type { NodeWorkerWorkspaceRetainInput } from "../worker/node-workspace-retain-protocol.js";
 import type { NodeWorkerPreparedWorkspaceRow } from "./node-worker-prepared-workspace-store.js";
 
@@ -79,6 +81,8 @@ export function resolveNodePreparedWorkspaceIdentity(
 }
 
 export type NodeWorkerManagedWorkspaceRequest = {
+  /** Required for device folders; managed paths already carry their gateway namespace. */
+  gatewayNamespace?: string;
   workspaceDir: string;
   environmentId: string;
   sessionId: string;
@@ -131,6 +135,20 @@ export function nodeWorkerWorkspaceLaunchGenerationKey(
   });
 }
 
+export function nodeWorkerManagedWorkspacePath(
+  root: string,
+  placement: NodeWorkerWorkspaceLaunchReference,
+): string {
+  return path.join(
+    root,
+    placement.gatewayNamespace,
+    "workspaces",
+    hashNodeWorkerWorkspaceComponent(placement.environmentId, 16),
+    hashNodeWorkerWorkspaceComponent(placement.sessionId, 32),
+    String(placement.ownerEpoch),
+  );
+}
+
 export function nodeWorkerWorkspaceSessionKey(
   environmentHash: string,
   sessionHash: string,
@@ -156,7 +174,7 @@ export function parseNodeWorkerWorkspaceTransferGeneration(name: string): number
 export function resolveNodeManagedWorkspaceIdentity(
   root: string,
   request: NodeWorkerManagedWorkspaceRequest,
-): { workspaceDir: string; gatewayNamespace: string; generationKey: string } {
+): { workspaceDir: string; homeDir: string; gatewayNamespace: string; generationKey: string } {
   const fail = () => {
     throw new Error("INVALID_REQUEST: node placement does not own the requested workspace");
   };
@@ -188,16 +206,8 @@ export function resolveNodeManagedWorkspaceIdentity(
   if (!gatewayNamespace || !GATEWAY_NAMESPACE_PATTERN.test(gatewayNamespace)) {
     return fail();
   }
-  const environmentHash = hashNodeWorkerWorkspaceComponent(request.environmentId, 16);
-  const sessionHash = hashNodeWorkerWorkspaceComponent(request.sessionId, 32);
-  const expected = path.join(
-    root,
-    gatewayNamespace,
-    "workspaces",
-    environmentHash,
-    sessionHash,
-    String(request.ownerEpoch),
-  );
+  const placement = { ...request, gatewayNamespace };
+  const expected = nodeWorkerManagedWorkspacePath(root, placement);
   if (
     !stats.isDirectory() ||
     !isPathInside(root, workspaceDir) ||
@@ -210,14 +220,29 @@ export function resolveNodeManagedWorkspaceIdentity(
   }
   return {
     workspaceDir,
+    // Workspace commands already use the session root as their retained HOME.
+    homeDir: path.dirname(workspaceDir),
     gatewayNamespace,
-    generationKey: nodeWorkerWorkspaceGenerationKey({
-      gatewayNamespace,
-      environmentHash,
-      sessionHash,
-      generation: request.ownerEpoch,
-    }),
+    generationKey: nodeWorkerWorkspaceLaunchGenerationKey(placement),
   };
+}
+
+export function ensureNodeWorkerWorkspaceSessionRoot(
+  root: string,
+  gatewayNamespace: string,
+  environmentId: string,
+  sessionId: string,
+) {
+  if (!GATEWAY_NAMESPACE_PATTERN.test(gatewayNamespace)) {
+    throw new Error("INVALID_REQUEST: invalid node workspace gateway namespace");
+  }
+  const gatewayRoot = ensureContainedDirectory(root, gatewayNamespace);
+  const workspacesRoot = ensureContainedDirectory(gatewayRoot, "workspaces");
+  const environmentRoot = ensureContainedDirectory(
+    workspacesRoot,
+    hashNodeWorkerWorkspaceComponent(environmentId, 16),
+  );
+  return ensureContainedDirectory(environmentRoot, hashNodeWorkerWorkspaceComponent(sessionId, 32));
 }
 
 export function ensureContainedDirectory(parent: string, name: string): string {
@@ -243,12 +268,11 @@ function resolveArgumentPath(workspaceDir: string, arg: string): string | undefi
 }
 
 export function assertWorkspaceArgv(workspaceDir: string, argv: readonly string[]): void {
-  // This private transport owns cwd and direct path operands; it is not the user-facing
-  // system.run policy domain, so absolute/relative escapes must never cross its workspace.
+  // This private transport owns cwd and direct path operands, separate from system.run policy.
+  const { sourceIndices } = resolveRuntimeScriptPosition(argv);
   for (const [index, arg] of argv.entries()) {
-    // Canonical workspace helpers travel as the source operand to `node -e`.
-    // Treating JavaScript slash characters as host paths rejects the shipped scripts.
-    if (index > 0 && argv[index - 1] === "-e" && path.basename(argv[0] ?? "") === "node") {
+    // Runtime eval source can contain slashes without representing a host path.
+    if (sourceIndices.includes(index)) {
       continue;
     }
     const candidate = resolveArgumentPath(workspaceDir, arg);
@@ -341,3 +365,7 @@ export function buildNodeWorkerWorkspaceRetainSnapshot(input: NodeWorkerWorkspac
     manifestsBySession,
   };
 }
+
+export type NodeWorkerWorkspaceAcquisition = OpenClawPluginNodeWorkspaceLease & {
+  assertCurrent?: () => void;
+};

@@ -1,10 +1,11 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { mergeUserBackgroundImages } from "./user-background.store.js";
 import { mergeUserGitHubConnection } from "./user-github-connections.kernel.js";
 import { mergeUserModelAccounts } from "./user-model-accounts.js";
 import { mergeUserPreferences } from "./user-preferences.store.js";
+import { assertProfilesAreNotDelegated } from "./user-profile-delegation.worker.js";
 import {
   publishUserProfileAliasChange,
   publishUserProfileAuthorityChange,
@@ -20,7 +21,7 @@ import {
 } from "./user-profiles-internal.js";
 
 export function mergeUserProfiles(
-  db: DatabaseSync,
+  db: EngineConnection,
   sourceProfileId: string,
   targetProfileId: string,
   now: number,
@@ -38,6 +39,7 @@ export function mergeUserProfiles(
     ).rows.map((row) => row.id),
   ];
   mutation?.before(db, ...sourceProfileIds, targetProfileId);
+  assertProfilesAreNotDelegated(db, [...sourceProfileIds, targetProfileId]);
   prepareUserProfileGitHubMerge(db, sourceProfileIds, targetProfileId);
   const source = requireResolvedUserProfileById(db, sourceProfileId);
   if (source.avatar !== null) {

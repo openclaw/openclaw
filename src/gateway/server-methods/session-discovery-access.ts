@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import {
   ErrorCodes,
   errorShape,
@@ -13,12 +12,13 @@ import { isSameSessionSharingTarget } from "../session-sharing-target-read.js";
 import { prepareSessionSharingAccess } from "./sessions-sharing-authority.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-/** Keep discovery bound to current sharing facts and the session's selected skill revisions. */
+/** Keep discovery bound to current sharing facts while consuming selected display metadata. */
 export async function withSessionDiscoveryAccess(
-  params: Pick<
-    GatewayRequestHandlerOptions,
-    "client" | "context" | "respond" | "signal" | "hasCurrentClientAuthority"
-  > & { sessionKey?: string; agentId: string; changedError: ErrorShape },
+  params: Pick<GatewayRequestHandlerOptions, "client" | "context" | "respond" | "signal"> & {
+    sessionKey?: string;
+    agentId: string;
+    changedError: ErrorShape;
+  },
   discover: (entry?: SessionEntry) => Promise<unknown>,
 ): Promise<void> {
   if (!params.sessionKey) {
@@ -30,7 +30,7 @@ export async function withSessionDiscoveryAccess(
     using access = await prepareSessionSharingAccess(
       { ...params, sessionKey: params.sessionKey },
       () => {
-        throw new Error("Session discovery authority changed.");
+        throw new Error("Session discovery ended. Start a new request to retry.");
       },
     );
     if (!access) {
@@ -55,37 +55,29 @@ export async function withSessionDiscoveryAccess(
       return target;
     };
     const selected = readCurrent();
-    const readEntry = <T>(consume: (entry: SessionEntry) => T) =>
-      withReadySessionRows(
-        projection,
-        () => [query],
-        (read) => {
-          readCurrent(selected);
-          const row = read.describe(query);
-          const entry = row?.storedEntry;
-          if (
-            !entry ||
-            (read.readSource(row)?.path ?? row.storeTarget.storePath) !==
-              (sourcePath ?? selected.storePath) ||
-            entry.sessionId !== selected.entry.sessionId ||
-            entry.lifecycleRevision !== selected.entry.lifecycleRevision
-          ) {
-            throw new SessionMutationAuthorizationChangedError(params.changedError);
-          }
-          return consume(entry);
-        },
-      );
-    const entry = await readEntry((current) => structuredClone(current));
+    const entry = await withReadySessionRows(
+      projection,
+      () => [query],
+      (read) => {
+        readCurrent(selected);
+        const row = read.describe(query);
+        const current = row?.storedEntry;
+        if (
+          !current ||
+          (read.readSource(row)?.path ?? row.storeTarget.storePath) !==
+            (sourcePath ?? selected.storePath) ||
+          current.sessionId !== selected.entry.sessionId ||
+          current.lifecycleRevision !== selected.entry.lifecycleRevision
+        ) {
+          throw new SessionMutationAuthorizationChangedError(params.changedError);
+        }
+        return current;
+      },
+    );
     readCurrent(selected);
     const result = await discover(entry);
-    // Refuse unresolved membership before row preparation can refresh it.
     readCurrent(selected);
-    await readEntry((current) => {
-      if (!isDeepStrictEqual(current.skillLibrarySelections, entry.skillLibrarySelections)) {
-        throw new SessionMutationAuthorizationChangedError(params.changedError);
-      }
-      respond(true, result, undefined);
-    });
+    respond(true, result, undefined);
   } catch (error) {
     respond(
       false,

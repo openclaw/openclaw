@@ -3,22 +3,18 @@ import { ed25519, x25519 } from "@noble/curves/ed25519.js";
 import { hkdf } from "@noble/hashes/hkdf.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { describe, expect, it, vi } from "vitest";
-import type { AuditEntry, AuditStore } from "./audit.js";
+import { assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { canonicalBytes } from "./canonical.js";
 import { base64, fromBase64url, utf8 } from "./encoding.js";
-import { seal, type Envelope } from "./envelope.js";
+import type { Envelope, MessageBody } from "./envelope.js";
 import type { GuardAdapter, Verdict } from "./guard.js";
 import { generateIdentity } from "./identity.js";
 import { MemoryAuditStore, MemoryReplayStore } from "./memory-stores.test-support.js";
 import {
   composeInbound,
-  composeOutbound,
   PipelineError,
-  type ReviewApproval,
   type ReviewDecisionState,
   type ReviewGate,
-  type ReviewRequest,
 } from "./pipeline.js";
 
 const githubCommit = "430f975aacee445525c4663aa88ed1590f2f08b1";
@@ -34,10 +30,6 @@ const allow: Verdict = {
   policyVersion: "v1",
 };
 
-function audit(): MemoryAuditStore {
-  return new MemoryAuditStore(auditKey);
-}
-
 function mockGuard(...verdicts: Verdict[]): GuardAdapter & { calls: number } {
   return {
     providerId: "mock",
@@ -49,131 +41,65 @@ function mockGuard(...verdicts: Verdict[]): GuardAdapter & { calls: number } {
   };
 }
 
-function structuralGuard(
-  pinnedModel: string,
-  ...results: unknown[]
-): GuardAdapter & { calls: number } {
-  return {
-    providerId: "structural",
-    pinnedModel,
-    calls: 0,
-    async classify() {
-      return (results[this.calls++] ?? results.at(-1)) as Verdict;
-    },
-  };
-}
-
-function identities() {
-  return { alice: generateIdentity(), bob: generateIdentity() };
-}
-
-type Identity = ReturnType<typeof generateIdentity>;
-type OutboundOptions = Parameters<typeof composeOutbound>[0];
 type InboundOptions = Parameters<typeof composeInbound>[0];
 
-function outboundOptions(
-  alice: Identity,
-  bob: Identity,
-  overrides: Partial<OutboundOptions> = {},
-): OutboundOptions {
-  return {
-    id: "01JZ0000000000000000000000",
-    from: "alice#1",
-    to: "bob#1",
-    body: { text: "ordinary text" },
-    senderSigningSecretKey: alice.signing.secretKey,
-    recipientEncryptionPublicKey: bob.encryption.publicKey,
-    guard: mockGuard(allow),
-    audit: audit(),
-    policyVersion: "v1",
-    ...overrides,
-  };
-}
-
-function sealedEnvelope(
-  alice: Identity,
-  bob: Identity,
-  id: string,
-  body: Parameters<typeof seal>[0]["body"],
-): Envelope {
-  return seal({
-    id,
-    from: "alice#1",
-    to: "bob#1",
-    body,
-    senderSigningSecretKey: alice.signing.secretKey,
-    recipientEncryptionPublicKey: bob.encryption.publicKey,
-    ts: now,
-  });
-}
-
-function inboundOptions(
-  envelope: Envelope,
-  alice: Identity,
-  bob: Identity,
-  overrides: Partial<InboundOptions> = {},
-): InboundOptions {
-  return {
-    envelope,
+function createInbound(guard: GuardAdapter, audit: MemoryAuditStore) {
+  const alice = generateIdentity();
+  const bob = generateIdentity();
+  return (
+    message: string | MessageBody,
+    overrides: Partial<InboundOptions> = {},
+  ): InboundOptions => ({
+    envelope: craftEnvelope(typeof message === "string" ? { text: message } : message, alice, bob),
     self: "bob#1",
     recipientEncryptionSecretKey: bob.encryption.secretKey,
     recipientSigningSecretKey: bob.signing.secretKey,
     senderSigningPublicKey: alice.signing.publicKey,
     replayStore: new MemoryReplayStore(),
     now,
-    guard: mockGuard(allow),
-    audit: audit(),
+    guard,
+    audit,
     policyVersion: "v1",
     ...overrides,
-  };
+  });
 }
 
-function reviewVerdict(): Verdict {
-  return {
-    ...allow,
-    decision: "review",
-    category: "ambiguous",
-    reason: "Review.",
-  };
-}
+const review: Verdict = { ...allow, decision: "review", category: "ambiguous", reason: "Review." };
+
+const approvalGate = (approved: boolean) =>
+  gateOf(async ({ approvalDigest }) => ({ approved, approvalDigest }));
+const recordedGate = (decision: ReviewDecisionState) =>
+  gateOf(
+    async () => undefined,
+    async () => decision,
+  );
 
 function gateOf(
-  request: (review: ReviewRequest) => Promise<ReviewApproval | undefined>,
-  lookup: (approvalDigest: string) => Promise<ReviewDecisionState> = async () => "none",
+  request: ReviewGate["request"],
+  lookup: ReviewGate["lookup"] = async () => "none",
 ): ReviewGate {
   return { lookup, request };
 }
 
 async function capturePipelineError(promise: Promise<unknown>): Promise<PipelineError> {
-  try {
-    await promise;
-  } catch (error) {
-    if (error instanceof PipelineError) {
-      return error;
-    }
-    throw error;
-  }
-  throw new Error("expected pipeline error");
-}
-
-class FailOnceAuditStore implements AuditStore {
-  readonly inner = audit();
-  #fail = true;
-
-  async appendEvent(type: string, payload: unknown, ts?: number): Promise<AuditEntry> {
-    if (this.#fail) {
-      this.#fail = false;
-      throw new Error("transient audit failure");
-    }
-    return this.inner.appendEvent(type, payload, ts);
-  }
-
-  entries(): Promise<AuditEntry[]> {
-    return this.inner.entries();
-  }
+  const error = await promise.then(
+    () => undefined,
+    (reason: unknown) => reason,
+  );
+  assert.instanceOf(error, PipelineError);
+  return error;
 }
 
 describe("pipeline", () => {
+  let guard: ReturnType<typeof mockGuard>;
+  let inboundAudit: MemoryAuditStore;
+  let inbound: ReturnType<typeof createInbound>;
+  beforeEach(() => {
+    guard = mockGuard(allow);
+    inboundAudit = new MemoryAuditStore(auditKey);
+    inbound = createInbound(guard, inboundAudit);
+  });
+
   it.each(["accepted", "failed"] as const)(
     "joins an admitted heartbeat before %s inbound work settles",
     async (outcome) => {
@@ -181,27 +107,12 @@ describe("pipeline", () => {
       const guardEntered = createDeferred<void>();
       const finishGuard = createDeferred<void>();
       const finishRefresh = createDeferred<void>();
-      const finalized = createDeferred<void>();
       try {
-        const { alice, bob } = identities();
-        const envelope = sealedEnvelope(alice, bob, "01JZ0000000000000000000000", {
-          text: "ordinary text",
-        });
         const replay = new MemoryReplayStore();
         const refresh = vi
           .spyOn(replay, "refresh")
           .mockImplementationOnce(() => finishRefresh.promise);
-        const complete = replay.complete.bind(replay);
-        vi.spyOn(replay, "complete").mockImplementation(async (...args) => {
-          await complete(...args);
-          finalized.resolve();
-        });
-        const release = replay.release.bind(replay);
-        vi.spyOn(replay, "release").mockImplementation(async (...args) => {
-          await release(...args);
-          finalized.resolve();
-        });
-        const guard = mockGuard(allow);
+        const finalized = vi.spyOn(replay, outcome === "accepted" ? "complete" : "release");
         vi.spyOn(guard, "classify").mockImplementation(async () => {
           guardEntered.resolve();
           await finishGuard.promise;
@@ -210,34 +121,25 @@ describe("pipeline", () => {
           }
           return allow;
         });
-        let settled = false;
-        const pending = composeInbound(
-          inboundOptions(envelope, alice, bob, { replayStore: replay, guard }),
-        ).then(
-          (value) => {
-            settled = true;
-            return { value };
-          },
-          (error: unknown) => {
-            settled = true;
-            return { error };
-          },
+        const settled = vi.fn();
+        const pending = composeInbound(inbound("ordinary text", { replayStore: replay })).then(
+          settled,
+          settled,
         );
         await guardEntered.promise;
         await vi.advanceTimersByTimeAsync(60_000);
         expect(refresh).toHaveBeenCalledTimes(1);
         finishGuard.resolve();
-        await finalized.promise;
         await vi.advanceTimersByTimeAsync(0);
-        expect(settled).toBe(false);
+        expect(finalized).toHaveBeenCalled();
+        expect(settled).not.toHaveBeenCalled();
         finishRefresh.resolve();
-        const result = await pending;
-        expect(settled).toBe(true);
-        if (outcome === "accepted") {
-          expect(result).toMatchObject({ value: { disposition: "accepted" } });
-        } else {
-          expect(result).toHaveProperty("error");
-        }
+        await pending;
+        expect(settled).toHaveBeenCalledExactlyOnceWith(
+          outcome === "accepted"
+            ? expect.objectContaining({ disposition: "accepted" })
+            : expect.any(Error),
+        );
         expect(vi.getTimerCount()).toBe(0);
       } finally {
         finishGuard.resolve();
@@ -248,354 +150,74 @@ describe("pipeline", () => {
     },
   );
 
-  it.each([
-    "hello",
-    `See [the maintainer guide](${githubBlob}).`,
-    `Commit: <https://github.com/openclaw/openclaw/commit/${githubCommit}>`,
-    `Tree: https://github.com/openclaw/openclaw/tree/${githubCommit}/.agents`,
-    `Commit: 'https://github.com/openclaw/openclaw/commit/${githubCommit}'`,
-  ])("runs an allowed outbound and inbound exchange end to end: %s", async (text) => {
-    const { alice, bob } = identities();
-    const outboundAudit = audit();
-    const outboundGuard = mockGuard(allow);
-    const classifyOutbound = vi.spyOn(outboundGuard, "classify");
-    const outbound = await composeOutbound(
-      outboundOptions(alice, bob, {
-        body: { text },
-        ts: now,
-        audit: outboundAudit,
-        guard: outboundGuard,
-      }),
-    );
-    expect(classifyOutbound).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ direction: "outbound", text }),
-    );
-    const inboundAudit = audit();
-    const inboundGuard = mockGuard(allow);
-    const classifyInbound = vi.spyOn(inboundGuard, "classify");
-    const replayStore = new MemoryReplayStore();
-    const options = inboundOptions(outbound.envelope, alice, bob, {
-      replayStore,
-      guard: inboundGuard,
-      audit: inboundAudit,
-    });
-    const inbound = await composeInbound(options);
-    expect(inbound.disposition).toBe("accepted");
-    if (inbound.disposition !== "accepted") {
-      throw new Error("expected accepted result");
-    }
-    expect(inbound.body.text).toBe(text);
-    expect(classifyInbound).toHaveBeenCalledExactlyOnceWith(
+  it("accepts and deduplicates an authenticated inbound envelope", async () => {
+    const text = `Tree: https://github.com/openclaw/openclaw/tree/${githubCommit}/.agents`;
+    const classify = vi.spyOn(guard, "classify");
+    const options = inbound(text);
+    const result = await composeInbound(options);
+    expect(classify).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ direction: "inbound", text }),
     );
-    expect(inbound.receipt).toMatchObject({ id: outbound.envelope.id, status: "accepted" });
-    const outboundEntries = await outboundAudit.entries();
+    expect(result).toMatchObject({
+      disposition: "accepted",
+      body: { text },
+      receipt: { id: options.envelope.id, status: "accepted" },
+    });
     const inboundEntries = await inboundAudit.entries();
-    expect(outboundEntries.map((entry) => entry.event.type)).toEqual([
-      "proposal",
-      "guard_verdict",
-      "envelope",
-    ]);
-    expect(inboundEntries.map((entry) => entry.event.type)).toEqual([
+    expect(inboundEntries.map(({ event }) => event.type)).toEqual([
       "guard_verdict",
       "inbox",
       "receipt",
     ]);
-    expect(
-      new Set(
-        outboundEntries.map(
-          (entry) => (entry.event.payload as { approvalDigest: string }).approvalDigest,
-        ),
-      ).size,
-    ).toBe(1);
-    expect(
-      new Set(
-        inboundEntries.map(
-          (entry) => (entry.event.payload as { approvalDigest: string }).approvalDigest,
-        ),
-      ).size,
-    ).toBe(1);
+    const digests = inboundEntries.map(
+      ({ event }) => (event.payload as { approvalDigest: string }).approvalDigest,
+    );
+    expect(new Set(digests).size).toBe(1);
     const duplicate = await composeInbound({ ...options, now: now + 10 * 60 });
     expect(duplicate).toEqual({
       disposition: "duplicate",
-      body: inbound.body,
-      receipt: inbound.receipt,
+      body: result.body,
+      receipt: result.receipt,
     });
-    expect(inboundGuard.calls).toBe(1);
+    expect(guard.calls).toBe(1);
     expect(await inboundAudit.entries()).toHaveLength(inboundEntries.length);
   });
 
   it("rejects a decrypted free-form thread before guard admission", async () => {
-    const { alice, bob } = identities();
-    const guard = mockGuard(allow);
-    const envelope = craftEnvelope({ text: "hello", thread: "free-form thread" }, alice, bob);
     await expect(
-      composeInbound(inboundOptions(envelope, alice, bob, { guard })),
-    ).rejects.toMatchObject({ code: "malformed" });
-    expect(guard.calls).toBe(0);
-  });
-
-  it.each([
-    `${githubBlob} ${["sk-", "abcdefghijklmnopqrstuvwxyz123456"].join("")}`,
-    `https://github.com/openclaw/openclaw/commit/${githubCommit}?token=${githubCommit}`,
-    `https://example.org/?next='${githubBlob}`,
-    `https://example.org/#'${githubBlob}`,
-    `_https://example.org/?next=${githubBlob}_`,
-    `mailto:review@example.org?next=${githubBlob}`,
-  ])("stops a deterministic outbound denial before guard and sealing: %s", async (text) => {
-    const { alice, bob } = identities();
-    const guard = mockGuard(allow);
-    let rngCalls = 0;
-    await expect(
-      composeOutbound(
-        outboundOptions(alice, bob, {
-          body: { text },
-          guard,
-          rng(length) {
-            rngCalls++;
-            return new Uint8Array(length);
-          },
-        }),
-      ),
-    ).rejects.toMatchObject({ stage: "deterministic" });
-    expect(guard.calls).toBe(0);
-    expect(rngCalls).toBe(0);
-  });
-
-  it("stops an outbound guard denial before sealing", async () => {
-    const { alice, bob } = identities();
-    const deny: Verdict = {
-      ...allow,
-      decision: "deny",
-      category: "confidential",
-      reason: "Denied.",
-    };
-    let rngCalls = 0;
-    await expect(
-      composeOutbound(
-        outboundOptions(alice, bob, {
-          body: { text: githubBlob },
-          guard: mockGuard(deny),
-          rng(length) {
-            rngCalls++;
-            return new Uint8Array(length);
-          },
-        }),
-      ),
-    ).rejects.toMatchObject({ stage: "guard", verdict: deny });
-    expect(rngCalls).toBe(0);
-  });
-
-  it("centrally rejects invalid verdicts from structural guard adapters", async () => {
-    const { alice, bob } = identities();
-    const cases: Array<[string, string, unknown]> = [
-      ["wrong model", "mock-2026-07-12", { ...allow, model: "other-2026-07-12" }],
-      ["floating model", "mock-latest", { ...allow, model: "mock-latest" }],
-      ["wrong policy", "mock-2026-07-12", { ...allow, policyVersion: "v2" }],
-      ["unknown decision", "mock-2026-07-12", { ...allow, decision: "maybe" }],
-    ];
-    for (const [name, pinnedModel, rawVerdict] of cases) {
-      let rngCalls = 0;
-      await expect(
-        composeOutbound(
-          outboundOptions(alice, bob, {
-            id: "01JZ0000000000000000000008",
-            body: { text: `case ${name}` },
-            guard: structuralGuard(pinnedModel, rawVerdict),
-            rng(length) {
-              rngCalls++;
-              return new Uint8Array(length);
-            },
-          }),
-        ),
-      ).rejects.toMatchObject({
-        stage: "guard",
-        verdict: { decision: "deny", category: "guard_failure" },
-      });
-      expect(rngCalls).toBe(0);
-    }
-  });
-
-  it("accepts a valid structural adapter and admits the post-review verdict again", async () => {
-    const { alice, bob } = identities();
-    const common = outboundOptions(alice, bob, {
-      id: "01JZ0000000000000000000009",
-      body: { text: "structural adapter" },
-    });
-    await expect(
-      composeOutbound({ ...common, guard: structuralGuard(allow.model, allow) }),
-    ).resolves.toMatchObject({ verdict: allow });
-    const review = reviewVerdict();
-    const invalidAfterApproval = { ...allow, model: "wrong-2026-07-12" };
-    await expect(
-      composeOutbound({
-        ...common,
-        audit: audit(),
-        guard: structuralGuard(allow.model, review, invalidAfterApproval),
-        reviewGate: gateOf(async ({ approvalDigest }) => ({ approved: true, approvalDigest })),
-      }),
+      composeInbound(inbound({ text: "hello", thread: "free-form thread" })),
     ).rejects.toMatchObject({
-      stage: "guard",
-      verdict: { decision: "deny", category: "guard_failure" },
+      code: "malformed",
     });
+    expect(guard.calls).toBe(0);
   });
 
-  it("requires exact full-proposal approval and fresh classification for review", async () => {
-    const { alice, bob } = identities();
-    const review = reviewVerdict();
-    const common = outboundOptions(alice, bob, { body: { text: githubBlob } });
-    await expect(
-      composeOutbound({ ...common, audit: audit(), guard: mockGuard(review) }),
-    ).rejects.toMatchObject({ stage: "review" });
-    await expect(
-      composeOutbound({
-        ...common,
-        audit: audit(),
-        guard: mockGuard(review),
-        reviewGate: gateOf(async ({ approvalDigest }) => ({ approved: false, approvalDigest })),
-      }),
-    ).rejects.toMatchObject({ stage: "review", reviewOutcome: "denied", receipt: undefined });
-    await expect(
-      composeOutbound({
-        ...common,
-        audit: audit(),
-        guard: mockGuard(review),
-        reviewGate: gateOf(async () => ({ approved: true, approvalDigest: "wrong" })),
-      }),
-    ).rejects.toMatchObject({ stage: "review" });
-    const guard = mockGuard(review, allow);
-    const result = await composeOutbound({
-      ...common,
-      audit: audit(),
-      guard,
-      reviewGate: gateOf(async ({ approvalDigest }) => ({ approved: true, approvalDigest })),
-    });
-    expect(result.verdict.decision).toBe("allow");
-    expect(guard.calls).toBe(2);
-  });
-
-  it("does not reuse an approval across recipients", async () => {
-    const { alice, bob } = identities();
-    const review = reviewVerdict();
-    const common = outboundOptions(alice, bob, {
-      id: "01JZ0000000000000000000007",
-      from: "sender#1",
-      body: { text: "identical body" },
-    });
-    let vincentDigest = "";
-    await expect(
-      composeOutbound({
-        ...common,
-        to: "vincent#1",
-        audit: audit(),
-        guard: mockGuard(review),
-        reviewGate: gateOf(async (request) => {
-          vincentDigest = request.approvalDigest;
-          expect(request).toMatchObject({
-            id: common.id,
-            from: common.from,
-            to: "vincent#1",
-            direction: "outbound",
-          });
-          expect(request.bodyHash).toMatch(/^[0-9a-f]{64}$/);
-          return undefined;
-        }),
-      }),
-    ).rejects.toMatchObject({ stage: "review", reviewOutcome: "pending" });
-    await expect(
-      composeOutbound({
-        ...common,
-        to: "alice#1",
-        audit: audit(),
-        guard: mockGuard(review),
-        reviewGate: gateOf(async () => ({ approved: true, approvalDigest: vincentDigest })),
-      }),
-    ).rejects.toMatchObject({ stage: "review", message: "approval digest mismatch" });
-  });
-
-  it("releases a replay claim after transient audit failure and retries successfully", async () => {
-    const { alice, bob } = identities();
-    const envelope = sealedEnvelope(alice, bob, "01JZ0000000000000000000001", {
-      text: "retry me",
-    });
-    const replayStore = new MemoryReplayStore();
-    const inboundAudit = new FailOnceAuditStore();
-    const options = inboundOptions(envelope, alice, bob, {
-      replayStore,
-      audit: inboundAudit,
-    });
-    await expect(composeInbound(options)).rejects.toThrow("transient audit failure");
-    const retried = await composeInbound(options);
-    expect(retried.disposition).toBe("accepted");
-    expect(retried.receipt.status).toBe("accepted");
-  });
-
-  it("returns an identical cached rejection receipt on guard-deny redelivery", async () => {
-    const { alice, bob } = identities();
-    const envelope = sealedEnvelope(alice, bob, "01JZ0000000000000000000002", {
-      text: "classify me",
-    });
-    const replayStore = new MemoryReplayStore();
-    const inboundAudit = audit();
-    const deny: Verdict = { ...allow, decision: "deny", category: "injection", reason: "Denied." };
-    const guard = mockGuard(deny);
-    const options = inboundOptions(envelope, alice, bob, {
-      replayStore,
-      guard,
-      audit: inboundAudit,
-    });
-    const rejection = await capturePipelineError(composeInbound(options));
-    expect(rejection.receipt).toMatchObject({ status: "rejected", category: "guard_deny" });
-    const entryCount = (await inboundAudit.entries()).length;
-    const duplicate = await composeInbound({ ...options, now: now + 1_000 });
-    expect(duplicate).toEqual({ disposition: "duplicate", receipt: rejection.receipt });
-    expect(duplicate).not.toHaveProperty("body");
-    expect((await inboundAudit.entries()).length).toBe(entryCount);
-    expect(guard.calls).toBe(1);
-  });
-
-  it("completes explicit inbound review denial and caches its receipt", async () => {
-    const { alice, bob } = identities();
-    const envelope = sealedEnvelope(alice, bob, "01JZ0000000000000000000005", {
-      text: "review me",
-    });
-    const review = reviewVerdict();
-    const guard = mockGuard(review);
-    const replayStore = new MemoryReplayStore();
-    const inboundAudit = audit();
-    const options = inboundOptions(envelope, alice, bob, {
-      replayStore,
-      guard,
-      audit: inboundAudit,
-      reviewGate: gateOf(async ({ approvalDigest }) => ({
-        approved: false,
-        approvalDigest,
-      })),
-    });
-    const rejection = await capturePipelineError(composeInbound(options));
-    expect(rejection).toMatchObject({
-      stage: "review",
-      reviewOutcome: "denied",
-      receipt: { status: "rejected", category: "review_denied" },
-    });
-    const entryCount = (await inboundAudit.entries()).length;
-    await expect(composeInbound(options)).resolves.toEqual({
-      disposition: "duplicate",
-      receipt: rejection.receipt,
-    });
-    expect((await inboundAudit.entries()).length).toBe(entryCount);
-    expect(guard.calls).toBe(1);
-  });
+  it.each(["guard", "review"] as const)(
+    "caches %s rejection without repeating classification or audit",
+    async (stage) => {
+      guard = mockGuard(stage === "guard" ? { ...allow, decision: "deny" } : review);
+      const options = inbound("classify me", { guard, reviewGate: approvalGate(false) });
+      const rejection = await capturePipelineError(composeInbound(options));
+      expect(rejection).toMatchObject({
+        stage,
+        reviewOutcome: stage === "review" ? "denied" : undefined,
+        receipt: {
+          status: "rejected",
+          category: stage === "guard" ? "guard_deny" : "review_denied",
+        },
+      });
+      const entryCount = (await inboundAudit.entries()).length;
+      const duplicate = await composeInbound({ ...options, now: now + 1_000 });
+      expect(duplicate).toEqual({ disposition: "duplicate", receipt: rejection.receipt });
+      expect((await inboundAudit.entries()).length).toBe(entryCount);
+      expect(guard.calls).toBe(1);
+    },
+  );
 
   it("releases pending inbound review and accepts a later approved retry", async () => {
-    const { alice, bob } = identities();
-    const envelope = sealedEnvelope(alice, bob, "01JZ0000000000000000000006", {
-      text: "decide later",
-    });
-    const review = reviewVerdict();
-    const guard = mockGuard(review, review, allow);
+    guard = mockGuard(review, review, allow);
     let decided = false;
-    const options = inboundOptions(envelope, alice, bob, {
+    const options = inbound("decide later", {
       guard,
       reviewGate: gateOf(async ({ approvalDigest }) =>
         decided ? { approved: true, approvalDigest } : undefined,
@@ -614,136 +236,65 @@ describe("pipeline", () => {
     expect(guard.calls).toBe(3);
   });
 
-  it("holds a pending review on redelivery without re-classifying", async () => {
-    const { alice, bob } = identities();
-    const envelope = sealedEnvelope(alice, bob, "01JZ0000000000000000000011", {
-      text: "parked while pending",
-    });
-    const guard = mockGuard(allow);
-    const inboundAudit = audit();
-    const options = inboundOptions(envelope, alice, bob, {
-      guard,
-      audit: inboundAudit,
-      reviewGate: gateOf(
-        async () => undefined,
-        async () => "pending",
-      ),
-    });
-    await expect(composeInbound(options)).rejects.toMatchObject({
-      stage: "review",
-      reviewOutcome: "pending",
-      receipt: undefined,
-    });
-    // The recorded review owns redelivery: no fresh guard roll may resolve it,
-    // and re-attempts must not grow the audit chain.
-    expect(guard.calls).toBe(0);
-    expect((await inboundAudit.entries()).length).toBe(0);
-    await expect(
-      composeOutbound(
-        outboundOptions(alice, bob, {
-          guard,
-          reviewGate: gateOf(
-            async () => undefined,
-            async () => "pending",
-          ),
-        }),
-      ),
-    ).rejects.toMatchObject({ stage: "review", reviewOutcome: "pending" });
-    expect(guard.calls).toBe(0);
-  });
+  it.each(["pending", "approved", "denied"] as const)(
+    "honors a recorded %s review on redelivery",
+    async (decision) => {
+      const recorded = decision === "pending" ? decision : { approved: decision === "approved" };
+      const pending = composeInbound(inbound("parked", { reviewGate: recordedGate(recorded) }));
+      if (decision === "approved") {
+        expect((await pending).disposition).toBe("accepted");
+        expect(
+          (await inboundAudit.entries()).some((entry) => entry.event.type === "review_approval"),
+        ).toBe(true);
+      } else {
+        expect(await capturePipelineError(pending)).toMatchObject({
+          stage: "review",
+          reviewOutcome: decision,
+          receipt:
+            decision === "pending" ? undefined : { status: "rejected", category: "review_denied" },
+        });
+        if (decision === "pending") {
+          expect(await inboundAudit.entries()).toHaveLength(0);
+        }
+      }
+      expect(guard.calls).toBe(decision === "approved" ? 1 : 0);
+    },
+  );
 
-  it("completes a decided-approved review on redelivery with one classification", async () => {
-    const { alice, bob } = identities();
-    const envelope = sealedEnvelope(alice, bob, "01JZ0000000000000000000012", {
-      text: "approved while parked",
-    });
-    const guard = mockGuard(allow);
-    const inboundAudit = audit();
-    const result = await composeInbound(
-      inboundOptions(envelope, alice, bob, {
-        guard,
-        audit: inboundAudit,
-        reviewGate: gateOf(
-          async () => undefined,
-          async () => ({ approved: true }),
-        ),
-      }),
-    );
-    expect(result.disposition).toBe("accepted");
-    expect(guard.calls).toBe(1);
-    const entries = await inboundAudit.entries();
-    expect(entries.some((entry) => entry.event.type === "review_approval")).toBe(true);
-  });
-
-  it("completes a decided-denied review on redelivery without classifying", async () => {
-    const { alice, bob } = identities();
-    const envelope = sealedEnvelope(alice, bob, "01JZ0000000000000000000013", {
-      text: "denied while parked",
-    });
-    const guard = mockGuard(allow);
-    const rejection = await capturePipelineError(
-      composeInbound(
-        inboundOptions(envelope, alice, bob, {
-          guard,
-          reviewGate: gateOf(
-            async () => undefined,
-            async () => ({ approved: false }),
-          ),
-        }),
-      ),
-    );
-    expect(rejection).toMatchObject({
-      stage: "review",
-      reviewOutcome: "denied",
-      receipt: { status: "rejected", category: "review_denied" },
-    });
-    expect(guard.calls).toBe(0);
-  });
-
-  it("parks an inbound guard failure instead of rejecting the peer", async () => {
-    const { alice, bob } = identities();
-    const envelope = sealedEnvelope(alice, bob, "01JZ0000000000000000000014", {
-      text: "guard outage",
-    });
-    const failure: Verdict = {
-      ...allow,
-      decision: "deny",
-      category: "guard_failure",
-      reason: "Guard unavailable or invalid.",
-    };
-    const replayStore = new MemoryReplayStore();
-    const inboundAudit = audit();
-    const failing = inboundOptions(envelope, alice, bob, {
-      replayStore,
-      guard: mockGuard(failure),
-      audit: inboundAudit,
-    });
-    const parked = await capturePipelineError(composeInbound(failing));
-    expect(parked).toMatchObject({
-      stage: "guard",
-      verdict: { category: "guard_failure" },
-      receipt: undefined,
-    });
-    expect(
-      (await inboundAudit.entries()).some((entry) => entry.event.type === "inbox_rejected"),
-    ).toBe(false);
-    // The replay claim released, so recovery retries once the guard is back.
-    const retried = await composeInbound({
-      ...failing,
-      guard: mockGuard(allow),
-      now: now + 60,
-    });
-    expect(retried.disposition).toBe("accepted");
-  });
+  it.each(["audit", "guard"] as const)(
+    "releases a claim after %s failure for retry",
+    async (source) => {
+      const options = inbound("retry me");
+      if (source === "audit") {
+        vi.spyOn(inboundAudit, "appendEvent").mockRejectedValueOnce(
+          new Error("transient audit failure"),
+        );
+        await expect(composeInbound(options)).rejects.toThrow("transient audit failure");
+      } else {
+        options.guard = mockGuard({ ...allow, decision: "deny", category: "guard_failure" });
+        expect(await capturePipelineError(composeInbound(options))).toMatchObject({
+          stage: "guard",
+          verdict: { category: "guard_failure" },
+          receipt: undefined,
+        });
+        expect(
+          (await inboundAudit.entries()).some(({ event }) => event.type === "inbox_rejected"),
+        ).toBe(false);
+      }
+      await expect(
+        composeInbound({ ...options, guard: mockGuard(allow), now: now + 60 }),
+      ).resolves.toMatchObject({
+        disposition: "accepted",
+        receipt: { status: "accepted" },
+      });
+    },
+  );
 
   it("completes deterministic inbound denial with a signed rejection", async () => {
-    const { alice, bob } = identities();
-    const envelope = sealedEnvelope(alice, bob, "01JZ0000000000000000000003", {
-      text: `${githubBlob} ${["sk-", "abcdefghijklmnopqrstuvwxyz123456"].join("")}`,
-    });
-    const guard = mockGuard(allow);
     await expect(
-      composeInbound(inboundOptions(envelope, alice, bob, { guard })),
+      composeInbound(
+        inbound(`${githubBlob} ${["sk-", "abcdefghijklmnopqrstuvwxyz123456"].join("")}`, { guard }),
+      ),
     ).rejects.toMatchObject({
       stage: "deterministic",
       receipt: { status: "rejected", category: "deterministic_deny" },

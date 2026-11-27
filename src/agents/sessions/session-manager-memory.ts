@@ -1,4 +1,3 @@
-import type { CliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import type { SessionActorMemoryMetadataCommand } from "../../config/sessions/session-actor-memory-metadata-contract.js";
 import type {
   SessionManagerIncognitoDatabase,
@@ -6,14 +5,14 @@ import type {
 } from "../../config/sessions/session-manager-write-contract.js";
 import { SqliteTranscriptMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
 import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/session-transcript-writer-claim-error.js";
-import type { SessionManagerMemoryBinding } from "./session-manager-incognito-scope.js";
+import type { ActiveSessionManagerMemoryBinding } from "./session-manager-incognito-scope.js";
 import { captureSessionMessageAdmission } from "./session-manager-message-admission.js";
 import { prepareSessionManagerMetadataCommand } from "./session-manager-metadata-command.js";
 import { SessionManagerActorCommittedError } from "./session-manager-persistence-error.js";
 
 /** Adapts the existing manager contract to its selected actor, without opening a database. */
 export function createSessionManagerMemoryDatabase(
-  binding: SessionManagerMemoryBinding,
+  binding: ActiveSessionManagerMemoryBinding,
 ): SessionManagerIncognitoDatabase {
   const { actor, storage, database } = binding;
   if (actor.target.database.kind !== "memory") {
@@ -23,13 +22,11 @@ export function createSessionManagerMemoryDatabase(
     path: database.path,
     identity: { incarnation: actor.target.database.incarnation },
     async withMetadata(assertCurrent, operation, controls) {
-      let cliWriter: CliHistoryWriter | undefined;
       let commandSignal: AbortSignal | undefined;
       const assertMetadataCurrent = () => {
         commandSignal?.throwIfAborted();
         assertCurrent();
         binding.authority.assertCurrent();
-        cliWriter?.assertCurrent();
         controls?.initialWriter?.assertActive();
       };
       const admission = captureSessionMessageAdmission(assertMetadataCurrent, controls);
@@ -45,7 +42,7 @@ export function createSessionManagerMemoryDatabase(
         },
       };
       const execute = async (command: SessionActorMemoryMetadataCommand) => {
-        cliWriter = prepareSessionManagerMetadataCommand(command, database.path, admission.control);
+        prepareSessionManagerMetadataCommand(command, admission.control);
         if (command.type === "session.metadata.mutation") {
           return storage.read(command, authority);
         }

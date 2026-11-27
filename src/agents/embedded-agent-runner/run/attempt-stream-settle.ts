@@ -1,9 +1,18 @@
 import {
+  PROVIDER_DEFERRED_TOOL_NAMES,
+  PROVIDER_MODEL_INPUT,
+  PROVIDER_STATE_SCOPE,
+} from "@openclaw/ai/provider-types";
+import {
   isAnthropicServerToolClearingEnabled,
+  isCompactionReplayCheckpoint,
   resolveCompactionReplayEligibility,
+  stripCompactionReplayCheckpoint,
 } from "@openclaw/ai/transports";
-import type { ModelCompatConfig } from "../../../config/types.models.js";
+import type { ModelCompatConfig } from "../../../config/zod-schema.model-compat.js";
+import type { ContextEngineInfo } from "../../../context-engine/types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import { withGuardedFetchBeforeRequest } from "../../../infra/net/fetch-request-authority.js";
 import { createOpenAIServiceTierObservationWrapper } from "../../../llm/providers/stream-wrappers/openai-service-tier-observation.js";
 import { createCodexNativeWebSearchWrapper } from "../../../llm/providers/stream-wrappers/openai.js";
 import { getAgentScopedMediaLocalRoots } from "../../../media/local-roots.js";
@@ -12,13 +21,16 @@ import { resolveProviderTextTransforms } from "../../../plugins/provider-runtime
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import type { AgentRunAttemptFailureSource } from "../../agent-run-terminal-outcome.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
+import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { resolveSelectedModelCredential } from "../../model-auth-selected-credential.js";
+import { configuredModelSupportsNativeVideo } from "../../model-input.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
 import { resolveModelCallUrgency } from "../../run-trigger.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { AgentSession, SessionManager, SettingsManager } from "../../sessions/index.js";
 import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
+import { withPreparedSessionCapabilityRead } from "../../subagents/spawn/subagent-session-store.js";
 import { isToolExecutionAllowed } from "../../tool-policy-shared.js";
 import { hasNonzeroUsage, normalizeUsage } from "../../usage.js";
 import { isRunnerAbortError } from "../abort.js";
@@ -30,12 +42,14 @@ import {
   resolvePreparedExtraParams,
 } from "../extra-params.js";
 import { log } from "../logger.js";
+import { createAttemptModelRequestTransformer } from "../model-request-hook.js";
 import type { PromptCacheRequestObservation } from "../prompt-cache-request-observer.js";
 import { resolveCacheRetention } from "../prompt-cache-retention.js";
 import {
   type ProviderPromptState,
   wrapStreamFnWithProviderPromptState,
 } from "../provider-prompt-state.js";
+import { applySessionForkRequest } from "../session-fork-request.js";
 import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
   resolveEmbeddedAgentApiKey,
@@ -44,10 +58,7 @@ import {
 } from "../stream-resolution.js";
 import type { ProviderThinkLevel } from "../utils.js";
 import { joinWithRunLivenessDeadline, RUN_LIVENESS_JOIN_TIMEOUT_MS } from "./abortable.js";
-import {
-  shouldWaitForCompletionRequiredAsyncTasks,
-  waitForCompletionRequiredAsyncTasks,
-} from "./attempt-async-tasks.js";
+import { prepareEmbeddedAccessProgramGuard } from "./access-program.js";
 import {
   buildContextEnginePromptCacheInfo,
   findCurrentAttemptAssistantMessage,
@@ -64,6 +75,7 @@ import {
 import { selectCompactionTimeoutSnapshot } from "./compaction-timeout.js";
 import { materializeProviderContext } from "./images.js";
 import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
+import { promptImageSessionKey } from "./prompt-image-decisions.js";
 import { wrapStreamFnWithProviderReviewContinuation } from "./provider-review-continuation.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -90,6 +102,7 @@ export async function settleEmbeddedAttemptStream(input: {
   };
   markTimedOutDuringCompaction: () => void;
   getRunAbortDeadlineAtMs: () => number | undefined;
+  onRunAbortDeadlineChanged: (listener: () => void) => () => void;
   runAbortSignal: AbortSignal;
   isProbeSession: boolean;
   onBlockReplyFlush?: (payload: {
@@ -107,52 +120,11 @@ export async function settleEmbeddedAttemptStream(input: {
 }) {
   const { attempt, activeSession, sessionManager, subscription, state } = input;
 
-  try {
-    if (
-      shouldWaitForCompletionRequiredAsyncTasks({
-        sessionKey: attempt.sessionKey,
-        toolMetas: subscription.toolMetas,
-        yieldDetected: state.yieldAborted,
-        abortSignal: input.runAbortSignal,
-      })
-    ) {
-      const asyncTaskWait = await waitForCompletionRequiredAsyncTasks({
-        getToolMetas: () =>
-          subscription.toolMetas.filter(
-            (entry) => typeof entry.toolName === "string" && entry.toolName.trim().length > 0,
-          ),
-        sessionKey: attempt.sessionKey,
-        getDeadlineAtMs: () => {
-          const deadlineAtMs = input.getRunAbortDeadlineAtMs();
-          return deadlineAtMs === undefined ? undefined : Math.max(Date.now(), deadlineAtMs - 500);
-        },
-        abortSignal: input.runAbortSignal,
-      });
-      // An aborted run legitimately leaves async tasks unfinished; stamping a
-      // timeout failure here would reclassify the abort as an errored completion.
-      if (asyncTaskWait.timedOutRunIds.length > 0 && !input.readLifecycleState().aborted) {
-        state.promptError = new Error(
-          `Timed out waiting for async task completion: ${asyncTaskWait.timedOutRunIds.join(", ")}`,
-        );
-        state.promptErrorSource = "prompt";
-      }
-    }
-  } catch (err) {
-    // Cancelled task observation must still reach after-turn settlement. The
-    // lifecycle owner already records timeout versus user abort; another read
-    // here could wait indefinitely behind the same database coordinator.
-    const lifecycle = input.readLifecycleState();
-    if ((!lifecycle.timedOut && !lifecycle.aborted) || !isRunnerAbortError(err)) {
-      throw err;
-    }
-  }
-
   // Snapshot only outside compaction. Compaction rewrites history in place and
   // cannot be allowed to leave the timeout result with a half-written view.
-  const wasCompactingBefore = activeSession.isCompacting;
+  const wasCompacting = activeSession.isCompacting;
   const snapshot = activeSession.messages.slice();
-  const wasCompactingAfter = activeSession.isCompacting;
-  const preCompactionSnapshot = wasCompactingBefore || wasCompactingAfter ? null : snapshot;
+  const preCompactionSnapshot = wasCompacting ? null : snapshot;
   const preCompactionSessionId = activeSession.sessionId;
   const aggregateTimeoutMs = 60_000;
 
@@ -257,10 +229,11 @@ export async function settleEmbeddedAttemptStream(input: {
     const usageAssistant = hasNonzeroUsage(completedAssistantUsage)
       ? currentAttemptCompletedAssistant
       : transcriptUsageSnapshot?.assistant;
-    const fallbackLastCacheTouchAt = readLastCacheTtlTimestamp(sessionManager, {
-      provider: attempt.provider,
-      modelId: attempt.modelId,
-    });
+    const fallbackLastCacheTouchAt = readLastCacheTtlTimestamp(
+      sessionManager,
+      { provider: attempt.provider, modelId: attempt.modelId },
+      attempt.promptCacheKeepWarm,
+    );
     const promptCache = buildContextEnginePromptCacheInfo({
       retention: input.cache.retention,
       lastCallUsage,
@@ -291,21 +264,23 @@ export async function settleEmbeddedAttemptStream(input: {
         const { timedOutDuringCompaction } = input.readLifecycleState();
         const compactionOccurredThisAttempt = subscription.getCompactionCount() > 0;
         const cacheTtlCompat: ModelCompatConfig | undefined = attempt.model.compat;
-        await appendAttemptCacheTtlIfNeeded({
-          sessionManager,
-          timedOutDuringCompaction,
-          compactionOccurredThisAttempt,
-          config: attempt.config,
-          provider: attempt.provider,
-          modelId: attempt.modelId,
-          modelApi: attempt.model.api,
-          modelRoute: {
-            baseUrl: attempt.model.baseUrl,
-            supportsPromptCacheKey: cacheTtlCompat?.supportsPromptCacheKey,
-          },
-          isCacheTtlEligibleProvider,
-          toolResultPromptProjectionState: input.toolResultPromptProjectionState,
-        });
+        if (!attempt.inputAlreadyDelivered) {
+          await appendAttemptCacheTtlIfNeeded({
+            sessionManager,
+            timedOutDuringCompaction,
+            compactionOccurredThisAttempt,
+            config: attempt.config,
+            provider: attempt.provider,
+            modelId: attempt.modelId,
+            modelApi: attempt.model.api,
+            modelRoute: {
+              baseUrl: attempt.model.baseUrl,
+              supportsPromptCacheKey: cacheTtlCompat?.supportsPromptCacheKey,
+            },
+            isCacheTtlEligibleProvider,
+            toolResultPromptProjectionState: input.toolResultPromptProjectionState,
+          });
+        }
 
         if (timedOutDuringCompaction) {
           const removedEntries = await normalizeCompactionRecoveryTranscriptTail({
@@ -339,6 +314,9 @@ export async function settleEmbeddedAttemptStream(input: {
               error: formatErrorMessage(state.promptError),
             });
           } catch (entryErr) {
+            // Worker errors lose object identity; use the live owner's cancellation reason.
+            attempt.abortSignal?.throwIfAborted();
+            input.runAbortSignal.throwIfAborted();
             log.warn(`failed to persist prompt error entry: ${String(entryErr)}`);
           }
         }
@@ -371,6 +349,7 @@ export async function settleEmbeddedAttemptStream(input: {
 export async function prepareEmbeddedAttemptTransport(input: {
   assertCronRootCurrent?: () => void;
   attempt: EmbeddedRunAttemptParams;
+  contextEngineInfo?: ContextEngineInfo;
   session: AgentSession;
   settingsManager: SettingsManager;
   providerThinkingLevel: ProviderThinkLevel | undefined;
@@ -384,6 +363,8 @@ export async function prepareEmbeddedAttemptTransport(input: {
   sandboxSessionKey: string;
   sandbox?: SandboxContext | null;
   codeModeControlsEnabled: boolean;
+  /** Hidden catalog entries that a direct call hydrates in this run (directory or on-demand). */
+  getDeferredToolEntries?: () => readonly { name: string }[] | undefined;
   providerPromptState: {
     state: ProviderPromptState;
     effectiveContextTokenBudget: number;
@@ -396,12 +377,26 @@ export async function prepareEmbeddedAttemptTransport(input: {
     attempt.admittedRunContext,
     input.abortSignal,
   );
-  const assertRunCurrent = input.assertCronRootCurrent
-    ? () => {
-        assertAdmittedCurrent?.();
-        input.assertCronRootCurrent?.();
-      }
-    : assertAdmittedCurrent;
+  const runtime = attempt.preparedModelRuntime;
+  const profileId = attempt.authProfileId;
+  const credential = profileId ? attempt.authProfileStore?.profiles[profileId] : undefined;
+  const selectedCredential =
+    runtime &&
+    resolveSelectedModelCredential({
+      provider: attempt.model.provider,
+      profileId,
+      mode: credential?.type ?? attempt.runtimePlan?.auth.selectedAuthMode,
+    });
+  // Observation initializes the account entry; capture Access authority only after it exists.
+  const recordServiceTier =
+    runtime?.accountCatalog &&
+    selectedCredential &&
+    selectedCredential.source !== "harness" &&
+    selectedCredential.requirement === "api-key" &&
+    attempt.model.provider === "openai" &&
+    attempt.model.api === "openai-responses"
+      ? runtime.accountCatalog.prepareServiceTierObserver({ selectedCredential, credential })
+      : undefined;
   // Rebuild each turn from the session's original stream base so prior-turn
   // wrappers do not pin us to stale provider/API transport behavior.
   const defaultSessionStreamFn = resolveEmbeddedAgentBaseStreamFn({
@@ -411,9 +406,21 @@ export async function prepareEmbeddedAttemptTransport(input: {
     settingsManager: input.settingsManager,
     sessionTransport: session.agent.transport,
   });
+  if (
+    attempt.cyberAccessProgram !== undefined &&
+    attempt.cyberAccessProgram !== "standard" &&
+    attempt.provider !== "openai"
+  ) {
+    throw new Error(
+      "Daybreak access is unsupported by this provider. Select Standard or an OpenAI model.",
+    );
+  }
   const streamExtraParamsOverride = {
     ...attempt.streamParams,
     fastMode: attempt.fastMode,
+    ...(attempt.provider === "openai" && attempt.cyberAccessProgram !== undefined
+      ? { accessPrograms: { cyber: attempt.cyberAccessProgram } }
+      : {}),
     // Memory extraction must see the original history, not a provider summary.
     ...(attempt.trigger === "memory"
       ? { anthropicServerCompaction: false, responsesServerCompaction: false }
@@ -431,50 +438,42 @@ export async function prepareEmbeddedAttemptTransport(input: {
     model: attempt.model,
     resolvedTransport,
   };
-  const effectiveExtraParams =
+  const resolvedExtraParams =
     attempt.runtimePlan?.transport.resolveExtraParams(extraParamsContext) ??
     resolvePreparedExtraParams({
       ...extraParamsContext,
       cfg: attempt.config,
+      transportConfig: attempt.transportConfig,
       provider: attempt.provider,
       modelId: attempt.modelId,
       providerRuntimeHandle: input.getProviderRuntimeHandle(),
       agentDir: input.agentDir,
       auth,
     });
+  const ownsCompaction = input.contextEngineInfo?.ownsCompaction === true;
+  const suppressResponsesCompaction =
+    attempt.model.api === "openai-responses" &&
+    (attempt.trigger === "memory" ||
+      (ownsCompaction && resolvedExtraParams.responsesServerCompaction !== true));
+  const effectiveExtraParams = suppressResponsesCompaction
+    ? { ...resolvedExtraParams, responsesServerCompaction: false, responsesCompactEndpoint: false }
+    : resolvedExtraParams;
+  const assertAccessCurrent = await prepareEmbeddedAccessProgramGuard(
+    attempt,
+    effectiveExtraParams,
+  );
+  const assertRunCurrent = () => {
+    assertAdmittedCurrent?.();
+    input.assertCronRootCurrent?.();
+    assertAccessCurrent?.();
+  };
   const providerStreamFn = registerProviderStreamForModel({
     model: attempt.model,
-    cfg: attempt.config,
+    cfg: attempt.transportConfig ?? attempt.config,
     agentDir: input.agentDir,
     workspaceDir: input.workspaceDir,
     auth,
   });
-  const directProviderStreamFn = providerStreamFn
-    ? wrapStreamFnWithMessageTransform(
-        providerStreamFn,
-        (messages) => messages,
-        async ({ context, ...provider }) => {
-          assertRunCurrent?.();
-          const prepared = await materializeProviderContext({
-            ...provider,
-            context,
-            workspaceDir: input.workspaceDir,
-            agentWorkspaceDir: attempt.workspaceDir,
-            workspaceOnly: input.workspaceOnly,
-            localRoots: input.workspaceOnly
-              ? undefined
-              : getAgentScopedMediaLocalRoots(attempt.config ?? {}, input.sessionAgentId),
-            onCurrentTurnImageFailure: input.onCurrentTurnImageFailure,
-            sandbox:
-              input.sandbox?.enabled && input.sandbox.fsBridge
-                ? { root: input.sandbox.workspaceDir, bridge: input.sandbox.fsBridge }
-                : undefined,
-          });
-          assertRunCurrent?.();
-          return prepared;
-        },
-      )
-    : undefined;
   const transportApiKey = await resolveEmbeddedAgentApiKey({
     provider: attempt.model.provider,
     resolvedApiKey: attempt.resolvedApiKey,
@@ -486,7 +485,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
     wrapApiKey,
   } = selectEmbeddedAgentStream({
     currentStreamFn: defaultSessionStreamFn,
-    providerStreamFn: directProviderStreamFn,
+    providerStreamFn,
     sessionId: attempt.sessionId,
     promptCacheKey: attempt.promptCacheKey,
     signal: input.abortSignal,
@@ -497,12 +496,84 @@ export async function prepareEmbeddedAttemptTransport(input: {
     authStorage: attempt.authStorage,
     assertCurrent: assertRunCurrent,
   });
-  session.agent.streamFn = streamFn;
+  const boundaryStreamFn = wrapStreamFnWithMessageTransform(
+    streamFn,
+    (messages) => messages,
+    async ({ context, ...provider }) => {
+      assertRunCurrent?.();
+      let localRoots: readonly string[] | undefined;
+      const prepared = await materializeProviderContext({
+        ...provider,
+        context,
+        imageSessionKey: promptImageSessionKey(attempt),
+        workspaceDir: input.workspaceDir,
+        agentWorkspaceDir: attempt.workspaceDir,
+        workspaceOnly: input.workspaceOnly,
+        maxDimensionPx: resolveImageSanitizationLimits(attempt.config).maxDimensionPx,
+        localRoots: input.workspaceOnly
+          ? undefined
+          : () =>
+              (localRoots ??= getAgentScopedMediaLocalRoots(
+                attempt.config ?? {},
+                input.sessionAgentId,
+              )),
+        onCurrentTurnImageFailure: input.onCurrentTurnImageFailure,
+        sandbox:
+          input.sandbox?.enabled && input.sandbox.fsBridge
+            ? { root: input.sandbox.workspaceDir, bridge: input.sandbox.fsBridge }
+            : undefined,
+      });
+      assertRunCurrent?.();
+      return prepared;
+    },
+  );
+  const providerInput = configuredModelSupportsNativeVideo({
+    cfg: attempt.config,
+    provider: attempt.model.provider,
+    modelId: attempt.model.id,
+    api: attempt.model.api,
+  })
+    ? [...attempt.model.input, "video" as const]
+    : undefined;
+  let deferredToolEntries: readonly { name: string }[] | undefined;
+  let deferredToolNames: ReadonlySet<string> | undefined;
+  // A direct provider transport replaces the session SDK stream, so attach
+  // turn-owned thinking provenance to the selected transport as well.
+  session.agent.streamFn = (model, context, options) => {
+    const entries = input.getDeferredToolEntries?.();
+    if (entries !== deferredToolEntries) {
+      deferredToolEntries = entries;
+      deferredToolNames = entries && new Set(entries.map((entry) => entry.name));
+    }
+    const providerOptions = {
+      ...options,
+      openclawThinkingExplicit: attempt.thinkingExplicit,
+      ...(providerInput ? { [PROVIDER_MODEL_INPUT]: providerInput } : {}),
+      ...(deferredToolNames ? { [PROVIDER_DEFERRED_TOOL_NAMES]: deferredToolNames } : {}),
+      ...(attempt.providerStateScope ? { [PROVIDER_STATE_SCOPE]: attempt.providerStateScope } : {}),
+      ...(attempt.sessionForkRequest?.cachePrewarm ? { cachePrewarm: true as const } : {}),
+    };
+    // Async payload preparation outlives stream admission; managed fetch rechecks Access at egress.
+    return withGuardedFetchBeforeRequest(assertAccessCurrent, () =>
+      boundaryStreamFn(model, context, providerOptions),
+    );
+  };
   // Install inside provider/config wrappers so their full onPayload chain runs
   // before admission hashes the request body that the built-in transport sends.
+  const sessionFork = attempt.sessionForkRequest;
   session.agent.streamFn = wrapStreamFnWithProviderPromptState({
     streamFn: session.agent.streamFn,
     ...input.providerPromptState,
+    transformPayload: createAttemptModelRequestTransformer(attempt, input.sessionAgentId),
+    ...(sessionFork
+      ? {
+          finalizePayload: (payload: Record<string, unknown>) =>
+            applySessionForkRequest(payload, sessionFork, {
+              api: attempt.model.api,
+              allowedTools: attempt.toolExecutionAllow ?? [],
+            }),
+        }
+      : {}),
   });
   session.agent.streamFn = wrapStreamFnWithProviderReviewContinuation({
     streamFn: session.agent.streamFn,
@@ -527,12 +598,13 @@ export async function prepareEmbeddedAttemptTransport(input: {
     });
   }
   const nativeWebSearchPolicyContext = {
-    // Provider-hosted search bypasses local execute hooks, so its request must
-    // honor the same execution cap without changing foreground function schemas.
+    // Hosted search executes before client-side gates, so it honors the execution cap. A session
+    // fork lists it like its session, so the fork shares the session's cached tools prefix.
     webSearchEnabled:
       attempt.disableTools !== true &&
       attempt.toolOverrides?.webSearch !== false &&
       (!attempt.toolExecutionAllow ||
+        attempt.sessionForkRequest !== undefined ||
         isToolExecutionAllowed(attempt.toolExecutionAllow, "web_search")),
     runtimeToolAllowlist: attempt.toolsAllow,
     sessionKey: input.sandboxSessionKey,
@@ -549,24 +621,27 @@ export async function prepareEmbeddedAttemptTransport(input: {
     senderE164: attempt.senderE164,
   };
 
-  const { nativeWebSearchAllowedByToolPolicy } = applyExtraParamsToAgent(
-    session.agent,
-    attempt.config,
-    attempt.provider,
-    attempt.modelId,
-    streamExtraParamsOverride,
-    input.providerThinkingLevel,
-    input.sessionAgentId,
-    input.workspaceDir,
-    attempt.model,
-    input.agentDir,
-    resolvedTransport,
-    {
-      preparedExtraParams: effectiveExtraParams,
-      modelCallUrgency: resolveModelCallUrgency(attempt),
-      auth,
-      nativeWebSearchPolicyContext,
-    },
+  const { nativeWebSearchAllowedByToolPolicy } = await withPreparedSessionCapabilityRead(() =>
+    applyExtraParamsToAgent(
+      session.agent,
+      attempt.config,
+      attempt.provider,
+      attempt.modelId,
+      streamExtraParamsOverride,
+      input.providerThinkingLevel,
+      input.sessionAgentId,
+      input.workspaceDir,
+      attempt.model,
+      input.agentDir,
+      resolvedTransport,
+      {
+        preparedExtraParams: effectiveExtraParams,
+        transportConfig: attempt.transportConfig,
+        modelCallUrgency: resolveModelCallUrgency(attempt),
+        auth,
+        nativeWebSearchPolicyContext,
+      },
+    ),
   );
   if (input.codeModeControlsEnabled) {
     session.agent.streamFn = createCodexNativeWebSearchWrapper(session.agent.streamFn, {
@@ -589,13 +664,6 @@ export async function prepareEmbeddedAttemptTransport(input: {
     effectiveExtraParams,
   });
   const effectiveAgentTransport = agentTransportOverride ?? session.agent.transport;
-  if (agentTransportOverride && session.agent.transport !== agentTransportOverride) {
-    const previousTransport = session.agent.transport;
-    log.debug(
-      `embedded agent transport override: ${previousTransport} -> ${agentTransportOverride} ` +
-        `(${attempt.provider}/${attempt.modelId})`,
-    );
-  }
   session.agent.transport = effectiveAgentTransport;
   const contextPruning = attempt.config?.agents?.defaults?.contextPruning;
   const serverToolClearingEnabled =
@@ -613,47 +681,47 @@ export async function prepareEmbeddedAttemptTransport(input: {
   // Agent turns carry no credential, and provider wrappers classify auth from
   // options.apiKey (for example Anthropic OAuth identity), so attach it outermost.
   session.agent.streamFn = wrapApiKey(session.agent.streamFn);
-  const runtime = attempt.preparedModelRuntime;
-  const profileId = attempt.authProfileId;
-  const credential = profileId ? attempt.authProfileStore?.profiles[profileId] : undefined;
-  const selectedCredential =
-    runtime &&
-    resolveSelectedModelCredential({
-      provider: attempt.model.provider,
-      profileId,
-      mode: credential?.type ?? attempt.runtimePlan?.auth.selectedAuthMode,
-    });
-  if (
-    runtime?.accountCatalog &&
-    selectedCredential &&
-    selectedCredential.source !== "harness" &&
-    selectedCredential.requirement === "api-key" &&
-    attempt.model.provider === "openai" &&
-    attempt.model.api === "openai-responses"
-  ) {
-    const record = runtime.accountCatalog.prepareServiceTierObserver({
-      selectedCredential,
-      credential,
-    });
+  if (suppressResponsesCompaction) {
+    // Checkpoints already stored by older builds must not replace the engine's selection.
+    session.agent.streamFn = wrapStreamFnWithMessageTransform(session.agent.streamFn, (messages) =>
+      messages.some(
+        (message) =>
+          message.role === "assistant" && isCompactionReplayCheckpoint(message.providerReplay),
+      )
+        ? messages.map((message) =>
+            message.role === "assistant" ? stripCompactionReplayCheckpoint(message) : message,
+          )
+        : messages,
+    );
+  }
+  if (recordServiceTier && selectedCredential && selectedCredential.source !== "harness") {
     session.agent.streamFn = createOpenAIServiceTierObservationWrapper(
       session.agent.streamFn,
       (model, observation) =>
         !input.abortSignal.aborted &&
-        record({
+        recordServiceTier({
           modelId: model.id,
           runtimeId: "openclaw",
           api: model.api,
           baseUrl: model.baseUrl,
           ...observation,
         }),
+      {
+        runId: attempt.runId,
+        sessionId: attempt.sessionId,
+        authScope: input.agentDir,
+        accountRoute: selectedCredential.identityKey,
+      },
     );
   }
   return {
     serverToolClearingEnabled,
-    compactionReplayEnabled: resolveCompactionReplayEligibility(attempt.model, {
-      extraParams: effectiveExtraParams,
-      apiKey: transportApiKey,
-    }),
+    compactionReplayEnabled:
+      !suppressResponsesCompaction &&
+      resolveCompactionReplayEligibility(attempt.model, {
+        extraParams: effectiveExtraParams,
+        apiKey: transportApiKey,
+      }),
     effectiveAgentTransport,
     effectiveExtraParams,
     effectivePromptCacheRetention,

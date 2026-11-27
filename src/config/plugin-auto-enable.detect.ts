@@ -10,13 +10,20 @@ import type { PluginAutoEnableCandidate } from "./plugin-auto-enable.types.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 /** Detects installed plugins that should become enabled from existing config usage. */
-export function detectPluginAutoEnableCandidates(params: {
+export function detectPluginAutoEnableCandidates(
+  params: Parameters<typeof detectPluginAutoEnableCandidatesWithRegistry>[0],
+): PluginAutoEnableCandidate[] {
+  return detectPluginAutoEnableCandidatesWithRegistry(params).candidates;
+}
+
+/** Keep detection and materialization on one registry within a synchronous apply. */
+export function detectPluginAutoEnableCandidatesWithRegistry(params: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   manifestRegistry?: PluginManifestRegistry;
   discovery?: PluginDiscoveryResult;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
-}): PluginAutoEnableCandidate[] {
+}): { candidates: PluginAutoEnableCandidate[]; manifestRegistry?: PluginManifestRegistry } {
   const env = params.env ?? process.env;
   const config = params.config ?? {};
   const readiness = resolvePluginAutoEnableReadiness(
@@ -26,17 +33,20 @@ export function detectPluginAutoEnableCandidates(params: {
     params.ambientEnvTriggers,
   );
   if (!readiness.mayNeedAutoEnable) {
-    return [];
+    return { candidates: [], manifestRegistry: params.manifestRegistry };
   }
   const registry = resolvePluginAutoEnableManifestRegistry({
     config,
     env,
     manifestRegistry: params.manifestRegistry,
   });
-  return resolveConfiguredPluginAutoEnableCandidates({
-    config,
-    env,
-    registry,
-    configuredChannelIds: readiness.configuredChannelIds,
-  });
+  return {
+    candidates: resolveConfiguredPluginAutoEnableCandidates({
+      config,
+      env,
+      registry,
+      configuredChannelIds: readiness.configuredChannelIds,
+    }),
+    manifestRegistry: registry,
+  };
 }

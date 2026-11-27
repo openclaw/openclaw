@@ -1,14 +1,13 @@
-import type { DatabaseSync } from "node:sqlite";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { createSqliteWorkerWriteAdmission } from "../infra/sqlite-worker-store.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { withAgentProvenancePublication } from "./agent-provenance-publication.js";
 import type { AgentCreatedVia, AgentProvenance } from "./agent-provenance.types.js";
-import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
+import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 
 export type { AgentCreatedVia, AgentProvenance } from "./agent-provenance.types.js";
 
-type AgentProvenanceDatabase = Pick<OpenClawStateKyselyDatabase, "agent_provenance">;
 type AgentProvenanceOptions = OpenClawStateDatabaseOptions & { nowMs?: number };
 
 export async function recordAgentProvenance(
@@ -26,8 +25,19 @@ export async function recordAgentProvenance(
     creatorAgentId: provenance.creatorAgentId ? normalizeAgentId(provenance.creatorAgentId) : null,
     createdAtMs: options.nowMs ?? Date.now(),
   };
-  const { executeOpenClawStateWorker } = await import("./openclaw-state-worker-store.js");
-  await executeOpenClawStateWorker(context, { type: "agentProvenance.record", input });
+  const { runOpenClawStateWorkerOperation } = await import("./openclaw-state-worker-store.js");
+  await runOpenClawStateWorkerOperation(
+    context,
+    (scope) => scope.execute({ type: "agentProvenance.record", input }),
+    {
+      createAdmission: withAgentProvenancePublication(
+        createSqliteWorkerWriteAdmission(context.admission.assertCurrent, [
+          context.admission.databasePath,
+        ]),
+        context,
+      ),
+    },
+  );
 }
 
 type AgentProvenanceReadOptions = Pick<OpenClawStateDatabaseOptions, "env" | "path">;
@@ -43,16 +53,20 @@ export async function readAgentProvenanceForDisplay(
   }
   const context = captureOpenClawStateWorkerContext(options);
   const requestedIds = agentIds.map(normalizeAgentId);
-  const { executeOpenClawStateWorker } = await import("./openclaw-state-worker-store.js");
   const records: AgentProvenance[] = [];
   // Canonical IDs are bounded; chunking keeps roster growth below broker input
   // admission limits while preserving caller order and the first read error.
   for (let offset = 0; offset < requestedIds.length; offset += DISPLAY_PROVENANCE_BATCH_SIZE) {
-    const batch = await executeOpenClawStateWorker(context, {
-      type: "agentProvenance.readBatch",
-      input: { agentIds: requestedIds.slice(offset, offset + DISPLAY_PROVENANCE_BATCH_SIZE) },
-    });
-    records.push(...batch);
+    const batch = await executeExistingOpenClawStateRead(
+      { path: context.admission.databasePath, env: context.environment },
+      {
+        type: "agentProvenance.readBatch",
+        input: { agentIds: requestedIds.slice(offset, offset + DISPLAY_PROVENANCE_BATCH_SIZE) },
+      },
+      { context, current: true },
+    );
+    context.admission.assertCurrent();
+    records.push(...(batch?.records ?? []));
   }
   return records;
 }
@@ -61,18 +75,11 @@ export async function listAgentProvenance(
   options: AgentProvenanceReadOptions = {},
 ): Promise<AgentProvenance[]> {
   const context = captureOpenClawStateWorkerContext(options);
-  const { executeOpenClawStateWorker } = await import("./openclaw-state-worker-store.js");
-  return executeOpenClawStateWorker(context, {
-    type: "agentProvenance.list",
-    input: undefined,
-  });
-}
-
-/** Delete one row inside the caller's authoritative state transaction. */
-export function deleteAgentProvenanceForAgent(database: DatabaseSync, agentId: string): void {
-  const db = getNodeSqliteKysely<AgentProvenanceDatabase>(database);
-  executeSqliteQuerySync(
-    database,
-    db.deleteFrom("agent_provenance").where("agent_id", "=", normalizeAgentId(agentId)),
+  const reply = await executeExistingOpenClawStateRead(
+    { path: context.admission.databasePath, env: context.environment },
+    { type: "agentProvenance.list", input: undefined },
+    { context, current: true },
   );
+  context.admission.assertCurrent();
+  return reply?.records ?? [];
 }

@@ -5,14 +5,52 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeChatType, type ChatType } from "../channels/chat-type.js";
 import { parseSqliteSessionEntryRecord } from "../config/sessions/session-entry-json.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { normalizeAccountId } from "../routing/account-id.js";
 import { buildConversationRef, normalizeConversationPeerId } from "../routing/conversation-ref.js";
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import { migrateLegacySessionCreator } from "./creator-namespace-migration.js";
-import { ensurePendingInputConsumptionColumn } from "./openclaw-agent-pending-inputs-schema.js";
+import { STARTUP_ADDITIVE_AGENT_COLUMN_DEFINITIONS } from "./openclaw-agent-db-additive-columns.js";
+import type { DB } from "./openclaw-agent-db.generated.js";
+import { migrateAgentMemberAccessInTransaction } from "./openclaw-agent-member-access-schema.js";
+import {
+  AGENT_ARCHIVE_UNDO_SCHEMA_VERSION,
+  AGENT_MEMBER_ACCESS_SCHEMA_VERSION,
+} from "./openclaw-schema-versions.js";
 import { ensureColumn, tableExists } from "./openclaw-state-db-schema-helpers.js";
+
+/** Session row access steps from v44 on, in version order. */
+export function migrateSessionAccessVersionSteps(
+  db: DatabaseSync,
+  crossesVersion: (version: number) => boolean,
+): void {
+  if (crossesVersion(AGENT_MEMBER_ACCESS_SCHEMA_VERSION)) {
+    migrateAgentMemberAccessInTransaction(db);
+  }
+  if (crossesVersion(AGENT_ARCHIVE_UNDO_SCHEMA_VERSION)) {
+    migrateSessionArchiveUndoMarker(db);
+  }
+}
+
+function migrateSessionArchiveUndoMarker(db: DatabaseSync): void {
+  if (ensureColumn(db, "session_nodes", "archive_undo_marker TEXT")) {
+    return; // The canonical predecessor has no marker; no node reads or writes are needed.
+  }
+  // Older rebuilds may already have installed the nullable column. Never adopt a
+  // pre-v45 value as an issued archive occurrence.
+  const existing = getNodeSqliteKysely<DB>(db)
+    .selectFrom("session_nodes")
+    .select("session_key")
+    .where("archive_undo_marker", "is not", null)
+    .limit(1);
+  if (executeSqliteQueryTakeFirstSync(db, existing)) {
+    throw new SqliteSchemaMismatchError(
+      "Cannot migrate an agent database with an archive undo marker predating schema 45.",
+    );
+  }
+}
 
 export function assertSupportedAgentMigrationSchemas(
   db: DatabaseSync,
@@ -29,6 +67,15 @@ export function assertSupportedAgentMigrationSchemas(
   ) {
     throw new SqliteSchemaMismatchError(
       `OpenClaw agent database ${pathname} contains an unreleased session schema (version ${userVersion}). Preserve a complete copy of your state directory and configuration, including shared agent registration. Run "openclaw doctor --fix" with OpenClaw 2026.9.7 against that copy. If a store is held, follow Doctor's explicit agent-restoration instructions, then rerun Doctor before retrying the upgrade.`,
+    );
+  }
+  if (
+    userVersion === 44 &&
+    readSqliteTableColumns(db, "session_nodes")?.has("archive_undo_marker") &&
+    !readSqliteTableColumns(db, "session_members")?.has("access")
+  ) {
+    throw new SqliteSchemaMismatchError(
+      "Automatic upgrade of the preview archive-marker schema 44 is unsupported. Keep writers stopped, preserve this store, and restore a verified pre-preview backup with its matching build.",
     );
   }
   const acpParentStreamColumns = readSqliteTableColumns(db, "acp_parent_stream_events");
@@ -349,12 +396,10 @@ export function readSqliteTableColumns(db: DatabaseSync, tableName: string): Set
 
 /** Installs same-version session projections on first updated-binary open. */
 export function ensureSessionAdditiveColumns(db: DatabaseSync): void {
-  ensurePendingInputConsumptionColumn(db);
-  // NULL records an older writer's unclassified projection; the transcript
-  // reconcile owner fills it without parsing payloads during schema open.
-  ensureColumn(db, "session_transcript_active_events", "context_eligible INTEGER");
-  ensureColumn(db, "session_nodes", "project_id TEXT");
-  ensureColumn(db, "session_conversations", "route_context_json TEXT");
+  // NULL leaves derived projections for their owning reconcilers, without parsing rows here.
+  for (const { tableName, columnName, dataType } of STARTUP_ADDITIVE_AGENT_COLUMN_DEFINITIONS) {
+    ensureColumn(db, tableName, `${columnName} ${dataType}`);
+  }
   if (
     tableExists(db, "session_conversations") &&
     !getAdmittedSqliteSchemaFacts(db)?.triggers.has(
@@ -376,21 +421,6 @@ export function ensureSessionAdditiveColumns(db: DatabaseSync): void {
       END;
     `);
   }
-}
-
-export function hasPendingSessionConversationRouteContextColumn(db: DatabaseSync): boolean {
-  const columns = readSqliteTableColumns(db, "session_conversations");
-  return Boolean(columns && !columns.has("route_context_json"));
-}
-
-export function hasPendingSessionProjectColumn(db: DatabaseSync): boolean {
-  const columns = readSqliteTableColumns(db, "session_nodes");
-  return Boolean(columns && !columns.has("project_id"));
-}
-
-export function hasPendingSessionTranscriptContextEligibilityColumn(db: DatabaseSync): boolean {
-  const columns = readSqliteTableColumns(db, "session_transcript_active_events");
-  return Boolean(columns && !columns.has("context_eligible"));
 }
 
 /** Adds the v11 exact delivery target before the conversation backfill writes canonical rows. */

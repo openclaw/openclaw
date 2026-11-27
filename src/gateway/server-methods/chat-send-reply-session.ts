@@ -21,10 +21,7 @@ export type ChatReplySession = Pick<
   "agentId" | "backingSessionId" | "cfg" | "clientRunId" | "sessionKey" | "sessionLoadOptions"
 > &
   Partial<
-    Pick<
-      PreparedChatSendSession,
-      "entry" | "storePath" | "sessionTarget" | "capturedReadSources" | "assertSessionTargetCurrent"
-    >
+    Pick<PreparedChatSendSession, "entry" | "storePath" | "sessionTarget" | "capturedReadSources">
   >;
 
 /** Initialization owns the start binding; later delivery decisions read fresh stored rows. */
@@ -44,14 +41,11 @@ export function createChatReplySessionReader(
   };
   const target = session.sessionTarget;
   const source = target?.readSource;
-  const assertTargetCurrent = session.assertSessionTargetCurrent;
-  // Other sources or spellings would make qualification's absence checks query SQLite.
   const borrowed =
     target &&
     source &&
     typeof source.databaseIdentity === "string" &&
     assertWorkCurrent &&
-    assertTargetCurrent &&
     target.storeKeys.length === 1 &&
     target.storeKeys[0] === target.storeKey &&
     session.capturedReadSources?.length === 1 &&
@@ -59,7 +53,6 @@ export function createChatReplySessionReader(
       ? {
           target,
           source: { ...source, databaseIdentity: source.databaseIdentity },
-          assertTargetCurrent,
           assertWorkCurrent,
         }
       : undefined;
@@ -67,7 +60,6 @@ export function createChatReplySessionReader(
   const assertRetainedSourceCurrent = borrowed
     ? () => {
         borrowed.assertWorkCurrent();
-        borrowed.assertTargetCurrent();
         assertBorrowedRouting(getRuntimeConfig());
       }
     : undefined;

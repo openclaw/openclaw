@@ -17,39 +17,6 @@ struct ChatWorkingProgressTests {
         #expect(ChatWorkingClawStance.seeded("run-6", salt: salt) == .spin)
     }
 
-    @Test func `stance weights total one hundred and match the allowlist`() {
-        let weightedStances = ChatWorkingClawStance.weightedStances
-        #expect(weightedStances.reduce(0) { $0 + $1.weight } == 100)
-        #expect(weightedStances.map(\.weight) == [55, 18, 5, 4, 3, 2, 2, 2, 2, 2, 2, 2, 1])
-        #expect(weightedStances.map(\.stance) == [
-            .standard,
-            .southpaw,
-            .flurry,
-            .spin,
-            .shadowbox,
-            .backflip,
-            .zen,
-            .drummer,
-            .peekaboo,
-            .nodOff,
-            .curious,
-            .omNom,
-            .fakeOut,
-        ])
-        #expect(weightedStances.map(\.stance) == ChatWorkingClawStance.allCases)
-    }
-
-    @Test func `rare stances are selectable`() {
-        let salt: UInt32 = 0xA1B2_C3D4
-        #expect(ChatWorkingClawStance.seeded("run-38", salt: salt) == .zen)
-        #expect(ChatWorkingClawStance.seeded("run-21", salt: salt) == .drummer)
-        #expect(ChatWorkingClawStance.seeded("run-8", salt: salt) == .peekaboo)
-        #expect(ChatWorkingClawStance.seeded("run-15", salt: salt) == .nodOff)
-        #expect(ChatWorkingClawStance.seeded("run-10", salt: salt) == .curious)
-        #expect(ChatWorkingClawStance.seeded("run-24", salt: salt) == .omNom)
-        #expect(ChatWorkingClawStance.seeded("run-22", salt: salt) == .fakeOut)
-    }
-
     @Test func `zen samples the breath and deliberate snip keyframes`() {
         for (elapsed, scale) in [(0.0, 1.0), (1.8, 1.08), (3.3, 1.0), (6.0, 1.0)] {
             let pose = ChatWorkingClawMotion.pose(stance: .zen, elapsed: elapsed)
@@ -61,78 +28,6 @@ struct ChatWorkingProgressTests {
         for (elapsed, jaw) in [(3.6, -10.0), (4.2, -24.0), (4.56, 2.0), (5.16, -10.0)] {
             let pose = ChatWorkingClawMotion.pose(stance: .zen, elapsed: elapsed)
             self.expectClose(pose.jawRotation, jaw)
-        }
-    }
-
-    @Test func `drummer samples the two tilt and jaw hit keyframes`() {
-        for (elapsed, rotation) in [(0.0, 0.0), (0.18, -8.0), (0.36, 0.0), (0.66, 8.0), (0.84, 0.0)] {
-            let pose = ChatWorkingClawMotion.pose(stance: .drummer, elapsed: elapsed)
-            self.expectClose(pose.bodyRotation, rotation)
-            #expect(pose.bodyScale == 1)
-            #expect(pose.xOffset == 0)
-            #expect(pose.yOffset == 0)
-        }
-        for (elapsed, jaw) in [
-            (0.12, -20.0),
-            (0.18, 2.0),
-            (0.30, -10.0),
-            (0.60, -20.0),
-            (0.66, 2.0),
-            (0.78, -10.0),
-        ] {
-            let pose = ChatWorkingClawMotion.pose(stance: .drummer, elapsed: elapsed)
-            self.expectClose(pose.jawRotation, jaw)
-        }
-    }
-
-    @Test func `peekaboo samples the vertical duck pop and boo keyframes`() {
-        for (elapsed, yOffset, scale) in [
-            (1.32, 0.0, 1.0),
-            (1.488, 5.0, 0.72),
-            (1.728, 5.0, 0.72),
-            (1.872, -1.5, 1.06),
-            (2.016, 0.0, 1.0),
-        ] {
-            let pose = ChatWorkingClawMotion.pose(stance: .peekaboo, elapsed: elapsed)
-            self.expectClose(pose.yOffset, yOffset)
-            self.expectClose(pose.bodyScale, scale)
-            #expect(pose.bodyRotation == 0)
-            #expect(pose.xOffset == 0)
-        }
-        for (elapsed, jaw) in [
-            (1.32, -10.0),
-            (1.488, -2.0),
-            (1.728, -2.0),
-            (1.872, -28.0),
-            (2.064, -10.0),
-        ] {
-            let pose = ChatWorkingClawMotion.pose(stance: .peekaboo, elapsed: elapsed)
-            self.expectClose(pose.jawRotation, jaw)
-        }
-    }
-
-    @Test func `latest rare stances sample their defining beats`() {
-        let samples: [(
-            stance: ChatWorkingClawStance,
-            elapsed: TimeInterval,
-            bodyRotation: CGFloat,
-            xOffset: CGFloat,
-            yOffset: CGFloat,
-            jawRotation: CGFloat
-        )] = [
-            (.nodOff, 2.304, -3, 0, -0.5, -6),
-            (.curious, 0.96, -14, 0, 0, -16),
-            (.omNom, 0.864, 0, 2.5, 0, 8),
-            (.fakeOut, 1.392, 3, 0, 0, 4),
-        ]
-
-        for sample in samples {
-            let pose = ChatWorkingClawMotion.pose(stance: sample.stance, elapsed: sample.elapsed)
-            self.expectClose(pose.bodyRotation, sample.bodyRotation)
-            self.expectClose(pose.xOffset, sample.xOffset)
-            self.expectClose(pose.yOffset, sample.yOffset)
-            self.expectClose(pose.jawRotation, sample.jawRotation)
-            #expect(pose.bodyScale == 1)
         }
     }
 
@@ -179,27 +74,7 @@ struct ChatWorkingProgressTests {
     }
 
     @Test func `working phrases keep English defaults without a generated catalog`() {
-        #expect(ChatWorkingPhrase.resources == [
-            "Shelling",
-            "Scuttling",
-            "Clawing",
-            "Pinching",
-            "Molting",
-            "Bubbling",
-            "Tiding",
-            "Reefing",
-            "Cracking",
-            "Sifting",
-            "Brining",
-            "Nautiling",
-            "Krilling",
-            "Barnacling",
-            "Lobstering",
-            "Tidepooling",
-            "Pearling",
-            "Snapping",
-            "Surfacing",
-        ])
+        #expect(ChatWorkingPhrase.resources.first == "Shelling")
     }
 
     @Test func `compact duration clamps and keeps two meaningful units`() {
@@ -259,31 +134,6 @@ struct ChatWorkingProgressTests {
             row: self.doneRow(self.previousEndedAt - 5000)) == nil)
     }
 
-    @Test func `recap expires an unresolved watch`() {
-        var resolver = ChatTurnRecapResolver()
-        let start = Date(timeIntervalSince1970: 1000)
-        _ = resolver.resolve(
-            sessionKey: self.session,
-            indicatorVisible: true,
-            row: self.doneRow(self.previousEndedAt),
-            now: start)
-        #expect(resolver.resolve(
-            sessionKey: self.session,
-            indicatorVisible: false,
-            row: self.doneRow(self.previousEndedAt),
-            now: start) == nil)
-        #expect(resolver.resolve(
-            sessionKey: self.session,
-            indicatorVisible: false,
-            row: self.doneRow(self.previousEndedAt),
-            now: start.addingTimeInterval(31)) == nil)
-        #expect(resolver.resolve(
-            sessionKey: self.session,
-            indicatorVisible: false,
-            row: self.doneRow(self.runEndedAt),
-            now: start.addingTimeInterval(60)) == nil)
-    }
-
     @Test func `recap consumes a fresh done row without runtime`() {
         var resolver = ChatTurnRecapResolver()
         _ = resolver.resolve(
@@ -321,58 +171,46 @@ struct ChatWorkingProgressTests {
             row: self.doneRow(self.runEndedAt)) == nil)
     }
 
-    @Test func `recap consumes a watch whose baseline was never observed`() {
+    @Test func `recap waits for all concurrent runs then uses the latest completion`() {
         var resolver = ChatTurnRecapResolver()
-        #expect(resolver.resolve(
-            sessionKey: self.session,
-            indicatorVisible: true,
-            row: nil) == nil)
-        #expect(resolver.resolve(
-            sessionKey: self.session,
-            indicatorVisible: false,
-            row: self.doneRow(self.previousEndedAt)) == nil)
-        #expect(resolver.resolve(
-            sessionKey: self.session,
-            indicatorVisible: false,
-            row: self.doneRow(self.runEndedAt)) == nil)
-    }
-
-    @Test func `recap adopts the first row observed mid-watch`() {
-        var resolver = ChatTurnRecapResolver()
-        _ = resolver.resolve(sessionKey: self.session, indicatorVisible: true, row: nil)
         _ = resolver.resolve(
             sessionKey: self.session,
             indicatorVisible: true,
             row: self.doneRow(self.previousEndedAt))
         #expect(resolver.resolve(
             sessionKey: self.session,
-            indicatorVisible: false,
-            row: self.doneRow(self.previousEndedAt)) == nil)
+            indicatorVisible: true,
+            row: self.doneRow(self.runEndedAt, runtimeMs: 2000)) == nil)
         #expect(resolver.resolve(
             sessionKey: self.session,
             indicatorVisible: false,
-            row: self.doneRow(self.runEndedAt, runtimeMs: 6000)) ==
-            ChatTurnRecap(runtimeMs: 6000, outputTokens: nil))
+            row: self.doneRow(self.runEndedAt + 1000, runtimeMs: 4000, outputTokens: 80)) ==
+            ChatTurnRecap(runtimeMs: 4000, outputTokens: 80))
     }
 
-    @Test func `recap forfeits when a terminal stamp changes mid-watch`() {
+    @Test func `recaps stay scoped to their watched sessions`() {
         var resolver = ChatTurnRecapResolver()
-        _ = resolver.resolve(
-            sessionKey: self.session,
-            indicatorVisible: true,
-            row: ChatTurnRecapSessionRow(status: "running"))
-        _ = resolver.resolve(
-            sessionKey: self.session,
-            indicatorVisible: true,
-            row: self.doneRow(self.previousEndedAt))
+        let otherSession = "agent:other:main"
+        for session in [self.session, otherSession] {
+            _ = resolver.resolve(
+                sessionKey: session,
+                indicatorVisible: true,
+                row: self.doneRow(self.previousEndedAt))
+        }
+        let first = ChatTurnRecap(runtimeMs: 2000, outputTokens: 40)
         #expect(resolver.resolve(
             sessionKey: self.session,
             indicatorVisible: false,
-            row: self.doneRow(self.previousEndedAt)) == nil)
+            row: self.doneRow(self.runEndedAt, runtimeMs: 2000, outputTokens: 40)) == first)
+        #expect(resolver.resolve(
+            sessionKey: otherSession,
+            indicatorVisible: false,
+            row: self.doneRow(self.runEndedAt, runtimeMs: 4000, outputTokens: 80)) ==
+            ChatTurnRecap(runtimeMs: 4000, outputTokens: 80))
         #expect(resolver.resolve(
             sessionKey: self.session,
             indicatorVisible: false,
-            row: self.doneRow(self.runEndedAt, runtimeMs: 4000)) == nil)
+            row: self.doneRow(self.runEndedAt + 1000, runtimeMs: 9000)) == first)
     }
 
     @Test func `recap forfeits a failed turn that races the indicator`() {

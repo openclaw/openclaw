@@ -99,7 +99,7 @@
   padding: 40px 20px;
   text-align: center;
   border: 1px dashed color-mix(in oklab, var(--muted) 35%, transparent);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
 }
 
 .logbook__empty-title {
@@ -113,16 +113,19 @@
 }
 
 .logbook-card {
+  display: grid;
+  grid-template-columns: max-content 4px minmax(0, 1fr) auto;
+  column-gap: 10px;
   border: 1px solid color-mix(in oklab, var(--muted) 18%, transparent);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: var(--card);
   overflow: hidden;
 }
 
 .logbook-card__header {
   display: grid;
-  grid-template-columns: max-content 4px minmax(0, 1fr) auto;
-  gap: 10px;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
   align-items: center;
   width: 100%;
   padding: 10px 12px;
@@ -131,6 +134,11 @@
   color: inherit;
   font: inherit;
   text-align: left;
+}
+
+.logbook-card__header:focus-visible {
+  /* Keep the full outline above the expanded image in the next grid row. */
+  z-index: 1;
 }
 
 .logbook-card__header:hover {
@@ -214,14 +222,15 @@
 
 .logbook-card__body {
   display: flex;
+  grid-column: 3 / -1;
   flex-direction: column;
   gap: 10px;
-  padding: 0 12px 12px 118px;
+  padding: 0 12px 12px 0;
 }
 
 .logbook-card__keyframe {
   max-width: 100%;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   border: 1px solid color-mix(in oklab, var(--muted) 20%, transparent);
 }
 
@@ -265,8 +274,8 @@
 }
 
 @media (max-width: 768px) {
-  .logbook-card__header {
-    grid-template-columns: 4px minmax(0, 1fr);
+  .logbook-card {
+    grid-template-columns: max-content minmax(0, 1fr);
   }
 
   .logbook-card__time,
@@ -275,6 +284,7 @@
   }
 
   .logbook-card__body {
+    grid-column: 1 / -1;
     padding-left: 12px;
   }
 }
@@ -375,11 +385,18 @@
 
 .logbook-standup__body {
   font-size: 13px;
+  /* Reading text keeps macOS stem darkening; app chrome stays antialiased via body. */
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
 }
 
 .logbook-ask__form {
   display: flex;
   gap: 6px;
+}
+
+.logbook-ask__form > .btn {
+  padding-block: 0;
 }
 
 .logbook-ask__input {
@@ -392,6 +409,6 @@
   font-size: 13px;
   line-height: 1.5;
   padding: 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: color-mix(in oklab, var(--panel) 70%, transparent);
 }

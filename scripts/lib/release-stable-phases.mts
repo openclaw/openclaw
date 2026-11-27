@@ -70,7 +70,7 @@ export async function cut(ctx: ReleaseContext): Promise<void> {
   ).stdout.trim();
   let tip = remote.split(/\s+/u)[0] || cutSha;
   if (!remote) {
-    await ctx.run("git", ["push", "origin", `${cutSha}:refs/heads/${state.branch}`]);
+    await ctx.run("pnpm", ["release:push", "--", "--head", cutSha, "--branch", state.branch]);
   } else {
     await ctx.run("git", ["fetch", "origin", state.branch]);
     tip = (await ctx.run("git", ["rev-parse", "FETCH_HEAD"], { dryRunStdout: tip })).stdout.trim();
@@ -116,7 +116,7 @@ export async function cut(ctx: ReleaseContext): Promise<void> {
       `# Write CHANGELOG/${state.release}.md and CHANGELOG/records/${state.release}.md with $openclaw-changelog-update`,
       "pnpm changelog:check",
       shellCommand("git", ["commit", "-am", `chore(release): cut ${state.release}`]),
-      shellCommand("git", ["push", "origin", state.branch]),
+      "pnpm release:push",
       ctx.resume("cut"),
     ]);
   }
@@ -291,7 +291,7 @@ async function candidateInputs(ctx: ReleaseContext): Promise<Map<string, string>
     "normal",
     "--release-profile",
     "stable",
-    "--full-release-run",
+    "--full-release-validation-run-id",
     requireValue(state.validate.runId, "Full Release Validation run"),
     "--publish-workflow-ref",
     requireValue(state.validate.toolingTag, "tooling tag"),
@@ -416,7 +416,6 @@ export async function publish(ctx: ReleaseContext): Promise<void> {
         ctx.log("publish", command);
       }
     }
-    inputs.set("wait_for_clawhub", "false");
     // flip-github activates the release itself; keep Docker off the activation gate.
     inputs.delete("finalize_release_before_docker");
     const dispatched = await dispatchReleaseWorkflow(ctx, {

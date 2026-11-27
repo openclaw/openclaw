@@ -383,16 +383,16 @@ struct MacNodeHostWorkerTests {
         #expect(nativeCatalogEnabledReads.withLock { $0 } == 1)
     }
 
-    @Test(arguments: [
-        (
-            OpenClawComputerCommand.act.rawValue,
-            "COMPUTER_DISABLED: enable Computer Control in Settings"),
-    ])
-    func `worker cannot bypass native capability consent`(command: String, expectedMessage: String) async {
+    @Test func `worker cannot bypass native capability consent`() async {
+        let command = OpenClawComputerCommand.act.rawValue
         let worker = StubMacNodeHostWorker(commands: [command])
-        let runtime = MacNodeRuntime(
+        let services = await MainActor.run { MacNodeRuntimeTests.MainActorServicesProbe() }
+        let runtime = await MacNodeRuntime(
             nodeHostWorker: worker,
+            desktopAvailability: services.desktopAvailability,
+            makeMainActorServices: { services },
             computerControlEnabled: { false },
+            computerControlProvider: { .cua },
             codexThreadCatalogEnabled: { false })
 
         let response = await runtime.handleInvoke(BridgeInvokeRequest(
@@ -400,8 +400,8 @@ struct MacNodeHostWorkerTests {
             command: command))
 
         #expect(!response.ok)
-        #expect(response.error?.code == .unavailable)
-        #expect(response.error?.message == expectedMessage)
+        #expect(response.error?.code == .permissionMissing)
+        #expect(response.error?.details == .init(capabilities: ["computerControl"], state: .disabledInOpenClaw))
         #expect(await worker.invokedCommands().isEmpty)
     }
 
@@ -420,8 +420,8 @@ struct MacNodeHostWorkerTests {
                 command: command))
 
             #expect(!response.ok)
-            #expect(response.error?.code == .unavailable)
-            #expect(response.error?.message == "CANVAS_DISABLED: enable Canvas in Settings")
+            #expect(response.error?.code == .permissionMissing)
+            #expect(response.error?.details == .init(capabilities: ["canvas"], state: .disabledInOpenClaw))
             #expect(await worker.invokedCommands().isEmpty)
         }
     }
@@ -492,6 +492,26 @@ struct MacNodeHostWorkerTests {
             workerManifest: cua) == descriptor)
     }
 
+    @Test(arguments: [ComputerControlProvider.peekaboo, .cua])
+    func `bounded native bridge omits desktop attachment without changing provider ownership`(
+        provider: ComputerControlProvider) throws
+    {
+        let manifest = MacNodeHostManifest(
+            version: "test",
+            caps: ["screen", "computer", "system"],
+            commands: ["desktop.stream", "screen.snapshot", "computer.act", "system.run"],
+            computerUse: OpenClawProtocol.AnyCodable(["contractVersion": 2]),
+            pathEnv: "/usr/bin:/bin")
+        let direct = try #require(MacNodeModeCoordinator.workerManifest(manifest, for: provider))
+        let native = try #require(MacNodeModeCoordinator.workerManifest(
+            manifest, for: provider, supportsDesktopStreaming: false))
+        #expect(direct.commands.contains("desktop.stream"))
+        #expect(native.commands == direct.commands.filter { $0 != "desktop.stream" })
+        #expect(native.caps == direct.caps)
+        #expect(native.computerUse == direct.computerUse)
+        #expect(native.pathEnv == direct.pathEnv)
+    }
+
     @Test func `elevation host never advertises a persisted CUA provider`() throws {
         let suiteName = "MacNodeElevationHostProviderTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
@@ -542,6 +562,9 @@ struct MacNodeHostWorkerTests {
         # Progress belongs to the invoke; ready already lets the app send that invoke.
         while IFS= read -r line; do
           case "$line" in
+            *'"id":"worker-permission"'*)
+              printf '%s\\n' '{"type":"invoke-result","generation":0,"result":{"id":"worker-permission","ok":false,"error":{"code":"PERMISSION_MISSING","message":"PERMISSION_MISSING: screenRecording","details":{"capabilities":["screenRecording"],"state":"restart-required"}}}}'
+              ;;
             *'"type":"invoke"'*)
               printf '%s\\n' '{"type":"gateway-request","generation":0,"id":"gateway-1",\
         "method":"node.invoke.progress","params":{"invokeId":"worker-run","nodeId":"","seq":0,"chunk":"hello"},\
@@ -563,8 +586,14 @@ struct MacNodeHostWorkerTests {
             id: "worker-run",
             command: "system.run",
             paramsJSON: #"{"command":["/usr/bin/true"]}"#))
+        let permissionResponse = await worker.invoke(BridgeInvokeRequest(
+            id: "worker-permission", command: "system.run", paramsJSON: "{}"))
         await worker.stop()
         #expect(response.ok)
+        #expect(permissionResponse.error == OpenClawNodeError(
+            code: .permissionMissing,
+            message: "PERMISSION_MISSING: screenRecording",
+            details: .init(capabilities: ["screenRecording"], state: .restartRequired)))
 
         struct Response: Decodable {
             struct Payload: Decodable {

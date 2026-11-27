@@ -5,7 +5,7 @@ import * as convergence from "../../commands/doctor/shared/post-core-plugin-conv
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { withServer } from "../../plugin-sdk/test-helpers/http-test-server.js";
-import { readPersistedInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../../plugins/installed-plugin-index-records.js";
 import { loadInstalledPluginIndex } from "../../plugins/installed-plugin-index.js";
 import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
 import { seedInstalledPluginIndex } from "../../plugins/test-helpers/installed-plugin-index.js";
@@ -86,7 +86,6 @@ describe("post-core plugin payload degradation", () => {
 
             expect(result).toMatchObject({
               status: "warning",
-              assessment: { kind: "no-payload-repair" },
               changed: false,
               warnings: [
                 expect.objectContaining({
@@ -103,7 +102,7 @@ describe("post-core plugin payload degradation", () => {
             });
             expect(result.npm.outcomes.some((outcome) => outcome.status === "error")).toBe(false);
             expect(await fs.readFile(state.configPath, "utf8")).toBe(originalConfig);
-            expect(readPersistedInstalledPluginIndexInstallRecords()).toEqual(records);
+            expect(await readPersistedInstalledPluginIndexInstallRecordsAsync()).toEqual(records);
             const selected = withPluginCache(createPluginCache(), () =>
               loadInstalledPluginIndex({ config, installRecords: records, env: process.env }),
             ).plugins.find((plugin) => plugin.pluginId === pluginId);
@@ -118,18 +117,17 @@ describe("post-core plugin payload degradation", () => {
   );
 
   it.each([
-    ["consent", "warning", "unsafe", "capability-consent-required"],
-    ["integrity", "warning", "unsafe", "integrity-drift"],
-    ["unclassified", "ok", "unsafe", "convergence-failed"],
-    ["mixed", "warning", "unsafe", "unowned-plugin-payload"],
-    ["repaired-advisory", "warning", "unsafe", "plugin-requirement-unknown"],
-    ["retained-clawhub", "warning", "no-payload-repair", undefined],
-    ["invalid-config", "error", "core-critical", "invalid-config"],
-    ["config-read-file", "error", "core-critical", "config-read-failed"],
-    ["config-read-include", "error", "core-critical", "config-read-failed"],
-    ["authority", undefined, undefined, undefined],
-  ] as const)("classifies %s with update status=%s", async (failure, status, kind, reason) => {
-    await withOpenClawTestState({ label: `plugin-assessment-${failure}` }, async (state) => {
+    ["consent", "warning", undefined],
+    ["integrity", "warning", undefined],
+    ["convergence-error", "ok", undefined],
+    ["repaired-advisory", "warning", undefined],
+    ["retained-clawhub", "warning", undefined],
+    ["invalid-config", "error", "invalid-config"],
+    ["config-read-file", "error", "config-read-failed"],
+    ["config-read-include", "error", "config-read-failed"],
+    ["authority", undefined, undefined],
+  ] as const)("reports %s with update status=%s", async (failure, status, reason) => {
+    await withOpenClawTestState({ label: `post-core-plugins-${failure}` }, async (state) => {
       await state.writeConfig({ plugins: { enabled: false } });
       const refusal = new Error("original updater authority refused");
       const retained = failure === "retained-clawhub";
@@ -214,7 +212,7 @@ describe("post-core plugin payload degradation", () => {
             installedPluginIdRecovery: new Map(),
             changes: [],
             warnings:
-              failure === "unclassified" || retained
+              retained || failure === "convergence-error"
                 ? []
                 : [
                     {
@@ -226,21 +224,7 @@ describe("post-core plugin payload degradation", () => {
                   ],
             installRecords: retained ? (cfg.plugins?.installs ?? {}) : {},
             errored: !retained,
-            smokeFailures:
-              failure === "unclassified" || retained
-                ? []
-                : [
-                    smokeFailure,
-                    ...(failure === "mixed"
-                      ? [
-                          {
-                            pluginId: "another",
-                            reason: "missing-install-path" as const,
-                            detail: "No isolation root",
-                          },
-                        ]
-                      : []),
-                  ],
+            smokeFailures: retained || failure === "convergence-error" ? [] : [smokeFailure],
             outcomes:
               failure === "consent"
                 ? [
@@ -276,11 +260,27 @@ describe("post-core plugin payload degradation", () => {
           await expect(update).rejects.toBe(refusal);
         } else {
           const result = await update;
-          expect(result).toMatchObject({
-            status,
-            assessment: { kind, ...(reason ? { reason } : {}) },
-          });
-          expect(result.reason).toBe(kind === "core-critical" ? reason : undefined);
+          expect(result.status).toBe(status);
+          expect(result.reason).toBe(reason);
+          if (failure === "consent") {
+            expect(result.npm.outcomes).toContainEqual(
+              expect.objectContaining({
+                pluginId: "fixture",
+                status: "error",
+                code: PLUGIN_CAPABILITY_CONSENT_REQUIRED,
+              }),
+            );
+          }
+          if (failure === "integrity") {
+            expect(result.integrityDrifts).toEqual([
+              expect.objectContaining({
+                pluginId: "fixture",
+                expectedIntegrity: "sha512-known",
+                actualIntegrity: "sha512-changed",
+                action: "aborted",
+              }),
+            ]);
+          }
           if (retained) {
             expect(result.warnings).toEqual([
               expect.objectContaining({
@@ -290,7 +290,7 @@ describe("post-core plugin payload degradation", () => {
               }),
             ]);
           }
-          if (kind === "core-critical") {
+          if (status === "error") {
             expect(spy).not.toHaveBeenCalled();
             expect(result.changed).toBe(false);
             expect(result.failureFacts).toEqual([
@@ -330,7 +330,7 @@ describe("post-core plugin payload degradation", () => {
   });
 });
 
-describe("failed cohort repair requirement assessment", () => {
+describe("failed cohort repair reporting", () => {
   it("keeps an unavailable payload visible after the real failed repair", async () => {
     await withOpenClawTestState({ label: "unavailable-repair" }, async (state) => {
       const pluginId = "cohort-broken";
@@ -388,12 +388,9 @@ describe("failed cohort repair requirement assessment", () => {
                 config: { retained: "authored" },
               });
               expect(result.reason).toBeUndefined();
-              expect(readPersistedInstalledPluginIndexInstallRecords()).toEqual(records);
+              expect(await readPersistedInstalledPluginIndexInstallRecordsAsync()).toEqual(records);
               expect(await fs.readFile(dataPath, "utf8")).toBe("newer data survives");
-              expect(result).toMatchObject({
-                status: "warning",
-                assessment: { kind: "unsafe", reason: "plugin-requirement-unknown" },
-              });
+              expect(result.status).toBe("warning");
             },
           );
         },

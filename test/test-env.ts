@@ -5,18 +5,22 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import JSON5 from "json5";
 import { resolveEffectiveHomeDir } from "../src/infra/home-dir.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../src/infra/supervisor-markers.js";
-import { captureFullEnv, deleteTestEnvValue, setTestEnvValue } from "../src/test-utils/env.js";
+import {
+  captureEnv,
+  captureFullEnv,
+  deleteTestEnvValue,
+  setTestEnvValue,
+} from "../src/test-utils/env.js";
 import { readTestHomeSource, resolveTestCorepackHome } from "./test-home-context.mts";
 import {
   isTruthyTestEnvValue as isTruthyEnvValue,
   LIVE_TEST_TRIGGER_ENV_KEYS,
   resolveTestHomePolicy,
 } from "./test-home-policy.mts";
+import { isCredentialEnvName } from "./vitest/credential-env-name.js";
 
-type RestoreEntry = { key: string; value: string | undefined };
 type InstallTestEnvOptions =
   | { mode?: "live-aware"; loadProfileEnv?: boolean }
   | { mode: "hermetic" };
@@ -75,16 +79,6 @@ type ConfigValidationApi = typeof import("../src/config/validation.js");
 
 let cachedLegacyConfigCompatApi: LegacyConfigCompatApi | undefined;
 let cachedConfigValidationApi: ConfigValidationApi | undefined;
-
-function restoreEnv(entries: RestoreEntry[]): void {
-  for (const { key, value } of entries) {
-    if (value === undefined) {
-      deleteTestEnvValue(key);
-    } else {
-      setTestEnvValue(key, value);
-    }
-  }
-}
 
 function loadLegacyConfigCompatApi(): LegacyConfigCompatApi {
   cachedLegacyConfigCompatApi ??= requireFromHere(
@@ -196,47 +190,39 @@ function loadProfileEnv(homeDir = os.homedir()): void {
   }
 }
 
-function resolveRestoreEntries(): RestoreEntry[] {
+function resolveRestoreKeys(credentialEnvKeys: readonly string[]): string[] {
   return [
-    ...HERMETIC_TEST_ENV_KEYS.map((key) => ({ key, value: process.env[key] })),
-    { key: "OPENCLAW_TEST_FAST", value: process.env.OPENCLAW_TEST_FAST },
-    {
-      key: "OPENCLAW_STRICT_FAST_REPLY_CONFIG",
-      value: process.env.OPENCLAW_STRICT_FAST_REPLY_CONFIG,
-    },
-    {
-      key: "OPENCLAW_ALLOW_SLOW_REPLY_TESTS",
-      value: process.env.OPENCLAW_ALLOW_SLOW_REPLY_TESTS,
-    },
-    {
-      key: "OPENCLAW_LIVE_TEST_NORMALIZE_CONFIG",
-      value: process.env.OPENCLAW_LIVE_TEST_NORMALIZE_CONFIG,
-    },
-    { key: "HOME", value: process.env.HOME },
-    { key: "USERPROFILE", value: process.env.USERPROFILE },
-    { key: "XDG_CONFIG_HOME", value: process.env.XDG_CONFIG_HOME },
-    { key: "XDG_DATA_HOME", value: process.env.XDG_DATA_HOME },
-    { key: "XDG_STATE_HOME", value: process.env.XDG_STATE_HOME },
-    { key: "XDG_CACHE_HOME", value: process.env.XDG_CACHE_HOME },
-    { key: "XDG_RUNTIME_DIR", value: process.env.XDG_RUNTIME_DIR },
-    { key: "COREPACK_HOME", value: process.env.COREPACK_HOME },
-    { key: "OPENCLAW_STATE_DIR", value: process.env.OPENCLAW_STATE_DIR },
-    { key: "OPENCLAW_CONFIG_PATH", value: process.env.OPENCLAW_CONFIG_PATH },
-    { key: "OPENCLAW_GATEWAY_PORT", value: process.env.OPENCLAW_GATEWAY_PORT },
-    { key: "OPENCLAW_BRIDGE_ENABLED", value: process.env.OPENCLAW_BRIDGE_ENABLED },
-    { key: "OPENCLAW_BRIDGE_HOST", value: process.env.OPENCLAW_BRIDGE_HOST },
-    { key: "OPENCLAW_BRIDGE_PORT", value: process.env.OPENCLAW_BRIDGE_PORT },
-    { key: "OPENCLAW_CANVAS_HOST_PORT", value: process.env.OPENCLAW_CANVAS_HOST_PORT },
-    { key: "OPENCLAW_TEST_HOME", value: process.env.OPENCLAW_TEST_HOME },
-    { key: "OPENCLAW_AGENT_DIR", value: process.env.OPENCLAW_AGENT_DIR },
-    { key: "PI_CODING_AGENT_DIR", value: process.env.PI_CODING_AGENT_DIR },
-    ...ISOLATED_TEST_CREDENTIAL_ENV_KEYS.map((key) => ({ key, value: process.env[key] })),
-    ...ISOLATED_TEST_SERVICE_ENV_KEYS.map((key) => ({ key, value: process.env[key] })),
-    { key: "NODE_OPTIONS", value: process.env.NODE_OPTIONS },
+    ...HERMETIC_TEST_ENV_KEYS,
+    "OPENCLAW_TEST_FAST",
+    "OPENCLAW_STRICT_FAST_REPLY_CONFIG",
+    "OPENCLAW_ALLOW_SLOW_REPLY_TESTS",
+    "OPENCLAW_LIVE_TEST_NORMALIZE_CONFIG",
+    "HOME",
+    "USERPROFILE",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_STATE_HOME",
+    "XDG_CACHE_HOME",
+    "XDG_RUNTIME_DIR",
+    "COREPACK_HOME",
+    "OPENCLAW_STATE_DIR",
+    "OPENCLAW_CONFIG_PATH",
+    "OPENCLAW_GATEWAY_PORT",
+    "OPENCLAW_TELEMETRY_ENDPOINT",
+    "OPENCLAW_BRIDGE_ENABLED",
+    "OPENCLAW_BRIDGE_HOST",
+    "OPENCLAW_BRIDGE_PORT",
+    "OPENCLAW_CANVAS_HOST_PORT",
+    "OPENCLAW_TEST_HOME",
+    "OPENCLAW_AGENT_DIR",
+    "PI_CODING_AGENT_DIR",
+    ...new Set([...ISOLATED_TEST_CREDENTIAL_ENV_KEYS, ...credentialEnvKeys]),
+    ...ISOLATED_TEST_SERVICE_ENV_KEYS,
+    "NODE_OPTIONS",
   ];
 }
 
-function initializeIsolatedTestEnv(tempHome: string): void {
+function initializeIsolatedTestEnv(tempHome: string, credentialEnvKeys: readonly string[]): void {
   // Corepack's installed toolchain is independent of application state. Bind its
   // upstream cache default before isolating HOME/XDG so nested pnpm stays offline.
   setTestEnvValue("COREPACK_HOME", resolveTestCorepackHome(process.env));
@@ -263,8 +249,15 @@ function initializeIsolatedTestEnv(tempHome: string): void {
   deleteTestEnvValue("OPENCLAW_BRIDGE_HOST");
   deleteTestEnvValue("OPENCLAW_BRIDGE_PORT");
   deleteTestEnvValue("OPENCLAW_CANVAS_HOST_PORT");
+  // Update checks and outcome reports must never reach the production receiver, even
+  // when a case emulates production or spawns a CLI. Nothing listens on the discard port.
+  setTestEnvValue("OPENCLAW_TELEMETRY_ENDPOINT", "http://127.0.0.1:9/openclaw-test-telemetry");
   // Ambient channel credentials can activate real plugins even with an isolated HOME.
   for (const key of ISOLATED_TEST_CREDENTIAL_ENV_KEYS) {
+    deleteTestEnvValue(key);
+  }
+  // Fixture env copies spread process.env credentials into assertion output.
+  for (const key of credentialEnvKeys) {
     deleteTestEnvValue(key);
   }
   // A test worker is not the parent Gateway's service. Retaining its identity
@@ -357,6 +350,7 @@ function restoreClaudeConfigFromBackupIfNeeded(tempHome: string): void {
 }
 
 function sanitizeLiveConfig(raw: string): string {
+  const JSON5 = requireFromHere("json5") as typeof import("json5");
   try {
     const parsed: {
       agents?: {
@@ -536,9 +530,17 @@ export function installTestEnv(options?: InstallTestEnvOptions): {
       return { cleanup: () => {}, tempHome: realHome };
     }
 
-    const restore = resolveRestoreEntries();
+    // Git config keys and potentially credential-valued entries form one counted tuple.
+    // Removing only KEY_n leaves malformed config and inherited auth values behind.
+    const credentialEnvKeys = live
+      ? []
+      : Object.keys(process.env).filter(
+          (key) =>
+            isCredentialEnvName(key) || /^GIT_CONFIG_(?:COUNT|(?:KEY|VALUE)_\d+)$/u.test(key),
+        );
+    const restore = captureEnv(resolveRestoreKeys(credentialEnvKeys));
     tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-home-"));
-    initializeIsolatedTestEnv(tempHome);
+    initializeIsolatedTestEnv(tempHome, credentialEnvKeys);
 
     if (hermetic) {
       for (const key of HERMETIC_TEST_ENV_KEYS) {
@@ -558,7 +560,7 @@ export function installTestEnv(options?: InstallTestEnvOptions): {
     return {
       tempHome,
       cleanup: () => {
-        restoreEnv(restore);
+        restore.restore();
         removeHome();
       },
     };

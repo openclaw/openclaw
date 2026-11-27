@@ -10,7 +10,11 @@ import {
 } from "./package-local-overrides.js";
 import type { StagedPackageSwapParams } from "./package-update-swap-contract.js";
 
-/** Prepare before drain; invoke only after retaining the old tree and registering rollback. */
+/**
+ * Prepare before drain. `backupRoot` is where the old tree is when the returned
+ * replay runs: its backup location once moved there, or the package path itself
+ * when an atomic exchange publishes and the replay precedes it.
+ */
 export async function preparePackageSwapLocalOverrides(
   params: Pick<
     StagedPackageSwapParams,
@@ -30,7 +34,7 @@ export async function preparePackageSwapLocalOverrides(
   // Reject unsupported topology while the original service can still serve.
   await readPackageDistContentInventoryIfPresent(packageRoot);
   await collectPackageDistInventory(packageRoot, { includePackageExcludedFiles: true });
-  const runtimeUrls = options.reapply
+  const runtime = options.reapply
     ? await prepareLocalOverrideRuntime({
         sourceRoot: params.targetSwapRoot,
         destinationRoot: params.backupRoot,
@@ -41,7 +45,7 @@ export async function preparePackageSwapLocalOverrides(
     path.relative(params.targetSwapRoot, packageRoot),
   );
   return async (roots) => {
-    // Capture only after the real move, so staging/drain-time edits are included.
+    // Capture only at replay time, so staging/drain-time edits are included.
     const plan = await captureLocalPackageOverrides({
       packageRoot: roots
         ? path.join(roots.backupRoot, path.relative(params.targetSwapRoot, packageRoot))
@@ -56,7 +60,7 @@ export async function preparePackageSwapLocalOverrides(
       packageRoot: roots?.packageRoot ?? params.stage.packageRoot,
       plan,
       reapply: options.reapply,
-      runtimeUrls,
+      runtime,
     });
     params.onLocalOverrides?.(result);
     if (result.status === "error") {

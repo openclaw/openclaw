@@ -45,7 +45,7 @@ describe("command-poll-backoff", () => {
   });
 
   describe("pruneStaleCommandPolls", () => {
-    it("removes polls older than maxAge", () => {
+    it("removes polls older than one hour", () => {
       const state: SessionState = {
         lastActivity: Date.now(),
         state: "processing",
@@ -56,7 +56,7 @@ describe("command-poll-backoff", () => {
         ]),
       };
 
-      pruneStaleCommandPollsCore(state, 3600000);
+      pruneStaleCommandPollsCore(state);
 
       expect(state.commandPollCounts?.has("cmd-old")).toBe(false);
       expect(state.commandPollCounts?.has("cmd-new")).toBe(true);

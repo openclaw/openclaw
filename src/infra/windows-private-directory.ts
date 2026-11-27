@@ -10,7 +10,7 @@ import { markPrivateDirectoryCreationRefused } from "./private-directory-creatio
 export function createPrivateWindowsDirectory(directoryPath: string): void {
   let attempted = false;
   try {
-    createDirectorySync(path.toNamespacedPath(path.resolve(directoryPath)), {
+    createDirectorySync(path.resolve(directoryPath), {
       private: true,
       assertBeforeMutation() {
         attempted = true;
@@ -27,15 +27,5 @@ export function createPrivateWindowsDirectory(directoryPath: string): void {
 }
 
 export function createPrivateWindowsFile(filePath: string): OwnedFileDescriptorSync {
-  const resolved = path.resolve(filePath);
-  // fs-safe 0.26.0 stages in <parent>/.fs-safe-create-<UUID>/file. Keep short
-  // publication paths plain; remove this adapter when fs-safe includes openclaw/fs-safe#924.
-  const stagingLength = path.join(
-    path.dirname(resolved),
-    `.fs-safe-create-${"x".repeat(36)}`,
-    "file",
-  ).length;
-  const target =
-    Math.max(resolved.length, stagingLength) >= 260 ? path.toNamespacedPath(resolved) : resolved;
-  return createFileSync(target, { private: true });
+  return createFileSync(path.resolve(filePath), { private: true });
 }

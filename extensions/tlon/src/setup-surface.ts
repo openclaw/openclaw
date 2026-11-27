@@ -30,42 +30,26 @@ export const tlonSetupWizard = createTlonSetupWizardBase(async ({ cfg, accountId
     input: { dangerouslyAllowPrivateNetwork },
   });
 
-  const currentGroups = resolved.groupChannels;
-  const wantsGroupChannels = await prompter.confirm({
-    message: t("wizard.tlon.addGroupsPrompt"),
-    initialValue: currentGroups.length > 0,
-  });
-  if (wantsGroupChannels) {
-    const entry = await prompter.text({
-      message: t("wizard.tlon.groupChannelsPrompt"),
-      placeholder: "chat/~host-ship/general, chat/~host-ship/support",
-      initialValue: currentGroups.join(", ") || undefined,
+  for (const field of ["groupChannels", "dmAllowlist"] as const) {
+    const groups = field === "groupChannels";
+    const current = resolved[field];
+    const wantsEntries = await prompter.confirm({
+      message: t(groups ? "wizard.tlon.addGroupsPrompt" : "wizard.tlon.restrictDmsPrompt"),
+      initialValue: current.length > 0,
     });
-    next = applyTlonSetupConfig({
-      cfg: next,
-      accountId,
-      input: { groupChannels: splitSetupEntries(entry ?? "") },
-    });
-  }
-
-  const currentAllowlist = resolved.dmAllowlist;
-  const wantsAllowlist = await prompter.confirm({
-    message: t("wizard.tlon.restrictDmsPrompt"),
-    initialValue: currentAllowlist.length > 0,
-  });
-  if (wantsAllowlist) {
-    const entry = await prompter.text({
-      message: t("wizard.tlon.dmAllowlistPrompt"),
-      placeholder: "~zod, ~nec",
-      initialValue: currentAllowlist.join(", ") || undefined,
-    });
-    next = applyTlonSetupConfig({
-      cfg: next,
-      accountId,
-      input: {
-        dmAllowlist: splitSetupEntries(entry ?? "").map((ship) => normalizeShip(ship)),
-      },
-    });
+    if (wantsEntries) {
+      const entry = await prompter.text({
+        message: t(groups ? "wizard.tlon.groupChannelsPrompt" : "wizard.tlon.dmAllowlistPrompt"),
+        placeholder: groups ? "chat/~host-ship/general, chat/~host-ship/support" : "~zod, ~nec",
+        initialValue: current.join(", ") || undefined,
+      });
+      const entries = splitSetupEntries(entry ?? "");
+      next = applyTlonSetupConfig({
+        cfg: next,
+        accountId,
+        input: { [field]: groups ? entries : entries.map((ship) => normalizeShip(ship)) },
+      });
+    }
   }
 
   const autoDiscoverChannels = await prompter.confirm({

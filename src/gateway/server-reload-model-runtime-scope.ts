@@ -26,18 +26,28 @@ export function createGatewayModelRuntimeReload() {
         config: previousConfig,
         sourceConfig: projectConfigOntoRuntimeSourceSnapshot(previousConfig),
       };
-      const agentIds = doesReloadAffectPluginCapabilities(plan, baseline.config, nextConfig)
-        ? undefined
-        : resolveReloadAgentIds([
-            ...plan.changedPaths,
-            ...diffConfigPaths(baseline.config, nextConfig),
-          ]);
+      const pluginCapabilitiesChanged = doesReloadAffectPluginCapabilities(
+        plan,
+        baseline.config,
+        nextConfig,
+      );
+      const changedPaths = [...plan.changedPaths, ...diffConfigPaths(baseline.config, nextConfig)];
+      const preservePluginGenerations =
+        !pluginCapabilitiesChanged &&
+        changedPaths.every(
+          (path) =>
+            !isProviderAuthRelevantReloadPath(path) || path === "auth" || path.startsWith("auth."),
+        );
+      const agentIds = pluginCapabilitiesChanged ? undefined : resolveReloadAgentIds(changedPaths);
       return {
         required:
           pending !== undefined || doesReloadAffectProviderAuth(plan, previousConfig, nextConfig),
         refreshContextWindows: pending !== undefined || shouldRefreshContextWindowCache(plan),
         agentIds,
-        scope: agentIds ? { agentIds } : {},
+        scope: {
+          ...(agentIds ? { agentIds } : {}),
+          ...(preservePluginGenerations ? { preservePluginGenerations: true } : {}),
+        },
         sourceConfig: baseline.sourceConfig,
         complete: () => {
           pending = undefined;
@@ -92,12 +102,14 @@ export async function pruneRemovedProviderModelCatalogs(
 export function refreshModelRuntimeAfterHotReload(params: {
   config: OpenClawConfig;
   agentIds: ReadonlySet<string> | undefined;
+  preservePluginGenerations?: boolean;
   pluginMetadataSnapshot: PluginMetadataSnapshot | undefined;
   isPublicationCurrent?: () => boolean;
 }): Promise<void> {
   return refreshPreparedModelRuntimeSnapshots(params.config, {
     catalogMode: "static",
     joinSupersedingPublication: true,
+    ...(params.preservePluginGenerations ? { preservePluginGenerations: true } : {}),
     ...(params.isPublicationCurrent ? { isPublicationCurrent: params.isPublicationCurrent } : {}),
     allowGatewaySubagentBinding: true,
     ...(params.agentIds ? { agentIds: params.agentIds } : {}),

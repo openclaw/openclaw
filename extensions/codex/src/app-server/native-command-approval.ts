@@ -1,4 +1,5 @@
 import type { ExecApprovalDecision } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { isStringArray } from "openclaw/plugin-sdk/collection-input-runtime";
 import {
   sanitizeCodexApprovalVisibleText,
   type AppServerApprovalOutcome,
@@ -83,11 +84,7 @@ function findAvailableCommandPersistentApproval(
     const prefix = isJsonObject(exec) ? exec.execpolicy_amendment : undefined;
     const amendment = isJsonObject(network) ? network.network_policy_amendment : undefined;
     let target: string;
-    if (
-      Array.isArray(prefix) &&
-      prefix.length > 0 &&
-      prefix.every((part) => typeof part === "string")
-    ) {
+    if (isStringArray(prefix) && prefix.length > 0) {
       target = `Command prefix: ${JSON.stringify(prefix)}`;
     } else if (
       isJsonObject(amendment) &&

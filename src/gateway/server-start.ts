@@ -1,25 +1,32 @@
 import { formatErrorMessage } from "../infra/errors.js";
+import { getResourceProfile } from "../infra/gateway-resource-profile.js";
+import { createLegacyPluginSdkReplyDispatch } from "../plugins/legacy-sdk-reply-dispatch.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-error.js";
 import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
+import { installGatewayDatabaseEngine } from "./server-database-engine.js";
 import { createGatewayKernel, gatewayKernelLogs } from "./server-kernel.js";
+import { schedulePostReadyWorkRelease } from "./server-post-ready-release.js";
 import type { GatewayServer, GatewayServerOptions } from "./server-public.js";
 import { createGatewayHttpTransport } from "./server-runtime-state.js";
 import { rethrowGatewayStartupError, runGatewayCloseSteps } from "./server-shutdown.js";
 import { finishGatewayStartup } from "./server-startup-finish.js";
+import { captureGatewayInstallationTrial } from "./stale-install.js";
 import { beginMacOSSystemCaWarmupOnce } from "./system-ca-warmup.js";
 
 const { log, logTailscale, logChannels, logHealth, logCron, logReload, logHooks, logWsControl } =
   gatewayKernelLogs;
-const POST_READY_WORK_START_DELAY_MS = 500;
-
 export async function startGatewayServerCore(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
-  const sdkResourceHost = new LegacyPluginSdkResourceHost();
+  await installGatewayDatabaseEngine(
+    opts.startupConfigSnapshotRead?.snapshot,
+    opts.startupConfigSnapshotRead?.databaseEngineSelection,
+  );
+  const sdkResourceHost = new LegacyPluginSdkResourceHost(createLegacyPluginSdkReplyDispatch());
   // Join startup through its returned promise without giving resident listeners the boot scope.
   const start = (signal?: AbortSignal) =>
     runOutsideAsyncWorkScope(() =>
@@ -39,6 +46,7 @@ async function startGatewayServerWithSdkHost(
   const { promise: postReadyWorkBarrier, resolve: releasePostReadyWork } = createDeferredCore();
   const gatewayKernel = await createGatewayKernel(port, opts, {
     deferEarlyRuntime: true,
+    deferRequestRuntime: true,
     sdkResourceHost,
   });
   // A Gateway restart must refresh restored skill catalogs, even in the same process.
@@ -53,10 +61,33 @@ async function startGatewayServerWithSdkHost(
   let stopStartingTailscale: (() => void) | undefined;
   const { closeOnStartupFailure, prepareClose, terminalSessions, shutdownRuntime } = gatewayKernel;
   try {
+    if (!opts.updateCanary) {
+      await captureGatewayInstallationTrial();
+    }
     const transport = await createGatewayHttpTransport({
       ...gatewayKernel.createHttpTransportOptions(),
       httpRequestLifetime: gatewayKernel.gatewayRequestContext,
+      waitForRequestRuntime: gatewayKernel.ensureRequestRuntimeReady,
       updateCanary: opts.updateCanary,
+      onListening: opts.gatewayStateOwner?.markListening,
+      deferHookWake: async (request) => {
+        const owner = gatewayKernel.kernel.getReloadState().cronState;
+        const defer = owner.deferHookWake;
+        if (!defer) {
+          throw new Error("Scheduled Hook wake admission is unavailable; restart the Gateway");
+        }
+        const commitGuard = () => {
+          request.commitGuard();
+          if (
+            gatewayKernel.lifecycle.closePreludeStarted ||
+            gatewayKernel.kernel.getReloadState().cronState !== owner
+          ) {
+            throw new Error("Scheduled Hook wake owner changed; retry the request");
+          }
+        };
+        commitGuard();
+        return await defer({ ...request, commitGuard });
+      },
       ...(!gatewayKernel.minimalTestGateway && gatewayKernel.tailscaleMode !== "off"
         ? {
             prepareManagedTailscaleIngress: async (backend) => {
@@ -105,7 +136,7 @@ async function startGatewayServerWithSdkHost(
   } catch (err) {
     // Failed startup must release work whose normal timer was never armed.
     releasePostReadyWork();
-    return await rethrowGatewayStartupError(err, closeOnStartupFailure);
+    return await rethrowGatewayStartupError(err, () => closeOnStartupFailure(err));
   } finally {
     if (stopStartingTailscale) {
       signal?.removeEventListener("abort", stopStartingTailscale);
@@ -118,10 +149,11 @@ async function startGatewayServerWithSdkHost(
         return;
       }
       // Deferred sidecars must finish before the I/O window for background work begins.
-      gatewayKernel.scheduler.schedule({
-        id: "startup:post-ready-work",
-        delayMs: POST_READY_WORK_START_DELAY_MS,
-        run: releasePostReadyWork,
+      schedulePostReadyWorkRelease({
+        scheduler: gatewayKernel.scheduler,
+        profile: getResourceProfile(),
+        release: releasePostReadyWork,
+        isClosing: () => gatewayKernel.lifecycle.closePreludeStarted,
       });
     },
     // The caller owns deferred startup failure; close releases the background waiters.
@@ -135,12 +167,13 @@ async function startGatewayServerWithSdkHost(
     getTailscaleIngressEndpoint: gatewayKernel.transportBridge.getTailscaleIngressEndpoint,
     close: (optsLocal) => {
       if (!closePromise) {
-        closePromise = sdkResourceHost
-          .run(async () => {
+        closePromise = gatewayKernel
+          .runClose(async () => {
             const preparedClose = prepareClose(optsLocal);
             releasePostReadyWork();
             await runGatewayCloseSteps({
               owner: gatewayKernel,
+              exitAfterClose: optsLocal?.exitAfterClose,
               close: await preparedClose,
               disposeTerminalSessions: () => terminalSessions.disposeAll(),
               runStopHooks: async () => {

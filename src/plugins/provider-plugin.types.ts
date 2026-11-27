@@ -7,11 +7,11 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderUsageSnapshot } from "../infra/provider-usage.types.js";
-import type { ProviderFastModePolicyContext } from "../plugin-sdk/provider-model-types.js";
 import type {
   OAuthCredentials as SessionOAuthCredentials,
   OAuthLoginCallbacks,
-} from "../plugin-sdk/provider-oauth-runtime.js";
+} from "../llm/utils/oauth/types.js";
+import type { ProviderFastModePolicyContext } from "../plugin-sdk/provider-model-types.js";
 import type { PluginTextTransforms } from "./cli-backend.types.js";
 import type {
   ProviderAuthMethod,
@@ -60,6 +60,7 @@ import type {
   ProviderNormalizeModelIdContext,
   ProviderNormalizeTransportContext,
   ProviderPrepareRuntimeAuthContext,
+  ProviderPrepareRuntimeAuthContextV2,
   ProviderPreparedRuntimeAuth,
   ProviderResolveUsageAuthContext,
   ProviderResolvedUsageAuth,
@@ -117,6 +118,8 @@ export type ProviderPlugin = {
    */
   envVars?: string[];
   auth: ProviderAuthMethod[];
+  /** Physical credential owner, matching canonical catalog metadata. */
+  authScope?: "agent" | "plugin";
   /**
    * Legacy text-provider catalog hook.
    *
@@ -238,7 +241,7 @@ export type ProviderPlugin = {
    */
   buildReplayPolicy?: (ctx: ProviderReplayPolicyContext) => ProviderReplayPolicy | null | undefined;
   /**
-   * @deprecated Use sanitizeReplayHistoryAsync; removed in the next Plugin SDK major.
+   * @deprecated Use sanitizeReplayHistoryAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release.
    * Provider-owned replay-history sanitization.
    *
    * Runs after OpenClaw performs generic transcript cleanup. Use this for
@@ -390,6 +393,10 @@ export type ProviderPlugin = {
   prepareRuntimeAuth?: (
     ctx: ProviderPrepareRuntimeAuthContext,
   ) => Promise<ProviderPreparedRuntimeAuth | null | undefined>;
+  /** Preferred exchange for chat and Decision inference; takes precedence over the legacy hook. */
+  prepareRuntimeAuthV2?: (
+    ctx: ProviderPrepareRuntimeAuthContextV2,
+  ) => Promise<ProviderPreparedRuntimeAuth | null | undefined>;
   /**
    * Usage/billing auth resolution hook.
    *
@@ -429,6 +436,11 @@ export type ProviderPlugin = {
    * raw error shape. Return undefined to fall back to generic classification.
    */
   classifyFailoverReason?: (ctx: ProviderFailoverErrorContext) => FailoverReason | null | undefined;
+  /**
+   * Return safe, user-facing copy for a recognized provider error.
+   * Return undefined to use OpenClaw's default copy. Never return a raw error body.
+   */
+  formatUserFacingError?: (ctx: ProviderFailoverErrorContext) => string | undefined;
   /**
    * Provider-owned cache TTL eligibility.
    *
@@ -605,9 +617,10 @@ export type ProviderPlugin = {
    * OpenClaw calls this before falling back to the shared `shared model runtime` OAuth
    * refreshers. Use it when the provider has a custom refresh endpoint, or when
    * the provider needs custom refresh-failure behavior that should stay out of
-   * core auth-profile code.
+   * core auth-profile code. The optional second argument is the caller's
+   * effective config; prefer it over reading global runtime config.
    */
-  refreshOAuth?: (cred: OAuthCredential) => Promise<OAuthCredential>;
+  refreshOAuth?: (cred: OAuthCredential, config?: OpenClawConfig) => Promise<OAuthCredential>;
   /**
    * Provider-owned auth-doctor hint.
    *

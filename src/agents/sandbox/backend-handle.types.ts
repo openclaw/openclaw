@@ -1,4 +1,4 @@
-import type { SandboxFsBridge } from "./fs-bridge.types.js";
+import type { SandboxFsBridge, SandboxFsPreparation } from "./fs-bridge.types.js";
 
 export type SandboxBackendId = string;
 
@@ -8,6 +8,8 @@ export type SandboxBackendExecSpec = {
   /** Local transport cwd, independent of the remote command's workdir. */
   cwd?: string;
   stdinMode: "pipe-open" | "pipe-closed";
+  /** Prepare physical runtime selection immediately before deferred process admission. */
+  prepareCurrent?: () => Promise<void>;
   /** Synchronously revalidate runtime authority at deferred process admission. */
   assertCurrent?: () => void;
   finalizeToken?: unknown;
@@ -33,6 +35,7 @@ export type SandboxBackendCommandResult = {
 };
 
 export type SandboxFsBridgeContext = {
+  fsPreparation?: SandboxFsPreparation;
   workspaceDir: string;
   agentWorkspaceDir: string;
   skillsWorkspaceDir?: string;
@@ -78,6 +81,8 @@ export type SandboxBackendHandle = {
     workdir?: string;
     env: Record<string, string>;
     usePty: boolean;
+    /** Request piped input without a PTY; callers must honor the returned stdinMode. */
+    stdin?: boolean;
   }): Promise<SandboxBackendExecSpec>;
   finalizeExec?: (params: {
     status: "completed" | "failed";

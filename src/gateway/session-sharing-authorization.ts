@@ -1,39 +1,59 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
   type ErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { captureMemoryExactSessionReader } from "../config/sessions/session-accessor.memory-exact-read.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { toAgentStoreSessionKey } from "../routing/session-key.js";
 import type { SessionOperatorScope } from "../shared/session-method-scopes-base.js";
+import { readParticipantPublicationAuthority } from "./github-publication-participation.js";
 import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
-import { authenticatedProfileUnavailableError } from "./server-methods/gateway-client-identity.js";
+import {
+  authenticatedProfileUnavailableError,
+  isGatewayClientProfilePending,
+} from "./server-methods/gateway-client-identity.js";
 import { isSyntheticGatewayCaller } from "./server-methods/gateway-personal-caller.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
   SessionMutationAuthorization,
 } from "./server-methods/types.js";
-import { isSessionArchiveMutation } from "./session-method-policy.js";
+import {
+  isAgentRunStartMethod,
+  isSessionArchiveMutation,
+  isSessionProfileDependentMethod,
+  isRequiredSessionTargetMethod,
+} from "./session-method-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import {
   authorizeOwnSessionMutation,
+  isGatewayAdmin,
+  withSessionSharingTarget,
   type SessionSharingTarget,
 } from "./session-sharing-policy.js";
-import type {
-  PreparedMutationSharing,
-  PreparedSessionSharingProfiles,
+import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
+import {
+  prepareSessionSharing,
+  type createSessionSharingConsumption,
+  type PreparedMutationSharing,
+  type PreparedSessionSharingProfiles,
 } from "./session-sharing-read.js";
 import {
   resolveChatSendAuthorizationParams,
+  resolveSessionMutationTargets,
+  resolveTalkSessionTargetInput,
   type SessionMutationTarget,
 } from "./session-sharing-target-input.js";
-import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
-import type { GatewaySessionStoreCache } from "./session-utils-store-lookup.js";
+import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
+import type { PreparedTalkSessionTarget } from "./talk/session-target.types.js";
 
 export type SessionMutationAuthorizationParams = {
   client: GatewayClient | null;
@@ -42,17 +62,48 @@ export type SessionMutationAuthorizationParams = {
   context: GatewayRequestContext;
   /** Trusted prepared identity; never adopt a later target while capturing authority. */
   expectedTarget?: ExpectedSessionMutationTarget;
+  /** Recorded-principal input requires an existing, unarchived physical destination. */
+  assertPrincipalTargetCurrent?: (target: SessionSharingTarget | null) => void;
   /** The router's actual alternative admission, not other grants on the same client. */
   sessionScope?: SessionOperatorScope;
+  /** Resolve this pending requirement against the exact existing session. */
+  participationRequired?: true;
+  /** Prepared against the child's original invitation, never request data. */
+  participantRunAuthority?: import("../agents/admitted-run-context.js").AdmittedRunOperatorAuthority;
+  /** Database access classified by the host-owned method registry. */
+  databaseAdmission?: "read" | "write";
   sessionRowRead?: SessionRowReadView;
   preparedSharing?: PreparedMutationSharing;
+  preparedTargets?: ReadonlyArray<{
+    sessionKey: string;
+    agentId?: string;
+    readSource?: import("../config/sessions/session-entry-read-source.types.js").CapturedSessionEntryReadSource;
+    prepareRead: () => Promise<void> | undefined;
+    read: () => PreparedMutationSharing;
+    followRegistration?: (
+      change: import("../state/openclaw-agent-db-contract.js").AgentDatabaseRegistryChange,
+    ) => void;
+    bindCreation: (
+      operation: import("../config/sessions/session-accessor.sqlite-entry-cache.types.js").SessionEntryCreationOperation,
+    ) => void;
+  }>;
+  preparedTalkSessionTarget?: PreparedTalkSessionTarget;
   preparedProfiles?: PreparedSessionSharingProfiles;
 };
 
 export function prepareSessionMutationAuthorizationRequest(
   request: SessionMutationAuthorizationParams,
 ) {
-  let params = { ...request };
+  const publicationAuthority = readParticipantPublicationAuthority(
+    request.method,
+    request.requestParams,
+  );
+  let params = {
+    ...request,
+    ...(publicationAuthority
+      ? { participantRunAuthority: publicationAuthority, participationRequired: undefined }
+      : {}),
+  };
   params.preparedProfiles?.readCurrent();
   if (params.method === "chat.send") {
     const normalized = resolveChatSendAuthorizationParams(
@@ -63,6 +114,22 @@ export function prepareSessionMutationAuthorizationRequest(
       return { ok: false as const, error: normalized.error };
     }
     params = { ...params, requestParams: normalized.value };
+  }
+  const requester =
+    params.method === "question.request"
+      ? params.client?.internal?.agentRuntimeIdentity
+      : undefined;
+  if (requester && isRecord(params.requestParams)) {
+    // The question owner uses the admitted run, not caller-supplied correlation fields.
+    params = {
+      ...params,
+      requestParams: {
+        ...params.requestParams,
+        agentId: requester.agentId,
+        sessionKey: requester.sessionKey,
+        runId: requester.operationalRunInstance.runId,
+      },
+    };
   }
   const patch =
     params.method === "sessions.patchMany" && isRecord(params.requestParams)
@@ -84,14 +151,41 @@ export function prepareSessionMutationAuthorizationRequest(
       ),
     };
   }
+  const authorizesAgentRun = isAgentRunStartMethod(params.method, params.requestParams);
+  // Progress remains bound to its captured conversation even for administrators.
+  const bindsProgressLifecycle =
+    params.method === "progressCard.put" || params.method === "progressCard.refresh";
+  // Administrator access still needs the exact Talk target for transport ownership.
+  const bindsTalkTarget =
+    resolveTalkSessionTargetInput(params.method, params.requestParams, params.client?.connId) !==
+    undefined;
+  const adminBypass = isGatewayAdmin(params.client) && !authorizesAgentRun;
+  if (
+    !adminBypass &&
+    isGatewayClientProfilePending(params.client) &&
+    isSessionProfileDependentMethod(params.method)
+  ) {
+    return { ok: false as const, error: authenticatedProfileUnavailableError() };
+  }
   return {
     ok: true as const,
     params,
-    requiresCommunicationAuthority,
+    authorizesAgentRun,
+    bindsProgressLifecycle,
+    adminBypass,
+    requiresSessionFacts:
+      !adminBypass ||
+      requiresCommunicationAuthority ||
+      bindsProgressLifecycle ||
+      bindsTalkTarget ||
+      params.method === "chat.send" ||
+      params.expectedTarget !== undefined,
     targetOwnership: {
       requireOwner:
         requiresCommunicationAuthority ||
-        isSessionArchiveMutation(params.method, params.requestParams),
+        isSessionArchiveMutation(params.method, params.requestParams) ||
+        // Restoring a removed workspace is the same creator-or-admin action as unarchiving.
+        params.method === "worktrees.restore",
       ownerAction: requiresCommunicationAuthority ? "change communication settings" : undefined,
     },
   };
@@ -115,15 +209,6 @@ export type ExpectedSessionMutationTarget = Readonly<{
 }>;
 
 export type { PreparedMutationSharing } from "./session-sharing-read.js";
-
-export type SessionSharingLookupCaches = {
-  storeCache: GatewaySessionStoreCache;
-  targetDiscoveryCache: GatewaySessionStoreDiscoveryCache;
-};
-
-export function createSessionSharingLookupCaches(): SessionSharingLookupCaches {
-  return { storeCache: new Map(), targetDiscoveryCache: new Map() };
-}
 
 // docs/gateway/protocol.md gives these handlers visibility-based authorization.
 // The router still prevents view/suggest-capped callers from reassigning foreign sessions.
@@ -204,10 +289,11 @@ export function prepareAuthorizedSessionMutationFacts(params: {
         }
       : undefined;
   const expectedReadSource = original?.readSource ?? params.source;
+  // Compare qualified identities; chat retains logical global/unknown routes.
   if (
     !expectedRoute ||
     facts.agentId !== expectedRoute.agentId ||
-    facts.sessionKey !==
+    toAgentStoreSessionKey({ agentId: facts.agentId, requestKey: facts.sessionKey }) !==
       toAgentStoreSessionKey({
         agentId: expectedRoute.agentId,
         requestKey: expectedRoute.storeKey,
@@ -300,4 +386,174 @@ export function createSessionCreationAuthorizationRecorder(params: {
     expected.lifecycleRevision = created.lifecycleRevision;
     expected.created = true;
   };
+}
+
+export function resolvePreparedTalkAuthorizationTarget(
+  params: SessionMutationAuthorizationParams,
+  getCfg: () => import("../config/types.openclaw.js").OpenClawConfig,
+) {
+  try {
+    const talkInput = resolveTalkSessionTargetInput(
+      params.method,
+      params.requestParams,
+      params.client?.connId,
+    );
+    const talkSessionTarget =
+      talkInput?.kind === "relay" ? talkInput.target : params.preparedTalkSessionTarget;
+    if (talkInput && !talkSessionTarget) {
+      throw new Error("Talk session authorization requires prepared session facts");
+    }
+    if (talkSessionTarget) {
+      talkSessionTarget.assertCurrent(getCfg());
+    }
+    return { error: null, talkInput, talkSessionTarget };
+  } catch (error) {
+    return {
+      error: errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        String(error instanceof Error ? error.message : error),
+      ),
+    };
+  }
+}
+
+export function findPreparedSharingTarget(
+  params: Pick<SessionMutationAuthorizationParams, "preparedTargets">,
+  targetRef: { sessionKey?: string; key?: string; agentId?: string },
+) {
+  const sessionKey = normalizeOptionalString(targetRef.sessionKey ?? targetRef.key);
+  const agentId = normalizeOptionalString(targetRef.agentId);
+  return params.preparedTargets?.find(
+    (target) => target.sessionKey === sessionKey && target.agentId === agentId,
+  );
+}
+
+/** Resolve a canonical writer target back to its retained request identity. */
+export function bindSessionMutationSharingReader(
+  authorization: SessionMutationAuthorization,
+  params: SessionMutationAuthorizationParams,
+  targets: readonly AuthorizedSessionMutationTarget[],
+): void {
+  if (!params.preparedTargets) {
+    return;
+  }
+  authorization.readTargetSharing = (targetRef) => {
+    const expected = targets.find(
+      (target) =>
+        target.resolved?.canonicalKey === targetRef.sessionKey &&
+        target.resolved.agentId === targetRef.agentId,
+    );
+    if (!expected) {
+      throw sessionMutationTargetChanged(params.method, targetRef.sessionKey);
+    }
+    authorization.assertTargetCurrent(expected);
+    const retained = findPreparedSharingTarget(params, expected);
+    if (!retained) {
+      throw sessionMutationTargetChanged(params.method, targetRef.sessionKey);
+    }
+    return retained.read();
+  };
+}
+
+export async function withCurrentSessionSharingSource<T>(params: {
+  request: SessionMutationAuthorizationParams;
+  target: SessionMutationTarget;
+  changed: () => Error;
+  consumeSharing: ReturnType<typeof createSessionSharingConsumption>["consume"];
+  assertCurrent: () => void;
+  consume: () => T;
+}): Promise<T> {
+  const { request, target } = params;
+  request.preparedProfiles?.readCurrent();
+  const cfg = request.context.getRuntimeConfig();
+  const assertRoutingCurrent = captureSessionMutationRouting(cfg, params.changed, [target]);
+  return withSessionSharingTarget(
+    { cfg, sessionKey: target.sessionKey, agentId: target.agentId },
+    (read) =>
+      params.consumeSharing(
+        {
+          ...read,
+          assertCurrent: () => {
+            read.assertCurrent();
+            assertRoutingCurrent(request.context.getRuntimeConfig());
+          },
+        },
+        () => {
+          params.assertCurrent();
+          return params.consume();
+        },
+      ),
+    request.preparedSharing?.selection,
+  );
+}
+
+/** Missing rows bind to their memory namespace or configured durable write target. */
+export function resolveSessionMutationWriteRoute(
+  cfg: OpenClawConfig,
+  target: SessionMutationTarget,
+) {
+  const identity = resolveSessionStoreIdentity({ cfg, ...target });
+  const memory = captureMemoryExactSessionReader({
+    agentId: identity.agentId,
+    sessionKey: identity.canonicalKey,
+  });
+  return {
+    ...identity,
+    storePath: memory?.path ?? resolveSessionStorePathCore(cfg.session?.store, identity),
+  };
+}
+
+export function resolveRequiredSessionMutationTargets(
+  params: SessionMutationAuthorizationParams,
+  talkTargets: SessionMutationTarget[] | undefined,
+  readPolicy: () => ReturnType<typeof prepareSessionSharing> | undefined,
+): { targets?: SessionMutationTarget[]; error: ErrorShape | null } {
+  const targetRefs =
+    talkTargets ??
+    resolveSessionMutationTargets({
+      participationRequired: params.participationRequired,
+      hasInvitedAccessCeiling:
+        (params.method === "session.typing" || params.method === "session.suggestions.add") &&
+        params.sessionScope === "operator.sessions.write" &&
+        Boolean(
+          (
+            readPolicy() ??
+            prepareSessionSharing({
+              cfg:
+                params.context.getCommittedRuntimeConfig?.() ?? params.context.getRuntimeConfig(),
+              client: params.client,
+            })
+          ).invitedAccessCeiling,
+        ),
+      sessionScope: params.sessionScope,
+      client: params.client,
+      method: params.method,
+      requestParams: params.requestParams,
+      context: params.context,
+    }) ??
+    (params.sessionScope === "operator.sessions.write" &&
+    !isRequiredSessionTargetMethod(params.method)
+      ? []
+      : undefined);
+  if (params.expectedTarget && targetRefs?.length !== 1) {
+    return {
+      error: sessionMutationTargetChanged(params.method, params.expectedTarget.sessionKey).error,
+    };
+  }
+  if (params.participationRequired && targetRefs?.length !== 1) {
+    return {
+      error: errorShape(ErrorCodes.FORBIDDEN, "Participation requires one existing session."),
+    };
+  }
+  if (!targetRefs) {
+    if (isRequiredSessionTargetMethod(params.method)) {
+      return {
+        error: errorShape(ErrorCodes.INVALID_REQUEST, "session mutation target is unavailable", {
+          details: { code: "SESSION_MUTATION_TARGET_REQUIRED", method: params.method },
+        }),
+      };
+    }
+    return { error: null };
+  }
+  return { targets: targetRefs, error: null };
 }
