@@ -165,11 +165,9 @@ function convertTools(
   const prepared = mode === "managed" ? prepareOpenAITools(tools) : undefined;
   const projection = prepared?.projection ?? projectOpenAITools(tools);
   const convert = () => {
-    // Direct requests have no refusal retry, so they send the strict field only where the route
-    // declares strict support; strict tools are the managed transport's default.
     const strictSetting =
       mode === "direct"
-        ? model.compat?.supportsStrictMode === true
+        ? compat.supportsStrictMode
           ? false
           : undefined
         : resolveOpenAIStrictToolSetting(compat);

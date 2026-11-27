@@ -33,7 +33,8 @@
               "required": [
                 "query"
               ]
-            }
+            },
+            "strict": false
           }
         }
       ],

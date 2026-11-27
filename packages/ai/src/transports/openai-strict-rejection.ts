@@ -1,5 +1,6 @@
 import type { Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { getAiTransportHost, type OpenAIStrictToolRoute } from "../host.js";
 
 // A route that declares compat.supportsStrictMode (config or provider catalog) is never second-guessed.
@@ -45,10 +46,6 @@ const STRICT_MESSAGE = /invalid schema for function|\bstrict\b|json_schema|addit
 const NOT_STRICT_MESSAGE =
   /insufficient_quota|exceeded your current quota|invalid_api_key|incorrect api key|unauthori[sz]ed|rate limit|too many requests|context_length_exceeded|maximum context length/i;
 
-function readString(...values: unknown[]): string {
-  return values.find((value): value is string => typeof value === "string") ?? "";
-}
-
 /**
  * Whether the provider's error is a strict or tool-schema rejection. Structured fields decide
  * first (an account code vetoes, a strict code or tools[n] param confirms); the message only
@@ -56,15 +53,15 @@ function readString(...values: unknown[]): string {
  */
 function isStrictRejection(error: Record<string, unknown>): boolean {
   const body = isRecord(error.error) ? error.error : {};
-  const code = readString(body.code, error.code);
-  const type = readString(body.type, error.type);
-  if (NOT_STRICT_CODE.test(code) || NOT_STRICT_CODE.test(type)) {
+  // The provider body wins; the SDK error mirrors its fields when the body is absent.
+  const field = (key: string) => readStringValue(body[key]) ?? readStringValue(error[key]) ?? "";
+  if (NOT_STRICT_CODE.test(field("code")) || NOT_STRICT_CODE.test(field("type"))) {
     return false;
   }
-  if (STRICT_CODE.test(code) || STRICT_PARAM.test(readString(body.param, error.param))) {
+  if (STRICT_CODE.test(field("code")) || STRICT_PARAM.test(field("param"))) {
     return true;
   }
-  const message = readString(body.message, error.message);
+  const message = field("message");
   return STRICT_MESSAGE.test(message) && !NOT_STRICT_MESSAGE.test(message);
 }
 

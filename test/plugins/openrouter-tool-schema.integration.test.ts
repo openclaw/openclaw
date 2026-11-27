@@ -110,12 +110,12 @@ it.each(
   expect(captured.url).toBe(`${route.baseUrl}/chat/completions`);
   expect(captured.body.model).toBe(route.id);
   const tool = captured.body.tools[0]!.function;
-  // targetId is optional, so the tool is not strict as written: managed requests send it with
-  // strict: false; direct requests and a declared opt-out omit the field.
-  if (mode === "managed" && !omitStrict) {
-    expect(tool.strict).toBe(false);
-  } else {
+  // targetId is optional, so the tool is not strict as written: it is sent with strict: false
+  // (OpenRouter treats an omitted field as strict); a declared opt-out omits the field.
+  if (omitStrict) {
     expect(tool).not.toHaveProperty("strict");
+  } else {
+    expect(tool.strict).toBe(false);
   }
   expect(tool.parameters.required).toEqual(["action"]);
   expect(tool.parameters.properties).toHaveProperty("targetId");
