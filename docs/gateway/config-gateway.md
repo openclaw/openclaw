@@ -413,7 +413,8 @@ workers, because their cleanup relies on worker exit. A failed, cancelled or tim
 replaces the whole shared host: every hosted endpoint's in-flight work fails with an
 explicit error, and the next request starts a new host. Neither profile is a memory cap or
 OOM guarantee. One-shot CLI commands outside the Gateway, such as `openclaw agent --local`,
-always use the shared host for these core workers, whatever this setting is.
+always run every worker of these core kinds, not only the first, in the shared host, whatever
+this setting is.
 
 ### Lean startup
 

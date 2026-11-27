@@ -14,6 +14,7 @@ import {
   type WorktreeAllocationGuard,
 } from "./allocation.js";
 import type { WorktreeGcProgress } from "./gc-progress.js";
+import { worktreePathExists } from "./git.js";
 import {
   collectOrphanWorktreeBranches,
   hasUnregisteredManagedBranches,
@@ -121,6 +122,9 @@ export async function collectRetiredWorktreeArtifacts({
   const repositories = new Set<string>();
   for (const repoRoot of new Set(branchOwners.map((record) => record.repoRoot))) {
     try {
+      if (!(await worktreePathExists(repoRoot))) {
+        continue;
+      }
       if (
         await hasUnregisteredManagedBranches(
           repoRoot,

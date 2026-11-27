@@ -23,6 +23,7 @@ const dayBucket = { mode: "utc-offset", utcOffsetMinutes: 0 } as const;
 
 function createExportScenario(
   format: Parameters<ReturnType<typeof createUsageExportRequest>["run"]>[0],
+  displayedSnapshot?: () => SessionsUsageResult | null,
 ) {
   const selectedUsage = { ...completeUsage };
   const selected: SessionUsageEntry = {
@@ -69,6 +70,7 @@ function createExportScenario(
     () => {},
     binding,
     () => ({ startDate: date, endDate: date, scope: "instance", timeZone: "utc", ...query }),
+    displayedSnapshot,
   );
   return {
     download,
@@ -82,6 +84,40 @@ function createExportScenario(
     query,
   };
 }
+
+it("matches reordered tool identities without losing duplicate rows", async () => {
+  let displayed: SessionsUsageResult | null = null;
+  const { build, request, selected, exporter, download, toast } = createExportScenario(
+    "json",
+    () => displayed,
+  );
+  displayed = build([selected]);
+  const detail = build([structuredClone(selected)]);
+  displayed.aggregates.tools.tools = [
+    { name: "__proto__", count: 3 },
+    { name: "10", count: 2 },
+    { name: "constructor", count: 1 },
+    { name: "__proto__", count: 1 },
+  ];
+  detail.aggregates.tools.tools = [
+    { name: "constructor", count: 1 },
+    { name: "__proto__", count: 3 },
+    { name: "__proto__", count: 1 },
+    { name: "10", count: 2 },
+  ];
+  request.mockResolvedValue(detail);
+
+  await exporter.run("json");
+  expect(download).toHaveBeenCalledOnce();
+  expect(toast).not.toHaveBeenCalled();
+
+  detail.aggregates.tools.tools[1]!.count++;
+  await exporter.run("json");
+  expect(download).toHaveBeenCalledOnce();
+  expect(toast).toHaveBeenCalledWith(
+    expect.objectContaining({ message: expect.stringContaining("Refresh usage and try again") }),
+  );
+});
 
 it("refuses incomplete exports and allows a complete retry", async () => {
   const format = "json";
