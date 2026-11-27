@@ -1410,6 +1410,18 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/infra/gateway-lock-payload.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["classifyGatewayLockProcessNamespace"],
+        guard: "holder && databasePath && isLegacyGatewayLeaseLock(holder)",
+        evidence:
+          "Physical Gateway lock admission reads only the selected SQLite gateway-owner lease before reclaiming a namespace-less, explicit Gateway-role owner older than five minutes. Native callers are gateway-state-owner-record.ts stale-lock/access admission and gateway-lock.ts historical-lock admission/discovery. Modern owners never enter this branch; runtime lease renewals remain worker-owned.",
+      },
+    ],
+  ],
+  [
     "src/infra/gateway-owner-lease.ts",
     [
       {

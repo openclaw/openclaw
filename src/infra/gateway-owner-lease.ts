@@ -37,6 +37,7 @@ import {
 } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import { readProcessMachineIdentity } from "./current-machine-identity.js";
+import { isTruthyEnvValue } from "./env.js";
 import {
   classifyGatewayOwnerProcessNamespace,
   describeGatewayLockHolder,
@@ -83,7 +84,15 @@ function resolveStoppedGatewayOwnerLease(previous: GatewayOwnerLeaseIdentity | u
   if (!previous) {
     return undefined;
   }
-  if (previous.state === "dead") {
+  if (
+    previous.state === "dead" ||
+    (process.platform === "linux" &&
+      !isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_REQUIRE_NAMESPACE_PROOF) &&
+      !isStatePostgres() &&
+      previous.processNamespace === undefined &&
+      typeof previous.expiresAt === "number" &&
+      previous.expiresAt <= Date.now())
+  ) {
     return previous;
   }
   const namespace = classifyGatewayOwnerProcessNamespace(previous.processNamespace, {
