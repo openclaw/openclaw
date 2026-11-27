@@ -423,17 +423,15 @@ export function resolveDynamicToolCallTimeoutMs(params: {
         );
   }
   const args = isJsonObject(params.call.arguments) ? params.call.arguments : undefined;
-  if (params.call.tool === "node_exec") {
-    const executionTimeoutMs = params.toolBridge?.availableTools
-      .find((tool) => tool.name === params.call.tool)
-      ?.getExecutionTimeoutMs?.(params.call.arguments);
-    if (executionTimeoutMs !== undefined) {
-      // Foreground node execution owns its command and transport budgets.
-      return addSafeTimeoutDelayGraceMs(
-        executionTimeoutMs,
-        CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS,
-      );
-    }
+  const executionTimeoutMs = params.toolBridge?.availableTools
+    .find((tool) => tool.name === params.call.tool)
+    ?.getExecutionTimeoutMs?.(params.call.arguments);
+  if (executionTimeoutMs !== undefined) {
+    // The tool owns its operation budget, including any operator approval wait.
+    return addSafeTimeoutDelayGraceMs(
+      executionTimeoutMs,
+      CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS,
+    );
   }
   if (
     params.call.tool === "openclaw" ||

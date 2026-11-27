@@ -443,3 +443,49 @@ it.each(["direct", "cron-fallback", "receive-only", "ask-send", "send-only"] as 
     expect(admitted).toHaveLength(1);
   },
 );
+
+it("marks returned peer delivery failure notices hidden at admission", async () => {
+  const fixture = peerFixture(communicationConfig());
+  const replyAdmission = await fixture.accept("failed-peer-run");
+  const admitted: NonNullable<ReturnType<typeof readSessionSendDeliveryAdmission>>["delivery"][] =
+    [];
+  const callGateway: AgentToolGatewayRequestCaller = async <T>(
+    request: Parameters<AgentToolGatewayRequestCaller>[0],
+  ) => {
+    if (request.method === "agent.wait") {
+      return { status: "ok", terminalReply: { disposition: "silent" } } as T;
+    }
+    const params = request.params as { idempotencyKey: string };
+    request.sessionMutationCommitGuard?.();
+    const admission = readSessionSendDeliveryAdmission({
+      agentId: "main",
+      sessionKey: fixture.targetKey,
+      sessionId: fixture.target.sessionId,
+      runId: params.idempotencyKey,
+    });
+    if (admission) {
+      admitted.push(admission.delivery);
+    }
+    return { runId: params.idempotencyKey } as T;
+  };
+
+  await runSessionsSendA2AFlow({
+    ...fixture.flow,
+    callGateway,
+    runId: "failed-peer-run",
+    requesterSession: fixture.target,
+    targetSession: fixture.source,
+    replyAdmission,
+    notifyRequesterOnWaitFailure: true,
+    reply: { status: "error", error: "aborted", endedAt: 1 },
+  });
+
+  expect(admitted).toMatchObject([
+    {
+      returnedResult: {
+        extraSystemPrompt: expect.stringContaining("sessions_send delivery failed"),
+        hideInput: true,
+      },
+    },
+  ]);
+});

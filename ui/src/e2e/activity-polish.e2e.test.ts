@@ -10,6 +10,7 @@ import {
   activityPolishKeys as keys,
   activityPolishPullRequest,
 } from "./activity-polish.test-support.ts";
+import { chatSessionListResponse } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Activity recap and preview states" });
@@ -21,6 +22,66 @@ const screenshot = async (page: Page, name: string) => {
 };
 
 suite.define(() => {
+  it.each([
+    ["Australia/Lord_Howe", "2026-10-04T01:30:00+10:30", "3 AM"],
+    ["Australia/Lord_Howe", "2026-04-05T01:30:00+11:00", "2 AM"],
+    ["America/New_York", "2026-03-08T01:00:00-05:00", "3 AM"],
+    ["America/New_York", "2026-11-01T01:00:00-04:00", "1 AM"],
+    ["Asia/Kathmandu", "2026-10-04T00:00:00+05:45", "1 AM"],
+    ["UTC", "2026-04-05T00:00:00Z", "1 AM"],
+  ])(
+    "labels the hourly Activity peak from its boundary in %s at %s",
+    async (timezoneId, start, label) => {
+      await suite.withPage({ timezoneId, locale: "en-US" }, async ({ page }) => {
+        const since = Date.parse(start);
+        const hour = 3_600_000;
+        // On Lord Howe the cutoff falls just after the offset change, but the first bin starts before it.
+        await page.clock.setFixedTime(new Date(since + 24 * hour + 45 * 60_000));
+        const list = chatSessionListResponse([
+          {
+            key: "agent:main:peak",
+            kind: "direct",
+            label: "Peak session",
+            updatedAt: since + hour,
+          },
+        ]);
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "sessions.list": {
+              ...list,
+              activityPulse: {
+                since,
+                until: since + 25 * hour,
+                buckets: Array.from({ length: 25 }, (_, index) => Number(index === 1)),
+                sessions: 1,
+                running: 0,
+              },
+            },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}activity?time=24h`);
+        const request = await gateway.waitForRequest("sessions.list", {
+          match: { activeMinutes: 1440 },
+        });
+        expect(request.params).toHaveProperty(
+          "activityPulseBoundaries",
+          Array.from({ length: 26 }, (_, index) => since + index * hour),
+        );
+        const chart = page.getByRole("img", { name: /Last 24 hours/ });
+        await chart.locator(".activity-pulse__bar").nth(1).hover();
+        const tooltip = page.locator("openclaw-tooltip .tooltip-content").filter({ visible: true });
+        await tooltip.waitFor();
+        expect({
+          tooltip: (await tooltip.textContent())?.trim(),
+          summary: await chart.getAttribute("aria-label"),
+        }).toEqual({
+          tooltip: `${label} · 1 session`,
+          summary: `Last 24 hours: 1 session by last activity; most sessions at ${label}`,
+        });
+      });
+    },
+  );
+
   it.each([
     { width: 1440, height: 1100, colorScheme: "light" as const },
     { width: 390, height: 844, colorScheme: "dark" as const },

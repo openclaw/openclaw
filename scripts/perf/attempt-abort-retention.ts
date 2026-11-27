@@ -13,6 +13,7 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { queryObjects, writeHeapSnapshot } from "node:v8";
 import { SessionManager } from "../../src/agents/sessions/session-manager.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -135,12 +136,7 @@ async function measure(factories: typeof baseline, arm: "base" | "candidate", pa
   observer.observe({ entryTypes: ["gc"] });
   const inspector = new Session();
   if (values.mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 1024,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 1024);
   }
   const held: Awaited<ReturnType<typeof completedAttempt>>[] = [];
   const durations: number[] = [];

@@ -22,6 +22,7 @@ import { parseArgs } from "node:util";
 import { GCProfiler } from "node:v8";
 import type { SubagentRunRecord } from "../../src/agents/subagents/registry/subagent-registry.types.js";
 import type { InternalSessionEntry } from "../../src/config/sessions/types.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -170,12 +171,7 @@ await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     await run(2, -2);
     globalThis.gc?.();
     if (inspector) {
-      inspector.connect();
-      await inspector.post("HeapProfiler.startSampling", {
-        samplingInterval: 4096,
-        includeObjectsCollectedByMajorGC: true,
-        includeObjectsCollectedByMinorGC: true,
-      });
+      await startCollectedHeapSampling(inspector, 4096);
     }
     const gc = new GCProfiler();
     gc.start();

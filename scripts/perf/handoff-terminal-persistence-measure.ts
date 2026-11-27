@@ -12,6 +12,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { RpcSourceRef } from "../../src/sessions/session-controller.rpc-sources.types.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -103,12 +104,7 @@ for (let index = 0; index < 5; index++) {
   assert.equal(result.ok, values.mode === "idle");
 }
 const profiler = new Session();
-profiler.connect();
-await profiler.post("HeapProfiler.startSampling", {
-  samplingInterval: 4096,
-  includeObjectsCollectedByMajorGC: true,
-  includeObjectsCollectedByMinorGC: true,
-});
+await startCollectedHeapSampling(profiler, 4096);
 const cpu = process.cpuUsage();
 const started = performance.now();
 let accepted = 0;

@@ -137,7 +137,7 @@ extensions/codex/src/session-cli.ts	1
 extensions/codex/src/session-upstream-activity.ts	1
 extensions/codex/src/web-search-provider.runtime.ts	1
 extensions/comfy/workflow-runtime.ts	2
-extensions/copilot/harness.ts	7
+extensions/copilot/harness.ts	5
 extensions/copilot/src/attempt-config.ts	8
 extensions/copilot/src/attempt-execution.ts	2
 extensions/copilot/src/attempt-finalize.ts	2
@@ -760,7 +760,6 @@ extensions/telegram/src/channel-actions.ts	1
 extensions/telegram/src/client-fetch.ts	5
 extensions/telegram/src/doctor-contract.ts	3
 extensions/telegram/src/doctor.ts	10
-extensions/telegram/src/fetch.ts	6
 extensions/telegram/src/forum-service-message.ts	1
 extensions/telegram/src/interactive-fallback.ts	1
 extensions/telegram/src/miniapp/command.ts	1
@@ -1223,7 +1222,6 @@ src/agents/sessions/tools/edit.ts	3
 src/agents/sessions/tools/tool-definition-wrapper.ts	1
 src/agents/shell-snapshot.ts	1
 src/agents/spawn-plan.ts	1
-src/agents/subagents/announce/subagent-announce-completion-delivery.ts	1
 src/agents/subagents/announce/subagent-announce-origin.ts	2
 src/agents/subagents/registry/subagent-registry-lifecycle-delivery.ts	2
 src/agents/subagents/registry/subagent-registry.ts	1
@@ -1497,7 +1495,7 @@ src/commands/doctor-telegram-general-topic-conversations.ts	2
 src/commands/doctor-tools-md-migration.ts	5
 src/commands/doctor-workspace.ts	1
 src/commands/doctor/cron/legacy-quarantine-migration.ts	1
-src/commands/doctor/cron/legacy-repair.ts	4
+src/commands/doctor/cron/legacy-repair.ts	3
 src/commands/doctor/cron/store-migration.ts	2
 src/commands/doctor/cron/warnings.ts	1
 src/commands/doctor/shared/allowfrom-fallback-migration.ts	1
@@ -1601,7 +1599,6 @@ src/config/sessions/transcript-replay.ts	1
 src/config/sessions/transcript-tree.ts	3
 src/config/sessions/transcript.ts	8
 src/config/sessions/types.ts	1
-src/config/validation-channel-rules.ts	1
 src/config/validation-core.ts	1
 src/config/validation-plugin-config.ts	2
 src/config/validation.ts	1
@@ -1953,7 +1950,7 @@ src/meeting-bot/browser-request.ts	3
 src/meeting-bot/browser-session-control.ts	1
 src/meeting-bot/chrome-node-result.ts	2
 src/meeting-bot/platform-adapter.ts	7
-src/meeting-bot/plugin-entry.ts	5
+src/meeting-bot/plugin-entry.ts	3
 src/meeting-bot/plugin-shell.ts	1
 src/meeting-bot/realtime-tool-continuity.ts	2
 src/meeting-bot/runtime-facade.ts	4

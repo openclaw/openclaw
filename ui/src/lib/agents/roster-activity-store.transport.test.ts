@@ -314,6 +314,7 @@ it.each(["same-client", "detached", "replacement-client"])(
   async (cause) => {
     const f = await subscribedFixture();
     const detached = cause === "detached";
+    let refreshed: Promise<void> | undefined;
     if (detached) {
       f.detach();
     }
@@ -321,7 +322,7 @@ it.each(["same-client", "detached", "replacement-client"])(
       const previousClient = f.source.gateway.snapshot.client!;
       const client = createTestGatewayClient((...args) => previousClient.request(...args));
       f.source.publish({ ...f.source.gateway.snapshot, client });
-      void f.store.refresh();
+      refreshed = f.store.refresh();
     } else {
       f.source.publish({ ...f.source.gateway.snapshot, phase: "reconnecting" });
       f.source.publish({ ...f.source.gateway.snapshot, phase: "connected" });
@@ -333,6 +334,7 @@ it.each(["same-client", "detached", "replacement-client"])(
     expect(f.requests).toHaveLength(2);
     expect(f.requests[1]?.params.offset).toBeUndefined();
     await f.respond(1, "Current connection");
+    await refreshed;
     f.notify.mockClear();
     await f.respond(0, "Old connection", true);
     expectWindow(f, 2, "Current connection");

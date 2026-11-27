@@ -36,6 +36,38 @@ vi.mock("../cli/plugin-registry-loader.js", () => ({
   ensureCliPluginRegistryLoaded: vi.fn(),
 }));
 
+// Doctor sources of installed plugins are unavailable while their state migration is pending.
+const doctorSource = vi.hoisted(() => ({ unprepared: undefined as string | undefined }));
+vi.mock("../commands/doctor/legacy-config-repair.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../commands/doctor/legacy-config-repair.js")>();
+  const [
+    { isPluginDoctorMigrationDeferred },
+    { PluginSetupPreparationRequiredError },
+    { createPluginManifestRecordFixture },
+  ] = await Promise.all([
+    import("../plugins/doctor-contract-registry.js"),
+    import("../plugins/plugin-setup-module.js"),
+    import("../plugins/plugin-metadata.test-support.js"),
+  ]);
+  return {
+    ...actual,
+    planLegacyConfigForUpdateChannel: (
+      ...args: Parameters<typeof actual.planLegacyConfigForUpdateChannel>
+    ) => {
+      const id = doctorSource.unprepared;
+      if (id && !isPluginDoctorMigrationDeferred(id)) {
+        throw new PluginSetupPreparationRequiredError(
+          createPluginManifestRecordFixture({ id, origin: "global" }),
+          "/plugins/doctor.js",
+          "/plugins",
+        );
+      }
+      return actual.planLegacyConfigForUpdateChannel(...args);
+    },
+  };
+});
+
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
     await closeOpenClawStateDatabaseAsync();
@@ -71,6 +103,7 @@ beforeEach(async () => {
   env = { HOME: root, OPENCLAW_STATE_DIR: root, OPENCLAW_CONFIG_PATH: configPath };
   await writeConfig(allowed);
   vi.mocked(ensureCliPluginRegistryLoaded).mockReset().mockResolvedValue(undefined);
+  doctorSource.unprepared = undefined;
 });
 
 async function linkedAdmins() {
@@ -317,25 +350,29 @@ it.each(["discord", "mattermost"])(
   },
 );
 
-it("checks a Telegram owner against the Doctor migration without publishing it", async () => {
-  const legacy = (owner: string) =>
-    JSON.stringify({
-      commands: { ownerAllowFrom: [`telegram:${owner}`] },
-      skills: { workshop: { autonomous: { mode: "auto", channelNotices: true } } },
-    });
-  const original = legacy("1001");
-  await writeConfig(original);
-  const authority = await createDelegatedUpdateRequesterAuthority(
-    { channel: "telegram", senderId: "1001", authorizationSource: "configured-owner" },
-    "run",
-    { assertCurrent() {} },
-    env,
-  );
-  expect(authority.isCurrent()).toBe(true);
-  expect(await fs.readFile(configPath, "utf8")).toBe(original);
-  await writeConfig(legacy("1002"));
-  expect(authority.isCurrent()).toBe(false);
-});
+it.each([undefined, "discord"])(
+  "checks an owner against the Doctor migration without publishing it (unprepared: %s)",
+  async (unprepared) => {
+    doctorSource.unprepared = unprepared;
+    const legacy = (owner: string) =>
+      JSON.stringify({
+        commands: { ownerAllowFrom: [`telegram:${owner}`] },
+        skills: { workshop: { autonomous: { mode: "auto", channelNotices: true } } },
+      });
+    const original = legacy("1001");
+    await writeConfig(original);
+    const authority = await createDelegatedUpdateRequesterAuthority(
+      { channel: "telegram", senderId: "1001", authorizationSource: "configured-owner" },
+      "run",
+      { assertCurrent() {} },
+      env,
+    );
+    expect(authority.isCurrent()).toBe(true);
+    expect(await fs.readFile(configPath, "utf8")).toBe(original);
+    await writeConfig(legacy("1002"));
+    expect(authority.isCurrent()).toBe(false);
+  },
+);
 
 it.each(["registry", "config preparation", "config recheck"])(
   "reports %s failure, not revocation",

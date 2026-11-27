@@ -132,29 +132,43 @@ function DesktopRow(props: {
           <span class="subagents-desktop__name">
             <SubagentListName name={name()} />
           </span>
-          <Show when={group() !== "done"}>
+          <Show when={group() !== "done" || props.row.modelLabel}>
             <span class="subagents-desktop__status">
-              <Show
-                when={group() === "active"}
-                fallback={
-                  group() === "waiting"
-                    ? props.row.session.status === "queued"
-                      ? t("common.queued")
-                      : t("chat.subagentsPanel.desktopWaiting")
-                    : groupLabel(group())
-                }
-              >
-                <span class="subagents-desktop__working text-shimmer">
-                  {t("chat.subagentsPanel.desktopWorking")}
-                </span>{" "}
-                <Show
-                  when={props.row.session.runtimeMs != null || props.row.session.startedAt != null}
-                >
-                  <span>
-                    {t("chat.subagentsPanel.desktopFor")} {props.renderElapsed(props.row)}
-                  </span>
-                </Show>
+              <Show when={group() !== "done"}>
+                <span>
+                  <Show
+                    when={group() === "active"}
+                    fallback={
+                      group() === "waiting"
+                        ? props.row.session.status === "queued"
+                          ? t("common.queued")
+                          : t("chat.subagentsPanel.desktopWaiting")
+                        : groupLabel(group())
+                    }
+                  >
+                    <span class="subagents-desktop__working text-shimmer">
+                      {t("chat.subagentsPanel.desktopWorking")}
+                    </span>{" "}
+                    <Show
+                      when={
+                        props.row.session.runtimeMs != null || props.row.session.startedAt != null
+                      }
+                    >
+                      <span>
+                        {t("chat.subagentsPanel.desktopFor")} {props.renderElapsed(props.row)}
+                      </span>
+                    </Show>
+                  </Show>
+                </span>
               </Show>
+              {props.row.modelLabel && (
+                <>
+                  {group() !== "done" && <span aria-hidden="true">·</span>}
+                  <span class="chat-subagents__model" title={props.row.modelLabel}>
+                    {props.row.modelLabel}
+                  </span>
+                </>
+              )}
             </span>
           </Show>
           <span class="sr-only">{metadata()}</span>

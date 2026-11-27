@@ -531,7 +531,7 @@ class ChatCompletedWorkLayoutTest {
         )
       }
       composeRule.waitUntil {
-        composeRule.runOnIdle { model.chatStreamingAssistantText.value == text && model.chatPendingToolCalls.value.size == 1 }
+        composeRule.runOnIdle { model.chatStreamingAssistant.value?.text == text && model.chatPendingToolCalls.value.size == 1 }
       }
       composeRule.onNode(hasScrollToIndexAction()).performScrollToNode(workedMatcher)
       composeRule.onNode(workedMatcher).assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Expanded")))

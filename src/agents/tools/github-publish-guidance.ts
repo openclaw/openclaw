@@ -15,7 +15,7 @@ export function describeGitHubPublishTool(options: {
     "- readiness: observe publication state and an existing requestId; never resubmit it.",
     "- inspect_pr: read a PR by pullRequestUrl.",
     "- create_issue: title and optional body.",
-    "- create_comment: post approved Markdown (issueNumber, body).",
+    "- create_comment: issueNumber/body; approval unless session PR.",
   ];
   if (options.publicationAvailable) {
     lines.push(

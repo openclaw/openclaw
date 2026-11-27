@@ -167,6 +167,14 @@ suite.define(() => {
         await gateway.waitForRequest("chat.message.get");
         const panel = page.locator("openclaw-chat-tool-output");
         await panel.locator('.chat-tool-output[aria-busy="false"]').waitFor();
+        if (captureUiProof) {
+          await capture(page, suite.artifactDir, "tool-output-header");
+        }
+        const pane = await page.locator(".side-panel__header:visible").boundingBox();
+        expect(await panel.locator(".sidebar-header").boundingBox()).toMatchObject({
+          x: expect.closeTo(pane!.x, 0),
+          width: expect.closeTo(pane!.width, 0),
+        });
         expect(
           await panel
             .getByText("Full output unavailable. Only the captured output is shown.", {

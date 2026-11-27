@@ -6,7 +6,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it("preserves reader position from captured scrolls until reset, then cancels on disposal", () => {
+it("preserves reader position until forced to follow, then cancels on disposal", () => {
   vi.useFakeTimers();
   const container = document.createElement("div");
   Object.defineProperties(container, {
@@ -31,8 +31,7 @@ it("preserves reader position from captured scrolls until reset, then cancels on
     vi.advanceTimersByTime(20);
     expect(container.scrollTop).toBe(0);
 
-    follow.reset();
-    follow.schedule();
+    follow.schedule(true);
     vi.advanceTimersByTime(20);
     expect(container.scrollTop).toBe(1_000);
 
@@ -53,7 +52,7 @@ it("preserves reader position from captured scrolls until reset, then cancels on
   }
 });
 
-it("keeps admitted virtual following through an anchor scroll and rechecks the toggle", () => {
+it("keeps admitted following through an anchor scroll and rechecks the toggle", () => {
   vi.useFakeTimers();
   const container = document.createElement("div");
   Object.defineProperties(container, {
@@ -62,7 +61,7 @@ it("keeps admitted virtual following through an anchor scroll and rechecks the t
   });
   document.body.append(container);
   container.scrollTop = 900;
-  const scrollToEnd = vi.fn();
+  const scroll = vi.spyOn(container, "scrollTop", "set");
   let enabled = false;
   let follow!: ReturnType<typeof useStreamAutoFollow>;
   const dispose = createRoot((stop) => {
@@ -70,7 +69,6 @@ it("keeps admitted virtual following through an anchor scroll and rechecks the t
       container: () => container,
       enabled: () => enabled,
       identity: () => "stream",
-      scrollToEnd,
     });
     return stop;
   });
@@ -78,27 +76,34 @@ it("keeps admitted virtual following through an anchor scroll and rechecks the t
     container.addEventListener("scroll", follow.handleScroll);
     follow.schedule();
     vi.advanceTimersByTime(20);
-    expect(scrollToEnd).not.toHaveBeenCalled();
+    expect(container.scrollTop).toBe(900);
+    expect(scroll).not.toHaveBeenCalled();
     enabled = true;
     follow.schedule();
-    // The virtualizer retains an old row while the new tail is being rendered.
+    // An anchor scroll must not revoke following already admitted for this frame.
     container.scrollTop = 400;
     container.dispatchEvent(new Event("scroll"));
+    scroll.mockClear();
     follow.schedule();
     vi.advanceTimersByTime(20);
-    expect(scrollToEnd).toHaveBeenCalledOnce();
-    expect(container.scrollTop).toBe(400);
+    expect(container.scrollTop).toBe(1_000);
+    expect(scroll).toHaveBeenCalledExactlyOnceWith(1_000);
+    container.scrollTop = 400;
+    scroll.mockClear();
     follow.schedule();
     enabled = false;
     vi.advanceTimersByTime(20);
-    expect(scrollToEnd).toHaveBeenCalledOnce();
+    expect(container.scrollTop).toBe(400);
+    expect(scroll).not.toHaveBeenCalled();
     enabled = true;
     follow.schedule();
     dispose();
     vi.advanceTimersByTime(20);
-    expect(scrollToEnd).toHaveBeenCalledOnce();
+    expect(container.scrollTop).toBe(400);
+    expect(scroll).not.toHaveBeenCalled();
   } finally {
     dispose();
+    scroll.mockRestore();
     container.removeEventListener("scroll", follow.handleScroll);
     container.remove();
   }
