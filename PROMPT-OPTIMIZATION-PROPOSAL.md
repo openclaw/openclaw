@@ -24,7 +24,7 @@ The first experiment reclaimed 8,424 input tokens in an existing session without
 
 The second experiment reduces the overhead of the runtime context that remains. Together, they address both prompt size and its rate of growth.
 
-The potential benefit is more meaningful conversation and task context, fewer context-limit interventions, better continuity, and fewer associated cache rebuilds. This is particularly important for smaller local models, but relevant to hosted models too.
+The benefit is more room for meaningful conversation and task context, with fewer context-limit interventions, better continuity, and fewer associated cache rebuilds expected. This is particularly important for smaller local models, but relevant to hosted models too.
 
 ## Why This Change Was Made
 
@@ -39,11 +39,11 @@ The objective is not to make agents remember less. It is to stop making them rep
 
 ## Evidence and limitations
 
-November testing used OpenClaw 2026.11.10, Windows, local Gemma via openai-completions and tool-free Discord. Historical carriers fell from 6–9 to one. Derived warm-cache reuse decreased from 92.0% to 82.2%, and mean fresh tokens increased slightly from 1,092 to 1,216 in the first experiment. Subsequent metadata-experiment first-token times were approximately 97, 5 and 40 seconds; history changes and cache behavior confound these observations. The table reports distinct measurements, not a combined speedup.
+November testing used OpenClaw 2026.11.10, Windows, local Gemma via openai-completions and tool-free Discord. Historical carriers fell from 6–9 to one. Derived warm-cache reuse decreased from 92.0% to 82.2%, and mean fresh tokens increased slightly from 1,092 to 1,216 in the first experiment. Subsequent metadata-experiment first-token times were approximately 97, 5 and 40 seconds; history changes and cache behavior confound these observations.
 
 Related cache investigation: https://github.com/openclaw/openclaw/issues/202001. The renamed transient-context package is locally tested but not independently live-installed; the overlay is tied to exact compiled bundles. Current upstream source integration, regression tests, tool-enabled and cross-provider validation, rollback and controlled combined benchmarks remain outstanding.
 
-This is a draft design proposal, not a merge-ready runtime change.
+This is a design proposal.
 
 ## Our track record: working solutions months before upstream
 
@@ -71,7 +71,7 @@ Our August fix stopped avoidable cache loss when tool permissions changed. Today
 
 ## In summary: we have solutions, not just suggestions
 
-We were right about separating durable model state from transient per-turn information in August. Today's work goes further: reducing context growth should reduce cache resets and fresh-token consumption, even where cached tokens are free.
+We were right about separating durable model state from transient per-turn information in August. Today's work goes further: reducing context growth should reduce cache resets and fresh-token consumption, regardless of cached-token pricing.
 
 We've been using the general transient-turn approach in our Discord deployments for months, with approximately threefold improvement in usage efficiency reported from our operational experience.
 
