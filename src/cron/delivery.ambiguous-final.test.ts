@@ -68,10 +68,9 @@ describe("automation results after an ambiguous transport failure", () => {
   it("resends an automation result once instead of losing it", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const channel = register();
-    let settled = false;
-    const pending = send(true).finally(() => (settled = true));
+    const pending = send(true);
     // Skip the resend backoff.
-    while (!settled) {
+    for (let step = 0; step < 30 && channel.attempts() < 2; step++) {
       await vi.advanceTimersByTimeAsync(1_000);
     }
     const result = await pending;
