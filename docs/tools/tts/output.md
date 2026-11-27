@@ -41,14 +41,15 @@ Local CLI providers may still use `{{OutputPath}}` as scratch space before
 OpenClaw imports the completed bytes. See [Media playback](/nodes/media-playback)
 for inline-player formats and limits.
 
-| Target                                | Format                                                                                                                                |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| Feishu / Matrix / Telegram / WhatsApp | Voice-note replies prefer **Opus** (`opus_48000_64` from ElevenLabs, `opus` from OpenAI). 48 kHz / 64 kbps balances clarity and size. |
-| Other channels                        | **MP3** (`mp3_44100_128` from ElevenLabs, `mp3` from OpenAI). 44.1 kHz / 128 kbps is the default balance for speech.                  |
-| Talk / telephony                      | Provider-native **PCM** (Inworld 22050 Hz, Google 24 kHz), or `ulaw_8000` from Gradium for telephony.                                 |
+| Target                                          | Format                                                                                                                                |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Discord / Feishu / Matrix / Telegram / WhatsApp | Voice-note replies prefer **Opus** (`opus_48000_64` from ElevenLabs, `opus` from OpenAI). 48 kHz / 64 kbps balances clarity and size. |
+| Channels requesting audio-file synthesis        | **MP3** (`mp3_44100_128` from ElevenLabs, `mp3` from OpenAI). 44.1 kHz / 128 kbps is the default balance for speech.                  |
+| Talk / telephony                                | Provider-native **PCM** (Inworld 22050 Hz, Google 24 kHz), or `ulaw_8000` from Gradium for telephony.                                 |
 
-Per-provider notes:
+Channel and provider notes:
 
+- **Discord:** native voice messages use 48 kHz Ogg/Opus with a duration and waveform. The sender uses `ffprobe` to inspect the audio and `ffmpeg` when conversion or waveform generation is needed.
 - **Feishu / WhatsApp transcoding:** when a voice-note reply lands as MP3/WebM/WAV/M4A or another likely audio file, the channel plugin transcodes it to 48 kHz Ogg/Opus with `ffmpeg` (`libopus`, 64 kbps) before sending the native voice message. WhatsApp sends the result through the Baileys `audio` payload with `ptt: true` and `audio/ogg; codecs=opus`. On transcode failure: Feishu catches the error and falls back to sending the original file as a plain attachment; WhatsApp has no fallback, so the send itself fails rather than posting an incompatible PTT payload.
 - **MiniMax:** MP3 (`speech-2.8-hd` model, 32 kHz sample rate) for normal audio attachments; transcoded to 48 kHz Opus with `ffmpeg` for channel-advertised voice-note targets.
 - **Xiaomi MiMo:** MP3 by default, or WAV when configured; transcoded to 48 kHz Opus with `ffmpeg` for channel-advertised voice-note targets.
@@ -68,6 +69,23 @@ OpenAI and ElevenLabs choose output formats per channel as listed above. An
 explicit OpenAI `responseFormat` overrides that selection; a format that is not
 voice-note compatible may be delivered as an audio file or transcoded by a
 channel that supports conversion.
+
+## Channel delivery
+
+The synthesis target selects the audio encoding. It does not guarantee that a
+channel can deliver the file or display it as a voice message.
+
+| Channel                                         | Spoken-reply delivery                                                                                                                                                                                                 |
+| ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Discord / Feishu / Matrix / Telegram / WhatsApp | Native voice messages for compatible audio. These channels request voice-note synthesis. Conversion requirements and failure behavior are described above.                                                            |
+| Google Chat / LINE                              | Cannot deliver the generated local audio file. Google Chat requires remote HTTP(S) media URLs, and LINE requires public HTTPS media URLs.                                                                             |
+| iMessage                                        | Voice presentation for MP3 or CAF output, using audio-file synthesis. CAF is preferred. Native voice messages require an existing chat and bridge transport (`sendTransport: "bridge"` or `"auto"`), not AppleScript. |
+| IRC / Twitch                                    | Include the media path or URL in message text instead of uploading an audio attachment.                                                                                                                               |
+| Nextcloud Talk                                  | Voice presentation for MP3 or WAV output, using audio-file synthesis. Other formats remain file attachments.                                                                                                          |
+| Other channels that accept local audio          | Audio attachments, subject to the channel's media support and limits.                                                                                                                                                 |
+
+Generating speech does not publish its local media path as a remotely accessible
+URL. Check the channel's delivery support before enabling automatic TTS.
 
 ## Auto-TTS behavior
 

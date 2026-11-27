@@ -8,8 +8,10 @@ read_when:
   - Using /tts commands or directives
 ---
 
-OpenClaw converts outbound replies into native voice messages on Feishu, Matrix,
-Telegram, and WhatsApp. Every other channel receives an audio attachment.
+OpenClaw converts outbound replies into speech. The channel and audio format
+determine whether it arrives as a voice message, an audio attachment, or a link.
+Some channels cannot deliver generated local audio. See
+[Channel delivery](/tools/tts/output#channel-delivery) for formats and restrictions.
 Telephony and Talk receive PCM or Ulaw streams.
 
 TTS is the speech-output half of [Talk](/nodes/talk)'s `stt-tts` mode (`talk.speak` calls this
