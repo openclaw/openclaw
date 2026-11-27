@@ -58,6 +58,12 @@ Some releases only ship CLI, evidence, or Windows assets. If the newest release
 has no macOS app asset, use the newest one that does, or build from source with
 [macOS dev setup](/platforms/mac/dev-setup).
 
+If the app reports **OpenClaw app update required**, the app's bundled runtime
+cannot read the local state schema. Choose **Open Downloads** and install a
+compatible app for your Gateway's release channel. If a compatible build is not
+available yet, keep your state and credentials intact and wait for the matching
+installer. Running Doctor with the older app's CLI cannot downgrade the schema.
+
 ## First run
 
 Install and launch **OpenClaw.app**. On a fresh installation with no saved Gateway

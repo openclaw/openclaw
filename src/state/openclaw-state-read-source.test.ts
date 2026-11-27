@@ -3,6 +3,7 @@
 import { emptyReply, mock, queueTask, source } from "./openclaw-state-read-worker.test-harness.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, it, vi } from "vitest";
+import { getSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
 import * as processRole from "../infra/database-engine/admission-scope.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { withRuntimeWorkerGeneration } from "../infra/runtime-worker-generation.js";
@@ -14,6 +15,7 @@ import {
   executeExistingOpenClawStateRead,
   withOpenClawStateDatabaseReadSnapshot,
 } from "./openclaw-state-db-readonly.js";
+import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
 import * as snapshotSource from "./openclaw-state-read-snapshot-source.js";
 import {
   captureOpenClawStateReadSource,
@@ -121,9 +123,7 @@ it.each(["gateway", "cli-oneshot", undefined] as const)(
         });
         await transport.startClose();
         expect(task.close).toHaveBeenCalledExactlyOnceWith(
-          role === "cli-oneshot" || (awaitedOnly && role !== "gateway")
-            ? { retire: true }
-            : undefined,
+          role === undefined && awaitedOnly ? { retire: true } : undefined,
         );
       }
       expect(mock.create).toHaveBeenCalledTimes(role === undefined ? 2 : 1);
@@ -133,7 +133,7 @@ it.each(["gateway", "cli-oneshot", undefined] as const)(
   },
 );
 
-it("joins successful CLI reader exit for ordinary and later awaited reads", async () => {
+it("releases CLI reader handles before a successful read returns and keeps the reader", async () => {
   const roleSpy = vi.spyOn(processRole, "getDatabaseProcessRole").mockReturnValue("cli-oneshot");
   const { location, authority } = readFixture();
   try {
@@ -144,17 +144,24 @@ it("joins successful CLI reader exit for ordinary and later awaited reads", asyn
         undefined,
         awaitedOnly,
       );
-      // Admission must finish without retiring the worker needed by the actual query.
+      // Admission must finish without releasing the reader needed by the actual query.
       const admission = readyTask();
       await transport.startValidateFresh(location.context, authority);
       expect(admission.close).toHaveBeenCalledExactlyOnceWith(undefined);
       const task = queueTask();
-      const stopping = createDeferredCore<"stopping">();
-      const stopped = createDeferredCore();
-      task.close.mockImplementationOnce(() => {
-        stopping.resolve("stopping");
-        return stopped.promise;
-      });
+      const releasing = createDeferredCore<"releasing">();
+      const released = createDeferredCore();
+      // Node releases handles in place; runtimes without explicit native close rotate the reader.
+      const release = () => {
+        releasing.resolve("releasing");
+        return released.promise;
+      };
+      (getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources
+        ? mock.closeResources
+        : mock.rotate
+      ).mockImplementationOnce(release);
+      mock.closeResources.mockClear();
+      mock.rotate.mockClear();
       const result = transport.startRead(location, authority);
       let settled = false;
       void result.then(() => {
@@ -163,17 +170,22 @@ it("joins successful CLI reader exit for ordinary and later awaited reads", asyn
       try {
         await task.captured;
         task.result.resolve(emptyReply);
-        const first = await Promise.race([stopping.promise, result.then(() => "returned")]);
-        expect(first).toBe("stopping");
-        expect(task.close).toHaveBeenCalledExactlyOnceWith({ retire: true });
+        const first = await Promise.race([releasing.promise, result.then(() => "returned")]);
+        expect(first).toBe("releasing");
+        expect(task.close).toHaveBeenCalledExactlyOnceWith(undefined);
+        expect(mock.closeResources.mock.calls.length + mock.rotate.mock.calls.length).toBe(1);
         expect(settled).toBe(false);
       } finally {
-        stopped.resolve();
+        released.resolve();
         await expect(result).resolves.toEqual({ value: emptyReply });
         await transport.startClose();
       }
     }
     expect(mock.create).toHaveBeenCalledOnce();
+    // The kept reader exits when the command closes shared state at CLI cleanup.
+    expect(mock.closePool).not.toHaveBeenCalled();
+    await closeOpenClawStateDatabaseAsync();
+    expect(mock.closePool).toHaveBeenCalledOnce();
   } finally {
     roleSpy.mockRestore();
   }

@@ -133,6 +133,10 @@ export const resolveDateInterpretation = (params: {
     const utcOffsetMinutes = parseUtcOffsetToMinutes(params.utcOffset);
     if (params.timeZone !== undefined && params.timeZone !== null) {
       const requestedTimeZone = normalizeOptionalString(params.timeZone);
+      // "Local" on a UTC client and explicit UTC use the same calendar and snapshot.
+      if (requestedTimeZone === "UTC") {
+        return { ok: true, value: { mode: "utc" } };
+      }
       const timeZone = requestedTimeZone ? resolveTimezone(requestedTimeZone) : undefined;
       if (!timeZone) {
         // Browser tzdata can lead Gateway ICU. Preserve legacy fixed-offset

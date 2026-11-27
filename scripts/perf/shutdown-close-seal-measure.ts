@@ -15,6 +15,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { getFreePort } from "../lib/gateway-bench-probes.ts";
 import { BASE_GATEWAY_BENCH_CONFIG, createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -130,12 +131,7 @@ await runCliWithExitFinalization({
         );
         assert(!readSqliteCleanCloseSeal(seeded.path, statSync(seeded.path, { bigint: true })));
         if (values.allocations) {
-          inspector.connect();
-          await inspector.post("HeapProfiler.startSampling", {
-            samplingInterval: 32768,
-            includeObjectsCollectedByMajorGC: true,
-            includeObjectsCollectedByMinorGC: true,
-          });
+          await startCollectedHeapSampling(inspector, 32768);
         }
         setImmediate(() => {
           start = performance.now();

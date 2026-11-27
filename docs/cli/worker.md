@@ -77,6 +77,8 @@ the attempt count, Gateway host and port (or local socket path), and last failur
 `no hello within deadline` means it opened but the Gateway did not complete worker
 admission. A retryable admission rejection retains its reason. These bounded,
 credential-redacted details appear in the node launch journal and turn error.
+Transport reconnects use jittered exponential backoff. A brief successful admission
+does not reset the retry streak or budget; a successful heartbeat clears both.
 
 Container launches revalidate the pinned daemon identity before creating each
 container. This check allows 30 seconds for a busy daemon; a timeout still fails

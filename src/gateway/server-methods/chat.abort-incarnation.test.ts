@@ -4,6 +4,7 @@
 import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { SubagentLifecycleController } from "../../agents/subagents/registry/subagent-registry-lifecycle.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
 import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
@@ -16,10 +17,7 @@ import { emitAgentEvent } from "../../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import * as sessionLifecycle from "../../sessions/session-controller.lifecycle.js";
-import {
-  observeSessionWorkAdmissionDrain,
-  rpcSourceTesting,
-} from "../../sessions/session-lifecycle-admission.test-support.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { closeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
 import { listOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.test-support.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
@@ -130,20 +128,19 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
         }
         return await mutateSession(params);
       });
-    const restoreDrain = observeSessionWorkAdmissionDrain(async (params, released) => {
-      if (
-        ("target" in params ? params.target.storeScope : params.scope) === storePath &&
-        Array.from("target" in params ? params.target.aliases : params.identities).includes(
-          activeKey,
-        )
-      ) {
-        expect(released).toBe(true);
-        // Keep the captured kill scope pending after the real drain. A cold
-        // sibling reset must not consume the active admission's deadline.
-        entered.resolve();
-        await resume.promise;
-      }
-    });
+    // oxlint-disable-next-line typescript/unbound-method -- Every call supplies the intercepted controller via .call.
+    const acquireTerminal = SubagentLifecycleController.prototype.acquireTerminalCompletionLock;
+    const terminal = vi
+      .spyOn(SubagentLifecycleController.prototype, "acquireTerminalCompletionLock")
+      .mockImplementation(async function (this: SubagentLifecycleController, runId) {
+        const release = await acquireTerminal.call(this, runId);
+        if (runId === "active") {
+          // Pause terminal settlement after the real admission drain has finished.
+          entered.resolve();
+          await resume.promise;
+        }
+        return release;
+      });
     const abort = abortParent();
     const dispatch = vi.fn(async () => {});
     const interrupted = vi.fn();
@@ -230,7 +227,7 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
       try {
         await abort.pending;
       } finally {
-        restoreDrain();
+        terminal.mockRestore();
         mutation.mockRestore();
         releaseSwarmRun("capacity");
         releaseSwarmRun("grandchild");
@@ -240,7 +237,7 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
 );
 
 it.each(["child", "ancestor"])(
-  "retained durable intent prevents queued dispatch when the %s identity owner closes",
+  "durable cancellation prevents queued dispatch when the %s identity owner closes",
   async (faultOwner) => {
     const childAgent = faultOwner === "ancestor" ? "worker" : "broken";
     const badKey = `agent:${childAgent}:subagent:bad`;
@@ -334,9 +331,17 @@ it.each(["child", "ancestor"])(
           loadExactSessionEntryReadOnly({ storePath, sessionKey: badKey })?.entry.sessionId,
         ).toBe("bad-session");
       }
-      expect(loadSubagentRegistryFromSqlite().get("bad")?.killIntent).toMatchObject({
-        reason: "killed",
-      });
+      const persisted = loadSubagentRegistryFromSqlite().get("bad");
+      if (faultOwner === "ancestor") {
+        // The child's admitted claim can finish after its ancestor owner closes.
+        expect(persisted).toMatchObject({
+          execution: { status: "terminal" },
+          endedReason: "subagent-killed",
+          killReconciliation: { taskCancellationAccepted: true },
+        });
+      } else {
+        expect(persisted?.killIntent).toMatchObject({ reason: "killed" });
+      }
       expect(subagentRuns.get("healthy")?.endedReason).toBe("subagent-killed");
       expect(releaseSwarmRun(capacityOwner)).toBe(true);
       await vi.waitFor(() => expect(survivorDispatch).toHaveBeenCalledOnce());

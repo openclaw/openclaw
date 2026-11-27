@@ -1,6 +1,6 @@
 package ai.openclaw.app.node
 
-import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.InvokeResult
 import ai.openclaw.app.hasPermission
 import android.Manifest
 import android.content.Context
@@ -220,13 +220,13 @@ class MotionHandler internal constructor(
   appContext: Context,
   private val dataSource: MotionDataSource = SystemMotionDataSource(appContext),
 ) {
-  suspend fun handleMotionActivity(paramsJson: String?): GatewaySession.InvokeResult =
+  suspend fun handleMotionActivity(paramsJson: String?): InvokeResult =
     invokeMotion(paramsJson, "motion activity failed") { request ->
       val activity = dataSource.activity(request)
       Json.encodeToString(mapOf("activities" to listOf(activity)))
     }
 
-  suspend fun handleMotionPedometer(paramsJson: String?): GatewaySession.InvokeResult =
+  suspend fun handleMotionPedometer(paramsJson: String?): InvokeResult =
     invokeMotion(paramsJson, "pedometer query failed") { request ->
       val payload = dataSource.pedometer(request)
       buildJsonObject {
@@ -240,7 +240,7 @@ class MotionHandler internal constructor(
     paramsJson: String?,
     fallbackMessage: String,
     query: (MotionRangeRequest) -> String,
-  ): GatewaySession.InvokeResult {
+  ): InvokeResult {
     if (!dataSource.hasPermission()) {
       return nodeInvokeError("MOTION_PERMISSION_REQUIRED", "grant Motion permission")
     }
@@ -248,9 +248,9 @@ class MotionHandler internal constructor(
       parseRangeRequest(paramsJson)
         ?: return nodeInvokeError("INVALID_REQUEST", "expected JSON object")
     return try {
-      GatewaySession.InvokeResult.ok(query(request))
+      InvokeResult.ok(query(request))
     } catch (err: IllegalArgumentException) {
-      GatewaySession.InvokeResult.error(code = "MOTION_UNAVAILABLE", message = err.message ?: "MOTION_UNAVAILABLE")
+      InvokeResult.error(code = "MOTION_UNAVAILABLE", message = err.message ?: "MOTION_UNAVAILABLE")
     } catch (err: CancellationException) {
       throw err
     } catch (err: Throwable) {

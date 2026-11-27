@@ -2,6 +2,7 @@ import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-c
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
+import { resolveCompactionTimeoutMs } from "../../agents/embedded-agent-runner/compaction-safety-timeout.js";
 import type { PreparedCompactionSession } from "../../agents/embedded-agent-runner/run/compaction-accounting-bridge.js";
 import { compactEmbeddedAgentSession } from "../../agents/embedded-agent.js";
 import { NO_MODEL_CONFIGURED_MESSAGE } from "../../agents/model-selection-config.js";
@@ -19,9 +20,7 @@ import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-
 import { readTranscriptStatsAsync } from "../../config/sessions/session-transcript-stats.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { getGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
-import { resolveSessionSelectedModelRefAsync } from "../session-utils-model-selection.js";
-import { prepareGatewaySessionEntryReader } from "../session-utils-store-lineage.js";
+import { resolveGatewaySessionModelForRun } from "../session-model-for-run.js";
 
 type GatewaySessionCompactionParams = {
   agentId: string;
@@ -34,25 +33,6 @@ type GatewaySessionCompactionParams = {
   sessionStoreKey: string;
   storePath: string;
 };
-
-/** Select the model ordinary turns use, including one inherited from a parent session. */
-async function resolveCompactionSessionModel(params: GatewaySessionCompactionParams) {
-  const readSourceEntry = await prepareGatewaySessionEntryReader({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    entry: params.entry,
-    store: {},
-  });
-  params.abortSignal?.throwIfAborted();
-  return await resolveSessionSelectedModelRefAsync({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    source: { entry: params.entry, readSourceEntry },
-    manifestPlugins: getGatewayPluginMetadataSnapshot() ?? [],
-  });
-}
 
 /** Prepare eligibility and owner metadata without materializing a host transcript. */
 export async function prepareGatewaySessionCompaction(
@@ -68,7 +48,7 @@ export async function prepareGatewaySessionCompaction(
     sessionKey: params.sessionStoreKey,
     storePath: params.storePath,
   };
-  const resolvedModel = await resolveCompactionSessionModel(params);
+  const resolvedModel = await resolveGatewaySessionModelForRun(params);
   const usesLegacyRuntime = (entry: SessionEntry) => {
     const persistedRuntime = resolveManualCompactionCliTarget({
       provider: resolvedModel?.provider,
@@ -139,6 +119,7 @@ export async function prepareGatewaySessionCompaction(
     transcriptTarget,
     { kind: "preflight" },
     params.abortSignal,
+    resolveCompactionTimeoutMs(params.cfg),
   );
   if (prepared.status !== "preflight") {
     throw new Error("Expected compaction preflight facts");
@@ -174,7 +155,7 @@ export async function runGatewaySessionCompaction(
     sessionKey: params.sessionStoreKey,
     storePath: params.storePath,
   };
-  const resolvedModel = await resolveCompactionSessionModel(params);
+  const resolvedModel = await resolveGatewaySessionModelForRun(params);
   if (!resolvedModel) {
     return { ok: false, compacted: false, reason: NO_MODEL_CONFIGURED_MESSAGE };
   }

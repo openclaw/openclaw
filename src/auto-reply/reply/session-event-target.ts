@@ -56,7 +56,7 @@ import { deliveryContextFromSession } from "../../utils/delivery-context.read.js
 import {
   prepareCommandOwnerAuthority,
   type PreparedCommandOwnerAuthority,
-} from "../command-auth.js";
+} from "../command-owner-facts.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { SessionEventTarget } from "./session-event-contract.js";
 import { narrowSessionEventSettings } from "./session-event-policy-inheritance.js";
@@ -70,7 +70,6 @@ const targetScopes = resolveGlobalSingleton(
         env?: NodeJS.ProcessEnv;
         operatorAuthority?: AdmittedRunOperatorAuthority;
         operatorSource?: RestartRecoveryOperatorSource;
-        ownerContinuation?: true;
         hasOriginatingCaller?: true;
         /** The captured requester keys the authority, whose source label is shared by owners. */
         commandOwner?: {
@@ -126,8 +125,6 @@ export async function captureSessionEventTargetForHost(
     operatorAuthority?: AdmittedRunOperatorAuthority;
     /** Deferred requester reference, admitted by the event's start owner. */
     operatorSource?: RestartRecoveryOperatorSource;
-    /** The producing turn held command-owner authority under `operatorAuthority`. */
-    ownerContinuation?: true;
     /**
      * Continue the producing turn's requester as command owner while they remain one.
      * The identity comes from the host-owned caller, never from the producer.
@@ -228,9 +225,7 @@ export async function captureSessionEventTargetForHost(
       options.retainRequesterOwner && callerAgentMatches ? caller?.requesterOrigin : undefined;
     const commandOwner =
       requester?.messageProvider && requester.senderId
-        ? await (
-            await import("../command-auth.js")
-          ).prepareCommandOwnerAuthority(
+        ? await prepareCommandOwnerAuthority(
             cfg,
             {
               channel: requester.messageProvider,
@@ -273,9 +268,6 @@ export async function captureSessionEventTargetForHost(
         : {}),
       ...(options.scheduledRequester
         ? { scheduledRequester: { requester: options.scheduledRequester } }
-        : {}),
-      ...((operatorAuthority || options.operatorSource) && options.ownerContinuation
-        ? { ownerContinuation: true }
         : {}),
       ...(requester?.messageProvider &&
       requester.senderId &&
@@ -525,11 +517,6 @@ export function hasSessionEventOriginatingCaller(target: SessionEventTarget): bo
   );
 }
 
-/** Whether the producing turn was an owner under the target's captured operator source. */
-export function readSessionEventTargetOwnerContinuation(target: SessionEventTarget): boolean {
-  return targetScopes.get(target)?.ownerContinuation === true;
-}
-
 export type CommandOwnerRequester = Readonly<{
   channel: string;
   accountId?: string;
@@ -577,8 +564,6 @@ export function combineSessionEventTargetsForHost(
       targetScopes.get(target)?.operatorSource !== targetScopes.get(first)?.operatorSource ||
       readSessionEventTargetOperatorAuthority(target) !==
         readSessionEventTargetOperatorAuthority(first) ||
-      readSessionEventTargetOwnerContinuation(target) !==
-        readSessionEventTargetOwnerContinuation(first) ||
       hasSessionEventOriginatingCaller(target) !== hasSessionEventOriginatingCaller(first) ||
       commandOwnerRequesterKey(target) !== commandOwnerRequesterKey(first) ||
       readSessionEventTargetScheduledRequester(target) !==

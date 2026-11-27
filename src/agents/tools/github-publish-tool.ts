@@ -14,6 +14,7 @@ import {
   GitHubPublicationEvidenceSchema,
   type GitHubPublicationEvidence,
   GitHubPublicationTitleSchema,
+  SessionGitHubPullRequestInspectResultSchema,
   type GitHubPublicationAction,
   type SessionGitHubActionResult,
   type SessionGitHubReadinessResult,
@@ -55,6 +56,7 @@ const publicationWorkspaceActions = [
   "readiness",
   "inspect_pr",
   "create_issue",
+  "create_comment",
   "prepare_pr",
   "refresh_base",
   "edit",
@@ -62,6 +64,11 @@ const publicationWorkspaceActions = [
   "request_review",
   "upload_evidence",
 ];
+
+const commentIssueNumber = Type.Optional(
+  SessionGitHubPullRequestInspectResultSchema.properties.number,
+);
+const GITHUB_PUBLISH_TOOL_TIMEOUT_MS = 600_000;
 
 export const githubPublishToolDefinition = {
   name: "github_publish",
@@ -74,6 +81,7 @@ export const githubPublishToolDefinition = {
       action: Type.Optional(stringEnum(publicationWorkspaceActions)),
       title: Type.Optional(GitHubPublicationTitleSchema),
       body: GitHubPublicationEditSchema.properties.body,
+      issueNumber: commentIssueNumber,
       draft: Type.Optional(Type.Boolean()),
       workspacePath: SessionGitHubPublishParamsSchema.properties.workspacePath,
     },
@@ -138,6 +146,7 @@ function resolveGitHubPublishParameters(params: {
             ),
             title: Type.Optional(GitHubPublicationTitleSchema),
             body: GitHubPublicationEditSchema.properties.body,
+            issueNumber: commentIssueNumber,
             draft: Type.Optional(Type.Boolean()),
             ...(params.workspacePreparationAvailable
               ? { workspacePath: SessionGitHubPublishParamsSchema.properties.workspacePath }
@@ -153,10 +162,12 @@ function resolveGitHubPublishParameters(params: {
               "readiness",
               "inspect_pr",
               "create_issue",
+              "create_comment",
               ...publicationOperatorActions,
             ]),
             title: Type.Optional(GitHubPublicationTitleSchema),
             body: SessionGitHubPublishParamsSchema.properties.body,
+            issueNumber: commentIssueNumber,
           },
           { additionalProperties: false },
         );
@@ -176,7 +187,6 @@ export function createGitHubPublishTool(
     sessionId?: string;
     runId?: string;
     onYield?: SessionsYieldCallback;
-    senderIsOwner?: boolean;
   } & Pick<
     SpawnedToolContext,
     "inheritedToolAllowlist" | "inheritedToolDenylist" | "sessionPermissionPolicy"
@@ -206,6 +216,10 @@ export function createGitHubPublishTool(
   const tool: AnyAgentTool = {
     label: options.observationOnly ? "GitHub Publication Readiness" : "GitHub Publish",
     name: githubPublishToolDefinition.name,
+    getExecutionTimeoutMs: (args) =>
+      isRecord(args) && args.action === "create_comment"
+        ? GITHUB_PUBLISH_TOOL_TIMEOUT_MS
+        : undefined,
     // An unbound sandboxed preparation yields this turn. Like sessions_yield, it runs only as a
     // direct call: a Code Mode exec cannot carry a turn handoff. On-demand keeps every call
     // direct without sending this definition before the session first uses it.
@@ -245,6 +259,7 @@ export function createGitHubPublishTool(
           action?:
             | "readiness"
             | "create_issue"
+            | "create_comment"
             | "inspect_pr"
             | "prepare_pr"
             | "publish"
@@ -254,6 +269,7 @@ export function createGitHubPublishTool(
             | "upload_evidence"
             | GitHubPublicationAction["action"];
           pullRequestUrl?: string;
+          issueNumber?: number;
           evidence?: GitHubPublicationEvidence;
           conflictsResolved?: boolean;
           baseCommit?: string;
@@ -285,7 +301,7 @@ export function createGitHubPublishTool(
         waitForGatewayDispatch(
           args[0],
           callInProcessGatewayTool(...args),
-          args[2]?.timeoutMs ?? 600_000,
+          args[2]?.timeoutMs ?? GITHUB_PUBLISH_TOOL_TIMEOUT_MS,
           signal,
         );
       if (action === "readiness") {
@@ -333,7 +349,6 @@ export function createGitHubPublishTool(
           requestOwners,
           onYield: options.onYield,
           signal,
-          senderIsOwner: options.senderIsOwner,
           ...(method === "sessions.github.action" || caller.operatorAuthority?.participationCeiling
             ? { retainRequester: true as const }
             : {}),
@@ -454,6 +469,31 @@ export function createGitHubPublishTool(
             title: input.title,
             ...(input.body !== undefined ? { body: input.body } : {}),
           }),
+        );
+      }
+      if (input.action === "create_comment") {
+        if (
+          input.issueNumber === undefined ||
+          !input.body ||
+          Object.keys(input).some((key) => !["action", "issueNumber", "body"].includes(key))
+        ) {
+          throw new Error(
+            "create_comment accepts only an issueNumber and body for the current project.",
+          );
+        }
+        return guidedResult(
+          githubActionGuidance.create_comment,
+          await callGateway(
+            "sessions.github.action",
+            {
+              action: "create_comment",
+              sessionKey: caller.sessionKey,
+              agentId: caller.agentId,
+              issueNumber: input.issueNumber,
+              body: input.body,
+            },
+            { signal },
+          ),
         );
       }
       if (input.action === "inspect_pr") {

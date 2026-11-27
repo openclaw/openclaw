@@ -61,6 +61,7 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { applyModelOverrideWithAuthProfileCompatibility } from "../sessions/auth-profile-preservation.js";
+import type { ChatRef } from "../sessions/chat-ref.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
 import {
@@ -77,7 +78,6 @@ import {
   prepareSessionPatchModelSelection,
   resolveSessionPatchModelSelection,
 } from "./server-methods/sessions-patch-model-selection.js";
-import { resolveProtectedSessionVisibilityError } from "./server-methods/sessions-shared.js";
 import { applySessionExecutionSettings } from "./session-execution-settings.js";
 import {
   isAgentSessionModelPatchOrigin,
@@ -107,6 +107,7 @@ type SessionPatchProjectionParams = {
   /** Trusted catalog runtime must own selection checks before the new row is persisted. */
   preparedAgentRuntime?: string;
   archivedBy?: SessionEntry["archivedBy"];
+  deferredSelfSnooze?: ChatRef;
   /** Exact harness owner authorized to project its new reserved session row. */
   authorizedAgentHarnessId?: string;
   personalModelSelection?: UserModelAccountSelection;
@@ -353,13 +354,8 @@ function* projectSessionPatchSteps(
     }
   }
 
-  if (patch.snoozedUntil !== undefined && patch.snoozedUntil !== null) {
-    const protectedError = resolveProtectedSessionVisibilityError(cfg, storeKey, "snooze");
-    if (protectedError) {
-      return { ok: false, error: protectedError };
-    }
-  }
   const lifecycleFlagsError = applySessionPatchLifecycleFlags({
+    cfg,
     patch,
     next,
     existingEntry: params.existingEntry,

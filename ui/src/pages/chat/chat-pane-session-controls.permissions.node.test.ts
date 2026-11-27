@@ -169,6 +169,12 @@ describe("chat pane model-setting permissions", () => {
     expect(controls.composerControls.model.snapshot).toBeDefined();
     expect(controls.permissionPicker).toMatchObject({ mode: "workspace", disabled: false });
   });
+  it("lists model accounts on picker open only when the connection can read them", async () => {
+    const sessionOnly = await createControlsFixture("operator.sessions.write");
+    expect(sessionOnly.state.request).not.toHaveBeenCalledWith("users.listModelAccounts", {});
+    const reader = await createControlsFixture("operator.write");
+    expect(reader.state.request).toHaveBeenCalledExactlyOnceWith("users.listModelAccounts", {});
+  });
   it("persists an explicit Standard choice over inherited speed", async () => {
     const { state, selectedSession, container } =
       await createControlsFixture("operator.sessions.write");
@@ -178,7 +184,6 @@ describe("chat pane model-setting permissions", () => {
     const standard = container.querySelector<HTMLButtonElement>('[data-chat-speed-option="off"]')!;
     expect(standard.getAttribute("aria-checked")).toBe("true");
     expect(standard.disabled).toBe(false);
-    expect(state.request).toHaveBeenCalledExactlyOnceWith("users.listModelAccounts", {});
     state.request.mockImplementation(async (method, params) => {
       if (method === "sessions.patch") {
         if (

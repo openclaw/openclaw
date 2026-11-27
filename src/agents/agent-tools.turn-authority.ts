@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { operatorRefusalText } from "../gateway/operator-refusal.js";
 import {
   gateAgentToolExecution,
   markAgentToolExecutionUnavailable,
@@ -76,10 +77,10 @@ export function resolveTurnToolSurface(params: {
         ? (params.outsideTurnReason?.(tool.name) ??
             `${tool.name} is not available during a child-completion turn because it is outside the authority carried from its requester. Do not retry ${tool.name}.`)
         : scopedReads
-          ? `On this system-started turn, ${tool.name} runs only the ${CRON_SCOPED_READ_ACTIONS.join(", ")} actions. Other actions need the owner's authority, and this turn was not started by the owner. Do not retry them.`
-          : `${tool.name} needs the owner's authority, and this turn was not started by the owner. ${
+          ? `On this system-started turn, ${tool.name} runs only the ${CRON_SCOPED_READ_ACTIONS.join(", ")} actions. ${operatorRefusalText("owner-only", `run other ${tool.name} actions`)} Do not retry them.`
+          : `${operatorRefusalText("owner-only", `run ${tool.name}`)} ${
               tool.requiredClientCaps?.length
-                ? `Ask the owner to request it again from the open Control UI with ${tool.requiredClientCaps.join(", ")}.`
+                ? `The Gateway owner can request it again from the open Control UI with ${tool.requiredClientCaps.join(", ")}.`
                 : `Do not retry ${tool.name}.`
             }`,
     );

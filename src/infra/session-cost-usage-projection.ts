@@ -25,7 +25,7 @@ import type {
 } from "./session-cost-usage.types.js";
 
 const formatUtcDayKey = (date: Date): string =>
-  `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+  `${String(date.getUTCFullYear()).padStart(4, "0")}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
 
 type UsageDayKeyFormatter = (date: Date) => string;
 

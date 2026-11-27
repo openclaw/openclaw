@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as doctorMaintenance from "../commands/doctor-maintenance.js";
+import * as retainedRuntime from "../commands/doctor-retained-runtime.js";
 import * as nocow from "../commands/doctor-sqlite-nocow.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
@@ -70,7 +71,6 @@ const maintenance = vi.hoisted(() => ({
   releaseState: vi.fn(),
   repairSqliteNoCow: vi.fn(),
   enableSqliteReclamation: vi.fn(),
-  cleanupRetainedRuntimes: vi.fn(),
   release: vi.fn(),
 }));
 const resultWriter = await vi.importActual<typeof import("../infra/update-doctor-result.js")>(
@@ -124,6 +124,8 @@ describe("Doctor refused-migration maintenance outcome", () => {
     vi.clearAllMocks();
     maintenance.enableSqliteReclamation.mockReset();
     vi.spyOn(doctorMaintenance, "beginDoctorMaintenance").mockResolvedValue(maintenance);
+    // Runtime cleanup scans the host temp directory; these cases observe only its outcome and order.
+    vi.spyOn(retainedRuntime, "cleanupRetainedUpdateRuntimesBeforeMaintenance").mockResolvedValue();
     mocks.config.mockReturnValue({});
     mocks.packageRoot.mockReturnValue(undefined);
   });
@@ -134,7 +136,7 @@ describe("Doctor refused-migration maintenance outcome", () => {
     { fix: true, updating: "1", request: undefined, repair: false, conversion: true },
     { fix: true, updating: "1", request: "1", repair: true, conversion: true },
   ])(
-    "gates SQLite repairs after checks and before restoration (fix=$fix, update=$updating, request=$request)",
+    "cleans updater runtimes before the stop and gates SQLite repairs before restoration (fix=$fix, update=$updating, request=$request)",
     async ({ fix, updating, request, repair, conversion }) => {
       vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", updating);
       vi.stubEnv("OPENCLAW_DOCTOR_SQLITE_NOCOW_REPAIR", request);
@@ -155,7 +157,7 @@ describe("Doctor refused-migration maintenance outcome", () => {
       for (const [fn, event] of [
         [maintenance.repairSqliteNoCow, "repair"],
         [maintenance.enableSqliteReclamation, "conversion"],
-        [maintenance.cleanupRetainedRuntimes, "cleanup"],
+        [vi.mocked(retainedRuntime.cleanupRetainedUpdateRuntimesBeforeMaintenance), "cleanup"],
         [maintenance.finish, "restoration"],
       ] as const) {
         fn.mockReset().mockImplementationOnce(async () => {
@@ -169,10 +171,10 @@ describe("Doctor refused-migration maintenance outcome", () => {
       proceed.resolve();
       await work;
       expect(events).toEqual([
+        ...(fix ? ["cleanup"] : []),
         "checks completed",
         ...(repair ? ["repair"] : []),
         ...(conversion ? ["conversion"] : []),
-        ...(fix ? ["cleanup"] : []),
         "restoration",
       ]);
       expect(maintenance.enableSqliteReclamation).toHaveBeenCalledTimes(Number(conversion));
@@ -185,6 +187,21 @@ describe("Doctor refused-migration maintenance outcome", () => {
       expect(runtime.log.mock.calls.some(([message]) => message === deferred)).toBe(fix && !repair);
     },
   );
+
+  it("reports an updater runtime cleanup failure and still runs the stopped repairs", async () => {
+    await withDoctorState(async () => {
+      const cleanupFailure = new Error("fixture native broker could not settle");
+      vi.mocked(
+        retainedRuntime.cleanupRetainedUpdateRuntimesBeforeMaintenance,
+      ).mockRejectedValueOnce(cleanupFailure);
+      const runtime = createDoctorRuntime();
+      await runDoctorHealthFlow(runtime, repairOptions);
+      expect(runtime.error).toHaveBeenCalledWith(cleanupFailure.message);
+      expect(doctorMaintenance.beginDoctorMaintenance).toHaveBeenCalledOnce();
+      expect(mocks.runContributions).toHaveBeenCalledOnce();
+      expect(maintenance.finish).toHaveBeenCalledOnce();
+    });
+  });
 
   it("settles runtime exit before forwarding database write proof", async () => {
     const resultPath = createUpdatePostInstallDoctorResultPath();

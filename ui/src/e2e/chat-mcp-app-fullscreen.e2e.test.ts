@@ -112,6 +112,8 @@ it.each(["chromium", "webkit"] as const)(
             viewport: innerHeight,
             viewportWidth: innerWidth,
             host: bounds.height,
+            panelWidth: target.closest(".sidebar-content")!.getBoundingClientRect().width,
+            frameWidth: frame.getBoundingClientRect().width,
             left: bounds.left,
             right: bounds.right,
             target: target.getBoundingClientRect().height,
@@ -129,6 +131,7 @@ it.each(["chromium", "webkit"] as const)(
         animations: "disabled",
       });
       await fs.writeFile(path.join(proof, engine + "-expanded.png"), screenshot.png);
+      expect(measurements.frameWidth).toBeCloseTo(measurements.panelWidth, 0);
       expect(measurements.iframe).toBeGreaterThan(450);
       expect(Math.abs(measurements.host - measurements.target)).toBeLessThanOrEqual(4);
       expect(Math.abs(measurements.iframe - measurements.mount)).toBeLessThanOrEqual(4);

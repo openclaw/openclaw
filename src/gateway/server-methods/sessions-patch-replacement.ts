@@ -8,6 +8,7 @@ import {
   applySessionEntryCanonicalReplacements,
   type SessionEntryCanonicalReplacement,
 } from "../../config/sessions/session-accessor.sqlite-replacement-projection.js";
+import { isSameSessionOccurrence } from "../../config/sessions/session-archive-undo.js";
 import type { SessionLabelOwnerIndex } from "../../config/sessions/session-entry-selection.js";
 import { adoptPersistedSessionSnapshot } from "../../config/sessions/session-snapshot-merge.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
@@ -178,23 +179,38 @@ export function createSessionPatchGroupWriter(params: {
   return async (catalog?: SessionPatchCatalogResult): Promise<GroupAdmissionResult> => {
     params.timing?.mark("snapshot");
     let projected: GroupMutationOperation | undefined;
-    const admitted = await applySessionEntryCanonicalReplacements<GroupAdmissionResult>({
-      ...store,
-      onCommittedEntries: (entries, patchDiffBaselines) => {
-        if (!store.fieldPatch) {
-          return;
+    const onCommittedEntries: NonNullable<typeof store.onCommittedEntries> = (
+      entries,
+      patchDiffBaselines,
+    ) => {
+      for (const replacement of projected?.replacements ?? []) {
+        const entry = entries.get(replacement.sessionKey);
+        const receipt = projected?.archiveReceipts?.get(replacement.sessionKey);
+        if (
+          receipt &&
+          entry &&
+          isSameSessionOccurrence(entry, replacement.entry) &&
+          entry.archivedAt !== undefined
+        ) {
+          receipt.outcome.archiveUndoToken = receipt.token;
         }
-        for (const replacement of projected?.replacements ?? []) {
-          const entry = entries.get(replacement.sessionKey);
-          if (entry) {
-            adoptPersistedSessionSnapshot(replacement.entry, entry);
-            const baseline = patchDiffBaselines?.get(replacement.sessionKey);
-            if (baseline) {
-              replacement.entry.sessionDiffBaseline = baseline;
-            }
+        if (entry && replacement.archiveUndo?.kind === "undo") {
+          // The writer alone knows whether this occurrence cleared a shared pin.
+          // Read back its actual postimage, never the client's projected result.
+          replacement.entry.pinnedAt = entry.pinnedAt;
+        }
+        if (entry && store.fieldPatch) {
+          adoptPersistedSessionSnapshot(replacement.entry, entry);
+          const baseline = patchDiffBaselines?.get(replacement.sessionKey);
+          if (baseline) {
+            replacement.entry.sessionDiffBaseline = baseline;
           }
         }
-      },
+      }
+    };
+    const admitted = await applySessionEntryCanonicalReplacements<GroupAdmissionResult>({
+      ...store,
+      onCommittedEntries,
       update: (entries) => {
         // Archive removal belongs to maintenance; only restore prepares a checkout here.
         const needsExternalPreparation =
@@ -220,10 +236,12 @@ export function createSessionPatchGroupWriter(params: {
     }
     params.timing?.mark("projection");
     const operation = await params.project(admitted.snapshot, "detached", catalog);
+    projected = operation;
     params.timing?.mark("commit");
     return operation.replacements?.length
       ? await applySessionEntryCanonicalReplacements({
           ...store,
+          onCommittedEntries,
           update: (entries) => {
             // External preparation owns detached rows, not permission to
             // overwrite a changed target, alias, or requested-label owner.

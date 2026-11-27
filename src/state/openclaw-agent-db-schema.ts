@@ -92,6 +92,7 @@ import {
   ensureSessionAdditiveColumns,
   ensureSessionEntryValidityProjection,
   migrateConversationDeliveryTargetColumn,
+  migrateSessionAccessVersionSteps,
   migrateSessionCreatorNamespaces,
   migrateSessionTranscriptActiveProjection,
   migrateSessionTranscriptGenerations,
@@ -103,10 +104,6 @@ import {
 } from "./openclaw-agent-db.paths.js";
 import { AGENT_INDEX_RETIREMENT_SQL } from "./openclaw-agent-index-retirement-migration.js";
 import { migrateAgentJsonPredicatesInTransaction } from "./openclaw-agent-json-predicate-schema.js";
-import {
-  AGENT_MEMBER_ACCESS_SCHEMA_VERSION,
-  migrateAgentMemberAccessInTransaction,
-} from "./openclaw-agent-member-access-schema.js";
 import { AGENT_MEMORY_REVISION_SQL } from "./openclaw-agent-memory-revision-migration.js";
 import { migrateOutboxEnqueueSequenceInTransaction } from "./openclaw-agent-outbox-sequence-migration.js";
 import { migrateSessionParticipantsSchema } from "./openclaw-agent-participants-migration.js";
@@ -132,6 +129,7 @@ import {
 } from "./openclaw-agent-trajectory-storage-migration.js";
 import { migrateAgentWriteLayoutInTransaction } from "./openclaw-agent-write-layout-migration.js";
 import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import { normalizeSqliteText } from "./openclaw-state-db-schema-repair.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
@@ -294,9 +292,7 @@ function ensureAgentSchema(
         if (crossesVersion(AGENT_PENDING_INPUT_ENDINGS_SCHEMA_VERSION)) {
           migrateAgentPendingInputEndingsInTransaction(db);
         }
-        if (crossesVersion(AGENT_MEMBER_ACCESS_SCHEMA_VERSION)) {
-          migrateAgentMemberAccessInTransaction(db);
-        }
+        migrateSessionAccessVersionSteps(db, crossesVersion);
         // Historical rebuilds also converge indexes. Later version steps own
         // only their declared tables; additive index repair stays at admission.
         if (previousVersion < CANONICAL_SESSION_WRITER_VALIDATION_SCHEMA_VERSION) {
@@ -320,15 +316,12 @@ function ensureAgentSchema(
                   foundVersion: previousVersion,
                   supportedVersion: targetVersion,
                 }),
-                // These empty-table steps do not change existing relations. Only v41 adds a FK.
-                ...(previousVersion >= 40 &&
-                targetVersion <= AGENT_TOOL_USAGE_SCHEMA_VERSION &&
-                integrity.check === "quick"
+                // A schema-only step owns only its declared relations; the next start checks the rest.
+                ...(integrity.schemaOnly
                   ? {
-                      foreignKeyTables:
-                        previousVersion < AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION
-                          ? ["session_transcript_active_event_facts"]
-                          : [],
+                      foreignKeyTables: (integrity.tables ?? []).filter((table) =>
+                        tableExists(db, table),
+                      ),
                     }
                   : {}),
               }

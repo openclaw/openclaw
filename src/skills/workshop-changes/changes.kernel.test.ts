@@ -4,6 +4,7 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   listWorkshopChangesInDatabase,
+  readWorkshopActivityInDatabase,
   recordWorkshopChangeInDatabase,
   type WorkshopChange,
 } from "./changes.kernel.js";
@@ -50,6 +51,26 @@ describe("workshop change storage", () => {
     }
   });
 
+  it("updates activity per live skill without regressing on an older timestamp", async () => {
+    const state = await createOpenClawTestState({ layout: "state-only" });
+    try {
+      const database = openOpenClawStateDatabase();
+      const { db } = database;
+      const record = (row: WorkshopChange) =>
+        runSqliteImmediateTransactionSync(db, () => recordWorkshopChangeInDatabase(database, row));
+      record(change("first", 1));
+      record(change("latest", 3));
+      record(change("older", 2));
+      record({ ...change("peer", 4), agentId: "other" });
+      expect(readWorkshopActivityInDatabase(db, "main", "deploy")).toBe(3);
+      record({ ...change("archived", 5), action: "archive" });
+      expect(readWorkshopActivityInDatabase(db, "main", "deploy")).toBeNull();
+      expect(readWorkshopActivityInDatabase(db, "other", "deploy")).toBe(4);
+    } finally {
+      await state.cleanup();
+    }
+  });
+
   it("retains committed changes after a failed first append and reuses admitted schema", async () => {
     const state = await createOpenClawTestState({ layout: "state-only" });
     try {
@@ -63,6 +84,7 @@ describe("workshop change storage", () => {
           throw new Error("rollback");
         }),
       ).toThrow("rollback");
+      expect(readWorkshopActivityInDatabase(db, "main", "deploy")).toBeNull();
       expect(listWorkshopChangesInDatabase(db, { agentId: "main", limit: 10 })).toEqual([]);
 
       runSqliteImmediateTransactionSync(db, () =>

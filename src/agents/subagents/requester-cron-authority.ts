@@ -12,11 +12,13 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { captureActiveCronManagementAuthority } from "../cron-creator-authority-context.js";
 import type { FollowupRequesterAuthority } from "./completion/session-followup-completion.types.js";
+import { isSubagentDeliveryWithheld } from "./registry/subagent-delivery-state.js";
 import type { SubagentRunRecord } from "./registry/subagent-registry.types.js";
 import {
   sameRequesterSettleBatch,
   resolveCurrentRequesterSettleBatch,
 } from "./registry/subagent-requester-settle-identity.js";
+import { isSubagentPausedByYield } from "./registry/subagent-requester-turn-custody.js";
 import {
   getSubagentRunRuntimeKey,
   isSameSubagentRunOwner,
@@ -128,9 +130,7 @@ function isCurrent(authority: RequesterCronAuthority): boolean {
       entry &&
       isSameSubagentRunOwner(entry, binding.entry) &&
       state.byEntry.get(getSubagentRunRuntimeKey(entry)) === authority &&
-      !entry.suppressCompletionDelivery &&
-      !entry.killIntent?.suppressTaskDelivery &&
-      !entry.killReconciliation?.suppressTaskDelivery,
+      !isSubagentDeliveryWithheld(entry),
     );
   }
   let session: PreparedSessionMutationFacts["target"];
@@ -401,7 +401,7 @@ export function revokeRequesterCronAuthorityBatch(
     if (authority?.kind === "yield" && authority.rearmGeneration === rearmGeneration) {
       if (
         isSameSubagentRunOwner(authority.runs.get(entry.runId), entry) &&
-        entry.pauseReason === "sessions_yield" &&
+        isSubagentPausedByYield(entry) &&
         entry.requesterSettleWake?.rearmGeneration === rearmGeneration &&
         isCurrent(authority)
       ) {
@@ -445,7 +445,7 @@ async function withRequesterCronAuthority<T>(
   const authority = params.batch[0] && state.byEntry.get(getSubagentRunRuntimeKey(params.batch[0]));
   const child = params.batch.length === 1 ? params.batch[0] : undefined;
   const pause: RequesterCronAuthorityDispatch["pause"] =
-    child?.pauseReason === "sessions_yield" && child.requesterSettleWake?.pauseNotice
+    isSubagentPausedByYield(child) && child.requesterSettleWake?.pauseNotice
       ? { entry: child }
       : undefined;
   if (
@@ -471,7 +471,7 @@ async function withRequesterCronAuthority<T>(
           (pause.scope
             ? pause.scope.active && !pause.scope.signal.aborted
             : isSameSubagentRunOwner(pausedEntry, pause.entry) &&
-              pausedEntry?.pauseReason === "sessions_yield" &&
+              isSubagentPausedByYield(pausedEntry) &&
               Boolean(pausedEntry.requesterSettleWake?.pauseNotice) &&
               params.isCurrent())
         : authority.runScopeBound === true || params.isCurrent())

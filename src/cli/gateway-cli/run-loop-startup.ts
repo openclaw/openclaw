@@ -88,7 +88,7 @@ type GatewayRunLoopStartOptions = Pick<
   | "gatewayStateOwner"
 > & { requestHotReloadRecovery?: GatewayRestartEmitter };
 
-export type GatewayRestartStartupFailureHandler = (
+type GatewayRestartStartupFailureHandler = (
   error: unknown,
   signal: AbortSignal,
 ) => Promise<"completed" | "failed" | void>;
@@ -100,6 +100,8 @@ export type GatewayRunLoopParams = {
   /** Grants this run loop authority over the process it exclusively owns. */
   ownsProcessLifecycle?: boolean;
   lockPort?: number;
+  /** Resolve the next listener port before reacquiring its state owner. */
+  resolveRestartPort?: () => Promise<number>;
   lifecycleLockDeadlineMs?: number;
   healthHost?: string;
   healthConfig?: OpenClawConfig;
@@ -114,18 +116,39 @@ export type GatewayRunLoopParams = {
 };
 
 export function createGatewayRestartRecovery(
-  {
-    onRestartStartupFailure: onFailure,
-  }: {
-    onRestartStartupFailure?: GatewayRestartStartupFailureHandler;
-  },
+  params: Pick<GatewayRunLoopParams, "onRestartStartupFailure" | "resolveRestartPort" | "lockPort">,
   logger: Pick<SubsystemLogger, "info" | "error">,
   supervisor: GatewayOwnerSupervisor | null,
 ) {
+  const onFailure = params.onRestartStartupFailure;
+  let preparationFailure: { error: unknown } | undefined;
   let work:
     | { controller: AbortController; settled: ReturnType<GatewayRestartStartupFailureHandler> }
     | undefined;
   return {
+    async reacquireLock() {
+      preparationFailure = undefined;
+      let port: number | undefined;
+      try {
+        port = (await params.resolveRestartPort?.()) ?? params.lockPort;
+      } catch (error) {
+        // The next startup iteration owns recovery; do not acquire stale-port custody.
+        preparationFailure = { error };
+        return null;
+      }
+      return acquireGatewayLock({
+        port,
+        listenerMode: supervisor ? "supervised" : "foreground",
+        supervisor,
+      });
+    },
+    throwPreparationFailure() {
+      if (preparationFailure) {
+        const failure = preparationFailure;
+        preparationFailure = undefined;
+        throw failure.error;
+      }
+    },
     reportInstallationReplacement(
       replacement: GatewayInstallationReplacement,
     ): GatewayBootLifecycleCompletion {

@@ -62,6 +62,25 @@ describe("followup queue callback custody", () => {
     },
   );
 
+  it("releases earlier callbacks when a collected retry cannot retain a later source", async () => {
+    const q = createQueueCase();
+    const first = vi.fn(() => vi.fn());
+    const second = vi.fn(() => vi.fn());
+    q.add({ ...createRun({ prompt: "first" }), [replyCallbackCustody]: { retain: first } });
+    q.add({ ...createRun({ prompt: "second" }), [replyCallbackCustody]: { retain: second } });
+    await q.drain();
+    expect(q.calls).toHaveLength(1);
+
+    const release = vi.fn();
+    const closed = new Error("consumer closed");
+    first.mockReturnValueOnce(release);
+    second.mockImplementationOnce(() => {
+      throw closed;
+    });
+    expect(() => q.calls[0]![replyCallbackCustody]?.retain()).toThrow(closed);
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("does not enqueue when the external lifecycle rejects the run identity", () => {
     const q = createQueueCase({ mode: "followup", debounceMs: 10_000, cap: 50 });
     const onEnqueued = vi.fn(() => false);

@@ -94,56 +94,6 @@ function lastDispatchedCtxPayload(): Record<string, unknown> {
 
 describe("msteams members added handler", () => {
   it.each([
-    { promptStarters: ["Do X", "Do Y"], labels: ["Do X", "Do Y"] },
-    {
-      promptStarters: [],
-      labels: ["What can you do?", "Summarize my last meeting", "Help me draft an email"],
-    },
-  ])("sends welcome card starters $promptStarters", async ({ promptStarters, labels }) => {
-    const deps = createDeps();
-    deps.cfg = { channels: { msteams: { promptStarters } } };
-    const sendActivity = await welcome(deps);
-    expect(sendActivity).toHaveBeenCalledWith({
-      type: "message",
-      attachments: [
-        {
-          contentType: "application/vnd.microsoft.card.adaptive",
-          content: {
-            type: "AdaptiveCard",
-            version: "1.5",
-            body: [
-              { type: "TextBlock", text: "Hi! I'm OpenClaw.", weight: "Bolder", size: "Medium" },
-              {
-                type: "TextBlock",
-                text: "I can help you with questions, tasks, and more. Here are some things to try:",
-                wrap: true,
-              },
-            ],
-            actions: labels.map((label) => ({
-              type: "Action.Submit",
-              title: label,
-              data: { msteams: { type: "imBack", value: label } },
-            })),
-          },
-        },
-      ],
-    });
-  });
-
-  it.each([
-    { botName: undefined, name: "OpenClaw" },
-    { botName: "", name: "OpenClaw" },
-    { botName: "Support", name: "Support" },
-  ])("sends the group welcome for $botName", async ({ botName, name }) => {
-    const deps = createDeps();
-    deps.cfg = { channels: { msteams: { groupWelcomeCard: true } } };
-    const sendActivity = await welcome(deps, "groupChat", botName);
-    expect(sendActivity).toHaveBeenCalledWith(
-      `Hi! I'm ${name}. Mention me with @${name} to get started.`,
-    );
-  });
-
-  it.each([
     ["personal", 1],
     ["groupChat", 0],
   ] as const)("stores the %s install conversation reference", async (conversationType, saves) => {

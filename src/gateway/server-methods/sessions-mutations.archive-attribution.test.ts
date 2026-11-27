@@ -125,13 +125,13 @@ it("drains an archive behind an unrelated writer, then commits after that writer
   const resume = createDeferredCore();
   const drained = createDeferredCore();
   let writer: Promise<void> | undefined;
-  const prepareOwner = archivePreparation.prepareSessionPatchArchive;
+  const prepareOwner = archivePreparation.prepareSessionPatchArchives;
   const drainOwner = lifecycleDrain.prepareSessionLifecycleDrain;
   const prepare = vi
-    .spyOn(archivePreparation, "prepareSessionPatchArchive")
+    .spyOn(archivePreparation, "prepareSessionPatchArchives")
     .mockImplementationOnce(async (params) => {
       writer = runOpenClawAgentWriteAdmission(
-        { agentId: "main", path: params.target.initialTarget.readSource!.path },
+        { agentId: "main", path: params.targets[0]!.initialTarget.readSource!.path },
         async () => {
           entered.resolve();
           await resume.promise;

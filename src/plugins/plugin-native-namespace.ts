@@ -30,6 +30,32 @@ type NamespaceMember = {
 // Membership and source paths stay fixed; admission only updates identities and digests.
 const nativeSourceMembers = new WeakMap<PluginNativeNamespaceFact, Map<string, string>>();
 
+/** Keep the namespace object shared by live loans while detaching its published member facts. */
+export function writablePluginNativeMember(namespace: PluginNativeNamespaceFact, relative: string) {
+  if (Object.isFrozen(namespace.members) && namespace.members[relative] !== undefined) {
+    namespace.members = structuredClone(namespace.members);
+  }
+  return namespace.members[relative];
+}
+
+/** Hardlink placement can restamp a captured inode shared with its installed source. */
+export function refreshPluginNativeMemberIdentity(
+  namespace: PluginNativeNamespaceFact,
+  relative: string,
+  capturedIdentity: string,
+): string {
+  const previous = namespace.members[relative]!;
+  if (previous.capturedIdentity === capturedIdentity) {
+    return previous.sourceIdentity;
+  }
+  const member = writablePluginNativeMember(namespace, relative)!;
+  if (member.sourceIdentity === member.capturedIdentity) {
+    member.sourceIdentity = capturedIdentity;
+  }
+  member.capturedIdentity = capturedIdentity;
+  return member.sourceIdentity;
+}
+
 export function nativeMemberForSource(namespace: PluginNativeNamespaceFact, source: string) {
   const relative = path.relative(namespace.sourceDirectory, source);
   // A file alias can be visited before its real pathname. The binary's real parent owns
@@ -437,7 +463,7 @@ export function capturePluginNativeNamespace(params: {
         ) {
           changed.set(member.source, member.identity);
         }
-        const old = previous?.members[relative];
+        const old = previous && writablePluginNativeMember(previous, relative);
         if (old) {
           old.capturedIdentity = member.identity;
         }
@@ -476,8 +502,8 @@ export function capturePluginNativeNamespace(params: {
 
 /** Fill dormant companion digests after the legacy initial receipt has consumed native bytes. */
 export function finishPluginNativeNamespace(fact: PluginNativeNamespaceFact): void {
-  for (const [relative, member] of Object.entries(fact.members)) {
-    if (member.sizeBytes === undefined || member.contentHash) {
+  for (const [relative, indexed] of Object.entries(fact.members)) {
+    if (indexed.sizeBytes === undefined || indexed.contentHash) {
       continue;
     }
     const filename = pluginNativeNamespaceMemberPath(fact, relative);
@@ -486,11 +512,12 @@ export function finishPluginNativeNamespace(fact: PluginNativeNamespaceFact): vo
     // The first read can stamp a security-software extended attribute. Retain
     // the observed identity with the digest so later reuse sees the admitted file.
     if (
-      content.sizeBytes !== member.sizeBytes ||
-      !pluginSourceIdentityChangedOnlyByCtime(member.capturedIdentity, identity)
+      content.sizeBytes !== indexed.sizeBytes ||
+      !pluginSourceIdentityChangedOnlyByCtime(indexed.capturedIdentity, identity)
     ) {
       throw new Error("Native plugin companion changed before admission completed");
     }
+    const member = writablePluginNativeMember(fact, relative)!;
     if (member.sourceIdentity === member.capturedIdentity) {
       member.sourceIdentity = identity;
     }

@@ -18,7 +18,7 @@ import type { EngineConnection } from "../infra/sql-connection.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 
 /** Inspect all required inputs before maintenance can create a store or migrate shared schema. */
-export async function prepareRequiredLegacyClientCredentials(env: NodeJS.ProcessEnv) {
+async function prepareRequiredLegacyClientCredentials(env: NodeJS.ProcessEnv) {
   const [
     { prepareLegacyDeviceIdentity },
     { prepareLegacyDeviceAuth },

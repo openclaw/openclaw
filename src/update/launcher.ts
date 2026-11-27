@@ -3,10 +3,11 @@ import path from "node:path";
 import { ROOT_VALUE_FLAGS } from "../../cli-root-options.mjs";
 import { GATEWAY_RUN_VALUE_FLAGS } from "../../gateway-run-argv.mjs";
 import { hasErrnoCode } from "../infra/errno.js";
+import { LEGACY_ROLLBACK_SOURCE } from "./legacy-rollback-source.js";
 import { LINK_SOURCE } from "./link-source.js";
-import { ROLLBACK_SOURCE } from "./rollback-source.js";
+import { MANIFEST_RESTORE_SOURCE } from "./rollback-source.js";
 
-const LAUNCHER_FORMAT = 3;
+const LAUNCHER_FORMAT = 4;
 // Both starts share the wall-clock ceiling; migration keeps the full allowance.
 export const TRIAL_BUDGET_MS = 20 * 60 * 1000;
 // A reported healthy host needed 496 seconds for agent preparation before ready.
@@ -67,27 +68,37 @@ function writeTrial(record) {
     try { fs.fsyncSync(dir); } finally { fs.closeSync(dir); }
   }
 }
-${ROLLBACK_SOURCE}
+${LEGACY_ROLLBACK_SOURCE}
+${MANIFEST_RESTORE_SOURCE}
 ${LINK_SOURCE}
 let stderrTail = Buffer.alloc(0);
 let stderrTarget;
 function rollback(trial, reason) {
-  if (trial.phase !== "restoring") {
+  const replay = trial.phase === "restoring";
+  const manifest = readRestoreManifest(trial, replay);
+  if (!replay) {
     trial.phase = "restoring";
     trial.outcome = { status: "rolled-back", reason, stderrTail: stderrTail.toString("utf8"), at: Date.now() };
-    trial.restoring = [];
-    const since = trial.createdAt - 1000;
-    for (const generation of new Set([trial.buildId, trial.version].filter(Boolean))) {
-      const suffix = ".pre-" + generation;
-      const files = collectPreserved(path.dirname(prefix), suffix, since, 4, []);
-      if (trial.config && !files.includes(trial.config) && (fs.lstatSync(trial.config + suffix, { throwIfNoEntry: false })?.ctimeMs ?? 0) >= since) files.push(trial.config);
-      trial.restoring.push({ suffix, files });
+    if (manifest === null) {
+      trial.restoring = [];
+      const since = trial.createdAt - 1000;
+      for (const generation of new Set([trial.buildId, trial.version].filter(Boolean))) {
+        const suffix = ".pre-" + generation;
+        const files = collectPreserved(path.dirname(prefix), suffix, since, 4, []);
+        if (trial.config && !files.includes(trial.config) && (fs.lstatSync(trial.config + suffix, { throwIfNoEntry: false })?.ctimeMs ?? 0) >= since) files.push(trial.config);
+        trial.restoring.push({ suffix, files });
+      }
     }
-    // Inventory and phase precede every mutation; a killed restore replays safely.
+    // The phase precedes every mutation; a killed restore replays its original record.
     writeTrial(trial);
   }
-  for (const generation of new Set([trial.buildId, trial.version].filter(Boolean))) retirePlans(path.dirname(prefix), generation);
-  for (const { suffix, files } of trial.restoring) restoreState(files, suffix);
+  if (manifest === null) {
+    if (!trial.restoring) throw new Error("Update restore manifest is missing. Preserve the release and run openclaw triage.");
+    for (const generation of new Set([trial.buildId, trial.version].filter(Boolean))) retirePlans(path.dirname(prefix), generation, trial.createdAt - 1000);
+    for (const { suffix, files } of trial.restoring) restoreState(files, suffix);
+  } else {
+    restoreManifestFiles(manifest);
+  }
   switchLink(trial.previous);
   trial.phase = "rolled-back";
   writeTrial(trial);

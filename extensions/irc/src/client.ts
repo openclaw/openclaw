@@ -365,6 +365,23 @@ export async function connectIrcClient(options: IrcClientOptions) {
         if (nickCollision && tryRecoverNickCollision()) {
           continue;
         }
+        // NICKLEN may arrive only after registration. Shorten generated nicks on 432,
+        // preserving the collision suffix and stopping before the base becomes empty.
+        if (line.command === "432" && fallbackNickAttempted) {
+          const suffixIndex = currentNick.lastIndexOf("_");
+          if (suffixIndex > 1) {
+            const shorterNick =
+              currentNick.slice(0, suffixIndex - 1) + currentNick.slice(suffixIndex);
+            try {
+              sendRaw(`NICK ${shorterNick}`);
+              currentNick = shorterNick;
+              continue;
+            } catch (err) {
+              failAndClose(err);
+              return;
+            }
+          }
+        }
         const detail =
           line.trailing ??
           (line.params.join(" ") || (nickCollision ? "nickname in use" : "login rejected"));

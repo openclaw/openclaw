@@ -112,7 +112,10 @@ describe("authenticated Talk permission parity", () => {
   beforeAll(async () => {
     state = await createOpenClawTestState({ label: "voice-permission-parity", applyEnv: true });
     config = {
-      agents: { entries: { main: { workspace: state.workspaceDir } } },
+      agents: {
+        defaults: { model: "anthropic/claude-opus-4-6" },
+        entries: { main: { workspace: state.workspaceDir } },
+      },
       plugins: { enabled: false },
       tools: { exec: { host: "gateway", mode: "full" } },
     };
@@ -170,7 +173,12 @@ describe("authenticated Talk permission parity", () => {
         cwd,
         sessionRoot: cwd,
         permissionMode: "guarded",
-        execOverrides: { host: "node", node: "session-node", nodeCwd: "/node/task" },
+        // The typed-turn owner carries the session's exec pin; exec defaults resolve from it.
+        execSession: expect.objectContaining({
+          execHost: "node",
+          execNode: "session-node",
+          execCwd: "/node/task",
+        }),
       });
       return { payloads: [{ text: "Prepared." }], meta: {} };
     });

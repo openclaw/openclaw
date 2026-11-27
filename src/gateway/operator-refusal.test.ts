@@ -13,6 +13,8 @@ const SENTENCES = {
     "I did not start this request. The sign-in it was started with is no longer valid. Reconnect to the Gateway, then send your message again.",
   "role-denies":
     "I did not start this request. Your role on this Gateway does not allow it. Ask a Gateway admin to do it, or to add the permission to your role.",
+  "owner-only":
+    "I did not start this request. It needs the Gateway owner's authority, and this turn does not run with it. Ask the Gateway owner to do it.",
   "channel-unverified":
     "I did not start this request. This channel cannot confirm who you are. Use Control UI, Discord or Telegram for this. If you are not the Gateway owner, ask an admin to link your channel account to your Gateway profile first.",
   "agent-not-in-role":
@@ -29,6 +31,10 @@ const SENTENCES = {
     "I did not start this request. The invitation you joined this session with has ended. Ask the session owner to invite you again.",
   "github-not-linked":
     "I did not start this request. Your Gateway profile has no linked GitHub account, so I cannot check that the PR is yours. Link it once in the Control UI under Settings → Profile → Identity, on the configured GitHub host, then ask again.",
+  "automation-account-unrecorded":
+    "I did not start this request. It has no recorded inference account, so OpenClaw refused the selected credentials. Select an authorized stored account with `openclaw automations edit <jobId> --model <provider/model>@<account>`, or use a configured provider key. For eligible host-managed accounts, `openclaw doctor --fix` can record the account.",
+  "workspace-not-owned":
+    "I did not start this request. Only the person who started this conversation or an administrator can restore its workspace. Ask an administrator to restore this workspace, or start a new conversation.",
 } satisfies Record<OperatorRefusalCause, string>;
 
 async function runRefusedTool(failure: () => unknown) {

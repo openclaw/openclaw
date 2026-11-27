@@ -1,8 +1,10 @@
 // Verifies OpenClaw tool registration, availability, and construction policy.
+import path from "node:path";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import type { WidgetPresenter } from "../plugins/plugin-registration.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -12,11 +14,13 @@ import { createTestOperatorAuthority } from "./admitted-run-context.test-support
 import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import { getAgentToolExecutionLocation } from "./agent-tool-metadata.js";
 import { createOpenClawCodingTools, createOpenClawCodingToolsInternal } from "./agent-tools.js";
+import { buildCliMcpGrantContext } from "./cli-runner/mcp-grant-context.js";
 import { createCodeModeTools } from "./code-mode.js";
 import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
 } from "./cron-creator-authority-context.js";
+import { prepareAttemptSystemPromptAdditions } from "./embedded-agent-runner/run/attempt-system-prompt-additions.js";
 import { createLazyExecTool } from "./lazy-exec-tool.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import {
@@ -497,6 +501,97 @@ describe("gateway client capability tool filtering", () => {
     expect(built()).toBe(false);
     expect(built(true)).toBe(true);
     expect(built(false, { alsoAllow: ["session_project"] })).toBe(false);
+  });
+
+  describe.each(["embedded", "cli"] as const)("%s project-move tool eligibility", (runtime) => {
+    const workspaceDir = path.resolve("project-move-default");
+    const alternateDir = path.resolve("project-move-alternate");
+    const projectDir = path.resolve("project-move-checkout");
+    const config: OpenClawConfig = {
+      agents: { entries: { main: { workspace: workspaceDir } } },
+      tools: { profile: "full", updatePlan: false },
+    };
+    const session = { sessionId: "project-move-test", updatedAt: 1 };
+    const cases: {
+      name: string;
+      sessionKey: string;
+      workspaceDir: string;
+      cwd?: string;
+      entry: InternalSessionEntry;
+      expected: boolean;
+    }[] = [
+      {
+        name: "the default workspace",
+        sessionKey: "agent:main:main",
+        workspaceDir,
+        entry: { ...session, sessionRoot: workspaceDir },
+        expected: true,
+      },
+      {
+        name: "a subagent with only a spawned cwd binding",
+        sessionKey: "agent:main:subagent:alternate",
+        workspaceDir,
+        cwd: alternateDir,
+        entry: {
+          ...session,
+          spawnedBy: "agent:main:main",
+          spawnedWorkspaceDir: workspaceDir,
+          spawnedCwd: alternateDir,
+        },
+        expected: false,
+      },
+      {
+        name: "a cron child borrowing its parent's project checkout",
+        sessionKey: "agent:main:cron:job:run:child",
+        workspaceDir: projectDir,
+        entry: session,
+        expected: false,
+      },
+      {
+        name: "the project-bound parent",
+        sessionKey: "agent:main:project-parent",
+        workspaceDir: projectDir,
+        entry: { ...session, projectId: "project", sessionRoot: projectDir },
+        expected: false,
+      },
+    ];
+    it.each(cases)("offers the tool only in $name when eligible", async (scenario) => {
+      const run = {
+        config,
+        agentId: "main",
+        sessionId: session.sessionId,
+        runId: "project-move-run",
+        sessionKey: scenario.sessionKey,
+        sessionFile: scenario.sessionKey,
+        workspaceDir: scenario.workspaceDir,
+        cwd: scenario.cwd,
+        entry: scenario.entry,
+        sessionEntry: scenario.entry,
+        senderIsOwner: true,
+        modelId: "synthetic-model",
+        provider: "synthetic",
+        prompt: "Inspect the tool list without running a model.",
+        timeoutMs: 1_000,
+      };
+      const capability =
+        runtime === "embedded"
+          ? await prepareAttemptSystemPromptAdditions(run)
+          : buildCliMcpGrantContext({
+              run,
+              config,
+              agentId: "main",
+              requireExplicitMessageTarget: false,
+              modelId: run.modelId,
+              modelProvider: run.provider,
+            });
+      const tools = createTestOpenClawTools({
+        config,
+        agentSessionKey: scenario.sessionKey,
+        workspaceDir: scenario.workspaceDir,
+        sessionProjectMoveEligible: capability.sessionProjectMoveEligible,
+      });
+      expect(hasTool(tools, "session_project")).toBe(scenario.expected);
+    });
   });
 
   it("negotiates GitHub reconnect guidance with the requesting Control UI", () => {

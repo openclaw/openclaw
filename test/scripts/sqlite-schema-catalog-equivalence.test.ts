@@ -25,6 +25,10 @@ import {
   readGeneratedSqliteCatalog,
   readGeneratedSqliteFingerprint,
 } from "../../src/state/postgres-schema.generated/sqlite-catalogs.js";
+import {
+  readSqliteStateCatalog,
+  readSqliteStateFingerprint,
+} from "../../src/state/postgres-schema.generated/sqlite-state-catalogs.js";
 
 const inputs = listSqliteSchemaInputs();
 const distinctInputs = [...new Map(inputs.map((input) => [input.sql, input])).values()];
@@ -84,6 +88,18 @@ describe("generated SQLite schema catalogs", () => {
       expect(registeredSql.has(sql)).toBe(true);
       expect(readGeneratedSqliteFingerprint(sql)).toBeDefined();
     }
+  });
+
+  it.each([
+    ["full", "df594c58841a6f289f32aab3f0ff5c0d20f3be8f600a21271f08e7ed21e0cce2"],
+    ["runtime 0/0", "42740e063461d52643265d479219da2387ab3fa5e5cc81b4d6246f9aa0d635db"],
+    ["runtime 0/1", "5b971c4a36389f5654e0ef2b717fa98d2021f93c0d83871c3a8473a98ac80eb4"],
+    ["runtime 1/0", "537b715e8837d0ad7ba5c85a331e69c24f2d4e3594d5b2ce84dffd909f000242"],
+    ["runtime 1/1", "df787440d666b59909bf906a96936af7f802c1e747e5928f8863de00aea0b9c1"],
+  ])("serves the pre-Workshop-activity %s catalog after a build swap", (_layout, hash) => {
+    // An installed reader supplies the hash of its original SQL to the replacement assets.
+    expect(readSqliteStateFingerprint(hash)).toBeDefined();
+    expect(readSqliteStateCatalog(hash)).toBeDefined();
   });
 
   it("keeps predecessor schemas free of objects introduced after their version", () => {

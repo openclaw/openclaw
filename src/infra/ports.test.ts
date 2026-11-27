@@ -12,6 +12,9 @@ import {
   getWindowsWmicExePath,
 } from "./windows-install-roots.js";
 
+const readProcessCommand = vi.hoisted(() => vi.fn());
+vi.mock("@openclaw/proc-safe/inspect", () => ({ readProcessCommand }));
+
 const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../process/exec.js", () => ({
@@ -133,6 +136,36 @@ afterEach(() => {
 });
 
 describe("ports helpers", () => {
+  it.for(["darwin", "win32"] as const)(
+    "matches only the app preset in the listening process argv on %s",
+    async (platform, { skip }) => {
+      await using server = net.createServer();
+      const { port } = await listenServer(skip, server, 0, "127.0.0.1");
+      const url = new URL(`http://127.0.0.1:${port}`);
+      if (platform === "darwin") {
+        mockProcessPlatform(platform);
+        mockUnixCommands({ lsof: commandOutput(`p4242\ncllama-server\nn127.0.0.1:${port}\n`) });
+      } else {
+        mockWindowsCommands({
+          netstat: commandOutput(`TCP 127.0.0.1:${port} 0.0.0.0:0 LISTENING 4242\n`),
+        });
+      }
+      const { localListenerHasArgument } = await import("./ports-inspect.js");
+      const argument = { flag: "--models-preset", value: "directory with spaces/models.ini" };
+      readProcessCommand.mockReturnValue({ argv: ["llama-server", argument.flag, argument.value] });
+      await expect(localListenerHasArgument(url, argument)).resolves.toBe(true);
+      expect(readProcessCommand).toHaveBeenCalledWith(4242);
+      readProcessCommand.mockReturnValue({
+        argv: ["llama-server", argument.flag, argument.value + ".backup"],
+      });
+      await expect(localListenerHasArgument(url, argument)).resolves.toBe(false);
+      await server[Symbol.asyncDispose]();
+      runCommandWithTimeoutMock.mockClear();
+      await expect(localListenerHasArgument(url, argument)).resolves.toBe(false);
+      expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps process inspection behind the busy-port diagnostics boundary", () => {
     const source = readFileSync(new URL("./ports.ts", import.meta.url), "utf8");
 
