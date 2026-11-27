@@ -52,6 +52,7 @@ import { sanitizeToolUseResultPairingForModel } from "../../session-transcript-r
 import { agentSessionDeferThresholdCompaction } from "../../sessions/agent-session-types.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { boundSessionToolResult } from "../../sessions/session-tool-result-preparation.js";
+import type { SpillOwner } from "../../sessions/tools/private-temp-file.js";
 import { invalidateComputerFrameIfMissing } from "../../tools/computer-tool-shared.js";
 import { resolveAttemptWorkspaceSandbox } from "../../workspace-sandbox.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
@@ -254,6 +255,7 @@ export function installEmbeddedAttemptContextGuards(input: {
   agentDir: string;
   attempt: EmbeddedRunAttemptInternalParams;
   computerContextEpoch: { value: number };
+  spillOwner?: SpillOwner;
   dropThinkingBlocksForEstimate: boolean;
   effectiveCwd: string;
   effectiveFsWorkspaceOnly: boolean;
@@ -416,7 +418,7 @@ export function installEmbeddedAttemptContextGuards(input: {
   const spill =
     input.sandbox?.enabled && input.sandbox.fsBridge
       ? { sandbox: { root: input.sandbox.workspaceDir, bridge: input.sandbox.fsBridge } }
-      : undefined;
+      : { owner: input.spillOwner };
   const previousAfterToolCall = activeSession.agent.afterToolCall;
   activeSession.agent.afterToolCall = async (context, signal) => {
     const update = await previousAfterToolCall?.call(activeSession.agent, context, signal);

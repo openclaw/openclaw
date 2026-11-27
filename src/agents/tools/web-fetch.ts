@@ -49,6 +49,7 @@ import {
   htmlToMarkdown,
   markdownToText,
   truncateWebFetchText,
+  sanitizeWebFetchUrl,
   type ExtractMode,
 } from "./web-fetch-utils.js";
 import {
@@ -315,18 +316,6 @@ function throwIfFetchAborted(signal: AbortSignal | undefined): void {
   throw signal.reason instanceof Error ? signal.reason : new Error("aborted");
 }
 
-// Repair model-injected scheme/authority whitespace; preserve path/query whitespace
-// for the URL parser to percent-encode.
-function sanitizeWebFetchUrl(raw: string): string {
-  let end = raw.length;
-  while (end > 0 && raw.charCodeAt(end - 1) <= 0x20) {
-    end -= 1;
-  }
-  const trimmed = raw.slice(0, end).replace(/^\s+/, "");
-  const repaired = trimmed.replace(/^(https?:\/\/)\s+/i, "$1");
-  return repaired.replace(/^(https?:\/\/[^/?#\s]+)\s+$/i, "$1");
-}
-
 async function buildWebFetchPayload(params: {
   providerId?: string;
   payload: unknown;
@@ -493,6 +482,7 @@ export function createWebFetchTool(options?: {
   sandboxRoot?: string;
   sandboxFsBridge?: SandboxFsBridge;
   agentSessionKey?: string;
+  spillOwner?: PrivateTempFileOptions["owner"];
   runtimeWebFetch?: RuntimeWebFetchMetadata;
   lateBindRuntimeConfig?: boolean;
   lookupFn?: LookupFn;
@@ -506,7 +496,9 @@ export function createWebFetchTool(options?: {
   // another caller fetches the same URL with identical network settings.
   const cacheScope = options?.sandboxed
     ? sha256Hex(JSON.stringify([options.agentSessionKey ?? randomUUID(), options.sandboxRoot]))
-    : undefined;
+    : options?.spillOwner
+      ? sha256Hex(JSON.stringify([options.spillOwner.agentId, options.spillOwner.sessionKey]))
+      : undefined;
   const tool: AnyAgentTool = {
     label: "Web Fetch",
     name: "web_fetch",
@@ -604,10 +596,10 @@ export function createWebFetchTool(options?: {
           ? { ...executionFetch?.ssrfPolicy, hostnameAllowlist }
           : executionFetch?.ssrfPolicy;
         const lookupFn = options?.lookupFn;
-        const fetchOutput = {
+        const fetchOutput: PrivateTempFileOptions = {
           ...(options?.sandboxed
             ? { sandbox: { root: options.sandboxRoot, bridge: options.sandboxFsBridge } }
-            : {}),
+            : { owner: options?.spillOwner }),
           signal,
         };
         const fetchWebPayload = async (): Promise<Record<string, unknown>> => {

@@ -449,6 +449,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
 
         const hostApprovalParams = () => ({
           admitShellDispatch,
+          spillOwner: defaults?.spillOwner,
           approvalTransport,
           command: params.command,
           toolCallId,
@@ -572,6 +573,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         await admitShellDispatch?.();
         run = await runExecProcess({
           command: params.command,
+          spillOwner: defaults?.spillOwner,
           execCommand: execCommandOverride,
           workdir,
           env,
