@@ -44,7 +44,7 @@ function transportLog(subsystem: string): ReturnType<typeof createSubsystemLogge
 }
 
 function strictToolRouteKey(route: OpenAIStrictToolRoute): string {
-  return JSON.stringify([route.api, route.baseUrl, route.model]);
+  return JSON.stringify([route.provider, route.api, route.baseUrl, route.model]);
 }
 
 // The store owns expiry; a process re-reads each route at most hourly, so a long-lived Gateway

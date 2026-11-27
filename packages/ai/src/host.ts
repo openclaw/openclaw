@@ -206,8 +206,13 @@ export interface AiTransportHost {
   };
 }
 
-/** The (api, baseUrl, model) a learned strict-tool rejection belongs to. */
-export type OpenAIStrictToolRoute = { api: string; baseUrl: string; model: string };
+/** The (provider, api, baseUrl, model) a learned strict-tool rejection belongs to. */
+export type OpenAIStrictToolRoute = {
+  provider: string;
+  api: string;
+  baseUrl: string;
+  model: string;
+};
 
 const MAX_PENDING_CUSTOM_API_REGISTRATIONS = 32;
 

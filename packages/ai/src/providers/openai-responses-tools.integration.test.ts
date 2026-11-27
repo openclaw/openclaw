@@ -179,6 +179,7 @@ it("retries a strict-tool refusal once without strict tools and records the rout
   ]);
   expect(recorded).toEqual([
     {
+      provider: responsesLoopbackModel.provider,
       api: responsesLoopbackModel.api,
       baseUrl: responsesLoopbackModel.baseUrl,
       model: responsesLoopbackModel.id,

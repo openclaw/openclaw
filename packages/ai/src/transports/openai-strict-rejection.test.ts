@@ -84,11 +84,19 @@ it("retries once without strict tools, remembers the route, and skips strict nex
   expect((await run(proxyModel)).stopReason).toBe("stop");
   expect(endpoint.sentStrict).toEqual([true, false]);
   expect(endpoint.recorded).toEqual([
-    { api: "openai-completions", baseUrl: "https://proxy.example/v1", model: "proxy-model" },
+    {
+      provider: proxyModel.provider,
+      api: "openai-completions",
+      baseUrl: "https://proxy.example/v1",
+      model: "proxy-model",
+    },
   ]);
 
   expect((await run(proxyModel)).stopReason).toBe("stop");
   expect(endpoint.sentStrict).toEqual([true, false, false]);
+  // Another configured provider on the same URL and model may reach another tenant.
+  await run({ ...proxyModel, provider: "proxy-tenant-b" });
+  expect(endpoint.sentStrict).toEqual([true, false, false, true, false]);
 });
 
 it("does not learn a rejection that the retry without strict also gets", async () => {

@@ -9,8 +9,15 @@ function declaresStrictMode(model: Model): boolean {
   );
 }
 
+// The configured provider is part of the route: two providers can reach different tenants
+// through the same URL and model.
 function strictToolRoute(model: Model): OpenAIStrictToolRoute {
-  return { api: model.api, baseUrl: model.baseUrl ?? "", model: model.id };
+  return {
+    provider: model.provider,
+    api: model.api,
+    baseUrl: model.baseUrl ?? "",
+    model: model.id,
+  };
 }
 
 /** The same route with strict tools off: tools go out non-strict, with their own schemas. */
