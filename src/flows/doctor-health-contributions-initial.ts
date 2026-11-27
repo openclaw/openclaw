@@ -6,6 +6,7 @@ import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { gmailGogCheck } from "./doctor-gmail-gog-check.js";
+import { checkInitialConfigWriteHealthPending } from "./doctor-health-contribution-runners.config-plan.js";
 import { runInitialConfigWriteHealth } from "./doctor-health-contribution-runners.config.js";
 import {
   runClaudeCliHealth,
@@ -55,6 +56,7 @@ export function resolveInitialDoctorHealthContributions(params: {
   return [
     createDoctorHealthContribution("doctor:write-config-migrations", "Write config migrations", {
       required: true,
+      pending: checkInitialConfigWriteHealthPending,
       run: runInitialConfigWriteHealth,
     }),
     createDoctorHealthContribution("doctor:agent-database-admission", "Agent database admission", {
