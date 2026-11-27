@@ -369,7 +369,8 @@ function runner(opts: Opts) {
     fs.writeFileSync(`${serviceFile}.before-update-recovery`, original);
     fs.rmSync(legacy);
   }
-  let schema = (opts.migrates && restarts > 2) || (resumed && opts.past) ? migrated : planned;
+  let schema =
+    (opts.migrates && restarts > 2) || (resumed && opts.past && !opts.stopMs) ? migrated : planned;
   // A resumed runner can find the release still migrating; it holds state until ready.
   let [migrating, alive, running, enabled, failed] = [resumed, 2, true, false, false];
   let loaded = true;
@@ -474,7 +475,8 @@ function runner(opts: Opts) {
     log: (line) => void logs.push(line),
     driverAlive: () => calls.push("driver alive") > 0 && alive-- > 0,
     restarts: async () => restarts,
-    schema: () => schema,
+    // Another state directory holds other stores, or none.
+    schema: () => (opts.stateDir ? null : schema),
     service: gatewayServiceControl(full, run),
     stateDir: () => opts.stateDir ?? stateDir,
     // The migrating Gateway holds the state's maintenance lock.
@@ -532,6 +534,7 @@ const runs: Run[] = [
     "release",
     "stopped",
   ],
+  ["stops the release before giving up", { ...resumed, past: true, stopMs: 3e5 }, "release", SF],
   ["changes nothing when the service cannot move", f("release gateway install"), "original"],
   ["puts back a definition the install sent elsewhere", { elsewhere: "unit" }, "original"],
   ["puts back an environment the install rewrote", { elsewhere: "env" }, "original"],

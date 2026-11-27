@@ -300,6 +300,11 @@ export async function runEarlyGitReleaseRecovery(
       }
       return failed;
     }
+    // The service may run the release, which can still be migrating: stop it and compare the
+    // schemas again before the previous build comes back.
+    if (servesRelease()) {
+      return notReady(`The recovery stopped: ${why}`);
+    }
     const moves = fastForwarded
       ? ` The checkout's branch was fast-forwarded to ${plan.target.slice(0, 11)} but not rebuilt; the Gateway still serves the previous build.`
       : "";
@@ -400,6 +405,18 @@ export async function runEarlyGitReleaseRecovery(
   };
 
   const recover = async (): Promise<boolean> => {
+    // The runner reads and records state through the state directory the service uses; under
+    // another one every schema comparison and record would be about the wrong installation.
+    if (realpath(deps.stateDir()) !== realpath(plan.stateDir)) {
+      log(
+        `stopped before changing the Gateway: this job resolves the state directory ${deps.stateDir()}, not the service's ${plan.stateDir}. Next step: run \`openclaw update\` again from the checkout.`,
+      );
+      // The service never named the release unless an earlier run of this job moved it there.
+      if (!servesRelease()) {
+        await removeRelease();
+      }
+      return false;
+    }
     const restarts = await deps.restarts(plan);
     if (restarts > MAX_RESTARTS) {
       const why = `The recovery was interrupted ${MAX_RESTARTS + 1} times`;
@@ -410,12 +427,6 @@ export async function runEarlyGitReleaseRecovery(
         "early-release-recovery-interrupted",
         `${why}; the Gateway service starts ${servesRelease() ? "the new release" : "the checkout"}.`,
         `from the checkout, run \`${FINISH}\``,
-      );
-    }
-    // The runner reads and records state through the state directory the service uses.
-    if (realpath(deps.stateDir()) !== realpath(plan.stateDir)) {
-      return abandon(
-        `it resolves the state directory ${deps.stateDir()}, not the service's ${plan.stateDir}`,
       );
     }
     // The updater still records its own outcome in the state database; migrating under it races.
