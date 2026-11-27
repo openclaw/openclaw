@@ -596,6 +596,35 @@ describe("installDownloadSpec extraction safety", () => {
           0o755 & ~mask,
         );
       }
+
+      if (archiveType === "zip") {
+        await withDownloadServer(
+          (response) => {
+            response.writeHead(200, {
+              "content-type": "application/octet-stream",
+              "content-disposition": 'attachment; filename="runtime.zip"',
+            });
+            response.end(archive);
+          },
+          async (origin) => {
+            const inferredKey = `${skillKey}-content-disposition`;
+            const inferred = await installDownloadSpec({
+              skillKey: inferredKey,
+              spec: {
+                kind: "download",
+                url: `${origin}/download`,
+                extract: true,
+                stripComponents: 1,
+              },
+              timeoutMs: 30_000,
+            });
+            expect(inferred.ok, inferred.message).toBe(true);
+            await expect(
+              fs.readFile(path.join(resolveSkillToolsRootDir(inferredKey), "run.sh"), "utf8"),
+            ).resolves.toBe(executableContents);
+          },
+        );
+      }
     },
   );
 

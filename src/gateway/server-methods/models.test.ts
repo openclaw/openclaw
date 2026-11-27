@@ -22,7 +22,7 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { assertPluginMetadataSnapshotConsistency } from "../plugin-metadata.test-helpers.js";
 import { WITHOUT_OPENAI_ENV_AUTH } from "../test-helpers.env.js";
-import { listModels, requestModelsList } from "./models-list.test-support.js";
+import { catalogLoader, createModelsListClient } from "./models-list.test-support.js";
 import {
   claudeOptOutConfig,
   EXPECTED_DEMO_IDENTITY,
@@ -94,6 +94,9 @@ vi.mock("../../plugins/provider-thinking.js", () => ({
   },
 }));
 
+// Prepared owner facts use this fixture, including when ambient discovery has bundled decisions.
+const { listModels, requestModelsList } = createModelsListClient(modelPluginMetadataSnapshot);
+
 const withoutOpenAIEnvAuth = async <T>(run: () => Promise<T>): Promise<T> =>
   await withEnvAsync({ ...WITHOUT_OPENAI_ENV_AUTH }, run);
 
@@ -151,10 +154,6 @@ function createDemoOAuthStore(params: { access: string; expires: number }) {
       },
     },
   };
-}
-
-function catalogLoader(entries: Array<Record<string, unknown>>) {
-  return vi.fn(async () => entries);
 }
 
 function expectModels(respond: ReturnType<typeof vi.fn>, models: unknown) {

@@ -86,7 +86,7 @@ beforeEach(() => {
   root = path.join(home, "prefix", "lib", "node_modules", "openclaw");
   const stateDir = path.join(home, "profile");
   fs.mkdirSync(root, { recursive: true });
-  fs.mkdirSync(stateDir);
+  fs.mkdirSync(stateDir, { mode: 0o700 });
   writeFixtureJsonSync(path.join(root, "package.json"), { name: "openclaw", version: "2026.9.1" });
   configPath = path.join(stateDir, "openclaw.json");
   contextPath = path.join(home, "context.json");
