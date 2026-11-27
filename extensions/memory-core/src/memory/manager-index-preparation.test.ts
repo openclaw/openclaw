@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { serialize } from "node:v8";
+import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 import { expect, it } from "vitest";
 import {
   prepareMemoryIndexChunks,
@@ -79,3 +80,29 @@ it.each([undefined, { id: "test", maxInputTokens: 4096 }])(
     expect(serialize(prepared).byteLength).toBeLessThan(80 * 1024);
   },
 );
+
+it("bounds heading-only merges to the chunker's maximum characters", () => {
+  // A long run of headings with no body text previously merged without limit.
+  const content = Array.from({ length: 200 }, (_, index) => `###### heading ${index}`).join("\n");
+  const { chunks } = prepareHeading(content, 0);
+  const maxChars = 8 * 4 + 1; // chunking.tokens * estimate; the chunker charges one separator
+  expect(Math.max(...chunks.map((chunk) => chunk.text.length))).toBeLessThanOrEqual(maxChars);
+  expect(chunks.length).toBeGreaterThan(1);
+  expect(chunks.map((chunk) => chunk.text).join("\n")).toBe(content);
+});
+
+it("measures heading-only merges with the weighted estimator, not raw length", () => {
+  // Two headings fit the raw ceiling but exceed the weighted one, so a raw
+  // length check would merge them while the chunker budget must not.
+  const heading = "###### 中文标题甲";
+  const content = Array.from({ length: 30 }, () => heading).join("\n");
+  const { chunks } = prepareHeading(content, 0);
+  const maxChars = 8 * 4 + 1;
+  const weighted = (text: string) =>
+    text.split("\n").reduce((total, line) => total + estimateStringChars(line) + 1, 0);
+
+  expect((heading + "\n" + heading).length).toBeLessThanOrEqual(maxChars);
+  expect(weighted(heading + "\n" + heading)).toBeGreaterThan(maxChars);
+  expect(chunks.map((chunk) => chunk.text)).toEqual(Array.from({ length: 30 }, () => heading));
+  expect(Math.max(...chunks.map((chunk) => weighted(chunk.text)))).toBeLessThanOrEqual(maxChars);
+});

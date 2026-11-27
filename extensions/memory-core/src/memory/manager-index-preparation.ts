@@ -4,7 +4,9 @@ import {
   extractCuratedEntryRecallMetadata,
   enforceEmbeddingMaxInputTokens,
   hashText,
+  estimateMarkdownChunkChars,
   remapChunkLines,
+  resolveMarkdownChunkMaxChars,
   stripMemoryAnnotationCarriers,
   type MemoryChunk,
   type MemoryEntryProvenance,
@@ -65,6 +67,10 @@ export function prepareMemoryIndexChunks({
   // All chunks share one source snapshot; splitting per chunk makes indexing quadratic.
   const sourceLines = source === "memory" ? content.replace(/\r\n/gu, "\n").split("\n") : [];
   const chunkOptions = { ...chunking, perEntry };
+  // Heading-only merge must not cross the chunker's own ceiling; otherwise a
+  // long run of headings becomes one embedding input larger than the provider
+  // accepts and the whole rebuild aborts.
+  const maxChunkChars = resolveMarkdownChunkMaxChars(chunking);
   const baseChunks: MemoryChunk[] = [];
   for (const chunk of source === "sessions"
     ? chunkSessionContentAtResetBoundary({
@@ -97,10 +103,19 @@ export function prepareMemoryIndexChunks({
       const following = chunk.text
         .split("\n")
         .slice(Math.max(0, previous.endLine - chunk.startLine + 1));
-      chunk.text = [previous.text, ...following].join("\n");
-      chunk.startLine = previous.startLine;
-      chunk.hash = hashText(chunk.text);
-      baseChunks.pop();
+      const merged = [previous.text, ...following].join("\n");
+      // Attaching a heading to its following body stays intact; only a run of
+      // heading-only chunks is bounded, because that is the merge that can grow
+      // without limit and exceed the embedding provider's input limit.
+      const nextIsHeadingOnly = chunk.text
+        .split("\n")
+        .every((line) => !line.trim() || /^ {0,3}#{1,6}(?:\s|$)/u.test(line));
+      if (!nextIsHeadingOnly || estimateMarkdownChunkChars(merged) <= maxChunkChars) {
+        chunk.text = merged;
+        chunk.startLine = previous.startLine;
+        chunk.hash = hashText(chunk.text);
+        baseChunks.pop();
+      }
     }
     chunk.provenance = resolveChunkProvenance(entry, source, chunk, pathClassification.originClass);
     baseChunks.push(chunk);
