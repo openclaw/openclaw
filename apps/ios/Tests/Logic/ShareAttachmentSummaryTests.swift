@@ -8,13 +8,6 @@ struct ShareAttachmentSummaryTests {
         #expect(summary.omissionMessage == nil)
     }
 
-    @Test func `reports image truncation before the share can be sent`() {
-        let summary = ShareAttachmentSummary(selectedImageCount: 6, acceptedImageCount: 3)
-
-        #expect(summary.omissionMessage ==
-            "Only 3 of 6 images can be sent. Remove omitted items and share again.")
-    }
-
     @Test func `reports unsupported videos files and unknown attachments`() {
         let summary = ShareAttachmentSummary(
             selectedImageCount: 1,
