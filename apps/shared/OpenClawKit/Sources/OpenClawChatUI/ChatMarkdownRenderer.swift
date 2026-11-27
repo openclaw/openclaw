@@ -34,20 +34,21 @@ struct ChatMarkdownRenderer: View {
             self == .response ? .hierarchy : .prose
         }
 
-        var proseFont: Font {
+        func proseFont(textScale: CGFloat) -> Font {
             self == .response
-                ? OpenClawChatTypography.body
-                : OpenClawChatTypography.callout.italic()
+                ? OpenClawChatTypography.body(size: 17, weight: .regular, relativeTo: .body, textScale: textScale)
+                : OpenClawChatTypography.body(
+                    size: 16, weight: .regular, relativeTo: .callout, textScale: textScale).italic()
         }
 
         var inlineMath: InlineMathTypography {
             self == .response ? .body : .callout
         }
 
-        func headingFont(level: Int) -> Font {
+        func headingFont(level: Int, textScale: CGFloat) -> Font {
             switch self.headingStyle {
-            case .hierarchy: OpenClawChatTypography.heading(level: level)
-            case .prose: self.proseFont
+            case .hierarchy: OpenClawChatTypography.heading(level: level, textScale: textScale)
+            case .prose: self.proseFont(textScale: textScale)
             }
         }
     }
@@ -74,6 +75,7 @@ struct ChatMarkdownRenderer: View {
 
     var reveal: ChatMarkdownProseReveal?
 
+    @Environment(\.openClawChatTextScale) private var textScale
     @ScaledMetric private var inlineMathFontSize: CGFloat
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.openURL) private var parentOpenURL
@@ -227,7 +229,7 @@ struct ChatMarkdownRenderer: View {
         switch block {
         case let .prose(prose):
             self.proseText(prose, index: index, fileLabels: fileLabels)
-                .font(self.typography.proseFont)
+                .font(self.typography.proseFont(textScale: self.textScale))
                 .foregroundStyle(self.textColor)
                 .tint(self.linkColor)
                 .textSelection(.enabled)
@@ -235,7 +237,7 @@ struct ChatMarkdownRenderer: View {
                 .modifier(ChatInlineMathAccessibilityModifier(label: prose.inlineAccessibilityText))
         case let .heading(level, prose):
             self.proseText(prose, index: index, fileLabels: fileLabels)
-                .font(self.typography.headingFont(level: level))
+                .font(self.typography.headingFont(level: level, textScale: self.textScale))
                 .foregroundStyle(self.textColor)
                 .tint(self.linkColor)
                 .textSelection(.enabled)
@@ -280,7 +282,7 @@ struct ChatMarkdownRenderer: View {
     private func proseText(_ prose: ChatMarkdownProse, index: Int, fileLabels: [String: String]?) -> SwiftUI.Text {
         guard let reveal = self.reveal, reveal.blockIndex == index else {
             return prose.renderedText(
-                fontSize: self.inlineMathFontSize,
+                fontSize: self.inlineMathFontSize * self.textScale,
                 textColor: self.textColor,
                 colorScheme: self.colorScheme,
                 fileLabels: fileLabels)

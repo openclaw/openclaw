@@ -9,6 +9,7 @@ import UIKit
 @MainActor
 struct ChatCodeBlockView: View {
     let block: ChatCodeBlock
+    @Environment(\.openClawChatTextScale) private var textScale
 
     var body: some View {
         #if os(iOS) || os(macOS)
@@ -38,7 +39,7 @@ struct ChatCodeBlockView: View {
             .foregroundStyle(.secondary)
             ScrollView(.horizontal, showsIndicators: false) {
                 Text(self.attributedCode)
-                    .font(OpenClawChatTypography.mono(size: 13, relativeTo: .footnote))
+                    .font(OpenClawChatTypography.mono(size: 13, relativeTo: .footnote, textScale: self.textScale))
                     .foregroundStyle(OpenClawChatTheme.assistantText)
                     .lineSpacing(2)
                     .textSelection(.enabled)
@@ -68,6 +69,7 @@ struct ChatCodeBlockView: View {
 struct ChatMathBlockView: View {
     let block: ChatMathBlock
     let textColor: Color
+    @Environment(\.openClawChatTextScale) private var textScale
 
     @ScaledMetric(relativeTo: .body) private var fontSize: CGFloat = OpenClawChatTypography.bodySize
 
@@ -78,7 +80,7 @@ struct ChatMathBlockView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 ChatMathPlatformView(
                     latex: self.block.latex,
-                    fontSize: self.fontSize,
+                    fontSize: self.fontSize * self.textScale,
                     textColor: self.textColor)
                     .fixedSize()
                     .accessibilityElement(children: .ignore)
@@ -146,6 +148,7 @@ extension ChatMathPlatformView {
 @MainActor
 struct ChatMarkdownTableView: View {
     let table: ChatMarkdownTable
+    @Environment(\.openClawChatTextScale) private var textScale
     let typography: ChatMarkdownRenderer.Typography
 
     /// Padding the card adds on both sides of the grid.
@@ -246,8 +249,9 @@ struct ChatMarkdownTableView: View {
     private func cell(_ text: String, isHeader: Bool, column: Int) -> some View {
         // Cells read at the size of the reply's body text; a fixed footnote size stayed
         // smaller than the surrounding prose at every Dynamic Type setting.
-        ChatMarkdownInlineChips.text(ChatMarkdownInlineChips.inlineMarkdown(text), fileLabels: self.fileLabels)
-            .font(isHeader ? self.typography.proseFont.weight(.semibold) : self.typography.proseFont)
+        let font = self.typography.proseFont(textScale: self.textScale)
+        return ChatMarkdownInlineChips.text(ChatMarkdownInlineChips.inlineMarkdown(text), fileLabels: self.fileLabels)
+            .font(isHeader ? font.weight(.semibold) : font)
             .foregroundStyle(OpenClawChatTheme.assistantText)
             .textSelection(.enabled)
             // Grid cells otherwise accept compressed row proposals and ellipsize wrapped text.
@@ -276,6 +280,7 @@ struct ChatMarkdownListView: View {
     let list: ChatMarkdownList
     let context: ChatMarkdownRenderer.Context
     let variant: ChatMarkdownVariant
+    @Environment(\.openClawChatTextScale) private var textScale
     let typography: ChatMarkdownRenderer.Typography
     let textColor: Color
     var isStreaming = false
@@ -291,7 +296,7 @@ struct ChatMarkdownListView: View {
                     VStack(alignment: .leading, spacing: 7) {
                         if self.list.items[index].content.isEmpty {
                             Text(verbatim: " ")
-                                .font(self.typography.proseFont)
+                                .font(self.typography.proseFont(textScale: self.textScale))
                         } else {
                             ForEach(self.list.items[index].content.indices, id: \.self) { contentIndex in
                                 self.content(self.list.items[index].content[contentIndex])
@@ -314,14 +319,14 @@ struct ChatMarkdownListView: View {
         HStack(spacing: 4) {
             if let text = marker.text {
                 Text(verbatim: text)
-                    .font(self.typography.proseFont)
+                    .font(self.typography.proseFont(textScale: self.textScale))
                     .foregroundStyle(self.textColor)
                     .monospacedDigit()
                     .accessibilityLabel(self.markerAccessibilityLabel(at: index))
             }
             if let checkbox = marker.checkbox {
                 Image(systemName: checkbox == .checked ? "checkmark.square.fill" : "square")
-                    .font(self.typography.proseFont)
+                    .font(self.typography.proseFont(textScale: self.textScale))
                     .foregroundStyle(self.textColor)
                     .accessibilityLabel(Text(self.checkboxAccessibilityLabel(checkbox)))
             }

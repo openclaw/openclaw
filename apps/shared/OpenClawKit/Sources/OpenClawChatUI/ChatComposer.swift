@@ -856,8 +856,7 @@ struct OpenClawChatComposer: View {
         ZStack(alignment: editorOverlayAlignment) {
             #if !os(macOS)
             if self.viewModel.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Text(self.placeholderText)
-                    .font(OpenClawChatTypography.body)
+                ChatScaledPlaceholder(text: self.placeholderText)
                     .foregroundStyle(.tertiary)
                     .padding(.horizontal, self.cleanFieldTextInset)
                     .padding(.vertical, self.composerChrome == .clean ? 0 : 4)

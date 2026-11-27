@@ -48,7 +48,7 @@ struct ChatMarkdownTableCompactWidthTests {
             of: Self.reply(Self.pitchTableMarkdown(bodyRows: 2)),
             width: wide)
         let cellPitch = twoRowInkHeight - oneRowInkHeight
-        let prosePitch = try Self.probePitch(font: ChatMarkdownRenderer.Typography.response.proseFont)
+        let prosePitch = try Self.probePitch(font: ChatMarkdownRenderer.Typography.response.proseFont(textScale: 1))
         let footnotePitch = try Self.probePitch(font: OpenClawChatTypography.footnote)
         // One extra body row adds one cell line plus the grid's vertical spacing, and the probes are
         // built with that same spacing, so all three pitches measure the cell's rendered line height.
