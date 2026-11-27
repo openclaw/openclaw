@@ -93,6 +93,15 @@ function mountOwnedComposer(overrides: Partial<ChatComposerProps> = {}) {
   return { owner, state, view, input, enter };
 }
 
+it("makes file-reference opt-in actionable only after session admission", () => {
+  const view = mountComposer({ sessionAdmitted: false });
+  const optIn = view.query<HTMLInputElement>(".composer-file-references input[type=checkbox]");
+  expect(optIn?.disabled).toBe(true);
+  view.update({ sessionAdmitted: true });
+  flush();
+  expect(optIn?.disabled).toBe(false);
+});
+
 it("rebinds the native composer when its pane presentation changes", () => {
   const { view, input, owner } = mountOwnedComposer({ paneId: "single" });
   view.update({ paneId: "plugin-app:agent:main:one" });

@@ -31,6 +31,8 @@ class FileReferenceChip extends WidgetType {
   toDOM(view: EditorView) {
     const span = view.dom.ownerDocument.createElement("span");
     span.className = "chat-composer-file-reference";
+    span.style.cssText =
+      "padding-inline:3px;border:1px solid var(--border);border-radius:4px;background:var(--bg-accent);unicode-bidi:isolate";
     span.textContent = this.text;
     span.dir = "auto";
     span.title = `${this.root}: ${this.path}`;

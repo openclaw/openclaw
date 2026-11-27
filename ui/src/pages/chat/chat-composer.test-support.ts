@@ -18,6 +18,7 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import type { ChatProps } from "./chat-view-frame.ts";
+import { ComposerFileReferences } from "./components/chat-composer-file-references.tsx";
 import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import type { ChatComposerProps } from "./components/chat-composer-types.ts";
 import { ChatComposer, resetChatComposerState } from "./components/chat-composer.tsx";
@@ -86,7 +87,10 @@ export function renderComposerInto(container: HTMLElement, props: ComposerProps)
     const view = mountSolid(
       () => {
         const questions = createComposerQuestions(props.paneId, current);
-        return createComponent(ChatComposer, merge(current, { questions }));
+        return createComponent(
+          ChatComposer,
+          merge({ fileReferenceControls: ComposerFileReferences }, current, { questions }),
+        );
       },
       {
         container,

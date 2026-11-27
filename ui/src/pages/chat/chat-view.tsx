@@ -32,6 +32,7 @@ import { ChatTranscript, type ChatTranscriptInput } from "./chat-view-transcript
 import type { ChatActivityPillsProps } from "./components/chat-activity-pills-types.ts";
 import { publicationOutsidePills } from "./components/chat-activity-pills-visibility.ts";
 import { ChatCommentController } from "./components/chat-comment-controller.ts";
+import { ComposerFileReferences } from "./components/chat-composer-file-references.tsx";
 import { ChatComposerPluginContributions } from "./components/chat-composer-plugin-contributions.tsx";
 import {
   ComposerQuestionDock,
@@ -222,6 +223,7 @@ function ChatComposerView(input: ChatViewInput) {
     <ChatComposer
       {...input.props}
       questions={input.questions}
+      fileReferenceControls={ComposerFileReferences}
       getTranscriptElement={input.getTranscriptElement}
       getScrollToLatestElement={input.getScrollToLatestElement}
       progressCard={showProgress() ? input.props.progressCard : null}

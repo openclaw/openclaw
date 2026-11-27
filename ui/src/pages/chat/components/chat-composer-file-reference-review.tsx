@@ -1,11 +1,17 @@
 import { For, Show } from "solid-js";
+import { registerChatFileReferenceReviewEnglish } from "../../../i18n/locales/en-chat-file-reference-review.ts";
 import { fileReferenceText } from "../../../lib/chat/file-references.ts";
 import { focusComposerInput } from "../../../lib/composer-input.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { ComposerFileReferenceOwner } from "../composer-file-references.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
 export { ComposerFileReferenceOwner } from "../composer-file-references.ts";
+
+registerEnglishCatalog(registerChatFileReferenceReviewEnglish);
+
+const optionStyle = "display:flex;align-items:flex-start;gap:8px";
+const pathStyle = "overflow-wrap:anywhere;white-space:pre-wrap";
 
 const phaseCopy = {
   idle: "idle",
@@ -59,7 +65,7 @@ export default function ComposerFileReferenceReview(props: {
       <Show when={read().enabled}>
         <p class="muted">{t("chat.fileReferences.instructions")}</p>
         <p class="muted">{t("chat.fileReferences.privacy")}</p>
-        <label class="composer-file-references__option">
+        <label class="composer-file-references__option" style={optionStyle}>
           <input
             type="checkbox"
             checked={read().literal}
@@ -67,7 +73,7 @@ export default function ComposerFileReferenceReview(props: {
           />
           {t("chat.fileReferences.literal")}
         </label>
-        <label class="composer-file-references__option">
+        <label class="composer-file-references__option" style={optionStyle}>
           <input
             type="checkbox"
             checked={read().commandMode}
@@ -86,6 +92,7 @@ export default function ComposerFileReferenceReview(props: {
       <Show when={read().open}>
         <div
           class="composer-file-references__review"
+          style={{ "max-height": "55vh", "overflow-y": "auto" }}
           onKeyDown={(event) => {
             if (event.key === "Escape") {
               event.preventDefault();
@@ -134,25 +141,25 @@ export default function ComposerFileReferenceReview(props: {
             <For each={read().candidates}>
               {(candidate) => (
                 <div class="composer-file-references__candidate">
-                  <label class="composer-file-references__option">
+                  <label class="composer-file-references__option" style={optionStyle}>
                     <input
                       type="radio"
                       name={`${props.paneId}-file-reference`}
                       checked={read().selected?.objectId === candidate.reference.objectId}
                       onChange={() => props.owner.select(candidate.reference.objectId)}
                     />
-                    <bdi class="composer-file-references__path">
+                    <bdi class="composer-file-references__path" style={pathStyle}>
                       {fileReferenceText(candidate.reference).slice(1)}
                     </bdi>
                   </label>
                   <details>
                     <summary>{t("chat.fileReferences.inspect")}</summary>
                     <p>
-                      <bdi class="composer-file-references__path">
+                      <bdi class="composer-file-references__path" style={pathStyle}>
                         {candidate.reference.rootLabel}
                       </bdi>
                     </p>
-                    <code class="composer-file-references__path" dir="auto">
+                    <code class="composer-file-references__path" style={pathStyle} dir="auto">
                       {fileReferenceText(candidate.reference).slice(1)}
                     </code>
                   </details>

@@ -1,6 +1,16 @@
 import type { FileReferenceSource } from "../composer-file-references.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
+export function isComposerFileReferenceEligible(props: ChatComposerProps): boolean {
+  return (
+    props.canCompose !== false &&
+    props.sessionAdmitted !== false &&
+    !props.suggestionComposer &&
+    !props.goalDraftMode &&
+    props.pluginActionsPresented !== false
+  );
+}
+
 export function readComposerFileReferenceSource(
   props: ChatComposerProps,
   state: Pick<ChatComposerState, "editRevision" | "composerTextarea">,
@@ -16,12 +26,7 @@ export function readComposerFileReferenceSource(
     target: state.composerTextarea,
     // The opt-in control explicitly selects the English command grammar.
     locale: "en-US",
-    eligible:
-      props.canCompose !== false &&
-      props.sessionAdmitted !== false &&
-      !props.suggestionComposer &&
-      !props.goalDraftMode &&
-      props.pluginActionsPresented !== false,
+    eligible: isComposerFileReferenceEligible(props),
     request: (params) =>
       client
         ? client.request("sessions.files.references", params)

@@ -1,6 +1,6 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import type { JSX } from "@solidjs/web";
-import type { Accessor, Signal, StoreSetter } from "solid-js";
+import type { Accessor, Component, Signal, StoreSetter } from "solid-js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type {
   GatewaySessionRow,
@@ -223,6 +223,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
     component: typeof ChatPaneModelControl;
   };
   footerContent?: JSX.Element;
+  fileReferenceControls?: Component<{ composer: ChatComposerProps; state: ChatComposerState }>;
   /** False while the pane is retained but hidden; plugin composer actions retire then. */
   pluginActionsPresented?: boolean;
   composerRecovery?:

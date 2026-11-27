@@ -5,7 +5,10 @@ import { focusComposerInput } from "../../../lib/composer-input.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
 import type { ComposerFileReferenceOwner } from "../composer-file-references.ts";
-import { readComposerFileReferenceSource } from "./chat-composer-file-reference-options.ts";
+import {
+  isComposerFileReferenceEligible,
+  readComposerFileReferenceSource,
+} from "./chat-composer-file-reference-options.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 
@@ -103,13 +106,20 @@ export function ComposerFileReferences(props: {
     }
   };
   return (
-    <section class="composer-file-references">
-      <label class="composer-file-references__option">
+    <section class="composer-file-references" style={{ padding: "6px 12px" }}>
+      <label
+        class="composer-file-references__option"
+        style={{ display: "flex", "align-items": "flex-start", gap: "8px" }}
+      >
         <input
           type="checkbox"
           checked={projection()?.read().enabled ?? false}
           aria-busy={loading() ? "true" : undefined}
-          disabled={loading() || !props.composer.connected || props.composer.canCompose === false}
+          disabled={
+            loading() ||
+            !props.composer.connected ||
+            !isComposerFileReferenceEligible(props.composer)
+          }
           onChange={(event) => void enable(event.currentTarget)}
         />
         {t("chat.fileReferences.enable")}
