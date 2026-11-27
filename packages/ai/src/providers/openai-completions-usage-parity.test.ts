@@ -138,23 +138,16 @@ const scenarios: UsageScenario[] = [
     },
     expectedCost: billedCost,
   })),
-  ...(
-    [
-      ["BYOK fee plus upstream inference cost", { upstream_inference_cost: 0.0009 }, 0.00095],
-      ["BYOK fee without upstream cost keeps estimate", {}, 0.000271],
-    ] as const
-  ).map(([name, cost_details, expectedCost]) => ({
-    name,
-    cost: tieredCost,
-    usage: wireUsage(101, 20, {
-      prompt_tokens_details: { cached_tokens: 76 },
-      cost: 0.00005,
+  usageCase(
+    "OpenRouter BYOK fee plus upstream inference cost",
+    wireUsage(32, 5, {
+      cost: 0.000001,
       is_byok: true,
-      cost_details,
+      cost_details: { upstream_inference_cost: 0.0000156 },
     }),
-    expectedUsage: tokenBuckets(25, 20, 76, 0),
-    expectedCost,
-  })),
+    { ...tokenBuckets(32, 5, 0, 0), cost: { totalOrigin: "provider-billed" } },
+    { expectedCost: 0.0000166 },
+  ),
   usageCase(
     "explicit zero reasoning tokens",
     wireUsage(10, 5, { completion_tokens_details: { reasoning_tokens: 0 } }),
