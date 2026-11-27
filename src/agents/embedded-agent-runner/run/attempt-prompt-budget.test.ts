@@ -20,7 +20,7 @@ import { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 import { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
 import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 
-// Prompt assembly consumes the prepared provider handle; discovery belongs to attempt setup.
+// mock-isolation: Prompt assembly consumes the prepared provider handle; discovery belongs to attempt setup.
 vi.mock("../../../plugins/providers.runtime-core.js", () => {
   const reject = () => {
     throw new Error("Prompt budget fixture unexpectedly discovered provider runtime");
