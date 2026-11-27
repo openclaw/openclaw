@@ -413,7 +413,22 @@ function introducesNullValue(previous: unknown, converted: unknown): boolean {
  * properties and array items. Union branches are never projected that way (their tool stays
  * non-strict), so a null inside a branch is the tool's own value and is left alone.
  */
-function dropNullOptionalArguments(args: unknown, schema: unknown, root: unknown): void {
+function dropNullOptionalArguments(args: unknown, initialSchema: unknown, root: unknown): void {
+  if (!isObjectBackedRecord(initialSchema)) {
+    return;
+  }
+  // Follow local references the strict projection inlined, as the rest of validation does.
+  let node: JsonSchemaObject = initialSchema;
+  const seen = new Set<JsonSchemaObject>();
+  while (!seen.has(node)) {
+    seen.add(node);
+    const target = resolveRootSchemaRef(node, isJsonSchemaObject(root) ? root : undefined);
+    if (!target) {
+      break;
+    }
+    node = target;
+  }
+  const schema = node;
   if (!isObjectBackedRecord(schema)) {
     return;
   }

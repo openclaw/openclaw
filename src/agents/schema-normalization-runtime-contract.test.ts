@@ -30,9 +30,9 @@ function preparedTools() {
   });
 }
 
-it("keeps HTTP Responses strict decisions stable for the same tool set", () => {
+it("decides HTTP Responses strict per tool: one permissive tool no longer downgrades the rest", () => {
   const httpParams = responseParams([strictTool(), permissiveTool()] as never);
-  expect(httpParams.tools?.map((tool) => tool.strict)).toEqual([false, false]);
+  expect(httpParams.tools?.map((tool) => tool.strict)).toEqual([true, false]);
 });
 
 it("normalizes raw parameter-free schemas for HTTP Responses", () => {

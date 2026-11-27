@@ -121,6 +121,19 @@ describe.each(profiles)("validateToolArguments (%s)", (profile) => {
     );
     expect(validate({ path: "a.md", mode: null })).toEqual({ path: "a.md" });
   });
+  // The strict projection inlines referenced objects, so their optional nulls mean absent too.
+  it("drops null for an optional key inside a referenced object", () => {
+    const validate = validator(
+      objectSchema(
+        { options: ref("Options") },
+        {
+          required: ["options"],
+          $defs: { Options: objectSchema({ offset: integer }, { required: [] }) },
+        },
+      ),
+    );
+    expect(validate({ options: { offset: null } })).toEqual({ options: {} });
+  });
   it.each([
     { label: "a missing required field", value: {} },
     { label: "an invalid field type", value: { leaf: "invalid" } },
