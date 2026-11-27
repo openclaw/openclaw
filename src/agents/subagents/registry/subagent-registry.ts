@@ -541,7 +541,7 @@ export const listCollectorRunsForRequester = publicApi.listCollectorRunsForReque
 export const completeCollectorLaunchCleanup = publicApi.completeCollectorLaunchCleanup;
 export const recordSwarmStructuredOutput = publicApi.recordSwarmStructuredOutput;
 export const listSwarmRunsForGroup = publicApi.listSwarmRunsForGroup;
-export const getSwarmRunByLaunchReplayKey = publicApi.getSwarmRunByLaunchReplayKey;
+export const resolveSwarmLaunchReplay = publicApi.resolveSwarmLaunchReplay;
 export const countActiveRunsForSession = publicApi.countActiveRunsForSession;
 export function initSubagentRegistry() {
   return subagentRestorer.restoreOnce();

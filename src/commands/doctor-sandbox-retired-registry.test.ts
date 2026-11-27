@@ -30,6 +30,8 @@ beforeEach(() => {
 const repair = (shouldRepair = true) =>
   registry.maybeRepairSandboxRegistryFiles({ shouldRepair }, () => {});
 const inspect = registry.detectLegacySandboxRegistryFileIssues;
+const pending = (shouldRepair = true) =>
+  registry.checkSandboxRegistryFilesPending({ shouldRepair });
 
 it.each([
   { name: "browsers.json", sharded: false, bytes: "{malformed original bytes\n" },
@@ -45,6 +47,8 @@ it.each([
     fs.symlinkSync(at("missing-archive"), `${source}.migrated`);
   }
 
+  await expect(pending()).resolves.toBe("work");
+  await expect(pending(false)).resolves.toBe("none");
   await repair(false);
   expect(note).toHaveBeenCalledWith(expect.stringContaining("doctor --fix"), "Sandbox");
   const issues = await inspect();
@@ -60,6 +64,7 @@ it.each([
   expect(fs.existsSync(source)).toBe(false);
   expect(fs.readFileSync(archive, "utf8")).toBe(bytes);
   expect(await inspect()).toEqual([]);
+  await expect(pending()).resolves.toBe("none");
   expect(note).toHaveBeenLastCalledWith(expect.stringContaining(archive), "Sandbox");
   if (occupied) {
     expect(fs.readlinkSync(`${source}.migrated`)).toBe(at("missing-archive"));
@@ -86,6 +91,7 @@ it("refuses an uninspectable source path instead of treating it as absent", asyn
 it("leaves current installations alone when retired registry paths are absent", async () => {
   fs.writeFileSync(at("current-state"), "current installation");
   expect(await inspect()).toEqual([]);
+  await expect(pending()).resolves.toBe("none");
   await repair();
   expect(note).not.toHaveBeenCalled();
   expect(fs.readdirSync(fixture.root)).toEqual(["current-state"]);

@@ -305,6 +305,8 @@ describe("production lint suppressions", () => {
         "src/agents/session-dirs.ts|unicorn/no-array-sort|1",
         // Binary output must escape C0/C1 bytes while preserving tab, LF and CR.
         "src/agents/shell-utils.ts|no-control-regex|1",
+        // Swarm summaries sort only their freshly materialized private arrays.
+        "src/agents/subagents/registry/subagent-session-swarm-summary.ts|unicorn/no-array-sort|2",
         "src/agents/tool-schema-hints.ts|unicorn/no-array-sort|1",
         // MCP catalog metadata is snapshotted through JSON so undefined members are dropped.
         "src/agents/tool-search-prepared-catalog.ts|unicorn/prefer-structured-clone|1",
@@ -367,7 +369,6 @@ describe("production lint suppressions", () => {
         "src/gateway/session-list-view-cache.ts|unicorn/no-new-array|1",
         "src/gateway/session-row-presentation.ts|unicorn/no-array-sort|1",
         "src/gateway/session-sharing-read.ts|unicorn/no-array-sort|1",
-        "src/gateway/session-swarm-summary.ts|unicorn/no-array-sort|2",
         // Node worker ports do not accept a browser target origin.
         "src/gateway/system-ca-warmup.worker.ts|unicorn/require-post-message-target-origin|1",
         "src/hooks/module-loader.ts|typescript/no-unnecessary-type-parameters|1",

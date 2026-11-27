@@ -1466,16 +1466,14 @@ describe("runCopilotAttempt", () => {
       );
       if (toolsAllow?.length === 0) {
         expect(submitted.tools).toEqual([]);
-        expect(content).not.toContain("Available deferred-schema tools:");
+        expect(content).not.toContain("Deferred tools:");
         expect(content).not.toContain("fixture_allowed");
       } else {
-        expect(content).toContain("Available deferred-schema tools:");
-        expect(content).toContain("fixture_allowed");
-        expect(content).toContain("Allowed catalog capability.");
+        expect(content).toContain("Deferred tools: fixture_allowed");
+        expect(content).not.toContain("Allowed catalog capability.");
         expect(submitted.tools?.map((tool) => tool.name)).not.toContain("fixture_allowed");
-        expect(content).toContain("Deferred names are not directly callable.");
-        expect(content).toContain("Call dispatch_action");
-        expect(content).not.toContain("Call a unique deferred tool name directly");
+        expect(content).toContain("not directly callable: call dispatch_action");
+        expect(content).not.toContain("Call a unique name directly");
         expect(content).not.toContain("fixture_denied");
       }
       expect(config.tools.toolSearch.mode).toBe("tools");
