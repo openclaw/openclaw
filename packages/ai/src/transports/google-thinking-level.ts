@@ -1,4 +1,17 @@
+import type { ThinkingLevelMap } from "@openclaw/llm-core";
 import { isGoogleGemini3ProModel, isGoogleGemini4Model } from "../internal/google-model-family.js";
+
+/**
+ * Reports whether a model row opts into Google's XHIGH thinking level.
+ * Live Vertex contract on 2026-11-12: gemini-4-hydrogen accepts thinkingLevel XHIGH and
+ * gemini-4-carbon rejects it with HTTP 400, so support comes from the catalog row
+ * (`thinkingLevelMap.xhigh: "xhigh"`) rather than the model family.
+ */
+export function googleSupportsXHighThinking(model: {
+  thinkingLevelMap?: ThinkingLevelMap;
+}): boolean {
+  return model.thinkingLevelMap?.xhigh === "xhigh";
+}
 
 /** Reports MINIMAL support for Gemini 3 and 4 thinkingLevel models. */
 export function googleFlashSupportsMinimalThinking(modelId: string): boolean {

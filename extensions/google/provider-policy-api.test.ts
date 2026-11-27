@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { GOOGLE_GEMINI_TEXT_MODEL_BY_ID } from "./provider-catalog.js";
 import {
   normalizeConfig,
   resolveFastModeSupport,
@@ -141,6 +142,19 @@ describe("google provider policy public artifact", () => {
       expect(thinking(modelId)?.preserveWhenCatalogReasoningFalse).toBe(true);
     },
   );
+
+  it.each([
+    ["gemini-4-hydrogen", true],
+    ["gemini-4-argon", false],
+  ] as const)("offers xhigh for the bundled %s row: %s", (modelId, expected) => {
+    const levels = resolveThinkingProfile({
+      provider: "google-vertex",
+      modelId,
+      reasoning: true,
+      thinkingLevelMap: GOOGLE_GEMINI_TEXT_MODEL_BY_ID.get(modelId)?.thinkingLevelMap,
+    })?.levels.map(({ id }) => id);
+    expect(levels?.includes("xhigh")).toBe(expected);
+  });
 
   it("honors catalog reasoning=false for non-thinking-level Google models", () => {
     expect(thinking("gemma-4-26b-a4b-it")).toBeUndefined();

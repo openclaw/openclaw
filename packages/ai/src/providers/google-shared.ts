@@ -10,7 +10,10 @@ import {
 import { isGoogleGemini3ThinkingLevelModel } from "../internal/google-model-family.js";
 import { clampThinkingLevel } from "../model-utils.js";
 import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
-import { googleFlashSupportsMinimalThinking } from "../transports/google-thinking-level.js";
+import {
+  googleFlashSupportsMinimalThinking,
+  googleSupportsXHighThinking,
+} from "../transports/google-thinking-level.js";
 import {
   awaitProviderLifecycleCallback,
   failTransportStream,
@@ -38,10 +41,13 @@ import { adjustMaxTokensForThinking } from "./simple-options.js";
 
 export type GoogleApiType = "google-generative-ai" | "google-vertex" | "google-interactions";
 
+// @google/genai 2.32 has no XHIGH member; the Gemini API and Vertex accept it for opted-in models.
+const GOOGLE_XHIGH_THINKING_LEVEL = "XHIGH" as ThinkingLevel;
+
 type GoogleThinkingOptions = {
   enabled: boolean;
   budgetTokens?: number;
-  level?: `${ThinkingLevel}`;
+  level?: `${ThinkingLevel}` | "XHIGH";
 };
 
 export type GoogleProviderOptions = StreamOptions & {
@@ -60,6 +66,7 @@ export type GoogleGenerateContentClient = {
 };
 
 type ClampedGoogleThinkingLevel = Exclude<AgentThinkingLevel, "xhigh" | "max">;
+type GoogleThinkingEffort = ClampedGoogleThinkingLevel | "xhigh";
 
 export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>(params: {
   stream: AssistantMessageEventStream;
@@ -166,7 +173,7 @@ export function buildGoogleGenerateContentParams<T extends GoogleApiType>(
 
 /** Shared wire policy for the Gemini API and Vertex, with or without the Google SDK. */
 export function buildGoogleGenerationConfig(
-  model: Pick<Model, "id" | "reasoning" | "maxTokens">,
+  model: Pick<Model, "id" | "reasoning" | "maxTokens" | "thinkingLevelMap">,
   thinking: GoogleThinkingOptions | undefined,
   maxTokens: number | undefined,
 ): Pick<GenerateContentConfig, "maxOutputTokens" | "thinkingConfig"> {
@@ -180,6 +187,7 @@ export function buildGoogleGenerationConfig(
           LOW: "low",
           MEDIUM: "medium",
           HIGH: "high",
+          XHIGH: "xhigh",
           THINKING_LEVEL_UNSPECIFIED: undefined,
         } as const;
         const level = effort[thinking.level];
@@ -268,16 +276,15 @@ function buildGoogleThinking(
   if (clampedReasoning === "off") {
     return disabled();
   }
-  const effort = (
-    clampedReasoning === "max" ? "high" : clampedReasoning
-  ) as ClampedGoogleThinkingLevel;
+  const levelEffort: GoogleThinkingEffort = clampedReasoning === "max" ? "high" : clampedReasoning;
 
   if (interactions || isGoogleGemini3ThinkingLevelModel(model.id) || isGemma4Model(model)) {
     return {
       enabled: true,
-      level: getGoogleThinkingLevel(effort, model),
+      level: getGoogleThinkingLevel(levelEffort, model),
     };
   }
+  const effort: ClampedGoogleThinkingLevel = levelEffort === "xhigh" ? "high" : levelEffort;
 
   const customBudgets = options.thinkingBudgets;
   let budgetTokens: number | undefined;
@@ -337,9 +344,16 @@ function isGemma4Model(model: Pick<Model, "id">): boolean {
 }
 
 function getGoogleThinkingLevel(
-  effort: ClampedGoogleThinkingLevel,
-  model: Pick<Model, "id">,
+  effort: GoogleThinkingEffort,
+  model: Pick<Model, "id" | "thinkingLevelMap">,
 ): ThinkingLevel {
+  if (
+    effort === "xhigh" &&
+    isGoogleGemini3ThinkingLevelModel(model.id) &&
+    googleSupportsXHighThinking(model)
+  ) {
+    return GOOGLE_XHIGH_THINKING_LEVEL;
+  }
   if (isGemma4Model(model)) {
     return effort === "minimal" || effort === "low" ? ThinkingLevel.MINIMAL : ThinkingLevel.HIGH;
   }
@@ -353,6 +367,7 @@ function getGoogleThinkingLevel(
     case "medium":
       return ThinkingLevel.MEDIUM;
     case "high":
+    case "xhigh":
       return ThinkingLevel.HIGH;
   }
   return ThinkingLevel.HIGH;

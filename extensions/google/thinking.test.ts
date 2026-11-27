@@ -1,11 +1,15 @@
 // Google tests cover thinking plugin behavior.
 import { describe, expect, it } from "vitest";
+import { GOOGLE_GEMINI_TEXT_MODEL_BY_ID } from "./provider-catalog.js";
 import {
   isGoogleGemini3ThinkingLevelModel,
   resolveGoogleGemini3ThinkingLevel,
   sanitizeGoogleThinkingPayload,
 } from "./thinking-api.js";
 import { buildGoogleGenerativeAiParams } from "./transport-stream.js";
+
+const GEMINI_4_HYDROGEN_THINKING_LEVEL_MAP =
+  GOOGLE_GEMINI_TEXT_MODEL_BY_ID.get("gemini-4-hydrogen")?.thinkingLevelMap;
 
 function buildGeminiUserParams(
   model: Partial<Parameters<typeof buildGoogleGenerativeAiParams>[0]> = {},
@@ -104,6 +108,34 @@ describe("Google transport thinking config", () => {
       options: { reasoning },
       expected: { includeThoughts: true, ...(thinkingLevel ? { thinkingLevel } : {}) },
     })),
+    ...[
+      ["high", "HIGH"],
+      ["xhigh", "XHIGH"],
+      ["max", "XHIGH"],
+    ].map(([reasoning, thinkingLevel]) => ({
+      name: `bundled Gemini 4 Hydrogen row sends ${reasoning} as ${thinkingLevel}`,
+      model: { id: "gemini-4-hydrogen", thinkingLevelMap: GEMINI_4_HYDROGEN_THINKING_LEVEL_MAP },
+      options: { reasoning },
+      expected: { includeThoughts: true, thinkingLevel },
+    })),
+    {
+      name: "Gemini 4 row without an xhigh entry keeps xhigh at HIGH",
+      model: { id: "gemini-4-carbon", thinkingLevelMap: { minimal: null } },
+      options: { reasoning: "xhigh" },
+      expected: { includeThoughts: true, thinkingLevel: "HIGH" },
+    },
+    {
+      name: "Gemma 4 row with an xhigh entry still sends HIGH",
+      model: { id: "gemma-4-26b-a4b-it", thinkingLevelMap: { xhigh: "xhigh" } },
+      options: { reasoning: "xhigh" },
+      expected: { includeThoughts: true, thinkingLevel: "HIGH" },
+    },
+    {
+      name: "Gemini 2.5 row with an xhigh entry keeps the high budget",
+      model: { id: "gemini-2.5-pro", thinkingLevelMap: { xhigh: "xhigh" } },
+      options: { reasoning: "xhigh" },
+      expected: { includeThoughts: true, thinkingBudget: 32768 },
+    },
     {
       name: "adaptive Gemini 2.5 uses a dynamic budget",
       model: { id: "gemini-2.5-flash" },
