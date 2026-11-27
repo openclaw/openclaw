@@ -81,7 +81,7 @@ async function formatRefusal(
   const effect =
     unitState && path.resolve(unitState) === path.resolve(callerState)
       ? `would write that service's state as ${caller}`
-      : `would back up and check ${callerState} instead of the service's state`;
+      : `would back up and check ${caller}'s own state instead of the service's`;
   const message = `Gateway service ${unit} runs as ${user}, but this update runs as ${caller} and ${effect}. The package, the service state and the Gateway were not changed.`;
   const selectors = Object.entries(unitEnv).map(([key, value]) => `${key}=${quoteCliArg(value)}`);
   const backup =

@@ -154,7 +154,7 @@ describe("candidate admission for a system unit run by another account", () => {
 
     expect(process.exitCode).toBe(3);
     expect(verdict.verdict).toBe("refuse");
-    const message = `Gateway service openclaw-gateway.service runs as openclaw, but this update runs as root and would back up and check ${stateDir} instead of the service's state. The package, the service state and the Gateway were not changed.`;
+    const message = `Gateway service openclaw-gateway.service runs as openclaw, but this update runs as root and would back up and check root's own state instead of the service's. The package, the service state and the Gateway were not changed.`;
     expect(verdict.facts.checks).toEqual([
       { name: "managed-service-account", status: "refuse", detail: message },
     ]);
@@ -210,7 +210,9 @@ describe("candidate admission for a system unit run by another account", () => {
 
     const verdict = await admit();
 
-    expect(verdict.reasons[0]?.message).toContain("instead of the service's state");
+    expect(verdict.reasons[0]?.message).toContain(
+      "would back up and check root's own state instead of the service's.",
+    );
     expect(verdict.reasons[0]?.nextAction).toContain(
       "sudo -u openclaw env <the unit's HOME, OPENCLAW_HOME, OPENCLAW_STATE_DIR, OPENCLAW_CONFIG_PATH and OPENCLAW_PROFILE> openclaw backup create --verify --output <directory>",
     );
