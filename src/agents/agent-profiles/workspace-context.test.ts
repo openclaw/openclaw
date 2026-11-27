@@ -269,6 +269,5 @@ describe("Agent Profile workspace context", () => {
 
     const file = result?.contextFiles.find((entry) => entry.path.endsWith("AGENTS.md"));
     expect(file?.content).toBe(agents);
-    expect(file?.content).toContain(sentinel);
   });
 });
