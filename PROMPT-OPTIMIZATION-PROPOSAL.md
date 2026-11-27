@@ -53,7 +53,7 @@ If upstream chooses not to adopt them, that's fine. We will continue benefiting 
 
 ## Our manifesto: human-level conversational intelligence and memory within 32k
 
-Our goal is a capable OpenClaw agent running on consumer hardware, with the following engineering targets:
+Our goal is a capable OpenClaw agent participating in ordinary, multi-user Discord conversation on consumer hardware. These engineering targets are for short conversational exchanges, not coding, research or tool-heavy workflows. The broader context-optimization principles can benefit other OpenClaw deployments, but their token budgets will differ.
 
 - **32,768-token context window:** remain useful within this budget, rather than relying on ever-larger windows.
 - **Under 100 tokens of average net prompt growth per ordinary short chat exchange:** preserve genuine conversation, not repeated bookkeeping.
