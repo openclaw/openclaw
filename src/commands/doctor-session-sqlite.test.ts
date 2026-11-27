@@ -238,6 +238,14 @@ it.each([
       sandbox: "required",
     } as const,
   },
+  {
+    name: "named session audience",
+    legacy: { createdActor: { id: "profile-legacy", type: "human" } },
+    canonical: {
+      access: { mode: "audience" as const, profileIds: ["profile-selected"] },
+      createdActor: { id: "profile-owner", type: "human", source: "profile" } as const,
+    },
+  },
 ])("preserves canonical $name during legacy import", async ({ legacy, canonical }) => {
   const store = createLegacyStore({ entryOverrides: legacy });
   await upsertEntry(sessionScope(store), {
@@ -245,6 +253,7 @@ it.each([
     sessionId: "session-1",
     updatedAt: 3000,
   });
+  expect(readEntry(sessionScope(store))?.entry).toMatchObject(canonical);
   const { entry } = await importSession(store);
   expect(entry).toMatchObject({ ...canonical, sessionId: "session-1" });
 });

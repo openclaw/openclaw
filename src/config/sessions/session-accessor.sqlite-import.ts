@@ -30,6 +30,7 @@ import {
 } from "./session-accessor.sqlite-transcript-state.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
+import { preserveCreationStamp } from "./session-entry-provenance.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import { transcriptEventJsonSql } from "./transcript-payload.js";
 import type { SessionEntry } from "./types.js";
@@ -91,8 +92,13 @@ function importSqliteSessionRowsInTransaction(
       : undefined;
   // Plugin doctor migrations can claim a legacy session before the full
   // session import runs. Preserve that same-generation canonical owner.
+  // The stored policy and its creator belong to the logical node. A legacy
+  // transcript import must retain them when that node already has access metadata.
+  const entryWithRetainedAccess = currentEntry?.access
+    ? preserveCreationStamp({ ...params.entry, access: currentEntry.access }, currentEntry)
+    : params.entry;
   const importedEntry = {
-    ...params.entry,
+    ...entryWithRetainedAccess,
     ...(preservedHarnessId ? { agentHarnessId: preservedHarnessId } : {}),
     sessionFile: resolved.sessionKey,
   };
