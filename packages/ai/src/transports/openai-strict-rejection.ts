@@ -38,6 +38,7 @@ export async function resolveStrictToolModel<M extends Model>(model: M): Promise
 /**
  * True when a request that was refused before any output may be retried once without
  * strict tools: a 400 or 422 on an undeclared route whose request carried a strict tool.
+ * Native OpenAI serves strict tools, so its 400s are never strict refusals and never retried.
  */
 export function isStrictToolRetryCandidate(
   model: Model,
@@ -48,6 +49,7 @@ export function isStrictToolRetryCandidate(
   return (
     (status === 400 || status === 422) &&
     !declaresStrictMode(model) &&
+    !isNativeOpenAIEndpoint(model) &&
     (tools ?? []).some(
       (tool) =>
         isRecord(tool) &&

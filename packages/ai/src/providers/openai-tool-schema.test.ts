@@ -122,6 +122,16 @@ describe("OpenAI strict tool schema normalization", () => {
       objectSchema({ options: { type: "object", properties: { known: { type: "string" } } } }),
     ],
     [
+      "optional keys beside a key-count constraint",
+      {
+        type: "object",
+        properties: { a: { type: "string" }, b: { type: "string" } },
+        required: [],
+        additionalProperties: false,
+        maxProperties: 1,
+      },
+    ],
+    [
       "optional keys inside a union of arrays",
       objectSchema({
         tags: {

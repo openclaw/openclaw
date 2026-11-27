@@ -26,6 +26,23 @@ const OPENAPI_SCHEMA_ANNOTATION_KEYS = new Set([
   "example",
 ]);
 
+/** Object keywords beside which optional keys can become required-and-nullable exactly. */
+const STRICT_PROJECTABLE_OBJECT_KEYS = new Set([
+  "type",
+  "properties",
+  "required",
+  "additionalProperties",
+  "title",
+  "description",
+  "default",
+  "examples",
+  "$comment",
+  "$id",
+  "$schema",
+  "$defs",
+  "definitions",
+]);
+
 function isNullSchemaLike(schema: unknown): boolean {
   if (!isRecord(schema)) {
     return false;
@@ -281,11 +298,13 @@ function normalizeToolSchemaRecursive(
     profile === "strict" &&
     !unionBranch &&
     normalized.type === "object" &&
-    isRecord(normalized.properties)
+    isRecord(normalized.properties) &&
+    Object.keys(normalized).every((key) => STRICT_PROJECTABLE_OBJECT_KEYS.has(key))
   ) {
     // Strict mode requires every key: an optional key becomes required and nullable, and the
     // argument boundary drops those nulls again, so tool semantics do not change. Inside a
-    // union branch that drop could not tell branches apart, so those keys stay optional and
+    // union branch, or beside a keyword that counts or relates keys (maxProperties,
+    // dependentRequired, if/then, ...), that is not exact, so those keys stay optional and
     // the tool is sent non-strict.
     const properties = normalized.properties;
     const required = new Set(

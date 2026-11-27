@@ -229,14 +229,22 @@ describe("ClawRouter plugin", () => {
       { apiKey: "synthetic-router-key", cacheRetention: "none" },
     );
     await stream.result();
-    // Omitted strictness makes OpenAI require every optional input.
+    // Strict tools keep an optional input optional by sending it required and nullable;
+    // the argument boundary drops the null again.
     expect(payloads[0]?.tools).toEqual([
       {
         type: "function",
         name: "send_report",
         description: "Send a document",
-        strict: false,
-        parameters,
+        strict: true,
+        parameters: {
+          ...parameters,
+          properties: {
+            document: { type: "string" },
+            recommendation: { type: ["string", "null"] },
+          },
+          required: ["document", "recommendation"],
+        },
       },
     ]);
   });
