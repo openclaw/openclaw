@@ -514,6 +514,11 @@ export function createWorktreeGitMaintenance(env?: NodeJS.ProcessEnv) {
     });
     for (const repoRoot of new Set(records.map((record) => record.repoRoot))) {
       assertCurrent();
+      // A deleted repository has nothing to maintain; resume once its path returns. An
+      // unreadable path falls through so maintenance records that failure as before.
+      if (!(await git.worktreePathExists(repoRoot).catch(() => true))) {
+        continue;
+      }
       const report = async (
         stage: NonNullable<ManagedWorktreeGcResult["gitMaintenance"]>["stage"],
         counts?: { packsBefore: number; packsAfter?: number },

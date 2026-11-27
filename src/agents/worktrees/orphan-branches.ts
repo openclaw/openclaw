@@ -1,6 +1,13 @@
 import { formatErrorMessage } from "../../infra/errors.js";
 import { withWorktreeMutationLease } from "./allocation.js";
-import { commandError, listGitWorktrees, requireGit, requireGitPath, runGit } from "./git.js";
+import {
+  commandError,
+  listGitWorktrees,
+  requireGit,
+  requireGitPath,
+  runGit,
+  worktreePathExists,
+} from "./git.js";
 import { readPendingWorktrees } from "./pending-slots.js";
 import { readRegistryWorktrees } from "./registry-read.js";
 import type { ManagedWorktreeRecord } from "./types.js";
@@ -18,6 +25,11 @@ export async function hasUnregisteredManagedBranches(
   records: readonly ManagedWorktreeRecord[],
   beforeRun: () => void,
 ): Promise<boolean> {
+  // A deleted repository has no branches to inspect. Its registry rows keep their
+  // ownership, so discovery resumes once the path returns.
+  if (!(await worktreePathExists(repoRoot))) {
+    return false;
+  }
   const owned = new Set(
     records
       .filter((record) => record.repoRoot === repoRoot)
