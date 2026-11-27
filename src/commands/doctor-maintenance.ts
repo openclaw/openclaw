@@ -466,7 +466,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
         // replaces the live tree after its stop, outside the service operation lock.
         if (inspection.serviceUpdateVerdict?.kind !== "absent") {
           assertAuthority(() => {
-            const admitted = resolveDoctorUpdateAdmission(env);
+            const admitted = resolveDoctorUpdateAdmission(env, undefined, params.legacyPostCore);
             // Storage guards can run inside a transaction; receipts belong to service admission.
             assertUpdateAdmissionReadCurrent = () => assertAuthority(admitted.assertCurrent);
             const checkAndRecord = () => assertAuthority(admitted.recordContinuation);

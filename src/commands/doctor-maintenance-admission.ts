@@ -1,3 +1,4 @@
+import { captureUpdateCommandExecutorAuthority } from "../cli/update-cli/update-command-executor-capabilities.js";
 import { UPDATE_RUN_ID_ENV } from "../infra/update-control-plane-sentinel.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { createUpdateFailureFact } from "../infra/update-failure-facts.js";
@@ -6,10 +7,12 @@ import { recordUpdateRunRepairContinuation } from "../infra/update-run-ledger.js
 import { createUpdateRunAdmissionReader } from "../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
+import type { DoctorMaintenanceParams } from "./doctor-maintenance-types.js";
 
 export function resolveDoctorUpdateAdmission(
   env: NodeJS.ProcessEnv,
   boundRunId?: string,
+  legacyPostCore?: DoctorMaintenanceParams["legacyPostCore"],
 ): {
   assertCurrent: () => void;
   readContinuation: () => UpdateRunRecord | undefined;
@@ -23,7 +26,19 @@ export function resolveDoctorUpdateAdmission(
   );
   const readAdmission = () => {
     const runs = readRuns();
-    const admission = inspectUpdateRepairDriverAdmission(runs, inheritedRunId);
+    // The shipped updater did not record a driver. Its already-admitted native
+    // executor proves this exact post-core run; all other runs still use driver admission.
+    if (legacyPostCore) {
+      if (!inheritedRunId) {
+        throw new Error("Legacy post-core Doctor requires its inherited update run.");
+      }
+      captureUpdateCommandExecutorAuthority(legacyPostCore.fence, inheritedRunId);
+    }
+    const admission = inspectUpdateRepairDriverAdmission(
+      runs,
+      inheritedRunId,
+      legacyPostCore?.createdAtMs,
+    );
     if (admission.kind === "conflict") {
       if (admission.reason === "ancestry-unverified") {
         throw new DoctorMaintenanceRefusalError(
@@ -46,6 +61,9 @@ export function resolveDoctorUpdateAdmission(
       }
       throw new Error(admission.message);
     }
+    if (legacyPostCore && admission.kind !== "continuation") {
+      throw new Error("Legacy post-core Doctor could not verify its active update run.");
+    }
     return admission;
   };
   const admission = readAdmission();
@@ -63,7 +81,10 @@ export function resolveDoctorUpdateAdmission(
     },
     recordContinuation: () => {
       const current = readAdmission();
-      if (continuation?.steps.some((step) => step.step === "finalize:repair-continuation")) {
+      if (
+        !legacyPostCore &&
+        continuation?.steps.some((step) => step.step === "finalize:repair-continuation")
+      ) {
         const run =
           current.kind === "continuation"
             ? current.run
