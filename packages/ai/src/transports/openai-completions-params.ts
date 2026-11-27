@@ -4,7 +4,7 @@ import {
   estimateStringChars,
 } from "@openclaw/normalization-core/cjk-chars";
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import { convertMessages, hasToolCallHistory } from "../openai-completions-messages.js";
+import { convertMessages } from "../openai-completions-messages.js";
 import { measuredRequestPressure, type OpenAICompletionsOptions } from "../provider-options.js";
 import {
   PROVIDER_DEFERRED_TOOL_NAMES,
@@ -355,49 +355,27 @@ export function buildOpenAICompletionsRequest(
     params.stop = options.stop;
   }
   let directToolProjection: ReturnType<typeof projectOpenAITools> | undefined;
-  if (supportsTools) {
-    if (converted) {
-      if (policy.mode === "direct") {
-        directToolProjection = converted.projection;
-      }
-      if (
-        converted.tools.length > 0 ||
-        (policy.mode === "managed" &&
-          converted.projection.inputToolCount === 0 &&
-          converted.projection.diagnostics.length === 0)
-      ) {
-        params.tools = converted.tools;
-      } else if (hasToolCallHistory(context.messages)) {
-        params.tools = [];
-      }
-      if (
-        policy.mode === "direct" &&
-        params.stream &&
-        compat.zaiToolStream &&
-        converted.tools.length > 0
-      ) {
+  // An empty tools array is never sent: OpenAI accepts its absence, and some
+  // servers reject `[]` (#53472). A request without tools says nothing about tools.
+  if (supportsTools && converted) {
+    if (policy.mode === "direct") {
+      directToolProjection = converted.projection;
+    }
+    // Reconcile even without tools: a required choice with no surviving tool must fail.
+    const toolChoice =
+      policy.mode === "managed" && options?.toolChoice
+        ? reconcileOpenAICompletionsToolChoice(options.toolChoice, converted.projection)
+        : compatDetection?.capabilities.usesExplicitProxyLikeEndpoint
+          ? "auto"
+          : undefined;
+    if (converted.tools.length > 0) {
+      params.tools = converted.tools;
+      if (policy.mode === "direct" && params.stream && compat.zaiToolStream) {
         params.tool_stream = true;
       }
-      if (policy.mode === "managed" && options?.toolChoice) {
-        const toolChoice = reconcileOpenAICompletionsToolChoice(
-          options.toolChoice,
-          converted.projection,
-        );
-        if (toolChoice !== undefined) {
-          params.tool_choice = toolChoice;
-        }
-      } else if (
-        compatDetection?.capabilities.usesExplicitProxyLikeEndpoint &&
-        params.tools?.length
-      ) {
-        params.tool_choice = "auto";
+      if (toolChoice !== undefined) {
+        params.tool_choice = toolChoice;
       }
-    } else if (hasToolCallHistory(context.messages)) {
-      params.tools = [];
-    }
-    if (compatDetection?.capabilities.usesExplicitProxyLikeEndpoint && params.tools?.length === 0) {
-      delete params.tools;
-      delete params.tool_choice;
     }
   }
   if (policy.mode === "direct" && compat.cacheControlFormat === "anthropic") {
@@ -416,7 +394,7 @@ export function buildOpenAICompletionsRequest(
       options.toolChoice,
       directToolProjection ?? projectOpenAITools([]),
     );
-    if (toolChoice !== undefined) {
+    if (toolChoice !== undefined && params.tools) {
       params.tool_choice = toolChoice;
     }
   }
