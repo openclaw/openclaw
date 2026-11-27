@@ -47,26 +47,29 @@ it("continues a Memory import with saved progress until every file on its checkp
   const claimed = fixture({
     sessions: { [label]: { key: "s-mem", displayName: label } },
     history: {
-      "s-mem": [userText(continuePrompt()), statusLine("done", "Saved 5 items from 3 files")],
+      "s-mem": [
+        userText(continuePrompt()),
+        // Claude CLI can group several tool results in a user message without text.
+        {
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: "toolu_1", content: "[]" },
+            { type: "tool_result", tool_use_id: "toolu_2", content: "[]" },
+          ],
+        },
+        statusLine("done", "Saved 5 items from 3 files"),
+      ],
     },
     checkpoint,
   });
   claimed.ui.s.scribe = "memory";
-  expect((await claimed.render()).querySelector(".scribe-chip-warn")?.textContent).toBe(
-    "Needs attention",
-  );
+  const pending = await claimed.render();
+  expect(pending.querySelector(".scribe-chip-warn")?.textContent).toBe("Needs attention");
+  expect(buttonNamed(pending, "Continue")).toBeDefined();
   const finished = fixture({
     sessions: { [label]: { key: "s-mem", displayName: label } },
     history: {
-      "s-mem": [
-        userText(continuePrompt()),
-        // A Claude CLI turn records its tool results as user messages without text.
-        {
-          role: "user",
-          content: [{ type: "tool_result", tool_use_id: "toolu_1", content: "[]" }],
-        },
-        statusLine("done", "Saved 6 items from 3 files"),
-      ],
+      "s-mem": [userText(continuePrompt()), statusLine("done", "Saved 6 items from 3 files")],
     },
     checkpoint: checkpoint.replace("pending", "done (1 saved, 0 known, 0 skipped)"),
   });

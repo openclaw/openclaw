@@ -489,7 +489,8 @@ async function readMemoryProgress(
   while (history) {
     // The latest start or Continue opts in. CLI tool results may have role user without text.
     const sent = history.messages?.findLast(
-      (message) => isRecord(message) && message.role === "user" && messageText(message) !== "",
+      (message) =>
+        isRecord(message) && message.role === "user" && messageText(message).trim() !== "",
     );
     if (sent) {
       return messageText(sent).includes(MEMORY_CHECKPOINT)
