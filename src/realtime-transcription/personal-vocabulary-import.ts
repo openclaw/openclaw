@@ -91,6 +91,7 @@ export function previewPersonalVocabularyImport(
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new VocabularyError("invalid-input");
   }
+  // SAFETY: parsed JSON was checked above to be a non-null, non-array object.
   const value = parsed as Record<string, unknown>;
   if (!Number.isSafeInteger(value.schemaVersion)) {
     throw new VocabularyError("invalid-input");

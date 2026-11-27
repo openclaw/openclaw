@@ -85,7 +85,7 @@ describe("personal vocabulary import preview", () => {
   });
 
   it("preserves an existing ID on an explicitly accepted rename and pins the proposed revision", () => {
-    const originalScope = { ...scope };
+    const originalScope: { profileId: string; workspaceId: string } = { ...scope };
     const target = { ...source([{ id: "stable", canonical: "Ariadna" }]), scope: originalScope };
     const preview = previewPersonalVocabularyImport(
       file([

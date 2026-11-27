@@ -8,7 +8,7 @@ import {
   resolveEffectiveVocabulary,
   selectVocabularyHints,
 } from "./vocabulary-terms.js";
-import { type EffectiveVocabularyTerm } from "./vocabulary-types.js";
+import type { EffectiveVocabularyTerm } from "./vocabulary-types.js";
 
 /** Proposed private snapshot bound, not an advertised provider quota or public setting. */
 export const PERSONAL_VOCABULARY_MAX_HINTS = 64;
@@ -127,6 +127,7 @@ export function preparePersonalVocabularyHints(
   destination: PersonalVocabularyDestination,
 ): PersonalVocabularyPreparedHints {
   assertPersonalVocabularyScope(snapshot.scope, destination.scope);
+  // SAFETY: an empty array holds no elements, so typing it as string[] admits no wrong value.
   const empty = Object.freeze([] as string[]);
   const unavailable = (
     status: "unavailable" | "blocked",

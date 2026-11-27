@@ -31,6 +31,7 @@ function record(input: unknown, fields: readonly string[]): Record<string, unkno
       throw new VocabularyError("invalid-input");
     }
   }
+  // SAFETY: input is a non-null object whose own keys were all checked as allowed data fields above.
   return input as Record<string, unknown>;
 }
 
@@ -58,6 +59,7 @@ export function canonicalVocabularyLocale(input: unknown): string {
 
 function stringList(input: unknown, maximum: number, normalize: (value: unknown) => string) {
   if (input === undefined) {
+    // SAFETY: an empty array holds no elements, so typing it as string[] admits no wrong value.
     return Object.freeze([] as string[]);
   }
   if (!Array.isArray(input)) {
@@ -361,12 +363,14 @@ export function resolveEffectiveVocabulary(params: {
       // This derived projection may unite several import records. Its lists are bounded
       // by the aggregate input budget, not a single record's sixteen-alias limit.
       // Lower-priority shared aliases never add behavior to a personal/session override.
+      // SAFETY: an empty array holds no elements, so typing it as string[] admits no wrong value.
+      const allLocales = Object.freeze([] as string[]);
       return Object.freeze({
         term: Object.freeze({
           ...first.term,
           aliases: mergeStrings(preferred.map((candidate) => candidate.term.aliases)),
           locales: preferred.some((candidate) => !candidate.term.locales.length)
-            ? Object.freeze([] as string[])
+            ? allLocales
             : mergeStrings(preferred.map((candidate) => candidate.term.locales)),
         }),
         sources: Object.freeze([...sources.values()]),
@@ -380,6 +384,7 @@ export function selectVocabularyHints(
   effective: EffectiveVocabulary,
   capability: VocabularyHintCapability,
 ): VocabularyHints {
+  // SAFETY: an empty array holds no elements, so typing it as string[] admits no wrong value.
   const empty = Object.freeze([] as string[]);
   if (capability.kind === "unsupported") {
     return Object.freeze({
@@ -398,6 +403,7 @@ export function selectVocabularyHints(
     throw new VocabularyError("invalid-input");
   }
   const candidates = effective.entries.map((entry) => entry.term.canonical);
+  // SAFETY: empty is a frozen string[], which widening to readonly string[] cannot make unsound.
   let selected = { terms: empty as readonly string[], bytes: 0, tokens: 0 };
   let low = 0;
   let high = Math.min(candidates.length, capability.maxTerms);

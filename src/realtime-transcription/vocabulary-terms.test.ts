@@ -200,7 +200,7 @@ describe("effective vocabulary", () => {
     expect(effective).toEqual(
       resolveEffectiveVocabulary({
         ...parameters,
-        collections: [...collections].reverse(),
+        collections: collections.toReversed(),
       }),
     );
   });
