@@ -20,6 +20,7 @@ type Api = "openai-responses" | "anthropic-messages";
 type Turn = { role: string; text: string };
 
 const REPLY = "SCHEDULED_REPLY_42";
+const HOOK_TOKEN = "synthetic-cron-single-copy-hook-token";
 
 // Normalizes Responses input items and Anthropic messages to role/text pairs.
 function readTurns(api: Api, body: Record<string, unknown>): Turn[] {
@@ -81,6 +82,12 @@ describe.each<Api>(["openai-responses", "anthropic-messages"])("%s", (api) => {
     const modelRef = "fixture/fixture";
     const cfg = {
       gateway: { mode: "local", auth: { mode: "token", token }, reload: { mode: "off" } },
+      hooks: {
+        enabled: true,
+        token: HOOK_TOKEN,
+        allowRequestSessionKey: true,
+        allowedSessionKeyPrefixes: ["hook:"],
+      },
       agents: {
         entries: { main: {} },
         defaults: {
@@ -206,6 +213,36 @@ describe.each<Api>(["openai-responses", "anthropic-messages"])("%s", (api) => {
     await send(sessionKey, "Hello.");
     await runCron({ sessionTarget: `session:${sessionKey}`, payload, delivery: { mode: "none" } });
     await expect(observe(sessionKey)).resolves.toEqual({ modelCopies: 1, displayRows: 1 });
+  }, 60_000);
+
+  it("keeps one visible reply per persistent hook turn with delivery disabled", async () => {
+    const key = `hook:single-copy-${randomUUID()}`;
+    for (let turn = 0; turn < 3; turn++) {
+      const response = await fetch(`http://127.0.0.1:${gateway.port}/hooks/agent`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${HOOK_TOKEN}`,
+          "content-type": "application/json",
+          "idempotency-key": randomUUID(),
+        },
+        body: JSON.stringify({
+          message: `SCHEDULED_TICK ${turn}. Reply with the marker.`,
+          sessionKey: key,
+          sessionMode: "persistent",
+          deliver: false,
+          waitForCompletion: true,
+        }),
+      });
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({
+        ok: true,
+        completion: { status: "ok", replyDisposition: "visible", deliveryAttempted: false },
+      });
+    }
+    await expect(observe(`agent:main:${key}`)).resolves.toEqual({
+      modelCopies: 3,
+      displayRows: 3,
+    });
   }, 60_000);
 
   it("main-session systemEvent cron reply reaches the next request once", async () => {
