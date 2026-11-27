@@ -559,16 +559,16 @@
     },
     "nativeChildTools": {
       "label": "Native Child Host Tools",
-      "help": "Delegate selected OpenClaw tools to native Codex children under the owning OpenClaw session's authority, not the child's native sandbox. Omit the allowlist or leave it empty to disable.",
+      "help": "Delegate selected OpenClaw tools under the owning session's authority, not the native child's sandbox. Omit the allowlist or leave it empty to disable. The Codex plugin's codex_session_send, codex_session_interrupt, and codex_threads cannot be delegated.",
       "advanced": true
     },
     "nativeChildTools.allow": {
       "label": "Allowed Native Child Host Tools",
-      "help": "Canonical tool names or anchored * patterns. Wildcards can grant newly matching host tools after a plugin or server update."
+      "help": "Match eligible tools by name or anchored * pattern. Allow and deny normalize aliases on both sides: exec also matches a plugin tool named bash. Wildcards can grant newly matching tools after a plugin or server update."
     },
     "nativeChildTools.deny": {
       "label": "Denied Native Child Host Tools",
-      "help": "Canonical tool names or * patterns excluded even when they match an allow entry."
+      "help": "Exclude names or * patterns using the same alias matching as allow. A deny wins over any matching allow entry."
     },
     "discovery": {
       "label": "Model Discovery",

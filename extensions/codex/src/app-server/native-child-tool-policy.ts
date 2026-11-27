@@ -34,6 +34,12 @@ const CHILD_RESULT_ONLY_MEDIA_TOOLS = new Set([
   "video_generate",
   "music_generate",
 ]);
+// These Codex plugin tools act on sessions outside the child's assignment.
+const CODEX_SESSION_CONTROLS = new Set([
+  "codex_session_send",
+  "codex_session_interrupt",
+  "codex_threads",
+]);
 
 type CatalogRow = {
   name: string;
@@ -84,6 +90,14 @@ export function resolveNativeChildToolCatalog(params: {
           owner,
           status: "unavailable",
           reason: "Not on the executable host surface for this child.",
+        };
+      }
+      if (meta?.pluginId === "codex" && CODEX_SESSION_CONTROLS.has(name)) {
+        return {
+          name,
+          owner,
+          status: "unsupported",
+          reason: "Codex session controls cannot be delegated to native children.",
         };
       }
       const compatibleCore =

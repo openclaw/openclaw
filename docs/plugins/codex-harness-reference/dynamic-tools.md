@@ -117,9 +117,18 @@ delegate selected host capabilities, set `plugins.entries.codex.config.nativeChi
 
 Use the exposed tool name, not the Codex discovery prefix (`openclaw.`).
 In this example `research` is an OpenClaw-projected MCP server. An empty or
-absent `allow` grants nothing; `deny` takes precedence. A wildcard also matches
-future eligible tools added under that name pattern. Prefer exact names when
-you need to review each new capability individually.
+absent `allow` grants nothing; `deny` takes precedence. Patterns match the
+whole tool name. `*` matches zero or more characters, including `__`: for
+example, `research__get_*` matches both `research__get_` and
+`research__get_team__doc`. The wildcard also matches future eligible tools with those
+names. Prefer exact names when you need to review new capabilities individually.
+
+Both lists use OpenClaw's tool-policy aliases. The matcher trims and lowercases
+both the pattern and the tool name, then replaces whole-name aliases:
+`bash` to `exec`, `apply-patch` to `apply_patch`, `cron` to `automations`, and
+`tool_call` to `dispatch_action`. For example, an allow or deny entry of `exec`
+also matches an eligible plugin tool literally named `bash`. Matching does
+not make the built-in `exec` eligible or change Codex-native shell access.
 
 These calls use **OpenClaw host authority**. A child's native Codex sandbox and
 approval settings do not confine them. Host-side availability, tool and action
@@ -171,6 +180,10 @@ the same tools directly in the parent chat keeps their usual delivery behavior.
 
 Non-core tools can qualify when OpenClaw identifies their owning plugin or MCP
 server. OpenClaw excludes tools it recognizes as channel messaging tools.
+Three tools owned by the Codex plugin are also always excluded:
+`codex_session_send`, `codex_session_interrupt`, and `codex_threads`. They can
+control sessions outside the child's assignment. Neither an exact allow entry
+nor `codex_*` or `*` grants them. This exclusion does not change parent access.
 There is no fixed list of eligible plugin tools: use the catalog preview above
 to see which tools your parent session can delegate. Eligibility alone never
 grants access.

@@ -10,6 +10,47 @@ import { resolveNativeChildToolCatalog } from "./native-child-tool-policy.js";
 const availableTools = [createTool("read"), createTool("skills_read")];
 
 describe("nativeChildTools", () => {
+  it("keeps Codex session controls out of exact and wildcard grants without blocking sibling tools", () => {
+    const controls = ["codex_session_interrupt", "codex_session_send", "codex_threads"];
+    const names = [...controls, "codex_plugins"];
+    const owned = (name: string, pluginId: string) =>
+      createOwnerBackedContractTool({ name, pluginId, result: textToolResult("") });
+    for (const allow of [names, ["codex_*"], ["*"]]) {
+      const { tools } = resolveNativeChildToolCatalog({
+        policy: { allow },
+        availableTools: names.map((name) => owned(name, "codex")),
+      });
+      expect(tools.filter((row) => row.status === "unsupported").map((row) => row.name)).toEqual(
+        controls,
+      );
+      expect(tools.filter((row) => row.status === "allowed").map((row) => row.name)).toEqual([
+        "codex_plugins",
+      ]);
+    }
+    expect(
+      resolveNativeChildToolCatalog({
+        policy: { allow: ["codex_threads"] },
+        availableTools: [owned("codex_threads", "fixture")],
+      }).tools[0]?.status,
+    ).toBe("allowed");
+  });
+
+  it("normalizes exact aliases on both sides without granting an unsupported core implementation", () => {
+    const shellAlias = createOwnerBackedContractTool({
+      name: "bash",
+      pluginId: "fixture",
+      result: textToolResult(""),
+    });
+    const statuses = (allow: string[], deny?: string[]) =>
+      resolveNativeChildToolCatalog({
+        availableTools: [shellAlias, createTool("exec")],
+        policy: { allow, deny },
+      }).tools.map(({ status }) => status);
+    expect(statuses([" EXEC "])).toEqual(["allowed", "unsupported"]);
+    expect(statuses(["bash"])).toEqual(["allowed", "unsupported"]);
+    expect(statuses(["*"], ["exec"])).toEqual(["denied", "unsupported"]);
+  });
+
   it("makes media generation eligible without granting it by default or overriding denies", () => {
     const names = ["image_generate", "music_generate", "video_generate"];
     const generators = names.map((name) => createTool(name));
