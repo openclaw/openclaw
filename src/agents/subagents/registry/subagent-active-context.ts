@@ -11,14 +11,11 @@ import { resolveSubagentCompletionResultText } from "../completion/subagent-comp
 import { isSubagentRunVisibleToSession } from "./subagent-control-scope.js";
 import { isSubagentDeliveryWithheld } from "./subagent-delivery-state.js";
 import { buildSubagentList, captureSubagentListReadContext } from "./subagent-list.js";
-import { subagentRuns } from "./subagent-registry-memory.js";
-import { buildSubagentRunReadIndexFromRuns } from "./subagent-registry-queries.js";
+import { withSubagentSessionListRead } from "./subagent-registry-read-index.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
-import { withSubagentRunReadSnapshot } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isRequesterSettleWakeForRun } from "./subagent-requester-settle-identity.js";
 import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
-import { recordLatestSubagentRun } from "./subagent-run-generation.js";
 
 // Prompt data is sanitized then JSON-quoted so active subagent state cannot add
 // executable prompt instructions through labels or task text.
@@ -31,6 +28,14 @@ function quotePromptData(value: string): string {
 const RECENT_PROMPT_MAX_ENTRIES = 8;
 const PENDING_RESULT_MAX_ENTRIES = 8;
 const PENDING_RESULT_MAX_CHARS = 2_000;
+
+/** Possible first lines of this snapshot; the runtime-facts change filter identifies it by them. */
+export const SUBAGENT_SNAPSHOT_HEADINGS = [
+  "## Active Subagents",
+  "## Recently Completed Subagents",
+  "## Child results awaiting delivery",
+] as const;
+const [ACTIVE_HEADING, RECENT_HEADING, PENDING_HEADING] = SUBAGENT_SNAPSHOT_HEADINGS;
 
 function hasOutstandingCompletion(entry: SubagentRunRecord): boolean {
   if (
@@ -96,27 +101,19 @@ export async function buildActiveSubagentRuntimeContext(params: {
       entry.controllerStorePath === storePath) ||
       (entry.requesterSessionKey.trim() === controllerSessionKey &&
         entry.requesterStorePath === storePath));
-  return withSubagentRunReadSnapshot(
-    subagentRuns,
-    (snapshot) => {
-      const latest = new Map<string, SubagentRunReadRecord>();
-      for (const entry of snapshot.values()) {
-        const key = entry.childSessionKey.trim();
-        if (key) {
-          recordLatestSubagentRun(latest, key, entry);
-        }
-      }
+  return withSubagentSessionListRead(
+    [controllerSessionKey],
+    ({ latestRunsByChildSessionKey: latest }) => {
       const yielded = [...latest.values()].filter(
         (entry) => isVisible(entry) && isSubagentPausedByYield(entry),
       );
       return {
-        snapshot,
         latest,
         runIds: [],
         sessionKeys: [controllerSessionKey, ...yielded.map((entry) => entry.childSessionKey)],
       };
     },
-    ({ snapshot: readSnapshot, latest }, snapshot) => {
+    ({ latest }, snapshot, readIndex) => {
       const visible = [...snapshot.values()].filter(isVisible);
       const runs = visible.filter(
         (entry) => latest.get(entry.childSessionKey.trim())?.runId === entry.runId,
@@ -154,17 +151,7 @@ export async function buildActiveSubagentRuntimeContext(params: {
         params.includeSpawnContext === false
           ? undefined
           : buildSubagentList({
-              context: captureSubagentListReadContext(
-                runs,
-                buildSubagentRunReadIndexFromRuns({
-                  runs: readSnapshot,
-                  inMemoryRuns: [...readSnapshot.keys()].flatMap(
-                    (id) => subagentRuns.get(id) ?? [],
-                  ),
-                }),
-                snapshot,
-                recentMinutes,
-              ),
+              context: captureSubagentListReadContext(runs, readIndex(), snapshot, recentMinutes),
               // Prompt fields are registry-owned; enrichment belongs to visible lists.
               sessionEntries: new Map(),
               taskMaxChars: 96,
@@ -202,7 +189,7 @@ export async function buildActiveSubagentRuntimeContext(params: {
       const sections: string[][] = [];
       if (list && list.active.length > 0) {
         sections.push([
-          "## Active Subagents",
+          ACTIVE_HEADING,
           ...list.active
             .toSorted((a, b) => (a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : 0))
             .slice(0, 16)
@@ -212,14 +199,14 @@ export async function buildActiveSubagentRuntimeContext(params: {
       }
       if (recentForPrompt.length > 0) {
         sections.push([
-          "## Recently Completed Subagents",
+          RECENT_HEADING,
           `Children that ended in the last ${recentMinutes}m, newest first:`,
           ...recentForPrompt.map(formatEntry),
         ]);
       }
       if (pending.length > 0) {
         sections.push([
-          "## Child results awaiting delivery",
+          PENDING_HEADING,
           ...pending.slice(0, PENDING_RESULT_MAX_ENTRIES).map(formatPendingResult),
           ...(pending.length > PENDING_RESULT_MAX_ENTRIES
             ? [`- additional_results=${pending.length - PENDING_RESULT_MAX_ENTRIES}`]
@@ -228,6 +215,5 @@ export async function buildActiveSubagentRuntimeContext(params: {
       }
       return sections.map((lines) => lines.join("\n")).join("\n\n");
     },
-    { sessionKeys: [controllerSessionKey], descendants: true },
   );
 }

@@ -514,6 +514,15 @@ export function createWorktreeGitMaintenance(env?: NodeJS.ProcessEnv) {
     });
     for (const repoRoot of new Set(records.map((record) => record.repoRoot))) {
       assertCurrent();
+      try {
+        if (!(await git.worktreePathExists(repoRoot))) {
+          continue;
+        }
+      } catch (error) {
+        assertCurrent();
+        progress.error("git-maintenance", error, repoRoot);
+        continue;
+      }
       const report = async (
         stage: NonNullable<ManagedWorktreeGcResult["gitMaintenance"]>["stage"],
         counts?: { packsBefore: number; packsAfter?: number },

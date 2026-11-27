@@ -127,6 +127,8 @@ const repositoryScriptEntries = [
   // Package scripts execute these maintained generators, whose inputs are production contracts.
   "scripts/generate-runtime-script-assets.mjs!",
   "scripts/generate-static-validators.mts!",
+  // ToolOperationCatalog.swift consumes this CLI's generated wording catalog.
+  "scripts/tool-operations.ts!",
   // src/daemon/systemd-directives.ts documents this node regeneration command.
   "scripts/generate-systemd-directives.mjs!",
   // ui:validators:gen/check compile canonical payload schemas into browser runtime guards.
@@ -1416,6 +1418,8 @@ const config = {
         "solid-js",
         "playwright-core",
         "partial-json",
+        // Performance measurement resolves Tokenjuice from extensions/tokenjuice/package.json.
+        "tokenjuice",
         // The bundled AI runtime loads Bun proxy support through a computed import.
         "proxy-from-env",
         // The native Canvas bundle falls back without optional Markdown support.

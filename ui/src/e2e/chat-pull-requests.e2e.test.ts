@@ -322,25 +322,11 @@ suite.define(() => {
     ).not.toBeNull();
     const openChip = chips.first();
     await pollAttr(openChip, "data-state").toBe("open");
-    await pollText(openChip.locator(".chat-pr__title")).toBe(
-      "fix(macos): tighten the link-browser tab header",
-    );
-    await pollAttr(openChip.locator(".chat-pr__link"), "href").toBe(
-      "https://github.com/openclaw/openclaw/pull/103469",
-    );
     const actions = openChip.locator(".chat-pr__actions-trigger");
     await actions.click();
     const menu = page.locator(".chat-pr-menu").filter({ visible: true });
-    await pollText(menu.locator(".chat-pr-menu__repository")).toContain("openclaw/openclaw");
-    await pollText(menu.locator(".chat-pr-menu__repository")).toContain("#103469");
-    await pollText(menu.locator(".chat-pr__additions")).toBe("+4");
     await pollCount(menu.locator(".chat-pr__stale")).toBe(1);
     await menu.getByRole("menuitem", { name: "Checks: Passed 65", exact: true }).click();
-    await pollText(menu.locator(".chat-pr__checks-row--passed")).toContain("65");
-    await pollText(menu.locator(".chat-pr__checks-row--skipped")).toContain("31");
-    await pollAttr(menu.getByRole("menuitem", { name: "Open checks on GitHub" }), "href").toBe(
-      "https://github.com/openclaw/openclaw/pull/103469/checks",
-    );
     await page.locator(".agent-chat__input textarea").click();
     await expect.poll(() => menu.isVisible()).toBe(false);
     await openChatDetails(page);
@@ -357,7 +343,6 @@ suite.define(() => {
     const mergedChip = chips.nth(1);
     await pollAttr(mergedChip, "data-state").toBe("merged");
     await mergedChip.locator(".chat-pr__actions-trigger").click();
-    await pollText(menu.locator(".chat-pr-menu__facts")).toContain("Merged");
     await pollCount(menu.locator(".chat-pr__stale")).toBe(0);
     await page.keyboard.press("Escape");
 

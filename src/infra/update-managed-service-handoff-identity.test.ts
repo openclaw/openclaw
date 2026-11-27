@@ -13,6 +13,7 @@ import { executeSqliteQuerySync } from "./kysely-sync.js";
 import { nativeBoundaryTestEntrypoints } from "./native-boundary-runtime.test-support.js";
 import * as nodeSqlite from "./node-sqlite.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { managedHandoffBootSchema } from "./update-managed-service-handoff-boot-schema.js";
 import {
   createManagedHandoffLeaseDatabase,
   leaseQueries,
@@ -20,10 +21,7 @@ import {
 } from "./update-managed-service-handoff-database.js";
 import type { ManagedHandoffLeaseStoreOptions } from "./update-managed-service-handoff-lease-types.js";
 import { createManagedHandoffLeaseStore } from "./update-managed-service-handoff-lease.js";
-import {
-  managedHandoffBootSchema,
-  parseManagedHandoffLeasePayload,
-} from "./update-managed-service-handoff-schema.js";
+import { parseManagedHandoffLeasePayload } from "./update-managed-service-handoff-schema.js";
 
 const { readProcessAncestry, readProcessIdentity } = vi.hoisted(() => ({
   readProcessAncestry: vi.fn<typeof import("@openclaw/proc-safe/identity").readProcessAncestry>(),

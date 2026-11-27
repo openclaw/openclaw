@@ -179,45 +179,48 @@ describe("buildPromptSection", () => {
     [["memory_search"], "off"],
   ] as const)("guides recall using %j with citations=%s", (tools, citationsMode) => {
     const result = buildMemoryPromptSection({ availableTools: new Set(tools), citationsMode });
-    expect(result[1]).toContain(`run ${tools[0]}`);
-    expect(result[1]).toContain("not already present in the current turn");
-    expect(result[1]).toContain("Do not repeat memory retrieval");
-    expect(result[1]?.includes("for memory-file hits, use memory_get")).toBe(tools.length === 2);
+    expect(result[1]).toContain(tools[0]);
+    expect(result[1]).toContain(
+      tools[0] === "memory_search" ? "absent from this turn" : "not in this turn",
+    );
+    expect(result[1]).toContain("supplied context fully answers");
+    const { search, get } = captureMemoryModelContract({
+      agents: { entries: { main: {} } },
+      memory: { citations: citationsMode },
+    });
+    for (const tool of [search, get]) {
+      expect(tool.description).toContain("say you checked");
+      expect(tool.description).toContain(
+        citationsMode === "off"
+          ? "Citations are disabled"
+          : "Citations: include Source: <path#line>",
+      );
+    }
+    expect(search.description).toContain("only the needed lines of file hits");
+    expect(search.description).toContain(
+      "use `corpus=all` only when compiled wiki supplements are needed",
+    );
     if (tools[0] === "memory_get") {
       expect(result[1]).not.toContain("run memory_search");
     }
-    expect(result).toContain(
-      citationsMode === "off"
-        ? "Citations are disabled: do not mention file paths or line numbers in replies unless the user explicitly asks."
-        : "Citations: include Source: <path#line> when it helps the user verify memory snippets.",
-    );
+    // The disclosure limit stays in the prompt, where Code Mode cannot defer it.
+    expect(result.join("\n").includes("Citations are disabled")).toBe(citationsMode === "off");
     expect(result.at(-1)).toBe("");
   });
 
-  it.each([
-    [[], [], ["sessions_search", "sessions_history"]],
-    [["sessions_search"], ["sessions_search"], ["sessions_history"]],
-    [["sessions_history"], ["sessions_history"], ["sessions_search"]],
-    [["sessions_search", "sessions_history"], ["sessions_search", "sessions_history"], []],
-  ])("offers only available session follow-up tools: %j", (sessionTools, included, excluded) => {
-    const { search, promptBuilder } = captureMemoryModelContract({
+  it("defers session recall recipes without changing definitions with turn availability", () => {
+    const { search, get } = captureMemoryModelContract({
       agents: { entries: { main: {} } },
     });
-    const prompt = promptBuilder({
-      availableTools: new Set(["memory_search", "memory_get", ...sessionTools]),
-      agentId: "main",
-    }).join("\n");
-    const modelVisibleText = `${search.description}\n${prompt}`;
-    for (const name of included) {
-      expect(modelVisibleText).toContain(name);
-    }
-    for (const name of excluded) {
-      expect(modelVisibleText).not.toContain(name);
-    }
-    expect(prompt).toContain("Session search line numbers are not history offsets");
-    expect(prompt).toContain("Never read raw transcript files");
-    if (sessionTools.length === 2) {
-      expect(prompt).toContain("returned sessionKey, messageId, and sessionId");
+    for (const tool of [search, get]) {
+      expect(tool.description).toContain("if available use sessions_search");
+      expect(tool.description).toContain("then sessions_history");
+      expect(tool.description).toContain("returned sessionKey, messageId, and sessionId");
+      expect(tool.description).toContain("Without history, hits are snippets only");
+      expect(tool.description).toContain("Search line numbers are not history offsets");
+      expect(tool.description).toContain("never read raw transcript files");
+      expect(tool.description).toContain("top-level warning or action guidance");
+      expect(tool.description).toContain("disabled=true, or stale=true");
     }
   });
 
@@ -238,13 +241,12 @@ describe("buildPromptSection", () => {
     for (const text of [lazy.search.description, lazy.get.description]) {
       expect(text).toContain("MEMORY.md, USER.md");
       expect(text).toContain("recursively under memory/");
-      expect(text).toContain("results are partial");
+      expect(text).toContain("Report recall as partial");
       expect(text.includes("configured extra paths")).toBe(sourceCase.extraPaths.length > 0);
     }
     const defaultSearchScope = lazy.search.description.split(". ", 1)[0] ?? "";
     expect(defaultSearchScope.includes("indexed session transcripts")).toBe(sourceCase.sessions);
     expect(lazy.get.description).not.toContain("indexed session transcripts");
-    expect(lazy.search.description).toContain("Corpus outcomes cover each requested corpus");
     expect(lazy.get.description).toContain("status=ok");
     expect(lazy.get.description).toContain("status=not_found");
   });

@@ -15,7 +15,12 @@ import type { ProcessGatewayAllowlistParams } from "./bash-tools.exec-host-gatew
 export async function prepareCronStandingGrantConsumption(
   params: Pick<
     ProcessGatewayAllowlistParams,
-    "runId" | "command" | "workdir" | "requestedEnv" | "bypassHostApprovalFloors"
+    | "runId"
+    | "command"
+    | "workdir"
+    | "requestedEnv"
+    | "legacyScratchRequestedEnv"
+    | "bypassHostApprovalFloors"
   >,
   source: CronRunExecSource,
   hostPolicy: Pick<Parameters<typeof prepareCronExecHostPolicyUse>[1], "security" | "ask">,
@@ -52,11 +57,25 @@ export async function prepareCronStandingGrantConsumption(
   let initial: ConsumeCronStandingGrantResult;
   try {
     assertOccurrence();
-    initial = await validateCronStandingGrant({
-      ...lookup,
-      databaseOptions: { path: context.admission.databasePath, env: context.environment },
-      assertCurrent: assertOccurrence,
-    });
+    const validate = () =>
+      validateCronStandingGrant({
+        ...lookup,
+        databaseOptions: { path: context.admission.databasePath, env: context.environment },
+        assertCurrent: assertOccurrence,
+      });
+    initial = await validate();
+    if (initial.outcome === "no-grant" && params.legacyScratchRequestedEnv) {
+      // 11.10 stored runtime scratch in the hash. Retain its exact binding and authority.
+      const legacyBinding = buildCronExecOperationBinding({
+        command: params.command,
+        cwd: params.workdir,
+        env: params.legacyScratchRequestedEnv,
+      });
+      if (legacyBinding !== lookup.operationBinding) {
+        lookup.operationBinding = legacyBinding;
+        initial = await validate();
+      }
+    }
     assertOccurrence();
   } catch (error) {
     policy.release();

@@ -57,10 +57,8 @@ import {
 } from "./subagent-announce-delivery.runtime.js";
 import { runDescendantWake } from "./subagent-announce-descendant-wake.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
-import {
-  createSubagentAnnounceObligation,
-  type SubagentAnnounceFlowOutcome,
-} from "./subagent-announce-obligation.js";
+import { createSubagentAnnounceObligation } from "./subagent-announce-obligation-lifecycle.js";
+import type { SubagentAnnounceFlowOutcome } from "./subagent-announce-obligation.js";
 import {
   resolveAnnounceOrigin,
   resolveSubagentCompletionOrigin,

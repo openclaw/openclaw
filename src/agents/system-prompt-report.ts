@@ -174,8 +174,13 @@ function resolveRenderedSkillsPrompt(systemPrompt: string, skillsPrompt: string)
   // The renderer places the catalog after this boundary. Workspace examples and
   // provider headings in the stable prefix are not the rendered Skills section.
   const prompt = splitSystemPromptCacheBoundary(systemPrompt)?.dynamicSuffix ?? systemPrompt;
-  // Callers may pass the stored XML catalog; `skills_read` sessions render its compact form.
-  for (const catalog of new Set([input, compactCatalogForSkillRead(input)])) {
+  // Callers may pass the stored XML catalog; `skills_read` sessions render a compact form,
+  // names only when `skills_search` is usable.
+  for (const catalog of new Set([
+    input,
+    compactCatalogForSkillRead(input, false),
+    compactCatalogForSkillRead(input, true),
+  ])) {
     for (const heading of prompt.matchAll(/(?:^|\n)## Skills\n/g)) {
       const sectionStart = heading.index + heading[0].length;
       const catalogStart = prompt.indexOf(catalog, sectionStart);

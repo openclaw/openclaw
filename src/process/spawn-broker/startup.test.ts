@@ -1,10 +1,12 @@
 import { spawnSync } from "node:child_process";
+import { once } from "node:events";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { withTestTimeout } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { captureRetainedNativeWorkerSource } from "../../infra/worker-native-lifecycle.js";
 import { createSpawnBrokerHost } from "./host.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -37,6 +39,50 @@ describe.skipIf(skipBrokerTests)("spawn broker startup failure", () => {
       await expect(command.ready()).rejects.toThrow("fixture file reader is unavailable");
     } finally {
       await command.close();
+    }
+  });
+
+  it("keeps command capture mandatory only for hosts that can run commands", async () => {
+    const wrapper = path.join(tempDirs.make("openclaw-attachment-broker-"), "broker.mts");
+    writeFileSync(
+      wrapper,
+      `import { registerHooks } from "node:module";
+       registerHooks({ resolve(specifier, context, nextResolve) {
+         if (specifier === "./execa-worker.js" && context.parentURL?.includes("/process/spawn-broker/")) {
+           throw new Error("fixture command handler is unavailable");
+         }
+         return nextResolve(specifier, context);
+       } });
+       await import(${JSON.stringify(new URL("./worker.ts", import.meta.url).href)});`,
+    );
+    const workerUrl = pathToFileURL(wrapper);
+    const source = captureRetainedNativeWorkerSource({
+      runtimeGeneration: {
+        resolve: (url) => (/\/spawn-broker\/worker\.[jt]s$/u.test(url.pathname) ? workerUrl : url),
+        retain() {},
+      },
+    });
+    await using cleanup = new AsyncDisposableStack();
+    cleanup.defer(async () => {
+      await source.retireIdleBroker();
+    });
+    const resource = await source.captureIndependentResource(
+      new URL(
+        "data:text/javascript,export function createNativeWorkerResource(port) { port.on('message', value => port.postMessage(value)); return { close() { port.close() } } }",
+      ),
+    );
+    cleanup.defer(() => resource.close());
+    const reply = once(resource.port, "message");
+    resource.port.postMessage("captured", []);
+    expect(await reply).toEqual(["captured"]);
+
+    for (const options of [{ workerUrl }, { workerUrl, nativeResources: true as const }]) {
+      const host = createSpawnBrokerHost(options);
+      try {
+        await expect(host.ready()).rejects.toThrow("fixture command handler is unavailable");
+      } finally {
+        await host.close();
+      }
     }
   });
 

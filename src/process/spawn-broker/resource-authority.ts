@@ -5,6 +5,7 @@ import { fitsBrokerSocketPath } from "./socket-directory.js";
 
 export type NativeResourceAuthority = {
   endpoint: string;
+  attachmentsOnly?: true;
   /** Private socket directory for the endpoint; undefined when the endpoint needs none. */
   directory: string | undefined;
   secret: string;
@@ -15,7 +16,7 @@ export type NativeResourceAuthority = {
  * is decided only here and forwarded whole to the broker, which creates and removes it. The host
  * removes it again after readiness in case the broker could not.
  */
-export function createNativeResourceAuthority(): NativeResourceAuthority {
+export function createNativeResourceAuthority(attachmentsOnly?: true): NativeResourceAuthority {
   const name = `oc-br-${randomBytes(16).toString("hex")}`;
   const preferred = join(tmpdir(), name);
   const directory =
@@ -26,6 +27,7 @@ export function createNativeResourceAuthority(): NativeResourceAuthority {
         : join("/tmp", name);
   const secret = randomBytes(32).toString("hex");
   return {
+    ...(attachmentsOnly ? { attachmentsOnly } : {}),
     directory,
     secret,
     endpoint: directory ? join(directory, "resource.sock") : `\\\\.\\pipe\\oc-br-${secret}`,

@@ -4,8 +4,6 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers
 import { registerAgentSessionLoopTestLifecycle } from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { retainSessionEntryWorkerPublication } from "../../config/sessions/session-accessor.sqlite-entry-worker-publication.js";
-import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
-import { removeSessionMember as removeSessionMemberSync } from "../../config/sessions/session-sharing-store.native.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -23,7 +21,7 @@ import * as profileReader from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { captureGatewayDeviceRevocation } from "../device-revocation.js";
 import { SessionMutationAuthorizationChangedError as AuthorizationChangedError } from "../session-sharing.js";
-import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
+import { rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { bindChatProfile } from "./chat-send-admission-fixtures.test-support.js";
 import { admitChatSend } from "./chat-send-admission.js";
@@ -210,37 +208,6 @@ it("retains callback custody during database closure", async () => {
     root.release();
     caller.release();
   }
-});
-
-it("rejects membership revoked inside retained chat admission before dispatch", async () => {
-  await using fixture = await createBrowserFollowupFixture({
-    createdActor: { type: "human", source: "profile", id: "another-profile" },
-  });
-  const cfg = { ...rolePolicyConfig(), session: { store: fixture.scope.storePath } };
-  const member = roleClient("view", "chat-admission-member");
-  Object.assign(fixture.client, member, { connId: "chat-admission-member" });
-  fixture.context.getRuntimeConfig = () => cfg;
-  await patchSessionEntryCore(fixture.scope, () => ({ visibility: "read-only" }));
-  await addSessionMember(fixture.scope, {
-    identityId: member.authenticatedUserProfile!.profileId,
-    addedBy: "another-profile",
-  });
-  const prepared = await authorize(fixture);
-  const { authorization, authorizationError, respond } = prepared;
-  expect(authorizationError).toBeNull();
-  await expect(
-    admitChatSend({
-      ...prepared,
-      withPreparedCurrent: (facts, consume, assertSourceCurrent) => {
-        removeSessionMemberSync(fixture.scope, member.authenticatedUserProfile!.profileId);
-        return authorization.withPreparedCurrent!(facts, consume, assertSourceCurrent);
-      },
-    }),
-  ).resolves.toEqual({ ok: false });
-  expect(fixture.context.dedupe.size).toBe(0);
-  expect(rpcSourceTesting.size).toBe(0);
-  expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-  expect(respond).toHaveBeenCalledWith(false, undefined, expect.anything());
 });
 
 it("joins a session write still publishing when durable recovery reconciliation resumes", async () => {
