@@ -984,18 +984,26 @@ class WearRealtimeTalkControllerTest {
     }
 
   @Test
-  fun `stop sends detach disposition only when Gateway advertises close disposition`() =
+  fun `stop closes through the captured request lease with detach disposition`() =
     runTest {
-      for ((advertised, expectedDisposition) in listOf(true to "detach", false to null)) {
+      val cases =
+        listOf(
+          setOf("talk-session-close-disposition") to "detach",
+          emptySet<String>() to null,
+        )
+      for ((capabilities, expectedDisposition) in cases) {
         val closeParams = mutableListOf<String?>()
-        val controller =
-          testTalkController(
-            requestGateway = { method, paramsJson, _ ->
+        val lease =
+          GatewaySession.RequestLease(
+            endpointStableId = "wear-test-gateway",
+            advertisedCapabilities = capabilities,
+            requestImpl = { method, paramsJson, _, withEnqueue ->
+              withEnqueue {}
               if (method == "talk.session.close") closeParams += paramsJson
               if (method == "talk.session.create") """{"relaySessionId":"relay-1"}""" else """{"ok":true}"""
             },
-            supportsCloseDisposition = { advertised },
           )
+        val controller = testTalkController(captureRequestLease = { lease })
 
         assertTrue(controller.start("watch-a", "session-a", "attempt-a", "en"))
         assertTrue(controller.stop("watch-a", "attempt-a"))
@@ -1004,6 +1012,28 @@ class WearRealtimeTalkControllerTest {
         assertEquals("relay-1", payload.getValue("sessionId").jsonPrimitive.content)
         assertEquals(expectedDisposition, payload["disposition"]?.jsonPrimitive?.content)
       }
+    }
+
+  @Test
+  fun `unconfirmed detach close triggers owning lease reconnect fallback`() =
+    runTest {
+      var reconnects = 0
+      val lease =
+        GatewaySession.RequestLease(
+          endpointStableId = "wear-test-gateway",
+          advertisedCapabilities = setOf("talk-session-close-disposition"),
+          reconnectIfCurrentImpl = { reconnects += 1 },
+          requestImpl = { method, _, _, withEnqueue ->
+            withEnqueue {}
+            if (method == "talk.session.create") """{"relaySessionId":"relay-1"}""" else error("close failed")
+          },
+        )
+      val controller = testTalkController(captureRequestLease = { lease })
+
+      assertTrue(controller.start("watch-a", "session-a", "attempt-a", "en"))
+      assertTrue(controller.stop("watch-a", "attempt-a"))
+
+      assertEquals(1, reconnects)
     }
 }
 
@@ -1016,7 +1046,15 @@ private fun CoroutineScope.testTalkController(
   sendWatchFrame: suspend (WearRealtimeAttemptOwner, WearRealtimeAudioFrameType, ByteArray) -> Unit = { _, _, _ -> },
   onSnapshot: (WearRealtimeTalkSnapshot) -> Unit = {},
   onForceCloseWatchChannel: (WearRealtimeAttemptOwner) -> Unit = {},
-  supportsCloseDisposition: () -> Boolean = { false },
+  captureRequestLease: () -> GatewaySession.RequestLease? = {
+    GatewaySession.RequestLease(
+      endpointStableId = "wear-test-gateway",
+      requestImpl = { method, paramsJson, timeoutMs, withEnqueue ->
+        withEnqueue {}
+        requestGateway(method, paramsJson, timeoutMs)
+      },
+    )
+  },
 ): WearRealtimeTalkController =
   WearRealtimeTalkController(
     scope = this,
@@ -1026,7 +1064,7 @@ private fun CoroutineScope.testTalkController(
     sendWatchFrame = sendWatchFrame,
     onSnapshot = onSnapshot,
     onForceCloseWatchChannel = onForceCloseWatchChannel,
-    supportsCloseDisposition = supportsCloseDisposition,
+    captureRequestLease = captureRequestLease,
   )
 
 private suspend fun WearRealtimeTalkController.start(

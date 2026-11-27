@@ -1,6 +1,7 @@
 package ai.openclaw.app.wear
 
 import ai.openclaw.app.asStringOrNull
+import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.TalkSessionCloseDisposition
 import ai.openclaw.app.node.parseJsonParamsObject
 import ai.openclaw.app.voice.RealtimeAgentCoordinator
@@ -52,6 +53,11 @@ private data class WearRealtimeAttemptKey(
   val attemptId: String,
 )
 
+private data class ClosingTalkSession(
+  val sessionId: String,
+  val lease: GatewaySession.RequestLease,
+)
+
 private enum class ActiveTalkState(
   val status: WearRealtimeTalkStatus,
   val text: String,
@@ -96,7 +102,15 @@ internal class WearRealtimeTalkController(
     ) -> Unit,
   private val onSnapshot: (WearRealtimeTalkSnapshot) -> Unit = {},
   private val onForceCloseWatchChannel: (WearRealtimeAttemptOwner) -> Unit = {},
-  private val supportsCloseDisposition: () -> Boolean = { false },
+  private val captureRequestLease: () -> GatewaySession.RequestLease? = {
+    GatewaySession.RequestLease(
+      endpointStableId = "wear-test-gateway",
+      requestImpl = { method, paramsJson, timeoutMs, withEnqueue ->
+        withEnqueue {}
+        requestGateway(method, paramsJson, timeoutMs)
+      },
+    )
+  },
 ) {
   private val lifecycleMutex = Mutex()
   private val lifecycleStateLock = Any()
@@ -106,6 +120,8 @@ internal class WearRealtimeTalkController(
   val snapshot: StateFlow<WearRealtimeTalkSnapshot> = _snapshot
 
   @Volatile private var sessionId: String? = null
+
+  @Volatile private var requestLease: GatewaySession.RequestLease? = null
 
   @Volatile private var activeOwner: WearRealtimeAttemptOwner? = null
 
@@ -178,10 +194,19 @@ internal class WearRealtimeTalkController(
           activeOwner != owner ||
           ownerSessionKey != sessionKey
 
+      val lease =
+        captureRequestLease()
+          ?: run {
+            synchronized(lifecycleStateLock) {
+              if (!startIsStale()) fail("Gateway not connected", expectedOwner = owner)
+            }
+            return@withLock false
+          }
+
       val payload =
         try {
           requestPhoneRealtimeSessionWithLanguageFallback(language) { requestedLanguage ->
-            requestGateway(
+            lease.request(
               "talk.session.create",
               buildJsonObject {
                 put("sessionKey", JsonPrimitive(sessionKey))
@@ -211,7 +236,7 @@ internal class WearRealtimeTalkController(
       // abort tears it down, or abort wins and the late relay is closed without resurrection.
       val activated =
         synchronized(lifecycleStateLock) {
-          if (startIsStale()) {
+          if (startIsStale() || !lease.isCurrent()) {
             if (activeOwner == owner) resetLocked()
             false
           } else if (createdSessionId.isNullOrBlank()) {
@@ -225,6 +250,7 @@ internal class WearRealtimeTalkController(
               ),
             )
             sessionId = createdSessionId
+            requestLease = lease
             eventDispatchScope?.cancel()
             eventDispatchScope = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
             startOutputLoop(owner, createdSessionId)
@@ -236,7 +262,7 @@ internal class WearRealtimeTalkController(
       if (!activated) {
         if (!createdSessionId.isNullOrBlank()) {
           runCatching {
-            closeGatewaySession(createdSessionId)
+            closeGatewaySession(ClosingTalkSession(createdSessionId, lease))
           }
         }
         return@withLock false
@@ -262,7 +288,7 @@ internal class WearRealtimeTalkController(
               (nodeId == null) == (attemptId == null)
             }
           if (!identityMatches) return@withLock false
-          sessionId.also { resetLocked() }
+          captureClosingSessionLocked().also { resetLocked() }
         }
       if (closingSession != null) {
         runCatching { closeGatewaySession(closingSession) }
@@ -275,7 +301,7 @@ internal class WearRealtimeTalkController(
       val closingSession =
         synchronized(lifecycleStateLock) {
           if (activeOwner != owner) return@withLock false
-          sessionId.also { resetLocked() }
+          captureClosingSessionLocked().also { resetLocked() }
         }
       if (closingSession != null) {
         scope.launch { runCatching { closeGatewaySession(closingSession) } }
@@ -754,7 +780,7 @@ internal class WearRealtimeTalkController(
         if (expectedSessionId != null && sessionId != expectedSessionId) return
         Log.w(TAG, message)
         val currentOwner = activeOwner
-        val closingSession = sessionId
+        val closingSession = captureClosingSessionLocked()
         realtimeAgentCoordinator.resetTransport()
         setSnapshot(
           _snapshot.value.copy(
@@ -776,19 +802,19 @@ internal class WearRealtimeTalkController(
     closingOwner?.let(onForceCloseWatchChannel)
   }
 
-  private suspend fun closeGatewaySession(closingSession: String) {
-    val params =
-      buildJsonObject {
-        put("sessionId", JsonPrimitive(closingSession))
-        if (supportsCloseDisposition()) {
-          put("disposition", JsonPrimitive(TalkSessionCloseDisposition.Detach.wireValue))
-        }
-      }
-    requestGateway("talk.session.close", params.toString(), 5_000L)
+  private fun captureClosingSessionLocked(): ClosingTalkSession? =
+    sessionId?.let { id -> requestLease?.let { lease -> ClosingTalkSession(id, lease) } }
+
+  private suspend fun closeGatewaySession(closingSession: ClosingTalkSession) {
+    closingSession.lease.closeTalkSession(
+      closingSession.sessionId,
+      TalkSessionCloseDisposition.Detach,
+    )
   }
 
   private fun closeTransportLocked() {
     sessionId = null
+    requestLease = null
     activeOwner = null
     ownerSessionKey = null
     audioFrames?.close()

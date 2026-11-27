@@ -2257,10 +2257,10 @@ class NodeRuntime internal constructor(
             (appContext as? NodeApp)?.wearRealtimeChannels?.close(owner)
           }
         },
-        supportsCloseDisposition = {
+        captureRequestLease = {
           connectedEndpoint?.stableId?.let { gatewayId ->
-            operatorSession.captureRequestLease(gatewayId)?.supportsCapability("talk-session-close-disposition")
-          } == true
+            operatorSession.captureRequestLease(gatewayId)
+          }
         },
       )
     }
