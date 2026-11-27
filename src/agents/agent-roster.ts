@@ -13,7 +13,7 @@ import { SYSTEM_AGENT_ROSTER_ENTRIES } from "../system-agent/agent-id.js";
 
 type AgentEntry = AgentConfig;
 type AgentRosterProperty = { kind: "entries" | "list"; value: unknown };
-export type AgentRosterConfig = {
+type AgentRosterConfig = {
   readonly agents?: {
     readonly ownership?: "explicit";
     readonly entries?: Readonly<Record<string, unknown>>;

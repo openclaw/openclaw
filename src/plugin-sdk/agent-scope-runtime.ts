@@ -19,8 +19,6 @@ export {
   tryResolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 
-export { tryResolveAgentOperationAgentId } from "../agents/agent-scope-config.js";
-
 export { resolveSessionAgentIdStrict, resolveSessionAgentIdsStrict };
 
 /** Preserve the SDK's writable array while core readers share immutable roster facts. */
