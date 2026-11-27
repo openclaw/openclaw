@@ -449,6 +449,11 @@ accepted server update or invalidate a published trial. Run `openclaw update sta
 before retrying an unconfirmed request. Preparation and installed-package delegation
 retain their own lifecycle budgets. The installed CLI must contain this repair.
 
+The release CLI retains the latest Gateway-acknowledged `runId` through unavailable
+status and CLI errors. Human output prints the ID at acknowledgement; an ID alone
+does not confirm completion. See [status and history](/cli/update/status-and-history)
+for JSON output shapes.
+
 Gateway post-ready maintenance and `openclaw update repair` refresh the known
 legacy Git launcher from development build `d44f263`, which incorrectly counted
 `gateway status` as a start. The candidate must contain this repair. It applies
