@@ -13,6 +13,7 @@ import {
   bindUiPreferences,
   loadUiPreferences,
   patchSettings,
+  sessionRendererPreloadKey,
   settingsKeyForGateway,
   type UiPreferences,
   type UiSettings,
@@ -239,10 +240,12 @@ export function createApplicationTheme(
     refresh,
   });
   const onStorage = (event: StorageEvent) => {
+    const gatewayUrl = gateway.connection.gatewayUrl;
     if (
       event.key === null ||
-      event.key === settingsKeyForGateway(gateway.connection.gatewayUrl) ||
-      event.key === backgroundPreferenceStorageKey(gateway.connection.gatewayUrl)
+      event.key === settingsKeyForGateway(gatewayUrl) ||
+      event.key === backgroundPreferenceStorageKey(gatewayUrl) ||
+      event.key === sessionRendererPreloadKey(gatewayUrl)
     ) {
       refresh();
     }

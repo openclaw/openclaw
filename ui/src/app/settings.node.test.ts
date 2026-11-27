@@ -38,6 +38,21 @@ function writeStored(value: Record<string, unknown>, gatewayUrl = expectedGatewa
   localStorage.setItem(`openclaw.control.settings.v1:${gatewayUrl}`, JSON.stringify(value));
 }
 
+function preloadStorageKey(gatewayUrl = expectedGatewayUrl("")) {
+  return `openclaw.control.preloadSessionRenderer.v1:${gatewayUrl}`;
+}
+
+function rejectPreloadStorageWrites() {
+  const dedicatedKey = preloadStorageKey();
+  const setItem = localStorage.setItem.bind(localStorage);
+  vi.spyOn(localStorage, "setItem").mockImplementation((key, value) => {
+    if (key === dedicatedKey) {
+      throw new DOMException("Storage quota exceeded", "QuotaExceededError");
+    }
+    setItem(key, value);
+  });
+}
+
 describe("resolveApplicationStartupSettings", () => {
   beforeEach(() => {
     vi.stubGlobal("window", {});
@@ -243,6 +258,47 @@ describe("gateway settings and layout persistence", () => {
     persistSessionToken(gwUrl, "");
     expect(loadSettings().token).toBe("");
     expect(sessionStorage.length).toBe(0);
+  });
+
+  it("keeps chat renderer preloading scoped to its Gateway across a downgrade write", () => {
+    const gatewayUrl = expectedGatewayUrl("");
+    patchSettings({ preloadSessionRenderer: true, sessionDeleteConfirm: false });
+
+    // The parent build rewrites its settings with only the fields it recognizes.
+    writeStored({ gatewayUrl });
+    expect(loadSettings()).toMatchObject({ gatewayUrl, preloadSessionRenderer: true });
+    expect(loadSettings().sessionDeleteConfirm).toBeUndefined();
+    expect(loadSettings("wss://other.example").preloadSessionRenderer).toBeUndefined();
+  });
+
+  it("carries forward a previously stored chat renderer opt-in and lets users turn it off", () => {
+    const gatewayUrl = expectedGatewayUrl("");
+    writeStored({ gatewayUrl, preloadSessionRenderer: true });
+    expect(loadSettings().preloadSessionRenderer).toBe(true);
+
+    writeStored({ gatewayUrl });
+    expect(loadSettings().preloadSessionRenderer).toBe(true);
+
+    patchSettings({ preloadSessionRenderer: false });
+    writeStored({ gatewayUrl, preloadSessionRenderer: true });
+    expect(loadSettings().preloadSessionRenderer).not.toBe(true);
+  });
+
+  it("saves shared settings when the chat renderer preference key cannot be written", () => {
+    rejectPreloadStorageWrites();
+    patchSettings({ preloadSessionRenderer: true, sessionDeleteConfirm: false });
+    expect(readStored().sessionDeleteConfirm).toBe(false);
+    expect(loadSettings().preloadSessionRenderer).toBe(true);
+  });
+
+  it("can turn preloading off when browser storage is full", () => {
+    patchSettings({ preloadSessionRenderer: true });
+    vi.spyOn(localStorage, "setItem").mockImplementation(() => {
+      throw new DOMException("Storage quota exceeded", "QuotaExceededError");
+    });
+
+    patchSettings({ preloadSessionRenderer: false });
+    expect(loadSettings().preloadSessionRenderer).not.toBe(true);
   });
 
   it("isolates remembered sessions and selected agents across inferred base paths", () => {
@@ -478,6 +534,11 @@ describe("gateway settings and layout persistence", () => {
       expect(theme.settings.realtimeTalkInputDeviceId).toBe("cross-tab-mic");
       expect(credentialReads).not.toHaveBeenCalled();
       expect(theme.settings).not.toHaveProperty("token");
+
+      const preloadKey = preloadStorageKey(first.gatewayUrl);
+      localStorage.setItem(preloadKey, "true");
+      events.dispatchEvent(Object.assign(new Event("storage"), { key: preloadKey }));
+      expect(theme.settings.preloadSessionRenderer).toBe(true);
 
       const background = selectBackgroundSource({ kind: "none" });
       saveBackgroundPreference(first.gatewayUrl, background);

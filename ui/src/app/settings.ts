@@ -125,6 +125,31 @@ function currentGatewaySelectionKeyForPage(pageUrl: string): string {
   return `${CURRENT_GATEWAY_SELECTION_KEY_PREFIX}${gatewayOriginScope(pageUrl)}`;
 }
 
+export function sessionRendererPreloadKey(gatewayUrl: string): string {
+  return `openclaw.control.preloadSessionRenderer.v1:${gatewayOriginScope(gatewayUrl)}`;
+}
+
+function loadSessionRendererPreloadPreference(
+  storage: Storage | null,
+  gatewayUrl: string,
+  previous?: boolean,
+): boolean | undefined {
+  try {
+    const key = sessionRendererPreloadKey(gatewayUrl);
+    const saved = storage?.getItem(key);
+    if (saved === "true" || saved === "false") {
+      return saved === "true";
+    }
+    if (previous === true) {
+      // Preserve an earlier opt-in before an older build can rewrite the shared record.
+      storage?.setItem(key, "true");
+    }
+  } catch {
+    // Storage can be unavailable while the in-memory preference still works.
+  }
+  return previous === true ? true : undefined;
+}
+
 function normalizeSidebarPreTeamScope(value: unknown): string | null | undefined {
   const agentId = normalizeOptionalString(value);
   return value === null ? null : agentId ? normalizeAgentId(agentId) : undefined;
@@ -403,7 +428,11 @@ export function loadUiPreferences(
       (selectedGatewayUrl ? readSettingsForGateway(storage, selectedGatewayUrl) : null) ??
       (targetGatewayUrl ? null : readSettingsForGateway(storage, defaultUrl));
     if (!source) {
-      return { ...defaults, background: loadBackgroundPreference(defaults.gatewayUrl) };
+      return {
+        ...defaults,
+        background: loadBackgroundPreference(defaults.gatewayUrl),
+        preloadSessionRenderer: loadSessionRendererPreloadPreference(storage, defaults.gatewayUrl),
+      };
     }
     const parsed = source.parsed;
     const parsedGatewayUrl = source.gatewayUrl;
@@ -475,7 +504,11 @@ export function loadUiPreferences(
         ? (personalNavigation?.railShortcuts ?? defaults.sidebarEntries)
         : (normalizeSidebarEntries(parsedRecord.railShortcuts) ?? defaults.sidebarEntries),
       sidebarLiveActivity: booleanSetting("sidebarLiveActivity"),
-      ...(parsed.preloadSessionRenderer === true ? { preloadSessionRenderer: true } : {}),
+      preloadSessionRenderer: loadSessionRendererPreloadPreference(
+        source.available ? storage : null,
+        gatewayUrl,
+        parsed.preloadSessionRenderer,
+      ),
       chatMessageMaxWidth: normalizeChatMessageMaxWidth(parsed.chatMessageMaxWidth),
       showAdvancedSettings: booleanSetting("showAdvancedSettings"),
       pinnedAgentIds: normalizeUniqueTrimmedStringList(parsed.pinnedAgentIds),
@@ -650,7 +683,6 @@ export function saveSettings(
       ),
     },
     sidebarLiveActivity: next.sidebarLiveActivity === false ? false : undefined,
-    preloadSessionRenderer: next.preloadSessionRenderer === true ? true : undefined,
     chatMessageMaxWidth: normalizeChatMessageMaxWidth(next.chatMessageMaxWidth),
     showAdvancedSettings: next.showAdvancedSettings === true ? true : undefined,
     // Empty pin list is the default; only real pins persist.
@@ -673,12 +705,40 @@ export function saveSettings(
     openLinksExternally: next.openLinksExternally === true ? true : undefined,
   };
   saveBackgroundPreference(next.gatewayUrl, next.background);
+  let preloadKeyToRemove: string | undefined;
+  if (
+    available &&
+    storage &&
+    (next.preloadSessionRenderer !== undefined || source?.parsed.preloadSessionRenderer === true)
+  ) {
+    const preloadKey = sessionRendererPreloadKey(next.gatewayUrl);
+    try {
+      storage.setItem(preloadKey, String(next.preloadSessionRenderer === true));
+    } catch {
+      // Keep the shared save working, including any opt-in that could not be moved.
+      if (next.preloadSessionRenderer === true) {
+        persisted.preloadSessionRenderer = true;
+      } else {
+        preloadKeyToRemove = preloadKey;
+      }
+    }
+  }
   const serialized = JSON.stringify(persisted);
-  settingsFallback = { key: scopedKey, record: persisted, pendingNavigation };
+  settingsFallback = {
+    key: scopedKey,
+    record:
+      next.preloadSessionRenderer === true
+        ? { ...persisted, preloadSessionRenderer: true }
+        : persisted,
+    pendingNavigation,
+  };
   try {
     const { pageUrl } = deriveDefaultGatewayUrl();
     const selectionKey = currentGatewaySelectionKeyForPage(pageUrl);
     if (available && storage) {
+      if (preloadKeyToRemove) {
+        storage.removeItem(preloadKeyToRemove);
+      }
       storage.setItem(scopedKey, serialized);
       if (options.selectGateway || storage.getItem(selectionKey) == null) {
         storage.setItem(selectionKey, next.gatewayUrl);
