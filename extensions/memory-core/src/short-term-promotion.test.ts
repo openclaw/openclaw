@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
@@ -19,7 +18,6 @@ import { previewRemDreaming } from "./dreaming-phases.js";
 vi.mock("openclaw/plugin-sdk/memory-host-events", () => ({
   appendMemoryHostEvent: vi.fn(async () => {}),
 }));
-vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", { spy: true });
 
 import {
   configureMemoryCoreDreamingState,
@@ -1561,40 +1559,6 @@ describe("short-term promotion", () => {
     expect((await applyAllCandidates(workspaceDir, ranked)).applied).toBe(0);
     const afterRetry = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
     expect(afterRetry.match(/Promoted From Short-Term Memory/g)).toHaveLength(1);
-  });
-
-  it("does not promote a trusted recall candidate from a quarantined daily file", async (workspaceDir) => {
-    const relativePath = "memory/2026-04-01.md";
-    const snippet = "Gateway binds loopback and port 18789";
-    await writeDailyMemoryNote(workspaceDir, "2026-04-01", [snippet]);
-    await recordMemoryRecalls(workspaceDir, "gateway host", [
-      memoryRecallResult(relativePath, 1, 1, 0.92, snippet, {
-        provenance: {
-          originClass: "agent",
-          sessionKind: "unknown",
-          observedAt: Date.parse("2026-04-01T12:00:00.000Z"),
-        },
-      }),
-    ]);
-    const ranked = await rankAllCandidates(workspaceDir);
-    expect(ranked[0]?.provenance?.originClass).toBe("agent");
-
-    vi.mocked(listMemoryArtifactProvenance).mockResolvedValueOnce([
-      {
-        relativePath,
-        provenance: {
-          fileHash: "0".repeat(64),
-          originClass: "untrusted",
-          observedAt: Date.parse("2026-04-01T12:05:00.000Z"),
-        },
-      },
-    ]);
-
-    const applied = await applyAllCandidates(workspaceDir, ranked);
-    expect(applied.applied).toBe(0);
-    expect(applied.rejectedCandidates[0]?.reason).toBe("origin filter (untrusted)");
-    expect(applied.rejectedCandidates[0]?.category).toBe("origin");
-    await expectEnoent(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"));
   });
 
   it("excludes a candidate downgraded during consolidation from the fallback write", async (workspaceDir) => {

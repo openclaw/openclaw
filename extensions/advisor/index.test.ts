@@ -75,7 +75,9 @@ async function startAdvisor(everyToolCalls = 1, reply = "NO_CHANGE", runTrigger 
     }
   };
   const startRun = async (runId = "run-1", trigger = "user", sessionKey = "agent:main:main") => {
-    const beforeReply = on.mock.calls[0]?.[1] as Hook | undefined;
+    const beforeReply = on.mock.calls.find(([name]) => name === "before_agent_reply")?.[1] as
+      | Hook
+      | undefined;
     await beforeReply?.({}, { sessionKey, runId, trigger });
     await send("lifecycle", "start", {}, undefined, runId);
   };
@@ -151,6 +153,26 @@ it.each(["Looks fine to me.", "CORRECTION", "NO_CHANGE"])(
     expect(run.steer).not.toHaveBeenCalled();
   },
 );
+
+it.each([
+  ["the effective tool policy restricts Codex native tools for this session", "tool_policy"],
+  ["OpenClaw sandboxing is active for this session", "sandbox"],
+  ["OpenClaw exec host=node is active for this session", "exec_host_node"],
+  ["an unexpected failure occurred", undefined],
+])("records an advisor outcome when the fork refuses: %s", async (cause, reason) => {
+  const run = await startAdvisor();
+  // The fork boundary returns plain Errors; Codex's side-question suite pins these sentences.
+  run.forkSession.mockRejectedValue(
+    new Error(`Codex-native /btw side-question mode is unavailable because ${cause}.`),
+  );
+  await run.tool(1);
+  expect(run.warn).toHaveBeenCalledExactlyOnceWith(
+    reason
+      ? `advisor: review skipped for session agent:main:main: ${reason}`
+      : "advisor: review failed for session agent:main:main: fork_failed",
+  );
+  expect(run.steer).not.toHaveBeenCalled();
+});
 
 it("reviews subagent runs, ignores non-user runs and does not review at run end", async () => {
   const run = await startAdvisor(1, "NO_CHANGE", "cron");

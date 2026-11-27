@@ -14,6 +14,7 @@ import {
   recordAgentDatabaseAdmissions,
 } from "../state/agent-database-admission.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import type { PreparedReadinessChecker } from "./health/types.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-method-policy.js";
 import type { GatewayStartupModuleMocks } from "./server-startup-module-mocks.test-support.js";
 import type { startGatewayPostAttachRuntime } from "./server-startup-post-attach.js";
@@ -21,7 +22,7 @@ import type { postAttachMocks } from "./server-startup-post-attach.mocks.test-su
 import { logGatewayReady } from "./server-startup-readiness.js";
 import type { startGatewaySidecars } from "./server-startup-sidecars.js";
 import type { GatewayStartupTrace } from "./server-startup-trace.js";
-import { createReadinessChecker, type PreparedReadinessChecker } from "./server/readiness.js";
+import { createReadinessChecker } from "./server/readiness.js";
 import { createPreparedReadinessFixture } from "./server/readiness.test-support.js";
 
 type PostAttachParams = Parameters<typeof startGatewayPostAttachRuntime>[0];
@@ -59,11 +60,12 @@ export function registerGatewayStartupReadinessTests(params: {
       const release = createDeferred();
       const stat = fs.stat;
       const heldStat = vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+        const result = await stat(...args);
         if (args[0] === process.execPath) {
           entered.resolve();
           await release.promise;
         }
-        return stat(...args);
+        return result;
       });
       let closing = false;
       const log = { info: vi.fn() };

@@ -88,23 +88,25 @@ class DocsSource {
     }
     const origins = [];
     let end = 0;
-    let matched = false;
+    let changed = false;
     this.text = this.text.replace(pattern, (...args) => {
-      matched = true;
       const offset = args.at(-2);
       const value = typeof replacement === "function" ? replacement(...args) : replacement;
+      if (value === args[0]) {
+        return value;
+      }
+      changed = true;
       for (let i = end; i < offset; i++) {
         origins.push(this.origins[i]);
       }
-      for (let i = 0; i < value.length; i++) {
-        origins.push(
-          value === args[0] ? this.origins[offset + i] : mapped ? this.origins[offset] : undefined,
-        );
+      // Replacement offsets count UTF-16 code units, including both surrogate halves.
+      for (let codeUnits = value.length; codeUnits > 0; codeUnits--) {
+        origins.push(mapped ? this.origins[offset] : undefined);
       }
       end = offset + args[0].length;
       return value;
     });
-    if (!matched) {
+    if (!changed) {
       return this;
     }
     for (let i = end; i < this.origins.length; i++) {

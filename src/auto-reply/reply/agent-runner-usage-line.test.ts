@@ -2,7 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { captureModelCostPricing } from "../../utils/usage-format.js";
+import { captureModelCostPricing } from "../../model-catalog/usage-pricing.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import { appendUsageLine, resolveResponseUsageLine } from "./agent-runner-usage-line.js";
 
@@ -53,7 +53,8 @@ it.each<
   [name: string, usage: Usage, tiered: boolean, expected: string | undefined, preparations: number]
 >([
   ["costless flat-price runtime", completeUsage, false, "est $1.00", 1],
-  ["explicit zero total", { ...completeUsage, cost: { total: 0 } }, true, "est $0.0000", 1],
+  ["placeholder zero total", { ...completeUsage, cost: { total: 0 } }, false, "est $1.00", 1],
+  ["placeholder zero tiered total", { ...completeUsage, cost: { total: 0 } }, true, undefined, 1],
   ["incomplete tiered cost", completeUsage, true, undefined, 1],
   ["input-only usage without a price", { input: 1_000_000 }, false, undefined, 0],
   ["output-only usage without a price", { output: 50 }, false, undefined, 0],
@@ -66,7 +67,12 @@ it.each<
     const model = modelDefinition("priced", {
       cost: {
         ...cost,
-        tieredPricing: tiered ? [{ ...cost, input: 2, output: 0, range: [200_000] }] : undefined,
+        tieredPricing: tiered
+          ? [
+              { ...cost, range: [0, 200_000] },
+              { ...cost, input: 2, output: 0, range: [200_000] },
+            ]
+          : undefined,
       },
     });
     const config = {

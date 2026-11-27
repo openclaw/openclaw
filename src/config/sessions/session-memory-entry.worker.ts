@@ -7,7 +7,6 @@ import {
   type SessionEntryRenderSink,
 } from "../../../packages/memory-host-sdk/src/host/session-entry-render.js";
 import { LruCache } from "../../infra/lru-cache.js";
-import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import type { WorkerTaskChannel } from "../../infra/worker-task-server.js";
 import { prepareAssistantTranscriptText } from "../../shared/chat-message-content.js";
@@ -96,10 +95,8 @@ async function streamSessionMemoryEntries(
                 database,
                 group.map(({ resolved }) => resolved.sessionId),
               ),
-              // SQLite reads larger transcripts after the batch transaction, one at a time.
-              deferAboveBytes: isPostgresSqlConnection(database.db)
-                ? Number.POSITIVE_INFINITY
-                : MAX_SNAPSHOT_BYTES,
+              // Larger transcripts are read after the batch transaction, one at a time.
+              deferAboveBytes: MAX_SNAPSHOT_BYTES,
             }),
             toDatabaseOptions(group[0]!.resolved),
           )
@@ -145,8 +142,8 @@ async function streamSessionMemoryEntries(
         };
       });
       // Transcripts the retained-snapshot cache admits (at most MAX_SNAPSHOT_BYTES) are read
-      // inside the batch transaction; on SQLite, larger ones, which the cache never retains,
-      // are streamed in slices after it.
+      // inside the batch transaction; larger ones, which the cache never retains, are streamed
+      // in slices after it.
       const exported = withOpenClawAgentDatabaseReadOnly(
         (database) =>
           runSqliteReadSnapshotSync(

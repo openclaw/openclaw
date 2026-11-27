@@ -1,11 +1,11 @@
 /** Process-local reverse registry from prepared agent directories to agent ids. */
 import path from "node:path";
 import { isMainThread } from "node:worker_threads";
+import { observeOwnedDirectory } from "../infra/owned-directory-observation.js";
 import {
   resolveIdentityPathViaExistingAncestor,
   resolveIdentityPathViaExistingAncestorSync,
-} from "../infra/boundary-path.js";
-import { observeOwnedDirectory } from "../infra/owned-directory-observation.js";
+} from "../infra/path-existence.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";

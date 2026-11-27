@@ -104,6 +104,39 @@ describe("stateless Template Add", () => {
     });
   };
 
+  it("installs welcome metadata as ordinary agent configuration", async () => {
+    const manifestPath = path.join(stateDir, "source", "CLAW.md");
+    await writeFile(
+      manifestPath,
+      [
+        "---",
+        "schemaVersion: 1",
+        "agent:",
+        "  id: briefing",
+        "  description: Follows your repositories.",
+        "  recommendedPrompts:",
+        "    - Set up a repository",
+        "    - Brief me on recent changes",
+        "---",
+        "Follow tracked projects.",
+        "",
+      ].join("\n"),
+    );
+    const read = await readTemplateManifestFile(manifestPath);
+    assert(read.ok, JSON.stringify(read.diagnostics));
+    source = read;
+    const plan = await buildPlan();
+    expect(plan.blockers).toEqual([]);
+    const result = await apply(plan);
+    expect(result.status, JSON.stringify(result.error)).toBe("complete");
+    expect(config.agents.entries).toMatchObject({
+      briefing: {
+        description: "Follows your repositories.",
+        recommendedPrompts: ["Set up a repository", "Brief me on recent changes"],
+      },
+    });
+  });
+
   it("builds a declared skill folder and preserves supporting bytes and executability after Add", async () => {
     const root = path.join(stateDir, "source");
     const skill = path.join(root, "bundles", "incident-guide");
@@ -765,6 +798,28 @@ describe("stateless Template Add", () => {
     expect(result.error?.message).toContain("Workspace changed");
     expect(Object.keys(config.agents.entries)).toEqual(["main", "workspace-agent"]);
     expect(existsSync(path.join(plan.agent.workspace, "USER.md"))).toBe(true);
+  });
+
+  it("removes the new agent from the config file when runtime activation fails", async () => {
+    const plan = await buildPlan();
+    const result = await apply(plan, {
+      commitConfig: undefined,
+      waitForAgentRuntime: async () => {
+        throw new Error("runtime unavailable");
+      },
+    });
+
+    expect(result).toMatchObject({
+      status: "partial",
+      configCommitted: false,
+      workspaceCreated: false,
+      error: { code: "add_failed", message: "runtime unavailable" },
+    });
+    const written = JSON.parse(await readFile(path.join(stateDir, "openclaw.json"), "utf8"));
+    expect(Object.keys(written.agents.entries)).toEqual(["main"]);
+    expect(existsSync(plan.agent.workspace)).toBe(false);
+    config = written;
+    expect((await buildPlan()).agent.finalId).toBe(plan.agent.finalId);
   });
 
   it("does not touch shared requirements when agent publication fails", async () => {

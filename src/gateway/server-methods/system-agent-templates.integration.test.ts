@@ -34,6 +34,7 @@ import type { withResolvedClawHubSource } from "../../templates/clawhub-source.j
 import { readTemplateManifestFile } from "../../templates/reader.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
+import { cancelAgentRuntimeBoundApprovals } from "./approval-run-cancellation.js";
 import { prepareDelegatedSystemAgentApproval } from "./system-agent-approval.js";
 import { withSystemAgentTemplateRequests } from "./system-agent-templates.js";
 import type { GatewayRequestHandlerOptions, GatewaySystemAgentSession } from "./types.js";
@@ -73,7 +74,6 @@ it.for([
   "automatic",
   "deny",
   "cancel",
-  "revoked",
   "labs",
   "authority",
   "trust",
@@ -201,7 +201,6 @@ it.for([
               return { text: "Host review requested.", directive: directiveRef.current };
             },
           });
-          let current = true;
           const controller = new AbortController();
           const manager = createTestApprovalManager<SystemAgentApprovalRequestPayload>(test, {
             approvalKind: "system-agent",
@@ -229,7 +228,6 @@ it.for([
               },
             },
             signal: controller.signal,
-            hasCurrentClientAuthority: () => current,
             context: {
               getRuntimeConfig: () => config,
               broadcastToConnIds: vi.fn(),
@@ -258,7 +256,7 @@ it.for([
                 const review = await engine.handle("Review this published Template");
                 expect(review.text).toContain(
                   scenario === "labs"
-                    ? "Settings > Labs"
+                    ? "Gateway configuration"
                     : scenario === "authority"
                       ? "operator.admin"
                       : "Template Add preview is unavailable",
@@ -302,15 +300,16 @@ it.for([
                 const description = (await manager.getSnapshot(pending.id))?.request.description;
                 expect(description).toContain(modelReview?.planIntegrity);
                 expect(description).toContain(modelReview?.target.workspace);
-                if (scenario === "revoked") {
-                  current = false;
-                }
                 if (scenario === "cancel") {
                   controller.abort(new Error("Fixture requester cancelled"));
                   expect(validateAgentRunDelegatedAuthority(authority)).toBe(true);
                 }
                 if (scenario === "cancel") {
-                  await manager.forceDenyIfRuntimeAuthorityClosed(pending.id);
+                  await cancelAgentRuntimeBoundApprovals({
+                    authority,
+                    manager,
+                    publish: vi.fn(),
+                  });
                 } else {
                   await manager.resolve(
                     pending.id,

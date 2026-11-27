@@ -63,6 +63,7 @@ it("keeps a cron context prefix readable while an inbound turn waits for actor a
     const inputAdmission = createReplyInputAdmission({
       followupRun,
       replyOperation,
+      runId: "inbound-run",
       sessionKey: target.sessionKey,
       storePath: target.storePath,
       sourceTurnId,
@@ -122,7 +123,6 @@ it("keeps a cron context prefix readable while an inbound turn waits for actor a
       ...inputAdmission,
       followupRun,
       replyOperation,
-      typing,
       activeIsNewSession: false,
       activeSessionStore: undefined,
       cfg: {},

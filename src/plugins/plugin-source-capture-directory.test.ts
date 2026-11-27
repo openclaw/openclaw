@@ -11,6 +11,7 @@ import { cleanupStartupPluginSourceCaptures } from "../commands/startup-plugin-s
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import * as census from "../infra/openclaw-process-census.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { acquireSqliteStagingToken } from "../infra/sqlite-staging-token.js";
 import {
   createGatewaySchedulerClock,
@@ -170,6 +171,30 @@ function runChild(
   expect(result.status, result.stderr).toBe(exitCode);
   return result;
 }
+
+it("retains a loaded addon token after completed source and cache close until host exit", async () => {
+  const result = runChild(`
+    const { captureLoadedAddonThroughSourceClose } = await import(${moduleSpecifier("loadedAddon")});
+    console.log(JSON.stringify(await captureLoadedAddonThroughSourceClose(process.env.OPENCLAW_STATE_DIR)));
+  `);
+  const { instance, captured } = JSON.parse(result.stdout.trim());
+  // Natural child exit must also retire its unrefed physical owner before cleanup.
+  await expect
+    .poll(() => {
+      try {
+        const release = acquireSqliteStagingToken(instance, "reclaim");
+        release();
+        return true;
+      } catch (error) {
+        if (!isSqliteLockError(error)) {
+          throw error;
+        }
+        return false;
+      }
+    })
+    .toBe(true);
+  expect(fs.existsSync(captured)).toBe(true);
+});
 
 // Forced WeakRef collection needs V8; JSC may retain dead objects through conservative stack roots.
 it("does not retain the caller that first imports source capture storage", () => {
@@ -691,10 +716,21 @@ it("metadata retirement joins its sweep, not sibling schedules", async () => {
   const release = () => fsPromises.writeFile(path.join(barrier, "release"), "exit");
   const removal = interceptPluginCaptureReclamation(
     `
-    import fs from 'node:fs';
-    const watcher = fs.watch(${JSON.stringify(barrier)}, (_event, name) => {
-      if (String(name) === 'release') watcher.close();
-    });
+    import { access } from 'node:fs/promises';
+    import { setTimeout as delay } from 'node:timers/promises';
+    const deadline = Date.now() + 60_000;
+    void (async () => {
+      while (Date.now() < deadline) {
+        try {
+          await access(${JSON.stringify(path.join(barrier, "release"))});
+          return;
+        } catch (error) {
+          if (error.code !== 'ENOENT') throw error;
+        }
+        await delay(10);
+      }
+      throw new Error('Fixture release was not published');
+    })();
   `,
     () => entered.resolve(),
   );

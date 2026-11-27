@@ -118,6 +118,23 @@ export function fullClaw(text = TEXT): StoredClaw {
     member_approved_at: Object.fromEntries(
       Object.keys(authority.members).map((accountId) => [accountId, NOW]),
     ),
+    member_browser_requests: Object.fromEntries(
+      Object.keys(authority.members).map((accountId) => [
+        accountId,
+        {
+          notice: {
+            requestId: id(1),
+            label: text,
+            location: text,
+            requestedAt: NOW,
+            expiresAt: NOW + 1800,
+          },
+          recent: [1, 2, 3].map((n) => ({ requestId: id(n), until: NOW + 1800 })),
+          terminal: [4, 5, 6].map((n) => ({ requestId: id(n), until: NOW + 1800 })),
+          blockedUntil: NOW + 1800,
+        },
+      ]),
+    ),
     owner_profile: { sub: text, email: text, name: text },
     binding: {
       v: 1,

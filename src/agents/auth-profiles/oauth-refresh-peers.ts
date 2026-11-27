@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveIdentityPathViaExistingAncestor } from "../../infra/boundary-path.js";
 import { toErrorObject } from "../../infra/errors.js";
+import { resolveIdentityPathViaExistingAncestor } from "../../infra/path-existence.js";
 import { withSqliteReadOnlyWorkerScope } from "../../infra/sqlite-readonly-worker.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";

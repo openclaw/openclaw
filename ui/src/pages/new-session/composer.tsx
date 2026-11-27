@@ -63,11 +63,8 @@ import {
   ComposerWidthEdge,
   prepareComposerWidthEdge,
 } from "../chat/components/chat-composer-width-ref.tsx";
-import {
-  NewSessionPlusMenu,
-  NewSessionSelectionStatus,
-  StartControl,
-} from "./composer-capability-controls.tsx";
+import { ChatLazyBoundary } from "../chat/components/chat-lazy-boundary.tsx";
+import { NewSessionPlusMenu, StartControl } from "./composer-capability-controls.tsx";
 import type { NewSessionComposerOptions } from "./composer-options.ts";
 import { createComposerPlaceholder } from "./composer-placeholder.ts";
 import { NewSessionComposerTextareaContext } from "./composer-textarea-context.ts";
@@ -300,6 +297,9 @@ function prepareComposer(options: NewSessionComposerOptions, textarea: NewSessio
 const [petAdmitted, admitPet] = createSignal(false);
 const LobsterPet = lazy(() => import("../../components/lobster-pet.tsx"), {
   export: "LobsterPet",
+});
+const ChatInviteAccess = lazy(() => import("../chat/components/chat-invite-access.tsx"), {
+  export: "ChatInviteAccess",
 });
 
 type NewSessionComposerFrame = ReturnType<typeof prepareComposer>;
@@ -597,12 +597,34 @@ export function NewSessionComposer(props: {
         </Show>
         <HumanMentionMenuView args={[textarea.mentionMenu, frame().mentionMenuHost]} />
         <EmojiMenu args={[textarea.emojiMenu, "new-session", textarea.getTextarea()]} />
+        <Show
+          when={
+            frame().mentionDirectory?.inviteAccessAvailable &&
+            frame()
+              .mentionMenuHost.getMentions()
+              .some((mention) => mention.access !== undefined)
+          }
+        >
+          <ChatLazyBoundary>
+            <ChatInviteAccess
+              text={frame().visibleMessage}
+              mentions={frame().mentionMenuHost.getMentions()}
+              options={textarea.mentionMenu.selectedInviteOptions}
+              onChange={(mentions) => {
+                frame().mentionMenuHost.commitDraft(frame().visibleMessage, mentions);
+                focusComposerInput(textarea.getTextarea(), { preventScroll: true });
+              }}
+            />
+          </ChatLazyBoundary>
+        </Show>
         <Show when={!options().nativeTerminal}>
           <ChatAttachmentInputs {...frame().attachmentProps} inputHandle={inputHandle} />
         </Show>
         <AttachmentPreview {...frame().attachmentProps} readRevision={frame()} />
-        <AttachmentReadStatus pendingReads={options().attachmentDraft.reads.pendingReads} />
-        <div class="agent-chat__composer-lede">{options().dictationStatus}</div>
+        <AttachmentReadStatus
+          pendingReads={options().attachmentDraft.reads.pendingReads}
+          videoStatus={options().attachmentDraft.reads.videoPreparationStatus?.message}
+        />
         <div class="agent-chat__composer-input-row">
           <div class="agent-chat__composer-combobox">
             <Show when={frame().skillMenuVisible}>
@@ -647,9 +669,6 @@ export function NewSessionComposer(props: {
               />
             </Show>
             {options().permissionControl}
-            <Show when={!options().nativeTerminal}>
-              <NewSessionSelectionStatus options={options()} />
-            </Show>
           </div>
           <div class="agent-chat__composer-trail">
             <div class="agent-chat__composer-controls">
@@ -672,6 +691,7 @@ export function NewSessionComposer(props: {
                 </div>
               </Show>
             </div>
+            {options().dictationStatus}
             <div
               class="agent-chat__composer-actions"
               ref={(element) => {

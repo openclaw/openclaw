@@ -19,6 +19,7 @@ import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { createChatProps, disposeChatView, renderChatPropsInto } from "./chat-view.test-helpers.ts";
 import type { ChatProps } from "./chat-view.tsx";
 import { createComposerQuestions } from "./components/chat-composer-questions.ts";
+import { questionPanelIn } from "./components/chat-question-card.test-support.ts";
 import { getTranscriptState } from "./components/chat-thread-interactions.ts";
 import {
   flushDeferredRowPrune,
@@ -88,7 +89,8 @@ it.each([false, true])(
       onAsyncQuestionSubmit: submit,
     });
     renderChatPropsInto(container, props);
-    await vi.waitFor(() => expect(other()).not.toBeNull());
+    await questionPanelIn(container);
+    expect(other()).not.toBeNull();
     const answer = other()!;
     answer.value = "New contributors";
     answer.dispatchEvent(new Event("input", { bubbles: true }));

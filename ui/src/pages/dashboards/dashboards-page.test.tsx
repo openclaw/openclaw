@@ -15,6 +15,7 @@ import {
 } from "../../lib/sessions/session-capability.test-support.ts";
 import { dashboardSessionListQuery } from "../../lib/sessions/session-requests.ts";
 import { sessionChanged } from "../../lib/sessions/session-rpc.test-support.ts";
+import { createNavigationPreferencesFixture } from "../../test-helpers/application-context-fixtures.ts";
 import {
   createTestGatewayClient,
   type GatewayRequestHandler,
@@ -42,6 +43,7 @@ function pageContext(overrides: {
     agents: createAgentCapability(gateway),
     agentIdentity: createAgentIdentityCapability(gateway),
     sessions: { listSnapshot: () => snapshot(null), subscribeList: () => () => {} },
+    navigation: createNavigationPreferencesFixture(),
     ...overrides,
   } as ApplicationContext;
 }
@@ -83,6 +85,7 @@ function routeData(...rows: GatewaySessionRow[]): DashboardsRouteData {
     error: null,
     basePath: "",
     fallbackAgentId: "main",
+    agents: [],
     mainKey: "main",
     globalScope: false,
   };
@@ -299,6 +302,40 @@ it.each([false, true])("keeps pages across row events; retires late pages: %s", 
   expect(cardTitles(element)).toEqual(["Old"]);
 });
 
+it("matches all sigma forms in the gallery and its author picker", async () => {
+  const rows = Array.from({ length: 9 }, (_, index) =>
+    row(`agent:main:dashboard:board-${index}`, `Board ${index}`, {
+      createdActor: {
+        type: "human",
+        id: `user-${index}`,
+        label: index === 0 ? "ΝΙΚΟΣ" : `User ${index}`,
+      },
+    }),
+  );
+  const { container } = await mountDashboard(undefined, routeData(...rows));
+  flush();
+  container.querySelector<HTMLButtonElement>('button[aria-label="Search dashboards"]')!.click();
+  flush();
+  const search = container.querySelector<HTMLInputElement>('input[type="search"]')!;
+  for (const query of ["Σ", "σ", "ς"]) {
+    changeValue(search, query);
+    expect(cardTitles(container)).toEqual(["Board 0"]);
+  }
+  changeValue(search, "");
+  container.querySelector<HTMLButtonElement>('button[aria-label="Filter by author"]')!.click();
+  const picker = await waitForSolid(() => {
+    const input = document.querySelector<HTMLInputElement>(".dashboards-authors__search input");
+    expect(input).not.toBeNull();
+    return input!;
+  });
+  for (const query of ["Σ", "σ", "ς"]) {
+    changeValue(picker, query);
+    const choices = document.querySelectorAll(".dashboards-authors__row");
+    expect(choices).toHaveLength(1);
+    expect(choices[0]?.textContent).toContain("ΝΙΚΟΣ");
+  }
+});
+
 it("renders the route host and filters by search and author and sorts cards by title", async () => {
   const authoredRow = (key: string, name: string, updatedAt: number, id: string, label: string) =>
     row(`agent:main:dashboard:${key}`, name, {
@@ -343,4 +380,31 @@ it("renders the route host and filters by search and author and sorts cards by t
   );
   changeValue(document.querySelector<HTMLSelectElement>("#dashboards-display select")!, "title");
   expect(cardTitles(element)).toEqual(["Alpha signals", "Zulu monitor"]);
+});
+
+it("pins a dashboard to the sidebar rail from its card menu and unpins it again", async () => {
+  const context = pageContext({});
+  context.navigation.update({ sidebarEntries: ["route:usage"] });
+  const key = "agent:main:dashboard:release";
+  const { container } = await mountDashboard(context, routeData(row(key, "Release health")));
+  flush();
+  const trigger = container.querySelector<HTMLButtonElement>(
+    `[data-dashboard-session="${key}"] button[aria-label="Dashboard actions"]`,
+  )!;
+  const choose = async (label: string) => {
+    trigger.click();
+    await waitForSolid(() =>
+      expect(document.querySelector(`[role="menuitem"][aria-label="${label}"]`)).not.toBeNull(),
+    );
+    document.querySelector<HTMLElement>(`[role="menuitem"][aria-label="${label}"]`)!.click();
+    flush();
+  };
+
+  await choose("Pin to the sidebar");
+  expect(context.navigation.snapshot.sidebarEntries).toEqual([
+    "route:usage",
+    `session-rail:${key}`,
+  ]);
+  await choose("Unpin from the sidebar");
+  expect(context.navigation.snapshot.sidebarEntries).toEqual(["route:usage"]);
 });

@@ -1,4 +1,3 @@
-import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -9,6 +8,7 @@ import {
   prepareSessionSourceEffect,
   type SessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
+import { openCommandStdinFile } from "../../process/command-stdin-file.js";
 import { runCommandWithTimeout, runExec, spawnCommand } from "../../process/exec.js";
 import { MAX_WORKSPACE_RESULT_GIT_PACK_BYTES } from "../../worker/node-workspace-transfer-protocol.js";
 import type { RepositoryGitHistory } from "./session-repository-checkpoints.types.js";
@@ -47,10 +47,9 @@ export async function importWorkerWorkspaceHistory(params: {
   if (!params.gitPackPath) {
     throw new Error("Cloud workspace Git history has no pack");
   }
-  const pack = await fs.open(params.gitPackPath, constants.O_RDONLY | constants.O_NOFOLLOW);
-  try {
-    const info = await pack.stat();
-    if (!info.isFile() || info.size > MAX_WORKSPACE_RESULT_GIT_PACK_BYTES) {
+  {
+    await using pack = await openCommandStdinFile(params.gitPackPath);
+    if (pack.size > MAX_WORKSPACE_RESULT_GIT_PACK_BYTES) {
       throw new Error("Cloud workspace Git pack exceeds its byte limit");
     }
     const commitGuard = composeSessionSourceAssertion([
@@ -77,14 +76,12 @@ export async function importWorkerWorkspaceHistory(params: {
         "--strict",
       ]).slice(1),
       {
-        stdinFileDescriptor: pack.fd,
+        stdinFile: pack.stdinFile,
         baseEnv: params.baseEnv,
         timeoutMs: WORKSPACE_RESULT_GIT_TIMEOUT_MS,
         maxBuffer: 1024 * 1024,
       },
     );
-  } finally {
-    await pack.close();
   }
   // Verify the received graph, not just the worker's ancestry claim.
   await git(params.root, ["merge-base", "--is-ancestor", history.baseCommit, history.headCommit], {

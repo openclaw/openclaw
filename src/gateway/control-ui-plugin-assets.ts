@@ -32,16 +32,10 @@ import {
   CUSTOM_PLUGIN_UI_DISABLED_MESSAGE,
   isControlUiPluginAllowed,
 } from "./control-ui-plugin-policy.js";
-import {
-  authorizeControlUiPluginCookieRequest,
-  prepareControlUiPluginCookieRequest,
-} from "./http-auth-plugin-cookie.js";
+import { prepareControlUiPluginCookieRequest } from "./http-auth-plugin-cookie.js";
 import { authorizeControlUiReadRequestOrReply } from "./http-auth-utils.js";
 import { sendGatewayAuthFailure, sendMethodNotAllowed } from "./http-common.js";
-import {
-  captureHttpRequestAuthority,
-  type GatewayHttpRequestAuthOptions,
-} from "./http-request-authority.js";
+import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import { authorizeOperatorScopesForRequiredScope, READ_SCOPE } from "./method-scopes.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
@@ -410,17 +404,7 @@ export async function handleControlUiPluginAssetRequest(
     respondNotFound(res);
     return true;
   }
-  const hasCurrentClientAuthority = captureHttpRequestAuthority({ ...params, req });
-  await prepareControlUiPluginCookieRequest(req, {
-    requestPath: pathname,
-    authGeneration: resolveSharedGatewaySessionGeneration(params.auth, params.trustedProxies),
-    res,
-  });
-  if (res.writableEnded || res.destroyed) {
-    return true;
-  }
-  // Keep the final policy check in the same synchronous frame as asset disclosure.
-  const cookieAuth = authorizeControlUiPluginCookieRequest(req, {
+  const cookieAuth = await prepareControlUiPluginCookieRequest(req, {
     requestPath: pathname,
     authGeneration: resolveSharedGatewaySessionGeneration(params.auth, params.trustedProxies),
     res,
@@ -439,10 +423,6 @@ export async function handleControlUiPluginAssetRequest(
       return true;
     }
   } else if (!(await authorizeControlUiReadRequestOrReply({ req, res, ...params }))) {
-    return true;
-  }
-  if (!hasCurrentClientAuthority()) {
-    sendGatewayAuthFailure(res, { ok: false, reason: "unauthorized" });
     return true;
   }
   const registry = getActiveBrowserRegistry();

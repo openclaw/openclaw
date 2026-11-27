@@ -18,7 +18,7 @@ import {
 import { withSessionTranscriptDeltaReader } from "./session-transcript-delta-read.js";
 
 it.each(["restore alias", "delta alias", "maintenance replacement"] as const)(
-  "refuses %s at the commit grant without changing either database or retained archive bytes",
+  "refuses %s at the commit grant without further writes and preserves recoverable archive bytes",
   async (operation) =>
     withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const originalPath = state.statePath("stores", "original.sqlite");
@@ -38,6 +38,7 @@ it.each(["restore alias", "delta alias", "maintenance replacement"] as const)(
         await runSessionColdStorageMaintenance({ config: maintenanceConfig(originalPath) });
       }
       const before = [original.snapshot(), replacement.snapshot()];
+      let originalBeforeGrant = before[0];
       const archives = [original, replacement].map((fixture) =>
         readSessionColdTranscript(fixture.database(), historicalId),
       );
@@ -68,6 +69,7 @@ it.each(["restore alias", "delta alias", "maintenance replacement"] as const)(
                   ...params,
                   onCommitRequest() {
                     commitRequests++;
+                    originalBeforeGrant = original.snapshot();
                     if (operation !== "maintenance replacement") {
                       fs.unlinkSync(alias);
                       fs.symlinkSync(replacementPath, alias);
@@ -102,7 +104,10 @@ it.each(["restore alias", "delta alias", "maintenance replacement"] as const)(
           fs.renameSync(detached, originalPath);
         }
       }
-      expect([original.snapshot(), replacement.snapshot()]).toEqual(before);
+      expect([original.snapshot(), replacement.snapshot()]).toEqual([
+        originalBeforeGrant,
+        before[1],
+      ]);
       expect(
         [original, replacement].map((fixture) =>
           readSessionColdTranscript(fixture.database(), historicalId),
@@ -110,6 +115,11 @@ it.each(["restore alias", "delta alias", "maintenance replacement"] as const)(
       ).toEqual(archives);
       for (const file of files) {
         expect(fs.readFileSync(file.pathname)).toEqual(file.bytes);
+      }
+      if (operation !== "maintenance replacement") {
+        await restoreSessionColdTranscript(original.scope);
+        expect(readSessionColdTranscript(original.database(), historicalId)).toBeUndefined();
+        expect(original.snapshot()).toEqual(original.original);
       }
     }),
 );

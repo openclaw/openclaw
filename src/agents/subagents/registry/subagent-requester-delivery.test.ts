@@ -38,8 +38,8 @@ afterEach(() => {
 it.for([
   { kind: "requesterBatch", visibleFinal: false },
   { kind: "requesterBatch", visibleFinal: true },
-  { kind: "block", visibleFinal: false },
-  { kind: "block", visibleFinal: true },
+  { kind: "settleInHistory", visibleFinal: false },
+  { kind: "settleInHistory", visibleFinal: true },
 ] as const)(
   "retains committed consumption when a continuation is cancelled (%j)",
   async ({ kind, visibleFinal }) => {
@@ -86,7 +86,6 @@ it.for([
                 delivered: false,
                 path: "direct",
                 reason: "delivery_suppressed",
-                disposition: "intentional_non_delivery",
               },
             })
           : {
@@ -94,12 +93,7 @@ it.for([
                 (subagent) =>
                   mutateSubagentCompletionInDatabase(database, {
                     kind,
-                    params: {
-                      subagent,
-                      operatorAuthorityUnavailable: true,
-                      reason: "private requester continuation was cancelled",
-                      disposition: "intentional_non_delivery",
-                    },
+                    subagent,
                     now: 100,
                   }).records,
               ),
@@ -109,7 +103,7 @@ it.for([
     expect(result.records).toHaveLength(2);
     for (const { subagent } of result.records) {
       expect(subagent.delivery).toMatchObject({
-        status: visibleFinal ? "failed" : "delivered",
+        status: "delivered",
         requesterDelivery: { state: "consumed", runId },
       });
       if (kind === "requesterBatch") {

@@ -4,7 +4,10 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { acquireGatewayLock, resolveGatewayLockPaths } from "./gateway-lock.js";
-import { acquireGatewayStateOwner } from "./gateway-state-owner.js";
+import {
+  acquireGatewayStateOwner,
+  acquireStateDatabaseSchemaLease,
+} from "./gateway-state-owner.js";
 
 const fixtureRootTracker = createSuiteTempRootTracker({
   prefix: "openclaw-gateway-lock-unactionable-",
@@ -24,14 +27,6 @@ function createDeadlineClock() {
     },
   };
 }
-
-// A live PID whose identity the inspector cannot confirm: `/proc` reads fail
-// when the reader runs outside the container that wrote the lock, so the owner
-// stays "unknown" and the lock is never reclaimed, whatever its age.
-const unverifiableOwner = {
-  readProcessCmdline: () => null,
-  readProcessStartTime: () => null,
-};
 
 async function pathExists(target: string): Promise<boolean> {
   return fs
@@ -53,10 +48,10 @@ async function makeCase() {
   return { env, lockDir, ...resolveGatewayLockPaths(env, lockDir) };
 }
 
-function attemptLock(
-  { env, lockDir }: Pick<Awaited<ReturnType<typeof makeCase>>, "env" | "lockDir">,
-  inspectOwner = true,
-) {
+function attemptLock({
+  env,
+  lockDir,
+}: Pick<Awaited<ReturnType<typeof makeCase>>, "env" | "lockDir">) {
   const clock = createDeadlineClock();
   return acquireGatewayLock({
     allowInTests: true,
@@ -67,7 +62,6 @@ function attemptLock(
     pollIntervalMs: 25,
     now: clock.now,
     sleep: clock.sleep,
-    ...(inspectOwner ? unverifiableOwner : {}),
   });
 }
 
@@ -79,6 +73,58 @@ describe("Gateway lock timeout diagnostics", () => {
   afterAll(async () => {
     await fixtureRootTracker.cleanup();
   });
+
+  it.each([
+    { kind: "schema", releaseOnWait: true, expectedWaits: 1 },
+    { kind: "schema", releaseOnWait: false, expectedWaits: 2 },
+    { kind: "offline", releaseOnWait: false, expectedWaits: 0 },
+  ])(
+    "waits only for transient schema custody ($kind, releases: $releaseOnWait)",
+    async ({ kind, releaseOnWait, expectedWaits }) => {
+      const { env, lockDir, stateDir } = await makeCase();
+      const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+      const holder =
+        kind === "schema"
+          ? acquireStateDatabaseSchemaLease(databasePath)
+          : acquireGatewayStateOwner({ databasePath });
+      const clock = createDeadlineClock();
+      let waits = 0;
+      try {
+        const attempt = acquireGatewayLock({
+          waitForTransientSchemaOwner: true,
+          allowInTests: true,
+          env,
+          lockDir,
+          role: "sqlite-maintenance",
+          timeoutMs: 50,
+          pollIntervalMs: 25,
+          now: clock.now,
+          sleep: async (ms) => {
+            waits += 1;
+            if (releaseOnWait) {
+              holder.release();
+            }
+            await clock.sleep(ms);
+          },
+        });
+        if (releaseOnWait) {
+          const lock = await attempt;
+          try {
+            expect(lock).not.toBeNull();
+          } finally {
+            await lock?.release();
+          }
+        } else {
+          await expect(attempt).rejects.toThrow("state database is busy");
+        }
+        expect(waits).toBe(expectedWaits);
+      } finally {
+        if (!releaseOnWait || waits === 0) {
+          holder.release();
+        }
+      }
+    },
+  );
 
   it("names the process owner sidecar when a held owner cannot be verified", async () => {
     const { env, lockDir, stateDir, ownerLockPath, stateLockPath } = await makeCase();
@@ -136,7 +182,7 @@ describe("Gateway lock timeout diagnostics", () => {
     await fs.mkdir(path.dirname(path.dirname(ownerLockPath)), { recursive: true });
     await fs.writeFile(path.dirname(ownerLockPath), "not a directory", "utf8");
 
-    const attempt = attemptLock({ env, lockDir }, false);
+    const attempt = attemptLock({ env, lockDir });
     await expect(attempt).rejects.toThrow(ownerLockPath);
   });
 
@@ -158,7 +204,7 @@ describe("Gateway lock timeout diagnostics", () => {
       "utf8",
     );
 
-    const attempt = attemptLock({ env, lockDir }, false);
+    const attempt = attemptLock({ env, lockDir });
     await expect(attempt).rejects.toThrow(stateLockPath);
   });
 });

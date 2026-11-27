@@ -35,7 +35,7 @@ export function resolveUpdateOwnershipFailure(
     ? "Gateway ownership could not be verified."
     : "Gateway maintenance is busy.";
   const nextAction = ownershipUnverified
-    ? "If the recorded holder has stopped, run `openclaw gateway recover-lock` to inspect it before retrying."
+    ? "Stop the recorded Gateway through its service manager or container, then retry."
     : "Wait for the active Gateway or maintenance operation to finish, or stop the Gateway through its service manager before retrying.";
   return {
     message: `Update refused: ${message} ${nextAction}`,
@@ -93,11 +93,17 @@ export function createUpdateConfigFailure(
     snapshot.legacyIssues.some(
       (issue) => issue.path === "agents.list" || issue.path === "agents.entries",
     );
+  // Automatic legacy repair never rewrites included files, and the installed
+  // version's Doctor does not know these fields are retired.
+  const includedLegacy =
+    (snapshot.includedPaths?.length ?? 0) > 0 && snapshot.legacyIssues.length > 0;
   const nextAction =
     retired?.nextAction ??
     (includeOwnedLegacyRoster
       ? "Doctor cannot safely rewrite this include-owned legacy roster. Back up the root config, included files, and persisted state, then temporarily consolidate the original legacy config into one openclaw.json. Preserve roster order, legacy markers, environment and secret references, and configured path meanings. Run `openclaw doctor --fix` or retry the update; after repair and `openclaw config validate` succeed, split the repaired config back into includes and validate again. See https://docs.openclaw.ai/gateway/doctor/config-migrations#agent-roster-migration."
-      : "Run `openclaw doctor --fix` to repair retired or unrecognized configuration fields, then correct any remaining errors before retrying.");
+      : includedLegacy
+        ? `The update migrates ${snapshot.legacyIssues.map((issue) => issue.path).join(", ")} automatically only in a single-file config, and this config uses includes. Keep these settings as they are; do not remove them, because the installed version can then change behavior (a removed disabled heartbeat falls back to the default heartbeat). Back up the root config and included files, temporarily consolidate the included files into one openclaw.json, correct any other errors listed above, and retry the update. After it succeeds and \`openclaw config validate\` passes, split the config back into includes.`
+        : "Run `openclaw doctor --fix` to repair retired or unrecognized configuration fields, then correct any remaining errors before retrying.");
   return new UpdatePreMutationError(
     "invalid-config",
     [

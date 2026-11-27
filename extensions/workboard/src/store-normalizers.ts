@@ -758,7 +758,7 @@ export function normalizeMetadata(
   value: unknown,
   fallback: WorkboardMetadata = {},
   options: {
-    allowMetadataDependencyLinks?: boolean;
+    allowDependencyLinks?: boolean;
     allowArchivedAt?: boolean;
     automationLaunch?: WorkboardLaunchState;
     preserveProofId?: string;
@@ -783,7 +783,7 @@ export function normalizeMetadata(
   const normalizedLinks =
     links === undefined
       ? fallback.links
-      : options.allowMetadataDependencyLinks === false
+      : options.allowDependencyLinks === false
         ? (() => {
             const dependencyLinks = (fallback.links ?? []).filter(isDependencyLink);
             const ordinaryCapacity = Math.max(0, MAX_CARD_LINKS - dependencyLinks.length);

@@ -1,0 +1,2 @@
+25
+# Sign in with ChatGPT session_id affinity: two SIWC wrapper regressions observing the real transport headers (issue #197532).

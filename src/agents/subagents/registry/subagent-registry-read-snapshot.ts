@@ -1,5 +1,4 @@
 import { getAsyncWorkSignal } from "../../../shared/async-work-scope.js";
-import { freezeTrustedJsonSnapshot } from "../../../shared/immutable-data.js";
 import {
   executeExistingOpenClawStateRead,
   getActiveOpenClawStateDatabaseReadSnapshot,
@@ -28,6 +27,7 @@ import {
 } from "./subagent-registry-read-cache.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import type { SubagentRunMaintenanceRecord, SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import { isSubagentRunPayloadEvicted } from "./subagent-run-payload-facts.js";
 import { collectSubagentSessionReadKeys } from "./subagent-session-read-scope.js";
 
@@ -87,7 +87,7 @@ export function mergeSubagentRunReadScope(
       const yielded = readScope.yieldedChildren
         ? [...new Set([...persistedKeys, ...liveKeys])].flatMap((key) => {
             const entry = inMemoryRuns.get(key) ?? compact.get(key);
-            return entry?.pauseReason === "sessions_yield" ? [entry.childSessionKey] : [];
+            return isSubagentPausedByYield(entry) ? [entry.childSessionKey] : [];
           })
         : [];
       if (yielded.length > 0) {
@@ -288,10 +288,10 @@ export async function prepareSubagentSessionRunReadSnapshot(params: {
   const links = getSubagentSessionReadLookup(inMemoryRuns).captureTopology();
   const reply = await executeExistingOpenClawStateRead(
     { path: context.admission.databasePath, env: context.environment },
-    freezeTrustedJsonSnapshot({
+    {
       type: "subagents.runs",
       scope: { kind: "descendants", sessionKeys: roots, liveTopology: links },
-    } as const),
+    },
     { context, current: true },
   );
   if (reply && (reply.projection === "maintenance" || !reply.descendants)) {

@@ -136,7 +136,7 @@ function discoveryReadOptions(discovery?: GatewaySessionStoreDiscovery) {
         env: discovery.env,
         readCandidates: discovery.readCandidates,
         registeredDatabases: (discovery.snapshot?.registeredAgentDatabases ?? []).filter(
-          (entry) => entry.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION,
+          (entry) => entry.schemaVersion >= OPENCLAW_AGENT_SCHEMA_VERSION,
         ),
       }
     : {};

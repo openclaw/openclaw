@@ -7,7 +7,7 @@ import {
   readFileSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { afterAll } from "vitest";
 import { parse } from "yaml";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
@@ -54,23 +54,20 @@ type PerformanceTemplate = {
   root: string;
   git: string;
   target: string;
-  reportCommit: string;
 };
 
 const templateDirs = createTempDirTracker();
-const performanceTemplates = new Map<"base" | "publish", PerformanceTemplate>();
+const performanceTemplates = new Map<"base", PerformanceTemplate>();
 afterAll(() => {
   templateDirs.cleanup();
   performanceTemplates.clear();
 });
 
 export type PerformanceFixtureOptions = {
-  mode: "target" | "record" | "tested" | "kova" | "baseline" | "prepare" | "publish";
+  mode: "target" | "record" | "tested" | "kova" | "baseline" | "prepare";
   successfulGitTrees?: boolean;
   baseline?: "absent" | "invalid" | "trailing-newline";
   duplicate?: boolean;
-  race?: boolean;
-  remoteDuplicateAttempt?: number;
 };
 
 export function preparePerformanceFixture(root: string, options: PerformanceFixtureOptions) {
@@ -80,9 +77,8 @@ export function preparePerformanceFixture(root: string, options: PerformanceFixt
   const seed = join(workspace, "seed");
   const reports = join(temp, "reports");
   const input = join(temp, "input");
-  const publish = options.mode === "publish";
   const reuseDefault = !options.baseline && !options.duplicate;
-  const templateKind = publish ? "publish" : "base";
+  const templateKind = "base";
   const template = reuseDefault ? performanceTemplates.get(templateKind) : undefined;
   const git = template?.git ?? execFileSync("which", ["git"], { encoding: "utf8" }).trim();
   const gitEnv = {
@@ -141,30 +137,14 @@ export function preparePerformanceFixture(root: string, options: PerformanceFixt
     run(workspace, "add", "src");
     run(workspace, "commit", "-m", "fixture target");
     mkdirSync(reports);
-    if (publish) {
-      run(reports, "init", "--initial-branch=main");
-      run(reports, "remote", "add", "origin", "https://github.com/openclaw/clawgrit-reports.git");
-      // Keep FETCH_HEAD's source description valid when the snapshot is copied.
-      run(reports, "fetch", "--depth=1", relative(reports, remote), "main");
-      run(reports, "checkout", "-B", "main", "FETCH_HEAD");
-      run(reports, "config", "core.hooksPath", "/dev/null");
-      commitReport(reports, dest);
-      write(join(reports, ".git/preexisting.lock"), "not invocation-owned\n");
-    }
   }
   const target = template?.target ?? run(workspace, "rev-parse", "HEAD");
-  const reportCommit =
-    template?.reportCommit ?? (publish ? run(reports, "rev-parse", "HEAD") : "a".repeat(40));
   if (!template && reuseDefault) {
     // Snapshot complete repositories and their identities before scenario mutation.
     // Copies own their refs, index and objects; no live process or remote is shared.
     const templateRoot = templateDirs.make(`openclaw-performance-${templateKind}-template-`);
     cpSync(workspace, templateRoot, copyOptions);
-    performanceTemplates.set(templateKind, { root: templateRoot, git, target, reportCommit });
-  }
-  if (publish && options.race) {
-    commitReport(seed, "openclaw-performance/main/200-1/mock-provider");
-    run(seed, "push", remote, "HEAD:main");
+    performanceTemplates.set(templateKind, { root: templateRoot, git, target });
   }
   for (const [file, value] of Object.entries({
     "kova/reports/mock-provider/report.json": "{}\n",
@@ -208,14 +188,12 @@ export function preparePerformanceFixture(root: string, options: PerformanceFixt
     LANE_ID: "mock-provider",
     INPUT_ROOT: input,
     REPORTS_ROOT: reports,
-    REPORT_COMMIT: reportCommit,
     DEST_REL: dest,
     REPORT_URL: `https://github.com/openclaw/clawgrit-reports/tree/main/${dest}`,
     REPORT_PUBLISH_REQUIRED: "true",
     PERFORMANCE_REPORT_SELECTOR: resolve("scripts/lib/kova-report-selector.mjs"),
     PERFORMANCE_PUBLISHER_HELPER: resolve("scripts/lib/kova-report-publish-files.mjs"),
     PUBLISHED_REPORT_MAX_FILE_BYTES: "50000000",
-    ...(publish ? { CLAWGRIT_REPORTS_APP_TOKEN: "fixture-performance-token" } : {}),
   };
   const remoteGit = (...args: string[]) => run(workspace, "--git-dir", remote, ...args);
   const configPath = join(reports, ".git/config");

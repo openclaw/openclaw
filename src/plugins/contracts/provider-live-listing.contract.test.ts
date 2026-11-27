@@ -1,9 +1,10 @@
-// Bundled hosted OpenAI-compatible providers list models from the account, so a new
-// vendor model appears without an OpenClaw release (docs/plugins/sdk-provider-plugins/model-catalogs.md).
+// Bundled hosted providers list models from the account, so a new vendor model appears and
+// runs without an OpenClaw release (docs/plugins/sdk-provider-plugins/model-catalogs.md).
 import fs from "node:fs";
 import path from "node:path";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveProviderRequestPolicy } from "../../agents/provider-attribution.js";
 import { clearLiveCatalogCacheForTests } from "../../plugin-sdk/provider-catalog-live-runtime.js";
 import type { LiveModelCatalogFetchGuard } from "../../plugin-sdk/provider-catalog-live-runtime.js";
 import { registerProviderPlugins } from "../../test-utils/plugin-registration.js";
@@ -151,4 +152,80 @@ describe("bundled hosted OpenAI-compatible providers list models live", () => {
       }
     });
   }
+});
+
+function compareReleaseVersions(left: string, right: string): number {
+  const parts = (version: string) => version.split(/[-+]/u)[0]!.split(".").map(Number);
+  const [a, b] = [parts(left), parts(right)];
+  for (let index = 0; index < Math.max(a.length, b.length); index++) {
+    const difference = (a[index] ?? 0) - (b[index] ?? 0);
+    if (difference !== 0) {
+      return difference;
+    }
+  }
+  return 0;
+}
+
+// ChatGPT gates subscription models on the Codex client version: `/models?client_version=`
+// hides a model whose `minimal_client_version` is newer, and `/responses` rejects it for an
+// older `version` header. OpenClaw must list as a version that shows every launched model,
+// and its own turns must send a version that passes the gate of anything it lists.
+describe("OpenAI subscription models list and run without a release", () => {
+  afterEach(() => {
+    clearLiveCatalogCacheForTests();
+    fetchWithSsrFGuard.mockReset();
+    vi.unstubAllEnvs();
+  });
+
+  it("lists with the Responses version, and OpenClaw turns pass the model gate", async () => {
+    clearLiveCatalogCacheForTests();
+    vi.stubEnv("OPENCLAW_VERSION", "2026.11.5");
+    const minimumCodex = "0.999.0";
+    const listedAs: string[] = [];
+    fetchWithSsrFGuard.mockImplementation(async ({ url }) => {
+      const target = new URL(url);
+      const clientVersion = target.searchParams.get("client_version") ?? "0.0.0";
+      listedAs.push(clientVersion);
+      const gated = {
+        slug: PROBE_MODEL_ID,
+        visibility: "list",
+        minimal_client_version: minimumCodex,
+      };
+      const body = {
+        models: compareReleaseVersions(clientVersion, minimumCodex) >= 0 ? [gated] : [],
+      };
+      return { response: Response.json(body), finalUrl: url, release: async () => {} };
+    });
+    const { default: plugin } = (await import(
+      path.join(repoRoot, "extensions/openai/index.ts")
+    )) as { default: Parameters<typeof registerProviderPlugins>[0] };
+    const provider = (await registerProviderPlugins(plugin)).find((entry) => entry.id === "openai");
+    if (!provider) {
+      throw new Error("extensions/openai registers no openai provider");
+    }
+    // A ChatGPT sign-in without a stored profile lists through the subscription endpoint.
+    const credential = { apiKey: "contract-probe-oauth", discoveryApiKey: "contract-probe-oauth" };
+    const result = await runProviderCatalog({
+      provider,
+      providerIds: ["openai"],
+      config: {},
+      env: {} as NodeJS.ProcessEnv,
+      resolveProviderApiKey: () => credential,
+      resolveProviderAuth: () => ({ ...credential, mode: "oauth", source: "env" }),
+      reportCatalogOutcome: () => {},
+    });
+    const published = [
+      ...(result && "provider" in result ? [result.provider] : []),
+      ...(result && "providers" in result ? Object.values(result.providers ?? {}) : []),
+    ].flatMap((entry) => entry?.models ?? []);
+
+    expect(published.map((model) => model.id)).toContain(PROBE_MODEL_ID);
+    expect(listedAs).toEqual(["2026.11.5"]);
+    const turnVersion = resolveProviderRequestPolicy({
+      provider: "openai",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    }).attributionHeaders?.version;
+    expect(turnVersion).toBe(listedAs[0]);
+    expect(compareReleaseVersions(turnVersion!, minimumCodex)).toBeGreaterThanOrEqual(0);
+  });
 });

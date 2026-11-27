@@ -1,5 +1,5 @@
 ---
-summary: "Automated, hardened OpenClaw installation with Ansible, Tailscale VPN, and firewall isolation"
+summary: "Automated, hardened OpenClaw host installation with Ansible, firewall isolation, and optional Tailscale VPN"
 read_when:
   - You want automated server deployment with security hardening
   - You need firewall-isolated setup with VPN access
@@ -24,10 +24,10 @@ The [openclaw-ansible](https://github.com/openclaw/openclaw-ansible) repo is the
 
 ## What you get
 
-- Firewall-first security: UFW + Docker isolation (only SSH + Tailscale reachable)
-- Tailscale VPN for remote access without exposing services publicly
+- Firewall-first security: UFW + Docker isolation (only SSH reachable, plus Tailscale when enabled)
+- Optional Tailscale VPN for remote access without exposing services publicly
 - Docker for isolated sandbox containers with localhost-only bindings
-- Systemd integration with hardening, auto-starting on boot
+- A dedicated unprivileged `openclaw` user with scoped sudo, ready for `openclaw onboard --install-daemon`
 - One-command setup
 
 ## Quick start
@@ -38,17 +38,20 @@ curl -fsSL https://raw.githubusercontent.com/openclaw/openclaw-ansible/main/inst
 
 ## What gets installed
 
-1. Tailscale (mesh VPN for secure remote access)
-2. UFW firewall (SSH + Tailscale ports only)
+1. Tailscale (mesh VPN), only when `tailscale_enabled=true`
+2. UFW firewall (SSH only, plus Tailscale when enabled), fail2ban for SSH, and unattended security upgrades
 3. Docker CE + Compose V2 (default agent sandbox backend)
-4. Node.js and pnpm (OpenClaw accepts Node 24.16.0+ on 24.x or 26.1.0+; 24.22.1+/26.12.1+ is strongly recommended for security)
-5. OpenClaw, installed host-based, not containerized
-6. A systemd service with security hardening
+4. Node.js from NodeSource (major version set by `nodejs_version`) and pnpm. OpenClaw accepts Node 24.16.0+ on 24.x or 26.1.0+; 24.22.1+/26.12.1+ is strongly recommended for security. Check `node --version` after the install.
+5. OpenClaw, installed host-based with pnpm as the `openclaw` user, not containerized
+
+The playbook does not create `openclaw.json` or a Gateway service. Onboarding does both: it installs the Gateway as the systemd **user** service `openclaw-gateway.service` of the `openclaw` user. The installer does not add systemd sandboxing directives (such as `NoNewPrivileges` or `PrivateTmp`) to that unit.
 
 <Note>
 The gateway runs directly on the host, not in Docker. Agent sandboxing is
 optional; this playbook installs Docker because it is the default sandbox
-backend. See [Sandboxing](/gateway/sandboxing) for other backends.
+backend. The `openclaw` user is not added to the root-equivalent `docker`
+group, so giving the Gateway Docker access is an administrator decision. See
+[Sandboxing](/gateway/sandboxing) for other backends.
 </Note>
 
 ## Post-install setup
@@ -59,8 +62,10 @@ backend. See [Sandboxing](/gateway/sandboxing) for other backends.
     sudo -i -u openclaw
     ```
   </Step>
-  <Step title="Run the onboarding wizard">
-    The post-install script guides you through configuring OpenClaw.
+  <Step title="Run onboarding and install the Gateway service">
+    ```bash
+    openclaw onboard --install-daemon
+    ```
   </Step>
   <Step title="Connect messaging channels">
     Log in to WhatsApp, Telegram, Discord, or Signal:
@@ -70,29 +75,31 @@ backend. See [Sandboxing](/gateway/sandboxing) for other backends.
   </Step>
   <Step title="Verify the installation">
     ```bash
-    sudo systemctl status openclaw
-    sudo journalctl -u openclaw -f
+    openclaw gateway status
+    openclaw security audit
     ```
   </Step>
-  <Step title="Connect to Tailscale">
-    Join your VPN mesh for secure remote access.
+  <Step title="Connect to Tailscale (optional)">
+    If you installed with `tailscale_enabled=true`, join your VPN mesh for secure remote access.
   </Step>
 </Steps>
 
 ### Quick commands
 
+Run these as the `openclaw` user (`sudo -i -u openclaw`):
+
 ```bash
 # Check service status
-sudo systemctl status openclaw
+openclaw gateway status
+systemctl --user status openclaw-gateway.service
 
 # View live logs
-sudo journalctl -u openclaw -f
+openclaw logs --follow
 
-# Restart gateway (run as openclaw user)
+# Restart gateway
 openclaw gateway restart
 
-# Channel login (run as openclaw user)
-sudo -i -u openclaw
+# Channel login
 openclaw channels login --channel <name>
 ```
 
@@ -102,10 +109,12 @@ openclaw channels login --channel <name>
 
 Four-layer defense model:
 
-1. Firewall (UFW): only SSH (22) and Tailscale (41641/udp) exposed publicly
-2. VPN (Tailscale): gateway reachable only via the VPN mesh
+1. Firewall (UFW): only SSH (22) exposed publicly, plus Tailscale (41641/udp) when enabled
+2. Loopback Gateway: the installer does not change OpenClaw's default loopback bind; reach it through an SSH tunnel or [Tailscale Serve](/gateway/tailscale)
 3. Docker isolation: `DOCKER-USER` iptables chain prevents external port exposure
-4. Systemd hardening: `NoNewPrivileges`, `PrivateTmp`, unprivileged user
+4. Unprivileged user: the Gateway runs as `openclaw` with scoped sudo and without membership in the root-equivalent `docker` group
+
+The installer does not harden the Gateway's systemd unit. Inspect it as the `openclaw` user with `systemctl --user show openclaw-gateway.service -p NoNewPrivileges -p PrivateTmp -p ProtectSystem`.
 
 Check which ports are publicly reachable:
 
@@ -141,10 +150,9 @@ Docker is installed for agent sandboxes (isolated tool execution), not for runni
     ./run-playbook.sh
     ```
 
-    Or run the playbook directly and then run the setup script manually:
+    Or run the playbook directly, then continue with [Post-install setup](#post-install-setup):
     ```bash
     ansible-playbook playbook.yml --ask-become-pass
-    # Then run: /tmp/openclaw-setup.sh
     ```
 
   </Step>
@@ -167,39 +175,37 @@ You can run this multiple times without duplicating its effects.
 
 <AccordionGroup>
   <Accordion title="Firewall blocks my connection">
-    - Connect via Tailscale VPN first; the gateway is only reachable that way by design.
-    - SSH (port 22) is always allowed.
+    - SSH (port 22) is always allowed. The Gateway listens on loopback; use an SSH tunnel or [Tailscale Serve](/gateway/tailscale).
 
   </Accordion>
   <Accordion title="Service will not start">
+    Run these as the `openclaw` user (`sudo -i -u openclaw`):
     ```bash
-    # Check logs
-    sudo journalctl -u openclaw -n 100
+    # Check service state and logs
+    openclaw gateway status
+    systemctl --user status openclaw-gateway.service
+    openclaw logs
 
     # Verify permissions
-    sudo ls -la /opt/openclaw
+    ls -la ~/.openclaw ~/.config/systemd/user
 
     # Test manual start
-    sudo -i -u openclaw
-    cd ~/openclaw
     openclaw gateway run
     ```
 
   </Accordion>
   <Accordion title="Docker sandbox issues">
+    Run these from your administrator account, not as `openclaw`: the
+    `openclaw` user has neither Docker access nor general sudo rights.
     ```bash
     # Verify Docker is running
     sudo systemctl status docker
 
     # Check sandbox image
     sudo docker images | grep openclaw-sandbox
-
-    # Build the sandbox image if missing (requires a source checkout)
-    cd /opt/openclaw/openclaw
-    sudo -u openclaw ./scripts/sandbox-setup.sh
-    # For npm installs without a source checkout, see
-    # https://docs.openclaw.ai/gateway/sandboxing#images-and-setup
     ```
+
+    If the image is missing, build it from a source checkout that your administrator account owns, not from a checkout the `openclaw` user can write to. See [Images and setup](/gateway/sandboxing/images-and-setup).
 
   </Accordion>
   <Accordion title="Channel login fails">

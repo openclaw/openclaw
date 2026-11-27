@@ -37,12 +37,9 @@ import {
   resolveSkillTelemetrySourceValue,
 } from "../skills/loading/source.js";
 import { recordRunSkillUsage } from "../skills/runtime/run-usage.js";
-import { resolveSkillFileHost } from "../skills/skill-file-host.js";
+import { prepareSkillReadIndex } from "../skills/runtime/skill-read-index.js";
 import type { SkillSnapshot, SkillTelemetrySource } from "../skills/types.js";
-import {
-  isWorkspaceSkillReadPath,
-  resolveSkillReadPath,
-} from "../skills/workspace-skill-read-path.js";
+import { isWorkspaceSkillReadPath } from "../skills/workspace-skill-read-path.js";
 import { isPlainObject, truncateUtf16Safe } from "../utils.js";
 import { buildAdjustedParamsKey } from "./agent-tools.before-tool-call.state.js";
 import type { HookBlockedReason, HookContext } from "./agent-tools.before-tool-call.types.js";
@@ -337,33 +334,6 @@ function readToolPathCandidate(params: unknown, ctx?: HookContext): string | und
     : undefined;
 }
 
-function findSkillInstructionMatch(
-  snapshot: SkillSnapshot,
-  candidate: string,
-): SkillUsageMatch | undefined {
-  const skill = snapshot.resolvedSkills?.findLast((entry) => {
-    if (typeof entry.name !== "string" || !entry.name.trim()) {
-      return false;
-    }
-    const filePath = typeof entry.filePath === "string" ? entry.filePath.trim() : "";
-    const baseDir = typeof entry.baseDir === "string" ? entry.baseDir.trim() : "";
-    if (filePath && resolveSkillReadPath(entry) === candidate) {
-      return true;
-    }
-    if (resolveSkillFileHost(entry) === "workspace") {
-      return false;
-    }
-    return (
-      (filePath &&
-        (filePath.startsWith("node://")
-          ? filePath === candidate
-          : path.isAbsolute(filePath) && path.resolve(filePath) === candidate)) ||
-      (baseDir && path.isAbsolute(baseDir) && path.resolve(baseDir, "SKILL.md") === candidate)
-    );
-  });
-  return skill ? resolvedSkillUsageMatch({ activation: "read", skill }) : undefined;
-}
-
 export function findSkillUsageMatch(params: {
   toolName: string;
   toolParams: unknown;
@@ -422,7 +392,8 @@ export function findSkillUsageMatch(params: {
     return undefined;
   }
   if (params.ctx?.skillsSnapshot?.resolvedSkills?.length) {
-    return findSkillInstructionMatch(params.ctx.skillsSnapshot, candidate);
+    const skill = prepareSkillReadIndex(params.ctx.skillsSnapshot).get(candidate);
+    return skill ? resolvedSkillUsageMatch({ activation: "read", skill }) : undefined;
   }
   const match = params.ctx?.skillUsagePaths?.findLast(
     (entry) => path.resolve(entry.readPath) === candidate,

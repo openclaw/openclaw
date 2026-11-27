@@ -1,14 +1,13 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type {
   ModelChoice,
-  ModelRuntimeChoice,
   ModelsListResult,
 } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
+import { resolveAgentEntry } from "../../agents/agent-scope-config.js";
 import { resolveAgentWorkspaceDir, resolveAmbientOwnerAgentId } from "../../agents/agent-scope.js";
 import { resolveConfiguredModelEntries } from "../../agents/configured-model-entries.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
-import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import type { ModelAuthAvailabilityEvaluation } from "../../agents/model-auth-availability.js";
 import { projectModelCatalogAccessPrograms } from "../../agents/model-catalog-access-programs.js";
 import {
@@ -56,6 +55,7 @@ import { captureRuntimeConfig } from "../../config/runtime-source-projection.js"
 import { resolveProviderModelCatalogId } from "../../plugins/provider-model-routes.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { withCurrentReadAuthority } from "../../shared/current-read-authority.js";
+import { readDeclaredProviderNames } from "../provider-presentation.js";
 import { loadDeferredCatalog } from "../server-model-catalog-auth.js";
 import { resolveGatewayModelThinkingProfile } from "../session-utils-model.js";
 import { projectWorkerPlacementAgentRuntime } from "../worker-environments/placement-session-runtime.js";
@@ -74,7 +74,7 @@ import {
   retainModelChoiceAccountPin,
 } from "./models-list-public-projection.js";
 import { resolveDefaultModelsPreview } from "./models-list-result.default-models.js";
-import { prepareModelPickerRuntimeChoices } from "./models-list-runtime-choices.js";
+import { prepareModelPickerRuntimeProjection } from "./models-list-runtime-choices.js";
 
 type StatedRuntimeModelChoice = ModelChoice & {
   agentRuntime: NonNullable<ModelChoice["agentRuntime"]>;
@@ -367,9 +367,8 @@ export async function prepareModelsListResult({
     const manualSelectionAllowed = params.includeManualSelection
       ? visibilityPolicy.allows
       : undefined;
-    const configuredEntriesByKey = resolveConfiguredModelEntries({
+    const configuredEntriesParams = {
       cfg,
-      agentId,
       defaultModel,
       canonicalizeRef: (ref) => ({
         ...ref,
@@ -379,7 +378,24 @@ export async function prepareModelsListResult({
       }),
       ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
       manifestPlugins: metadataSnapshot,
+    } satisfies Parameters<typeof resolveConfiguredModelEntries>[0];
+    const configuredEntriesByKey = resolveConfiguredModelEntries({
+      ...configuredEntriesParams,
+      agentId,
     }).byKey;
+    const defaultEntriesByKey =
+      modelPreviews &&
+      Object.values(cfg.agents?.defaults?.models ?? {}).some(
+        (entry) => entry.pickerRuntimes?.length,
+      )
+        ? resolveConfiguredModelEntries(configuredEntriesParams).byKey
+        : undefined;
+    const previewDefaultBase = Boolean(
+      modelPreviews &&
+      Object.values(resolveAgentEntry(cfg, agentId)?.models ?? {}).some(
+        ({ agentRuntime }) => agentRuntime,
+      ),
+    );
     const createPublicProjector = (
       decisions: ReturnType<typeof createModelCatalogDecisions>,
       modelCatalog: ModelCatalogEntry[],
@@ -398,6 +414,7 @@ export async function prepareModelsListResult({
         pluginRegistry: preparedPluginRegistry,
       });
       const catalogResolver = createThinkingCatalogResolver(catalog);
+      const declaredNames = readDeclaredProviderNames(preparedPluginRegistry);
       // Route rows retain identity across reads; keep display/thinking work outside the hot overlay.
       const prepared = new WeakMap<ModelCatalogEntry, Map<string, StatedRuntimeModelChoice>>();
       return (
@@ -455,8 +472,10 @@ export async function prepareModelsListResult({
             provider: entry.provider,
             model: entry.id,
           });
+          const providerName = declaredNames.get(normalizeProviderId(entry.provider));
           preparedEntry = {
             ...buildPublicModelProjection(publicEntry, { includeDetails }),
+            ...(providerName ? { providerName } : {}),
             ...(manualSelectionAllowed
               ? {
                   manualSelectionAllowed: manualSelectionAllowed({
@@ -590,7 +609,7 @@ export async function prepareModelsListResult({
       };
     }
     const evaluations = new Map<string, ModelAuthAvailabilityEvaluation>();
-    const runtimeChoiceReaders = new Map<string, () => ModelRuntimeChoice[]>();
+    const projectRuntimes = new Map<string, (row: ModelChoice) => void>();
     const twinRoutes = new Map<string, CliRuntimeTwinRoute>();
     // Collapsing twins must not hide the only row the agent's manual policy or a role may select.
     const selectionPolicies =
@@ -613,7 +632,9 @@ export async function prepareModelsListResult({
         cfg,
         isCurrent: () => isCurrent() && projector.isCurrent(),
         metadataSnapshot,
-        catalog,
+        // The all view projects exactly its input rows. Scope expensive per-row auth and
+        // runtime preparation here while retaining the complete catalog for policy and diagnostics.
+        catalog: view === "all" && providerFilter ? catalog.filter(matchesProvider) : catalog,
         defaultProvider: DEFAULT_PROVIDER,
         defaultModel,
         agentId,
@@ -636,40 +657,21 @@ export async function prepareModelsListResult({
           if (twin) {
             twinRoutes.set(key, twin);
           }
-          const requestedRuntimes = configuredEntriesByKey.get(
-            modelKey(entry.provider, entry.id),
-          )?.pickerRuntimes;
-          const baseRuntime = requestedRuntimes?.length
-            ? resolveAgentHarnessPolicy({
-                config: cfg,
-                agentId,
-                provider: entry.provider,
-                modelId: entry.id,
-                modelApi: entry.api,
-                modelBaseUrl: entry.baseUrl,
-                resolveOpenAIProviderRoutes: projector.resolveOpenAIProviderRoutes,
-              }).runtime
-            : undefined;
-          const preparedHost = projector.evaluateEntry(entry, variants, baseRuntime);
-          // Picker alternatives never change the configured row when a session selects a sibling.
-          const host = baseRuntime
-            ? { ...preparedHost, requestedRuntimeId: undefined }
-            : preparedHost;
-          if (requestedRuntimes?.length) {
-            runtimeChoiceReaders.set(
-              key,
-              prepareModelPickerRuntimeChoices({
-                cfg,
-                agentId,
-                entry,
-                variants,
-                requestedRuntimes,
-                baseEvaluation: evaluateNative(entry, host),
-                decisions: projector,
-                evaluateNative,
-                projectPublic,
-              }),
-            );
+          const ref = modelKey(entry.provider, entry.id);
+          const { host, project } = prepareModelPickerRuntimeProjection({
+            cfg,
+            agentId,
+            entry,
+            variants,
+            requestedRuntimes: configuredEntriesByKey.get(ref)?.pickerRuntimes,
+            defaultRuntimes: defaultEntriesByKey?.get(ref)?.pickerRuntimes,
+            previewDefaultBase,
+            decisions: projector,
+            evaluateNative,
+            projectPublic,
+          });
+          if (project) {
+            projectRuntimes.set(key, project);
           }
           return () => {
             const evaluation = evaluateNative(entry, host);
@@ -702,11 +704,8 @@ export async function prepareModelsListResult({
               if (!evaluation) {
                 throw new Error("Model catalog publication omitted prepared auth evaluation");
               }
-              const runtimeChoices = runtimeChoiceReaders.get(key)?.();
               const projected = projectPublic(entry, evaluation);
-              if (runtimeChoices?.length) {
-                projected.runtimeChoices = runtimeChoices;
-              }
+              projectRuntimes.get(key)?.(projected);
               if (recommendationRank(entry) !== undefined) {
                 projected.recommended = true;
               }

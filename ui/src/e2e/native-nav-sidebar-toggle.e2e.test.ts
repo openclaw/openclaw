@@ -3,7 +3,10 @@ import type { Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import type { ControlUiMockGatewayScenario } from "../test-helpers/control-ui-e2e.ts";
+import {
+  waitForControlUiRoute,
+  type ControlUiMockGatewayScenario,
+} from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { textContent, chatSessionListResponse } from "./chat-flow.test-support.ts";
 import { focusChatSidePanel, openChatSidePanelType } from "./chat-side-panel.test-support.ts";
@@ -110,6 +113,39 @@ const TOAST_SCENARIO: ControlUiMockGatewayScenario = {
 suite.define(() => {
   const openPage = createNativeNavPageOpener(suite);
 
+  it("paints translucent macOS sidebar dividers without brighter joins", async () => {
+    const page = await openPage({ webChrome: true, pathname: "chat" });
+    await page.addStyleTag({
+      content:
+        ".macos-titlebar-sidebar-toggle svg { color: rgb(255 255 255 / 50%); background: black; }",
+    });
+    const toggles = page.locator(".macos-titlebar-sidebar-toggle");
+    await count(toggles, 2);
+    for (const toggle of await toggles.all()) {
+      if ((await toggle.getAttribute("aria-expanded")) !== "true") {
+        await toggle.click();
+      }
+      await attr(toggle, "aria-expanded", "true");
+      await page.mouse.move(600, 400);
+      const screenshot = await toggle.locator("svg").screenshot();
+      const brightest = await page.evaluate(async (png) => {
+        const image = new Image();
+        image.src = "data:image/png;base64," + png;
+        await image.decode();
+        const canvas = document.createElement("canvas");
+        canvas.width = image.width;
+        canvas.height = image.height;
+        const ctx = canvas.getContext("2d")!;
+        ctx.drawImage(image, 0, 0);
+        const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+        return Math.max(...pixels.filter((_, i) => i % 4 === 0));
+      }, screenshot.toString("base64"));
+      // A single half-opacity white stroke reaches 128 on black; two passes reach 192.
+      expect(brightest).toBeGreaterThanOrEqual(127);
+      expect(brightest).toBeLessThanOrEqual(129);
+    }
+  });
+
   it("keeps sidebar rail toggles in plain browsers", async () => {
     const page = await openPage({ nativeNav: false });
     expect(
@@ -128,12 +164,15 @@ suite.define(() => {
         ].map((file) => controlUiE2eBuiltModuleRequest(`ui/src/${file}`).source),
       ),
     ).toEqual({ titlebarRegistered: false, requested: [false, false] });
-    const toggle = page.locator('[data-navigation-view="sessions"]');
+    // The panel collapses itself; the Sessions rail item reopens it.
     const sidebarPanel = page.locator(".sidebar-shell");
     await visible(sidebarPanel);
-    await toggle.click();
+    await page
+      .locator("openclaw-app-sidebar")
+      .getByRole("button", { name: "Collapse sidebar", exact: true })
+      .click();
     await visible(sidebarPanel, false);
-    await toggle.click();
+    await page.locator('[data-navigation-view="sessions"]').click();
     await visible(sidebarPanel);
 
     await page.locator(".sidebar-issues-button").click();
@@ -232,7 +271,12 @@ suite.define(() => {
                 : [...document.querySelectorAll<HTMLElement>('[aria-label="Expand sidebar"]')].find(
                     (element) => element.checkVisibility(),
                   )!
-              : document.querySelector<HTMLElement>('[data-navigation-view="sessions"]')!;
+              : // Sessions reopens a collapsed panel; while open it opens the agent menu.
+                shell.classList.contains("shell--nav-collapsed")
+                ? document.querySelector<HTMLElement>('[data-navigation-view="sessions"]')!
+                : document.querySelector<HTMLElement>(
+                    'openclaw-app-sidebar [aria-label="Collapse sidebar"]',
+                  )!;
             toggle.click();
           }
           await new Promise<void>((resolve) => {
@@ -346,6 +390,10 @@ suite.define(() => {
         backdropOpacity: "0",
         moving: false,
       });
+      if (destination === "session") {
+        // Home stays mounted during navigation; wait before resolving its replacement composer.
+        await waitForControlUiRoute(page, { routeId: "chat", pathname: "/chat/main/session-a" });
+      }
       const composer = page.locator(
         destination === "session"
           ? ".chat-pane-cache__pane--visible .agent-chat__composer-combobox textarea"
@@ -359,13 +407,19 @@ suite.define(() => {
 
   it("keeps restored sidebar focus from opening its tooltip", async () => {
     const page = await openPage({ hasTouch: true, nativeNav: false });
-    const toggle = page.locator('[data-navigation-view="sessions"]');
+    // People is a view button with a tooltip; the panel's own button collapses it.
+    const toggle = page.locator('[data-navigation-view="online"]');
     const sidebarPanel = page.locator(".sidebar-shell");
     const openTooltip = page.locator("openclaw-tooltip[open]");
     await visible(sidebarPanel);
+    await toggle.click();
+    await waitForControlUiRoute(page, { routeId: "activity" });
+    const collapse = page
+      .locator("openclaw-app-sidebar")
+      .getByRole("button", { name: "Collapse sidebar", exact: true });
 
     // Safari tap leaves post-collapse focus restoration to the shell.
-    await toggle.evaluate((element) => {
+    await collapse.evaluate((element) => {
       for (const type of ["pointerdown", "pointerup"]) {
         element.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerType: "touch" }));
       }
@@ -391,7 +445,7 @@ suite.define(() => {
       .poll(() =>
         openTooltip.evaluate((tooltip) => (tooltip as HTMLElement & { content: string }).content),
       )
-      .toBe("Sessions");
+      .toBe("People");
     await page.keyboard.press("Enter");
     await visible(sidebarPanel);
     expect(await openTooltip.count()).toBe(0);
@@ -435,7 +489,7 @@ suite.define(() => {
     const toolbar = page.locator(".macos-titlebar-controls");
     await visible(toolbar);
     await visible(page.locator(".shell-chrome-controls"), false);
-    const newThread = page.locator(".sidebar-rail .sidebar-new-session");
+    const newThread = page.locator(".sidebar-session-toolbar .sidebar-new-session");
     await visible(newThread);
     await attr(newThread, "aria-disabled", null);
     await page.keyboard.press("Tab");
@@ -451,7 +505,8 @@ suite.define(() => {
 
     await page.locator(".macos-titlebar-controls__sidebar").click();
     await expectShellClass(page, "shell--nav-collapsed");
-    await visible(newThread);
+    // New session lives in the Sessions panel header, so it closes with the panel.
+    await visible(newThread, false);
     await page.locator(".sidebar-rail__bottom .sidebar-issues-button").waitFor();
     await page.locator(".sidebar-rail__bottom .sidebar-issues-button__count").waitFor();
     await page.evaluate(() => document.fonts.ready);
@@ -535,12 +590,13 @@ suite.define(() => {
         .toEqual([!canGoBack, canGoBack]);
     }
 
-    await newThread.click();
-    await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
+    // New session lives in the Sessions panel header, so the titlebar reopens the panel first.
     await page.locator(".macos-titlebar-controls__sidebar").click();
     await expectShellClass(page, "shell--nav-collapsed", false);
+    await newThread.click();
+    await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
 
-    for (const view of ["sessions", "pages", "online"]) {
+    for (const view of ["sessions", "online"]) {
       await rail.locator(".sidebar-identity-card").click();
       await page.getByRole("menuitem", { name: "Settings", exact: true }).click();
       await expectShellClass(page, "shell--settings");
@@ -675,7 +731,7 @@ suite.define(() => {
       }),
     ).toBe(false);
 
-    await navigation.locator('[data-navigation-view="sessions"]').click();
+    // The drawer opens on Sessions.
     const row = navigation.locator(".sidebar-recent-session").first();
     await row.hover();
     await row.click({ button: "right" });

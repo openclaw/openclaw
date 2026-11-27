@@ -48,6 +48,7 @@ import {
   mergeSessionEntryPatch,
   projectSessionEntryPatch,
   type SessionEntryPatchOperation,
+  type SessionEntryPatchWriteIntent,
 } from "./session-entry-patch-operation.js";
 import { captureSessionEntryPatchSource } from "./session-entry-patch-source.js";
 import type {
@@ -352,12 +353,14 @@ async function patchSqliteSessionEntrySnapshot(
     }
     let contextEntry = existing;
     let contextEntryBorrowed = true;
+    const writeIntent: SessionEntryPatchWriteIntent = {};
     const next =
       typeof params.update !== "function"
         ? projectSessionEntryPatch({
             ...options,
             existing,
             writeBase,
+            writeIntent,
             sessionKey,
             operation: params.update,
             onLifecycleProjection: (effects) => {
@@ -368,6 +371,7 @@ async function patchSqliteSessionEntrySnapshot(
             ...options,
             existing,
             writeBase,
+            writeIntent,
             sessionKey,
             patch: await params.update(structuredClone(writeBase), {
               get existingEntry() {
@@ -384,6 +388,7 @@ async function patchSqliteSessionEntrySnapshot(
             }),
           });
     return {
+      ...writeIntent,
       selection: params.selection,
       prepared,
       sessionKey,
@@ -394,7 +399,6 @@ async function patchSqliteSessionEntrySnapshot(
       consumePendingReset: options.consumePendingReset,
       providerReviewMutation: options.providerReviewMutation,
       shouldCommitIf: options.workerGuard?.shouldCommitIf,
-      cliHistory: options.workerGuard?.cliHistory,
       conversation: options.workerGuard?.conversation,
     };
   };
@@ -448,7 +452,6 @@ async function patchSqliteSessionEntrySnapshot(
               consumePendingReset: options.consumePendingReset,
               providerReviewMutation: options.providerReviewMutation,
               shouldCommitIf: options.workerGuard?.shouldCommitIf,
-              cliHistory: options.workerGuard?.cliHistory,
               conversation: options.workerGuard?.conversation,
               ensureIdentitySource,
             },
@@ -498,7 +501,6 @@ async function patchSqliteSessionEntrySnapshot(
           if (!input) {
             return null;
           }
-          const { writeBase, next } = input;
           // The updater may dispose the prepared handle; re-admit before waiting for the write lock.
           return withDatabase(async () => {
             let result: SessionEntry | null = null;
@@ -520,13 +522,8 @@ async function patchSqliteSessionEntrySnapshot(
                   return undefined;
                 }
                 const mutation = applySessionEntryPatchInDatabase(writeDatabase, {
-                  operationLabel: params.operationLabel,
-                  validateCanonicalKeys: params.validateCanonicalKeys,
+                  ...input,
                   readSnapshot: (current) => params.readSnapshot(current, true),
-                  prepared,
-                  sessionKey,
-                  writeBase,
-                  next,
                   options: {
                     ...options,
                     assertCommitAllowed: () => {
@@ -570,7 +567,7 @@ async function patchSqliteSessionEntrySnapshot(
               { operationLabel: params.operationLabel },
             );
             try {
-              if (next && result) {
+              if (input.next && result) {
                 if (lifecycleEffects) {
                   options.onCommitted?.(result, transcriptPredicate, lifecycleEffects);
                 } else if (transcriptPredicate) {

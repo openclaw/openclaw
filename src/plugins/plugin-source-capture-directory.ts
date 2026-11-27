@@ -18,6 +18,7 @@ import {
 } from "../infra/sqlite-staging-token.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { PluginSourceCaptureStorage } from "./plugin-instance-invocation.types.js";
 import {
   pluginSourceCaptureMaintenance,
@@ -273,6 +274,42 @@ export async function hasPluginNativeCaptureCleanupCandidates(stateDir: string):
     }
   }
   return false;
+}
+
+/**
+ * Read-only: whether `prunePluginNativeCaptureDirectories` would act on any root. It walks the
+ * same roots without custody. A managed root counts even when its payload is retained, because
+ * reclaiming it takes the root's SQLite custody lock; only that lock proves it is released.
+ */
+export async function hasPluginNativeCaptureReclaimCandidates(stateDir: string): Promise<boolean> {
+  let found = false;
+  let failure: unknown;
+  const recordFailure = (error: unknown) => {
+    failure ??= error;
+  };
+  const collect = () => {
+    found = true;
+  };
+  await reclaimInstances(
+    path.resolve(resolvePluginSourceCapturesDirectory(stateDir)),
+    recordFailure,
+    false,
+    undefined,
+    undefined,
+    collect,
+  ).catch(recordFailure);
+  await reclaimInstances(
+    tmpdir(),
+    recordFailure,
+    false,
+    undefined,
+    resolvePluginSourceCaptureFallbackPrefix(stateDir),
+    collect,
+  ).catch(recordFailure);
+  if (!found && failure !== undefined) {
+    throw failure instanceof Error ? failure : new Error(formatErrorMessage(failure));
+  }
+  return found;
 }
 
 /** The caller holds plugin lifecycle or offline maintenance custody and fresh index references. */
@@ -612,6 +649,13 @@ export function retainPluginSourceCaptureInstance(
   };
 }
 
+// Roots start loading their cleanup when acquired: release can run during Gateway
+// shutdown after an in-place update has replaced this chunk's siblings on disk.
+const loadTemporaryArtifactCleanup = createLazyRuntimeModule(
+  () => import("../infra/temp-artifact-cleanup.js"),
+);
+const prepareTemporaryArtifactCleanup = () => void loadTemporaryArtifactCleanup().catch(() => {});
+
 /** Native snapshots become durable only after their installed-index receipt is published. */
 export function createPluginNativeCaptureRoot(
   stateDir?: string,
@@ -620,11 +664,12 @@ export function createPluginNativeCaptureRoot(
   const instance = retainPluginSourceCaptureInstance(stateDir, placement, "native");
   try {
     const root = instance.createNativeDirectory();
+    prepareTemporaryArtifactCleanup();
     let committed = false;
     let disposed = false;
     return {
       directory: root.directory,
-      commit() {
+      commit(): void {
         if (disposed) {
           throw new Error("Plugin native capture has been disposed");
         }
@@ -641,7 +686,7 @@ export function createPluginNativeCaptureRoot(
         }
       },
       async disposeAsync() {
-        const { removeTemporaryArtifacts } = await import("../infra/temp-artifact-cleanup.js");
+        const { removeTemporaryArtifacts } = await loadTemporaryArtifactCleanup();
         if (!disposed) {
           if (!committed && !retainLoadedPluginSourceCapture(root.directory)) {
             await removeTemporaryArtifacts(root.directory, "Plugin native capture");
@@ -666,11 +711,12 @@ export function createPluginSourceCaptureRoot(
   const instance = retainPluginSourceCaptureInstance(stateDir, placement);
   try {
     const directory = instance.createDirectory(prefix);
+    prepareTemporaryArtifactCleanup();
     return {
       directory,
       managedRoot: instance.managedRoot,
       release: async () => {
-        const { removeTemporaryArtifacts } = await import("../infra/temp-artifact-cleanup.js");
+        const { removeTemporaryArtifacts } = await loadTemporaryArtifactCleanup();
         if (!retainLoadedPluginSourceCapture(directory)) {
           await removeTemporaryArtifacts(directory, "Plugin source worker");
         }

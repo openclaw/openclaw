@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { clearRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
@@ -10,6 +11,7 @@ import {
 } from "../../../infra/agent-events.js";
 import { claimAgentRunContext, getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import type { CommandQueueEnqueueOptions } from "../../../process/command-queue.types.js";
+import { expectCollected } from "../../../test-utils/retention.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import type { EmbeddedAgentRunResult } from "../types.js";
 import { createLaneControllerFixture } from "./lane-controller.test-support.js";
@@ -71,6 +73,51 @@ async function expectStaleRun(run: Promise<EmbeddedAgentRunResult>, runId: strin
 describe("createEmbeddedRunLaneController lifecycle admission", () => {
   beforeEach(() => resetAgentEventsForTest());
   afterEach(() => clearRuntimeConfigSnapshot());
+
+  it("releases closed attempt predicates without retaining abort callbacks or lane inputs", async () => {
+    function closeAttempt() {
+      const stores = { active: true };
+      const parent = new AbortController();
+      const reason = new Error("synthetic cancellation");
+      const admittedRunContext = createTestAdmittedRunContext("retention");
+      const { controller } = createLaneControllerFixture(
+        {
+          runId: "retention",
+          sessionId: "retention",
+          sessionKey: "agent:main:retention",
+          sessionFile: "retention.jsonl",
+          workspaceDir: ".",
+          prompt: "synthetic",
+          timeoutMs: 1_000,
+          admittedRunContext,
+        },
+        {
+          globalLane: "retention",
+          configureRuntime: false,
+          onSessionWriterClaimed: () => assert.ok(stores.active),
+        },
+      );
+      const controls = controller.createAttemptControls({
+        admittedRunContext,
+        abortSignal: parent.signal,
+        onAbort: () => assert.ok(stores.active),
+      });
+      assert.ok(controls.isAttemptCurrent());
+      parent.abort(reason);
+      assert.equal(controls.abortSignal.reason, reason);
+      assert.equal(controls.isAttemptCurrent(), false);
+      controls.close();
+      return {
+        check: controls.isAttemptCurrent,
+        stores: new WeakRef(stores),
+        reason: new WeakRef(reason),
+      };
+    }
+
+    const retained = closeAttempt();
+    await expectCollected(retained.stores, retained.reason);
+    expect(retained.check()).toBe(false);
+  });
 
   it.each([
     { trigger: "user" as const, expected: "foreground" },

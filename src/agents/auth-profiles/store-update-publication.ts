@@ -11,7 +11,7 @@ import { reportCommittedInlineAuthFailure } from "./constants.js";
 import { observeCanonicalAuthProfileCredentials } from "./credential-observation.js";
 import { publishInlineAuthFailure } from "./inline-usage-publication.js";
 import {
-  assertAuthProfileMigrationCandidates,
+  prepareAuthProfileMigrationCandidates,
   assertAuthProfileMigrationStateAtDatabasePath,
 } from "./legacy-source-diagnostic.js";
 import { getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath } from "./mutation-lineage.js";
@@ -239,20 +239,22 @@ export async function publishAuthProfileStoreUpdate(
         assertCurrent();
         reader.assertCurrent();
       }
-      if (!stillCurrent()) {
-        continue;
-      }
       const inherited = entry.databasePath === owner.sharedDatabasePath ? undefined : currentStore;
       const candidates = captureRuntimeAuthProfileLegacyCandidates(
         entry.databasePath === owner.sharedDatabasePath ? undefined : entry.agentDir,
         owner.env,
       );
-      assertAuthProfileMigrationCandidates({
+      await prepareAuthProfileMigrationCandidates({
         databasePath: entry.databasePath,
         candidates:
           entry.databasePath === owner.sharedDatabasePath ? candidates.shared : candidates.local,
-        hasCredentials: () => Object.keys(local.profiles).length > 0,
+        hasCredentials: Object.keys(local.profiles).length > 0,
+        assertCurrent,
       });
+      if (!stillCurrent()) {
+        continue;
+      }
+      assertAuthProfileMigrationStateAtDatabasePath(entry.databasePath);
       const refreshed = inherited
         ? mergeLocalAuthProfileStoreWithInheritedStore(local, inherited)
         : setRuntimeLocalProfileMetadata(local, listRuntimeLocalProfileIds(local));

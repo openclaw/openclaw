@@ -7,7 +7,7 @@ import {
   createSessionTranscriptUsageAccumulator,
   type SessionTranscriptUsageSnapshot,
 } from "./session-transcript-derived-readers.js";
-import { resolveSessionTranscriptCandidates } from "./session-transcript-files.fs.js";
+import { resolveSessionTranscriptCandidatesAsync } from "./session-transcript-files.fs.js";
 import { MAX_TRANSCRIPT_PARSE_LINE_BYTES } from "./session-transcript-record-parser.js";
 
 export type { SessionTranscriptUsageSnapshot } from "./session-transcript-derived-readers.js";
@@ -39,7 +39,11 @@ export async function readLatestSessionUsageFromTranscriptFileAsync(
   sessionFile?: string,
 ): Promise<SessionTranscriptUsageSnapshot | null> {
   let filePath: string | undefined;
-  for (const candidate of resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile)) {
+  for (const candidate of await resolveSessionTranscriptCandidatesAsync(
+    sessionId,
+    storePath,
+    sessionFile,
+  )) {
     if (await canAccess(candidate)) {
       filePath = candidate;
       break;

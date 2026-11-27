@@ -49,12 +49,6 @@ describe("resolveVoiceResponseModel", () => {
       agentId: "support",
       expected: { provider: "anthropic", model: "claude-opus-5-5" },
     },
-    {
-      name: "falls back to the compiled-in runtime default when nothing is configured",
-      cfg: {},
-      agentId: "main",
-      expected: { provider: "openai", model: "gpt-6-astra" },
-    },
   ])("$name", ({ cfg, agentId, responseModel, expected }) => {
     expect(
       resolveVoiceResponseModel({
@@ -64,5 +58,16 @@ describe("resolveVoiceResponseModel", () => {
         agentRuntime,
       }),
     ).toEqual(expected);
+  });
+
+  it("refuses to invent a model when nothing is configured", () => {
+    expect(() =>
+      resolveVoiceResponseModel({
+        cfg: {},
+        agentId: "main",
+        voiceConfig: normalizeVoiceCallConfig({}),
+        agentRuntime,
+      }),
+    ).toThrow("No model configured for voice responses.");
   });
 });

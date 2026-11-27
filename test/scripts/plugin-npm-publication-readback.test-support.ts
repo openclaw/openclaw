@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import JSZip from "jszip";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { expect } from "vitest";
 import {
   createPluginPublicationArtifact,

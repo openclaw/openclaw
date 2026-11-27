@@ -9,7 +9,7 @@ import {
   type FixtureReceiptChannel,
   withinTest,
 } from "openclaw/plugin-sdk/test-fixtures";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { expect } from "vitest";
 import {
   readCrabboxRuntimeInstallation,

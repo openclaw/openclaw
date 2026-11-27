@@ -22,7 +22,7 @@ import { AUTH_STORE_VERSION, reportCommittedInlineAuthFailure } from "./constant
 import type { InlineAuthFailureOperations } from "./inline-usage-kernel.js";
 import { publishInlineAuthFailure } from "./inline-usage-publication.js";
 import {
-  assertAuthProfileMigrationCandidates,
+  prepareAuthProfileMigrationCandidates,
   assertAuthProfileMigrationStateAtDatabasePath,
 } from "./legacy-source-diagnostic.js";
 import { resolveLegacyAuthProfileSourceCandidates } from "./legacy-source-files.js";
@@ -197,12 +197,13 @@ export async function withAuthProfileUsage<T>(
         throw new Error("Auth profile shared owner changed before write admission");
       }
       assertAuthProfileMigrationStateAtDatabasePath(databasePath);
-      assertAuthProfileMigrationCandidates({
-        databasePath,
-        candidates,
-        hasCredentials: () => Object.keys(selected.profiles).length > 0,
-      });
     };
+    await prepareAuthProfileMigrationCandidates({
+      databasePath,
+      candidates,
+      hasCredentials: Object.keys(selected.profiles).length > 0,
+      assertCurrent,
+    });
     assertCurrent();
     const providerAliases = resolveProviderAuthAliasMap({ env });
     let recordingStarted = false;

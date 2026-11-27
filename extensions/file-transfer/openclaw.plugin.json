@@ -112,6 +112,10 @@
             "followSymlinks": {
               "type": "boolean",
               "default": false
+            },
+            "boundedReplies": {
+              "type": "boolean",
+              "description": "Bound File Transfer replies for this exact paired Linux node on a size-limited route. Use the paired node ID as the key."
             }
           }
         }
