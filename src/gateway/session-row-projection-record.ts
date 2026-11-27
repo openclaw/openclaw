@@ -373,6 +373,7 @@ export function renewGeneration(row: Row): Row {
     sharingEntry: undefined,
     materialized: undefined,
     hasMessages: undefined,
+    fallbackTitle: undefined,
     lastMessagePreview: undefined,
     lastAssistantMessage: undefined,
     fallbackModel: undefined,
