@@ -1,11 +1,14 @@
 import { MessageChannel } from "node:worker_threads";
-import { racePromiseWithAbortSignal } from "../../../packages/retry/src/index.js";
+import { racePromiseWithAbortSignal, raceWithTimeout } from "../../../packages/retry/src/index.js";
 import { measureGatewayCloseStep } from "../../gateway/restart-trace.js";
 import {
   hasGatewayCleanupRetainedError,
   isGatewayCleanupRetainedError,
 } from "../../gateway/server-shutdown.js";
-import { finishDiagnosticsTimeline } from "../../infra/diagnostics-timeline.js";
+import {
+  finishDiagnosticsTimeline,
+  flushDiagnosticsTimeline,
+} from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { cleanupSnapshotOperations } from "../../infra/sqlite-readonly-location-cleanup.js";
 import { flushLogger } from "../../logging/logger.js";
@@ -14,11 +17,29 @@ import { GRACEFUL_CANCEL_TIMEOUT_MS } from "../../process/supervisor/cancellatio
 import { shutdownProcessSupervisor } from "../../process/supervisor/index.js";
 import { settlesWithin } from "../../shared/settle-within.js";
 import { requestSettledExitWatchdog } from "../one-shot-exit.js";
-import { flushGatewayLogsBeforeExit } from "./run-loop-exit.js";
-import type { GatewayShutdownFailure } from "./run-loop-terminal.js";
+import type { GatewayShutdownFailure } from "./run-loop-request.js";
 import type { ShutdownHardExitWatchdog } from "./shutdown-hard-exit.js";
 
 const SETTLED_EXIT_WATCHDOG_MS = 1_000;
+
+async function flushGatewayLogsBeforeExit(
+  logger: { warn: (message: string) => void },
+  timeoutMs = 4_000,
+) {
+  flushDiagnosticsTimeline();
+  const completion = flushLogger();
+  const flushed = await raceWithTimeout(
+    completion.then(() => true),
+    timeoutMs,
+    () => false,
+  );
+  if (!flushed) {
+    logger.warn(`log flush did not settle within ${timeoutMs}ms; waiting for accepted writes`);
+    // A file append already accepted by the transport cannot be replayed by an
+    // exit hook. The reporting grace does not release its physical custody.
+    await completion;
+  }
+}
 
 /** Retains accepted cleanup, including native watchdog cancellation, until its real settlement. */
 export function createGatewayRunCleanup(

@@ -31,6 +31,7 @@ import {
   type GatewayRunSignalContext,
   type GatewayRunSignalRequest,
 } from "./run-loop-request.js";
+import type { GatewayShutdownFailure as ShutdownFailure } from "./run-loop-request.js";
 import { resolveGatewayShutdownBudget } from "./run-loop-shutdown-budget.js";
 import * as loopCompletion from "./run-loop-shutdown-format.js";
 import { createGatewayRunSignals } from "./run-loop-signals.js";
@@ -43,10 +44,7 @@ import {
   prepareGatewayRunLoop,
   type GatewayRunLoopParams,
 } from "./run-loop-startup.js";
-import {
-  createGatewayRunTerminal,
-  type GatewayShutdownFailure as ShutdownFailure,
-} from "./run-loop-terminal.js";
+import { createGatewayRunTerminal } from "./run-loop-terminal.js";
 import type { ShutdownHardExitWatchdog } from "./shutdown-hard-exit.js";
 import { GatewayUpdateSuccessor } from "./update-successor.js";
 const gatewayLog = createSubsystemLogger("gateway");

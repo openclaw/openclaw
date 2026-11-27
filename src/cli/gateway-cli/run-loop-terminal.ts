@@ -4,13 +4,16 @@ import type { GatewayBootLifecycleCompletion } from "../../infra/gateway-boot-li
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
 import type { createGatewayHostLifecycle } from "./host-lifecycle.js";
-import { sameManagedUpdateOwner, type GatewayRunSignalRequest } from "./run-loop-request.js";
+import {
+  sameManagedUpdateOwner,
+  type GatewayRunSignalRequest,
+  type GatewayShutdownFailure,
+} from "./run-loop-request.js";
 import type { createGatewayRunSignals } from "./run-loop-signals.js";
 import type { GatewayUpdateSuccessor } from "./update-successor.js";
 
 type HostLifecycle = ReturnType<typeof createGatewayHostLifecycle>;
 type UpdateOwner = GatewayRestartIntent["successorOwner"];
-export type GatewayShutdownFailure = { step: string; error: unknown };
 
 /** Terminal continuation shares the loop's live authority; it owns no copied request state. */
 export function createGatewayRunTerminal(params: {

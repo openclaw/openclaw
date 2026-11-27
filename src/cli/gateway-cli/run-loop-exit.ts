@@ -1,9 +1,7 @@
-import { raceWithTimeout } from "../../../packages/retry/src/index.js";
 import {
   captureGatewayRestartTraceHandoff,
   formatGatewayPendingCloseSteps,
 } from "../../gateway/restart-trace.js";
-import { flushDiagnosticsTimeline } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { GatewayBootLifecycleCompletion } from "../../infra/gateway-boot-lifecycle.js";
 import {
@@ -11,13 +9,11 @@ import {
   formatGatewayRepeatedSignalHint,
 } from "../../infra/gateway-boot-lifecycle.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
-import { flushLogger } from "../../logging/logger.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
 import { sleep } from "../../utils/sleep.js";
 import type { createGatewayHostLifecycle } from "./host-lifecycle.js";
 import type { createGatewayRunCleanup } from "./run-loop-cleanup.js";
-import type { GatewayRunSignalRequest } from "./run-loop-request.js";
-import type { GatewayShutdownFailure } from "./run-loop-terminal.js";
+import type { GatewayRunSignalRequest, GatewayShutdownFailure } from "./run-loop-request.js";
 import { armShutdownHardExitWatchdog } from "./shutdown-hard-exit.js";
 import type { GatewayUpdateSuccessor } from "./update-successor.js";
 
@@ -29,25 +25,6 @@ export async function waitForLaunchdRestartHandoff(handoffSpawned?: Promise<bool
   // Preserve the crash-loop throttle window even when spawn settles early.
   await delay;
   return spawned;
-}
-
-export async function flushGatewayLogsBeforeExit(
-  logger: { warn: (message: string) => void },
-  timeoutMs = 4_000,
-) {
-  flushDiagnosticsTimeline();
-  const completion = flushLogger();
-  const flushed = await raceWithTimeout(
-    completion.then(() => true),
-    timeoutMs,
-    () => false,
-  );
-  if (!flushed) {
-    logger.warn(`log flush did not settle within ${timeoutMs}ms; waiting for accepted writes`);
-    // A file append already accepted by the transport cannot be replayed by an
-    // exit hook. The reporting grace does not release its physical custody.
-    await completion;
-  }
 }
 
 export function createGatewaySignalObserver(logger: Pick<SubsystemLogger, "warn">) {

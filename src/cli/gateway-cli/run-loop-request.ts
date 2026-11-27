@@ -11,6 +11,8 @@ import type { GatewayShutdownTrigger } from "../../process/gateway-work-admissio
 import { formatCliCommand } from "../command-format.js";
 import type { createGatewayHostLifecycle } from "./host-lifecycle.js";
 
+export type GatewayShutdownFailure = { step: string; error: unknown };
+
 export type GatewayRunSignalAction = "stop" | "restart" | "external-restart";
 
 export type GatewayRunSignalContext = {
