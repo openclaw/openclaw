@@ -36,6 +36,7 @@ import {
 } from "vitest";
 import { isMissingRegisteredMemoryToolsError } from "./config.js";
 import { registerActiveMemoryDiagnosticTests } from "./index.diagnostics.test-support.js";
+import { registerActiveMemoryEscalationIntegrationTests } from "./index.escalation.test-support.js";
 import plugin from "./index.js";
 import { registerActiveMemoryProviderTests } from "./index.memory-provider.test-support.js";
 import { createRecallStateFixture } from "./index.recall-state.test-support.js";
@@ -68,6 +69,7 @@ const UNPAIRED_SURROGATE_RE =
 const hoisted = vi.hoisted(() => {
   const sessionStore: Record<string, Record<string, unknown>> = {};
   return {
+    evaluateDecision: vi.fn(),
     closeActiveMemorySearchManager: vi.fn(async () => {}),
     getActiveMemorySearchManager: vi.fn(async () => ({ manager: null })),
     getActiveMemoryProvider: vi.fn(async () => ({ provider: null })),
@@ -206,6 +208,8 @@ vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async () => {
 });
 
 describe("active-memory plugin", () => {
+  const skippedRecallContext =
+    "Active Memory intentionally skipped deep recall because this turn did not ask for past context.";
   const unavailableRecallContext =
     "Active Memory could not retrieve memory for this turn. Do not assume that no relevant memory exists.";
 
@@ -345,6 +349,7 @@ describe("active-memory plugin", () => {
     name: "Active Memory",
     logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
     runtime: {
+      decisions: { evaluate: hoisted.evaluateDecision },
       agent: {
         runEmbeddedAgent: runtimeRunEmbeddedAgent,
         resolveCliBackendDispatchEligibilityAsync: resolveCliBackendDispatchEligibility,
@@ -1274,6 +1279,18 @@ describe("active-memory plugin", () => {
       );
     }
     expect(api.runtime.config.mutateConfigFile).not.toHaveBeenCalled();
+  });
+
+  registerActiveMemoryEscalationIntegrationTests({
+    expectPrependContextContains: expectRecallContains,
+    hasDebugLine,
+    hasInfoLine,
+    registerPluginConfig,
+    runEmbeddedAgent,
+    runPromptBuild,
+    evaluateDecision: hoisted.evaluateDecision,
+    updateConfigFile: (update) => (configFile = update(configFile)),
+    skippedRecallContext,
   });
 
   it.each([

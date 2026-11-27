@@ -141,6 +141,8 @@ export type ActiveRecallPluginConfig = Partial<
 export type ResolvedActiveRecallPluginConfig = {
   enabled: boolean;
   mode: ActiveMemoryMode;
+  /** Ask the owning agent's Decision model before the built-in escalation matcher. */
+  escalationDecision: boolean;
   agents: string[];
   model?: string;
   modelFallback?: string;
