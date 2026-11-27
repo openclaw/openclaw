@@ -563,7 +563,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         throw new Error("Memory status requires its captured database target");
       }
       const snapshot = await runMemoryStatus({ agentId, databasePath }, this.statusQuery());
-      return this.publishedStatus(snapshot);
+      return this.publishedStatus(await this.withStatusRefusalIdentity(snapshot));
     });
   }
 

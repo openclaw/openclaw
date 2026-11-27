@@ -34,6 +34,8 @@ export abstract class MemoryEmbeddingRefusalOps extends MemoryManagerEmbeddingOp
   protected abstract readonly providerRequirement: MemoryEmbeddingProviderRequirement;
   protected activeBackgroundCleanup = new Set<Promise<void>>();
   private statusEmbeddingRefusal?: string;
+  /** The endpoint the configured provider calls, from its last refusal check. */
+  private checkedEndpoint?: MemoryEmbeddingEndpoint;
   protected abstract markEmbeddingBootstrapFailure(err: unknown): MemoryEmbeddingBootstrapDebug;
   protected abstract refreshEmbeddingBootstrapFailure(
     failure: MemoryEmbeddingBootstrapDebug,
@@ -95,7 +97,8 @@ export abstract class MemoryEmbeddingRefusalOps extends MemoryManagerEmbeddingOp
     runtime: MemoryEmbeddingProviderRuntime | undefined,
     recheck = false,
   ): Promise<MemoryEmbeddingRefusal | undefined> {
-    const endpoint = recheck ? undefined : this.implicitEmbeddingEndpoint(runtime?.cacheKeyData);
+    this.checkedEndpoint = this.implicitEmbeddingEndpoint(runtime?.cacheKeyData);
+    const endpoint = recheck ? undefined : this.checkedEndpoint;
     if (!endpoint) {
       return undefined;
     }
@@ -132,27 +135,28 @@ export abstract class MemoryEmbeddingRefusalOps extends MemoryManagerEmbeddingOp
   }
 
   /**
-   * Status reads the stored refusal before any provider exists. It applies only while the
-   * configuration still resolves to that implicit endpoint; a read-only status probe reports
-   * it instead of a success it cannot record (`memory status --index` re-checks and clears).
+   * Only the provider's own identity says whether a recorded refusal covers today's endpoint.
+   * Creating the provider sends no request; a covered endpoint stays refused.
+   */
+  protected async withStatusRefusalIdentity<T extends { embeddingRefusal?: unknown }>(
+    snapshot: T,
+  ): Promise<T> {
+    if (snapshot.embeddingRefusal) {
+      await this.ensureProviderInitializedOrRefused();
+    }
+    return snapshot;
+  }
+
+  /**
+   * Status reads the stored refusal. It applies only while the configured provider still calls
+   * that implicit endpoint; a read-only status probe reports it instead of a success it cannot
+   * record (`memory status --index` re-checks and clears).
    */
   protected projectStatusEmbeddingRefusal(
     refusal: MemoryEmbeddingRefusal | null | undefined,
   ): string | undefined {
-    // Without a provider, the current destination is what memory.search or the provider entry
-    // configures now; an endpoint that names none is not one a refusal was recorded for.
-    const configuredBaseUrl = (
-      this.settings.remote?.baseUrl || this.cfg.models?.providers?.[this.settings.provider]?.baseUrl
-    )?.replace(/\/+$/, "");
-    const endpoint = refusal
-      ? this.implicitEmbeddingEndpoint(
-          this.providerRuntime?.cacheKeyData ?? {
-            provider: this.settings.provider,
-            baseUrl: configuredBaseUrl,
-            model: this.settings.model,
-          },
-        )
-      : undefined;
+    const endpoint =
+      this.implicitEmbeddingEndpoint(this.providerRuntime?.cacheKeyData) ?? this.checkedEndpoint;
     this.statusEmbeddingRefusal =
       refusal && endpoint && isSameMemoryEmbeddingEndpoint(refusal, endpoint)
         ? formatMemoryEmbeddingRefusal(refusal)
