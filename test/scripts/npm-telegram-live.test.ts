@@ -595,10 +595,13 @@ function captureDocker(env: NodeJS.ProcessEnv = {}) {
 const fs = require('node:fs');
 const args = process.argv.slice(2);
 if (args[0] === 'run' && args.includes('-i')) fs.readFileSync(0);
-if (args[0] === 'run' && args.includes('-i') && process.env.CHECK_WRITABLE_PREFIX === '1') {
-  const mount = args.find(arg => arg.endsWith(':/npm-global'));
-  const mode = fs.statSync(mount.slice(0, -':/npm-global'.length)).mode & 0o007;
-  if (mode !== 0o007) throw new Error('npm prefix is inaccessible to the container user: ' + mode);
+if (args[0] === 'run' && args.includes('-i') && process.env.CHECK_WRITABLE_MOUNTS === '1') {
+  for (const target of [':/npm-global', ':/app/.artifacts/qa-e2e/npm-telegram-live-output']) {
+    const mount = args.find(arg => arg.endsWith(target));
+    if (!mount) continue;
+    const mode = fs.statSync(mount.slice(0, -target.length)).mode & 0o007;
+    if (mode !== 0o007) throw new Error('Container mount is not writable: ' + target + ' (' + mode + ')');
+  }
 }
 fs.appendFileSync(process.env.DOCKER_CALLS, JSON.stringify(args) + '\\n');
 if (args.includes('--cidfile')) process.exit(Number(process.env.SUITE_EXIT_CODE || 0));
@@ -628,9 +631,14 @@ if (args.includes('/output')) process.exit(Number(process.env.ARTIFACT_EXIT_CODE
   return { root, candidate, result, runs };
 }
 
-it("makes the disposable npm prefix writable to the container user", () => {
-  const { result } = captureDocker({ CHECK_WRITABLE_PREFIX: "1" });
+it("makes both host-created mounts writable to the container user", () => {
+  const { result, runs } = captureDocker({ CHECK_WRITABLE_MOUNTS: "1" });
   expect(result.status, result.stderr).toBe(0);
+  const mounts = runs.flat();
+  expect(mounts.some((arg) => arg.endsWith(":/npm-global"))).toBe(true);
+  expect(
+    mounts.some((arg) => arg.endsWith(":/app/.artifacts/qa-e2e/npm-telegram-live-output")),
+  ).toBe(true);
 });
 
 it.each([false, true])("isolates install and runtime credentials (upgrade=%s)", (upgrade) => {

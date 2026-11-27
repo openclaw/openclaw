@@ -17,7 +17,7 @@ const historicalWarning = warning("2026.9.5", "2026.9.4");
 const posixIt = process.platform === "win32" ? it.skip : it;
 type VersionField = "freshVersion" | "manifestVersion" | "afterVersion" | "beforeVersion";
 type Fixture = Partial<
-  Record<VersionField | "baseline" | "freshWarning" | "updateWarning", string> &
+  Record<VersionField | "baseline" | "expectVersion" | "freshWarning" | "updateWarning", string> &
     Record<"freshExit" | "updateExit" | "globalExit", number> & { foreignPath: boolean }
 >;
 function runFixture(options: Fixture = {}) {
@@ -73,7 +73,7 @@ run_update_candidate "$BASELINE" applied --no-restart
       PATH: `${bin}:${process.env.PATH ?? ""}`,
       HOME: root,
       PACKAGE_NAME: "openclaw",
-      UPDATE_EXPECT_VERSION: "2026.9.5",
+      UPDATE_EXPECT_VERSION: options.expectVersion ?? "2026.9.5",
       UPDATE_TAG_URL: url,
       BASELINE: options.baseline ?? "2026.9.4",
       PAYLOAD: payload,
@@ -94,6 +94,38 @@ posixIt("accepts historical 9.4 warning only after the fresh CLI and global pack
   expect(result.stdout).toContain("cli=openclaw installed=2026.9.5 expected=2026.9.5");
   expect(result.stderr).toContain("fresh PATH and global install verified as 2026.9.5");
   expect(result.stderr).toContain(historicalWarning);
+});
+const novemberPair: Fixture = {
+  baseline: "2026.11.10",
+  beforeVersion: "2026.11.10",
+  expectVersion: "2026.11.11",
+  afterVersion: "2026.11.11",
+  manifestVersion: "2026.11.11",
+  freshVersion: "2026.11.11",
+  updateWarning: warning("2026.11.11", "2026.11.10"),
+};
+posixIt("accepts the published 2026.11.10 updater warning on the same proof", () => {
+  const result = runFixture(novemberPair);
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stderr).toContain("fresh PATH and global install verified as 2026.11.11");
+});
+posixIt.each(
+  Object.entries({
+    "stale PATH executable": { freshVersion: "2026.11.10" },
+    "stale global package": { manifestVersion: "2026.11.10" },
+    "mismatched warning versions": { updateWarning: warning("2026.11.12", "2026.11.10") },
+    "a later target from the same baseline": {
+      expectVersion: "2026.11.12",
+      afterVersion: "2026.11.12",
+      manifestVersion: "2026.11.12",
+      freshVersion: "2026.11.12",
+      updateWarning: warning("2026.11.12", "2026.11.10"),
+    },
+  } satisfies Record<string, Fixture>),
+)("rejects 2026.11.10 pair with %s", (_name, fixture) => {
+  const result = runFixture({ ...novemberPair, ...fixture });
+  expect(result.status).not.toBe(0);
+  expect(result.stderr).not.toContain("fresh PATH and global install verified");
 });
 const negatives: Record<string, Fixture> = {
   "stale PATH executable": { freshVersion: "2026.9.4" },
