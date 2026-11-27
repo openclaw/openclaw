@@ -697,12 +697,14 @@ suite.define(() => {
         await installTalkBrowserFixtures(page);
         await page.goto(suite.server.baseUrl + "chat");
         await page.getByText(TALK_READY_HISTORY_MESSAGE.content, { exact: true }).waitFor();
-        await button(page, "Dictation").click();
+        await button(page, "Dictation", true).click();
+        await page.locator(".chat-talk-input-picker[open]").waitFor({ state: "attached" });
         const feedback = page
           .locator(".chat-talk-input-picker__menu")
-          .getByRole("alert")
+          .getByRole("status")
           .filter({ hasText: "No transcription provider is configured" });
         await feedback.waitFor({ state: "visible" });
+        await captureFullPage(page, "mobile-dictation-unavailable");
       },
     ));
 
