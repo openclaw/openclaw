@@ -98,6 +98,8 @@ describe("PostgreSQL updater command admission", () => {
       resetDatabaseEngineSelectionForTest();
       try {
         const selection = await resolveDatabaseEngineSelection(config, process.env);
+        // Warm the process pool before status reads outside this selection scope.
+        // Hosted readers must inherit that pool; the root guard catches worker-local pools.
         const run = await withDatabaseEngineSelection(selection, async () => {
           namespaces.push(getPostgresPhysicalFacts(openOpenClawStateDatabase().db)!.namespace);
           const createdRun = createUpdateRun({ trigger: "cli" });
