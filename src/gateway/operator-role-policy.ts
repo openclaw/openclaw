@@ -17,6 +17,7 @@ import {
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
+import type { UserProfileRoleChange } from "../state/user-profile-writes.js";
 import { bumpGatewayAccessRevision } from "./gateway-access-revision.js";
 import {
   isOpenClawIdTunnelPrincipalCurrent,
@@ -57,6 +58,72 @@ const deniedOperatorRole: GatewayOperatorRoleDefinition = {
   agents: [],
   scopes: [],
 };
+
+type RoleSessions = GatewayOperatorRoleDefinition["sessions"];
+
+const OTHERS_ORDER = ["none", "view", "suggest", "write"];
+// Without a ceiling a member's stored level is ignored; any ceiling applies it
+// (resolveSessionMemberAccess), so "uncapped" ranks above "send".
+const INVITED_ORDER = ["read", "suggest", "send", "uncapped"];
+
+/**
+ * Session permissions only narrow along their order: none < view < suggest < write, and
+ * none < invited < write, where an invitation narrows when its access ceiling drops. Invited and
+ * view or suggest are not comparable, so a change between them counts as a loss. Invited tool
+ * and permission limits apply to the next request.
+ */
+function sessionsNarrowed(before: RoleSessions, after: RoleSessions): boolean {
+  if (before.others === "none" || after.others === "write") {
+    return false;
+  }
+  if (before.others === "invited" && after.others === "invited") {
+    return (
+      INVITED_ORDER.indexOf(after.maxInvitedAccess ?? "uncapped") <
+      INVITED_ORDER.indexOf(before.maxInvitedAccess ?? "uncapped")
+    );
+  }
+  if (before.others === "invited" || after.others === "invited") {
+    return true;
+  }
+  return OTHERS_ORDER.indexOf(after.others) < OTHERS_ORDER.indexOf(before.others);
+}
+
+/**
+ * A role write loses access unless the new effective role keeps every operator scope, agent and
+ * session permission of the old one. A role that cannot be resolved is not comparable, so it
+ * counts as a loss. Other role limits (tools, sandbox, projects) apply to the next request only.
+ */
+export function roleChangeLosesAccess(
+  cfg: OpenClawConfig,
+  change: UserProfileRoleChange,
+  identity: { githubLogin?: string | null; openclawIdAccountIds?: readonly string[] } | undefined,
+): boolean {
+  const definition = (role: string | null) => {
+    const { effectiveRole } = resolveOperatorRoleSelection(
+      change.profileId,
+      role,
+      cfg,
+      identity?.githubLogin ?? null,
+      operatorRoleSubject({ ...identity, profileId: change.profileId }),
+    );
+    return effectiveRole ? cfg.gateway?.roles?.definitions[effectiveRole] : undefined;
+  };
+  const before = definition(change.previousRole);
+  const after = definition(change.role);
+  if (!before || !after) {
+    return before !== after;
+  }
+  return (
+    !roleScopesAllow({
+      role: "operator",
+      requestedScopes: before.scopes,
+      allowedScopes: after.scopes,
+    }) ||
+    (after.agents !== "*" &&
+      (before.agents === "*" || before.agents.some((agent) => !after.agents.includes(agent)))) ||
+    sessionsNarrowed(before.sessions, after.sessions)
+  );
+}
 
 type GatewaySessionAgentAuthorization = {
   cfg: OpenClawConfig;
