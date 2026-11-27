@@ -48,7 +48,8 @@ function capturePendingTrace() {
     lines.push(String(chunk));
     return true;
   });
-  return () => lines.filter((line) => line.includes("doctor.pending."));
+  return () =>
+    lines.filter((line) => line.includes("doctor.pending.") && line.includes("pending="));
 }
 
 /** Every entry under root with its bytes and modification time. */

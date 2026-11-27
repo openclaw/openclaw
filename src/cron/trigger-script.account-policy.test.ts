@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import "../agents/openclaw-tools.js";
 import type {
   ChannelMessageActionContext,
   ChannelPlugin,

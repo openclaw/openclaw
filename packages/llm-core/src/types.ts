@@ -377,6 +377,8 @@ export const PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE = "PROVIDER_POST_DISPAT
 export const PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE = "PROVIDER_FAILURE_WITH_OUTPUT";
 /** The stream owner removed repetitive content before persistence and replay. */
 export const REPETITIVE_OUTPUT_ERROR_CODE = "openclaw_repetitive_output";
+/** The stream owner stopped a tool-call argument stream that only grew trailing whitespace. */
+export const DEGENERATE_OUTPUT_ERROR_CODE = "degenerate_output";
 /** Pre-dispatch argument rejection; callers still enforce output and effect guards. */
 export const MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE = "malformed_tool_call_arguments";
 
@@ -796,6 +798,12 @@ export interface AnthropicMessagesCompat {
   supportsCacheControlOnTools?: boolean;
   /** Whether empty thinking signatures can be replayed as native thinking blocks. Default: false. */
   allowEmptySignature?: boolean;
+  /**
+   * Whether reported `input_tokens` already include `cache_read_input_tokens`
+   * (for example LM Studio). When true, usage parsing subtracts cache reads so
+   * `input` stays the uncached bucket. Default: false (Anthropic's disjoint buckets).
+   */
+  inputTokensIncludeCacheRead?: boolean;
 }
 
 /**

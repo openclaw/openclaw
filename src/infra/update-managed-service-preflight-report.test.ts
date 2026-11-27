@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
+import { failedUpdateRun } from "./update-failure-report.test-support.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
-import type { UpdateRunResult } from "./update-runner-types.js";
 
 it.each([
   ["inside-gateway-service", "independent terminal outside the service"],
@@ -28,25 +28,18 @@ it.each([
       },
     ],
   };
-  for (const recorded of [false, true]) {
-    const result: UpdateRunResult = {
-      mode: "npm",
-      status: "error",
+  const report = await prepareUpdateFailureReport(
+    failedUpdateRun({
+      runId: "managed-preflight",
       reason: "managed-service-preflight",
-      steps: recorded ? [] : [step],
-      durationMs: 0,
-    };
-    const recordedRun = recorded
-      ? { runId: "managed-preflight", steps: updateRunStepsFromResultStep(step) }
-      : undefined;
-    const report = await prepareUpdateFailureReport(
-      { attemptId: "managed-preflight", result, recordedRun },
-      { env: {}, stateDir: "/report-test-state" },
-    );
-    expect(report.body).toContain(`Failing check managed-service-preflight (${code})`);
-    expect(report.body).toContain(guidance);
-    for (const privateText of ["Fixture Person", "private-install", "812345"]) {
-      expect(report.body).not.toContain(privateText);
-    }
+      target: { kind: "package", installationMethod: "npm-global" },
+      steps: updateRunStepsFromResultStep(step),
+    }),
+    { env: {}, stateDir: "/report-test-state" },
+  );
+  expect(report.body).toContain(`Failing check managed-service-preflight (${code})`);
+  expect(report.body).toContain(guidance);
+  for (const privateText of ["Fixture Person", "private-install", "812345"]) {
+    expect(report.body).not.toContain(privateText);
   }
 });

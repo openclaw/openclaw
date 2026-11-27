@@ -137,6 +137,7 @@ export function createUsageRollupScan(params: UsageCostRollupScanInput & { appen
         pricingFingerprint: priced ? params.pricingFingerprint : USAGE_COST_UNPRICED_FINGERPRINT,
         checkpoint,
         scannedAt: Date.now(),
+        includesTimedUsage: true,
         parsedRecords: (previous?.parsedRecords ?? 0) + parsedRecords,
         countedRecords: (previous?.countedRecords ?? 0) + countedRecords,
         rollup,

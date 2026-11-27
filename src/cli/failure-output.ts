@@ -234,7 +234,7 @@ export function formatCliJsonFailure(
   };
 }
 
-function shouldShowDebugDetails(
+export function shouldShowDebugDetails(
   argv: string[] | undefined = process.argv,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {

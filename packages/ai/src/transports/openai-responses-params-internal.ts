@@ -1,6 +1,5 @@
 import type { Context, Model } from "@openclaw/llm-core";
 import { resolveOpenAIThinkingApi } from "@openclaw/model-catalog-core/model-catalog-types";
-import { getAiTransportHost } from "../host.js";
 import { resolveCacheRetention } from "../providers/cache-retention.js";
 import { resolveOpenAIPromptCacheParams } from "../providers/openai-prompt-cache.js";
 import {
@@ -14,6 +13,7 @@ import {
 import { resolveOpenAIResponsesTextFormat } from "../providers/openai-response-format.js";
 import { prepareResponsesTools } from "../providers/openai-responses-tools.js";
 import { reconcileOpenAIResponsesToolChoice } from "../providers/openai-tool-projection.js";
+import { resolveOpenAIStrictToolSetting } from "../providers/openai-tool-schema.js";
 import { hasResponsesWebSearchTool } from "../providers/openai-web-search-tools.js";
 import { clampMaxTokensToModel } from "../providers/simple-options.js";
 import { prepareSystemPrompt } from "../utils/system-prompt-cache-boundary.js";
@@ -37,7 +37,7 @@ import {
   convertResponsesMessages,
 } from "./openai-responses-replay-internal.js";
 import { getCompat } from "./openai-transport-params.js";
-import { resolvePromptCacheKey, type OpenAIModeModel } from "./openai-transport-shared.js";
+import { resolvePromptCacheKey } from "./openai-transport-shared.js";
 
 const OPENAI_CODEX_RESPONSES_UNSUPPORTED_PARAMS = [
   "max_output_tokens",
@@ -197,10 +197,7 @@ export function buildOpenAIResponsesParams(
   }
   if (context.tools) {
     const tools = context.tools;
-    const strict = getAiTransportHost().resolveOpenAIStrictToolSetting(model as OpenAIModeModel, {
-      transport: "stream",
-      supportsStrictMode: compat.supportsStrictMode,
-    });
+    const strict = resolveOpenAIStrictToolSetting(compat);
     const { projection, tools: converted } = prepareResponsesTools(
       tools,
       strict,

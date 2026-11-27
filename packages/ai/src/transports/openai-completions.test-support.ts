@@ -42,8 +42,6 @@ configureAiTransportHost({
       headers,
     });
   },
-  resolveOpenAIStrictToolSetting: (_model, options) =>
-    options?.supportsStrictMode ? true : undefined,
   resolveProviderRequestCapabilities: resolveTestCapabilities,
   resolveModelRequestTimeoutMs: (model) => {
     const value = (model as { requestTimeoutMs?: unknown }).requestTimeoutMs;

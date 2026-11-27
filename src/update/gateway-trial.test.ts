@@ -3,7 +3,7 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import type * as PluginLifecycleClient from "../cli/plugins-lifecycle-client.js";
 import { resolvePluginBatchReload } from "../cli/plugins-lifecycle-client.js";
@@ -39,7 +39,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { VERSION } from "../version.js";
-import { announceReady, settleRunFromTrial } from "./gateway-trial.js";
+import { announceReady } from "./gateway-trial.js";
 import * as trialStore from "./store.js";
 import {
   acquireUpdateLock,
@@ -117,6 +117,9 @@ vi.mock("../gateway/update-run-watcher.js", async (importOriginal) => ({
 }));
 
 const directories: string[] = [];
+beforeEach(() => {
+  vi.stubEnv("OPENCLAW_LAUNCHER_IPC", "");
+});
 afterEach(async () => {
   await Promise.all(backgroundWork.splice(0));
   await closeOpenClawStateDatabaseAsync();
@@ -261,7 +264,7 @@ it.each(["succeeded", "rolled-back"] as const)(
       expect(resolvePluginBatchReload).not.toHaveBeenCalled();
     }
     expect(await readTrial(resolvePrefix())).toMatchObject({ reported: true });
-    await settleRunFromTrial((await readTrial())!);
+    await announceReady(null);
     expect((await getUpdateRunAsync(run.runId, options))?.finishedAtMs).toBe(
       finished?.finishedAtMs,
     );
@@ -374,19 +377,18 @@ it("keeps post-update maintenance when result notice preparation fails", async (
   vi.spyOn(UpdateNotices, "createUpdateRunNotifier").mockRejectedValueOnce(
     new Error("notice preparation failed"),
   );
-  await expect(
-    settleRunFromTrial({
-      v: 2,
-      runId: run.runId,
-      phase: "committed",
-      target: "releases/new/openclaw",
-      previous: "releases/old/openclaw",
-      version: VERSION,
-      attempts: 1,
-      createdAt: Date.now(),
-      outcome: { status: "succeeded", at: Date.now() },
-    }),
-  ).rejects.toThrow("notice preparation failed");
+  await writeTrial({
+    v: 2,
+    runId: run.runId,
+    phase: "committed",
+    target: "releases/new/openclaw",
+    previous: "releases/old/openclaw",
+    version: VERSION,
+    attempts: 1,
+    createdAt: Date.now(),
+    outcome: { status: "succeeded", at: Date.now() },
+  });
+  await expect(announceReady(null)).rejects.toThrow("notice preparation failed");
   await Promise.all(backgroundWork);
   expect(await getUpdateRunAsync(run.runId)).toMatchObject({
     status: "succeeded",
@@ -416,7 +418,7 @@ it.each([true, false])(
         options,
       );
     }
-    await settleRunFromTrial({
+    await writeTrial({
       v: 2,
       runId: run.runId,
       phase: "rolled-back",
@@ -427,6 +429,7 @@ it.each([true, false])(
       createdAt: Date.now(),
       outcome: { status: "rolled-back", reason: "new build failed to start", at: Date.now() },
     });
+    await announceReady(null);
     expect(notices).toEqual(
       acknowledged ? [{ runId: run.runId, kind: "finished", status: "failed" }] : [],
     );
@@ -553,9 +556,10 @@ it.each(["warning", "error"] as const)(
       createdAt: Date.now(),
       outcome: { status: "succeeded", at: Date.now() },
     };
+    await writeTrial(trial);
     const work = new AsyncWorkScope();
     try {
-      await work.run(() => settleRunFromTrial(trial));
+      await work.run(() => announceReady(null));
       await entered.promise;
       const committed = await getUpdateRunAsync(run.runId, options);
       expect(committed?.status).toBe("succeeded");
@@ -683,7 +687,7 @@ it.each([undefined, true, false])(
     await writeTrial(trial);
     const work = new AsyncWorkScope();
     try {
-      await work.run(() => settleRunFromTrial(trial));
+      await work.run(() => announceReady(null));
       await entered.promise;
       const committed = await getUpdateRunAsync(run.runId, options);
       expect(committed).toMatchObject({
@@ -767,13 +771,12 @@ it("finishes a ready update before plugin work can be aborted", async ({ signal 
   vi.stubEnv("OPENCLAW_STATE_DIR", state);
   const release = path.join(state, "release");
   await fs.mkdir(release);
+  // Ref'd timers keep both fixture processes alive until the command scope stops them.
   await fs.writeFile(
     path.join(release, "openclaw.mjs"),
     `import { spawn } from "node:child_process";
-import { MessageChannel } from "node:worker_threads";
-spawn(process.execPath, ["-e", "const { port1 } = new (require('node:worker_threads').MessageChannel)(); port1.on('message', () => {});"], { stdio: "ignore" });
-const { port1 } = new MessageChannel();
-port1.on("message", () => {});
+spawn(process.execPath, ["-e", "setInterval(() => {}, 60_000);"], { stdio: "ignore" });
+setInterval(() => {}, 60_000);
 process.stdout.write("maintenance-ready\\n");`,
   );
   const actualExec = await vi.importActual<typeof ProcessExec>("../process/exec.js");
@@ -814,7 +817,7 @@ process.stdout.write("maintenance-ready\\n");`,
   openOpenClawStateDatabase({ env: process.env });
   const run = await createUpdateRunAsync({ trigger: "control-ui" });
   try {
-    await settleRunFromTrial({
+    await writeTrial({
       v: 2,
       runId: run.runId,
       phase: "committed",
@@ -825,6 +828,7 @@ process.stdout.write("maintenance-ready\\n");`,
       createdAt: Date.now(),
       outcome: { status: "succeeded", at: Date.now() },
     });
+    await announceReady(null);
     await withinTest(entered.promise, signal);
     const committed = await getUpdateRunAsync(run.runId);
     expect(committed).toMatchObject({
@@ -899,7 +903,7 @@ it("collects obsolete paths after ready but keeps same-version selected and tria
   for (const release of [obsolete, previous, selected]) {
     await fs.utimes(path.dirname(release), past, past);
   }
-  await settleRunFromTrial(await readTrial(prefix), prefix);
+  await announceReady(null);
   await vi.waitFor(
     async () =>
       expect((await fs.readdir(path.join(prefix, "releases"))).toSorted()).toEqual([

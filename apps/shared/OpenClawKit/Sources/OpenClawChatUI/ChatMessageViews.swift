@@ -614,6 +614,7 @@ extension ChatMessageBubble {
                 text: text,
                 context: .user,
                 variant: self.markdownVariant,
+                typography: .response,
                 textColor: textColor)
                 .chatMarkdownFileLinks()
         }

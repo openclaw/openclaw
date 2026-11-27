@@ -82,7 +82,6 @@ describe("plugin contract registry public artifacts", () => {
           parameters: {},
           execute: async () => ({}),
         }),
-        credentialValue: "AIzaSyDUMMY",
       },
     ]);
 

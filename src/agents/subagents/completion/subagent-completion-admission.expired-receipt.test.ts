@@ -30,7 +30,6 @@ function settle(input: ReturnType<typeof records>, delivered: boolean) {
     entries: [input.subagent],
     outcome: { delivered, path: "direct", error: delivered ? undefined : "requester failed" },
     assertCurrent: () => {},
-    databaseOptions: { database: db.value },
   });
 }
 

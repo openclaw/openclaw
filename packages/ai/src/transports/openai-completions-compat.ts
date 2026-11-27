@@ -277,8 +277,13 @@ export function detectOpenAICompletionsCompat(
               ? "openrouter"
               : "openai",
     visibleReasoningDetailTypes: isOpenRouterLike ? ["response.output_text", "response.text"] : [],
+    // Declared strict support: the OpenAI and Azure OpenAI endpoints, OpenRouter, and the
+    // default route of the openai provider; any other route declares it in catalog or config.
     supportsStrictMode:
-      !isZai && (!usesConfiguredNonOpenAIEndpoint || endpointClass === "openrouter"),
+      endpointClass === "openai-public" ||
+      endpointClass === "azure-openai" ||
+      endpointClass === "openrouter" ||
+      (isDefaultRoute && isDefaultRouteProvider(provider, "openai")),
     requiresTypedUnionBranches: isMoonshot,
     supportsJsonSchemaResponseFormat:
       (endpointClass === "openai-public" ||

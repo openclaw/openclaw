@@ -137,9 +137,9 @@ const countedContext = {
   ...rowContext,
   subagentRuns: {
     ...subagentRuns,
-    getDisplaySubagentRun(...args: Parameters<typeof subagentRuns.getDisplaySubagentRun>) {
+    getSessionDisplayFacts(...args: Parameters<typeof subagentRuns.getSessionDisplayFacts>) {
       runReads++;
-      return subagentRuns.getDisplaySubagentRun(...args);
+      return subagentRuns.getSessionDisplayFacts(...args);
     },
   },
 };

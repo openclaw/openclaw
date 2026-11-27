@@ -37,6 +37,9 @@ type SessionUsageLatencyAggregate = {
   max: number;
   min?: number;
   sum: number;
+  timedMs?: number;
+  timedTokens?: number;
+  timedCost?: number;
 };
 
 export type SessionUsageRollupBucket = SessionUsageUntimestampedRollup & {
@@ -109,10 +112,19 @@ function compressLatencyCentroids(aggregate: SessionUsageLatencyAggregate): void
   }
 }
 
-function addLatencyValue(aggregate: SessionUsageLatencyAggregate, value: number): void {
+function addLatencyValue(
+  aggregate: SessionUsageLatencyAggregate,
+  value: number,
+  usage: CostUsageTotals | undefined,
+): void {
   const wasEmpty = aggregate.count === 0;
   aggregate.count += 1;
   aggregate.sum += value;
+  if (usage && value > 0) {
+    aggregate.timedMs = (aggregate.timedMs ?? 0) + value;
+    aggregate.timedTokens = (aggregate.timedTokens ?? 0) + usage.totalTokens;
+    aggregate.timedCost = (aggregate.timedCost ?? 0) + usage.totalCost;
+  }
   aggregate.min = wasEmpty ? value : Math.min(aggregate.min ?? value, value);
   aggregate.max = Math.max(aggregate.max, value);
   aggregate.centroids.push({ count: 1, value });
@@ -130,6 +142,11 @@ function mergeLatencyAggregate(
   const sourceMin = source.min ?? source.max;
   target.count += source.count;
   target.sum += source.sum;
+  if (source.timedMs !== undefined) {
+    target.timedMs = (target.timedMs ?? 0) + source.timedMs;
+    target.timedTokens = (target.timedTokens ?? 0) + (source.timedTokens ?? 0);
+    target.timedCost = (target.timedCost ?? 0) + (source.timedCost ?? 0);
+  }
   target.min = targetWasEmpty ? sourceMin : Math.min(target.min ?? target.max, sourceMin);
   target.max = Math.max(target.max, source.max);
   target.centroids.push(
@@ -243,7 +260,7 @@ export function appendSessionUsageRollupContribution(
         ? Math.max(0, timedBucket.timestampMs - sourceUserTimestamp)
         : undefined);
     if (latencyMs !== undefined && Number.isFinite(latencyMs) && latencyMs <= MAX_LATENCY_MS) {
-      addLatencyValue(timedBucket.latency, latencyMs);
+      addLatencyValue(timedBucket.latency, latencyMs, contribution.usageTotals);
     }
   }
   if (contribution.role === "user" && contribution.navigated !== true) {
@@ -301,6 +318,9 @@ export function computeLatencyStats(
     p95Ms,
     minMs: aggregate.min ?? aggregate.max,
     maxMs: aggregate.max,
+    timedMs: aggregate.timedMs,
+    timedTokens: aggregate.timedTokens,
+    timedCost: aggregate.timedCost,
   };
 }
 
@@ -449,6 +469,9 @@ function mergeLatencyStats(
       right?.minMs ?? Number.POSITIVE_INFINITY,
     ),
     maxMs: Math.max(left?.maxMs ?? 0, right?.maxMs ?? 0),
+    timedMs: (left?.timedMs ?? 0) + (right?.timedMs ?? 0) || undefined,
+    timedTokens: (left?.timedTokens ?? 0) + (right?.timedTokens ?? 0) || undefined,
+    timedCost: (left?.timedCost ?? 0) + (right?.timedCost ?? 0) || undefined,
   };
 }
 

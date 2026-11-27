@@ -229,7 +229,11 @@ export function memoryPublicationGroup(replacements: readonly MemorySourceIndexR
     if (!source) {
       return undefined;
     }
-    bytes += JSON.stringify(source.header).length * 2;
+    const { header } = source;
+    // Group membership is decided before file validation. Reserve the field names
+    // and two JSON numbers (under 32 characters each) at the UTF-16 byte budget.
+    const planned = header.verifiedFile ? { ...header, verifiedFile: undefined } : header;
+    bytes += JSON.stringify(planned).length * 2 + (header.source === "memory" ? 256 : 0);
     for (const fragment of source.fragments) {
       bytes += Math.max(Buffer.byteLength(fragment.json), fragment.json.length * 2) + 128;
     }

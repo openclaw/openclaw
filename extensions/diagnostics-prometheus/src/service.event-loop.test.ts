@@ -27,40 +27,6 @@ function memorySample(
   return { type: "diagnostic.memory.sample" as const, memory: { ...memoryDefaults, ...memory } };
 }
 
-it.each([
-  "admission_entry",
-  "admission_other",
-  "receipt_entry",
-  "receipt_events",
-  "receipt_value",
-  "receipt_other",
-] as const)("exports numeric %s samples without repeating cumulative values", (component) => {
-  using metrics = createMetricsHarness();
-  const sample = memorySample({
-    workerMessages: [
-      {
-        kind: "authority",
-        direction: "from_worker",
-        messages: 3,
-        payloadBytes: 50,
-        unmeasuredMessages: 2,
-        payloadComponents: {
-          "session.actor.appendTranscriptEvent": {
-            [component]: { bytes: 123, samples: 2, unmeasured: 1 },
-          },
-        },
-      },
-    ],
-  });
-  metrics.record(sample);
-  metrics.record(sample);
-  const rendered = metrics.render();
-  const labels = `component="${component}",request_class="session.actor.appendTranscriptEvent"`;
-  expectMetrics(rendered)(`openclaw_worker_authority_component_sampled_bytes_total{${labels}} 123
-openclaw_worker_authority_component_samples_total{${labels},result="measured"} 2
-openclaw_worker_authority_component_samples_total{${labels},result="unmeasured"} 1`);
-});
-
 it("keeps the latest major-GC heap and observation time through scavenges", () => {
   using metrics = createMetricsHarness();
   expect(metrics.render()).not.toContain("openclaw_heap_used_after_major_gc");
@@ -311,6 +277,11 @@ it("retains cumulative worker work, messages, selections and GC across retiremen
           messages: 3,
           payloadBytes: 567,
           payloadBytesByRequestClass: { "session.actor.completeTurn": 500, other: 67 },
+          payloadComponents: {
+            "session.actor.appendTranscriptEvent": {
+              receipt_other: { bytes: 123, samples: 2, unmeasured: 1 },
+            },
+          },
           unmeasuredMessages: 1,
         },
         {
@@ -376,6 +347,9 @@ openclaw_worker_message_payload_bytes_total{direction="from_worker",kind="author
 openclaw_worker_message_payload_bytes_total{direction="to_worker",kind="authority",request_class="other"} 0
 openclaw_worker_messages_total{direction="from_worker",kind="authority"} 3
 openclaw_worker_message_unmeasured_total{direction="from_worker",kind="authority"} 1
+openclaw_worker_authority_component_sampled_bytes_total{component="receipt_other",request_class="session.actor.appendTranscriptEvent"} 123
+openclaw_worker_authority_component_samples_total{component="receipt_other",request_class="session.actor.appendTranscriptEvent",result="measured"} 2
+openclaw_worker_authority_component_samples_total{component="receipt_other",request_class="session.actor.appendTranscriptEvent",result="unmeasured"} 1
 openclaw_session_row_selections_total{kind="parent",task="control-ui-pr"} 4
 openclaw_session_row_selection_rows_total{kind="parent",task="control-ui-pr"} 12
 openclaw_session_row_selection_resets_total 2

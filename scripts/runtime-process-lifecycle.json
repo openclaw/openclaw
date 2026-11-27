@@ -13,6 +13,14 @@
       "memory": { "scope": "worker-heap", "expectedMiB": null }
     }
   },
+  "cronStreamMatcher": {
+    "streamMatches": {
+      "owner": "src/gateway/cron-stream-matcher.ts",
+      "start": "lazy",
+      "retire": "Retire workers after one idle minute, extended to five on adaptive reuse, or sooner under memory pressure. Timeout or cancellation retires the active slot. Runtime close or restart joins the pool.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    }
+  },
   "directoryWatchHost": {
     "subscriptions": {
       "owner": "src/infra/directory-watch-host.ts",
@@ -26,6 +34,20 @@
       "owner": "src/infra/directory-watch-parent.worker.ts",
       "start": "eager",
       "retire": "Exit with the watch host; stop the host when its owner PID disappears.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    }
+  },
+  "fileLog": {
+    "writer": {
+      "owner": "src/logging/logger-file-worker.ts",
+      "start": "lazy",
+      "retire": "Retire the writer after one idle minute, extended to five on adaptive reuse, or sooner under memory pressure. Runtime cleanup flushes queued logs before closing the pool.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    },
+    "tailReader": {
+      "owner": "src/logging/log-tail-worker.ts",
+      "start": "lazy",
+      "retire": "Retire the separate tail reader after one idle minute, extended to five on adaptive reuse, or sooner under memory pressure. Runtime cleanup closes the pool.",
       "memory": { "scope": "worker-heap", "expectedMiB": null }
     }
   },
@@ -197,6 +219,14 @@
       "memory": { "scope": "worker-heap", "expectedMiB": null }
     }
   },
+  "stallObserver": {
+    "gatewayEventLoopMonitor": {
+      "owner": "src/logging/diagnostic-stall-kernel.ts",
+      "start": "eager",
+      "retire": "The Gateway main thread starts an unreferenced worker for the monitor lifetime. Monitor stop or worker error clears the heartbeat, closes the ports, and requests termination.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    }
+  },
   "stateRead": {
     "retainedReads": {
       "owner": "src/state/openclaw-state-read-worker.ts",
@@ -220,6 +250,14 @@
       "owner": "src/infra/shared-worker-host.ts",
       "start": "lazy",
       "retire": "Follow the pool's retirement policy and await endpoint cleanup. The last endpoint joins the host. Failed stops or missed acknowledgements force host retirement.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    }
+  },
+  "systemCaWarmup": {
+    "gatewayStartup": {
+      "owner": "src/gateway/system-ca-warmup.ts",
+      "start": "eager",
+      "retire": "Run once per macOS Gateway process. The worker closes its port after the CA read. Request termination on a failed reply or after ten seconds.",
       "memory": { "scope": "worker-heap", "expectedMiB": null }
     }
   },
