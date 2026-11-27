@@ -494,6 +494,15 @@ describe("mcp-app-view localization", () => {
     await expect(bridge.updateModelContextHandler!({ content: state.content })).resolves.toEqual(
       {},
     );
+    expect(request).toHaveBeenCalledWith(
+      "mcp.app.updateModelContext",
+      {
+        sessionKey: "agent:main:main",
+        viewId: "view-context-read-failure",
+        content: state.content,
+      },
+      { signal: expect.any(AbortSignal) },
+    );
     expectHost(bridge, { "openai/modelContext": state });
     expect(received).toHaveLength(0);
     expect(view.querySelector("iframe")).toBe(frame);
