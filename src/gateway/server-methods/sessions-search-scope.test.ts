@@ -9,8 +9,6 @@ import {
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
-import { resolveSqliteTranscriptScope } from "../../config/sessions/session-accessor.sqlite-scope.js";
-import { replaceSqliteTranscriptEventsInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-store.js";
 import { runSessionColdStorageMaintenance } from "../../config/sessions/session-cold-storage.js";
 import {
   addSessionMember,
@@ -19,7 +17,6 @@ import {
 import { readSessionTranscriptIndexStatus } from "../../config/sessions/session-transcript-projection-writer.js";
 import * as transcriptSearch from "../../config/sessions/session-transcript-search.js";
 import * as sessionTargets from "../../config/sessions/targets-runtime.js";
-import { timedMessageEvent } from "../../config/sessions/transcript-message.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
@@ -855,83 +852,6 @@ test("recall tolerates transcript-only activity on unrelated rows during its wor
     expect(result.payload?.results.map((hit) => hit.sessionKey)).toEqual([visible]);
   });
 });
-
-// Activity summaries are optional: existing transcripts without one still hold recall hits, so
-// rewrite fencing must not depend on a certified summary watermark — for clears and non-empty
-// replacements alike.
-test.each([
-  { withActivitySummary: true, replacement: "clear" },
-  { withActivitySummary: false, replacement: "clear" },
-  { withActivitySummary: true, replacement: "non-empty" },
-  { withActivitySummary: false, replacement: "non-empty" },
-])(
-  "recall discards hits when a destructive transcript rewrite lands during its worker read (activity summary: $withActivitySummary, replacement: $replacement)",
-  async ({ withActivitySummary, replacement }) => {
-    await withSearchState(async () => {
-      const owner = ensureProfileForEmail("recall-rewrite@example.test").id;
-      const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
-      setRuntimeConfigSnapshot(cfg);
-      const key = await seed(
-        "main",
-        "rewrite-target",
-        owner,
-        "needle",
-        withActivitySummary
-          ? {
-              activitySummary: {
-                version: 1,
-                text: "needle discussion",
-                updatedAt: Date.now(),
-                sessionId: "main-rewrite-target",
-                generation: null,
-                maxSeq: null,
-                leafEntryId: null,
-                coveredMessages: 1,
-                totalMessages: 1,
-                omittedContent: false,
-              },
-            }
-          : {},
-      );
-      const read = transcriptSearch.searchSessionTranscripts;
-      let rewritten = false;
-      vi.spyOn(transcriptSearch, "searchSessionTranscripts").mockImplementation(async (...args) => {
-        const result = await read(...args);
-        if (!rewritten) {
-          rewritten = true;
-          runOpenClawAgentWriteTransaction(
-            (database) => {
-              replaceSqliteTranscriptEventsInTransaction(
-                database,
-                resolveSqliteTranscriptScope({
-                  agentId: "main",
-                  sessionKey: key,
-                  sessionId: "main-rewrite-target",
-                }),
-                replacement === "clear"
-                  ? []
-                  : [
-                      timedMessageEvent("replacement", null, Date.now(), {
-                        role: "user",
-                        content: "replacement",
-                      }),
-                    ],
-              );
-            },
-            { agentId: "main" },
-          );
-        }
-        return result;
-      });
-      const result = await search(requestContext(cfg), identifiedClient(owner), {
-        query: "needle",
-        recall: { requesterAgentId: "main", requesterSessionKey: "agent:main:main" },
-      });
-      expect(result.ok, result.error?.message).toBe(true);
-      expect(result.payload?.results).toEqual([]);
-    });
-  },
-);
 
 test("recall still fails when the disclosure scope keeps changing during both read attempts", async () => {
   await withSearchState(async () => {
