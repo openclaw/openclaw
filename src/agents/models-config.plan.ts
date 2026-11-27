@@ -21,7 +21,7 @@ import { ensureAuthProfileStoreAsync } from "./auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
   buildSourceModelFields,
-  isWritableProviderConfig,
+  findUnwritableProviderReason,
   mergeProviders,
   mergeWithExistingProviderSecrets,
   type ExistingProviderConfig,
@@ -227,6 +227,8 @@ type ModelsJsonPlan =
       action: "write";
       contents: string;
       pluginCatalogWrites?: Record<string, string>;
+      /** Registry rejection reasons for providers omitted from this write. */
+      skippedProviders?: string[];
     };
 
 /** Resolves providers for models.json. */
@@ -317,9 +319,16 @@ function resolveProvidersForMode(params: {
 
 function filterWritableProviders(
   providers: Record<string, ProviderConfig>,
+  skippedProviders: Set<string>,
 ): Record<string, ProviderConfig> {
   const next = Object.fromEntries(
-    Object.entries(providers).filter(([, provider]) => isWritableProviderConfig(provider)),
+    Object.entries(providers).filter(([key, provider]) => {
+      const reason = findUnwritableProviderReason(key, provider);
+      if (reason) {
+        skippedProviders.add(reason);
+      }
+      return !reason;
+    }),
   );
   return Object.keys(next).length === Object.keys(providers).length ? providers : next;
 }
@@ -401,6 +410,8 @@ export async function planOpenClawModelsJson(params: {
     providers: normalizedProviders,
     secretRefManagedProviders,
   });
+  // The model registry rejects a whole models.json for one invalid provider, so omit those.
+  const skippedProviders = new Set<string>();
   const finalizeProviders = (candidateProviders: Record<string, ProviderConfig>) => {
     const normalized =
       normalizeProviderCatalogModelsForConfig(candidateProviders) ?? candidateProviders;
@@ -410,6 +421,7 @@ export async function planOpenClawModelsJson(params: {
         sourceConfigForSecrets: context.sourceConfigForSecrets,
         secretRefManagedProviders,
       }) ?? normalized,
+      skippedProviders,
     );
   };
   const explicitProviderIds = new Set(
@@ -473,5 +485,6 @@ export async function planOpenClawModelsJson(params: {
     action: "write",
     contents: nextContents,
     pluginCatalogWrites,
+    skippedProviders: [...skippedProviders],
   };
 }

@@ -163,6 +163,26 @@ describe("models-config planning", () => {
     });
   });
 
+  it("omits a configured provider the registry rejects and keeps the rest loadable", async () => {
+    discover({});
+    const { api: _api, ...withoutApi } = provider({ baseUrl: "https://legacy.example/v1" });
+    const plan = await generate({
+      cfg: { models: { providers: { valid: provider(), legacy: withoutApi } } },
+    });
+
+    expect(Object.keys(plan.providers)).toEqual(["valid"]);
+    expect(plan.skippedProviders).toEqual([
+      'Provider legacy, model gpt-5.5: no "api" specified. Set at provider or model level.',
+    ]);
+    const registry = ModelRegistry.create(
+      AuthStorage.inMemory(),
+      "/tmp/openclaw-skipped-provider/models.json",
+      { includePluginCatalogs: false, modelsJsonContents: plan.contents },
+    );
+    expect(registry.getError()).toBeUndefined();
+    expect(registry.find("valid", "gpt-5.5")).toBeDefined();
+  });
+
   it("treats empty replace-mode provider sets as authoritative", async () => {
     const discovery = discover({});
     const existingParsed = { providers: { stale: {} } };

@@ -328,12 +328,53 @@ function shouldPreserveExistingBaseUrl(params: {
   return !existingApi || !nextApi || existingApi === nextApi;
 }
 
-export function isWritableProviderConfig(entry: ProviderConfig): boolean {
-  if (!Array.isArray(entry.models) || entry.models.length === 0) {
-    return true;
+/** Returns why the model registry rejects this provider's models, if it does. */
+export function findProviderModelsError(
+  providerName: string,
+  config: ProviderModelCatalog,
+  source: "catalog" | "registration",
+): string | undefined {
+  const models = config.models ?? [];
+  if (models.length > 0 && !config.baseUrl) {
+    const subject = source === "catalog" ? "custom models" : "models";
+    return `Provider ${providerName}: "baseUrl" is required when defining ${subject}.`;
   }
+  for (const model of models) {
+    if (!model.api && !config.api) {
+      const guidance = source === "catalog" ? " Set at provider or model level." : "";
+      return `Provider ${providerName}, model ${model.id}: no "api" specified.${guidance}`;
+    }
+    if (source === "catalog") {
+      for (const field of ["contextWindow", "maxTokens"] as const) {
+        if (model[field] !== undefined && model[field] <= 0) {
+          return `Provider ${providerName}, model ${model.id}: invalid ${field}`;
+        }
+      }
+    }
+  }
+  return undefined;
+}
+
+/** Throws the model registry's rejection reason for this provider's models. */
+export function validateProviderModels(
+  ...params: Parameters<typeof findProviderModelsError>
+): void {
+  const error = findProviderModelsError(...params);
+  if (error) {
+    throw new Error(error);
+  }
+}
+
+/** Returns why models.json must omit this provider: the model registry would reject the file. */
+export function findUnwritableProviderReason(
+  providerName: string,
+  entry: ProviderConfig,
+): string | undefined {
   // AuthStorage can supply omitted keys; an explicitly empty key still violates the schema.
-  return Boolean(entry.baseUrl?.trim() && (entry.apiKey === undefined || entry.apiKey));
+  if (entry.apiKey === "" && entry.models?.length) {
+    return `Provider ${providerName}: "apiKey" is empty.`;
+  }
+  return findProviderModelsError(providerName, entry, "catalog");
 }
 
 /** Merges generated provider config with existing secrets safe to preserve. */
@@ -348,7 +389,7 @@ export function mergeWithExistingProviderSecrets(params: {
 
   const mergedProviders: Record<string, ProviderConfig> = {};
   for (const [key, entry] of Object.entries(normalizedExistingProviders)) {
-    if (!isWritableProviderConfig(entry)) {
+    if (findUnwritableProviderReason(key, entry)) {
       continue;
     }
     mergedProviders[key] = entry;

@@ -17,6 +17,7 @@ import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { privateFileStore } from "../infra/private-file-store.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import {
   resolvePluginMetadataSnapshot,
@@ -44,6 +45,8 @@ import {
   replacePersistedPluginModelCatalogs,
   type PersistedPluginModelCatalog,
 } from "./plugin-model-catalog.js";
+
+const log = createSubsystemLogger("agents/models-config");
 
 type ModelsConfigInput = OpenClawConfig | (() => Promise<CapturedRuntimeConfigRead>);
 
@@ -299,6 +302,10 @@ export async function ensureOpenClawModelsJsonWithInput(
       await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
       if (existingModelsFile.raw !== plan.contents) {
         await privateFileStore(path.dirname(targetPath)).writeText("models.json", plan.contents);
+        // Logged once per rewrite, not per catalog load, so the skip stays visible without repeating.
+        for (const reason of plan.skippedProviders ?? []) {
+          log.warn(`models.json omits a provider the model registry cannot load: ${reason}`);
+        }
       }
     }
     publishModelsJsonCostSource(
