@@ -10,9 +10,13 @@ import type { CronFormState } from "./types.ts";
 
 registerCronEnglish();
 
-export function parseCronScheduleAt(input: string): string | undefined {
+export function resolveCronScheduleAt(form: CronFormState): string | undefined {
+  // An untouched local minute still represents the instant from when the editor opened.
+  if (form.scheduleAt && form.scheduleAt === form.originalScheduleAt?.local) {
+    return form.originalScheduleAt.at;
+  }
   const parsed = parseOffsetlessIsoDateTimeInTimeZone(
-    input,
+    form.scheduleAt,
     Intl.DateTimeFormat().resolvedOptions().timeZone,
   );
   return parsed.ok ? parsed.iso : undefined;
@@ -185,7 +189,7 @@ export function hasUnchangedCronSchedule(form: CronFormState, job: CronJob): boo
     }
   }
   if (schedule.kind === "at") {
-    return form.scheduleAt === formatDateTimeLocal(schedule.at);
+    return resolveCronScheduleAt(form) === schedule.at;
   }
   if (schedule.kind === "every") {
     return parseCronDurationMs(form.everyAmount, form.everyUnit) === schedule.everyMs;
@@ -221,7 +225,7 @@ export function buildCronSchedule(form: CronFormState, source?: CronJob | null) 
     };
   }
   if (form.scheduleKind === "at") {
-    const at = parseCronScheduleAt(form.scheduleAt);
+    const at = resolveCronScheduleAt(form);
     if (!at) {
       throw new Error(t("cron.errors.invalidRunTime"));
     }

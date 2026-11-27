@@ -400,9 +400,7 @@ suite.define(() => {
       await expect
         .poll(async () => (await composer.boundingBox())!.x - (await flagRight()))
         .toBeGreaterThanOrEqual(0);
-      const identityTooltip = page
-        .getByRole("tooltip")
-        .filter({ hasText: "Identity and app menu for Owner:" });
+      const statusTooltip = page.getByRole("tooltip").filter({ hasText: /^Reconnecting$/ });
       const recovery = flag.locator(".gateway-status");
       await recovery.waitFor({ state: "visible" });
       expect(await retainedStatus.getAttribute("title")).toBe("");
@@ -412,7 +410,7 @@ suite.define(() => {
       await retainedStatus.hover();
       await recovery.waitFor({ state: "visible" });
       await page.clock.runFor(200);
-      expect(await identityTooltip.count()).toBe(0);
+      expect(await statusTooltip.count()).toBe(0);
       expect(await retainedStatus.getAttribute("aria-label")).toContain("Reconnecting");
       expect(
         await recovery.evaluate((button) => {
@@ -441,7 +439,7 @@ suite.define(() => {
       await retainedStatus.hover();
       await page.clock.runFor(200);
       await flag.waitFor({ state: "hidden" });
-      await identityTooltip.waitFor({ state: "visible" });
+      await statusTooltip.waitFor({ state: "visible" });
       await retainedStatus.focus();
       expect(await flag.isVisible()).toBe(false);
       expect(await retainedStatus.getAttribute("aria-label")).toContain("Reconnecting");
@@ -454,7 +452,7 @@ suite.define(() => {
       await retainedStatus.hover();
       await page.clock.runFor(200);
       expect(await flag.isVisible()).toBe(false);
-      await identityTooltip.waitFor({ state: "visible" });
+      await statusTooltip.waitFor({ state: "visible" });
     });
   });
 

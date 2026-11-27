@@ -3,9 +3,9 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it } from "vitest";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import { bindUserTurnTranscriptAnnotation } from "../../sessions/user-turn-transcript-annotation.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import {
   loadSessionEntry,

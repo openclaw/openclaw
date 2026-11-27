@@ -15,6 +15,7 @@ import {
   withWorkerWorkspaceHashMemo,
   withWorkspaceHashMemo,
   withoutWorkspaceHashContext,
+  workspaceStatIdentity,
   type WorkspaceHashMetrics,
 } from "./workspace-hash-memo.js";
 import {
@@ -104,25 +105,46 @@ export async function executeWorkspaceManifestComputation(
           : [],
       );
       const changed = new Set(previous?.changedPaths);
+      const fingerprints = input.captureFingerprints
+        ? prepareLocalWorkspaceFingerprints(new Map<string, never>(), "", null, Date.now())
+        : undefined;
       // Keep discovery: installers can create empty directories, and staged-input
       // markers can change eligibility. Only unchanged immutable file bytes are reused.
-      const { rawManifest, manifestRef } = await readActualWorkspaceManifestImpl(
+      const { manifest, rawManifest, manifestRef } = await readActualWorkspaceManifestImpl(
         { ...input, buildCacheInputs: new Set(input.buildCacheInputs) },
         previous
-          ? (relative, _identity, stats) => {
+          ? (relative, stats) => {
               const entry = entries.get(relative);
-              return !changed.has(relative) &&
+              const reused =
+                !changed.has(relative) &&
                 // Installer-owned bytes can be retained by a staged-input marker.
                 !/(?:^|\/)node_modules\//u.test(relative) &&
                 entry?.type === "file" &&
                 entry.size === Number(stats.size) &&
                 entry.mode === gitFileMode(Number(stats.mode & 0o777n))
-                ? entry
-                : undefined;
+                  ? entry
+                  : undefined;
+              if (reused) {
+                fingerprints?.observe(relative, workspaceStatIdentity("gateway", stats), true);
+              }
+              return reused;
             }
           : undefined,
+        // The installer has stopped; these immutable files can retain their actual ctime.
+        fingerprints && ((relative, identity) => fingerprints.observe(relative, identity, true)),
       );
-      return { rawManifest, manifestRef };
+      return {
+        rawManifest,
+        manifestRef,
+        ...(fingerprints
+          ? {
+              projectionFingerprints: fingerprints.encode(
+                new Map(manifest.entries.map((node) => [node.path, { node }])),
+                manifestRef,
+              ),
+            }
+          : {}),
+      };
     }
     case "workspace.manifest.local": {
       const { executeLocalWorkspaceManifestRead } =

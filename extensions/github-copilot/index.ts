@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   applyAuthProfileConfig,
+  applyProviderAuthConfigPatch,
   coerceSecretRef,
   ensureAuthProfileStoreAsync,
   listProfilesForProvider,
@@ -106,60 +107,26 @@ async function resolveInteractiveCopilotStarterModel(params: {
   }
 }
 
-// Undefined removes a previous tenant on merge; runtime derives service URLs from the host.
-function buildGithubCopilotDomainConfigPatch(domain?: string): Partial<OpenClawConfig> {
+// Enterprise logins persist the tenant. Switching back to github.com clears a persisted tenant
+// (undefined removes it on merge); github.com otherwise stays absent. Runtime derives service
+// URLs from the host.
+function buildGithubCopilotDomainConfigPatch(
+  domain: string,
+  previousDomain: string,
+): Partial<OpenClawConfig> | undefined {
+  const isEnterprise = domain !== PUBLIC_GITHUB_COPILOT_DOMAIN;
+  if (!isEnterprise && previousDomain === PUBLIC_GITHUB_COPILOT_DOMAIN) {
+    return undefined;
+  }
   return {
     models: {
       providers: {
         [PROVIDER_ID]: {
-          params: {
-            githubDomain: domain === undefined ? undefined : normalizeGithubCopilotDomain(domain),
-          },
+          params: { githubDomain: isEnterprise ? normalizeGithubCopilotDomain(domain) : undefined },
         },
       },
     },
   } as unknown as Partial<OpenClawConfig>;
-}
-
-function applyGithubCopilotDomainToConfig(
-  config: OpenClawConfig,
-  domain: string,
-  previousDomain: string,
-): OpenClawConfig {
-  const isEnterprise = domain !== PUBLIC_GITHUB_COPILOT_DOMAIN;
-  const shouldClear = !isEnterprise && previousDomain !== PUBLIC_GITHUB_COPILOT_DOMAIN;
-  if (!isEnterprise && !shouldClear) {
-    return config;
-  }
-
-  const models = config.models ?? {};
-  const providers = models.providers ?? {};
-  const provider = providers[PROVIDER_ID];
-  const params: Record<string, unknown> = {};
-  if (provider?.params) {
-    Object.assign(params, provider.params);
-  }
-  if (isEnterprise) {
-    params.githubDomain = domain;
-  } else {
-    delete params.githubDomain;
-  }
-  const nextProviders = { ...providers };
-  if (provider) {
-    nextProviders[PROVIDER_ID] = { ...provider, params };
-  } else {
-    // Source config accepts partial provider inputs; catalog materialization
-    // supplies baseUrl/models before runtime consumption.
-    Object.assign(nextProviders, { [PROVIDER_ID]: { params } });
-  }
-
-  return {
-    ...config,
-    models: {
-      ...models,
-      providers: nextProviders,
-    },
-  };
 }
 
 async function runGitHubCopilotNonInteractiveAuth(
@@ -225,11 +192,10 @@ async function runGitHubCopilotNonInteractiveAuth(
 
   const resolvedDomain = resolveGithubCopilotDomain({ config: ctx.config });
   const previousDomain = resolveGithubCopilotDomain({ env: {}, config: ctx.config });
-  const configWithDomain = applyGithubCopilotDomainToConfig(
-    ctx.config,
-    resolvedDomain,
-    previousDomain,
-  );
+  const domainPatch = buildGithubCopilotDomainConfigPatch(resolvedDomain, previousDomain);
+  const configWithDomain = domainPatch
+    ? applyProviderAuthConfigPatch(ctx.config, domainPatch)
+    : ctx.config;
 
   let starterModel: string | undefined;
   if (!resolveAgentModelPrimaryValue(configWithDomain.agents?.defaults?.model)) {
@@ -346,17 +312,17 @@ export default definePluginEntry({
           if (!trimmed) {
             return "Enter your GitHub Enterprise domain (for example your-org.ghe.com).";
           }
-          if (
-            normalizeGithubCopilotDomain(trimmed) === PUBLIC_GITHUB_COPILOT_DOMAIN &&
-            trimmed.toLowerCase() !== PUBLIC_GITHUB_COPILOT_DOMAIN
-          ) {
+          if (normalizeGithubCopilotDomain(trimmed) === PUBLIC_GITHUB_COPILOT_DOMAIN) {
+            if (trimmed.toLowerCase() === PUBLIC_GITHUB_COPILOT_DOMAIN) {
+              return "github.com is the default — use the standard GitHub Copilot login instead of the enterprise (data residency) option.";
+            }
             // GitHub's GHE docs list derived service hosts (api.<tenant>.ghe.com,
             // copilot-api.<tenant>.ghe.com) that users are likely to paste; point
             // them at the tenant root instead of the generic hostname message.
             if (trimmed.toLowerCase().endsWith(".ghe.com")) {
               return "Enter your tenant root (for example your-org.ghe.com), not a service host like api.your-org.ghe.com — service endpoints are derived automatically.";
             }
-            return "Enter a github.com or *.ghe.com hostname without scheme or path (for example your-org.ghe.com).";
+            return "Enter a *.ghe.com hostname without scheme or path (for example your-org.ghe.com).";
           }
           return undefined;
         },
@@ -379,14 +345,7 @@ export default definePluginEntry({
       // public-minted token instead of forcing a fresh tenant device login.
       const previousDomain = resolveGithubCopilotDomain({ env: {}, config: ctx.config });
       const domainChanged = previousDomain !== normalizedDomain;
-      // Enterprise logins persist the tenant domain. Switching back to github.com
-      // clears any persisted tenant so the default (no config == github.com) is
-      // restored; github.com stays absent otherwise to avoid redundant noise.
-      const configPatch = isEnterprise
-        ? buildGithubCopilotDomainConfigPatch(normalizedDomain)
-        : previousDomain !== PUBLIC_GITHUB_COPILOT_DOMAIN
-          ? buildGithubCopilotDomainConfigPatch()
-          : undefined;
+      const configPatch = buildGithubCopilotDomainConfigPatch(normalizedDomain, previousDomain);
 
       const suppliedToken =
         ctx.opts?.tokenProvider === PROVIDER_ID
@@ -451,7 +410,7 @@ export default definePluginEntry({
 
       const { runGitHubCopilotDeviceFlow } = await import("./login.js");
 
-      const result = await runGitHubCopilotDeviceFlow(
+      const accessToken = await runGitHubCopilotDeviceFlow(
         {
           showCode: async ({ verificationUrl, userCode, expiresInMs }) => {
             const expiresInMinutes = Math.max(1, Math.round(expiresInMs / 60_000));
@@ -492,22 +451,9 @@ export default definePluginEntry({
         normalizedDomain,
       );
 
-      if (result.status === "access_denied") {
-        await ctx.prompter.note("GitHub Copilot login was cancelled.", "GitHub Copilot");
-        return { profiles: [] };
-      }
-
-      if (result.status === "expired") {
-        await ctx.prompter.note(
-          "The GitHub device code expired. Retry login to get a new code.",
-          "GitHub Copilot",
-        );
-        return { profiles: [] };
-      }
-
       const starter = await resolveInteractiveCopilotStarterModel({
         ctx,
-        githubToken: result.accessToken,
+        githubToken: accessToken,
         githubDomain: normalizedDomain,
       });
       const persistInline = ctx.secretInputMode === "plaintext";
@@ -520,23 +466,11 @@ export default definePluginEntry({
           : []),
       ];
       return {
-        profiles: [buildCopilotTokenProfile(ctx, result.accessToken)],
+        profiles: [buildCopilotTokenProfile(ctx, accessToken)],
         ...(starter.defaultModel ? { defaultModel: starter.defaultModel } : {}),
         ...(notes.length > 0 ? { notes } : {}),
         ...(configPatch ? { configPatch } : {}),
       };
-    }
-
-    async function runGitHubCopilotEnterpriseAuth(ctx: ProviderAuthContext) {
-      const domain = await promptForEnterpriseDomain(ctx);
-      if (domain === PUBLIC_GITHUB_COPILOT_DOMAIN) {
-        await ctx.prompter.note(
-          "github.com is the default — use the standard GitHub Copilot login instead of the enterprise (data residency) option.",
-          "GitHub Copilot",
-        );
-        return { profiles: [] };
-      }
-      return await runGitHubCopilotDeviceAuth(ctx, domain);
     }
 
     api.registerEmbeddingProvider(githubCopilotMemoryEmbeddingProviderAdapter);
@@ -561,7 +495,8 @@ export default definePluginEntry({
           label: "GitHub Enterprise device login (data residency)",
           hint: "Device-code flow against your *.ghe.com tenant",
           kind: "device_code",
-          run: runGitHubCopilotEnterpriseAuth,
+          // COPILOT_GITHUB_DOMAIN=github.com is authoritative, so it signs in to github.com.
+          run: async (ctx) => runGitHubCopilotDeviceAuth(ctx, await promptForEnterpriseDomain(ctx)),
           wizard: {
             choiceId: "github-copilot-enterprise",
             choiceLabel: "GitHub Copilot (Enterprise / data residency)",

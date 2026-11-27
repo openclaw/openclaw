@@ -5,7 +5,6 @@ import { isThinkingLikeBlock } from "../thinking-block.js";
 import { isAssistantMessageWithContent } from "../thinking-signatures.js";
 
 type AssistantContentBlock = Extract<AgentMessage, { role: "assistant" }>["content"][number];
-type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
 
 const OMITTED_ASSISTANT_REASONING_TEXT = "[assistant reasoning omitted]";
 
@@ -14,36 +13,84 @@ function isToolCallBlock(block: AssistantContentBlock): boolean {
   return type === "toolCall" || type === "tool_use" || type === "function_call";
 }
 
-function mapAssistantMessages(
-  messages: AgentMessage[],
-  transform: (message: AssistantMessage, index: number) => AgentMessage,
-): AgentMessage[] {
-  let touched = false;
-  const out: AgentMessage[] = [];
-  for (const [index, message] of messages.entries()) {
-    const next = isAssistantMessageWithContent(message) ? transform(message, index) : message;
-    touched ||= next !== message;
-    out.push(next);
+export type ThinkingReplayAdapter<T, B> = {
+  role(message: T): string | undefined;
+  content(message: T): readonly B[] | undefined;
+  thinking(block: B): boolean;
+  signature(block: B): boolean;
+  toolCall(block: B): boolean;
+  replace(message: T, content: B[], placeholder: string): T;
+};
+
+export function transformThinkingReplay<T, B>(
+  messages: T[],
+  adapter: ThinkingReplayAdapter<T, B>,
+  operation: "invalid-signatures" | "drop-thinking" | "drop-reasoning" | "strip-all",
+  preserveLatestAssistant = true,
+): T[] {
+  const isAssistant = (message: T) =>
+    adapter.role(message) === "assistant" && adapter.content(message) !== undefined;
+  const latestAssistant = messages.findLastIndex(isAssistant);
+  let preserved =
+    operation === "drop-thinking" || (operation === "invalid-signatures" && preserveLatestAssistant)
+      ? latestAssistant
+      : -1;
+  if (operation === "drop-reasoning") {
+    preserved = findCurrentThinkingToolTurn(messages, adapter);
   }
-  return touched ? out : messages;
+  let touched = false;
+  const result = messages.map((message, index) => {
+    if (!isAssistant(message) || index === preserved) {
+      return message;
+    }
+    const content = adapter.content(message)!;
+    const filtered = content.filter(
+      (block) =>
+        !adapter.thinking(block) ||
+        (operation === "invalid-signatures" && adapter.signature(block)),
+    );
+    const next =
+      filtered.length === content.length
+        ? message
+        : adapter.replace(message, filtered, OMITTED_ASSISTANT_REASONING_TEXT);
+    touched ||= next !== message;
+    return next;
+  });
+  return touched ? result : messages;
 }
 
-function filterAssistantContent(
-  message: AssistantMessage,
-  keepBlock: (block: AssistantContentBlock) => boolean,
-): AssistantMessage {
-  const content = message.content.filter(keepBlock);
-  return content.length === message.content.length
-    ? message
-    : {
-        ...message,
-        // Provider converters drop blank blocks; preserve the assistant turn with nonempty text.
-        content:
-          content.length > 0 ? content : [{ type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT }],
-      };
+function findCurrentThinkingToolTurn<T, B>(
+  messages: readonly T[],
+  adapter: ThinkingReplayAdapter<T, B>,
+): number {
+  const latestUser = messages.findLastIndex((message) => adapter.role(message) === "user");
+  const index = messages.findIndex(
+    (message, candidate) => candidate > latestUser && adapter.role(message) === "assistant",
+  );
+  const message = messages[index];
+  return message &&
+    adapter.content(message)?.some((block) => adapter.toolCall(block)) &&
+    messages.some((next, candidate) => candidate > index && adapter.role(next) === "toolResult")
+    ? index
+    : -1;
 }
 
-function hasReplayableThinkingSignature(block: AssistantContentBlock): boolean {
+const thinkingArrayAdapter: ThinkingReplayAdapter<AgentMessage, AssistantContentBlock> = {
+  role: (message) => message?.role,
+  content: (message) => (isAssistantMessageWithContent(message) ? message.content : undefined),
+  thinking: isThinkingLikeBlock,
+  signature: hasReplayableThinkingSignature,
+  toolCall: isToolCallBlock,
+  replace: (message, content, placeholder) =>
+    message.role === "assistant"
+      ? {
+          ...message,
+          content: content.length > 0 ? content : [{ type: "text", text: placeholder }],
+        }
+      : message,
+};
+
+export function hasReplayableThinkingSignature(block: AssistantContentBlock): boolean {
   const record = asOptionalObjectRecord(block);
   if (!record) {
     return false;
@@ -65,72 +112,36 @@ export function stripInvalidThinkingSignatures(
   messages: AgentMessage[],
   options: { preserveLatestAssistant?: boolean } = {},
 ): AgentMessage[] {
-  const latestAssistantIndex =
-    (options.preserveLatestAssistant ?? true)
-      ? messages.findLastIndex(isAssistantMessageWithContent)
-      : -1;
-  return mapAssistantMessages(messages, (message, index) =>
-    index === latestAssistantIndex
-      ? message
-      : filterAssistantContent(
-          message,
-          (block) => !isThinkingLikeBlock(block) || hasReplayableThinkingSignature(block),
-        ),
+  return transformThinkingReplay(
+    messages,
+    thinkingArrayAdapter,
+    "invalid-signatures",
+    options.preserveLatestAssistant ?? true,
   );
 }
 
-/**
- * Keep the latest turn's replay signatures and preserve empty turns with placeholder text.
- * Unchanged history retains its original array identity.
- */
+/** Keep the latest assistant thinking; historical empty turns receive an omission marker. */
 export function dropThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
-  const latestAssistantIndex = messages.findLastIndex(isAssistantMessageWithContent);
-  return mapAssistantMessages(messages, (message, index) =>
-    index === latestAssistantIndex ? message : stripThinkingBlocksFromMessage(message),
-  );
-}
-
-function findCurrentToolTurnAssistantIndex(messages: AgentMessage[]): number {
-  const latestUserIndex = messages.findLastIndex((message) => message?.role === "user");
-  // Even an assistant without content ends the first-assistant eligibility window.
-  const index = messages.findIndex(
-    (message, candidateIndex) => candidateIndex > latestUserIndex && message?.role === "assistant",
-  );
-  const message = messages[index];
-  return message &&
-    isAssistantMessageWithContent(message) &&
-    message.content.some(isToolCallBlock) &&
-    messages.some(
-      (next, nextIndex) =>
-        nextIndex > index && next && typeof next === "object" && next.role === "toolResult",
-    )
-    ? index
-    : -1;
+  return transformThinkingReplay(messages, thinkingArrayAdapter, "drop-thinking");
 }
 
 export function shouldPreserveLatestAssistantThinking(messages: AgentMessage[]): boolean {
-  const latestAssistantIndex = messages.findLastIndex(isAssistantMessageWithContent);
+  const latest = messages.findLastIndex(isAssistantMessageWithContent);
   return (
-    latestAssistantIndex >= 0 &&
-    (latestAssistantIndex === messages.length - 1 ||
-      latestAssistantIndex === findCurrentToolTurnAssistantIndex(messages))
+    latest >= 0 &&
+    (latest === messages.length - 1 ||
+      latest === findCurrentThinkingToolTurn(messages, thinkingArrayAdapter))
   );
 }
 
 export function stripThinkingBlocksFromMessage(message: AgentMessage): AgentMessage {
-  if (!isAssistantMessageWithContent(message)) {
-    return message;
-  }
-  return filterAssistantContent(message, (block) => !isThinkingLikeBlock(block));
+  return transformThinkingReplay([message], thinkingArrayAdapter, "strip-all")[0]!;
 }
 
 export function stripAllThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
-  return mapAssistantMessages(messages, stripThinkingBlocksFromMessage);
+  return transformThinkingReplay(messages, thinkingArrayAdapter, "strip-all");
 }
 
 export function dropReasoningFromHistory(messages: AgentMessage[]): AgentMessage[] {
-  const currentToolTurnAssistantIndex = findCurrentToolTurnAssistantIndex(messages);
-  return mapAssistantMessages(messages, (message, index) =>
-    index === currentToolTurnAssistantIndex ? message : stripThinkingBlocksFromMessage(message),
-  );
+  return transformThinkingReplay(messages, thinkingArrayAdapter, "drop-reasoning");
 }

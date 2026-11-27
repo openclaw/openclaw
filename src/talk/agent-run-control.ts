@@ -138,6 +138,10 @@ export async function controlRealtimeVoiceAgentRun(
     } | null;
     text: string;
     getToolAuthorityOverlay?: () => ReplyToolAuthorityOverlay;
+    /** Worker-backed caller policy; takes precedence over the synchronous reader. */
+    getToolAuthorityOverlayAsync?: () => Promise<ReplyToolAuthorityOverlay>;
+    /** Live caller lifetime, checked after preparation and at each control effect. */
+    assertCurrent?: () => void;
     prepareToolAuthorityOverlay?: (overlay: ReplyToolAuthorityOverlay) => Promise<void>;
     /** Host context prepared by the validated authority callback, never provider text. */
     getSteeringContext?: () => string | undefined;
@@ -147,6 +151,14 @@ export async function controlRealtimeVoiceAgentRun(
     /** Optional Gateway Stop override; otherwise cancel the captured exact run owner. */
     cancelRun?: (runId: string) => Promise<boolean>;
   },
+  providedDeps?: RealtimeVoiceAgentControlDeps,
+): Promise<RealtimeVoiceAgentControlResult> {
+  return await controlTalkAgentRun(params, providedDeps);
+}
+
+/** Gateway Talk reads caller policy through the worker-backed session reader. */
+export async function controlTalkAgentRun(
+  params: Parameters<typeof controlRealtimeVoiceAgentRun>[0],
   providedDeps?: RealtimeVoiceAgentControlDeps,
 ): Promise<RealtimeVoiceAgentControlResult> {
   const sessionKey = params.sessionKey.trim();
@@ -256,11 +268,15 @@ export async function controlRealtimeVoiceAgentRun(
   }
   // Released dependency adapters may ignore optional preparation callbacks.
   const deferMessagePreparation = !providedDeps && Boolean(target || legacyOwner);
-  const toolAuthorityOverlay = params.getToolAuthorityOverlay?.();
+  const toolAuthorityOverlay = params.getToolAuthorityOverlayAsync
+    ? await params.getToolAuthorityOverlayAsync()
+    : params.getToolAuthorityOverlay?.();
+  params.assertCurrent?.();
   if (toolAuthorityOverlay && (mode === "cancel" || !deferMessagePreparation)) {
     await params.prepareToolAuthorityOverlay?.(toolAuthorityOverlay);
   }
   const preparedOwner = resolveCurrentRun();
+  params.assertCurrent?.();
   if (
     preparedOwner.sessionId !== sessionId ||
     (target ? !target.isCurrent(sessionId) : !isLegacyCurrent())
@@ -272,7 +288,11 @@ export async function controlRealtimeVoiceAgentRun(
       target === undefined
         ? providedDeps
           ? providedDeps.abortEmbeddedAgentRun(sessionId)
-          : await commands!.stopRealtimeVoiceSessionRun({ sessionKey, sessionId })
+          : await commands!.stopRealtimeVoiceSessionRun({
+              sessionKey,
+              sessionId,
+              assertCurrent: params.assertCurrent,
+            })
         : target !== null &&
           (params.cancelRun
             ? await params.cancelRun(target.runId)
@@ -319,15 +339,18 @@ export async function controlRealtimeVoiceAgentRun(
   };
   const steerText = deferMessagePreparation ? text : prepareMessage();
   const prepareCurrent = async () => {
-    const overlay = params.getToolAuthorityOverlay?.();
+    const overlay = params.getToolAuthorityOverlayAsync
+      ? await params.getToolAuthorityOverlayAsync()
+      : params.getToolAuthorityOverlay?.();
     if (overlay) {
       await params.prepareToolAuthorityOverlay?.(overlay);
     }
+    params.assertCurrent?.();
     options.toolAuthorityOverlay = overlay;
     options.inputRequesterDeviceId = overlay?.approvalReviewerDeviceId;
   };
   const canInject = () => {
-    options.toolAuthorityOverlay?.operatorAuthority?.assertCurrent();
+    params.assertCurrent?.();
     return target
       ? !target.signal.aborted && target.isCurrent(sessionId)
       : legacyOwner?.isCurrent() === true;
@@ -340,7 +363,12 @@ export async function controlRealtimeVoiceAgentRun(
         }
       },
       compatAssertCurrent: () => {
-        const overlay = params.getToolAuthorityOverlay?.();
+        params.assertCurrent?.();
+        // An asynchronous reader cannot repeat its read here; check the overlay
+        // prepared for this admission.
+        const overlay = params.getToolAuthorityOverlayAsync
+          ? options.toolAuthorityOverlay
+          : params.getToolAuthorityOverlay?.();
         options.toolAuthorityOverlay = overlay;
         options.inputRequesterDeviceId = overlay?.approvalReviewerDeviceId;
         if (overlay && legacyOwner && !legacyOwner.matchesCaller(overlay)) {

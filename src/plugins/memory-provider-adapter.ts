@@ -15,6 +15,7 @@ import type {
   MemorySearchPage,
   MemoryCitation,
   MemoryReference,
+  MemoryStoreRequest,
 } from "./memory-provider-runtime-types.js";
 import type {
   MemoryCallerContext,
@@ -83,11 +84,27 @@ export function refreshMemoryProviderWithHandoff(
 }
 
 /** Recheck both caller and provider lifetime after every asynchronous boundary. */
+const MAX_MEMORY_STORE_TEXT = 64 * 1024;
+
+/** Rejects store input every provider would otherwise have to re-validate. */
+function assertMemoryStoreRequest(request: MemoryStoreRequest) {
+  if (typeof request?.text !== "string" || !request.text.trim()) {
+    throw new Error("memory store requires non-empty text");
+  }
+  if (request.text.length > MAX_MEMORY_STORE_TEXT) {
+    throw new Error(`memory store text exceeds ${MAX_MEMORY_STORE_TEXT} characters`);
+  }
+  if (request.tags !== undefined && !request.tags.every((tag) => typeof tag === "string")) {
+    throw new Error("memory store tags must be strings");
+  }
+}
+
 export function bindMemoryProvider(
   provider: MemoryProviderHandle,
   providerId: string,
   context: MemoryCallerContext,
   runtimeOwner?: object,
+  options?: { readOnly?: boolean },
 ): MemoryProviderHandle {
   let closed = false;
   const instance =
@@ -148,6 +165,7 @@ export function bindMemoryProvider(
     ...provider.capabilities,
     sources: Object.freeze([...provider.capabilities.sources]),
     candidates: Object.freeze([...provider.capabilities.candidates]),
+    ...(provider.store ? { store: true } : {}),
   });
   const assertSearchCapabilities = (request: Parameters<MemoryProviderHandle["search"]>[0]) => {
     const unsupportedSource = request.sources?.find(
@@ -209,6 +227,24 @@ export function bindMemoryProvider(
         }
       : {}),
     ...(refresh ? { refresh: () => refresh() } : {}),
+    ...(provider.store
+      ? {
+          store: (request: MemoryStoreRequest) =>
+            invoke(async () => {
+              if (options?.readOnly) {
+                throw new Error("memory provider lease opened for status is read-only");
+              }
+              assertMemoryStoreRequest(request);
+              const result = await provider.store!(request);
+              if (result.status === "stored") {
+                assertReference(result.reference);
+              } else if (result.status !== "rejected" || typeof result.reason !== "string") {
+                throw new Error("memory provider returned an invalid store result");
+              }
+              return result;
+            }),
+        }
+      : {}),
     async close() {
       if (closed) {
         return;

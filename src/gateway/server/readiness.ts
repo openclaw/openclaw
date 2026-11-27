@@ -2,7 +2,7 @@ import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coe
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import {
   prepareChildRuntimeViability,
-  readChildRuntimeViability,
+  getRecordedChildRuntimeViability,
   type ChildRuntimeViability,
 } from "../../infra/child-runtime-viability.js";
 import type { AgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
@@ -124,7 +124,7 @@ export function createReadinessChecker(
     if (startup.status === "draining") {
       return { ready: false, coreReady: false, failing: ["gateway-draining"], uptimeMs };
     }
-    if (!(childRuntime ?? readChildRuntimeViability()).available) {
+    if (!(childRuntime ?? getRecordedChildRuntimeViability()).available) {
       return { ready: false, coreReady: false, failing: ["child-runtime"], uptimeMs };
     }
     const stateDatabaseFailure = deps.getStateDatabaseFailure?.();

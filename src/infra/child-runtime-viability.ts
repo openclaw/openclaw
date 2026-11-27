@@ -58,6 +58,11 @@ function publishRuntimeViability(execPath: string, error?: unknown): ChildRuntim
   return { execPath, available: !(runtime.execPath === execPath && runtime.failure) };
 }
 
+/** Read the launch/diagnostic owner's verdict without starting filesystem or child work. */
+export function getRecordedChildRuntimeViability(): ChildRuntimeViability {
+  return publishRuntimeViability(process.execPath);
+}
+
 /** Retained for the public synchronous readiness, OOM and SQLite contracts. */
 export function readChildRuntimeViability(params?: { execPath?: string }): ChildRuntimeViability {
   const execPath = params?.execPath ?? process.execPath;

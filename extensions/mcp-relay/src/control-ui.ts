@@ -313,7 +313,7 @@ const mountConnectedApps: ControlUiView = (container, initialContext) => {
   function render() {
     page.innerHTML = `
       <header class="mcp-connected-apps__header">
-        <div><h1>Connected apps</h1><p>Manage apps connected to your Gateway through the MCP relay.</p></div>
+        <div><h1 class="plugin-page-title">Connected apps</h1><p>Manage apps connected to your Gateway through the MCP relay.</p></div>
       </header>`;
     page.querySelector("header")!.append(button("Refresh", () => void refresh()));
     if (!canUse()) {

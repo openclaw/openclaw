@@ -34,9 +34,12 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
+import { getDatabaseEngineInput } from "./database-engine/context.js";
 import { executeSqliteQuerySync } from "./kysely-sync.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { openSqliteReadOnlyDatabase } from "./sqlite-snapshot-source.js";
 
 type SessionStoreTarget = ResolvedSessionStoreTarget & { sqlitePath?: string };
@@ -364,73 +367,103 @@ export function readSqliteEntryCount(target: SessionStoreTarget): number {
   return result.ok ? (result.value ?? 0) : 0;
 }
 
+/** The local PostgreSQL anchor locates the agent store but contains no session rows. */
+export function readSessionImportValidationSnapshot(
+  target: SessionStoreTarget,
+  env: NodeJS.ProcessEnv,
+): ReadOnlySqliteValidationSnapshotResult {
+  if (!getDatabaseEngineInput("agent")) {
+    return readOnlySqliteValidationSnapshot(target, env);
+  }
+  try {
+    const result = withOpenClawAgentDatabaseReadOnly(
+      ({ db }) => readSessionValidationRows(db),
+      resolveTargetSqliteOptions(target, env),
+    );
+    return { ok: true, snapshot: result.found ? result.value : emptySessionValidationSnapshot() };
+  } catch (error) {
+    return { ok: false, error };
+  }
+}
+
 export function readOnlySqliteValidationSnapshot(
   target: SessionStoreTarget,
+  env?: NodeJS.ProcessEnv,
 ): ReadOnlySqliteValidationSnapshotResult {
-  const empty: ReadOnlySqliteValidationSnapshot = {
+  const result = readSessionDatabase(
+    resolveTargetSqlitePath(target, env),
+    readSessionValidationRows,
+  );
+  return result.ok
+    ? { ok: true, snapshot: result.value ?? emptySessionValidationSnapshot() }
+    : result;
+}
+
+function emptySessionValidationSnapshot(): ReadOnlySqliteValidationSnapshot {
+  return {
     sessionIdsBySessionKey: new Map(),
     sessionKeysBySessionId: new Map(),
     transcriptEventCountsBySessionId: new Map(),
     archivedSessionIds: new Set(),
   };
-  const result = readSessionDatabase(resolveTargetSqlitePath(target), (database) => {
-    const projection = resolveSessionIdentityProjection(database);
-    const sessionIdsBySessionKey = new Map<string, string>();
-    if (projection) {
-      const statement = database.prepare(
-        `SELECT session_key, ${projection.sessionIdColumn} AS session_id
-               FROM ${projection.source}
-              ORDER BY session_key`,
-      );
-      // SAFETY: the selected SQLite columns have stable TEXT identities.
-      for (const row of statement.iterate() as Iterable<SessionIdentityRow>) {
-        sessionIdsBySessionKey.set(row.session_key, row.session_id);
+}
+
+function readSessionValidationRows(database: EngineConnection): ReadOnlySqliteValidationSnapshot {
+  const projection = resolveSessionIdentityProjection(database);
+  const sessionIdsBySessionKey = new Map<string, string>();
+  if (projection) {
+    const statement = database.prepare(
+      `SELECT session_key, ${projection.sessionIdColumn} AS session_id
+             FROM ${projection.source}
+            ORDER BY session_key`,
+    );
+    // SAFETY: the selected SQLite columns have stable TEXT identities.
+    for (const row of statement.iterate() as Iterable<SessionIdentityRow>) {
+      sessionIdsBySessionKey.set(row.session_key, row.session_id);
+    }
+  }
+  const sessionKeysBySessionId = new Map<string, string>();
+  if (tableExists(database, "session_windows")) {
+    for (const row of database
+      .prepare("SELECT session_id, session_key FROM session_windows")
+      .iterate()) {
+      if (typeof row.session_id === "string" && typeof row.session_key === "string") {
+        sessionKeysBySessionId.set(row.session_id, row.session_key);
       }
     }
-    const sessionKeysBySessionId = new Map<string, string>();
-    if (tableExists(database, "session_windows")) {
-      for (const row of database
-        .prepare("SELECT session_id, session_key FROM session_windows")
-        .iterate()) {
-        if (typeof row.session_id === "string" && typeof row.session_key === "string") {
-          sessionKeysBySessionId.set(row.session_id, row.session_key);
-        }
+  }
+  const transcriptEventCountsBySessionId = new Map<string, number>();
+  if (tableExists(database, "transcript_events")) {
+    const statement = database.prepare(
+      "SELECT session_id, COUNT(*) AS count FROM transcript_events GROUP BY session_id ORDER BY session_id",
+    );
+    for (const row of statement.iterate()) {
+      if (typeof row.session_id === "string" && typeof row.count === "number") {
+        transcriptEventCountsBySessionId.set(row.session_id, row.count);
       }
     }
-    const transcriptEventCountsBySessionId = new Map<string, number>();
-    if (tableExists(database, "transcript_events")) {
-      const statement = database.prepare(
-        "SELECT session_id, COUNT(*) AS count FROM transcript_events GROUP BY session_id ORDER BY session_id",
-      );
-      for (const row of statement.iterate()) {
-        if (typeof row.session_id === "string" && typeof row.count === "number") {
-          transcriptEventCountsBySessionId.set(row.session_id, row.count);
-        }
+  }
+  const archivedSessionIds = new Set<string>();
+  const query = getSessionKysely(database);
+  for (const table of [
+    "session_transcript_archives",
+    "session_transcript_cold_archives",
+  ] as const) {
+    if (tableExists(database, table)) {
+      for (const row of executeSqliteQuerySync(
+        database,
+        query.selectFrom(table).select("session_id"),
+      ).rows) {
+        archivedSessionIds.add(row.session_id);
       }
     }
-    const archivedSessionIds = new Set<string>();
-    const query = getSessionKysely(database);
-    for (const table of [
-      "session_transcript_archives",
-      "session_transcript_cold_archives",
-    ] as const) {
-      if (tableExists(database, table)) {
-        for (const row of executeSqliteQuerySync(
-          database,
-          query.selectFrom(table).select("session_id"),
-        ).rows) {
-          archivedSessionIds.add(row.session_id);
-        }
-      }
-    }
-    return {
-      sessionIdsBySessionKey,
-      sessionKeysBySessionId,
-      transcriptEventCountsBySessionId,
-      archivedSessionIds,
-    };
-  });
-  return result.ok ? { ok: true, snapshot: result.value ?? empty } : result;
+  }
+  return {
+    sessionIdsBySessionKey,
+    sessionKeysBySessionId,
+    transcriptEventCountsBySessionId,
+    archivedSessionIds,
+  };
 }
 
 export function scanReadOnlySqliteActiveTranscriptFiles(
@@ -476,7 +509,7 @@ function readSessionDatabase<T>(
   }
 }
 
-function resolveSessionIdentityProjection(database: DatabaseSync) {
+function resolveSessionIdentityProjection(database: EngineConnection) {
   if (tableExists(database, "session_nodes")) {
     return {
       sessionIdColumn: "current_session_id",

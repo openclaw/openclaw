@@ -3246,7 +3246,6 @@
       "test/scripts/ci-node-pretest-admission.test.ts": 1,
       "test/scripts/ci-node-test-plan-hosted-tail.test.ts": 30,
       "test/scripts/ci-node-test-plan.commands.test.ts": 22,
-      "test/scripts/ci-node-test-plan.test.ts": 145,
       "test/scripts/ci-node-worker-owner-boundary.test.ts": 1,
       "test/scripts/ci-npm-lock-admission.test.ts": 3,
       "test/scripts/ci-platform-checkout.test.ts": 58,

@@ -62,7 +62,7 @@ export async function withManagedImageSessionRead<T>(
                 current?.sessionId !== entry.sessionId ||
                 current?.lifecycleRevision !== entry.lifecycleRevision
               ) {
-                throw new Error("Managed media session authority changed");
+                throw new Error("Managed media session changed. Retry the request.");
               }
             },
           );

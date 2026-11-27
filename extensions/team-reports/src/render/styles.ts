@@ -246,7 +246,8 @@ a:hover { color: var(--oc-text-primary); text-decoration: underline; text-underl
 .brand-mark { display: grid; place-items: center; width: 26px; height: 26px; flex: 0 0 26px; }
 .brand-mark img { display: block; width: 100%; height: 100%; object-fit: contain; }
 .site-links { display: flex; align-items: center; justify-content: flex-end; gap: var(--oc-space-1); overflow-x: auto; white-space: nowrap; }
-.site-links a { min-height: 32px; padding: var(--oc-space-2) var(--oc-space-3); color: var(--oc-text-muted); font: 650 13px/1 var(--oc-font-body); }
+.site-links a { color: var(--oc-text-muted); }
+.site-links .oc-segmented-item { min-height: 32px; padding: var(--oc-space-2) var(--oc-space-3); font: 650 13px/1 var(--oc-font-body); }
 .site-links a:hover { color: var(--oc-text-primary); text-decoration: none; }
 .site-links a.is-active { color: var(--oc-text-primary); background: var(--oc-surface-interactive-hover); }
 .theme-toggle { flex: 0 0 auto; width: 34px; min-height: 34px; height: 34px; padding: 0; color: var(--oc-text-primary); cursor: pointer; }
@@ -293,8 +294,8 @@ blockquote { border-left: 2px solid var(--oc-border-strong); padding: var(--oc-s
 .oc-resource-list-link, .resource-row { display: flex; align-items: center; justify-content: space-between; gap: var(--oc-space-3); padding: var(--oc-space-2) var(--oc-space-3); }
 .oc-avatar { position: relative; display: inline-grid; flex: 0 0 auto; place-items: center; overflow: hidden; border: 1px solid var(--oc-border-subtle); border-radius: var(--oc-radius-surface); background: var(--oc-surface-secondary-soft); color: var(--oc-accent-secondary); font-weight: 650; line-height: 1; }
 .oc-avatar::before { content: attr(data-initials); }
-/* Transparent failed images leave the CSS initials beneath them visible. */
-.oc-avatar img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; color: transparent; font-size: 0; }
+/* The badge reserves the square. A missing photo with empty alt has no intrinsic height. */
+.oc-avatar img { position: absolute; top: 0; left: 0; width: 100%; height: auto; }
 .oc-avatar-xs { width: 20px; height: 20px; font-size: var(--oc-font-size-xs); }
 .oc-avatar-md { width: 40px; height: 40px; font-size: var(--oc-font-size-sm); }
 .oc-avatar-sm { width: 36px; height: 36px; font-size: var(--oc-font-size-sm); }

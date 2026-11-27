@@ -209,6 +209,7 @@ export type CronServiceDeps = {
       agentId?: string;
       sessionKey?: string;
       contextKey?: string;
+      deliver?: false;
       deliveryContext?: DeliveryContext;
       expectedTarget?: SessionEventTarget;
       createIfMissing?: true;
@@ -246,6 +247,7 @@ export type CronServiceDeps = {
     onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
     onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
     onLaneWait?: (info?: { waiting?: boolean }) => void;
+    providerRunSlot?: import("./timer-execution-timeout.js").CronProviderRunSlot;
     executionIdentity?: CronExecutionIdentityAdmission;
   }) => Promise<
     CronRunOutcome &
@@ -267,6 +269,7 @@ export type CronServiceDeps = {
     onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
     onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
     onLaneWait?: (info?: { waiting?: boolean }) => void;
+    providerRunSlot?: import("./timer-execution-timeout.js").CronProviderRunSlot;
     executionIdentity?: CronExecutionIdentityAdmission;
     job: CronStoredJob;
     text: string;
@@ -326,6 +329,8 @@ export type CronServiceDeps = {
     payload: ReplyPayload;
     runAtMs?: number;
     channel: CronMessageChannel;
+    target?: ResolvedFailureAlert["target"];
+    directPolicy?: ResolvedFailureAlert["directPolicy"];
     to?: string;
     mode?: "announce" | "webhook";
     accountId?: string;

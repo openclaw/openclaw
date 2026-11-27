@@ -9,16 +9,15 @@ import {
 } from "../transcripts/capture-summary.js";
 import { resolveTranscriptsConfig } from "../transcripts/config.js";
 import type {
-  TranscriptSessionDescriptor,
   TranscriptSourceStatus,
   TranscriptStartRequest,
   TranscriptsStartResult,
   TranscriptsStopResult,
-  TranscriptUtterance,
 } from "../transcripts/provider-types.js";
 import { sanitizeTranscriptSourceLocator } from "../transcripts/source-locator.js";
 import { TranscriptsSummaryChangedError } from "../transcripts/store-errors.js";
 import { TranscriptsStore } from "../transcripts/store.js";
+import type { TranscriptSessionDescriptor, TranscriptUtterance } from "../transcripts/types.js";
 import { MeetingTranscriptDeliveryError } from "./session-transcript-store.js";
 import type { MeetingSessionRecord } from "./session-types.js";
 import type {

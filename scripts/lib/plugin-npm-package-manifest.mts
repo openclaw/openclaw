@@ -247,7 +247,13 @@ export function runPluginNpmCiWithRetry(
 
   let result: SpawnResult | undefined;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    result = spawn(args, { ...options, timeout: timeoutMs });
+    // On Linux, npm can wait for a blocked fetch after SIGTERM and keep spawnSync stuck.
+    // Enforce the existing deadline; the timed-out attempt's staging tree is removed below.
+    result = spawn(args, {
+      ...options,
+      timeout: timeoutMs,
+      ...(process.platform === "linux" ? { killSignal: "SIGKILL" } : {}),
+    });
     if (!result) {
       throw new Error(`npm ci returned no result for ${pluginDir}`);
     }
@@ -958,18 +964,24 @@ function readGeneratedBundledChannelConfigEntries(source: string): unknown {
     }
   }
 
-  const compactMatch = source.match(
-    /const RAW_BUNDLED_CHANNEL_CONFIG_METADATA = \[([\s\S]*?)\]\.join\(""\);/u,
-  );
-  if (!compactMatch?.[1]) {
+  const rowsMatch = source.match(/^const loadPackedChannelRows = \(\) => (\[[\s\S]*?^\]);/mu);
+  const packedMatch =
+    rowsMatch ??
+    source.match(/const RAW_BUNDLED_CHANNEL_CONFIG_METADATA = (\[[\s\S]*?\])\.join\(""\);/u);
+  if (!packedMatch?.[1]) {
     return undefined;
   }
   try {
-    const chunks = JSON5.parse(`[${compactMatch[1]}]`);
-    if (!Array.isArray(chunks) || chunks.some((chunk) => typeof chunk !== "string")) {
+    const packed: unknown = JSON5.parse(packedMatch[1]);
+    const rows = rowsMatch ? packed : [packed];
+    if (
+      !Array.isArray(rows) ||
+      !rows.every((row) => Array.isArray(row) && row.every((chunk) => typeof chunk === "string"))
+    ) {
       return undefined;
     }
-    return JSON.parse(chunks.join(""));
+    const entries = rows.map((row) => JSON.parse(row.join("")));
+    return rowsMatch ? entries : entries[0];
   } catch {
     return undefined;
   }

@@ -65,6 +65,7 @@ function makeCatalog(
     archived?: boolean;
     sourceHomeId?: string;
     sessionKey?: string;
+    previewImageDigest?: string;
     shareRoute?: typeof SHARE_ROUTE;
   } = {},
 ) {
@@ -94,12 +95,23 @@ suite.define(() => {
         operatorScopes: ["operator.sessions.write"],
         featureMethods: [
           ...featureMethods,
+          "sessions.catalog.route",
           "beam.owned.list",
           "beam.owned.read",
           "beam.owned.continue",
           "beam.owned.resolve",
         ],
         methodResponses: {
+          "sessions.catalog.route": {
+            catalogId: "beam",
+            routeSegment: "beam",
+            methods: {
+              list: "beam.owned.list",
+              read: "beam.owned.read",
+              continue: "beam.owned.continue",
+              resolve: "beam.owned.resolve",
+            },
+          },
           "sessions.catalog.list": { catalogs: [] },
           "beam.owned.list": {
             catalogs: [
@@ -111,6 +123,7 @@ suite.define(() => {
                 { hostId: "gateway", label: "Beamed sessions", kind: "gateway" },
                 {
                   shareRoute: SHARE_ROUTE,
+                  previewImageDigest: "sha256:" + "0".repeat(64),
                   canContinue: false,
                   continuationUnavailableReason: handoffReason,
                 },
@@ -123,6 +136,12 @@ suite.define(() => {
           },
           "beam.owned.resolve": { sessionKey: "agent:main:publisher-continuation" },
           "beam.owned.read": {
+            previewImage: {
+              name: "diagram.png",
+              mimeType: "image/png",
+              digest: "sha256:" + "0".repeat(64),
+              data: "iVBORw0KGgoAAAANSUhEUgAAAAQAAAACCAIAAADwyuo0AAAAEElEQVR4nGNQCGiAIwZkDgBemgeBLDSLhAAAAABJRU5ErkJggg==",
+            },
             hostId: "gateway",
             label: "Owned synthetic Beam",
             threadId: fullId,
@@ -134,7 +153,43 @@ suite.define(() => {
         },
       });
       await page.goto(new URL("beam/owned-synthetic-beam-aaaaaaaaaaaa", suite.server.baseUrl).href);
-      await exactText(page, "My owned Beam is readable without operator.read.").waitFor();
+      const thread = page.locator(visiblePane).locator(".chat-thread");
+      const transcriptReply = exactText(thread, "My owned Beam is readable without operator.read.");
+      await transcriptReply.waitFor();
+      const attachment = thread.getByRole("figure", { name: "diagram.png" });
+      const openImage = attachment.getByRole("button", { name: "Open image diagram.png" });
+      await openImage.waitFor();
+      expect(await attachment.evaluate((figure) => figure.closest(".chat-group") === null)).toBe(
+        true,
+      );
+      expect(
+        await transcriptReply.evaluate(
+          (reply, figure) =>
+            Boolean(
+              figure && reply.compareDocumentPosition(figure) & Node.DOCUMENT_POSITION_FOLLOWING,
+            ),
+          await attachment.elementHandle(),
+        ),
+      ).toBe(true);
+      expect(
+        await openImage.locator("img").evaluate(async (img) => {
+          if (!(img instanceof HTMLImageElement)) {
+            throw new Error("Expected a screenshot image");
+          }
+          await img.decode();
+          return img.naturalWidth;
+        }),
+      ).toBe(4);
+      await openImage.click();
+      const viewer = page.getByRole("dialog", { name: "Image preview: diagram.png" });
+      await viewer.waitFor();
+      const [download] = await Promise.all([
+        page.waitForEvent("download"),
+        viewer.getByRole("button", { name: "Download image" }).click(),
+      ]);
+      expect(download.suggestedFilename()).toBe("diagram.png");
+      await page.keyboard.press("Escape");
+      await viewer.waitFor({ state: "hidden" });
       await exactText(page, handoffReason).waitFor();
       expect(await page.locator(`${visiblePane} textarea`).isDisabled()).toBe(true);
       await page.screenshot({ path: ".openclaw/tmp/beam-talk-proof/before.png" });
@@ -150,8 +205,12 @@ suite.define(() => {
           ),
         ],
       });
-      await page.reload();
+      await openImage.click();
+      await viewer.waitFor();
+      await gateway.emitGatewayEvent("sessions.catalog.routes.changed", { generation: 2 });
+      await viewer.waitFor({ state: "hidden" });
       await exactText(page, "My owned Beam is readable without operator.read.").waitFor();
+      expect(await attachment.count()).toBe(0);
       expect(await page.locator(`${visiblePane} textarea`).isDisabled()).toBe(false);
       expect((await gateway.getRequests("beam.owned.list")).length).toBeGreaterThan(0);
       expect((await gateway.getRequests("beam.owned.read")).at(-1)?.params).toMatchObject({

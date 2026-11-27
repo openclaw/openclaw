@@ -20,7 +20,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { AGENT_GIT_SHIM } from "../../src/infra/agent-git-shim.ts";
+import { buildAgentGitShimInstallCommand } from "../../src/infra/agent-git-shim-install.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -125,7 +125,13 @@ try {
       : `Synthetic fixture: ${files} files, ${commits} history commits; ${root}`,
   );
   mkdirSync(bin);
-  writeFileSync(path.join(bin, "git"), AGENT_GIT_SHIM, { mode: 0o755 });
+  const installed = spawnSync("/bin/sh", ["-c", buildAgentGitShimInstallCommand(bin)], {
+    env,
+    encoding: "utf8",
+  });
+  if (installed.status !== 0) {
+    throw new Error(installed.stderr);
+  }
   if (sharedShallow || historyBlobs) {
     mkdirSync(baselineBin);
     writeFileSync(path.join(baselineBin, "git"), readFileSync(baselineShimPath), { mode: 0o755 });
@@ -509,7 +515,9 @@ try {
           sharedShallow || historyBlobs
             ? createHash("sha256").update(readFileSync(baselineShimPath)).digest("hex")
             : undefined,
-        shimSha256: createHash("sha256").update(AGENT_GIT_SHIM).digest("hex"),
+        shimSha256: createHash("sha256")
+          .update(readFileSync(path.join(bin, "git")))
+          .digest("hex"),
         platform: process.platform,
         cpuScope:
           process.platform === "darwin"

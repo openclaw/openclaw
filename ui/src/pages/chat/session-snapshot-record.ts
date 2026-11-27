@@ -20,7 +20,7 @@ import {
   chatHeaderSharingSnapshotSchema,
   chatHeaderViewersSnapshotSchema,
 } from "./chat-header-viewers-snapshot.ts";
-import { trimmedChatHistoryPagination } from "./chat-history-pagination.ts";
+import { chatHistoryTrimOrder, trimmedChatHistoryPagination } from "./chat-history-pagination.ts";
 import { projectChatMessageReactions } from "./chat-message-reactions-snapshot.ts";
 import { chatSessionStateSnapshotSchema } from "./chat-session-state-snapshot.ts";
 import {
@@ -193,8 +193,8 @@ export async function parseSnapshotRecord(
   return { ...parsed, snapshot: { ...parsed.snapshot, historyState } };
 }
 
-// Refill history that omitted structured cancellation and subagent completion receipts.
-export const CHAT_SNAPSHOT_PROJECTION_VERSION = 16;
+// Older caches could trim a relocated activity beyond the held pagination boundary.
+export const CHAT_SNAPSHOT_PROJECTION_VERSION = 17;
 const CHAT_SNAPSHOT_MESSAGE_LIMIT = 80;
 
 export async function createSnapshotRecord(
@@ -206,8 +206,9 @@ export async function createSnapshotRecord(
   try {
     const source = pending.snapshot;
     const changes: Partial<ChatSessionSnapshot> = {};
-    const messages = source.messages;
-    let start = Math.max(0, messages.length - CHAT_SNAPSHOT_MESSAGE_LIMIT);
+    let start = Math.max(0, source.messages.length - CHAT_SNAPSHOT_MESSAGE_LIMIT);
+    const order = start > 0 ? chatHistoryTrimOrder(source.messages) : undefined;
+    const messages = order ? Array.from(order, (index) => source.messages[index]) : source.messages;
     // A history entry can project multiple rows; retain its whole sequence group.
     while (start > 0) {
       const seq = readSessionMessageSequence(messages[start]);
@@ -223,7 +224,7 @@ export async function createSnapshotRecord(
       changes.pagination = trimmedChatHistoryPagination(source.pagination);
     }
     let historyChanged = false;
-    const retainedMessages = changes.messages ?? messages;
+    const retainedMessages = changes.messages ?? source.messages;
     if (retainedMessages.some((message) => readLiveTerminalRunId(message))) {
       const { reconcileTerminalCanvasMessages } = await import("./chat-thread-canvas.ts");
       const projectedMessages = reconcileTerminalCanvasMessages(retainedMessages);
@@ -234,13 +235,12 @@ export async function createSnapshotRecord(
     }
     if (source.messageReactions) {
       changes.messageReactions = projectChatMessageReactions(
-        changes.messages ?? messages,
+        changes.messages ?? source.messages,
         new Map(Object.entries(source.messageReactions)),
       );
     }
     const rowDisplay = projectChatRowDisplay(
-      historyChanged ? { ...source, ...changes } : source,
-      historyChanged ? 0 : start,
+      changes.messages ? { ...source, messages: changes.messages } : source,
     );
     if (rowDisplay !== source.rowDisplay) {
       changes.rowDisplay = rowDisplay;

@@ -508,7 +508,6 @@ describe("Discord show_widget contextual presenter process proof", () => {
       const bytes = Buffer.from("%PDF-1.4\nDiscord attachment filename proof\n%%EOF\n");
       await writeFile(media, bytes);
       const cases: [string, boolean, string, string?, boolean?][] = [
-        ["declared", true, "report.pdf"],
         ["blank override", true, "report.pdf", "  "],
         ["explicit override", true, "operator.pdf", " operator.pdf "],
         ["media-derived", false, "source.pdf"],

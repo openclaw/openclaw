@@ -1,10 +1,7 @@
 import { createMemo, createSignal, For } from "solid-js";
-import { SettingsSegmented } from "../../components/solid/settings-ui.tsx";
-import { hasUnchangedCronSchedule } from "../../lib/cron/form-schedule.ts";
-import type { CronFieldKey, CronFormState } from "../../lib/cron/types.ts";
-import { formatMs } from "../../lib/format.ts";
+import type { CronFieldKey } from "../../lib/cron/types.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { formSentenceFrequency, scheduleKindPatch } from "./schedule-sentence.ts";
+import { formSentenceFrequency } from "./schedule-sentence.ts";
 import { EventSourceFields } from "./view-event-source.tsx";
 import {
   FieldRow,
@@ -14,7 +11,6 @@ import {
   CronSelect,
   TrayInput,
 } from "./view-fields.tsx";
-import { describeJobNextRun } from "./view-job-status.tsx";
 import { ScheduleHours, ScheduleSentence } from "./view-schedule-sentence.tsx";
 import type { CronProps } from "./view-types.ts";
 export function DurationRow(
@@ -64,7 +60,7 @@ export function DurationRow(
     />
   );
 }
-/** Schedule fields whose validation messages the tray lists under its controls. */
+/** Schedule fields whose validation messages appear below the tray. */
 export const TRAY_SCHEDULE_FIELDS = [
   "scheduleAt",
   "everyAmount",
@@ -105,10 +101,8 @@ export function ScheduleControls(props: CronProps & { phoneLayout: boolean }) {
     const read = formSentenceFrequency(draft);
     return preferredMode === "daily" && read === "weekly" ? "daily" : read;
   });
-  const showHours = () =>
-    form().scheduleKind === "cron" || form().scheduleKind === "every" || form().activeHoursEnabled;
   const savedHoursZone = createMemo(() => {
-    const job = props.editingJob;
+    const job = props.editingJob ?? props.cloningJob;
     if (
       !form().activeHoursEnabled ||
       form().scheduleKind !== "cron" ||
@@ -121,63 +115,18 @@ export function ScheduleControls(props: CronProps & { phoneLayout: boolean }) {
     const zone = job.activeHours.timezone ?? "user";
     return zone === (job.schedule.tz ?? "local") ? undefined : zone;
   });
-  const isOnExit = () => form().scheduleKind === "on-exit";
-  const isStream = () => form().scheduleKind === "stream";
-  // Process-backed schedules stay selectable only while current: jobs can
-  // convert to an editable schedule, but never synthesize a command in the UI.
-  const processSchedule = () =>
-    isOnExit()
-      ? { value: "on-exit" as const, label: t("cron.form.repeatOnExit") }
-      : isStream()
-        ? { value: "stream" as const, label: t("cron.form.repeatStream") }
-        : null;
-  const kinds = (): Array<{
-    value: CronFormState["scheduleKind"];
-    label: string;
-    testId: string;
-  }> => {
-    const process = processSchedule();
-    return [
-      ...(process ? [{ ...process, testId: `cron-schedule-kind-${process.value}` }] : []),
-      { value: "every", label: t("cron.form.repeatInterval"), testId: "cron-schedule-kind-every" },
-      { value: "at", label: t("cron.form.repeatOnce"), testId: "cron-schedule-kind-at" },
-      { value: "cron", label: t("cron.form.cronOption"), testId: "cron-schedule-kind-cron" },
-      ...((props.eventSource?.available && props.status?.triggersEnabled !== false) ||
-      form().scheduleKind === "event"
-        ? [
-            {
-              value: "event" as const,
-              label: t("cron.events.label"),
-              testId: "cron-schedule-kind-event",
-            },
-          ]
-        : []),
-    ];
-  };
+  const canChooseEvent = () =>
+    form().scheduleKind === "event" ||
+    (Boolean(props.eventSource?.available) && props.status?.triggersEnabled !== false);
   return (
     <>
-      {frequency() ? (
-        <ScheduleSentence
-          {...props}
-          frequency={frequency()!}
-          kinds={kinds()}
-          onFrequencyPreference={preferFrequency}
-          phoneLayout={props.phoneLayout}
-        />
-      ) : (
-        <span class="cron-sentence__row">
-          <span class="cron-sentence__label" aria-hidden="true">
-            {t("cron.form.repeat")}
-          </span>
-          <SettingsSegmented<CronFormState["scheduleKind"]>
-            class="settings-segmented--compact cron-tray-segmented"
-            value={form().scheduleKind}
-            options={kinds()}
-            ariaLabel={t("cron.form.repeat")}
-            onChange={(value) => props.onFormChange(scheduleKindPatch(form(), value))}
-          />
-        </span>
-      )}
+      <ScheduleSentence
+        {...props}
+        frequency={frequency()}
+        canChooseEvent={canChooseEvent()}
+        onFrequencyPreference={preferFrequency}
+        phoneLayout={props.phoneLayout}
+      />
       {form().scheduleKind === "at" ? (
         <span class="cron-sentence__row">
           <span class="cron-sentence__label" aria-hidden="true">
@@ -247,7 +196,7 @@ export function ScheduleControls(props: CronProps & { phoneLayout: boolean }) {
           />
         </span>
       ) : undefined}
-      {showHours() ? <ScheduleHours {...props} /> : undefined}
+      <ScheduleHours {...props} />
       {form().activeHoursEnabled ? (
         <span class="cron-sentence__row">
           <span class="cron-sentence__label" aria-hidden="true">
@@ -316,43 +265,6 @@ export function TrayErrors(props: Pick<CronProps, "fieldErrors"> & { fields: Cro
         </div>
       )}
     </For>
-  );
-}
-/**
- * A saved one-shot’s runtime when it no longer matches the configured time.
- */
-export function ScheduleNote(props: CronProps) {
-  const form = () => props.form;
-  // The form owns the authored occurrence; runtime deadlines may move after
-  // a continuation or retry. Never copy that deadline into the editable time.
-  const savedOneShot = createMemo(
-    () => {
-      const job = props.editingJob;
-      return job?.schedule.kind === "at" && hasUnchangedCronSchedule(form(), job) ? job : undefined;
-    },
-    { equals: false },
-  );
-  const runtime = createMemo(() => {
-    const job = savedOneShot();
-    if (job?.schedule.kind !== "at") {
-      return null;
-    }
-    const next = describeJobNextRun(job, true);
-    // A next run at the configured time would only repeat the time field.
-    return next === t("cron.form.nextRunAt", { at: formatMs(Date.parse(job.schedule.at)) })
-      ? null
-      : next;
-  });
-  return (
-    <>
-      {runtime() ? (
-        <span class="cron-sentence__row">
-          <span class="cron-tray-note__text" data-test-id="cron-schedule-note">
-            {runtime()}
-          </span>
-        </span>
-      ) : undefined}
-    </>
   );
 }
 /** Schedule settings too large for the tray: the event source and process-backed notes. */

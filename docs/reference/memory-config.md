@@ -128,10 +128,13 @@ explicitly, for example to `"${OMLX_API_KEY}"`.
 
 <Warning>
 Changing the embedding provider, model, provider settings, sources, scope,
-chunking, or tokenizer can make the existing SQLite vector index incompatible.
-OpenClaw pauses vector search and reports an index identity warning instead of
-automatically re-embedding everything. Rebuild when you are ready with
-`openclaw memory status --index --agent <id>` or
+chunking, or tokenizer can make the existing memory index incompatible.
+For a scope-only mismatch, the next normal memory search requests a shadow
+rebuild of the configured corpus before serving results. This can re-embed
+content and incur provider costs.
+Other identity mismatches pause vector search and report a warning instead of
+automatically re-embedding everything. Inspect the index with
+`openclaw memory status --index --agent <id>` or rebuild when ready with
 `openclaw memory index --force --agent <id>`.
 </Warning>
 
@@ -550,8 +553,10 @@ The "Memory file watching is tracking ..." warning reports an advisory count of
 watched paths or directories, not a measured host limit or confirmed exhaustion.
 Remove unnecessary `memory.search.extraPaths` entries or narrow their directory
 roots. Global entries and `agents.entries.<id>.memory.search.extraPaths` entries
-are combined: an empty per-agent list does not remove global roots. Changing only
-an entry's `pattern` filters indexed files, not the directory tree being watched.
+are combined: an empty per-agent list does not remove global roots. A `pattern`
+without `**`, braces, brackets, parentheses, or `.`/`..` segments also stops the
+watcher at the depth the pattern can match (`*/README.md` watches two levels);
+other patterns filter indexed files, not the directory tree being watched.
 Events outside every applicable pattern are ignored when they cannot affect an
 indexed file or directory. Events with no path or an unknown entry type remain
 conservative when indexed content could have changed.

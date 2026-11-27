@@ -36,7 +36,7 @@ vi.mock("node:os", async (importOriginal) => ({
   availableParallelism: () => 4,
 }));
 
-import type { ControlUiFileSnapshot } from "./control-ui-file.js";
+import type { ControlUiFileRead, ControlUiFileSnapshot } from "./control-ui-file.js";
 import {
   createGatewayControlUiRootLifecycle,
   readControlUiRootAsset,
@@ -208,6 +208,129 @@ describe("createGatewayControlUiRootLifecycle", () => {
     const refreshed = await newRead;
     await expectBody(Promise.resolve(refreshed), "new");
     expect(await readControlUiRootAsset(root, "icon.png", true)).toBe(refreshed);
+  });
+
+  test("shares in-flight reads across toggles of the same root while a sibling reads independently", async () => {
+    const { lifecycle, root } = preparedLifecycle("bundled");
+    const sibling = preparedLifecycle("bundled").root;
+    const blocked = createDeferred<ControlUiFileSnapshot | null>();
+    let attempts = 0;
+    const file = "assets/toggle.js";
+    const snapshot = (body: string) => ({
+      path: path.join(root.path, file + ".br"),
+      size: body.length,
+      mtimeMs: 1,
+      body: Buffer.from(body),
+    });
+    vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(async (input) => {
+      const { filePath } = input as ControlUiFileRead;
+      if (filePath.endsWith(".br")) {
+        return ++attempts === 1 ? blocked.promise : snapshot("sibling");
+      }
+      return { path: filePath, size: 2, mtimeMs: 1 };
+    });
+    const get = (target: typeof root) =>
+      readControlUiRootAsset(target, file, true, ["br", "gzip", "identity"]);
+    const initial = get(root);
+    try {
+      await vi.waitFor(() => expect(attempts).toBe(1));
+      lifecycle.setEnabled(false);
+      await enable(lifecycle);
+      expect(get(root)).toBe(initial);
+      const mixed = readControlUiRootAsset(root, file, true, ["br", "identity"]);
+      const independent = await get(sibling);
+      expect(independent?.br).toMatchObject({ body: Buffer.from("sibling") });
+      blocked.resolve(snapshot("original"));
+      const admitted = await initial;
+      expect((await mixed)?.br).toBe(admitted?.br);
+      expect(await get(root)).toBe(admitted);
+      expect(await get(sibling)).toBe(independent);
+      expect(attempts).toBe(2);
+    } finally {
+      blocked.resolve(snapshot("original"));
+      await initial;
+    }
+  });
+
+  test.each(["resolved", "bundled"] as const)(
+    "admits a GET while a %s root's HEAD is pending",
+    async (kind) => {
+      const { root } = preparedLifecycle(kind);
+      const metadata = createDeferred<ControlUiFileSnapshot | null>();
+      const read = vi
+        .spyOn(WorkerTaskPool.prototype, "run")
+        .mockImplementation((input) =>
+          (input as ControlUiFileRead).readBody
+            ? Promise.resolve(iconSnapshot("body"))
+            : metadata.promise,
+        );
+      const head = readControlUiRootAsset(root, "icon.png", false);
+      const body = readControlUiRootAsset(root, "icon.png", true);
+      try {
+        await vi.waitFor(() =>
+          expect(read.mock.calls.map(([input]) => (input as ControlUiFileRead).readBody)).toEqual([
+            false,
+            true,
+          ]),
+        );
+        await expectBody(body, "body");
+      } finally {
+        metadata.resolve({ ...iconSnapshot("body"), body: undefined });
+        await Promise.all([head, body]);
+      }
+    },
+  );
+
+  test("admits gzip while the same bundled file's Brotli read is pending", async () => {
+    const { root } = preparedLifecycle("bundled");
+    const brotli = createDeferred<ControlUiFileSnapshot | null>();
+    const read = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(async (input) => {
+      const { filePath, readBody } = input as ControlUiFileRead;
+      if (filePath.endsWith(".br")) {
+        return brotli.promise;
+      }
+      return {
+        path: filePath,
+        size: 4,
+        mtimeMs: 1,
+        ...(readBody && { body: Buffer.from("gzip") }),
+      };
+    });
+    const file = "assets/parallel.js";
+    const saw = (suffix: string) =>
+      read.mock.calls.some(([input]) => (input as ControlUiFileRead).filePath.endsWith(suffix));
+    const first = readControlUiRootAsset(root, file, true, ["br", "identity"]);
+    try {
+      await vi.waitFor(() => expect(saw(".br")).toBe(true));
+      const second = readControlUiRootAsset(root, file, true, ["gzip", "identity"]);
+      await vi.waitFor(() => expect(saw(".gz")).toBe(true));
+      expect((await second)?.gzip).toMatchObject({ body: Buffer.from("gzip") });
+    } finally {
+      brotli.resolve({
+        path: path.join(root.path, file + ".br"),
+        size: 2,
+        mtimeMs: 1,
+        body: Buffer.from("br"),
+      });
+      await first;
+    }
+  });
+
+  test("retries a preferred sidecar after its admitted read fails", async () => {
+    const { root } = preparedLifecycle("bundled");
+    const failure = new Error("first sidecar read failed");
+    let attempts = 0;
+    vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(async (input) => {
+      const { filePath, readBody } = input as ControlUiFileRead;
+      if (filePath.endsWith(".br") && ++attempts === 1) {
+        throw failure;
+      }
+      return { path: filePath, size: 2, mtimeMs: 1, ...(readBody && { body: Buffer.from("br") }) };
+    });
+    const get = () => readControlUiRootAsset(root, "assets/retry.js", true, ["br", "identity"]);
+    expect((await get())?.br).toBe(failure);
+    expect((await get())?.br).toMatchObject({ body: Buffer.from("br") });
+    expect(attempts).toBe(2);
   });
 
   test.each(["file", "inventory"] as const)(

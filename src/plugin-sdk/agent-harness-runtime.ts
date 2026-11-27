@@ -154,6 +154,7 @@ export type {
   AgentHarnessRuntimeArtifactBinding,
   AgentHarnessSideQuestionParams,
   AgentHarnessSideQuestionParamsV2,
+  AgentHarnessSideQuestionRequest,
   AgentHarnessSideQuestionResult,
   AgentHarnessSettledTurnFinalizationResult,
   AgentHarnessResetParams,
@@ -168,6 +169,7 @@ export type {
 export {
   AgentHarnessModelRequestPolicyError,
   AgentHarnessPreflightError,
+  AgentHarnessRuntimeUpdateRequiredError,
   AgentHarnessSessionCleanupError,
   AgentHarnessSessionSupersededError,
 } from "../agents/harness/errors.js";

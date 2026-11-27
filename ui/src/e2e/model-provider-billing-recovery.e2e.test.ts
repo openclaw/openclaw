@@ -49,10 +49,7 @@ suite.define(() => {
           },
         });
         await page.goto(suite.server.baseUrl + "settings/model-providers");
-        await page.locator('[data-model-readiness="model-required"]').waitFor();
-        await page.getByRole("button", { name: "Add account", exact: true }).first().click();
-        const picker = page.locator(".model-provider-login");
-        await picker.locator('[data-models-login-provider="xai"]').click();
+        await page.locator('[data-models-catalog-provider="xai"] button').click();
         const form = page.getByRole("dialog", { name: "Add provider", exact: true });
         const input = form.getByRole("textbox", { name: "API key", exact: true });
         await input.fill(key);

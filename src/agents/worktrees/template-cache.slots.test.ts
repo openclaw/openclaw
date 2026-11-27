@@ -17,6 +17,7 @@ let env: NodeJS.ProcessEnv;
 let root: string;
 let now: number;
 let installs: string[];
+let backend: string;
 
 beforeEach(() => {
   root = directories.make("sandbox-template-slots-");
@@ -24,6 +25,7 @@ beforeEach(() => {
   env = { ...process.env };
   now = Date.now();
   installs = [];
+  backend = "sandbox-test";
 });
 
 async function prepare(
@@ -46,7 +48,7 @@ async function prepare(
     commonDir: path.join(root, "repo", ".git"),
     worktreeRoot: path.join(root, "templates"),
     sourceCommit: commit,
-    backend: "sandbox-test",
+    backend,
     requireSpace: async () => {},
     validate: async (record) =>
       (await fs.readFile(path.join(record.path, "dependency"), "utf8")) === record.sourceCommit,
@@ -118,9 +120,11 @@ it("reuses three alternating commits for interleaved waiters without reinstallin
   ).toHaveLength(3);
 });
 
-it.each([false, true])(
-  "bounds idle slots without retiring live readers (recent reuse: %s)",
-  async (reuse) => {
+it.each(["sandbox-test", "btrfs"])(
+  "bounds %s idle slots without retiring live readers",
+  async (kind) => {
+    backend = kind;
+    const reuse = kind === "btrfs";
     const pinned = await prepare("a");
     for (const commit of ["b", "c", "d"]) {
       await (await prepare(commit)).release();

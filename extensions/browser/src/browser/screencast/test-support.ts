@@ -45,7 +45,7 @@ export class ScreencastViewer extends EventEmitter {
   }
 }
 
-export type ScreencastFrameHeader = {
+type ScreencastFrameHeader = {
   url: string;
   cssWidth: number;
   cssHeight: number;

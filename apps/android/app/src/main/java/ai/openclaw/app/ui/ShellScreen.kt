@@ -46,12 +46,14 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -91,6 +93,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -169,17 +172,19 @@ fun ShellScreen(
         val destination = requestedHomeDestination ?: return@LaunchedEffect
         // HomeDestination is a one-shot command from launch intents and settings
         // actions; consume it after translating to local shell state.
-        nav.selectTab(
-          when (destination) {
-            HomeDestination.Connect -> Tab.Overview
-            HomeDestination.Chat, HomeDestination.Voice -> Tab.Chat
-            HomeDestination.Settings -> Tab.Settings
-          },
-        )
-        // Screenshot scenes can target a settings detail route alongside the tab.
-        viewModel.requestedSettingsRoute.value?.let { route ->
+        val route = viewModel.requestedSettingsRoute.value
+        if (route != null) {
+          // Detail requests must retain their origin before any top-level tab selection.
           nav.openSettingsRoute(route)
           viewModel.clearRequestedSettingsRoute()
+        } else {
+          nav.selectTab(
+            when (destination) {
+              HomeDestination.Connect -> Tab.Overview
+              HomeDestination.Chat, HomeDestination.Voice -> Tab.Chat
+              HomeDestination.Settings -> Tab.Settings
+            },
+          )
         }
         closeSidebar()
         viewModel.clearRequestedHomeDestination()
@@ -209,6 +214,19 @@ fun ShellScreen(
 
       BackHandler(enabled = commandOpen) {
         commandOpen = false
+      }
+
+      val keyboardController = LocalSoftwareKeyboardController.current
+
+      @OptIn(ExperimentalLayoutApi::class)
+      val keyboardOpen = WindowInsets.isImeVisible
+
+      // Back closes an open keyboard before it navigates. The keyboard's own Back callback wins
+      // only if it registered after ours; navigation that enables while the keyboard is open, or
+      // a keyboard that registers none, would otherwise leave the screen. Joining when the
+      // keyboard opens makes this the newest app callback.
+      if (keyboardOpen) {
+        BackHandler { keyboardController?.hide() }
       }
 
       LaunchedEffect(commandOpen, pendingTrust, sidebarDrawerState) {
@@ -845,11 +863,25 @@ internal fun overviewHeaderState(
 
 internal fun overviewHeaderRoute(attentionRows: List<HomeAttentionRow>): SettingsRoute = attentionRows.firstOrNull()?.settingsRoute ?: SettingsRoute.Gateway
 
-internal fun overviewRecentSessions(sessions: List<ChatSessionEntry>): List<ChatSessionEntry> =
-  sessions
-    .sortedWith(compareByDescending<ChatSessionEntry> { it.lastActivityAt ?: it.updatedAtMs ?: Long.MIN_VALUE }.thenBy { it.key })
-    .distinctBy(ChatSessionEntry::key)
+/** Top-level sessions only, ranked by their newest child; child sessions are reached through their parent. */
+internal fun overviewRecentSessions(sessions: List<ChatSessionEntry>): List<ChatSessionEntry> {
+  val parentByKey = navigationParentLinks(sessions)
+  val threadActivity = mutableMapOf<String, Long>()
+  sessions.forEach { session ->
+    val activity = session.lastActivityAt ?: session.updatedAtMs ?: Long.MIN_VALUE
+    var root = session.key
+    while (true) root = parentByKey[root] ?: break
+    threadActivity[root] = maxOf(threadActivity[root] ?: Long.MIN_VALUE, activity)
+  }
+  return sessions
+    .filter { it.key !in parentByKey }
+    .sortedWith(
+      compareByDescending<ChatSessionEntry> { threadActivity[it.key] ?: Long.MIN_VALUE }
+        .thenByDescending { it.lastActivityAt ?: it.updatedAtMs ?: Long.MIN_VALUE }
+        .thenBy { it.key },
+    ).distinctBy(ChatSessionEntry::key)
     .take(overviewRecentSessionLimit)
+}
 
 internal data class OverviewMetricCardSpec(
   val title: String,

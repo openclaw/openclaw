@@ -1,13 +1,15 @@
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
+import { prepareGatewayPluginLoad } from "../gateway/server-plugin-bootstrap.js";
 import {
   createAgentToolResultMiddlewareRunner,
   createCodexAppServerToolResultExtensionRunner,
 } from "../plugin-sdk/agent-harness.js";
 import { listAgentToolResultMiddlewareRegistrations } from "../plugins/agent-tool-result-middleware.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
-import { clearActivePluginRegistry } from "../plugins/runtime.js";
+import { clearActivePluginRegistry, disposePluginRegistryInstances } from "../plugins/runtime.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
   cleanupTempPluginTestEnvironment,
   createTempPluginDir,
@@ -101,7 +103,7 @@ it("does not treat auto-enabled runtime config as explicit middleware opt-in", a
   expect(listAgentToolResultMiddlewareRegistrations("codex")).toHaveLength(0);
 });
 
-it("loads missing installed middleware when bundled middleware is already active", async () => {
+it("applies both bundled and installed middleware from the Gateway generation", async () => {
   const bundledDir = createBundledTempDir();
   const installedDir = createTempPluginDir(tempDirs, "openclaw-codex-ext-");
   writeMiddleware(bundledDir, "bundled", 'event.result.content[0].text + " | bundled"', true);
@@ -118,16 +120,28 @@ it("loads missing installed middleware when bundled middleware is already active
       entries: enabledOptions("bundled").config.plugins.entries,
     },
   };
-  loadOpenClawPlugins({ config, onlyPluginIds: ["bundled"] });
-  setRuntimeConfigSnapshot(config);
-
-  expect(listAgentToolResultMiddlewareRegistrations("codex")).toHaveLength(1);
-
-  const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" });
-  const result = await runner.applyToolResultMiddleware(toolResultEvent());
-
-  expect(result.content).toEqual([{ type: "text", text: "raw | bundled | installed" }]);
-  expect(listAgentToolResultMiddlewareRegistrations("codex")).toHaveLength(1);
+  const loaded = await prepareGatewayPluginLoad({
+    cfg: config,
+    baseMethods: [],
+    log: { debug() {}, info() {}, warn() {}, error() {} },
+    loadIntent: "startup",
+  });
+  try {
+    const result = await withPluginRuntimeRegistryScope(loaded.pluginRegistry, () =>
+      createAgentToolResultMiddlewareRunner({ runtime: "codex" }).applyToolResultMiddleware(
+        toolResultEvent(),
+      ),
+    );
+    const [block] = result.content;
+    expect(block?.type === "text" && block.text.split(" | ").toSorted()).toEqual([
+      "bundled",
+      "installed",
+      "raw",
+    ]);
+  } finally {
+    loaded.retireGatewayRuntimeBindings();
+    await disposePluginRegistryInstances(loaded.pluginRegistry);
+  }
 });
 
 it("preserves tool output when published Codex plugins omit factories", async () => {

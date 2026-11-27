@@ -16,6 +16,7 @@ Which Slack events OpenClaw observes, and what it does with them.
 - Thread broadcasts ("Also send to channel" thread replies) are processed as normal user messages.
 - Reaction add/remove events are mapped into system events.
 - Member join/leave, channel created/renamed, and pin add/remove events are mapped into system events.
+- Reaction, pin, member, edit/delete, and interaction events are dropped when OpenClaw cannot learn the conversation type from the event, an earlier event, or `conversations.info`. Slack ID prefixes do not distinguish group DMs from channels, so guessing could apply the open channel policy to a group DM. Grant the manifest's `channels:read`, `groups:read`, and `mpim:read` scopes to avoid these drops.
 - When the bot itself joins an allowed channel, it posts one introduction grounded in the channel name, purpose or topic, and available recent messages. Introductions are enabled by default, never run in direct messages, and can be disabled with `channels.slack.joinIntro: false` or overridden per account with `channels.slack.accounts.<accountId>.joinIntro`. See [group join introductions](/channels#group-join-introductions) for the history limits, once-per-room behavior, and untrusted-content handling.
 - Optional presence polling can map an observed human participant's `away` to `active` transition into the participant's most recently active eligible Slack session. The default is off.
 - `channel_id_changed` can migrate channel config keys when `configWrites` is enabled.

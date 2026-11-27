@@ -1,10 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
+import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { addGatewayLockRecoveryCommand } from "../cli/gateway-cli/register-recover-lock.js";
+import { withDoctorSqliteMaintenanceLock } from "../commands/doctor-sqlite-maintenance-lock.js";
+import { defaultRuntime } from "../runtime.js";
 import * as processIdentity from "../shared/pid-alive.js";
 import {
   GATEWAY_OWNER_HEARTBEAT_STALE_MS,
+  parseGatewayLockPayload,
   readGatewayLockProcessNamespace,
 } from "./gateway-lock-payload.js";
 import { inspectGatewayLockRecovery, recoverGatewayLock } from "./gateway-lock-recovery.js";
@@ -15,13 +20,18 @@ import { openNodeSqliteDatabase } from "./node-sqlite.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
-function fixture() {
+function fixturePaths() {
   const root = tempDirs.make("gateway-lock-recovery-");
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "openclaw.json"));
   const env = process.env;
   const paths = resolveGatewayLockPaths(env);
   const databasePath = path.join(root, "state", "openclaw.sqlite");
+  return { env, paths, databasePath };
+}
+
+function fixture() {
+  const { env, paths, databasePath } = fixturePaths();
   const localNamespace = readGatewayLockProcessNamespace();
   if (!localNamespace) {
     throw new Error("Recovery fixture requires the local process namespace");
@@ -43,6 +53,60 @@ function fixture() {
 }
 
 describe("explicit Gateway lock recovery", () => {
+  it.skipIf(process.platform !== "linux")(
+    "recovers a foreign stopped Doctor maintenance instance through the Gateway command",
+    async () => {
+      const { env, paths } = fixturePaths();
+      const lockPaths = [paths.ownerLockPath, paths.stateLockPath];
+      const records = await withDoctorSqliteMaintenanceLock({
+        env,
+        operation: "test maintenance",
+        run: () =>
+          lockPaths.map((pathname) => {
+            const payload = parseGatewayLockPayload(fs.readFileSync(pathname, "utf8"));
+            if (!payload) {
+              throw new Error(`Maintenance lock has an invalid payload: ${pathname}`);
+            }
+            return { pathname, payload };
+          }),
+      });
+      const local = readGatewayLockProcessNamespace();
+      const pidNsInitStartTicks = processIdentity.getProcessStartTime(1);
+      if (local?.platform !== "linux" || pidNsInitStartTicks === null) {
+        throw new Error("Linux PID namespace identity required");
+      }
+      const placement = {
+        ...local,
+        host: "stopped-foreign-container",
+        pidNsInode: local.pidNsInode === "12345" ? "12346" : "12345",
+      };
+      // Retain the actual maintenance writer's records and witness; select only
+      // the foreign namespace fixture to model files left after it stopped.
+      for (const record of records) {
+        fs.writeFileSync(
+          record.pathname,
+          JSON.stringify({ ...record.payload, processNamespace: placement }),
+        );
+      }
+      const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+      const program = new Command();
+      program.exitOverride();
+      addGatewayLockRecoveryCommand(program.command("gateway"));
+      await program.parseAsync(
+        [
+          "gateway",
+          "recover-lock",
+          "--terminated-namespace",
+          JSON.stringify({ ...placement, pidNsInitStartTicks }),
+          "--json",
+        ],
+        { from: "user" },
+      );
+      expect(output).toHaveBeenCalledWith({ recovered: true, removed: records.length });
+      expect(records.every((record) => !fs.existsSync(record.pathname))).toBe(true);
+    },
+  );
+
   it("inspects without changing files and removes only the confirmed foreign owner", async () => {
     const { env, lockPaths } = fixture();
     const before = lockPaths.map((pathname) => fs.statSync(pathname, { bigint: true }));
@@ -167,6 +231,76 @@ describe("explicit Gateway lock recovery", () => {
     expect(lockPaths.every((pathname) => fs.existsSync(pathname))).toBe(true);
   });
 
+  it
+    .skipIf(process.platform !== "linux")
+    .each(["matching", "different file", "missing incarnation"] as const)(
+    "recovers only files from the verified foreign Gateway instance (%s)",
+    async (kind) => {
+      const { payload, paths, lockPaths } = fixture();
+      const namespace = {
+        ...payload.processNamespace,
+        pidNsInode: "12345",
+        pidNsInitStartTicks: 7,
+      };
+      for (const pathname of lockPaths) {
+        fs.writeFileSync(
+          pathname,
+          JSON.stringify({
+            ...payload,
+            role: "gateway",
+            processNamespace: { ...payload.processNamespace, pidNsInode: namespace.pidNsInode },
+            pidNsInitStartTicks: kind === "missing incarnation" ? undefined : 7,
+          }),
+        );
+      }
+      if (kind === "different file") {
+        fs.writeFileSync(paths.configLockPath, JSON.stringify(payload));
+      }
+      const recovery = recoverGatewayLock({ terminatedNamespace: namespace });
+      if (kind === "matching") {
+        await expect(recovery).resolves.toEqual({ recovered: true, removed: 3 });
+      } else {
+        await expect(recovery).rejects.toThrow("does not belong");
+      }
+      expect(lockPaths.every((pathname) => fs.existsSync(pathname) === (kind !== "matching"))).toBe(
+        true,
+      );
+    },
+  );
+
+  it.skipIf(process.platform !== "linux").each(["gateway", "sqlite-maintenance"] as const)(
+    "checks the live %s PID when another hostname uses the caller's PID namespace",
+    async (role) => {
+      const { payload, lockPaths } = fixture();
+      const local = readGatewayLockProcessNamespace();
+      if (local?.platform !== "linux") {
+        throw new Error("Linux PID namespace required");
+      }
+      const placement = { ...local, host: "previous-container" };
+      const proof = { ...placement, pidNsInitStartTicks: processIdentity.getProcessStartTime(1) };
+      const record = {
+        ...payload,
+        role,
+        processNamespace: placement,
+        pidNsInitStartTicks: role === "gateway" ? proof.pidNsInitStartTicks : undefined,
+      };
+      for (const pathname of lockPaths) {
+        fs.writeFileSync(pathname, JSON.stringify(record));
+      }
+      await expect(recoverGatewayLock({ terminatedNamespace: proof })).rejects.toThrow(
+        "Cannot verify that PID",
+      );
+      expect(lockPaths.every((pathname) => fs.existsSync(pathname))).toBe(true);
+      for (const pathname of lockPaths) {
+        fs.writeFileSync(pathname, JSON.stringify({ ...record, pid: 2_147_483_647 }));
+      }
+      await expect(recoverGatewayLock({ terminatedNamespace: proof })).resolves.toEqual({
+        recovered: true,
+        removed: 3,
+      });
+    },
+  );
+
   it("clears the matching SQLite lease while retaining physical custody", async () => {
     const { env, databasePath, payload, lockPaths } = fixture();
     fs.mkdirSync(path.dirname(databasePath), { recursive: true });
@@ -186,7 +320,7 @@ describe("explicit Gateway lock recovery", () => {
           pid: payload.pid,
           host: "stopped-foreign-container",
           startedAt: payload.startTime ?? null,
-          processNamespace: payload.processNamespace,
+          // Pre-namespace releases persisted the owner without processNamespace.
         },
         port: 18789,
         mode: "foreground",

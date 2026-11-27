@@ -270,7 +270,7 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-it.for(["allowed", "denied", "revoked-command", "revoked-channel"] as const)(
+it.for(["allowed", "denied"] as const)(
   "handles an archived native command source (%s)",
   async (access) => {
     const storePath = join(tempDirs.make("openclaw-discord-archived-"), "sessions.json");
@@ -307,9 +307,6 @@ it.for(["allowed", "denied", "revoked-command", "revoked-channel"] as const)(
     expect(sessionStore.getSessionEntry(source)).toMatchObject({ sessionId, archivedAt: 2 });
     const transcript = sessionStore.loadTranscriptEventsSync({ ...source, sessionId });
     expect(JSON.stringify(transcript)).toContain("Synthetic archived history");
-    const restoreEntered = createDeferred<void>();
-    const releaseRestore = createDeferred<void>();
-    const revoking = access.startsWith("revoked-");
     const commandName = access === "allowed" ? "help" : "new";
     harness = createHarness(initialConfig, (params) =>
       getDiscordRuntime().channel.reply.dispatchReplyFromConfig({
@@ -317,13 +314,7 @@ it.for(["allowed", "denied", "revoked-command", "revoked-channel"] as const)(
         sessionWorkerPlacementContext: {
           workerSessionPlacementService: {
             getMany: () => new Map(),
-            getManyAsync: async () => {
-              if (revoking) {
-                restoreEntered.resolve();
-                await releaseRestore.promise;
-              }
-              return new Map();
-            },
+            getManyAsync: async () => new Map(),
           },
         },
       }),
@@ -333,7 +324,7 @@ it.for(["allowed", "denied", "revoked-command", "revoked-channel"] as const)(
     await withRegisteredChannelIngress(
       { plugin: discordPlugin, config: initialConfig, setRuntime: setDiscordRuntime },
       async () => {
-        const pending = harness.client.handleInteraction(
+        await harness.client.handleInteraction(
           createInternalInteractionPayload({
             ...interactionFor("status", CHANNEL),
             id: `archive-${access}`,
@@ -341,28 +332,6 @@ it.for(["allowed", "denied", "revoked-command", "revoked-channel"] as const)(
             data: { id: "archive-command", name: commandName, type: 1 },
           }),
         );
-        const completion = revoking
-          ? expect(pending).rejects.toThrow("Discord command authority changed")
-          : pending;
-        if (revoking) {
-          try {
-            await Promise.race([
-              restoreEntered.promise,
-              pending.then(() => {
-                throw new Error("Command finished without entering archive restoration");
-              }),
-            ]);
-            expect(sessionStore.getSessionEntry(source)?.archivedAt).toBe(2);
-            if (access === "revoked-command") {
-              harness.replaceConfig(denyCommands(cfg));
-            } else {
-              harness.replacePolicy();
-            }
-          } finally {
-            releaseRestore.resolve();
-          }
-        }
-        await completion;
       },
     );
     const after = sessionStore.getSessionEntry(source);

@@ -144,5 +144,15 @@ and the loader must update their vendored protocol before a Gateway publishes a 
 descriptor without `reset` and every other statement are byte-for-byte what they were, so the
 existing v1 vectors are unchanged. After v1 ships, a change like this needs a new version.
 
+### Claw unlink (added to v1-draft in place)
+
+Unlinking (OCF-281) added the `ClawUnlink` statement type to envelope version 1, the
+`unlinkClaw` endpoint with the `statement` auth class, and the `unlinked` error (with its
+`unlink` field) to Discovery API v1. They are added in place for the same reason as owner
+reset: v1-draft has not shipped. A reader built before the change refuses a `ClawUnlink` as
+`malformed` (unknown statement type). Discovery and the loader must update their vendored
+protocol before a Gateway unlinks. Every existing statement, descriptor and vector is
+unchanged. After v1 ships, a change like this needs a new version.
+
 A new envelope version must not change how an existing recovery kit derives its root key:
 the kit format has its own version (`OCK1`).

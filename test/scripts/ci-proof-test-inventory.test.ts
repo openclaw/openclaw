@@ -4,7 +4,7 @@ import { afterEach, expect, it } from "vitest";
 import {
   isPrExemptRuntimeTestFile,
   listPrExemptRuntimeTestFiles,
-} from "../../scripts/lib/ci-proof-test-inventory.mts";
+} from "../../scripts/lib/ci-test-tier-policy.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);

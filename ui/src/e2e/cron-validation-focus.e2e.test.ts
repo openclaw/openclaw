@@ -26,14 +26,17 @@ suite.define(() => {
         },
       });
       await page.goto(suite.server.baseUrl + "cron?new");
-      await page.locator("#cron-name").fill("Synthetic garden inventory");
       await page.locator("#cron-payload-text").fill("Summarize the fictional garden inventory.");
       await page.locator('[data-test-id="cron-schedule-hours"]').click();
       await page.locator('[data-test-id="cron-schedule-between"]').click();
       const input = page.locator("#cron-active-hours-start");
       await input.fill("invalid");
       await expect.poll(() => input.getAttribute("aria-invalid")).toBe("true");
-      const link = page.locator(".cron-form-status__link").filter({ hasText: "From:" });
+      const status = page.locator(".cron-form-status");
+      expect(await status.locator(".cron-help").textContent()).toBe(
+        "Select a field below to fix it.",
+      );
+      const link = status.getByRole("button", { name: /^From:/u });
       await link.focus();
       await page.keyboard.press("Enter");
       const outcome = await input.evaluate((element) => ({
