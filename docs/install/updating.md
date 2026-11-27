@@ -144,6 +144,15 @@ and the refusal prints the commands below with the unit's name, account and
 selectors filled in. Single-account installs and system units that run as the
 updating account are not affected.
 
+If the refused run pointed `OPENCLAW_STATE_DIR` at the service's state, the
+installed updater still wrote its log and report there as root, and the service
+account's backup refuses directories it cannot read. Give those files back to the
+service account first; the refusal prints this command with the real path:
+
+```bash
+sudo find /var/lib/openclaw/.openclaw -xdev -user 0 -exec chown openclaw {} +
+```
+
 Update such an install by hand:
 
 1. Create a verified backup of the service state as the service account, with

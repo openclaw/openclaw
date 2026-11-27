@@ -83,10 +83,11 @@ async function formatRefusal(
   const unitState =
     !mismatch.selectorsIncomplete && home ? resolveStateDir(unitEnv, () => home) : undefined;
   const callerState = resolveStateDir(params.env);
-  const effect =
-    unitState && path.resolve(unitState) === path.resolve(callerState)
-      ? `would write that service's state as ${caller}`
-      : `would back up and check ${caller}'s own state instead of the service's`;
+  const sameState =
+    unitState !== undefined && path.resolve(unitState) === path.resolve(callerState);
+  const effect = sameState
+    ? `would write that service's state as ${caller}`
+    : `would back up and check ${caller}'s own state instead of the service's`;
   const message = `Gateway service ${unit} runs as ${user}, but this update runs as ${caller} and ${effect}.`;
   const selectors = Object.entries(unitEnv).map(([key, value]) => `${key}=${quoteCliArg(value)}`);
   const backup =
@@ -102,7 +103,13 @@ async function formatRefusal(
       : params.packageManager === "bun"
         ? `${owner}bun add -g --trust ${spec}`
         : `${owner}npm install -g ${spec} --allow-scripts=openclaw`;
+  // Shipped drivers still write their log, report and diagnostics into the selected state as
+  // this account; the service account's backup refuses directories it cannot read.
+  const chownTo = serviceUser === "" ? "root" : quoteCliArg(serviceUser);
+  const unchanged = sameState
+    ? `The package and the running Gateway were not changed, but this run writes its log and report into that state as ${caller}; give them back to ${user} first: sudo find ${quoteCliArg(callerState)} -xdev -user ${uid} -exec chown ${chownTo} {} +.`
+    : "Nothing was changed: the package, the service state and the running Gateway are as they were.";
   // Shipped drivers keep at most 200 characters of the reason; the next action is shown whole.
-  const nextAction = `Nothing was changed: the package, the service state and the running Gateway are as they were. Update this system service by hand (${SYSTEM_SERVICE_UPDATE_DOCS}). First make a verified backup of its state as ${user}: ${backup}. Then run ${install} and sudo systemctl restart ${quoteCliArg(unit)}.`;
+  const nextAction = `${unchanged} Update this system service by hand (${SYSTEM_SERVICE_UPDATE_DOCS}). First make a verified backup of its state as ${user}: ${backup}. Then run ${install} and sudo systemctl restart ${quoteCliArg(unit)}.`;
   return { message, nextAction };
 }

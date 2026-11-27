@@ -186,6 +186,11 @@ describe("candidate admission for a system unit run by another account", () => {
     expect(verdict.reasons[0]?.message).toContain(
       "this update runs as root and would write that service's state as root.",
     );
+    // The installed driver still writes its log and report there as root, and the service
+    // account's backup refuses directories it cannot read, so ownership comes back first.
+    expect(verdict.reasons[0]?.nextAction).toContain(
+      `The package and the running Gateway were not changed, but this run writes its log and report into that state as root; give them back to openclaw first: sudo find ${stateDir} -xdev -user 0 -exec chown openclaw {} +. Update this system service by hand`,
+    );
   });
 
   it("keeps the reinstall with the account and package manager that own the installation", async () => {
