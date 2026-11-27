@@ -159,9 +159,14 @@ describe("happy path prompt snapshots", () => {
       throw new Error("Missing model-bound prompt layers");
     }
     const layers = snapshot.slice(layersStart);
-    const promptBytes = [...layers.matchAll(/^(`{3,})(\w*)\n([\s\S]*?)\n\1$/gmu)]
-      .filter(([, , info]) => info !== "json")
-      .reduce((sum, [, , , body = ""]) => sum + Buffer.byteLength(body, "utf8"), 0);
+    let promptBytes = 0;
+    for (const { groups } of layers.matchAll(
+      /^(?<fence>`{3,})(?<info>\w*)\n(?<body>[\s\S]*?)\n\k<fence>$/gmu,
+    )) {
+      if (groups?.info !== "json") {
+        promptBytes += Buffer.byteLength(groups?.body ?? "", "utf8");
+      }
+    }
     expect.soft(promptBytes).toBeLessThanOrEqual(CODEX_APP_SERVER_PROMPT_BUDGET_BYTES);
     const tools = JSON.stringify(JSON.parse(content("codex-dynamic-tools.telegram-direct.json")));
     expect
