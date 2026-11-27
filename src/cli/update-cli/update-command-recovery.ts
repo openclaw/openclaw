@@ -140,7 +140,7 @@ export async function assertUpdateCommandPackageFinalization(
       await executeExistingOpenClawStateRead(
         { env },
         { type: "updateRuns.get", runId: run.runId },
-        { current: true },
+        { current: true, preferIndependentWarmRead: true },
       );
       assertCurrent();
       assertUpdateCommandRecoveryState({ ...params.opts, run: { ...run, env } });
@@ -151,7 +151,7 @@ export async function assertUpdateCommandPackageFinalization(
       await executeExistingOpenClawStateRead(
         { env: historyEnv },
         { type: "updateRuns.get", runId: run.runId },
-        { current: true },
+        { current: true, preferIndependentWarmRead: true },
       );
       assertCurrent();
       assertUpdateCommandRecoveryState({ ...params.opts, run: { ...run, env: historyEnv } });
