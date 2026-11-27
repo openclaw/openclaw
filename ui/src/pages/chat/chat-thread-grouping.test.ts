@@ -103,7 +103,10 @@ it("folds only recorded OpenAI work as consecutive turns and the selected model 
   ].map(({ progress, response, fold }, i) => {
     const start = 1_000 * (i + 1);
     const prompt = message("user", `Check file ${i}`, start);
-    const update = message("assistant", `Inspecting file ${i}`, start + 1, progress);
+    const update = message("assistant", `Inspecting file ${i}`, start + 1, {
+      ...progress,
+      phase: "commentary",
+    });
     const read = tool(`read-${i}`, start + 2);
     const answer = message("assistant", `Verified file ${i}`, start + 3, {
       ...response,
@@ -275,7 +278,7 @@ it("keeps media visible and folds commentary after replacement", () => {
     openAIMessage("Done", 4),
   ];
   expectHistory(messages, [0, 1, 3], [2]);
-  const replacement = { ...preview, content: [{ type: "text", text: "Preparing a diagram" }] };
+  const replacement = { ...preview, content: [signed("Preparing a diagram", "commentary")] };
   expectHistory(
     messages.map((entry) => (entry === preview ? replacement : entry)),
     [0, 3],
@@ -318,8 +321,8 @@ it.each([true, false])(
 it.each<[string, object, boolean, boolean?]>([
   ["settled terminal", {}, true],
   ["explicit commentary", { phase: "commentary" }, false],
-  ["interrupted text", { openclawAbort: { aborted: true } }, false],
-  ["legacy unphased reply", {}, false, true],
+  ["interrupted text", { openclawAbort: { aborted: true } }, true],
+  ["legacy unphased reply", {}, true, true],
 ])("preserves %s through history reload", (_name, extra, preserved, legacy) => {
   const run = { runId: "completed-run" };
   const messages = [
@@ -443,7 +446,7 @@ describe("completed-turn rollup", () => {
   const call = (id: string, timestamp: number, narration?: string, name = "read") =>
     openAIMessage(
       [
-        ...(narration ? [{ type: "text", text: narration }] : []),
+        ...(narration ? [signed(narration, "commentary")] : []),
         { type: "toolCall", id, name, arguments: { path: `${id}.ts` } },
       ],
       timestamp,
@@ -464,9 +467,9 @@ describe("completed-turn rollup", () => {
   it("keeps Markdown and plain narration in one ordered rollup", () => {
     const markdown = openAIMessage(
       [
-        { type: "text", text: "Checking `layout.ts`:" },
+        signed("Checking `layout.ts`:", "commentary"),
         { type: "toolCall", id: "first", name: "read", arguments: {} },
-        { type: "text", text: "Found **two** issues:\n- spacing\n- radius" },
+        signed("Found **two** issues:\n- spacing\n- radius", "commentary"),
         { type: "toolCall", id: "second", name: "read", arguments: {} },
       ],
       2,
@@ -484,6 +487,27 @@ describe("completed-turn rollup", () => {
       ],
       ["Checking", "first", "Found **two**", "second", "Now the stylesheet.", "third"],
     );
+  });
+
+  it("keeps unlabeled pre-tool text visible while labeled commentary folds", () => {
+    const unlabeled = openAIMessage("Let me check the notes.", 2, {
+      ...run,
+      stopReason: "toolUse",
+    });
+    const messages = [
+      ask,
+      unlabeled,
+      tool("first", 3, run),
+      { ...call("second", 4, "Now the stylesheet."), stopReason: "toolUse" },
+      tool("second", 5, run),
+      answer,
+    ];
+    for (const history of [messages, structuredClone(messages)]) {
+      const items = projected(history);
+      expect(items.map((item) => item.kind)).toEqual(["group", "work-group", "group", "group"]);
+      expect(visible(items)).toEqual([ask, history[1], answer]);
+      expect(JSON.stringify(work(items))).toContain("Now the stylesheet.");
+    }
   });
 
   it("keeps tool-result images inside completed work without hiding the answer", () => {
@@ -609,7 +633,7 @@ it("keeps each run's reply visible when completions answer without new user inpu
   const run = (runId: string) => ({ __openclaw: { runId } });
   const items = collapse([
     message("user", "Start two subagents", 1_000),
-    openAIMessage("Spawning both.", 1_500, run("run-user")),
+    openAIMessage("Spawning both.", 1_500, { ...run("run-user"), phase: "commentary" }),
     { ...toolResult("spawn", "bash", "ok", 2_000), ...run("run-user") },
     openAIMessage("Both started.", 3_000, run("run-user")),
     openAIMessage("Child A finished.", 4_000, run("announce:v1:child-a")),

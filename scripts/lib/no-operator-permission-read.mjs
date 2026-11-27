@@ -5,7 +5,7 @@ import {
 } from "./type-assertion-guard-scope.mjs";
 
 // Live reads of an operator's role, role policy and profile access. A run admits once and then
-// keeps the frozen facts on its admitted operator authority (AGENTS.md "Choose good compromises").
+// keeps the frozen facts on its admitted operator authority (AGENTS.md "Decide authority once").
 const READERS = new Set([
   "authorizeCurrentOperatorRoleScopes",
   "captureResidentUserProfileAccess",
