@@ -15,6 +15,7 @@ import {
 } from "../infra/sqlite-database-admission.js";
 import { readSqliteFileGenerationSync } from "../infra/sqlite-file-generation-worker.js";
 import {
+  hasDefiniteSqliteFileGenerationMismatch,
   parseSqliteFileGeneration,
   sameSqliteFileGeneration,
   type SqliteFileGeneration,
@@ -295,6 +296,9 @@ function resolveQuarantineDecision(
     } catch {
       throw new Error(`OpenClaw quarantine store ${storePath} contains an invalid row.`);
     }
+    if (hasDefiniteSqliteFileGenerationMismatch(pathname, verifiedGeneration)) {
+      return undefined;
+    }
     try {
       const currentGeneration = readSqliteFileGenerationSync(path.resolve(pathname));
       if (!sameSqliteFileGeneration(verifiedGeneration, currentGeneration)) {
@@ -309,6 +313,20 @@ function resolveQuarantineDecision(
     quarantinedAt: decision.quarantinedAt,
     reason: decision.reason,
   };
+}
+
+/** Doctor uses record presence to verify and retire stale-generation quarantine rows. */
+export function hasOpenClawDatabaseQuarantineRecord(
+  pathname: string,
+  options: { env?: NodeJS.ProcessEnv } = {},
+): boolean {
+  const storePath = resolveQuarantineStorePath(options.env ?? process.env);
+  try {
+    return readPersistedQuarantineDecision(pathname, storePath, true) !== undefined;
+  } catch {
+    // Preserve the runtime guard's fail-open handling for an unreadable auxiliary index.
+    return false;
+  }
 }
 
 /** Runtime opens refuse recorded damage while tolerating a broken quarantine index. */
