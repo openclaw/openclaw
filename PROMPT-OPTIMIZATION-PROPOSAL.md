@@ -41,8 +41,12 @@ November tests used OpenClaw 2026.11.10, Windows, local Gemma, openai-completion
 
 The generic renamed transient-context package is locally tested but not independently live-installed. The V3.1 overlay is version-pinned. This draft changes no runtime behavior. Source integration, regression tests, tool-enabled and cross-provider validation, rollback and controlled combined benchmarks are still needed. Related cache investigation: https://github.com/openclaw/openclaw/issues/202001. This branch is based on upstream main and excludes unrelated fork changes and private recovery fixtures.
 
-## In summary: we had solutions, not just suggestions
+## In summary: we have solutions, not just suggestions
 
-We have been using the general transient-turn approach in our Discord deployments for months, with an approximately threefold improvement in usage efficiency reported by our operator. This is operational experience, not a controlled benchmark of these two November changes.
+In August, we demonstrated a working solution to owner/non-owner cache instability. Sixty-eight days later, upstream merged a fix built on the same architectural principle. Today, we are presenting two further complementary optimizations backed by live results.
 
-We are offering upstream the benefit of work we have already been doing, not asking upstream to invent a solution for us. The August record and November results support the same direction. If upstream chooses not to adopt it, we will continue benefiting from and developing these approaches in our own deployments.
+We've been using the general transient-turn approach in our Discord deployments for months, with an observed approximately threefold improvement in usage efficiency across our own operational experience, rather than a controlled benchmark of these two latest changes.
+
+**We were ahead of upstream on this architectural principle in August. We have working solutions to share again today.**
+
+If upstream chooses not to adopt them, that's fine. We will continue benefiting from and developing them ourselves. We're sharing this work because the wider OpenClaw community could benefit too.
