@@ -108,6 +108,7 @@ const lifetime = resolveGlobalSingleton(
     defaultBroker: {},
   }),
   closeDefaultRetainedNativeWorkerSource,
+  "native-workers",
 );
 
 /** Terminal process cleanup joins the existing unbound owner without starting another. */
