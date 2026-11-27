@@ -9,7 +9,6 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { cleanupStartupPluginSourceCaptures } from "../commands/startup-plugin-source-captures.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
-import * as census from "../infra/openclaw-process-census.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { acquireSqliteStagingToken } from "../infra/sqlite-staging-token.js";
@@ -575,8 +574,7 @@ async function startCliCapture(worker: boolean, legacy = false, signal = false) 
   }
 }
 
-it("metadata boot preserves recent and other producers' legacy captures", async () => {
-  vi.spyOn(census, "inspectOtherOpenClawProcesses").mockReturnValue({ pids: [12345] });
+it("metadata boot reclaims old captures and preserves recent and legacy files", async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   const active = artifactFixture();
   cleanups.unshift(() => sweepPluginSourceCapturesForTest(stateDir));
