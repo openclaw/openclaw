@@ -1455,7 +1455,7 @@ main() {
     "${PREFIX}/bin/openclaw" onboard
   elif [[ -n "$onboard_tty" ]]; then
     # The wizard requires both descriptors to be terminals, even when install output is redirected.
-    "${PREFIX}/bin/openclaw" onboard <"$onboard_tty" >>"$onboard_tty"
+    "${PREFIX}/bin/openclaw" onboard <>"$onboard_tty" >&0
   elif [[ "$RUN_ONBOARD" -eq 1 && "$RUNTIME_ONLY" -eq 0 ]]; then
     local quoted_claw=""
     printf -v quoted_claw '%q' "${bin_dir}/openclaw"
