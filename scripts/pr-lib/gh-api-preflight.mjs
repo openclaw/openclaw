@@ -62,8 +62,10 @@ function isPrimaryQuotaExhausted(error, resource) {
       : resourceHeader !== undefined &&
         (resourceHeader !== "core" || response.resource !== "core")) ||
     (response.remaining !== undefined && response.remaining !== 0) ||
+    /^retry-after:/im.test(stdout) ||
     /\b(?:secondary rate limit|abuse detection|retry-after|proxy authentication required)\b/i.test(
-      `${stdout}\n${stderr}`,
+      // CORS exposed-header names are not retry directives.
+      `${response.status ? JSON.stringify(response.body) : stdout}\n${stderr}`,
     ) ||
     [...stderr.matchAll(/\bHTTP(?:\/\d+(?:\.\d+)?)?\s+([1-5]\d{2})\b/gi)].some(
       ([, status]) => !statuses.includes(status),
@@ -148,7 +150,7 @@ export function rateLimitRetryGuidance({ remaining, resetUtc, retryAfter }) {
   return `Wait ${waits.join(" and ")}${resetUtc === "unknown" ? "; reset time is unknown" : ""}, then retry manually.`;
 }
 
-function main(exitCode, response) {
+export function readWriterLogin(exitCode, response) {
   const { status, body, remaining, limit, resetUtc, retryAfter, resource } =
     parseGithubResponse(response);
   const login = body?.login;
@@ -159,8 +161,7 @@ function main(exitCode, response) {
     login.trim().length > 0 &&
     (body.errors === undefined || (Array.isArray(body.errors) && body.errors.length === 0))
   ) {
-    process.stdout.write(`${login}\n`);
-    return;
+    return login;
   }
 
   const rateLimited =
@@ -172,6 +173,7 @@ function main(exitCode, response) {
   const details = `HTTP ${status ?? "unknown"}; exit=${exitCode}`;
   const quota = `resource=${resource}; remaining=${remaining ?? "unknown"}; limit=${limit ?? "unknown"}; reset=${resetUtc}`;
 
+  const diagnostics = [];
   // A depleted balance does not explain a malformed/partial HTTP 200 response.
   if (
     ["200", "403", "429"].includes(status) &&
@@ -180,26 +182,35 @@ function main(exitCode, response) {
       rateLimited ||
       throttleMessage)
   ) {
-    console.error(
+    diagnostics.push(
       `GitHub API preflight rate limited (${details}; ${quota}${retryAfter === undefined ? "" : `; retry-after=${retryAfter}s`}).`,
+      rateLimitRetryGuidance({ remaining, resetUtc, retryAfter }),
     );
-    console.error(rateLimitRetryGuidance({ remaining, resetUtc, retryAfter }));
   } else if (status === "401" || (exitCode === 4 && !status)) {
     // gh v2.98.0 returns 4 for its pre-request missing-auth check; 403 is not that contract.
-    console.error(`GitHub API preflight authentication unavailable (${details}).`);
-    console.error("Configure or refresh the intended active credential manually, then retry.");
+    diagnostics.push(
+      `GitHub API preflight authentication unavailable (${details}).`,
+      "Configure or refresh the intended active credential manually, then retry.",
+    );
   } else {
-    console.error(`GitHub API preflight failed (${details}); authentication was not verified.`);
+    diagnostics.push(`GitHub API preflight failed (${details}); authentication was not verified.`);
     if (remaining === 0) {
-      console.error(
+      diagnostics.push(
         `Observed exhausted primary quota (${quota}); failure cause remains unverified.`,
       );
     }
-    console.error("Check connectivity, GitHub service status, and access policy before retrying.");
+    diagnostics.push(
+      "Check connectivity, GitHub service status, and access policy before retrying.",
+    );
   }
-  process.exitCode = 1;
+  throw Object.assign(new Error(diagnostics.join("\n")), { status: 1 });
 }
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
-  main(Number(process.argv[2]), readFileSync(0, "utf8"));
+  try {
+    process.stdout.write(`${readWriterLogin(Number(process.argv[2]), readFileSync(0, "utf8"))}\n`);
+  } catch (error) {
+    console.error(error.message);
+    process.exitCode = 1;
+  }
 }

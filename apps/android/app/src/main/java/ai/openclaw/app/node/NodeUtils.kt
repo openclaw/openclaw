@@ -2,15 +2,33 @@ package ai.openclaw.app.node
 
 import ai.openclaw.app.AppearanceThemeFamily
 import ai.openclaw.app.AppearanceThemeMode
+import ai.openclaw.app.asObjectOrNull
+import ai.openclaw.app.asStringOrNull
+import ai.openclaw.app.gateway.InvokeResult
 import ai.openclaw.app.gateway.parseInvokeErrorFromThrowable
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 
-fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
+internal fun escapeSqlLikeLiteral(value: String): String = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+internal fun nodeInvokeError(
+  code: String,
+  message: String,
+): InvokeResult = InvokeResult.error(code, "$code: $message")
+
+internal inline fun nodeInvokeJson(
+  unavailableCode: String,
+  fallbackMessage: String,
+  encode: () -> String,
+): InvokeResult =
+  try {
+    InvokeResult.ok(encode())
+  } catch (err: Throwable) {
+    nodeInvokeError(unavailableCode, err.message ?: fallbackMessage)
+  }
 
 /** Parses invoke params into a JSON object, returning null for absent/malformed input. */
 fun parseJsonParamsObject(paramsJson: String?): JsonObject? {
@@ -28,19 +46,16 @@ fun readJsonPrimitive(
   key: String,
 ): JsonPrimitive? = params?.get(key) as? JsonPrimitive
 
-/** Parses an optional integer invoke param. */
 fun parseJsonInt(
   params: JsonObject?,
   key: String,
 ): Int? = readJsonPrimitive(params, key)?.contentOrNull?.toIntOrNull()
 
-/** Parses an optional decimal invoke param. */
 fun parseJsonDouble(
   params: JsonObject?,
   key: String,
 ): Double? = readJsonPrimitive(params, key)?.contentOrNull?.toDoubleOrNull()
 
-/** Parses an optional string invoke param. */
 fun parseJsonString(
   params: JsonObject?,
   key: String,
@@ -58,14 +73,6 @@ fun parseJsonBooleanFlag(
     else -> null
   }
 }
-
-/** Converts JSON null to Kotlin null while preserving primitive text content. */
-fun JsonElement?.asStringOrNull(): String? =
-  when (this) {
-    is JsonNull -> null
-    is JsonPrimitive -> content
-    else -> null
-  }
 
 /** Parses #RRGGBB or RRGGBB into opaque ARGB. */
 fun parseHexColorArgb(raw: String?): Long? {
@@ -87,28 +94,21 @@ fun resolveProfileAccentArgb(entries: JsonObject?): Long? {
 }
 
 fun resolveGatewayThemeFamily(config: JsonObject?): AppearanceThemeFamily {
-  val raw =
-    config
-      ?.get("ui")
-      .asObjectOrNull()
-      ?.get("prefs")
-      .asObjectOrNull()
-      ?.get("theme")
-      .asStringOrNull()
+  val raw = gatewayUiPrefs(config)?.get("theme").asStringOrNull()
   return AppearanceThemeFamily.entries.firstOrNull { it.rawValue == raw } ?: AppearanceThemeFamily.Claw
 }
 
 fun resolveGatewayThemeMode(config: JsonObject?): AppearanceThemeMode {
-  val raw =
-    config
-      ?.get("ui")
-      .asObjectOrNull()
-      ?.get("prefs")
-      .asObjectOrNull()
-      ?.get("themeMode")
-      .asStringOrNull()
+  val raw = gatewayUiPrefs(config)?.get("themeMode").asStringOrNull()
   return AppearanceThemeMode.entries.firstOrNull { it.rawValue == raw } ?: AppearanceThemeMode.System
 }
+
+private fun gatewayUiPrefs(config: JsonObject?): JsonObject? =
+  config
+    ?.get("ui")
+    .asObjectOrNull()
+    ?.get("prefs")
+    .asObjectOrNull()
 
 fun resolveGatewayAccentArgb(config: JsonObject?): Long? {
   val ui = config?.get("ui").asObjectOrNull()

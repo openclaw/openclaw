@@ -8,13 +8,11 @@ export type CliLoopbackCall = {
   current: Loopback.McpLoopbackToolCallStart;
   boundToolCallId?: string;
   outcome?: CliToolTerminalOutcome;
+  browserTab?: unknown;
   ambiguous: boolean;
   ambiguityGroup?: CliLoopbackAmbiguityGroup;
 };
-export type CliLoopbackAmbiguityGroup = {
-  calls: Set<CliLoopbackCall>;
-  activeToolCallIds: Set<string>;
-};
+export type CliLoopbackAmbiguityGroup = Set<CliLoopbackCall>;
 export type ActiveCliTool = Loopback.McpLoopbackToolCallStart & {
   loopbackCall?: CliLoopbackCall;
   loopbackAmbiguous: boolean;
@@ -26,10 +24,8 @@ export function createAskUserDeadlineTracking(
   isOverflowed: () => boolean,
 ) {
   const deadlines = new WeakMap<CliLoopbackCall, number>();
-  const state: { listeners: Set<() => void>; selected: number | undefined } = {
-    listeners: new Set(),
-    selected: undefined,
-  };
+  let onChange: (() => void) | undefined;
+  let selected: number | undefined;
   const selectDeadline = () => {
     if (isOverflowed()) {
       return undefined;
@@ -45,11 +41,11 @@ export function createAskUserDeadlineTracking(
   };
   const refresh = () => {
     const nextDeadline = selectDeadline();
-    if (nextDeadline === state.selected) {
+    if (nextDeadline === selected) {
       return;
     }
-    state.selected = nextDeadline;
-    state.listeners.forEach((listener) => listener());
+    selected = nextDeadline;
+    onChange?.();
   };
   const clear = (call: CliLoopbackCall) => {
     deadlines.delete(call);
@@ -66,9 +62,13 @@ export function createAskUserDeadlineTracking(
     }
     refresh();
   };
-  const onChange = (listener: () => void) => {
-    state.listeners.add(listener);
-    return () => void state.listeners.delete(listener);
+  return {
+    clear,
+    update,
+    refresh,
+    get: () => selected,
+    setOnChange: (listener: (() => void) | undefined) => {
+      onChange = listener;
+    },
   };
-  return { clear, update, refresh, get: () => state.selected, onChange };
 }

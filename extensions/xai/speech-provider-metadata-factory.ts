@@ -1,12 +1,12 @@
-import type { PluginCapabilityCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
+import type { PluginCapabilityCatalogHostContext } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
-  SpeechDirectiveTokenParseContext,
   SpeechProviderConfig,
   SpeechProviderOverrides,
   SpeechProviderPlugin,
   SpeechSynthesisTarget,
 } from "openclaw/plugin-sdk/speech";
+import { createSpeechDirectiveParser } from "openclaw/plugin-sdk/speech-provider";
 import {
   asFiniteNumberInRange,
   asOptionalObjectRecord,
@@ -19,28 +19,13 @@ const XAI_SPEECH_RESPONSE_FORMATS = ["mp3", "wav", "pcm", "mulaw", "alaw"] as co
 
 export type XaiSpeechResponseFormat = (typeof XAI_SPEECH_RESPONSE_FORMATS)[number];
 
-type XaiTtsProviderConfig = {
-  apiKey?: string;
-  baseUrl: string;
-  voiceId: string;
-  language?: string;
-  speed?: number;
-  responseFormat?: XaiSpeechResponseFormat;
-};
-
-type XaiTtsProviderOverrides = {
-  voiceId?: string;
-  language?: string;
-  speed?: number;
-};
-
 export const XAI_TTS_FALLBACK_VOICES = ["ara", "eve", "leo", "rex", "sal"] as const;
 
 export function normalizeXaiTtsBaseUrl(baseUrl?: string): string {
   return normalizeOptionalString(baseUrl)?.replace(/\/+$/, "") ?? XAI_BASE_URL;
 }
 
-export function isValidXaiTtsVoice(voice: string): boolean {
+function isValidXaiTtsVoice(voice: string): boolean {
   return normalizeOptionalString(voice) !== undefined;
 }
 
@@ -85,25 +70,14 @@ export function resolveXaiSpeechResponseFormat(
 export function xaiSpeechResponseFormatToFileExtension(
   format: XaiSpeechResponseFormat,
 ): ".mp3" | ".pcm" | ".wav" | ".mulaw" | ".alaw" {
-  switch (format) {
-    case "wav":
-      return ".wav";
-    case "pcm":
-      return ".pcm";
-    case "mulaw":
-      return ".mulaw";
-    case "alaw":
-      return ".alaw";
-    default:
-      return ".mp3";
-  }
+  return format === "wav" || format === "pcm" || format === "mulaw" || format === "alaw"
+    ? `.${format}`
+    : ".mp3";
 }
 
-function normalizeXaiSpeechProviderConfig(
-  rawConfig: Record<string, unknown>,
-): XaiTtsProviderConfig {
+function normalizeXaiSpeechProviderConfig(rawConfig: Record<string, unknown>) {
   const providers = asOptionalObjectRecord(rawConfig.providers);
-  const xai = asOptionalObjectRecord(providers?.xai ?? rawConfig.xai ?? rawConfig) ?? {};
+  const xai = asOptionalObjectRecord(providers?.xai) ?? {};
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: xai.apiKey,
@@ -121,23 +95,23 @@ function normalizeXaiSpeechProviderConfig(
   };
 }
 
-export function readXaiSpeechProviderConfig(config: SpeechProviderConfig): XaiTtsProviderConfig {
-  const normalized = normalizeXaiSpeechProviderConfig({});
+export function readXaiSpeechProviderConfig(config: SpeechProviderConfig) {
   return {
-    apiKey: normalizeOptionalString(config.apiKey) ?? normalized.apiKey,
-    baseUrl: normalizeOptionalString(config.baseUrl) ?? normalized.baseUrl,
-    voiceId: normalizeOptionalString(config.voiceId ?? config.voice) ?? normalized.voiceId,
-    language:
-      normalizeXaiLanguageCode(config.language ?? config.languageCode) ?? normalized.language,
-    speed: normalizeXaiSpeechSpeed(config.speed) ?? normalized.speed,
-    responseFormat:
-      normalizeXaiSpeechResponseFormat(config.responseFormat) ?? normalized.responseFormat,
+    apiKey: normalizeOptionalString(config.apiKey),
+    baseUrl:
+      normalizeOptionalString(config.baseUrl) ?? normalizeXaiTtsBaseUrl(process.env.XAI_BASE_URL),
+    voiceId: normalizeOptionalString(config.voiceId ?? config.voice) ?? "eve",
+    language: normalizeXaiLanguageCode(config.language ?? config.languageCode),
+    speed: normalizeXaiSpeechSpeed(config.speed),
+    responseFormat: normalizeXaiSpeechResponseFormat(config.responseFormat),
   };
 }
 
 export function readXaiSpeechOverrides(
   overrides: SpeechProviderOverrides | undefined,
-): XaiTtsProviderOverrides {
+): Partial<
+  Pick<ReturnType<typeof normalizeXaiSpeechProviderConfig>, "voiceId" | "language" | "speed">
+> {
   if (!overrides) {
     return {};
   }
@@ -152,31 +126,24 @@ export function resolveDirectXaiAudioApiKey(configApiKey?: string): string | und
   return normalizeOptionalString(configApiKey) ?? normalizeOptionalString(process.env.XAI_API_KEY);
 }
 
-function parseXaiSpeechDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
-  handled: boolean;
-  overrides?: SpeechProviderOverrides;
-  warnings?: string[];
-} {
-  switch (ctx.key) {
-    case "voice":
-    case "voice_id":
-    case "voiceid":
-    case "xai_voice":
-    case "xaivoice":
-      if (!ctx.policy.allowVoice) {
-        return { handled: true };
-      }
-      if (!isValidXaiTtsVoice(ctx.value)) {
-        return { handled: true, warnings: [`invalid xAI voice "${ctx.value}"`] };
-      }
-      return { handled: true, overrides: { voiceId: ctx.value } };
-    default:
-      return { handled: false };
-  }
-}
+const parseXaiSpeechDirectiveToken = createSpeechDirectiveParser({
+  voice: [
+    "allowVoice",
+    ["voice", "voice_id", "voiceid", "xai_voice", "xaivoice"],
+    {
+      parse: (ctx) =>
+        isValidXaiTtsVoice(ctx.value)
+          ? { handled: true, overrides: { voiceId: ctx.value } }
+          : { handled: true, warnings: [`invalid xAI voice "${ctx.value}"`] },
+    },
+  ],
+});
 
 export function createXaiSpeechProviderMetadata(
-  context: Pick<PluginCapabilityCatalogContext, "isProviderAuthProfileConfigured">,
+  context: Pick<
+    PluginCapabilityCatalogHostContext,
+    "isProviderAuthProfileConfigured" | "isProviderAuthProfileConfiguredAsync"
+  >,
 ): Omit<
   SpeechProviderPlugin,
   "listVoices" | "synthesize" | "streamSynthesize" | "synthesizeTelephony"
@@ -192,52 +159,42 @@ export function createXaiSpeechProviderMetadata(
     resolveTalkConfig: ({ baseTtsConfig, talkProviderConfig }) => {
       const base = normalizeXaiSpeechProviderConfig(baseTtsConfig);
       const responseFormat = normalizeXaiSpeechResponseFormat(talkProviderConfig.responseFormat);
+      const baseUrl = normalizeOptionalString(talkProviderConfig.baseUrl);
       return {
         ...base,
-        ...(talkProviderConfig.apiKey === undefined
-          ? {}
-          : {
-              apiKey: normalizeResolvedSecretInputString({
+        apiKey:
+          talkProviderConfig.apiKey === undefined
+            ? base.apiKey
+            : normalizeResolvedSecretInputString({
                 value: talkProviderConfig.apiKey,
                 path: "talk.providers.xai.apiKey",
               }),
-            }),
-        ...(normalizeOptionalString(talkProviderConfig.baseUrl) === undefined
-          ? {}
-          : {
-              baseUrl: normalizeXaiTtsBaseUrl(normalizeOptionalString(talkProviderConfig.baseUrl)),
-            }),
-        ...(normalizeOptionalString(talkProviderConfig.voiceId) === undefined
-          ? {}
-          : { voiceId: normalizeOptionalString(talkProviderConfig.voiceId) }),
-        ...(normalizeXaiLanguageCode(
-          talkProviderConfig.language ?? talkProviderConfig.languageCode,
-        ) === undefined
-          ? {}
-          : {
-              language: normalizeXaiLanguageCode(
-                talkProviderConfig.language ?? talkProviderConfig.languageCode,
-              ),
-            }),
-        ...(normalizeXaiSpeechSpeed(talkProviderConfig.speed) === undefined
-          ? {}
-          : { speed: normalizeXaiSpeechSpeed(talkProviderConfig.speed) }),
-        ...(responseFormat === undefined ? {} : { responseFormat }),
+        baseUrl: baseUrl === undefined ? base.baseUrl : normalizeXaiTtsBaseUrl(baseUrl),
+        voiceId: normalizeOptionalString(talkProviderConfig.voiceId) ?? base.voiceId,
+        language:
+          normalizeXaiLanguageCode(
+            talkProviderConfig.language ?? talkProviderConfig.languageCode,
+          ) ?? base.language,
+        speed: normalizeXaiSpeechSpeed(talkProviderConfig.speed) ?? base.speed,
+        responseFormat: responseFormat ?? base.responseFormat,
       };
     },
-    resolveTalkOverrides: ({ params }) => ({
-      ...(normalizeOptionalString(params.voiceId ?? params.voice) === undefined
-        ? {}
-        : { voiceId: normalizeOptionalString(params.voiceId ?? params.voice) }),
-      ...(normalizeXaiLanguageCode(params.language ?? params.languageCode) === undefined
-        ? {}
-        : { language: normalizeXaiLanguageCode(params.language ?? params.languageCode) }),
-      ...(normalizeXaiSpeechSpeed(params.speed) === undefined
-        ? {}
-        : { speed: normalizeXaiSpeechSpeed(params.speed) }),
-    }),
+    resolveTalkOverrides: ({ params }) => {
+      const voiceId = normalizeOptionalString(params.voiceId ?? params.voice);
+      const language = normalizeXaiLanguageCode(params.language ?? params.languageCode);
+      const speed = normalizeXaiSpeechSpeed(params.speed);
+      return {
+        ...(voiceId === undefined ? {} : { voiceId }),
+        ...(language === undefined ? {} : { language }),
+        ...(speed === undefined ? {} : { speed }),
+      };
+    },
+    // Retained for synchronous SDK consumers through 2026-12-31.
     isConfigured: ({ providerConfig, cfg }) =>
       Boolean(resolveDirectXaiAudioApiKey(readXaiSpeechProviderConfig(providerConfig).apiKey)) ||
       context.isProviderAuthProfileConfigured({ provider: "xai", cfg }),
+    isConfiguredAsync: async ({ providerConfig, cfg }) =>
+      Boolean(resolveDirectXaiAudioApiKey(readXaiSpeechProviderConfig(providerConfig).apiKey)) ||
+      (await context.isProviderAuthProfileConfiguredAsync({ provider: "xai", cfg })),
   };
 }

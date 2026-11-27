@@ -19,11 +19,13 @@ public enum ChatMessageVisibleText {
 
     static func copyText(in message: OpenClawChatMessage) -> String {
         let role = message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return role == "assistant" ? self.visibleText(in: message) : self.primaryText(in: message)
+        return role == "assistant" ? self.visibleText(in: message) : self.displayText(
+            in: message,
+            includeThinking: false)
     }
 
     public static func visibleText(in message: OpenClawChatMessage) -> String {
-        let text = self.primaryText(in: message)
+        let text = self.displayText(in: message, includeThinking: false)
         let role = message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard role != "user" else { return text }
         return AssistantTextParser.visibleSegments(from: text)
@@ -38,6 +40,10 @@ public enum ChatMessageVisibleText {
     }
 
     static func displayText(in message: OpenClawChatMessage, includeThinking: Bool) -> String {
+        #if os(macOS)
+        // Shared content stays unchanged for mobile and channel clients.
+        if let summary = message.desktopFailureSummary { return summary }
+        #endif
         let isAssistant = message.role.trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased() == "assistant"
         let parts = message.content.compactMap { content -> String? in
@@ -59,11 +65,7 @@ public enum ChatMessageVisibleText {
         return OpenClawChatMessage.displayText(
             contentText: parts.joined(separator: "\n"),
             role: message.role,
-            stopReason: message.stopReason,
-            errorMessage: message.errorMessage)
-    }
-
-    private static func primaryText(in message: OpenClawChatMessage) -> String {
-        self.displayText(in: message, includeThinking: false)
+            stopReason: message.presentationOwnsFooter ? message.stopReason : nil,
+            errorMessage: message.presentationOwnsFooter ? message.errorMessage : nil)
     }
 }

@@ -1,3 +1,4 @@
+import { readExecRequestOwners, withExecRequestOwners } from "../infra/exec-request-context.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import { registerSubagentRun } from "./subagents/registry/subagent-registry.js";
 import type { SubagentRegistrationScope } from "./subagents/registry/subagent-registry.types.js";
@@ -6,7 +7,13 @@ type SpawnPipelinePhase = "initialize" | "dispatch" | "register";
 
 export type SpawnBackendAdapter<TState> = {
   initialize(): Promise<TState>;
+  retainRegistrationScope?(scope: SubagentRegistrationScope): void;
   dispatchTurn(state: TState): Promise<{ runId: string }>;
+  /**
+   * Dispatch may fail after acceptance; registration may leave a live child.
+   * Confirm termination or retain the exact child and its cleanup obligation.
+   * The phase alone never grants session-deletion authority.
+   */
   cleanupOnFailure(params: {
     phase: SpawnPipelinePhase;
     state?: TState;
@@ -32,7 +39,6 @@ type SpawnPipelineResult<TState> =
       ok: false;
       phase: SpawnPipelinePhase;
       error: unknown;
-      state?: TState;
       runId?: string;
     };
 
@@ -72,20 +78,21 @@ export async function runSpawnPipeline<TState>(
       ({ runId } = await params.adapter.dispatchTurn(state));
       phase = "register";
       params.assertActive?.();
-      // Running and optional registration keep their synchronous handoff.
       registration = params.buildRegistration(state, runId);
-      const completion = registration.queued
-        ? registerSubagentRun(registration, {
+      await registerSubagentRun(
+        registration,
+        withExecRequestOwners(
+          {
             assertCurrent: params.assertActive,
             retainOwnership: (scope) => {
               registrationScope = scope;
+              params.adapter.retainRegistrationScope?.(scope);
             },
-          })
-        : registerSubagentRun(registration);
-      if (completion) {
-        await completion;
-      }
-      // Required queued registrations await here; ordinary child admission stays synchronous.
+          },
+          readExecRequestOwners(params),
+        ),
+      );
+      // Release launch admission only after any authority preparation and registry acknowledgement.
       params.admissionReservation?.release();
     } catch (error) {
       await params.adapter.cleanupOnFailure({
@@ -94,7 +101,7 @@ export async function runSpawnPipeline<TState>(
         error,
         ...(registrationScope ? { registrationScope } : {}),
       });
-      return { ok: false, phase, state, runId, error };
+      return { ok: false, phase, runId, error };
     }
 
     if (params.hookRunner?.hasHooks("subagent_progress")) {

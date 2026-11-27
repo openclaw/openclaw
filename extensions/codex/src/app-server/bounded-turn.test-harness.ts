@@ -15,7 +15,6 @@ export function codexModel(model = "gpt-5.4", id = model) {
     model,
     upgrade: null,
     upgradeInfo: null,
-    availabilityNux: null,
     displayName: id,
     description: "test model",
     hidden: false,
@@ -23,11 +22,9 @@ export function codexModel(model = "gpt-5.4", id = model) {
     inputModalities: ["text"],
     supportedReasoningEfforts: [{ reasoningEffort: "low", description: "fast" }],
     defaultReasoningEffort: "low",
-    supportsPersonality: false,
     multiAgentVersion: null,
     additionalSpeedTiers: [],
     serviceTiers: [],
-    defaultServiceTier: null,
   };
 }
 
@@ -76,6 +73,7 @@ export function createClientFactory(
     managedRequirements?: JsonValue;
     hooks?: JsonValue[];
     terminalItems?: JsonValue[];
+    rejectOutputSchema?: boolean | string;
   } = {},
 ) {
   const methods: string[] = [];
@@ -156,6 +154,30 @@ export function createClientFactory(
       }
       queueMicrotask(() => {
         for (const handler of fixture.notifications) {
+          if (options.rejectOutputSchema && isRecord(params) && isRecord(params.outputSchema)) {
+            void handler({
+              method: "error",
+              params: {
+                threadId: "thread-finalizer",
+                turnId: "turn-finalizer",
+                error: {
+                  message:
+                    typeof options.rejectOutputSchema === "string"
+                      ? options.rejectOutputSchema
+                      : JSON.stringify({
+                          error: {
+                            type: "invalid_request_error",
+                            code: "invalid_json_schema",
+                            param: "text.format.schema",
+                          },
+                        }),
+                  codexErrorInfo: "other",
+                },
+                willRetry: false,
+              },
+            });
+            continue;
+          }
           for (let index = 0; index < (options.preBindDeltaCount ?? 0); index += 1) {
             void handler({
               method: "item/agentMessage/delta",

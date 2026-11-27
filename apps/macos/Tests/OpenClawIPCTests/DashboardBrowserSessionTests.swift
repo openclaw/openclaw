@@ -24,13 +24,13 @@ private final class DashboardCookieNavigationObserver: NSObject, WKNavigationDel
     }
 }
 
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct DashboardBrowserSessionTests {
     private func session(
         _ token: String,
         subject: String = "fixture-account",
-        expiresAt: Date = Date().addingTimeInterval(300)) throws -> GatewayBrowserSession
+        expiresAt: Date = .fixtureSessionExpiry) throws -> GatewayBrowserSession
     {
         try GatewayBrowserSession(
             origin: #require(URL(string: "https://gateway.example/")),
@@ -52,9 +52,8 @@ struct DashboardBrowserSessionTests {
         controller.webView.navigationDelegate = observer
 
         controller.show(url: url, auth: controller.auth)
-        let deadline = ContinuousClock.now + .seconds(5)
-        while observer.cookiesAtNavigation == nil, ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(10))
+        try await TestWait.state("navigation cookies") {
+            observer.cookiesAtNavigation != nil
         }
         let cookies = try #require(observer.cookiesAtNavigation)
         let cookie = try #require(cookies.first { $0.name == "CF_Authorization" })
@@ -63,7 +62,8 @@ struct DashboardBrowserSessionTests {
         #expect(cookie.isSecure)
         #expect(cookie.isHTTPOnly)
         #expect(cookie.domain == "gateway.example")
-        #expect(controller._testUserScripts.allSatisfy { !$0.source.contains("first-session") })
+        #expect(controller.webView.configuration.userContentController.userScripts
+            .allSatisfy { !$0.source.contains("first-session") })
         try controller.nativeBrowser.open(
             tabId: "mac-private",
             url: #require(URL(string: "about:blank")),
@@ -97,6 +97,70 @@ struct DashboardBrowserSessionTests {
         #expect(observer.navigationCount == 0)
         #expect(controller.webView.url == nil)
         #expect(!controller.isWindowOpen)
+    }
+
+    @Test func `same account renewal updates retained leases and cookies without clearing website data`() async throws {
+        let store = DashboardBrowserSessionStore(dataStore: .nonPersistent())
+        let previous = try self.session("previous-session")
+        let next = try self.session("renewed-session", expiresAt: previous.expiresAt.addingTimeInterval(3600))
+        let lease = store.lease(for: previous)
+        try await lease.prepare(for: previous.origin, in: WKUserContentController())
+        let preference = try #require(HTTPCookie(properties: [
+            .name: "ui-theme", .value: "dark", .originURL: previous.origin, .path: "/",
+        ]))
+        await store.dataStore.httpCookieStore.setCookie(preference)
+        let openedDuringRenewal = store.lease(for: next)
+
+        try await store.renewSession(previous: previous, next: next, ifCurrent: { true })
+
+        #expect(lease.isCurrent)
+        #expect(lease.session == next)
+        #expect(openedDuringRenewal.isCurrent)
+        #expect(openedDuringRenewal.session == next)
+        try await lease.prepare(for: next.origin, in: WKUserContentController())
+        let cookies = await store.dataStore.httpCookieStore.allCookies()
+        let renewed = try #require(cookies.first { $0.name == "CF_Authorization" })
+        #expect(renewed.value == "renewed-session")
+        let cookieExpiry = try #require(renewed.expiresDate)
+        #expect(abs(cookieExpiry.timeIntervalSince(next.expiresAt)) < 1)
+        #expect(cookies.first { $0.name == "ui-theme" }?.value == "dark")
+    }
+
+    @Test(arguments: [false, true])
+    func `renewal rejects changed accounts and retired attempts without disturbing the current session`(
+        retiredAttempt: Bool) async throws
+    {
+        let store = DashboardBrowserSessionStore(dataStore: .nonPersistent())
+        let previous = try self.session("current-session")
+        let next = try self.session("rejected-session", subject: retiredAttempt ? previous.subject : "other-account")
+        let lease = store.lease(for: previous)
+        try await lease.prepare(for: previous.origin, in: WKUserContentController())
+
+        await #expect(throws: GatewayBrowserSessionError.superseded) {
+            try await store.renewSession(previous: previous, next: next, ifCurrent: { !retiredAttempt })
+        }
+
+        #expect(lease.isCurrent)
+        #expect(lease.session == previous)
+        try await lease.prepare(for: previous.origin, in: WKUserContentController())
+        #expect(await store.dataStore.httpCookieStore.allCookies().map(\.value) == ["current-session"])
+    }
+
+    @Test func `a failed cookie renewal leaves valid dashboard navigation usable`() async throws {
+        let store = DashboardBrowserSessionStore(dataStore: .nonPersistent())
+        let previous = try self.session("still-valid")
+        let expired = try self.session("expired-renewal", expiresAt: Date(timeIntervalSince1970: 10000))
+        let lease = store.lease(for: previous)
+        try await lease.prepare(for: previous.origin, in: WKUserContentController())
+
+        await #expect(throws: GatewayBrowserSessionError.expired) {
+            try await store.renewSession(previous: previous, next: expired, ifCurrent: { true })
+        }
+
+        #expect(lease.isCurrent)
+        #expect(lease.session == previous)
+        try await lease.prepare(for: previous.origin, in: WKUserContentController())
+        #expect(await store.dataStore.httpCookieStore.allCookies().map(\.value) == ["still-valid"])
     }
 
     @Test func `profile stores isolate accounts and replacement retires an older cookie write`() async throws {
@@ -188,22 +252,20 @@ struct DashboardBrowserSessionTests {
             do {
                 let opened = try #require(manager._testAuxiliaryWindows().first?.controller)
                 #expect(opened.auth.token == "after")
-                #expect(opened._testDashboardDataStore === primaryStore)
+                #expect(opened.webView.configuration.websiteDataStore === primaryStore)
                 await manager._testOpenWindow(for: target)
                 await manager._testOpenWindow(for: .profile("same-origin"))
                 let windows = manager._testAuxiliaryWindows()
                 let sameProfile = windows.filter { $0.target == target }
                 #expect(sameProfile.count == 2)
                 #expect(sameProfile.allSatisfy {
-                    $0.controller._testDashboardDataStore === opened._testDashboardDataStore
+                    $0.controller.webView.configuration.websiteDataStore === opened.webView.configuration
+                        .websiteDataStore
                 })
                 let other = try #require(windows.first { $0.target != target }?.controller)
-                #expect(other._testDashboardDataStore === primaryStore)
-                let readyDeadline = ContinuousClock.now + .seconds(5)
-                while await (try? opened.webView.evaluateJavaScript("document.body.innerText")) as? String != "Ready",
-                      ContinuousClock.now < readyDeadline
-                {
-                    try await Task.sleep(for: .milliseconds(10))
+                #expect(other.webView.configuration.websiteDataStore === primaryStore)
+                try await TestWait.state("profile page content") {
+                    await (try? opened.webView.evaluateJavaScript("document.body.innerText")) as? String == "Ready"
                 }
                 _ = try await opened.webView.evaluateJavaScript(
                     "document.body.innerText = 'Before save'; localStorage.setItem('ui-theme', 'dark')")
@@ -212,11 +274,8 @@ struct DashboardBrowserSessionTests {
                     name: MacGatewayProfileStore.didChangeNotification,
                     object: nil,
                     userInfo: [MacGatewayProfileStore.changedProfileIDKey: "first-open"])
-                let refreshedDeadline = ContinuousClock.now + .seconds(5)
-                while opened.gatewaySnapshot?.gateways.first(where: { $0.id == target.bridgeID })?.name != "Renamed",
-                      ContinuousClock.now < refreshedDeadline
-                {
-                    try await Task.sleep(for: .milliseconds(10))
+                try await TestWait.state("renamed profile snapshot") {
+                    opened.gatewaySnapshot?.gateways.first(where: { $0.id == target.bridgeID })?.name == "Renamed"
                 }
                 #expect(opened.gatewaySnapshot?.gateways.first { $0.id == target.bridgeID }?.name == "Renamed")
                 #expect(try await opened.webView
@@ -260,7 +319,7 @@ struct DashboardBrowserSessionTests {
             audience: "fixture",
             subject: "account",
             token: "synthetic",
-            expiresAt: Date().addingTimeInterval(300))
+            expiresAt: .fixtureSessionExpiry)
         let existingStore = WKWebsiteDataStore.nonPersistent()
         let manager = DashboardManager._testMake(
             websiteDataStore: existingStore,
@@ -272,7 +331,7 @@ struct DashboardBrowserSessionTests {
         defer { manager.close() }
         await manager._testOpenWindow(for: .profile("storage-owner"))
         let controller = try #require(manager._testAuxiliaryWindows().first?.controller)
-        #expect((controller._testDashboardDataStore === existingStore) == !browserSignIn)
+        #expect((controller.webView.configuration.websiteDataStore === existingStore) == !browserSignIn)
     }
 
     @Test func `browser-only setup reopens its Gateway without configuring machine integrations`() async throws {
@@ -485,16 +544,277 @@ struct DashboardBrowserSessionTests {
         let store = DashboardBrowserSessionStore(dataStore: .nonPersistent())
         let controller = self.controller(url: session.origin, store: store, lease: store.lease(for: session))
         defer { controller.closeDashboard() }
-        #expect(!controller.hasCurrentBrowserSession)
+        #expect(!controller.documentHost.hasCurrentBrowserSession)
         controller.invalidateBrowserSession(error: .expired)
         var text = ""
-        let deadline = ContinuousClock.now + .seconds(5)
-        while !text.contains("Connection"), ContinuousClock.now < deadline {
+        try await TestWait.state("expired session message") {
             text = await (try? controller.webView.evaluateJavaScript("document.body.innerText")) as? String ?? ""
-            try await Task.sleep(for: .milliseconds(10))
+            return text.contains("Connection")
         }
         #expect(text.contains("expired"))
         #expect(text.contains("Connection"))
         #expect(!controller.canDeliverNativeCommands)
+    }
+}
+
+/// These tests compile the shared openclaw.gateway-cookie-origin identifier in WKContentRuleListStore.default().
+@Suite(.serialized)
+@MainActor
+struct DashboardEmbedCookieTests {
+    private final class ContentController: WKUserContentController {
+        var addedIdentifiers: [String] = []
+        var removedIdentifiers: [String] = []
+
+        override func add(_ contentRuleList: WKContentRuleList) {
+            self.addedIdentifiers.append(contentRuleList.identifier)
+            super.add(contentRuleList)
+        }
+
+        override func remove(_ contentRuleList: WKContentRuleList) {
+            self.removedIdentifiers.append(contentRuleList.identifier)
+            super.remove(contentRuleList)
+        }
+    }
+
+    private func session(
+        host: String = "embed.example.com",
+        issuer: String = "https://identity.example.com",
+        subject: String = "fixture-account",
+        type: String = "app",
+        expiresAt: Date = Date().addingTimeInterval(3600)) throws -> GatewayBrowserSession
+    {
+        func encode(_ value: [String: Any]) throws -> String {
+            try JSONSerialization.data(withJSONObject: value).base64EncodedString()
+                .replacingOccurrences(of: "+", with: "-")
+                .replacingOccurrences(of: "/", with: "_")
+                .replacingOccurrences(of: "=", with: "")
+        }
+        let header = try encode(["alg": "RS256"])
+        let payload = try encode([
+            "iss": issuer, "sub": subject, "aud": ["fixture-audience"], "type": type,
+            "exp": expiresAt.timeIntervalSince1970,
+        ])
+        return try GatewayBrowserSession(
+            origin: #require(URL(string: "https://\(host)/")),
+            issuer: #require(URL(string: issuer)),
+            audience: "fixture-audience",
+            subject: subject,
+            token: "\(header).\(payload).c3ludGhldGlj",
+            expiresAt: expiresAt)
+    }
+
+    @Test func `only live same-principal application cookies allow embed origins`() throws {
+        let now = Date()
+        let gateway = try self.session(host: "gateway.example.com")
+        let valid = try self.session()
+        let cookie = try valid.cookie()
+        #expect(DashboardBrowserSessionStore.embedOrigin(for: cookie, gateway: gateway, now: now) == valid.origin)
+        #expect(cookie.domain == "embed.example.com")
+        #expect(cookie.path == "/")
+        #expect(cookie.isSecure && cookie.isHTTPOnly)
+        let invalid = try [
+            self.session(issuer: "https://other.example.com"),
+            self.session(subject: "another-account"),
+            self.session(type: "org"),
+            self.session(host: "gateway.example.com"),
+            self.session(expiresAt: now.addingTimeInterval(-1)),
+        ]
+        for session in invalid {
+            let cookie = try session.cookie(now: now.addingTimeInterval(-60))
+            #expect(DashboardBrowserSessionStore.embedOrigin(for: cookie, gateway: gateway, now: now) == nil)
+        }
+        var domainProperties = try #require(cookie.properties)
+        domainProperties[.domain] = ".example.com"
+        let domainCookie = try #require(HTTPCookie(properties: domainProperties))
+        #expect(DashboardBrowserSessionStore.embedOrigin(for: domainCookie, gateway: gateway, now: now) == nil)
+    }
+
+    @Test(arguments: ["discovery", "helper", "current"])
+    func `embed sign in requires its document to remain current through suspended work`(_ phase: String) async throws {
+        let issuer = "https://tenant.cloudflareaccess.com"
+        let gateway = try self.session(host: "gateway.example.com", issuer: issuer)
+        let embed = try self.session(issuer: issuer)
+        let payload = try JSONSerialization.data(withJSONObject: [
+            "type": "match", "hostname": "embed.example.com", "auth_domain": "tenant.cloudflareaccess.com",
+            "aud": "fixture-audience", "iat": Date().timeIntervalSince1970,
+        ]).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        let header = Data(#"{"alg":"RS256"}"#.utf8).base64EncodedString()
+            .replacingOccurrences(of: "=", with: "")
+        let application = try CloudflareAccessLogin.application(
+            gatewayURL: embed.origin, metadata: "\(header).\(payload).c3ludGhldGlj")
+        var documentCurrent = true
+        var helperRuns = 0
+        var helperSawRetirement = false
+        var pending: CheckedContinuation<Void, Never>?
+        var started: CheckedContinuation<Void, Never>?
+        let suspend: @MainActor @Sendable () async -> Void = {
+            await withCheckedContinuation { continuation in
+                pending = continuation
+                started?.resume()
+            }
+        }
+        let signIn = CloudflareAccessEmbedLogin(
+            discover: { _ in
+                if phase == "discovery" { await suspend() }
+                return application
+            },
+            signIn: { _, isCurrent in
+                helperRuns += 1
+                if phase != "discovery" { await suspend() }
+                helperSawRetirement = !isCurrent()
+                return embed
+            })
+        let store = DashboardBrowserSessionStore(dataStore: .nonPersistent(), embedSignIn: signIn)
+        let lease = store.lease(for: gateway)
+        try await lease.prepare(for: gateway.origin, in: WKUserContentController())
+        let flight = Task {
+            try await lease.signInEmbed(
+                appURL: embed.origin,
+                observedIframeHosts: ["embed.example.com"],
+                documentIsCurrent: { documentCurrent })
+        }
+        await withCheckedContinuation { started = $0 }
+        documentCurrent = phase == "current"
+        pending?.resume()
+        if documentCurrent {
+            #expect(try await flight.value)
+        } else {
+            await #expect(throws: CancellationError.self) { try await flight.value }
+        }
+        #expect(helperRuns == (phase == "discovery" ? 0 : 1))
+        #expect(helperSawRetirement == (phase == "helper"))
+        let cookies = await store.dataStore.httpCookieStore.allCookies()
+        #expect(Set(cookies.map(\.domain)) ==
+            (documentCurrent ? ["gateway.example.com", "embed.example.com"] : ["gateway.example.com"]))
+    }
+
+    @Test func `cookie rules allow exact gateway and HTTPS embed authorities only`() throws {
+        let gateway = try #require(URL(string: "https://gateway.example.com:8443/"))
+        let embed = try #require(URL(string: "https://embed.example.com/"))
+        let second = try #require(URL(string: "https://other.example.com/"))
+        let json = try DashboardBrowserSessionStore.cookieRules(for: gateway, embedOrigins: [embed, second])
+        let rules = try #require(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [[String: [String: String]]])
+        #expect(rules.first?["action"]?["type"] == "block-cookies")
+        let patterns = try rules.dropFirst().map { rule in
+            #expect(rule["action"]?["type"] == "ignore-previous-rules")
+            return try NSRegularExpression(pattern: #require(rule["trigger"]?["url-filter"]))
+        }
+        func allows(_ url: String) -> Bool {
+            patterns.contains { $0.firstMatch(in: url, range: NSRange(url.startIndex..., in: url)) != nil }
+        }
+        for url in [
+            "https://gateway.example.com:8443/", "wss://gateway.example.com:8443/",
+            "https://embed.example.com/", "https://embed.example.com:443/", "https://other.example.com/",
+        ] {
+            #expect(allows(url))
+        }
+        for url in [
+            "https://gateway.example.com/", "https://embed.example.com:444/", "http://embed.example.com/",
+            "wss://embed.example.com/", "https://embedXexample.com/", "https://embed.example.com.attacker.test/",
+        ] {
+            #expect(!allows(url))
+        }
+    }
+
+    @Test func `live controllers replace cookie rules without a removal gap and retain them on sign-out`() async throws {
+        let store = DashboardBrowserSessionStore(dataStore: .nonPersistent())
+        let gateway = try self.session(host: "gateway.example.com")
+        let lease = store.lease(for: gateway)
+        let controllers = [ContentController(), ContentController()]
+        for controller in controllers {
+            try await lease.prepare(for: gateway.origin, in: controller)
+            #expect(controller.addedIdentifiers.count == 1)
+        }
+        try await lease.installEmbedSession(self.session())
+        try await store.invalidate().value
+        for controller in controllers {
+            #expect(controller.addedIdentifiers.count == 2)
+            #expect(Set(controller.addedIdentifiers).count == 1)
+            #expect(controller.removedIdentifiers.isEmpty)
+        }
+        #expect(await store.dataStore.httpCookieStore.allCookies().isEmpty)
+    }
+
+    @Test func `same principal replacement retains valid embeds and sign-out removes them`() async throws {
+        let store = DashboardBrowserSessionStore(dataStore: .nonPersistent())
+        let gateway = try self.session(host: "gateway.example.com")
+        let next = try self.session(host: "gateway.example.com", expiresAt: gateway.expiresAt.addingTimeInterval(3600))
+        let embed = try self.session()
+        let invalid = try self.session(host: "other.example.com", subject: "another-account")
+        let lease = store.lease(for: gateway)
+        let controller = WKUserContentController()
+        try await lease.prepare(for: gateway.origin, in: controller)
+        try await lease.installEmbedSession(embed)
+        try await store.dataStore.httpCookieStore.setCookie(invalid.cookie())
+
+        try await store.invalidate(
+            previousPrincipal: gateway.browserDataPrincipal, retainingEmbedsFor: next).value
+        let replacement = store.lease(for: next)
+        try await replacement.prepare(for: next.origin, in: controller)
+        let cookies = await store.dataStore.httpCookieStore.allCookies()
+        #expect(Set(cookies.map(\.domain)) == ["gateway.example.com", "embed.example.com"])
+        let gatewayCookie = try next.cookie()
+        #expect(cookies.first { $0.domain == "gateway.example.com" }?.value == gatewayCookie.value)
+        await #expect(throws: GatewayBrowserSessionError.superseded) {
+            try await lease.installEmbedSession(embed)
+        }
+        try await store.invalidate().value
+        #expect(await store.dataStore.httpCookieStore.allCookies().isEmpty)
+    }
+
+    @Test func `first lease after relaunch restores valid embed cookies from WebKit`() async throws {
+        let namespace = "embed-cold-launch-\(UUID().uuidString)"
+        let identifier = DashboardBrowserSessionStore.identifier(profileID: "gateway", registryNamespace: namespace)
+        let result: Result<Void, Error>
+        do {
+            try await self.verifyColdEmbedCookies(namespace: namespace, identifier: identifier)
+            result = .success(())
+        } catch {
+            result = .failure(error)
+        }
+        try await WKWebsiteDataStore.remove(forIdentifier: identifier)
+        try result.get()
+    }
+
+    private func verifyColdEmbedCookies(namespace: String, identifier: UUID) async throws {
+        let gateway = try self.session(host: "gateway.example.com")
+        let embed = try self.session()
+        let invalid = try self.session(host: "other.example.com", type: "org")
+        let dataStore = WKWebsiteDataStore(forIdentifier: identifier)
+        try await dataStore.httpCookieStore.setCookie(embed.cookie())
+        try await dataStore.httpCookieStore.setCookie(invalid.cookie())
+        let owner = DashboardBrowserSessionStore.persistent(
+            profileID: "gateway", registryNamespace: namespace, currentSession: gateway)
+        try await owner.lease(for: gateway).prepare(for: gateway.origin, in: WKUserContentController())
+        let cookies = await owner.dataStore.httpCookieStore.allCookies()
+        #expect(Set(cookies.map(\.domain)) == ["gateway.example.com", "embed.example.com"])
+        try await owner.removeData().value
+        #expect(await owner.dataStore.httpCookieStore.allCookies().isEmpty)
+    }
+
+    @Test func `embed installation rejects a different account and principal changes erase embeds`() async throws {
+        let store = DashboardBrowserSessionStore(dataStore: .nonPersistent())
+        let gateway = try self.session(host: "gateway.example.com")
+        let lease = store.lease(for: gateway)
+        try await lease.prepare(for: gateway.origin, in: WKUserContentController())
+        let invalid = try self.session(subject: "another-account")
+        await #expect(throws: GatewayBrowserSessionError.invalidSession) {
+            try await lease.installEmbedSession(invalid)
+        }
+        try await lease.installEmbedSession(self.session())
+        let next = try self.session(host: "gateway.example.com", subject: "another-account")
+        try await store.lease(for: next).prepare(for: next.origin, in: WKUserContentController())
+        #expect(await store.dataStore.httpCookieStore.allCookies().map(\.domain) == ["gateway.example.com"])
+    }
+}
+
+extension Date {
+    /// Synthetic browser sessions outlive the CI job, so a starved runner cannot expire a
+    /// session in a test that is not about expiry.
+    static var fixtureSessionExpiry: Date {
+        Date().addingTimeInterval(24 * 60 * 60)
     }
 }

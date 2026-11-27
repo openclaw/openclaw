@@ -1,10 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import {
   startSecretEgressProxyServer,
   type SecretEgressProxyHandle,
+  type SecretEgressProcessGrant,
 } from "../secrets/egress-proxy/proxy-server.js";
 import {
   clearSecretEgressProxy,
@@ -19,8 +20,11 @@ import {
   createOperationalRunInstanceRef,
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
+  resolveAdmittedRunActiveAssertion,
   type PreparedAgentRunAdmission,
 } from "./admitted-run-context.js";
+import { bindAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
+import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.wrapper.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -62,131 +66,150 @@ beforeEach(async () => {
   publishSecretEgressProxy(proxy);
 });
 
-describe("exec proxy registration after store preparation", () => {
-  it.each(["close", "abort"] as const)(
-    "mints no proxy credentials after %s and leaves the next invocation usable",
-    async (revocation) => {
-      if (!state || !proxy) {
-        throw new Error("Expected the isolated exec fixture");
-      }
-      const config: OpenClawConfig = {
-        agents: {
-          defaults: { workspace: state.workspaceDir, skipBootstrap: true },
-          entries: { probe: { workspace: state.workspaceDir } },
-        },
-        plugins: { enabled: false },
-        tools: { exec: { host: "gateway", security: "full", ask: "off" } },
-        secrets: { egressProxy: { enabled: true } },
-      };
-      await state.writeConfig(config);
-      const workspaceDir = state.workspaceDir;
-      const registrations = vi.spyOn(proxy, "registerProcess");
-      const spawns = vi.spyOn(getProcessSupervisor(), "spawn");
+it.each(["close", "abort"] as const)(
+  "isolates process credentials and later invocations after %s during preparation",
+  async (revocation) => {
+    if (!state || !proxy) {
+      throw new Error("Expected the isolated exec fixture");
+    }
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: { workspace: state.workspaceDir, skipBootstrap: true },
+        entries: { probe: { workspace: state.workspaceDir } },
+      },
+      plugins: { enabled: false },
+      tools: { exec: { host: "gateway", security: "full", ask: "off" } },
+      secrets: { egressProxy: { enabled: true } },
+    };
+    await state.writeConfig(config);
+    const workspaceDir = state.workspaceDir;
+    const grants: SecretEgressProcessGrant[] = [];
+    const registerProcess = proxy.registerProcess;
+    const registrations = vi.spyOn(proxy, "registerProcess").mockImplementation((...args) => {
+      const grant = registerProcess(...args);
+      vi.spyOn(grant, "revoke");
+      grants.push(grant);
+      return grant;
+    });
+    const spawns = vi.spyOn(getProcessSupervisor(), "spawn");
 
-      const createInvocation = async (runId: string) => {
-        const controller = new AbortController();
-        const admission = prepareAgentRunAdmission({
-          cfg: config,
-          operationalRunInstance: createOperationalRunInstanceRef(runId),
-          facts: {
-            runId,
-            agentId: "probe",
-            ingress: { kind: "schedule", boundary: "cron.script", state: "present" },
-          },
-        });
-        admissions.push(admission);
-        const admitted = await admission.admit("gateway");
-        const sessionKey = "agent:probe:cron:egress-closure:trigger";
-        const caller = createAdmittedGatewayToolCallerIdentity({
-          admittedRunContext: admitted,
-          agentId: "probe",
-          sessionKey,
-          approvalSignals: [controller.signal],
-        });
-        if (!caller) {
-          throw new Error("Expected the admitted exec caller");
-        }
-        const tool = createExecTool({
-          config,
-          agentId: "probe",
-          sessionKey,
+    const createInvocation = async (runId: string) => {
+      const controller = new AbortController();
+      const admission = prepareAgentRunAdmission({
+        cfg: config,
+        operationalRunInstance: createOperationalRunInstanceRef(runId),
+        facts: {
           runId,
-          operationalRunInstance: admitted.operationalRunInstance,
-          trigger: "cron",
-          host: "gateway",
-          security: "full",
-          ask: "off",
-          cwd: workspaceDir,
-          allowBackground: false,
-          notifyOnExit: false,
-        });
-        return {
-          admission,
-          admitted,
-          controller,
-          execute: () =>
-            withGatewayToolCallerIdentity(caller, () =>
-              tool.execute(
-                `exec-${runId}`,
-                { command: "printf cron-egress-ok" },
-                controller.signal,
-              ),
-            ),
-        };
-      };
-
-      const retired = await createInvocation(`egress-${revocation}-retired`);
-      const enteredStoreRead = createDeferred();
-      const readStore = secretStore.readSecretStoreExecEnvironment;
-      const storeRead = vi
-        .spyOn(secretStore, "readSecretStoreExecEnvironment")
-        .mockImplementationOnce((params) => {
-          // The waiting test resumes before exec's import/read promise continuation.
-          enteredStoreRead.resolve();
-          return readStore(params);
-        });
-      // Drain the implementation itself: an abort wrapper can settle while exec continues.
-      const retiredExecution = retired.execute().then(
-        (value) => ({ status: "completed" as const, value }),
-        (error: unknown) => ({ status: "rejected" as const, error }),
-      );
-      void retiredExecution.then((outcome) => {
-        enteredStoreRead.reject(
-          outcome.status === "rejected"
-            ? outcome.error
-            : new Error("Exec completed before the store-read boundary"),
-        );
+          agentId: "probe",
+          ingress: { kind: "schedule", boundary: "cron.script", state: "present" },
+        },
       });
-      await enteredStoreRead.promise;
-      if (revocation === "abort") {
-        retired.controller.abort();
+      admissions.push(admission);
+      const admitted = await admission.admit("gateway");
+      const assertActive = resolveAdmittedRunActiveAssertion(admitted, controller.signal);
+      const sessionKey = "agent:probe:cron:egress-closure:trigger";
+      const caller = createAdmittedGatewayToolCallerIdentity({
+        admittedRunContext: admitted,
+        agentId: "probe",
+        sessionKey,
+        approvalSignals: [controller.signal],
+      });
+      if (!caller || !assertActive) {
+        throw new Error("Expected the admitted exec caller");
       }
-      // Cancellation's cron owner closes admission before a detached exec can resume.
-      retired.admission.close();
-      const retiredOutcome = await retiredExecution;
-      const lateRegistrationCount = registrations.mock.calls.length;
-      const retiredSpawnCount = spawns.mock.calls.length;
-      storeRead.mockRestore();
+      const tool = createExecTool({
+        config,
+        agentId: "probe",
+        sessionKey,
+        runId,
+        operationalRunInstance: admitted.operationalRunInstance,
+        trigger: "cron",
+        host: "gateway",
+        security: "full",
+        ask: "off",
+        cwd: workspaceDir,
+        allowBackground: false,
+        notifyOnExit: false,
+      });
+      const retainedTool = wrapToolWithBeforeToolCallHook(
+        bindAgentToolSourceExecutionGuard(tool, assertActive),
+      );
+      return {
+        admission,
+        admitted,
+        controller,
+        execute: (toolCallId = `exec-${runId}`) =>
+          withGatewayToolCallerIdentity(caller, () =>
+            retainedTool.execute(
+              toolCallId,
+              { command: "printf cron-egress-ok" },
+              controller.signal,
+            ),
+          ),
+      };
+    };
 
-      const later = await createInvocation(`egress-${revocation}-later`);
-      const laterResult = await later.execute();
-      later.admission.close();
+    const retired = await createInvocation(`egress-${revocation}-retired`);
+    const enteredStoreRead = createDeferred();
+    const readStore = secretStore.readSecretStoreExecEnvironment;
+    const storeRead = vi
+      .spyOn(secretStore, "readSecretStoreExecEnvironment")
+      .mockImplementationOnce((params) => {
+        // The waiting test resumes before exec's import/read promise continuation.
+        enteredStoreRead.resolve();
+        return readStore(params);
+      });
+    // Drain the implementation itself: cancellation can settle an outer wrapper first.
+    const retiredExecution = retired.execute().then(
+      (result) => ({ result, rejected: false }),
+      () => ({ result: undefined, rejected: true }),
+    );
+    await awaitGateBeforeSettlement(
+      enteredStoreRead.promise,
+      retiredExecution,
+      "Exec completed before the store-read boundary",
+    );
+    if (revocation === "abort") {
+      retired.controller.abort();
+    }
+    // Closing admission rejects the next call; only abort cancels admitted work.
+    retired.admission.close();
+    const { result: retiredResult, rejected } = await retiredExecution;
+    const lateRegistrationCount = registrations.mock.calls.length;
+    const retiredSpawnCount = spawns.mock.calls.length;
+    storeRead.mockRestore();
+    await expect(retired.execute(`retained-exec-${revocation}`)).rejects.toThrow();
+    expect(registrations).toHaveBeenCalledTimes(lateRegistrationCount);
+    expect(spawns).toHaveBeenCalledTimes(retiredSpawnCount);
 
-      expect(retiredOutcome.status).toBe("rejected");
-      expect(retired.controller.signal.aborted).toBe(revocation === "abort");
-      expect(retiredSpawnCount).toBe(0);
-      expect(getAdmittedRunDelegatedAuthority(retired.admitted)).toBeUndefined();
-      expect(laterResult.details).toMatchObject({
+    const later = await createInvocation(`egress-${revocation}-later`);
+    const laterResult = await later.execute();
+    later.admission.close();
+
+    expect(rejected).toBe(revocation === "abort");
+    expect(retired.controller.signal.aborted).toBe(revocation === "abort");
+    expect(retiredSpawnCount).toBe(revocation === "abort" ? 0 : 1);
+    if (revocation === "close") {
+      expect(retiredResult?.details).toMatchObject({
         status: "completed",
         exitCode: 0,
         aggregated: "cron-egress-ok",
       });
-      expect(getAdmittedRunDelegatedAuthority(later.admitted)).toBeUndefined();
-      expect(later.admitted.operationalRunInstance).not.toEqual(
-        retired.admitted.operationalRunInstance,
-      );
-      expect(lateRegistrationCount).toBe(0);
-      expect(registrations).toHaveBeenCalledOnce();
-    },
-  );
-});
+    }
+    expect(getAdmittedRunDelegatedAuthority(retired.admitted)).toBeUndefined();
+    expect(laterResult.details).toMatchObject({
+      status: "completed",
+      exitCode: 0,
+      aggregated: "cron-egress-ok",
+    });
+    expect(getAdmittedRunDelegatedAuthority(later.admitted)).toBeUndefined();
+    expect(later.admitted.operationalRunInstance).not.toEqual(
+      retired.admitted.operationalRunInstance,
+    );
+    expect(lateRegistrationCount).toBe(revocation === "abort" ? 0 : 1);
+    expect(registrations).toHaveBeenCalledTimes(lateRegistrationCount + 1);
+    for (const grant of grants) {
+      expect(grant.revoke).toHaveBeenCalled();
+    }
+  },
+);

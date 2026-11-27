@@ -1,9 +1,13 @@
 import { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeHostDataSql,
+  trackSqliteStatementExecutions,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
+import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.test-support.js";
+import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -11,6 +15,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY } from "../state/openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
 import {
   NodeWorkerLaunchStore,
@@ -26,6 +31,7 @@ import {
 import * as processIdentity from "./node-worker-process-identity.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import { NodeWorkerTurnStore } from "./node-worker-turn-store.js";
+import { NodeWorkerTurnKernel } from "./node-worker-turn-store.kernel.js";
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 const NOW_MS = 10 * DAY_MS;
@@ -95,6 +101,111 @@ async function fixture(
 }
 
 describe("node worker turn journal", () => {
+  it("returns durable claim and finish receipts within one turn and owner read each", async () => {
+    const f = await fixture();
+    await f.start();
+    await f.finish();
+    const database = openOpenClawStateDatabase({ env: f.env });
+    const kernel = new NodeWorkerTurnKernel({ database, env: f.env });
+    const measure = <T>(operation: () => T): T => {
+      const admission = vi
+        .spyOn(operationAdmission, "requestSqliteWorkerOperationAdmission")
+        .mockImplementation(() => {});
+      const reads = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(database.db),
+        ["receipt"],
+        (sql) =>
+          sql.startsWith("select ") &&
+          (sql.includes('from "node_worker_turns"') || sql.includes('from "node_worker_launches"'))
+            ? "receipt"
+            : null,
+      );
+      try {
+        const result = operation();
+        expect.soft(reads.counts.receipt).toBeLessThanOrEqual(2);
+        return result;
+      } finally {
+        reads.restore();
+        admission.mockRestore();
+      }
+    };
+    const claimed = measure(() => kernel.claim({ claim: f.next, ...f.owner, nowMs: NOW_MS + 1 }));
+    expect(claimed.action).toBe("start");
+    expect(claimed.receipt).toEqual(await f.turns.get(f.next.launchId));
+    const finished = measure(() =>
+      kernel.finish({
+        expected: f.next,
+        ...f.owner,
+        state: "completed",
+        resultJson: "{}",
+        nowMs: NOW_MS + 2,
+      }),
+    );
+    expect(finished).toMatchObject({ state: "completed", completedAtMs: NOW_MS + 2 });
+    expect(finished).toEqual(await f.turns.get(f.next.launchId));
+  });
+
+  it.each(["completed", "failed", "interrupted", "cancelled"] satisfies NodeWorkerTerminalState[])(
+    "returns the settled postimage without rereading when a predecessor leaves its owner %s",
+    async (state) => {
+      const f = await fixture();
+      await f.start();
+      const completed = await f.finish();
+      await f.turns.claim({ claim: f.next, ...f.owner, nowMs: NOW_MS + 2 });
+      const database = openOpenClawStateDatabase({ env: f.env });
+      const predecessor = new DatabaseSync(database.path);
+      try {
+        predecessor
+          .prepare(
+            "UPDATE node_worker_launches SET state = ?, result_json = ?, error_text = ?, completed_at_ms = ?, updated_at_ms = ? WHERE launch_id = ?",
+          )
+          .run(
+            state,
+            state === "completed" ? "{}" : null,
+            state === "completed" ? null : "predecessor cleanup",
+            NOW_MS + 1,
+            NOW_MS + 1,
+            f.first.launchId,
+          );
+      } finally {
+        predecessor.close();
+      }
+      const kernel = new NodeWorkerTurnKernel({ database, env: f.env });
+      const admission = vi
+        .spyOn(operationAdmission, "requestSqliteWorkerOperationAdmission")
+        .mockImplementation(() => {});
+      const reads = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(database.db),
+        ["receipt"],
+        (sql) =>
+          sql.startsWith("select ") &&
+          (sql.includes('from "node_worker_turns"') || sql.includes('from "node_worker_launches"'))
+            ? "receipt"
+            : null,
+      );
+      let settled;
+      try {
+        settled = kernel.get(f.next.launchId);
+        expect(settled).toMatchObject({
+          state: state === "completed" ? "interrupted" : state,
+          resultJson: null,
+          errorText:
+            state === "completed"
+              ? "node worker stopped before its turn completed"
+              : "predecessor cleanup",
+          completedAtMs: NOW_MS + 2,
+          updatedAtMs: NOW_MS + 2,
+        });
+        expect.soft(reads.counts.receipt).toBe(2);
+      } finally {
+        reads.restore();
+        admission.mockRestore();
+      }
+      expect(await f.turns.get(f.next.launchId)).toEqual(settled);
+      expect(await f.turns.get(f.first.launchId)).toEqual(completed);
+    },
+  );
+
   it("reads and replays durable receipts after supervisor shutdown without restarting recovery", async () => {
     const unexpected = () => {
       throw new Error("Process work is outside this receipt-only fixture");
@@ -134,7 +245,7 @@ describe("node worker turn journal", () => {
   it("keeps completed turn receipts independent of the physical slot and later turns across reopen", async () => {
     expect(isMainThread).toBe(true);
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("node-worker-turn-store-") };
-    const parentSql = observeHostDataSql(env);
+    const parentSql = observeHostDataSql();
     try {
       const f = await fixture({ pid: 17, startTime: 23 }, env);
       expect(

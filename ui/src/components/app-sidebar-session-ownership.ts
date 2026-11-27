@@ -1,36 +1,8 @@
-import type { SessionParticipantIdentity } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import type { SessionsListResult } from "../api/types.ts";
-import { someSidebarSessionInTree } from "./app-sidebar-session-navigation-logic.ts";
+import { sessionParticipantIdentityKey } from "../lib/chat/sender-label.ts";
+import { sessionSelfOwner, type SessionOwnerOption } from "../lib/session-owner.ts";
+import { findSidebarSessionInTree } from "./app-sidebar-session-navigation-logic.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
-import { sessionSelfOwner, type SessionOwnerOption } from "./session-owner-chip.ts";
-
-function sessionParticipantIdentityKey(identity: SessionParticipantIdentity): string {
-  switch (identity.type) {
-    case "profile":
-    case "agent":
-      return JSON.stringify([identity.type, identity.id]);
-    case "remote":
-      return JSON.stringify([
-        identity.type,
-        identity.pluginId,
-        identity.domain,
-        identity.idKind,
-        identity.id,
-      ]);
-    case "observation":
-      return JSON.stringify([
-        identity.type,
-        identity.pluginId,
-        identity.accountId,
-        identity.senderKind,
-        identity.id,
-      ]);
-    case "legacy":
-      return JSON.stringify([identity.type, identity.actorType, identity.source, identity.id]);
-    default:
-      return identity satisfies never;
-  }
-}
 
 function hasMultipleSidebarSessionIdentities(
   ownerOptions: readonly SessionOwnerOption[],
@@ -49,32 +21,86 @@ function hasMultipleSidebarSessionIdentities(
   if (identities.size >= 2) {
     return true;
   }
-  return someSidebarSessionInTree(rows, (row) => {
-    const participants = row.participants ?? [];
-    for (const participant of participants) {
-      const identity = participant.identity;
-      if (
-        humansOnly &&
-        identity.type !== "profile" &&
-        !(identity.type === "observation" && identity.senderKind === "human") &&
-        !(identity.type === "legacy" && identity.actorType === "human")
-      ) {
-        continue;
+  return Boolean(
+    findSidebarSessionInTree(rows, (row) => {
+      const participants = row.participants ?? [];
+      for (const participant of participants) {
+        const identity = participant.identity;
+        if (
+          humansOnly &&
+          identity.type !== "profile" &&
+          !(identity.type === "observation" && identity.senderKind === "human") &&
+          !(identity.type === "legacy" && identity.actorType === "human")
+        ) {
+          continue;
+        }
+        identities.add(sessionParticipantIdentityKey(identity));
+        if (identities.size >= 2) {
+          return true;
+        }
       }
-      identities.add(sessionParticipantIdentityKey(identity));
-      if (identities.size >= 2) {
-        return true;
+      // Unshown participants may all be agents; only known humans enable attribution.
+      return !humansOnly && (row.participantCount ?? participants.length) > participants.length;
+    }),
+  );
+}
+
+function withOwnerFilteredChildren(
+  row: SidebarRecentSession,
+  children: readonly SidebarRecentSession[],
+): SidebarRecentSession {
+  // Retain unloaded links for discovery, but count only visible loaded children.
+  const childSessionKeys = new Set(row.childSessionKeys);
+  for (const child of row.children) {
+    childSessionKeys.delete(child.key);
+  }
+  for (const child of children) {
+    childSessionKeys.add(child.key);
+  }
+  return { ...row, children, childSessionKeys: [...childSessionKeys] };
+}
+
+function filterTreeByOwner(
+  treeRows: readonly SidebarRecentSession[],
+  activeOwnerId: string,
+  profileId?: string,
+): SidebarRecentSession[] {
+  const filtered: SidebarRecentSession[] = [];
+  for (const row of treeRows) {
+    const children = filterTreeByOwner(row.children, activeOwnerId, profileId);
+    const ownerId = row.owner?.actor.id;
+    const profileMatches =
+      !profileId || (row.owner?.actor.type === "human" && ownerId === profileId);
+    if (ownerId === activeOwnerId && profileMatches) {
+      filtered.push(withOwnerFilteredChildren(row, children));
+    } else {
+      for (const child of children) {
+        filtered.push({ ...child, isChild: false });
       }
     }
-    // Unshown participants may all be agents; only known humans enable attribution.
-    return !humansOnly && (row.participantCount ?? participants.length) > participants.length;
-  });
+  }
+  return filtered;
+}
+
+export function filterPinnedSessionChildrenByOwner(
+  pin: SidebarRecentSession,
+  ownerId: string | null,
+): SidebarRecentSession {
+  if (!ownerId) {
+    return pin;
+  }
+  const rows = filterTreeByOwner(pin.children, ownerId);
+  return withOwnerFilteredChildren(
+    pin,
+    rows.map((row) => (row.isChild ? row : Object.assign({}, row, { isChild: true }))),
+  );
 }
 
 export function applySidebarSessionOwnerFilter(input: {
   projected: SidebarRecentSession[];
   ownerFacet: SessionsListResult["owners"];
   selectedOwnerId: string | null;
+  selectedProfileId?: string;
   self?: { id: string; name?: string; avatarUrl?: string } | null;
 }): {
   rows: SidebarRecentSession[];
@@ -97,39 +123,14 @@ export function applySidebarSessionOwnerFilter(input: {
   };
   // An absent facet is unresolved during hydration. A present facet is the
   // Gateway's complete owner inventory, even when rows are owner-filtered.
-  const selectedOwnerId = input.selectedOwnerId?.trim() || null;
-  const activeOwnerId =
-    selectedOwnerId &&
-    (input.ownerFacet === undefined || ownerOptions.some((owner) => owner.id === selectedOwnerId))
-      ? selectedOwnerId
-      : null;
-  if (!activeOwnerId) {
-    // Involving-me is evaluated by the Gateway against the complete participant table.
-    // The bounded display projection cannot safely repeat that predicate client-side.
-    return {
-      rows: input.projected,
-      ownerOptions,
-      ownershipVisibility,
-      activeOwnerId,
-    };
-  }
-  const filterTree = (treeRows: readonly SidebarRecentSession[]): SidebarRecentSession[] => {
-    const filtered: SidebarRecentSession[] = [];
-    for (const row of treeRows) {
-      const children = filterTree(row.children);
-      const ownerId = row.owner?.actor.id;
-      if (ownerId === activeOwnerId) {
-        filtered.push({ ...row, children });
-      } else {
-        for (const child of children) {
-          filtered.push({ ...child, isChild: false });
-        }
-      }
-    }
-    return filtered;
-  };
+  // A complete facet may omit an owner with no rows. That means an empty
+  // filtered list, never permission to broaden the selected owner to everyone.
+  const activeOwnerId = input.selectedOwnerId?.trim() || null;
   return {
-    rows: filterTree(input.projected),
+    // Involving-me membership is Gateway-owned; only an explicit owner filters this tree.
+    rows: activeOwnerId
+      ? filterTreeByOwner(input.projected, activeOwnerId, input.selectedProfileId)
+      : input.projected,
     ownerOptions,
     ownershipVisibility,
     activeOwnerId,

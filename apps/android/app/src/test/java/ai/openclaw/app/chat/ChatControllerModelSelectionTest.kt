@@ -1,13 +1,14 @@
 package ai.openclaw.app.chat
 
 import ai.openclaw.app.GatewayModelUnavailableReason
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.ui.chat.ChatComposerTextDraftStore
 import ai.openclaw.app.ui.chat.ChatModelPickerAction
 import ai.openclaw.app.ui.chat.chatModelPickerAction
-import ai.openclaw.app.ui.chat.chatModelPickerSections
+import ai.openclaw.app.ui.chat.chatModelPickerChoices
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -55,14 +56,14 @@ class ChatControllerModelSelectionTest {
       controller.load("agent:beta:main")
       advanceUntilIdle()
       val favorites = listOf("fixture/published")
-      assertTrue(chatModelPickerSections(controller.modelCatalog.value, favorites, emptyList()).pinned.isEmpty())
+      assertTrue(chatModelPickerChoices(controller.modelCatalog.value, favorites, emptyList()).isEmpty())
       val historyRequests = requests.count { it.first == "chat.history" }
 
       visible = true
       controller.handleGatewayEvent("chat.metadata.changed", "{}")
       advanceUntilIdle()
 
-      val choice = chatModelPickerSections(controller.modelCatalog.value, favorites, emptyList()).pinned.single()
+      val choice = chatModelPickerChoices(controller.modelCatalog.value, favorites, emptyList()).single()
       assertEquals("published", choice.id)
       assertEquals(ChatModelPickerAction.Select, chatModelPickerAction(choice))
       assertEquals(historyRequests, requests.count { it.first == "chat.history" })
@@ -128,7 +129,7 @@ class ChatControllerModelSelectionTest {
                   modelTransportStarted.complete(Unit)
                   releaseModelTransport.await()
                 }
-                withEnqueue { patches += patch }
+                withEnqueue { if (method == "sessions.patch") patches += patch }
                 if ("thinkingLevel" in patch) {
                   thinkingStarted.complete(Unit)
                   releaseThinking.await()
@@ -1812,13 +1813,14 @@ class ChatControllerModelSelectionTest {
   @Test
   fun historyHydratesSelectedModelAndAgentScopedCatalog() =
     runTest {
-      val (controller, requests) =
+      val setup =
         chatControllerTestSetup {
           respond("chat.history") { paramsJson ->
             """
             {
               "sessionId": "session-ops",
               "messages": [],
+              "defaults": {"modelProvider": " openai ", "model": " openai/configured-default "},
               "sessionInfo": {
                 "key": "agent:ops:main",
                 "sessionId": "session-ops",
@@ -1846,11 +1848,13 @@ class ChatControllerModelSelectionTest {
           }
           respond("sessions.list", """{"sessions":[]}""")
         }
+      val (controller, requests) = setup
 
       controller.load("agent:ops:main")
       advanceUntilIdle()
 
       assertEquals("anthropic/claude-opus-4", controller.selectedModelRef.value)
+      assertEquals("openai/configured-default", controller.defaultModelRef.value)
       assertEquals(
         "claude-opus-4",
         controller.modelCatalog.value
@@ -1875,6 +1879,52 @@ class ChatControllerModelSelectionTest {
       assertEquals("claude-opus-4", selectedAfterEvent.model)
       assertEquals("high", controller.thinkingLevel.value)
       assertEquals(24_000L, selectedAfterEvent.totalTokens)
+      assertEquals("openai/configured-default", controller.defaultModelRef.value)
+
+      val oldHistory = CompletableDeferred<String>()
+      setup.respond("chat.history") { oldHistory.await() }
+      controller.refresh()
+      runCurrent()
+      setup.respond(
+        "chat.history",
+        """{"sessionId":"session-other","messages":[],"defaults":{"modelProvider":"fixture","model":"other-default"},"sessionInfo":{"key":"agent:other:main","modelProvider":"fixture","model":"selected"}}""",
+      )
+      controller.switchSession("agent:other:main")
+      assertNull(controller.defaultModelRef.value)
+      runCurrent()
+      assertEquals("fixture/other-default", controller.defaultModelRef.value)
+      oldHistory.complete("""{"sessionId":"session-ops","messages":[],"defaults":{"modelProvider":"openai","model":"stale-default"}}""")
+      advanceUntilIdle()
+      assertEquals("fixture/other-default", controller.defaultModelRef.value)
+
+      val beforeConfig = CompletableDeferred<String>()
+      setup.respond("chat.history") { beforeConfig.await() }
+      controller.refresh()
+      runCurrent()
+      val patchReply = CompletableDeferred<String>()
+      setup.respond("sessions.patch") { patchReply.await() }
+      val pendingModel = async { controller.setSessionModelAwait("agent:other:main", "fixture/pinned") }
+      runCurrent()
+      val afterConfig = CompletableDeferred<String>()
+      setup.respond("chat.history") { afterConfig.await() }
+      controller.handleGatewayEvent("config.changed", "{}")
+      assertNull("Configuration changes must retire the old default immediately", controller.defaultModelRef.value)
+      runCurrent()
+      beforeConfig.complete("""{"sessionId":"session-other","messages":[],"defaults":{"modelProvider":"fixture","model":"other-default"}}""")
+      runCurrent()
+      assertNull("A history request started before config.changed must not restore the old badge", controller.defaultModelRef.value)
+      afterConfig.complete("""{"sessionId":"session-other","messages":[],"defaults":{"modelProvider":"fixture","model":"changed-default"},"sessionInfo":{"key":"agent:other:main","modelProvider":"fixture","model":"selected"}}""")
+      advanceUntilIdle()
+      assertEquals("fixture/changed-default", controller.defaultModelRef.value)
+      assertFalse("Refreshing defaults must not cancel an admitted model change", pendingModel.isCompleted)
+      patchReply.complete("""{"resolved":{"modelProvider":"fixture","model":"pinned"}}""")
+      assertTrue(pendingModel.await())
+      assertEquals("fixture/pinned", controller.selectedModelRef.value)
+
+      setup.respond("chat.history", """{"sessionId":"session-other","messages":[],"sessionInfo":{"key":"agent:other:main","modelProvider":"fixture","model":"pinned"}}""")
+      controller.refresh()
+      advanceUntilIdle()
+      assertNull("Missing defaults must not reuse the selected model or the previous default", controller.defaultModelRef.value)
     }
 
   @Test
@@ -2243,7 +2293,7 @@ class ChatControllerModelSelectionTest {
         listOf(
           CancellationException("caller cancelled"),
           GatewayRequestOutcomeUnknown("request timeout"),
-          GatewayRequestRejected(GatewaySession.ErrorShape("UNAVAILABLE", "metadata unavailable")),
+          GatewayRequestRejected(ErrorShape("UNAVAILABLE", "metadata unavailable")),
         )
       for (failure in failures) {
         var nextFailure: Throwable? = null

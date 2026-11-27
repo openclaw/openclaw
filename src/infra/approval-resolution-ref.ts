@@ -1,5 +1,5 @@
 // Approval resolution references compact exact IDs for transport-private callbacks.
-import { createHash } from "node:crypto";
+import { sha256Base64Url } from "./crypto-digest.js";
 
 const APPROVAL_RESOLUTION_REF_LENGTH = 43;
 
@@ -8,11 +8,7 @@ export function buildApprovalResolutionRef(params: {
   approvalId: string;
   approvalKind: "exec" | "plugin" | "system-agent";
 }): string {
-  return createHash("sha256")
-    .update(params.approvalKind, "utf8")
-    .update("\0", "utf8")
-    .update(params.approvalId, "utf8")
-    .digest("base64url");
+  return sha256Base64Url(`${params.approvalKind}\0${params.approvalId}`);
 }
 
 export function isApprovalResolutionRef(value: string): boolean {

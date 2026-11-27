@@ -1,3 +1,6 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
+
 /** Host callback used to read an already-authorized outbound media file. */
 export type OutboundMediaReadFile = (filePath: string) => Promise<Buffer>;
 
@@ -7,7 +10,20 @@ export type OutboundMediaAccess = {
   readFile?: OutboundMediaReadFile;
   /** Agent workspace directory for resolving relative media paths. */
   workspaceDir?: string;
+  /** Operator hostname deny list applied to remote outbound media downloads. */
+  blockedHostnames?: readonly string[];
 };
+
+/**
+ * Resolves outbound media access from the operator's `tools.web.fetch.ssrfPolicy.blockedHostnames`.
+ * Only the deny list applies; web_fetch's private-network opt-ins stay out of outbound media.
+ */
+export function resolveOutboundMediaAccessForConfig(
+  cfg: OpenClawConfig | undefined,
+): OutboundMediaAccess | undefined {
+  const blockedHostnames = cfg?.tools?.web?.fetch?.ssrfPolicy?.blockedHostnames;
+  return blockedHostnames?.length ? { blockedHostnames } : undefined;
+}
 
 /** Legacy and current knobs accepted by outbound media loaders before normalization. */
 type OutboundMediaLoadParams = {
@@ -25,18 +41,14 @@ type OutboundMediaLoadParams = {
 };
 
 /** Normalized outbound media loader options consumed by fetch/local media helpers. */
-type OutboundMediaLoadOptions = {
-  maxBytes?: number;
+type OutboundMediaLoadOptions = Omit<
+  OutboundMediaLoadParams,
+  "mediaAccess" | "mediaLocalRoots" | "mediaReadFile"
+> & {
   localRoots?: readonly string[] | "any";
-  readFile?: (filePath: string) => Promise<Buffer>;
-  proxyUrl?: string;
-  fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-  requestInit?: RequestInit;
-  trustExplicitProxyDns?: boolean;
+  readFile?: OutboundMediaReadFile;
   hostReadCapability?: boolean;
-  optimizeImages?: boolean;
-  /** Agent workspace directory for resolving relative media paths. */
-  workspaceDir?: string;
+  ssrfPolicy?: SsrFPolicy;
 };
 
 /** Normalizes empty root lists while preserving the explicit all-roots opt-in sentinel. */
@@ -63,13 +75,17 @@ export function resolveOutboundMediaAccess(
   const localRoots = resolvedLocalRoots === "any" ? undefined : resolvedLocalRoots;
   const readFile = params.mediaAccess?.readFile ?? params.mediaReadFile;
   const workspaceDir = params.mediaAccess?.workspaceDir;
-  if (!localRoots && !readFile && !workspaceDir) {
+  const blockedHostnames = params.mediaAccess?.blockedHostnames?.length
+    ? params.mediaAccess.blockedHostnames
+    : undefined;
+  if (!localRoots && !readFile && !workspaceDir && !blockedHostnames) {
     return undefined;
   }
   return {
     ...(localRoots ? { localRoots } : {}),
     ...(readFile ? { readFile } : {}),
     ...(workspaceDir ? { workspaceDir } : {}),
+    ...(blockedHostnames ? { blockedHostnames } : {}),
   };
 }
 
@@ -86,6 +102,7 @@ export function buildOutboundMediaLoadOptions(
   const workspaceDir = mediaAccess?.workspaceDir ?? params.workspaceDir;
   const readFile = mediaAccess?.readFile ?? params.mediaReadFile;
   const localRoots = mediaAccess?.localRoots ?? explicitLocalRoots;
+  const blockedHostnames = mediaAccess?.blockedHostnames;
   // Host reads must declare a root boundary so local file access cannot silently widen.
   if (readFile && !localRoots) {
     throw new Error(
@@ -104,5 +121,6 @@ export function buildOutboundMediaLoadOptions(
       : {}),
     ...(params.optimizeImages !== undefined ? { optimizeImages: params.optimizeImages } : {}),
     ...(workspaceDir ? { workspaceDir } : {}),
+    ...(blockedHostnames ? { ssrfPolicy: { blockedHostnames: [...blockedHostnames] } } : {}),
   };
 }

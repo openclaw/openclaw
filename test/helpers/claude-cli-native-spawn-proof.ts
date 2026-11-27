@@ -5,7 +5,11 @@ import { hasErrnoCode } from "../../src/infra/errno.js";
 import { runUtf8CommandWithTimeout } from "../../src/process/exec.js";
 import { createOpenClawTestInstance } from "./openclaw-test-instance.js";
 
-export type ClaudeCliSpawnProofKind = "native" | "node-leading" | "npm-shim";
+type ClaudeCliSpawnProofKind = "native" | "node-leading" | "npm-shim";
+
+export type ClaudeCliSpawnProofLaunch =
+  | { kind: "native"; launcher: string }
+  | { kind: Exclude<ClaudeCliSpawnProofKind, "native"> };
 
 export type ClaudeCliSpawnProof = {
   kind: ClaudeCliSpawnProofKind;
@@ -143,10 +147,41 @@ const PROCESS_ENV: Record<string, true> = {
   PI_CODING_AGENT_DIR: true,
 };
 
+// Cold csc.exe usually takes seconds but has exceeded 30s on loaded Windows
+// runners. Compilation is suite setup, not the launch contract under test.
+const NATIVE_LAUNCHER_COMPILE_TIMEOUT_MS = 120_000;
+
+/** Compile the native claude.exe once; it reads every fixture path from the proof env. */
+export async function compileClaudeCliNativeLauncher(outputDir: string): Promise<string> {
+  const windowsRoot = process.env.SystemRoot ?? process.env.SYSTEMROOT;
+  if (!windowsRoot) {
+    throw new Error("Native Windows fixture requires SystemRoot");
+  }
+  const compiler = path.join(windowsRoot, "Microsoft.NET", "Framework64", "v4.0.30319", "csc.exe");
+  const source = path.join(outputDir, "ClaudeFixture.cs");
+  const launcher = path.join(outputDir, "claude.exe");
+  await fs.writeFile(source, NATIVE_LAUNCHER);
+  const compiled = await runUtf8CommandWithTimeout(
+    [compiler, "/nologo", "/target:exe", `/out:${launcher}`, source],
+    { timeoutMs: NATIVE_LAUNCHER_COMPILE_TIMEOUT_MS, killProcessTree: true },
+  );
+  if (compiled.termination !== "exit" || compiled.code !== 0) {
+    throw new Error(
+      [
+        `Native fixture compilation failed: termination=${compiled.termination} code=${compiled.code} signal=${compiled.signal} timeoutMs=${NATIVE_LAUNCHER_COMPILE_TIMEOUT_MS}`,
+        `stdout: ${compiled.stdout}`,
+        `stderr: ${compiled.stderr}`,
+      ].join("\n"),
+    );
+  }
+  return launcher;
+}
+
 /** Run the ordinary shipped agent command, not the auth-binding/isolated-exec path. */
 export async function runClaudeCliNativeSpawnProof(
-  kind: ClaudeCliSpawnProofKind,
+  launch: ClaudeCliSpawnProofLaunch,
 ): Promise<ClaudeCliSpawnProof> {
+  const { kind } = launch;
   const env: Record<string, string | undefined> = Object.fromEntries(
     Object.keys(process.env)
       .filter((key) => !Object.hasOwn(PROCESS_ENV, key.toUpperCase()))
@@ -154,7 +189,6 @@ export async function runClaudeCliNativeSpawnProof(
   );
   const instance = await createOpenClawTestInstance({
     name: `claude-cli-spawn-${kind}`,
-    entrypoint: ["scripts/run-node.mjs"],
     env: {
       ...env,
       OPENCLAW_SKIP_PROVIDERS: undefined,
@@ -202,29 +236,8 @@ export async function runClaudeCliNativeSpawnProof(
     instance.env.APPDATA = instance.state.path("appdata");
     instance.env.LOCALAPPDATA = instance.state.path("local-appdata");
     const command = "claude";
-    if (kind === "native") {
-      const windowsRoot = process.env.SystemRoot ?? process.env.SYSTEMROOT;
-      if (!windowsRoot) {
-        throw new Error("Native Windows fixture requires SystemRoot");
-      }
-      const compiler = path.join(
-        windowsRoot,
-        "Microsoft.NET",
-        "Framework64",
-        "v4.0.30319",
-        "csc.exe",
-      );
-      const source = instance.state.path("ClaudeFixture.cs");
-      await fs.writeFile(source, NATIVE_LAUNCHER);
-      const compiled = await runUtf8CommandWithTimeout(
-        [compiler, "/nologo", "/target:exe", `/out:${path.join(prefix, "claude.exe")}`, source],
-        { baseEnv: instance.env, timeoutMs: 30_000, killProcessTree: true },
-      );
-      if (compiled.code !== 0) {
-        throw new Error(
-          `Native fixture compilation failed: ${compiled.stdout}\n${compiled.stderr}`,
-        );
-      }
+    if (launch.kind === "native") {
+      await fs.copyFile(launch.launcher, path.join(prefix, "claude.exe"));
     }
     await instance.state.writeConfig({
       plugins: { entries: { anthropic: { enabled: true } } },
@@ -236,13 +249,6 @@ export async function runClaudeCliNativeSpawnProof(
         },
       },
     });
-    const prepared = await instance.cli(["--version"], {
-      timeoutMs: 240_000,
-      execPath: process.execPath,
-    });
-    if (prepared.code !== 0) {
-      throw new Error(`CLI preparation failed: ${JSON.stringify(prepared)}`);
-    }
     const result = await instance.cli(
       [
         "agent",

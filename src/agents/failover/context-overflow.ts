@@ -1,4 +1,4 @@
-import { matchesContextOverflowMessage } from "@openclaw/ai/internal/runtime";
+import { matchesContextOverflowMessage } from "@openclaw/ai/internal/shared";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   hasRateLimitTpmHint,
@@ -11,23 +11,16 @@ import {
   isProviderRequestSizeCeilingError,
   isRateLimitErrorMessage,
 } from "./message-patterns.js";
-import {
-  classifyProviderPluginError,
-  type PreparedProviderFailoverOwner,
-} from "./provider-patterns.js";
+import { classifyProviderPluginError } from "./provider-patterns.js";
 
-export function isContextOverflowError(
-  errorMessage?: string,
-  opts?: { providerPlugin?: PreparedProviderFailoverOwner | null },
-): boolean {
+export function isContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
   }
   return (
     isContextOverflowErrorFromTables(errorMessage) ||
     (looksLikeProviderContextOverflowCandidate(errorMessage) &&
-      classifyProviderPluginError({ errorMessage, providerPlugin: opts?.providerPlugin }) ===
-        "context_overflow")
+      classifyProviderPluginError({ errorMessage }) === "context_overflow")
   );
 }
 
@@ -42,39 +35,21 @@ export function isLikelyContextOverflowError(errorMessage?: string): boolean {
     return isContextOverflowErrorFromTables(errorMessage);
   }
 
-  // Groq uses 413 for TPM (tokens per minute) limits, which is a rate limit, not context overflow.
-  if (hasRateLimitTpmHint(errorMessage)) {
+  // Quota, billing, and reasoning failures can contain the same broad token-limit
+  // wording; exclude them before consulting the overflow heuristic or provider.
+  if (
+    hasRateLimitTpmHint(errorMessage) ||
+    isReasoningConstraintErrorMessage(errorMessage) ||
+    isBillingErrorMessage(errorMessage) ||
+    matchesContextOverflowMessage(errorMessage, "context-window-too-small") ||
+    isRateLimitErrorMessage(errorMessage)
+  ) {
     return false;
   }
-
-  if (isReasoningConstraintErrorMessage(errorMessage)) {
-    return false;
-  }
-
-  // Billing/quota errors can contain patterns like "request size exceeds" or
-  // "maximum token limit exceeded" that match the context overflow heuristic.
-  // Billing is a more specific error class - exclude it early.
-  if (isBillingErrorMessage(errorMessage)) {
-    return false;
-  }
-
-  if (matchesContextOverflowMessage(errorMessage, "context-window-too-small")) {
-    return false;
-  }
-  // Rate limit errors can match the broad CONTEXT_OVERFLOW_HINT_RE pattern
-  // (e.g., "request reached organization TPD rate limit" matches request.*limit).
-  // Exclude them before checking context overflow heuristics.
-  if (isRateLimitErrorMessage(errorMessage)) {
-    return false;
-  }
-  if (isContextOverflowError(errorMessage)) {
-    return true;
-  }
-  if (normalizeLowercaseStringOrEmpty(errorMessage).includes("prompt template")) {
-    return false;
-  }
-  if (matchesContextOverflowMessage(errorMessage, "rate-limit-hint")) {
-    return false;
-  }
-  return matchesContextOverflowMessage(errorMessage, "failover-hint");
+  return (
+    isContextOverflowError(errorMessage) ||
+    (!normalizeLowercaseStringOrEmpty(errorMessage).includes("prompt template") &&
+      !matchesContextOverflowMessage(errorMessage, "rate-limit-hint") &&
+      matchesContextOverflowMessage(errorMessage, "failover-hint"))
+  );
 }

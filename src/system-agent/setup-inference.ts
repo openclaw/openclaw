@@ -14,12 +14,10 @@ export {
   SetupInferenceActivationIndeterminateError,
 } from "./setup-inference-core.js";
 export type {
-  ActivateSetupInferenceDeps,
   ActivateSetupInferenceParams,
   ActivateSetupInferenceResult,
   BoundVerifySetupInferenceResult,
   CompleteSetupInferenceResult,
-  DetectSetupInferenceDeps,
   ProviderAutoSetupInferenceKind,
   SavedAuthSetupInferenceKind,
   SetupInferenceCandidate,
@@ -30,13 +28,17 @@ export type {
   SetupInferenceUnavailableCandidate,
   VerifySetupInferenceResult,
 } from "./setup-inference-core.js";
-export { detectSetupInference, listManualSetupInferenceOptions } from "./setup-inference-detect.js";
+export {
+  detectSetupInference,
+  listManualSetupInferenceDetection,
+} from "./setup-inference-detect.js";
 export { activateSetupInference } from "./setup-inference-activate.js";
 export {
-  completeSetupInference,
-  completeSetupInferenceConfig,
   resolvePersistentApplyInference,
   verifySetupInference,
   verifySetupInferenceConfig,
 } from "./setup-inference-turn.js";
-export type { ResolvePersistentApplyInferenceDeps } from "./setup-inference-turn.js";
+export {
+  completeSetupInference,
+  completeSetupInferenceConfig,
+} from "./setup-inference-completion.js";

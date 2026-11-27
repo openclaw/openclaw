@@ -8,8 +8,8 @@ const hasLoneSurrogate = (value: string) =>
 describe("sanitizeForConsole", () => {
   it("truncates on code-point boundaries without splitting a surrogate pair", () => {
     const grin = String.fromCodePoint(0x1f600); // 😀 — two UTF-16 code units
-    const out = sanitizeForConsole(grin.repeat(6), 3);
-    expect(out).toBe(`${grin.repeat(3)}…`);
+    const out = sanitizeForConsole(grin.repeat(201));
+    expect(out).toBe(`${grin.repeat(200)}…`);
     expect(out !== undefined && hasLoneSurrogate(out)).toBe(false);
   });
 

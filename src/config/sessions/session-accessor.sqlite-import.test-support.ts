@@ -1,4 +1,3 @@
-import type { TranscriptEvents } from "../../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import { importSqliteSessionRowsBatch } from "./session-accessor.sqlite-import.js";
@@ -10,8 +9,8 @@ import {
   ensureTranscriptSessionRoot,
   touchTranscriptMutationInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
-import { createTranscriptEventInserter } from "./session-accessor.sqlite-transcript-store.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
+import { createTranscriptEventInserter } from "./transcript-payload.js";
 import type { SessionEntry } from "./types.js";
 
 export async function importSqliteSessionRows(
@@ -24,7 +23,7 @@ export async function importSqliteSessionRows(
 export async function seedUnindexedTranscriptForTest(
   params: Pick<SessionAccessScope, "agentId" | "env" | "sessionKey" | "storePath"> & {
     entry: SessionEntry;
-    events: readonly TranscriptEvents[];
+    events: readonly { session_id: string; seq: number; event_json: string; created_at: number }[];
     transcriptMtimeMs?: number;
   },
 ): Promise<void> {
@@ -37,7 +36,7 @@ export async function seedUnindexedTranscriptForTest(
       ensureTranscriptSessionRoot(database, resolved, first.created_at, { allowStoredAlias: true });
       ensureTranscriptGenerationInTransaction(database, resolved.sessionId);
     }
-    const insertEvent = createTranscriptEventInserter(database, resolved.sessionId);
+    const insertEvent = createTranscriptEventInserter(database.db, resolved.sessionId);
     for (const row of params.events) {
       insertEvent({ seq: row.seq, eventJson: row.event_json, createdAt: row.created_at });
     }

@@ -25,7 +25,12 @@ it.each([0, 7])(
     if (code === 0) {
       await expect(command).resolves.toEqual({ stdout: "out\n", stderr: "err\n" });
     } else {
-      await expect(command).rejects.toMatchObject({ code, stdout: "out\n", stderr: "err\n" });
+      await expect(command).rejects.toMatchObject({
+        code,
+        exitCode: code,
+        stdout: "out\n",
+        stderr: "err\n",
+      });
     }
     settled = true;
     expect(received).toEqual({ stdout: "out\n", stderr: "err\n" });

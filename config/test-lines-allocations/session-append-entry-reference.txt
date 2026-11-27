@@ -1,0 +1,2 @@
+# Exact net regression growth: preserve append entry references when transcript bodies exceed the replica byte budget.
+3

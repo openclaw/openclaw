@@ -122,6 +122,12 @@ describe("normalizeWhatsAppMessagingTarget", () => {
 });
 
 describe("normalizeWhatsAppAllowFromEntries", () => {
+  it("normalizes prefixed numbers and preserves the wildcard", () => {
+    expect(
+      normalizeWhatsAppAllowFromEntries([" whatsapp:+49123 ", "*", "49124@s.whatsapp.net"]),
+    ).toEqual(["49123", "*", "49124"]);
+  });
+
   it("deduplicates entries after WhatsApp target normalization", () => {
     expect(
       normalizeWhatsAppAllowFromEntries([

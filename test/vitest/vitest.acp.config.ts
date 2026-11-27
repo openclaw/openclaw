@@ -6,6 +6,7 @@ export function createAcpVitestConfig(env?: Record<string, string | undefined>) 
   return createScopedVitestConfig(["src/acp/**/*.test.ts"], {
     dir: "src/acp",
     env,
+    intersectIncludeFile: true,
     exclude: databaseWorkerCoreTestFiles,
     name: "acp",
   });

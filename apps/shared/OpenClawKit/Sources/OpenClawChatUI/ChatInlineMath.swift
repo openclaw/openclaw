@@ -3,12 +3,8 @@ import SwiftMath
 import SwiftUI
 #if os(macOS)
 import AppKit
-
-typealias ChatInlineMathPlatformImage = NSImage
 #else
 import UIKit
-
-typealias ChatInlineMathPlatformImage = UIImage
 #endif
 
 struct ChatInlineMathSpan {
@@ -33,7 +29,7 @@ enum ChatInlineMathScanner {
         var textStart = markdown.startIndex
         var cursor = markdown.startIndex
         var spanCount = 0
-        let codeSpans = self.confirmedCodeSpans(in: markdown)
+        let codeSpans = ChatMarkdownBlockSyntax.codeSpans(in: markdown, honoringEscapes: true)
         var codeSpanIndex = 0
 
         while cursor < markdown.endIndex {
@@ -78,6 +74,7 @@ enum ChatInlineMathScanner {
                 pieces.append(.literal(source))
             }
             cursor = candidate.end
+            codeSpanIndex = candidate.nextCodeSpanIndex
             textStart = cursor
         }
 
@@ -91,6 +88,7 @@ enum ChatInlineMathScanner {
         let closeStart: String.Index
         let end: String.Index
         let containsNewline: Bool
+        let nextCodeSpanIndex: Int
     }
 
     private static func candidate(
@@ -119,57 +117,12 @@ enum ChatInlineMathScanner {
                 return Candidate(
                     closeStart: cursor,
                     end: markdown.index(cursor, offsetBy: 2),
-                    containsNewline: containsNewline)
+                    containsNewline: containsNewline,
+                    nextCodeSpanIndex: codeSpanIndex)
             }
             cursor = markdown.index(after: cursor)
         }
         return nil
-    }
-
-    private struct BacktickRun {
-        let start: String.Index
-        let end: String.Index
-        let length: Int
-        let canOpen: Bool
-    }
-
-    private static func confirmedCodeSpans(in markdown: String) -> [Range<String.Index>] {
-        var runs: [BacktickRun] = []
-        var cursor = markdown.startIndex
-        while cursor < markdown.endIndex {
-            guard markdown[cursor] == "`" else {
-                cursor = markdown.index(after: cursor)
-                continue
-            }
-            let end = self.endOfBacktickRun(at: cursor, in: markdown)
-            runs.append(BacktickRun(
-                start: cursor,
-                end: end,
-                length: markdown.distance(from: cursor, to: end),
-                canOpen: !ChatMarkdownBlockSyntax.isEscaped(at: cursor, in: markdown)))
-            cursor = end
-        }
-
-        var nextMatchingRun = [Int?](repeating: nil, count: runs.count)
-        var nextIndexByLength: [Int: Int] = [:]
-        for index in runs.indices.reversed() {
-            nextMatchingRun[index] = nextIndexByLength[runs[index].length]
-            nextIndexByLength[runs[index].length] = index
-        }
-
-        var spans: [Range<String.Index>] = []
-        var index = 0
-        while index < runs.count {
-            guard runs[index].canOpen,
-                  let closeIndex = nextMatchingRun[index]
-            else {
-                index += 1
-                continue
-            }
-            spans.append(runs[index].start..<runs[closeIndex].end)
-            index = closeIndex + 1
-        }
-        return spans
     }
 
     private static func firstCodeSpan(
@@ -188,26 +141,18 @@ enum ChatInlineMathScanner {
         }
         return lower
     }
-
-    private static func endOfBacktickRun(at start: String.Index, in markdown: String) -> String.Index {
-        var end = start
-        while end < markdown.endIndex, markdown[end] == "`" {
-            end = markdown.index(after: end)
-        }
-        return end
-    }
 }
 
 /// Parsed math is stable after its delimiter closes. A bounded cache avoids
 /// repeating SwiftMath parsing as later streaming deltas rerender old blocks.
 @MainActor
 enum ChatMathParseCache {
-    private enum Result {
-        case parsed(MTMathList)
-        case invalid
+    private struct Entry {
+        let mathList: MTMathList?
     }
 
-    private static var cache: [String: Result] = [:]
+    private static var cache: [String: Entry] = [:]
+    private static var insertionOrder: [String] = []
     private static let capacity = 80
     private static let maxNestingDepth = 64
     private static let maxCommandCount = 128
@@ -225,22 +170,17 @@ enum ChatMathParseCache {
         // Chat owns the surrounding color, so preserve these as raw source.
         guard !self.unsafeCommands.contains(where: latex.contains) else { return nil }
         if let hit = self.cache[latex] {
-            if case let .parsed(mathList) = hit {
-                return mathList
-            }
-            return nil
+            return hit.mathList
         }
 
-        let result = MTMathListBuilder.build(fromString: latex)
-            .map(Result.parsed) ?? .invalid
+        let result = Entry(mathList: MTMathListBuilder.build(fromString: latex))
         if self.cache.count >= self.capacity {
-            self.cache.removeAll(keepingCapacity: true)
+            // Evict one oldest result, including cached failures, not every warm expression.
+            self.cache.removeValue(forKey: self.insertionOrder.removeFirst())
         }
         self.cache[latex] = result
-        if case let .parsed(mathList) = result {
-            return mathList
-        }
-        return nil
+        self.insertionOrder.append(latex)
+        return result.mathList
     }
 
     private static func isWithinParserLimits(_ latex: String) -> Bool {
@@ -274,7 +214,7 @@ enum ChatMathParseCache {
 @MainActor
 enum ChatInlineMathImageCache {
     struct RenderedImage {
-        let image: ChatInlineMathPlatformImage
+        let image: OpenClawPlatformImage
         let baselineOffset: CGFloat
     }
 
@@ -282,9 +222,11 @@ enum ChatInlineMathImageCache {
         let latex: String
         let fontSize: CGFloat
         let colorHash: Int
+        let scale: CGFloat
     }
 
     private static var cache: [Key: RenderedImage] = [:]
+    private static var insertionOrder: [Key] = []
     private static let capacity = 80
     private static let maxRenderedPixelArea: CGFloat = 262_144
     private static let maxRenderedPixelDimension: CGFloat = 4096
@@ -299,10 +241,13 @@ enum ChatInlineMathImageCache {
               let mathList = ChatMathParseCache.mathList(latex: latex)
         else { return nil }
         let platformColor = self.platformColor(textColor, colorScheme: colorScheme)
+        // A display-scale change must recheck the pixel budget before reusing a render.
+        let scale = self.imageScale
         let key = Key(
             latex: latex,
             fontSize: fontSize,
-            colorHash: self.colorHash(platformColor))
+            colorHash: self.colorHash(platformColor),
+            scale: scale)
         if let cached = self.cache[key] {
             return cached
         }
@@ -322,7 +267,7 @@ enum ChatInlineMathImageCache {
         metricsLabel.frame = CGRect(origin: .zero, size: size)
         metricsLabel.layoutIfNeeded()
         #endif
-        guard self.isSafeImageSize(size, scale: self.imageScale) else { return nil }
+        guard self.isSafeImageSize(size, scale: scale) else { return nil }
 
         // MTMathImage allocates immediately in asImage(). Measure with the same
         // text-mode typesetter first so hostile input cannot request an empty or
@@ -342,9 +287,10 @@ enum ChatInlineMathImageCache {
             image: image,
             baselineOffset: -(metricsLabel.displayList?.descent ?? 0))
         if self.cache.count >= self.capacity {
-            self.cache.removeAll(keepingCapacity: true)
+            self.cache.removeValue(forKey: self.insertionOrder.removeFirst())
         }
         self.cache[key] = rendered
+        self.insertionOrder.append(key)
         return rendered
     }
 

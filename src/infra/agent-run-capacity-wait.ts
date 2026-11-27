@@ -37,6 +37,7 @@ export function registerAgentRunCapacityWait(
         sessionKey: context.sessionKey,
         agentId: context.agentId,
         reason: "run-capacity",
+        scope: "runtime",
       });
     }
   };

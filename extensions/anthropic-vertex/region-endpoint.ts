@@ -1,7 +1,6 @@
 import { resolveProviderEndpoint } from "openclaw/plugin-sdk/provider-http";
 import { resolveAnthropicVertexRegion } from "./region.js";
 
-/** Build the native Vertex endpoint from the service region. */
 export function resolveAnthropicVertexBaseUrl(env?: NodeJS.ProcessEnv): string {
   const region = resolveAnthropicVertexRegion(env);
   return region === "global"
@@ -11,7 +10,6 @@ export function resolveAnthropicVertexBaseUrl(env?: NodeJS.ProcessEnv): string {
       : `https://${region}-aiplatform.googleapis.com`;
 }
 
-/** Extract a Vertex region from a provider base URL when possible. */
 export function resolveAnthropicVertexRegionFromBaseUrl(baseUrl?: string): string | undefined {
   const endpoint = resolveProviderEndpoint(baseUrl);
   return endpoint.endpointClass === "google-vertex" ? endpoint.googleVertexRegion : undefined;

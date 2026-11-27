@@ -11,11 +11,11 @@ import {
   normalizeProgressCardInput,
   ProgressCardInputError,
 } from "../../session-cards/progress-card-input.js";
-import { progressCardStore, type ProgressCardStore } from "../progress-card-store.js";
+import { progressCardStore } from "../progress-card-store.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { sessionObserverScopeKey } from "../session-observer-model.js";
-import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { resolveSessionStoreKey } from "../session-store-key.js";
+import { resolveRequestedSessionStoreTarget } from "../session-store-key.js";
+import { retainSessionScopedRead } from "./session-scoped-read.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -25,20 +25,16 @@ function resolveProgressCardSession(
   respond: Parameters<GatewayRequestHandlers[string]>[0]["respond"],
 ): { sessionKey: string; agentId: string; scopeKey: string } | undefined {
   const cfg = context.getRuntimeConfig();
-  const requested = resolveRequestedSessionAgentId(cfg, params.sessionKey, params.agentId);
+  const requested = resolveRequestedSessionStoreTarget(cfg, params.sessionKey, params.agentId);
   if (!requested.ok) {
     respond(false, undefined, requested.error);
     return undefined;
   }
-  const canonicalKey = resolveSessionStoreKey({
-    cfg,
-    sessionKey: params.sessionKey,
-    storeAgentId: requested.agentId,
-  });
+  const { sessionKey, agentId } = requested.value;
   return {
-    sessionKey: canonicalKey,
-    agentId: requested.agentId,
-    scopeKey: sessionObserverScopeKey(canonicalKey, requested.agentId),
+    sessionKey,
+    agentId,
+    scopeKey: sessionObserverScopeKey(sessionKey, agentId),
   };
 }
 
@@ -47,129 +43,127 @@ function projectProgressCard(card: ProgressCard | null, scopeKey: string): Progr
   return card ? { ...card, sessionKey: scopeKey } : null;
 }
 
-export function createProgressCardHandlers(
-  store: ProgressCardStore = progressCardStore,
-): GatewayRequestHandlers {
-  return {
-    "progressCard.refresh": async (invocation) => {
-      const { params, respond, context, sessionMutationAuthorization } = invocation;
-      if (
-        !assertValidParams(
-          params,
-          validateProgressCardRefreshParams,
-          "progressCard.refresh",
-          respond,
-        )
-      ) {
-        return;
-      }
-      const session = resolveProgressCardSession(params, context, respond);
-      if (!session) {
-        return;
-      }
+export const progressCardHandlers: GatewayRequestHandlers = {
+  "progressCard.refresh": async (invocation) => {
+    const { params, respond, context, sessionMutationAuthorization } = invocation;
+    if (
+      !assertValidParams(params, validateProgressCardRefreshParams, "progressCard.refresh", respond)
+    ) {
+      return;
+    }
+    const session = resolveProgressCardSession(params, context, respond);
+    if (!session) {
+      return;
+    }
+    const readCard = async () => {
       sessionMutationAuthorization?.assertCurrent();
-      const card = await store.get(session.sessionKey, session.agentId);
+      const card = await progressCardStore.get(session.sessionKey, session.agentId);
       sessionMutationAuthorization?.assertCurrent();
-      if (!card) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "There is no progress card to refresh."),
-        );
-        return;
+      return card;
+    };
+    const card = await readCard();
+    if (!card) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "There is no progress card to refresh."),
+      );
+      return;
+    }
+    const { requestProgressCardRefresh } = await import("./progress-card-refresh.js");
+    invocation.sessionMutationCommitGuard?.();
+    sessionMutationAuthorization?.assertCurrent();
+    await requestProgressCardRefresh(invocation, session, card, params.idempotencyKey, readCard);
+  },
+  "progressCard.get": async (options) => {
+    const { params, respond, context, sessionMutationAuthorization } = options;
+    if (!assertValidParams(params, validateProgressCardGetParams, "progressCard.get", respond)) {
+      return;
+    }
+    const session = resolveProgressCardSession(params, context, respond);
+    if (!session) {
+      return;
+    }
+    // Lazy handler preparation can outlive the session authorized by the router.
+    sessionMutationAuthorization?.assertCurrent();
+    const read = await retainSessionScopedRead(options, session.sessionKey, session.agentId);
+    try {
+      const card = await progressCardStore.get(session.sessionKey, session.agentId);
+      sessionMutationAuthorization?.assertCurrent();
+      read?.assertCurrent();
+      respond(true, { card: projectProgressCard(card, session.scopeKey) }, undefined);
+    } catch (error) {
+      if (error instanceof SessionMutationAuthorizationChangedError) {
+        throw error;
       }
-      const { requestProgressCardRefresh } = await import("./progress-card-refresh.js");
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
+    } finally {
+      read?.release();
+    }
+  },
+  "progressCard.put": async (invocation) => {
+    const { params, respond, context, sessionMutationAuthorization } = invocation;
+    if (!assertValidParams(params, validateProgressCardPutParams, "progressCard.put", respond)) {
+      return;
+    }
+    let input;
+    try {
+      input = normalizeProgressCardInput({ markdown: params.markdown, plan: params.plan });
+    } catch (error) {
+      if (!(error instanceof ProgressCardInputError)) {
+        throw error;
+      }
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
+      return;
+    }
+    if (params.expectedRevision !== undefined && (input.markdown || input.steps?.length)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "expectedRevision is only valid when clearing a card",
+        ),
+      );
+      return;
+    }
+    const session = resolveProgressCardSession(params, context, respond);
+    if (!session) {
+      return;
+    }
+    sessionMutationAuthorization?.assertCurrent();
+    const assertCurrent = () => {
+      invocation.signal?.throwIfAborted();
       invocation.sessionMutationCommitGuard?.();
       sessionMutationAuthorization?.assertCurrent();
-      await requestProgressCardRefresh(invocation, session, card, params.idempotencyKey);
-    },
-    "progressCard.get": async ({ params, respond, context, sessionMutationAuthorization }) => {
-      if (!assertValidParams(params, validateProgressCardGetParams, "progressCard.get", respond)) {
-        return;
-      }
-      const session = resolveProgressCardSession(params, context, respond);
-      if (!session) {
-        return;
-      }
-      // Lazy handler preparation can outlive the session authorized by the router.
-      sessionMutationAuthorization?.assertCurrent();
-      try {
-        const card = await store.get(session.sessionKey, session.agentId);
-        sessionMutationAuthorization?.assertCurrent();
-        respond(true, { card: projectProgressCard(card, session.scopeKey) }, undefined);
-      } catch (error) {
-        if (error instanceof SessionMutationAuthorizationChangedError) {
-          throw error;
-        }
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
-      }
-    },
-    "progressCard.put": async (invocation) => {
-      const { params, respond, context, sessionMutationAuthorization } = invocation;
-      if (!assertValidParams(params, validateProgressCardPutParams, "progressCard.put", respond)) {
-        return;
-      }
-      let input;
-      try {
-        input = normalizeProgressCardInput({ markdown: params.markdown, plan: params.plan });
-      } catch (error) {
-        if (!(error instanceof ProgressCardInputError)) {
-          throw error;
-        }
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
-        return;
-      }
-      if (params.expectedRevision !== undefined && (input.markdown || input.steps?.length)) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "expectedRevision is only valid when clearing a card",
-          ),
-        );
-        return;
-      }
-      const session = resolveProgressCardSession(params, context, respond);
-      if (!session) {
-        return;
-      }
-      sessionMutationAuthorization?.assertCurrent();
-      const assertCurrent = () => {
-        invocation.signal?.throwIfAborted();
-        invocation.sessionMutationCommitGuard?.();
-        sessionMutationAuthorization?.assertCurrent();
-      };
-      try {
-        const result = await store.put(
-          session.sessionKey,
+    };
+    try {
+      const result = await progressCardStore.put(
+        session.sessionKey,
+        {
+          ...input,
+          expectedRevision: params.expectedRevision,
+          assertCurrent,
+        },
+        session.agentId,
+      );
+      assertCurrent();
+      if (params.expectedRevision === undefined || result.card === null) {
+        context.broadcast(
+          "progressCard.changed",
           {
-            ...input,
-            expectedRevision: params.expectedRevision,
-            assertCurrent,
+            sessionKey: session.scopeKey,
+            revision: result.card?.revision ?? null,
           },
-          session.agentId,
+          { sessionKeys: [session.sessionKey], agentId: session.agentId },
         );
-        assertCurrent();
-        if (params.expectedRevision === undefined || result.card === null) {
-          context.broadcast(
-            "progressCard.changed",
-            {
-              sessionKey: session.scopeKey,
-              revision: result.card?.revision ?? null,
-            },
-            { sessionKeys: [session.sessionKey], agentId: session.agentId },
-          );
-        }
-        respond(true, { card: projectProgressCard(result.card, session.scopeKey) }, undefined);
-      } catch (error) {
-        if (error instanceof SessionMutationAuthorizationChangedError) {
-          throw error;
-        }
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
       }
-    },
-  };
-}
-
-export const progressCardHandlers = createProgressCardHandlers();
+      respond(true, { card: projectProgressCard(result.card, session.scopeKey) }, undefined);
+    } catch (error) {
+      if (error instanceof SessionMutationAuthorizationChangedError) {
+        throw error;
+      }
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
+    }
+  },
+};

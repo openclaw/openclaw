@@ -7,7 +7,8 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 import type { ExecApprovalRequestPayload } from "../infra/exec-approvals.js";
 import { buildSystemRunApprovalBinding } from "../infra/system-run-approval-binding.js";
-import { evaluateSystemRunApprovalMatch } from "./node-invoke-system-run-approval-match.js";
+import { createTestApprovalManager } from "./exec-approval-manager.test-support.js";
+import { sanitizeSystemRunParamsForForwarding } from "./node-invoke-system-run-approval.js";
 
 type FixtureCase = {
   name: string;
@@ -54,6 +55,7 @@ const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8")) as Fixture;
 function buildRequestPayload(entry: FixtureCase): ExecApprovalRequestPayload {
   const payload: ExecApprovalRequestPayload = {
     host: entry.request.host,
+    nodeId: "node-1",
     command: entry.request.command,
     commandArgv: entry.request.commandArgv,
     cwd: entry.request.cwd ?? null,
@@ -72,13 +74,38 @@ function buildRequestPayload(entry: FixtureCase): ExecApprovalRequestPayload {
   return payload;
 }
 
+const nonNodeHostCase: FixtureCase = {
+  name: "rejects non-node host requests",
+  request: {
+    host: "gateway",
+    command: "echo SAFE",
+    binding: { argv: ["echo", "SAFE"] },
+  },
+  invoke: {
+    argv: ["echo", "SAFE"],
+    binding: { cwd: null, agentId: null, sessionKey: null },
+  },
+  expected: { ok: false, code: "APPROVAL_REQUEST_MISMATCH" },
+};
+
 describe("system-run approval binding contract fixtures", () => {
-  for (const entry of fixture.cases) {
-    test(entry.name, () => {
-      const result = evaluateSystemRunApprovalMatch({
-        argv: entry.invoke.argv,
-        request: buildRequestPayload(entry),
-        binding: entry.invoke.binding,
+  for (const entry of [...fixture.cases, nonNodeHostCase]) {
+    test(entry.name, async (testContext) => {
+      const approvalManager = createTestApprovalManager(testContext);
+      const record = approvalManager.create(buildRequestPayload(entry), 60_000);
+      record.requestedByDeviceId = "contract-device";
+      await approvalManager.register(record, 60_000);
+      expect(await approvalManager.resolve(record.id, "allow-once", "operator")).toBe(true);
+      const result = await sanitizeSystemRunParamsForForwarding({
+        nodeId: "node-1",
+        client: { connect: { device: { id: "contract-device" } } },
+        rawParams: {
+          command: entry.invoke.argv,
+          ...entry.invoke.binding,
+          approved: true,
+          runId: record.id,
+        },
+        execApprovalManager: approvalManager,
       });
 
       expect(result.ok).toBe(entry.expected.ok);
@@ -86,7 +113,7 @@ describe("system-run approval binding contract fixtures", () => {
         if (result.ok) {
           throw new Error("expected approval mismatch");
         }
-        expect(result.code).toBe(entry.expected.code);
+        expect(result.details?.code).toBe(entry.expected.code);
       }
     });
   }

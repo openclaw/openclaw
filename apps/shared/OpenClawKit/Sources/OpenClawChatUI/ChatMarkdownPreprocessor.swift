@@ -252,75 +252,29 @@ enum ChatMarkdownPreprocessor {
         }
 
         let normalized = raw.replacingOccurrences(of: "\r\n", with: "\n")
-        let lines = normalized.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        var lines = normalized.split(separator: "\n", omittingEmptySubsequences: false).makeIterator()
         var outputLines: [String] = []
-        var inMetaBlock = false
-        var inFencedJson = false
-        var inProseBlock = false
-
-        for index in lines.indices {
-            let currentLine = lines[index]
-
-            // Prose context body (chat history/window): drop lines until the
-            // block-terminating blank line so the visible marker never renders.
-            if inProseBlock {
-                if currentLine.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    inProseBlock = false
-                }
-                continue
-            }
-
-            if !inMetaBlock, self.shouldStripTrailingUntrustedContext(lines: lines, index: index) {
-                break
-            }
-
-            if !inMetaBlock {
-                let trimmed = currentLine.trimmingCharacters(in: .whitespacesAndNewlines)
-                let isContextHeader = trimmed.count > self.inboundContextMarker.count &&
-                    trimmed.hasSuffix(self.inboundContextMarker)
-                if isContextHeader {
-                    let nextLine = index + 1 < lines.count ? lines[index + 1] : nil
-                    if nextLine?.trimmingCharacters(in: .whitespacesAndNewlines) != "```json" {
-                        inProseBlock = true
-                        continue
+        while let currentLine = lines.next() {
+            let trimmed = currentLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed == self.contextHeader { break }
+            if trimmed.count > self.inboundContextMarker.count, trimmed.hasSuffix(self.inboundContextMarker) {
+                let firstBodyLine = lines.next()?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let terminator = firstBodyLine == "```json" ? "```" : ""
+                // A context body owns every line through its closing fence or
+                // first prose blank, including any marker-looking text inside.
+                if firstBodyLine != terminator {
+                    while let bodyLine = lines.next() {
+                        if bodyLine.trimmingCharacters(in: .whitespacesAndNewlines) == terminator { break }
                     }
-                    inMetaBlock = true
-                    inFencedJson = false
-                    continue
                 }
+            } else {
+                outputLines.append(String(currentLine))
             }
-
-            if inMetaBlock {
-                if !inFencedJson, currentLine.trimmingCharacters(in: .whitespacesAndNewlines) == "```json" {
-                    inFencedJson = true
-                    continue
-                }
-
-                if inFencedJson {
-                    if currentLine.trimmingCharacters(in: .whitespacesAndNewlines) == "```" {
-                        inMetaBlock = false
-                        inFencedJson = false
-                    }
-                    continue
-                }
-
-                if currentLine.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    continue
-                }
-
-                inMetaBlock = false
-            }
-
-            outputLines.append(currentLine)
         }
 
         return outputLines
             .joined(separator: "\n")
             .replacingOccurrences(of: #"^\n+"#, with: "", options: .regularExpression)
-    }
-
-    private static func shouldStripTrailingUntrustedContext(lines: [String], index: Int) -> Bool {
-        lines[index].trimmingCharacters(in: .whitespacesAndNewlines) == self.contextHeader
     }
 
     private static func stripPrefixedTimestamps(_ raw: String) -> String {
@@ -329,10 +283,32 @@ enum ChatMarkdownPreprocessor {
     }
 
     private static func normalize(_ raw: String) -> String {
-        var output = raw
-        output = output.replacingOccurrences(of: "\r\n", with: "\n")
-        output = output.replacingOccurrences(of: "\n\n\n", with: "\n\n")
-        output = output.replacingOccurrences(of: "\n\n\n", with: "\n\n")
+        let markdown = raw.replacingOccurrences(of: "\r\n", with: "\n")
+        guard markdown.contains("\n\n\n") else {
+            return markdown.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        func normalizeProse(_ prose: Substring) -> String {
+            prose.replacingOccurrences(of: "\n\n\n", with: "\n\n")
+                .replacingOccurrences(of: "\n\n\n", with: "\n\n")
+        }
+
+        let sourceMap = MarkdownSourceMap(markdown)
+        var remaining = markdown[...]
+        var output = ""
+        func preserveCode(in node: any Markup) {
+            if node is Markdown.CodeBlock, let source = node.range, let range = sourceMap.range(for: source) {
+                output += normalizeProse(remaining[..<range.lowerBound])
+                output += markdown[range]
+                remaining = markdown[range.upperBound...]
+                return
+            }
+            for child in node.children {
+                preserveCode(in: child)
+            }
+        }
+        preserveCode(in: Document(parsing: markdown))
+        output += normalizeProse(remaining)
         return output.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

@@ -77,6 +77,30 @@ openclaw plugins inspect memory-lancedb --runtime --json
 See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect)
 and [Hot reload](/gateway/configuration/hot-reload).
 
+## Host memory status and search
+
+When `memory-lancedb` owns the memory slot, it answers the Gateway
+`memory.status`, `memory.search` with
+`version: 2`, and `memory.get` methods from its own agent-scoped store. Doctor,
+`openclaw memory status`, and the Control UI Memory overview report it as the
+memory provider. Operator searches and owner-private sessions can read that
+agent's memories. Other session audiences receive no stored hits. The plugin's
+`memory_recall` tool and automatic recall keep their existing paths.
+
+The Control UI Memories tab does not search or open LanceDB memories yet. It
+sends the unversioned `memory.search` request, which this provider answers with
+a retry-with-`version: 2` error. Use `memory_recall`, `openclaw ltm`, or the
+Gateway methods above to read stored memories.
+
+Status reads the store without making an embedding request. A readable store
+with no recorded embedding failure reports `ready`; the latest embedding failure
+reports `degraded`; an unreadable store reports `unavailable`. A successful
+embedding request clears the recorded failure. Status is not a live probe of the
+embedding service.
+
+If embedding credentials are unavailable, inspect the Gateway log, resolve the
+secret-provider failure, run `openclaw secrets reload`, and retry memory search.
+
 ## Embedding config
 
 `embedding` is required and must include at least one field. `provider`
@@ -115,10 +139,11 @@ dimensions. Automatic plugin reload creates a new instance with the changed
 identity; it does not re-embed existing rows.
 </Warning>
 
-OpenAI Codex / ChatGPT OAuth is not an OpenAI Platform embeddings credential.
-For OpenAI embeddings use an OpenAI API key auth profile, `OPENAI_API_KEY`, or
-`models.providers.openai.apiKey`. OAuth-only users should pick another
-embedding-capable provider such as `github-copilot` or `ollama`.
+The OpenAI provider adapter can use a stored Codex OAuth profile when the account
+grants embedding access. The separate Sign in with ChatGPT token-sharing grant
+does not authorize embeddings. API-key auth remains available through a profile,
+`OPENAI_API_KEY`, or `models.providers.openai.apiKey`. Other embedding-capable
+providers include `github-copilot` and `ollama`.
 
 ```json5
 {
@@ -220,6 +245,13 @@ Auto-recall embeds the current turn's prompt after removing media attachment
 notes and normalizing whitespace. The same limit bounds each recalled item
 after prompt escaping before that text reaches the model.
 
+Automatic recall and `memory_recall` each have a 15-second budget shared by
+embedding-provider initialization, the embedding request, and database search.
+On the provider-adapter path, cold initialization does not give the embedding
+request a fresh budget: if initialization finishes after the deadline, that
+expired query is not sent. Shared provider initialization may still finish for
+later operations.
+
 `captureMaxChars` gates whether a user message from the turn's `agent_end`
 event is short enough to be considered for auto-capture. `memory_store` rejects
 longer text before embedding or storage; the setting does not affect recall
@@ -253,6 +285,10 @@ entry, or one inheriting a disabled top-level search, also gets none of the `mem
 or `memory_forget` tools and does not participate in automatic recall or
 capture, even when the plugin-level `autoRecall`/`autoCapture` flags are on.
 
+Incognito sessions skip automatic recall and capture. Their prompts are not
+sent to the embedding provider for automatic recall, and `memory_store` refuses
+to save them. Explicit tool calls still follow their normal data-handling rules.
+
 ## Commands
 
 `memory-lancedb` registers the `ltm` CLI namespace whenever it is installed
@@ -262,7 +298,42 @@ capture, even when the plugin-level `autoRecall`/`autoCapture` flags are on.
 openclaw ltm list [--agent <id>] [--limit <n>] [--order-by-created-at]
 openclaw ltm search <query> [--agent <id>] [--limit <n>]
 openclaw ltm stats [--agent <id>]
+openclaw ltm optimize
 ```
+
+`ltm stats` gives its database read 60 seconds after plugin registration. It
+stops the isolated reader before reporting a timeout, without creating a memory
+table or changing existing memory data. A database with no memory table reports
+zero. Plugin discovery and source capture happen before this deadline starts.
+
+### Compact a local table
+
+Stop every Gateway and command using the table, including other profiles that
+share its `dbPath`, then run:
+
+```bash
+openclaw ltm optimize
+```
+
+The command compacts small fragments and prints before/after fragment and row
+counts. It operates on the entire shared table, across all agents, so it has no
+`--agent` option. All rows and existing version history are preserved. Retained
+versions still reference their old files, so fewer active fragments does not
+necessarily mean less disk usage.
+
+Optimization requires exclusive offline custody. It refuses while the active
+state directory has a Gateway owner or another plugin handle has the local table
+open, including handles from other profiles. Normal shared readers and writers
+remain supported outside maintenance. Restart the Gateways after it completes.
+
+Local filesystem paths and `file:` URLs share the same custody lock. Remote URI
+tables require distributed custody and are refused. Older plugin versions and
+external LanceDB scripts do not participate in the table lock; stop them before
+maintenance too.
+The command does not prune versions, delete memories, apply retention cleanup,
+or schedule background maintenance.
+
+### Query memories
 
 `ltm query` runs a non-vector query directly against the LanceDB table:
 
@@ -291,7 +362,17 @@ Agents get three tools from the active memory plugin:
 
 ## Storage
 
-LanceDB data defaults to `~/.openclaw/memory/lancedb`. Override with `dbPath`:
+LanceDB data defaults to `memory/lancedb` under the active OpenClaw state
+directory: `~/.openclaw/memory/lancedb` for the default profile.
+`OPENCLAW_STATE_DIR` or `--profile <name>` (`~/.openclaw-<name>`) move it with
+the state directory. See [Paths and instances](/help/environment#paths-and-instances).
+
+Earlier releases ignored the state directory, so named profiles and custom
+state directories shared `~/.openclaw/memory/lancedb`. Those setups now start
+with their own store. Set `dbPath: "~/.openclaw/memory/lancedb"` to keep using
+the old shared store.
+
+Override the path with `dbPath`:
 
 ```json5
 {
@@ -300,7 +381,7 @@ LanceDB data defaults to `~/.openclaw/memory/lancedb`. Override with `dbPath`:
       "memory-lancedb": {
         enabled: true,
         config: {
-          dbPath: "~/.openclaw/memory/lancedb",
+          dbPath: "/srv/openclaw/memory/lancedb",
           embedding: {
             apiKey: "${OPENAI_API_KEY}",
             model: "text-embedding-3-small",
@@ -322,7 +403,7 @@ agent.
 
 Databases created before per-agent ownership have no reliable row provenance.
 On upgrade, `openclaw doctor --fix` assigns those legacy rows once to the
-configured default agent. Runtime access fails closed until that migration has
+configured default agent. Runtime access is blocked until that migration has
 completed; other agents never inherit the old shared rows.
 
 `storageOptions` accepts string key/value pairs for LanceDB storage backends
@@ -366,6 +447,12 @@ time; use the default memory backend, run the Gateway on a supported
 platform/architecture, or disable `memory-lancedb`.
 
 ## Troubleshooting
+
+### Embedding provider cleanup failed
+
+The plugin waits for admitted embedding requests before closing each retired
+provider. If native cleanup fails, it reports the error instead of retrying it
+across plugin instances. Restart the Gateway to reclaim remaining native resources.
 
 ### Input length exceeds the context length
 

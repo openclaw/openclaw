@@ -6,6 +6,7 @@ import {
   type QuestionWaitAnswerResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { createAbortError } from "../../infra/abort-signal.js";
+import { QUESTION_COMPOSER_REPLACEMENT } from "../../shared/question-composer-replacement.js";
 import type { callGatewayTool } from "./gateway.js";
 
 /** Grace added to Gateway RPC deadlines so the question's own timeout wins. */
@@ -29,7 +30,6 @@ const TERMINAL_QUESTION_ERROR_REASONS = new Set([
   "QUESTION_NOT_FOUND",
 ]);
 
-/** Reads the Gateway's structured failure from a question RPC rejection. */
 export function readQuestionRejection(
   error: unknown,
 ): { code: unknown; reason?: string } | undefined {
@@ -49,7 +49,6 @@ export function isTerminalQuestionResolveError(error: unknown): boolean {
   return reason !== undefined && TERMINAL_QUESTION_ERROR_REASONS.has(reason);
 }
 
-/** Waits for one question's terminal state, validating the Gateway's payload. */
 export async function awaitGatewayQuestionAnswer(params: {
   gatewayCall: GatewayQuestionCall;
   questionId: string;
@@ -85,7 +84,7 @@ export function createGatewayQuestionCanceller(params: {
     | undefined;
   return (resolvedBy: string) => {
     params.beforeCancel?.();
-    cancellation ??= (async () => {
+    return (cancellation ??= (async () => {
       try {
         await params.gatewayCall(
           "question.resolve",
@@ -108,7 +107,22 @@ export function createGatewayQuestionCanceller(params: {
           return undefined;
         }
       }
-    })();
-    return cancellation;
+    })());
   };
+}
+
+/** Keep the status-only waiter contract; the terminal record owns the cancellation reason. */
+export async function wasQuestionReplacedByComposer(
+  gatewayCall: GatewayQuestionCall,
+  questionId: string,
+): Promise<boolean> {
+  try {
+    const result = await gatewayCall("question.get", { timeoutMs: 1_000 }, { id: questionId });
+    const question = asNullableRecord(asNullableRecord(result)?.question);
+    return (
+      question?.status === "cancelled" && question.resolvedBy === QUESTION_COMPOSER_REPLACEMENT
+    );
+  } catch {
+    return false;
+  }
 }

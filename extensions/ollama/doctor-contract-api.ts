@@ -1,1 +1,5 @@
-export { legacyConfigRules, normalizeCompatibilityConfig } from "./src/config-compat.js";
+export {
+  legacyConfigRules,
+  normalizeCompatibilityConfig,
+  providerRenames,
+} from "./src/config-compat.js";

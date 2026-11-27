@@ -1,19 +1,24 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isTranscriptArtifactText } from "../media-understanding/transcription-text.js";
-import { runWithGatewayDetachedWorkAdmission } from "../process/gateway-work-admission.js";
-import { getAsyncWorkSignal, runInDetachedAsyncContext } from "../shared/async-work-scope.js";
+import {
+  isGatewayRestartDraining,
+  runWithGatewayDetachedWorkAdmission,
+} from "../process/gateway-work-admission.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { assertTranscriptCaptureEnabled } from "./capture-startup.js";
 import type { resolveTranscriptsConfig } from "./config.js";
-import type { TranscriptSessionDescriptor } from "./provider-types.js";
 import { TranscriptsSummaryChangedError } from "./store-errors.js";
 import type { TranscriptSummarySnapshot, TranscriptsStore } from "./store.js";
 import { summarizeTranscriptsWithModel } from "./summary-model.js";
 import { runSummaryWork } from "./summary-work.js";
-import { summarizeTranscripts } from "./summary.js";
+import { summarizeTranscriptTurns } from "./summary.js";
+import type { TranscriptSessionDescriptor } from "./types.js";
 
 type SummaryParams = {
   config: ReturnType<typeof resolveTranscriptsConfig>;
   cfg?: OpenClawConfig;
+  stateDir: string;
   store: TranscriptsStore;
   session: TranscriptSessionDescriptor;
   expectedInputRevision?: string;
@@ -103,10 +108,17 @@ async function readTranscriptSummary(
   params: SummaryParams & { snapshot: TranscriptSummarySnapshot; abortSignal?: AbortSignal },
 ) {
   params.abortSignal?.throwIfAborted();
-  const utterances = params.snapshot.utterances;
+  const base = summarizeTranscriptTurns(
+    params.session,
+    params.snapshot.turns,
+    params.snapshot.utteranceCount,
+  );
   const agentId = params.session.metadata?.agentId;
   try {
-    if (params.cfg) {
+    if (params.cfg && !isGatewayRestartDraining()) {
+      // Final notes still persist during shutdown, but optional inference must not
+      // load a new agent runtime after an in-place update replaced its chunks.
+      assertTranscriptCaptureEnabled({ config: params.cfg, stateDir: params.stateDir });
       const modeled = await summarizeTranscriptsWithModel({
         cfg: params.cfg,
         agentId:
@@ -114,7 +126,8 @@ async function readTranscriptSummary(
             ? agentId
             : resolveDefaultAgentId(params.cfg),
         session: params.session,
-        utterances,
+        base,
+        hasSpeakerAliases: params.snapshot.hasSpeakerAliases,
         abortSignal: params.abortSignal,
         assertCurrent: params.assertCurrent,
       });
@@ -127,7 +140,7 @@ async function readTranscriptSummary(
     params.abortSignal?.throwIfAborted();
     // Historical captures may have no resolvable agent; they still get notes.
   }
-  return summarizeTranscripts({ session: params.session, utterances });
+  return base;
 }
 
 async function persistSnapshot(
@@ -199,7 +212,7 @@ export function ensureTranscriptSummary(params: SummaryParams) {
       return;
     }
     const snapshot = await readCurrentSnapshot(owned);
-    if (snapshot.utterances.some((utterance) => !isTranscriptArtifactText(utterance.text))) {
+    if (snapshot.turns.length) {
       await persistSnapshot(owned, lane, snapshot);
     }
   });
@@ -285,8 +298,9 @@ export async function createTranscriptSummaryUpdates(
           const snapshot = await params.store.readSummarySnapshot(
             params.session,
             params.config.maxUtterances,
+            owner.lastSequence + 1,
           );
-          if (!snapshot || snapshot.nextSequence <= owner.lastSequence) {
+          if (!snapshot) {
             return;
           }
           attemptedSequence = snapshot.nextSequence;
@@ -309,19 +323,12 @@ export async function createTranscriptSummaryUpdates(
     };
     lane.live = owner;
     lane.generation++;
-    try {
-      const initial = await params.store.readSummarySnapshot(
-        params.session,
-        params.config.maxUtterances,
-      );
-      if (!initial || stopped || lane.live !== owner) {
-        throw new TranscriptsSummaryChangedError();
-      }
-      return owner;
-    } catch (error) {
+    await Promise.resolve();
+    if (stopped || lane.live !== owner) {
       await owner.stop();
-      throw error;
+      throw new TranscriptsSummaryChangedError();
     }
+    return owner;
   } finally {
     lane.pending--;
     if (!lane.pending && !lane.live && lanes.get(key) === lane) {

@@ -5,6 +5,7 @@ export const {
   resolveLoadedProviderPluginsForHooks,
   resolveProviderPluginsForHooks,
   resolveProviderRuntimePlugin,
+  withProviderRuntimePlugin,
   resolveLoadedProviderRuntimePlugin,
   resolveProviderHookPlugin,
   resolveProviderRuntimePluginHandle,

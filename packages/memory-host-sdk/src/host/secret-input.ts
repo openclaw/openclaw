@@ -15,5 +15,9 @@ export function resolveMemorySecretInputString(params: {
   value: unknown;
   path: string;
 }): string | undefined {
-  return normalizeResolvedSecretInputString(params);
+  const resolved = normalizeResolvedSecretInputString(params);
+  if (params.value !== undefined && typeof params.value !== "string") {
+    throw new Error(`${params.path}: expected a resolved string value.`);
+  }
+  return resolved;
 }

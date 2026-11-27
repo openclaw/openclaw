@@ -1,33 +1,6 @@
 import Foundation
 import OpenClawKit
 
-struct WatchMessagingStartupBuffer<Event> {
-    private let maxCount: Int
-    private var events: [Event] = []
-    private(set) var isReady = false
-
-    init(maxCount: Int) {
-        precondition(maxCount > 0)
-        self.maxCount = maxCount
-    }
-
-    mutating func receive(_ event: Event) -> [Event] {
-        guard !self.isReady else { return [event] }
-        if self.events.count == self.maxCount {
-            self.events.removeFirst()
-        }
-        self.events.append(event)
-        return []
-    }
-
-    mutating func markReady() -> [Event] {
-        guard !self.isReady else { return [] }
-        self.isReady = true
-        defer { self.events.removeAll(keepingCapacity: false) }
-        return self.events
-    }
-}
-
 enum WatchMessagingError: LocalizedError {
     case unsupported
     case notPaired
@@ -50,11 +23,7 @@ enum WatchMessagingError: LocalizedError {
 
 @MainActor
 final class WatchMessagingService: @preconcurrency WatchMessagingServicing {
-    private static let maxStartupEvents = 64
-
     private let transport: WatchConnectivityTransport
-    private var startupEvents = WatchMessagingStartupBuffer<WatchMessagingInboundEvent>(
-        maxCount: WatchMessagingService.maxStartupEvents)
     private var statusHandler: (@Sendable (WatchMessagingStatus) -> Void)?
     private var lastEmittedStatus: WatchMessagingStatus?
     private var chatDeliveryHandler: (@Sendable (OpenClawWatchChatDeliveryCommand) async throws -> Void)?
@@ -93,16 +62,10 @@ final class WatchMessagingService: @preconcurrency WatchMessagingServicing {
         self.statusHandler = handler
         guard let handler else {
             self.lastEmittedStatus = nil
-            GatewayDiagnostics.log("watch messaging: cleared status handler")
             return
         }
         let snapshot = self.transport.currentStatusSnapshot()
         self.lastEmittedStatus = snapshot
-        GatewayDiagnostics.log(
-            "watch messaging: set status handler "
-                + "supported=\(snapshot.supported) paired=\(snapshot.paired) "
-                + "appInstalled=\(snapshot.appInstalled) reachable=\(snapshot.reachable) "
-                + "activation=\(snapshot.activationState)")
         handler(snapshot)
     }
 
@@ -125,24 +88,20 @@ final class WatchMessagingService: @preconcurrency WatchMessagingServicing {
 
     func setExecApprovalResolveHandler(_ handler: (@Sendable (WatchExecApprovalResolveEvent) -> Void)?) {
         self.execApprovalResolveHandler = handler
-        self.finishStartupRegistrationIfReady()
     }
 
     func setExecApprovalSnapshotRequestHandler(
         _ handler: (@Sendable (WatchExecApprovalSnapshotRequestEvent) -> Void)?)
     {
         self.execApprovalSnapshotRequestHandler = handler
-        self.finishStartupRegistrationIfReady()
     }
 
     func setAppSnapshotRequestHandler(_ handler: (@Sendable (WatchAppSnapshotRequestEvent) -> Void)?) {
         self.appSnapshotRequestHandler = handler
-        self.finishStartupRegistrationIfReady()
     }
 
     func setAppCommandHandler(_ handler: (@Sendable (WatchAppCommandEvent) -> Void)?) {
         self.appCommandHandler = handler
-        self.finishStartupRegistrationIfReady()
     }
 
     func sendNotification(
@@ -211,43 +170,11 @@ final class WatchMessagingService: @preconcurrency WatchMessagingServicing {
             return
         }
         self.lastEmittedStatus = snapshot
-        GatewayDiagnostics.log(
-            "watch messaging: status "
-                + "supported=\(snapshot.supported) paired=\(snapshot.paired) "
-                + "appInstalled=\(snapshot.appInstalled) reachable=\(snapshot.reachable) "
-                + "activation=\(snapshot.activationState)")
         self.statusHandler?(snapshot)
     }
 
-    private func emitExecApprovalResolve(_ event: WatchExecApprovalResolveEvent) {
-        self.execApprovalResolveHandler?(event)
-    }
-
-    private func emitExecApprovalSnapshotRequest(_ event: WatchExecApprovalSnapshotRequestEvent) {
-        GatewayDiagnostics.log(
-            "watch messaging: snapshot request "
-                + "id=\(event.requestId) transport=\(event.transport) "
-                + "sentAtMs=\(event.sentAtMs ?? -1)")
-        self.execApprovalSnapshotRequestHandler?(event)
-    }
-
-    private func emitAppSnapshotRequest(_ event: WatchAppSnapshotRequestEvent) {
-        GatewayDiagnostics.log(
-            "watch messaging: app snapshot request "
-                + "id=\(event.requestId) transport=\(event.transport) "
-                + "sentAtMs=\(event.sentAtMs ?? -1)")
-        self.appSnapshotRequestHandler?(event)
-    }
-
-    private func emitAppCommand(_ event: WatchAppCommandEvent) {
-        GatewayDiagnostics.log(
-            "watch messaging: app command "
-                + "id=\(event.commandId) command=\(event.command.rawValue) "
-                + "transport=\(event.transport)")
-        self.appCommandHandler?(event)
-    }
-
     private func receiveInboundEvent(_ event: WatchMessagingInboundEvent) async throws {
+        // NodeAppModel installs handlers synchronously on MainActor before queued transport delivery can run.
         switch event {
         case let .chatDeliveryCommand(command):
             // Returning is the application ACK boundary; a startup buffer is not custody.
@@ -263,38 +190,14 @@ final class WatchMessagingService: @preconcurrency WatchMessagingServicing {
             throw OpenClawWatchChatDeliveryError(
                 code: "upgrade_required",
                 message: "Update OpenClaw on iPhone and Apple Watch before sending Watch messages.")
-        default:
-            for event in self.startupEvents.receive(event) {
-                self.dispatchStartupEvent(event)
-            }
-        }
-    }
-
-    private func finishStartupRegistrationIfReady() {
-        guard self.execApprovalResolveHandler != nil,
-              self.execApprovalSnapshotRequestHandler != nil,
-              self.appSnapshotRequestHandler != nil,
-              self.appCommandHandler != nil
-        else {
-            return
-        }
-        for event in self.startupEvents.markReady() {
-            self.dispatchStartupEvent(event)
-        }
-    }
-
-    private func dispatchStartupEvent(_ event: WatchMessagingInboundEvent) {
-        switch event {
-        case .chatDeliveryCommand, .chatDeliveryReceiptAck, .legacyChat:
-            preconditionFailure("Durable Watch delivery must not enter the startup buffer")
         case let .execApprovalResolve(event):
-            self.emitExecApprovalResolve(event)
+            self.execApprovalResolveHandler?(event)
         case let .execApprovalSnapshotRequest(event):
-            self.emitExecApprovalSnapshotRequest(event)
+            self.execApprovalSnapshotRequestHandler?(event)
         case let .appSnapshotRequest(event):
-            self.emitAppSnapshotRequest(event)
+            self.appSnapshotRequestHandler?(event)
         case let .appCommand(event):
-            self.emitAppCommand(event)
+            self.appCommandHandler?(event)
         }
     }
 }

@@ -24,6 +24,31 @@ import java.util.UUID
 @RunWith(RobolectricTestRunner::class)
 class ClientDatabasesTest {
   @Test
+  fun retainedStoresRejectOperationsAfterDatabaseOwnerCloses() =
+    runTest {
+      withCleanDatabases(databaseNames()) { databases ->
+        val cache = databases.transcriptCache()
+        val outbox = databases.commandOutbox()
+        seedGateway(databases, "gateway-a", "retained")
+        databases.close()
+
+        val operations: List<suspend () -> Any?> =
+          listOf(
+            { cache.loadTranscript("gateway-a", "main", "main") },
+            { cache.loadSessions("", "main") },
+            { outbox.load("gateway-a") },
+            { outbox.confirmDeliveredAttempts(emptyMap()) },
+            { outbox.demoteSessionMutationToReconciliationState("", ChatOutboxScope("main", "main")) },
+          )
+        for (operation in operations) {
+          val failure = runCatching { operation() }.exceptionOrNull()
+          assertTrue(failure is IllegalStateException)
+          assertEquals("Android client databases are closed", failure?.message)
+        }
+      }
+    }
+
+  @Test
   fun deferredOutboxPersistsAtomicMutationDemotion() =
     runTest {
       val names = databaseNames()

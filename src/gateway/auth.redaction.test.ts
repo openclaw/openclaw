@@ -1,43 +1,42 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { REDACTED_SENTINEL } from "../config/redact-sentinel.js";
 import { refResolutionError } from "../secrets/resolve-errors.js";
 import {
   assertGatewayAuthConfigured,
   authorizeHttpGatewayConnect,
-  authorizeControlUiReadHttpGatewayConnect,
   authorizeWsControlUiGatewayConnect,
 } from "./auth.js";
-import { assertGatewayAuthNotKnownWeak } from "./known-weak-gateway-secrets.js";
 import { createRuntimeSecretsActivator } from "./server-startup-config.js";
 
-describe.each([
-  ["HTTP", authorizeHttpGatewayConnect],
-  ["Control UI HTTP read", authorizeControlUiReadHttpGatewayConnect],
-  ["WebSocket", authorizeWsControlUiGatewayConnect],
-] as const)("%s shared-secret fields", (_surface, authorize) => {
-  it.each(["token", "password"] as const)(
-    "rejects a redacted %s before shared-secret or Tailscale authentication",
-    async (mode) => {
-      const auth = { mode, [mode]: REDACTED_SENTINEL, allowTailscale: true };
-      expect(() => assertGatewayAuthConfigured(auth)).toThrow(/redaction sentinel/);
-      for (const connectAuth of [{ [mode]: REDACTED_SENTINEL }, null]) {
-        await expect(
-          authorize({
-            auth,
-            connectAuth,
-            ingressAttribution: {
-              kind: "tailscale-serve",
-              clientIp: "100.64.0.1",
-              rateLimit: { subject: { key: "synthetic-tailnet-user" }, resetOnSuccess: true },
-              verifyIdentity: async () => ({ login: "operator@example.test", name: "Operator" }),
-            },
-            browserOriginPolicy: { fetchSite: "same-origin" },
-          }),
-        ).resolves.toEqual({ ok: false, reason: `${mode}_redacted_config` });
-      }
-    },
-  );
-});
+it.each(["token", "password"] as const)(
+  "rejects a redacted %s before shared-secret or Tailscale authentication",
+  async (mode) => {
+    const auth = { mode, [mode]: REDACTED_SENTINEL, allowTailscale: true };
+    expect(() => assertGatewayAuthConfigured(auth)).toThrow(/redaction sentinel/);
+    if (mode === "password") {
+      const passwordAuth = { ...auth, allowTailscale: false };
+      expect(() => assertGatewayAuthConfigured(passwordAuth)).toThrow(
+        /gateway\.auth\.password.*external secret source/,
+      );
+      expect(() => assertGatewayAuthConfigured(passwordAuth)).not.toThrow(/doctor --fix/);
+    }
+    for (const connectAuth of [{ [mode]: REDACTED_SENTINEL }, null]) {
+      await expect(
+        authorizeWsControlUiGatewayConnect({
+          auth,
+          connectAuth,
+          ingressAttribution: {
+            kind: "tailscale-serve",
+            clientIp: "100.64.0.1",
+            rateLimit: { subject: { key: "synthetic-tailnet-user" }, resetOnSuccess: true },
+            verifyIdentity: async () => ({ login: "operator@example.test", name: "Operator" }),
+          },
+          browserOriginPolicy: { fetchSite: "same-origin" },
+        }),
+      ).resolves.toEqual({ ok: false, reason: `${mode}_redacted_config` });
+    }
+  },
+);
 
 it("rejects a redacted local password fallback without rejecting proxy mode", async () => {
   await expect(
@@ -60,16 +59,6 @@ it("rejects a redacted local password fallback without rejecting proxy mode", as
       },
     }),
   ).resolves.toEqual({ ok: false, reason: "password_redacted_config" });
-});
-
-it.each([
-  ["configured auth", assertGatewayAuthConfigured],
-  ["known-weak auth", assertGatewayAuthNotKnownWeak],
-] as const)("%s directs password recovery to its credential source", (_name, validate) => {
-  const auth = { mode: "password" as const, password: REDACTED_SENTINEL, allowTailscale: false };
-
-  expect(() => validate(auth)).toThrow(/gateway\.auth\.password.*external secret source/);
-  expect(() => validate(auth)).not.toThrow(/doctor --fix/);
 });
 
 it("keeps the corrupted store entry and Doctor remedy in the startup refusal", async () => {

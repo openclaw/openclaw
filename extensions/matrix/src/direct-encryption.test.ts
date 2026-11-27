@@ -6,12 +6,17 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { matrixPlugin } from "./channel.js";
 import { registerMatrixCli } from "./cli.js";
-import { loadMatrixCredentials, saveMatrixCredentials } from "./matrix/credentials.js";
+import { prepareMockMatrixClientStorage } from "./matrix/client/shared.test-support.js";
+import { saveMatrixCredentials } from "./matrix/credentials.js";
 import { installMatrixTestRuntime } from "./test-runtime.js";
 import type { CoreConfig } from "./types.js";
 
 const createMatrixClient = vi.hoisted(() => vi.fn());
-vi.mock("./matrix/client/create-client.js", () => ({ createMatrixClient }));
+// mock-isolation: Direct-room action proof supplies SDK I/O without opening client storage.
+vi.mock("./matrix/client/create-client.js", () => ({
+  createMatrixClient,
+  prepareMatrixClientStorage: prepareMockMatrixClientStorage,
+}));
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
@@ -25,10 +30,29 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
 const peer = "@owner:example.org";
 const roomId = "!created:example.org";
 const homeserver = "http://127.0.0.1:54321";
+const unrelated = { "@other:example.org": ["!other:example.org"] };
+const repaired = { ...unrelated, [peer]: [roomId] };
+const identity = { accountId: "ops", remoteUserId: peer, selfUserId: "@ops:example.org" };
+
+async function runCli(operation: "repair" | "inspect", client: ReturnType<typeof createClient>) {
+  createMatrixClient.mockResolvedValue(client);
+  const output = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+  const program = new Command();
+  registerMatrixCli({ program });
+  await program.parseAsync(
+    ["matrix", "direct", operation, "--account", "ops", "--user-id", peer, "--json"],
+    { from: "user" },
+  );
+  return JSON.parse(String(output.mock.calls.at(-1)?.[0]));
+}
 
 function createClient() {
   const events: string[] = [];
-  let direct: Record<string, string[]> = { "@other:example.org": ["!other:example.org"] };
+  let direct: Record<string, string[]> = structuredClone(unrelated);
+  const record = (event: string) =>
+    vi.fn(async () => {
+      events.push(event);
+    });
   return {
     events,
     getUserId: vi.fn(async () => "@ops:example.org"),
@@ -37,6 +61,8 @@ function createClient() {
       return structuredClone(direct);
     }),
     getJoinedRooms: vi.fn(async () => []),
+    getJoinedRoomMembers: vi.fn(async (_roomId: string): Promise<string[]> => []),
+    getRoomStateEvent: vi.fn(async () => ({ is_direct: true })),
     createDirectRoom: vi.fn(async (_userId: string, _options: { encrypted: boolean }) => {
       events.push("create");
       return roomId;
@@ -45,14 +71,11 @@ function createClient() {
       events.push("write");
       direct = structuredClone(content);
     }),
-    start: vi.fn(async () => {
-      events.push("start");
-    }),
+    prepareForOneOff: record("prepare"),
+    start: record("start"),
     quiesceSync: vi.fn(async () => {}),
     drainPendingDecryptions: vi.fn(async () => {}),
-    stopAndPersist: vi.fn(async () => {
-      events.push("persist");
-    }),
+    stopAndPersist: record("persist"),
     stopWithoutPersist: vi.fn(async () => {}),
   };
 }
@@ -65,10 +88,7 @@ function recordHostSql() {
       vi.spyOn(StatementSync.prototype, method),
     ),
   ];
-  return {
-    counts: () => counters.map((counter) => counter.mock.calls.length),
-    restore: () => counters.forEach((counter) => counter.mockRestore()),
-  };
+  return () => counters.map((counter) => counter.mock.calls.length);
 }
 
 function config(encryption: boolean): CoreConfig {
@@ -108,15 +128,11 @@ async function seed(cfg: CoreConfig) {
     process.env,
     "ops",
   );
-  expect(loadMatrixCredentials(process.env, "ops")?.userId).toBe("@ops:example.org");
 }
 
 function expectRepair(client: ReturnType<typeof createClient>, encrypted: boolean) {
   expect(client.createDirectRoom).toHaveBeenCalledWith(peer, { encrypted });
-  expect(client.setAccountData).toHaveBeenCalledWith("m.direct", {
-    "@other:example.org": ["!other:example.org"],
-    [peer]: [roomId],
-  });
+  expect(client.setAccountData).toHaveBeenCalledWith("m.direct", repaired);
   expect(client.events.filter((event) => event !== "start" && event !== "persist")).toEqual([
     "read",
     "create",
@@ -128,109 +144,122 @@ function expectRepair(client: ReturnType<typeof createClient>, encrypted: boolea
 describe.each([true, false])(
   "registered Matrix direct repair with named encryption=%s",
   (encrypted) => {
-    it("prepares the native approval target without reading credentials for encryption", async () => {
+    it("prepares native approval eligibility and targets with saved credentials off-thread", async () => {
       const cfg = config(encrypted);
       await seed(cfg);
       const client = createClient();
-      const runtime = matrixPlugin.approvalCapability?.nativeRuntime;
+      const runtime = matrixPlugin.approvalCapability?.nativeRuntimeAsync;
       expect(runtime).toBeDefined();
       if (!runtime) {
         throw new Error("Matrix native approval runtime missing");
       }
-      const counters = recordHostSql();
-      try {
-        expect(
-          runtime.availability.isConfigured({ cfg, accountId: "ops", context: { client } }),
-        ).toBe(true);
-        const availability = counters.counts();
-        const result = await runtime.transport.prepareTarget({
+      const counts = recordHostSql();
+      expect(
+        await runtime.availability.isConfigured({ cfg, accountId: "ops", context: { client } }),
+      ).toBe(true);
+      expect(
+        await matrixPlugin.approvalCapability?.getExecInitiatingSurfaceStateAsync?.({
           cfg,
           accountId: "ops",
-          context: { client },
+          action: "approve",
+        }),
+      ).toEqual({ kind: "enabled" });
+      const availability = counts();
+      expect(availability).toEqual([0, 0, 0, 0, 0, 0]);
+      const result = await runtime.transport.prepareTarget({
+        cfg,
+        accountId: "ops",
+        context: { client },
+        approvalKind: "exec",
+        request: {
+          id: "synthetic-approval",
+          request: { command: "echo synthetic" },
+          createdAtMs: 0,
+          expiresAtMs: 60_000,
+        },
+        view: {
           approvalKind: "exec",
-          request: {
-            id: "synthetic-approval",
-            request: { command: "echo synthetic" },
-            createdAtMs: 0,
-            expiresAtMs: 60_000,
-          },
-          view: {
-            approvalKind: "exec",
-            approvalId: "synthetic-approval",
-            phase: "pending",
-            title: "Exec approval",
-            metadata: [],
-            commandText: "echo synthetic",
-            actions: [],
-            expiresAtMs: 60_000,
-          },
-          pendingPayload: {},
-          plannedTarget: {
-            surface: "approver-dm",
-            reason: "preferred",
-            target: { to: `user:${peer}` },
-          },
-        });
-        const total = counters.counts();
-        expect(result?.target).toMatchObject({ to: `room:${roomId}`, roomId });
-        expectRepair(client, encrypted);
-        console.info(
-          "MATRIX_SQL_PROOF",
-          JSON.stringify({
-            operation: "native availability plus registered prepareTarget",
-            encrypted,
-            availability,
-            total,
-          }),
-        );
-        expect(total).toEqual(availability);
-      } finally {
-        counters.restore();
-      }
+          approvalId: "synthetic-approval",
+          phase: "pending",
+          title: "Exec approval",
+          metadata: [],
+          commandText: "echo synthetic",
+          actions: [],
+          expiresAtMs: 60_000,
+        },
+        pendingPayload: {},
+        plannedTarget: {
+          surface: "approver-dm",
+          reason: "preferred",
+          target: { to: `user:${peer}` },
+        },
+      });
+      const total = counts();
+      expect(result?.target).toMatchObject({ to: `room:${roomId}` });
+      expectRepair(client, encrypted);
+      expect(total).toEqual(availability);
     });
 
     it("runs Commander repair through real auth and lease owners with named encryption", async () => {
       const cfg = config(encrypted);
       await seed(cfg);
       const client = createClient();
-      createMatrixClient.mockResolvedValue(client);
-      const output = vi.spyOn(process.stdout, "write").mockReturnValue(true);
-      const program = new Command();
-      registerMatrixCli({ program });
-      const counters = recordHostSql();
-      try {
-        await program.parseAsync(
-          ["matrix", "direct", "repair", "--account", "ops", "--user-id", peer, "--json"],
-          { from: "user" },
-        );
-        const total = counters.counts();
-        const result = JSON.parse(String(output.mock.calls.at(-1)?.[0]));
-        expect(result).toMatchObject({
-          accountId: "ops",
-          encrypted,
-          activeRoomId: roomId,
-          createdRoomId: roomId,
-          changed: true,
-        });
-        expectRepair(client, encrypted);
-        expect(client.events[0]).toBe("start");
-        expect(client.events.at(-1)).toBe("persist");
-        expect(createMatrixClient).toHaveBeenCalledWith(
-          expect.objectContaining({
-            accountId: "ops",
-            userId: "@ops:example.org",
-            accessToken: "synthetic-matrix-token",
-            encryption: encrypted,
-          }),
-        );
-        console.info(
-          "MATRIX_SQL_PROOF",
-          JSON.stringify({ operation: "complete registered Commander repair", encrypted, total }),
-        );
-        expect(total).toEqual([0, 0, 0, 0, 0, 0]);
-      } finally {
-        counters.restore();
-      }
+      expect(await runCli("repair", client)).toEqual({
+        ...identity,
+        mappedRoomIds: [],
+        mappedRooms: [],
+        discoveredStrictRoomIds: [],
+        activeRoomId: roomId,
+        encrypted,
+        createdRoomId: roomId,
+        changed: true,
+        directContentBefore: unrelated,
+        directContentAfter: repaired,
+      });
+      expectRepair(client, encrypted);
+      expect(client.events[0]).toBe("start");
+      expect(client.events.at(-1)).toBe("persist");
+      expect(createMatrixClient.mock.calls[0]?.[0]).toMatchObject({
+        accountId: "ops",
+        userId: "@ops:example.org",
+        accessToken: "synthetic-matrix-token",
+        encryption: encrypted,
+      });
     });
   },
 );
+
+it("runs Commander inspect with strict and unavailable mapped rooms without starting or writing", async () => {
+  await seed(config(true));
+  const client = createClient();
+  client.getAccountData.mockResolvedValue({
+    "@owner:example.org": ["!strict:example.org", "!unavailable:example.org"],
+  });
+  client.getJoinedRoomMembers.mockImplementation(async (mappedRoomId) => {
+    if (mappedRoomId === "!unavailable:example.org") {
+      throw new Error("member read unavailable");
+    }
+    return ["@ops:example.org", "@owner:example.org"];
+  });
+  expect(await runCli("inspect", client)).toEqual({
+    ...identity,
+    mappedRoomIds: ["!strict:example.org", "!unavailable:example.org"],
+    mappedRooms: [
+      {
+        roomId: "!strict:example.org",
+        source: "account-data",
+        strict: true,
+        joinedMembers: ["@ops:example.org", "@owner:example.org"],
+      },
+      {
+        roomId: "!unavailable:example.org",
+        source: "account-data",
+        strict: false,
+        joinedMembers: null,
+      },
+    ],
+    discoveredStrictRoomIds: [],
+    activeRoomId: "!strict:example.org",
+  });
+  expect(client.events).toEqual(["prepare", "persist"]);
+});

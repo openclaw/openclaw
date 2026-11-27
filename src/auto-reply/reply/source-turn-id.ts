@@ -22,10 +22,27 @@ type ChannelSourceTurnContext = object & {
  * Internal-origin turns (gateway chat.send stamps the internal channel as the
  * ingress provider) carry run ids, not provider message ids. Minting a channel
  * source-turn id from them breaks the run-keyed user-turn admission guard;
- * gateway turns own restart via fingerprint admission and client retries.
+ * gateway turns use fingerprint admission and client retries.
  */
 export function shouldMintChannelSourceTurnId(ingressProvider: string | undefined): boolean {
   return !isInternalMessageChannel(ingressProvider);
+}
+
+/** Preserve the admitted input identity when a queued turn gets a new run ID. */
+export function resolveReplySourceTurnId(params: {
+  sourceTurnId?: string;
+  admissionRunId?: string;
+  ingressProvider?: string;
+}): string | undefined {
+  const sourceTurnId = normalizeOptionalString(params.sourceTurnId);
+  if (sourceTurnId) {
+    return sourceTurnId;
+  }
+  const admissionRunId = normalizeOptionalString(params.admissionRunId);
+  if (!admissionRunId || !isInternalMessageChannel(params.ingressProvider)) {
+    return undefined;
+  }
+  return admissionRunId;
 }
 
 /**
@@ -83,4 +100,10 @@ export function setChannelSourceTurnSameThreadRequired(
 
 export function readChannelSourceTurnSameThreadRequired(context: object): boolean {
   return (context as ChannelSourceTurnContext)[CHANNEL_SOURCE_TURN_SAME_THREAD_REQUIRED] === true;
+}
+
+/** Keep input identity and its narrowed channel scope together across execution handoffs. */
+export function copyChannelSourceTurnContext(target: object, source: object): void {
+  setChannelSourceTurnId(target, readChannelSourceTurnId(source));
+  setChannelSourceTurnSameThreadRequired(target, readChannelSourceTurnSameThreadRequired(source));
 }

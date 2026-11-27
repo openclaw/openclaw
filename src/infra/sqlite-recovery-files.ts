@@ -1,6 +1,5 @@
 /** Offline SQLite recovery preserves journals before moving the main pathname. */
 import fs from "node:fs";
-import { hasErrnoCode } from "./errno.js";
 import { resolveSqliteDatabaseFilePaths } from "./sqlite-files.js";
 
 export function moveSqliteFilesAside(
@@ -35,7 +34,7 @@ export function moveSqliteFilesAside(
     for (const move of completed.toReversed()) {
       try {
         assertCurrent();
-        if (pathExists(move.sourcePath)) {
+        if (fs.lstatSync(move.sourcePath, { throwIfNoEntry: false })) {
           throw new Error(`rollback source was recreated: ${move.sourcePath}`, {
             cause: error,
           });
@@ -70,18 +69,13 @@ export function inspectSqliteRecoveryFiles(sqlitePath: string): {
   const existing: string[] = [];
   const missing: string[] = [];
   for (const candidate of resolveSqliteDatabaseFilePaths(sqlitePath)) {
-    try {
-      const stat = fs.lstatSync(candidate);
-      if (!stat.isFile()) {
-        throw new Error(`SQLite recovery path is not a regular file: ${candidate}`);
-      }
+    const stat = fs.lstatSync(candidate, { throwIfNoEntry: false });
+    if (!stat) {
+      missing.push(candidate);
+    } else if (!stat.isFile()) {
+      throw new Error(`SQLite recovery path is not a regular file: ${candidate}`);
+    } else {
       existing.push(candidate);
-    } catch (error) {
-      if (hasErrnoCode(error, "ENOENT")) {
-        missing.push(candidate);
-        continue;
-      }
-      throw error;
     }
   }
   return { existing, missing };
@@ -97,21 +91,9 @@ export function planSqliteRecoveryMoves(
       destinationPath: `${sourcePath}${suffix}`,
       sourcePath,
     }));
-    if (moves.every((move) => !pathExists(move.destinationPath))) {
+    if (moves.every((move) => !fs.lstatSync(move.destinationPath, { throwIfNoEntry: false }))) {
       return moves;
     }
   }
   throw new Error(`Could not choose recovery paths for ${sourcePaths[0] ?? "SQLite files"}`);
-}
-
-function pathExists(filePath: string): boolean {
-  try {
-    fs.lstatSync(filePath);
-    return true;
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return false;
-    }
-    throw error;
-  }
 }

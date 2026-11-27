@@ -1,10 +1,10 @@
-import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { resolveDiscordDirectoryUserId } from "./directory-cache.js";
 import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-  normalizeOptionalStringifiedId,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeDiscordHandleKey, resolveDiscordDirectoryUserId } from "./directory-cache.js";
+  formatMention,
+  normalizeDiscordHandleKey,
+  normalizeDiscordSnowflake,
+} from "./target-parsing.js";
+import { findDiscordUrlRanges } from "./url-ranges.js";
 
 type DiscordMentionAliasesConfig = Record<string, string>;
 
@@ -12,40 +12,6 @@ const MENTION_CANDIDATE_PATTERN = /(^|[\s([{"'.,;:!?])@([a-z0-9_.-]{2,32}(?:#[0-
 const DISCORD_RESERVED_MENTIONS = new Set(["everyone", "here"]);
 const DISCORD_DISCRIMINATOR_SUFFIX = /#\d{4}$/;
 const DISCORD_BROADCAST_MENTION_PATTERN = /@(everyone|here)\b/;
-
-function normalizeSnowflake(value: string | number | bigint): string | null {
-  const text = normalizeOptionalStringifiedId(value) ?? "";
-  if (!/^\d+$/.test(text)) {
-    return null;
-  }
-  return text;
-}
-
-export function formatMention(params: {
-  userId?: string | number | bigint | null;
-  roleId?: string | number | bigint | null;
-  channelId?: string | number | bigint | null;
-}): string {
-  const userId = params.userId == null ? null : normalizeSnowflake(params.userId);
-  const roleId = params.roleId == null ? null : normalizeSnowflake(params.roleId);
-  const channelId = params.channelId == null ? null : normalizeSnowflake(params.channelId);
-  const values = [
-    userId ? { kind: "user" as const, id: userId } : null,
-    roleId ? { kind: "role" as const, id: roleId } : null,
-    channelId ? { kind: "channel" as const, id: channelId } : null,
-  ].filter((entry): entry is { kind: "user" | "role" | "channel"; id: string } => Boolean(entry));
-  if (values.length !== 1) {
-    throw new Error("formatMention requires exactly one of userId, roleId, or channelId");
-  }
-  const target = expectDefined(values.at(0), "single Discord mention target");
-  if (target.kind === "user") {
-    return `<@${target.id}>`;
-  }
-  if (target.kind === "role") {
-    return `<@&${target.id}>`;
-  }
-  return `<#${target.id}>`;
-}
 
 function resolveConfiguredMentionAlias(
   handle: string,
@@ -62,14 +28,8 @@ function resolveConfiguredMentionAlias(
       continue;
     }
     const aliasWithoutDiscriminator = alias.replace(DISCORD_DISCRIMINATOR_SUFFIX, "");
-    if (
-      alias === key ||
-      (withoutDiscriminator && withoutDiscriminator !== key && alias === withoutDiscriminator) ||
-      (aliasWithoutDiscriminator &&
-        aliasWithoutDiscriminator !== alias &&
-        aliasWithoutDiscriminator === key)
-    ) {
-      const userId = normalizeSnowflake(rawUserId);
+    if (alias === key || alias === withoutDiscriminator || aliasWithoutDiscriminator === key) {
+      const userId = normalizeDiscordSnowflake(rawUserId);
       if (userId) {
         return userId;
       }
@@ -85,29 +45,34 @@ function rewritePlainTextMentions(
     mentionAliases?: DiscordMentionAliasesConfig | null;
   },
 ): string {
-  if (!text.includes("@")) {
-    return text;
-  }
-  return text.replace(MENTION_CANDIDATE_PATTERN, (match, prefix, rawHandle) => {
-    const handle = normalizeOptionalString(rawHandle) ?? "";
-    if (!handle) {
+  const urlRanges = findDiscordUrlRanges(text);
+  return text.replace(
+    MENTION_CANDIDATE_PATTERN,
+    (match: string, prefix: string, handle: string, offset: number) => {
+      const mentionStart = offset + prefix.length;
+      if (urlRanges.some(({ start, end }) => start <= mentionStart && mentionStart < end)) {
+        return match;
+      }
+      for (let candidate = handle; candidate.length >= 2; candidate = candidate.slice(0, -1)) {
+        if (DISCORD_RESERVED_MENTIONS.has(candidate.toLowerCase())) {
+          return match;
+        }
+        const userId =
+          resolveConfiguredMentionAlias(candidate, params.mentionAliases) ??
+          resolveDiscordDirectoryUserId({
+            accountId: params.accountId,
+            handle: candidate,
+          });
+        if (userId) {
+          return `${prefix}${formatMention({ userId })}${handle.slice(candidate.length)}`;
+        }
+        if (!candidate.endsWith(".")) {
+          return match;
+        }
+      }
       return match;
-    }
-    const lookup = normalizeLowercaseStringOrEmpty(handle);
-    if (DISCORD_RESERVED_MENTIONS.has(lookup)) {
-      return match;
-    }
-    const userId =
-      resolveConfiguredMentionAlias(handle, params.mentionAliases) ??
-      resolveDiscordDirectoryUserId({
-        accountId: params.accountId,
-        handle,
-      });
-    if (!userId) {
-      return match;
-    }
-    return `${String(prefix ?? "")}${formatMention({ userId })}`;
-  });
+    },
+  );
 }
 
 function countBacktickRun(text: string, index: number): number {

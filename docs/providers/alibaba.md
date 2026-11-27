@@ -84,8 +84,11 @@ The bundled `alibaba` plugin registers a video-generation provider for Wan model
 
 ## Capabilities and limits
 
-Each model advertises only its matching runtime mode. Geometry also follows the
-vendor protocol for that model family instead of sending one generic parameter shape.
+With exactly one reference image and no video, `wan2.6-t2v` automatically
+uses `wan2.6-i2v`; the result reports the resolved model. This routing applies
+only when a same-generation image-to-video sibling exists in the known model
+catalog. Other requests use the selected model's mode. Geometry follows the
+vendor protocol for that model family.
 
 | Mode                         | Max output videos | Reference limits                      | Max duration | Supported controls                                                   |
 | ---------------------------- | ----------------- | ------------------------------------- | ------------ | -------------------------------------------------------------------- |
@@ -101,9 +104,13 @@ uses the input image's aspect ratio. Wan 2.7 reference-to-video sends the newer
 
 A request that omits `durationSeconds` gets DashScope's accepted default of **5 seconds**.
 
-<Warning>
-  Reference image and video inputs must be remote `http(s)` URLs; DashScope's reference modes reject local file paths. Upload to object storage first, or use the [media tool](/tools/media-overview) flow that already produces a public URL.
-</Warning>
+Image-to-video and Wan 2.7 reference images accept local files or remote
+`http(s)` URLs. OpenClaw sends local images as base64 data URIs, with a maximum
+of 20 MB per image before encoding. See the Model Studio references for
+[image-to-video](https://www.alibabacloud.com/help/en/model-studio/image-to-video-api-reference)
+and [Wan 2.7 reference-to-video](https://www.alibabacloud.com/help/en/model-studio/wan-video-to-video-api-reference).
+Reference videos and Wan 2.6 reference-to-video images still require remote
+`http(s)` URLs.
 
 ## Advanced configuration
 

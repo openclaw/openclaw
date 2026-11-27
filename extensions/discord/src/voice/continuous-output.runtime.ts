@@ -1,6 +1,6 @@
 import type { MessagePort } from "node:worker_threads";
+import { isRealtimeVoiceAudioAudible } from "openclaw/plugin-sdk/realtime-voice-playback";
 import {
-  isRealtimeVoiceAudioAudible,
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
   type RealtimeVoiceAudioOutputMessage,
 } from "openclaw/plugin-sdk/realtime-voice-provider";
@@ -49,7 +49,9 @@ export class DiscordContinuousOutput {
           return;
         }
         if (message.type === "audio") {
-          this.append(Buffer.from(message.audio));
+          // The port transferred ownership; keep the exact view without copying its storage.
+          const { audio } = message;
+          this.append(Buffer.from(audio.buffer, audio.byteOffset, audio.byteLength));
         } else if (message.type === "clear") {
           this.clear();
         }

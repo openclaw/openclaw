@@ -1,65 +1,59 @@
-// Onboard log contains tests cover bounded E2E wizard log polling.
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { logTailContains, readLogTail } from "../../scripts/e2e/lib/onboard/log-contains.mjs";
+import { logContains } from "../../scripts/e2e/lib/onboard/log-contains.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT_PATH = "scripts/e2e/lib/onboard/log-contains.mjs";
 
 describe("onboard log-contains helper", () => {
-  const tempRoots: string[] = [];
-
-  afterEach(() => {
-    for (const root of tempRoots.splice(0)) {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   function writeLog(contents: string) {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-onboard-log-"));
-    tempRoots.push(root);
+    const root = tempDirs.make("openclaw-onboard-log-");
     const logPath = path.join(root, "wizard.log");
     writeFileSync(logPath, contents, "utf8");
     return logPath;
   }
 
-  it("searches only a bounded tail window", () => {
-    const logPath = writeLog(
-      `prefix marker\n${"x".repeat(4096)}\n\u001b[32mReady\n to start\u001b[0m\n`,
-    );
-
-    const tail = readLogTail(logPath, 64);
-
-    expect(Buffer.byteLength(tail, "utf8")).toBeLessThanOrEqual(64);
-    expect(tail).toContain("Ready");
-    expect(tail).not.toContain("prefix marker");
-    expect(logTailContains(logPath, "Ready to start", 64)).toBe(true);
-    expect(logTailContains(logPath, "prefix marker", 64)).toBe(false);
+  it.each([
+    [
+      "ANSI read boundary",
+      `${"x".repeat(65_535)}\u001b[36mBoundary prompt\u001b[0m`,
+      "boundary prompt",
+    ],
+    ["UTF-8 read boundary", `${"x".repeat(65_535)}Key prompt`, "key prompt"],
+    ["lowercase expansion", "İnput prompt", "input prompt"],
+    ["OSC escape followed by BEL", "\u001b]title\u001b\u0007Visible prompt", "visible prompt"],
+  ])("finds visible text through %s", (_label, contents, needle) => {
+    expect(logContains(writeLog(contents), needle)).toBe(true);
   });
 
-  it("retains an earlier prompt across a large terminal redraw", () => {
-    const logPath = writeLog(
-      `What should we call your first agent?\n${"\u001b[36m│\u001b[39m agent\r\n".repeat(12_000)}`,
-    );
+  it("ignores Docker TTY line separators inside ANSI sequences", () => {
+    const splitBytes = (value: string) => value.split("").join("\r\n");
+    const prompt = "How should I set things up?";
+    const decoratedPrompt = prompt
+      .split("")
+      .map((character) => `${splitBytes("\u001b[36m")}│${splitBytes("\u001b[39m")} ${character}`)
+      .join("\r\n");
+    const logPath = writeLog(decoratedPrompt);
 
-    expect(logTailContains(logPath, "What should we call your first agent?")).toBe(true);
+    expect(logContains(logPath, prompt)).toBe(true);
   });
 
-  it("preserves CLI status behavior for matching and missing logs", () => {
-    const logPath = writeLog(`${"x".repeat(4096)}\nWizard Complete\n`);
+  it("scans the full log and preserves CLI status for matching and missing logs", () => {
+    const logPath = writeLog(
+      `Model/\u001b[36mauth\u001b[0m\n provider${"x".repeat(2 * 1_048_576)}\nWizard Complete\n`,
+    );
 
+    expect(spawnSync(process.execPath, [SCRIPT_PATH, logPath, "Model/auth provider"]).status).toBe(
+      0,
+    );
     expect(spawnSync(process.execPath, [SCRIPT_PATH, logPath, "wizard complete"]).status).toBe(0);
     expect(spawnSync(process.execPath, [SCRIPT_PATH, logPath, "prefix marker"]).status).toBe(1);
     expect(spawnSync(process.execPath, [SCRIPT_PATH, `${logPath}.missing`, "wizard"]).status).toBe(
       1,
     );
-  });
-
-  it("rejects invalid read windows", () => {
-    const logPath = writeLog("hello\n");
-
-    expect(() => readLogTail(logPath, 0)).toThrow("maxBytes must be a positive integer");
   });
 });
