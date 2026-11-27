@@ -13,6 +13,7 @@ private struct ChatTurnRecapObservation: Equatable {
 }
 
 @MainActor
+// swiftlint:disable file_length
 public struct OpenClawChatView: View {
     // The caller owns model lifetime; transport replacement can preserve presentation identity.
     private let viewModel: OpenClawChatViewModel
@@ -264,6 +265,9 @@ extension OpenClawChatView {
         .environment(\.openClawChatColumn, column)
         // Leaves read these; rows never take them as inputs, so a change redraws only the leaves.
         .environment(\.openClawChatGateway, self.gatewayResources)
+        #if os(iOS)
+        .environment(\.chatInlineVideos, self.viewModel.inlineVideos)
+        #endif
         .environment(\.openClawChatUserAccent, self.userAccent)
         .environment(\.openClawAssistantIdentity, ChatAssistantIdentity(
             name: self.assistantName,

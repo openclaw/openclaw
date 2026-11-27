@@ -24,6 +24,33 @@ struct ChatMediaImageBoxTests {
         return controller.sizeThatFits(in: CGSize(width: 361, height: CGFloat.greatestFiniteMagnitude)).height
     }
 
+    @Test func `video needs dimensions and either local bytes or a managed artifact`() {
+        let managed = "artifact_managed_media_11111111-1111-4111-8111-111111111111"
+        func block(_ kind: String, _ id: String?, _ height: Int?) -> OpenClawChatMessageContent {
+            OpenClawChatMessageContent(
+                type: kind,
+                artifactId: id,
+                url: "media://inbound/clip.mp4",
+                width: 384,
+                height: height,
+                durationSeconds: 74)
+        }
+        let portrait = block("video", managed, 640)
+        #expect(ChatInlineVideoSource(portrait, local: nil)?.size == CGSize(width: 384, height: 640))
+        #expect(ChatInlineVideoSource(block("video", managed, nil), local: nil) == nil)
+        #expect(ChatInlineVideoSource(block("video", managed, 0), local: nil) == nil)
+        #expect(ChatInlineVideoSource(block("audio", managed, 640), local: nil) == nil)
+        let inbound = block("video", nil, 640)
+        #expect(ChatInlineVideoSource(inbound, local: nil) == nil)
+        let local = OpenClawPendingAttachment(
+            url: nil,
+            data: Data([0]),
+            fileName: "clip.mp4",
+            mimeType: "video/mp4",
+            preview: nil)
+        #expect(ChatInlineVideoSource(inbound, local: local)?.duration == 74)
+    }
+
     @Test func `box follows the Control UI preview rule`() {
         let tall = ChatImageBox(pixelSize: CGSize(width: 1179, height: 2556)).size
         #expect(abs(tall.width - 166.06) < 0.01)
