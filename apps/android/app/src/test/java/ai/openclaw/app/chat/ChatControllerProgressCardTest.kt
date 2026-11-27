@@ -1,5 +1,6 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayErrorDetails
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
@@ -133,7 +134,7 @@ class ChatControllerProgressCardTest {
         }
         deniedFetch.completeExceptionally(
           GatewayRequestRejected(
-            GatewaySession.ErrorShape(
+            ErrorShape(
               code = "INVALID_REQUEST",
               message = "Session access denied",
               details = GatewayErrorDetails("SESSION_PARTICIPATION_REQUIRED", false, null),

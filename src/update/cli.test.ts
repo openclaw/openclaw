@@ -1,32 +1,22 @@
 import fs from "node:fs/promises";
-import { createServer } from "node:http";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { WebSocketServer } from "ws";
 import { validateUpdateRunParams } from "../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import type * as UpdateCliShared from "../cli/update-cli/shared.js";
 import type * as ConfigMutate from "../config/mutate.js";
 import { GatewayCredentialsRequiredError } from "../gateway/call-device-auth.js";
 import type { CallGatewayOptions } from "../gateway/call-options.js";
-import {
-  buildMinimalGatewayHelloOkPayload,
-  closeMinimalGatewayServer,
-  parseMinimalGatewayRequestFrame,
-  sendMinimalGatewayConnectChallenge,
-  sendMinimalGatewayResponse,
-} from "../gateway/minimal-gateway.test-helpers.js";
 import * as openclawRoot from "../infra/openclaw-root.js";
 import * as updateRunReader from "../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { createUpdateRunRecordFixture } from "../infra/update-run-record.test-support.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
-import * as resolveStore from "../secrets/resolve-store.js";
 import * as stateDatabaseCache from "../state/openclaw-state-db-cache.js";
-import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import { VERSION } from "../version.js";
+import { registerReleaseUpdateGatewayTests } from "./cli.gateway.test-support.js";
 import {
   runReleaseUpdateCli,
   tryAdoptInstalledPackageForGateway,
@@ -65,6 +55,11 @@ const confirmDowngrade = vi.hoisted(() =>
 const gatewayRunId = vi.hoisted(() => "e901d247-3929-4f73-94ef-0e54efbcfb73");
 const createRun = vi.hoisted(() => vi.fn(async () => ({ runId: gatewayRunId })));
 const mutateConfig = vi.hoisted(() => vi.fn());
+// Keep ordinary promise timers real; the polling case installs its controlled wait.
+vi.mock("node:timers/promises", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:timers/promises")>();
+  return { ...original, setTimeout: vi.fn(original.setTimeout) };
+});
 vi.mock("../config/mutate.js", async (importOriginal) => ({
   ...(await importOriginal<typeof ConfigMutate>()),
   mutateConfigFileWithRetry: mutateConfig,
@@ -95,6 +90,9 @@ vi.mock("../infra/update-install-status.js", async (importOriginal) => ({
   }),
 }));
 const prepared = vi.hoisted(() => [] as unknown[]);
+const prepareReply = vi.hoisted(() =>
+  vi.fn(async () => ({ status: "current" as const, version: "2026.11.6", pluginsChanged: false })),
+);
 const maintainRuntimes = vi.hoisted(() =>
   vi.fn(async (_repair: boolean, _authority: { assertCurrent: () => void }) => [] as string[]),
 );
@@ -107,7 +105,7 @@ vi.mock("./run.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./run.js")>()),
   prepareUpdate: async (params: unknown) => {
     prepared.push(params);
-    return { status: "current", version: "2026.11.6", pluginsChanged: false };
+    return prepareReply();
   },
 }));
 vi.mock("../infra/update-run-write.async.js", async (importOriginal) => ({
@@ -124,6 +122,7 @@ vi.mock("../infra/update-run-reader.js", async (importOriginal) => ({
     }),
 }));
 const runsGet = vi.hoisted(() => [] as Array<() => { run: Partial<UpdateRunRecord> | null }>);
+const restartReply = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 const useWireGateway = vi.hoisted(() => ({ enabled: false }));
 vi.mock("../gateway/call.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../gateway/call.js")>()),
@@ -135,7 +134,7 @@ vi.mock("../gateway/call.js", async (importOriginal) => ({
     if (request.method === "gateway.restart.request") {
       await request.prepareDispatchCurrent?.();
       sent.push(request);
-      return { ok: true };
+      return restartReply();
     }
     if (request.method === "update.run") {
       if (missingCredentials.enabled) {
@@ -167,6 +166,10 @@ vi.mock("../gateway/call.js", async (importOriginal) => ({
 }));
 
 afterEach(async () => {
+  // Wire fixtures restore their clock before closing their peers.
+  if (!useWireGateway.enabled) {
+    vi.useRealTimers();
+  }
   vi.restoreAllMocks();
   await home.restore();
   capabilities.length = 0;
@@ -176,13 +179,14 @@ afterEach(async () => {
   localRun.phase = "finished";
   localRun.origin = {};
   maintainRuntimes.mockReset();
-  maintainRuntimes.mockResolvedValue([]);
   confirmDowngrade.mockReset();
   createRun.mockClear();
   mutateConfig.mockClear();
   sent.length = 0;
   prepared.length = 0;
+  prepareReply.mockReset();
   runsGet.length = 0;
+  restartReply.mockReset();
   useWireGateway.enabled = false;
   process.exitCode = undefined;
 });
@@ -277,93 +281,86 @@ it("keeps following the run while the restarting Gateway refuses connections", a
   expect(process.exitCode).toBe(0);
 });
 
-it.each(["update.run", "gateway.restart.request"] as const)(
-  "follows %s without reading the Gateway token store after restart dispatch",
-  async (restartMethod) => {
-    useWireGateway.enabled = true;
-    vi.spyOn(installationIdentity, "checkUpdateInstallationSlot").mockResolvedValue();
-    const tag = restartMethod === "gateway.restart.request" ? VERSION : undefined;
-    if (tag) {
+registerReleaseUpdateGatewayTests(() => ({
+  home,
+  root,
+  localRun,
+  useWireGateway,
+  createRun,
+  prepared,
+}));
+
+it.each(["status", "restart"] as const)(
+  "keeps the %s result when RPC cleanup settles after expiry",
+  async (method) => {
+    const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const deadline = Date.now() + 5_000;
+    const record = createUpdateRunRecordFixture(gatewayRunId, { status: "succeeded" });
+    if (method === "status") {
+      runsGet.push(() => {
+        // A captured response survives the RPC owner's joined cleanup.
+        vi.setSystemTime(deadline + 1);
+        return { run: record };
+      });
+    } else {
       localRun.status = "running";
       localRun.phase = "activating";
-    }
-    const { claim, listener, releaseListener } = await reserveTestPortListener({
-      offsets: [0],
-      createListener: createServer,
-    });
-    const wss = new WebSocketServer({ server: listener });
-    try {
-      const configPath = path.join(home.home, "openclaw.json");
-      vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
-      vi.stubEnv("OPENCLAW_GATEWAY_PORT", undefined);
-      const refId = "GATEWAY_TEST_TOKEN";
-      const token = "wire-test-token";
-      await fs.writeFile(
-        configPath,
-        JSON.stringify({
-          gateway: {
-            port: claim.port,
-            auth: { mode: "token", token: { source: "store", provider: "default", id: refId } },
-          },
-        }),
-      );
-      const runId = tag ? "run-cli" : "run-wire";
-      const output = {
-        runId,
-        status: "succeeded",
-        phase: "finished",
-        steps: [],
-        after: {},
-        origin: {},
+      localRun.origin.releaseAdmission = {
+        owner: "candidate",
+        candidateVersion: VERSION,
+        verdict: "admit",
+        warnings: [],
       };
-      const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-      const requests: string[] = [];
-      const tokens: Array<string | undefined> = [];
-      let restartDispatched = false;
-      const readTokenStore = vi
-        .spyOn(resolveStore, "resolveStoreRefs")
-        .mockImplementation(async () => {
-          if (restartDispatched) {
-            throw new Error("Restart has exclusive state custody");
-          }
-          return new Map([[refId, token]]);
-        });
-      wss.on("connection", (ws) => {
-        ws.on("message", (data) => {
-          const { id, method, params } = parseMinimalGatewayRequestFrame(data);
-          if (!id || !method) {
-            return;
-          }
-          if (method === "connect") {
-            tokens.push(params?.auth?.token);
-            sendMinimalGatewayResponse(ws, id, buildMinimalGatewayHelloOkPayload());
-          } else {
-            requests.push(method);
-            if (method === restartMethod) {
-              restartDispatched = true;
-              sendMinimalGatewayResponse(ws, id, { ok: true, runId });
-            } else if (method === "update.runs.get") {
-              sendMinimalGatewayResponse(ws, id, { run: params?.runId === runId ? output : null });
-            }
-          }
-        });
-        sendMinimalGatewayConnectChallenge(ws);
+      restartReply.mockImplementationOnce(async () => {
+        vi.setSystemTime(deadline + 1);
+        return { ok: true };
       });
-
-      await runReleaseUpdateCli({ json: true, restart: true, runningRoot: root, tag, yes: true });
-      expect(requests).toEqual([restartMethod, "update.runs.get"]);
-      expect(tokens).toEqual([token, token]);
-      expect(readTokenStore).toHaveBeenCalledOnce();
-      expect(json).toHaveBeenCalledWith(output);
-      expect(process.exitCode).toBe(0);
-    } finally {
-      vi.unstubAllEnvs();
-      await closeMinimalGatewayServer(wss);
-      await releaseListener();
-      await claim.release();
     }
+    await runReleaseUpdateCli({
+      json: true,
+      restart: true,
+      runningRoot: root,
+      yes: true,
+      tag: method === "restart" ? VERSION : undefined,
+      timeoutMs: 5_000,
+    });
+    expect(json).toHaveBeenCalledWith(
+      method === "status"
+        ? record
+        : expect.objectContaining({
+            status: "running",
+            phase: "activating",
+            origin: localRun.origin,
+          }),
+    );
+    expect(sent).toHaveLength(1);
+    expect(process.exitCode).toBe(0);
   },
 );
+
+it("distinguishes completed plugin maintenance from an unconfirmed restart at expiry", async () => {
+  const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  const deadline = Date.now() + 5_000;
+  prepareReply.mockImplementationOnce(async () => {
+    vi.setSystemTime(deadline);
+    return { status: "current", version: VERSION, pluginsChanged: true };
+  });
+  await expect(
+    runReleaseUpdateCli({
+      json: true,
+      restart: true,
+      runningRoot: root,
+      yes: true,
+      tag: VERSION,
+      timeoutMs: 5_000,
+    }),
+  ).rejects.toThrow("Plugin maintenance completed, but the Gateway restart could not be confirmed");
+  expect(sent).toEqual([]);
+  expect(json).not.toHaveBeenCalled();
+  expect(prepared).toHaveLength(1);
+});
 
 it.each([false, true])(
   "reclaims earlier updaters' runtimes itself before the Gateway updates (json=%s)",
@@ -432,9 +429,14 @@ it("leaves kept-runtime lines to the cleanup owner's log", async () => {
 it("says the update is still running when the --timeout budget ends first", async () => {
   const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
   vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-  runsGet.push(() => ({
-    run: { status: "running", phase: "staging", steps: [], after: {}, origin: {} },
-  }));
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  const deadline = Date.now() + 100;
+  runsGet.push(() => {
+    // Reporting requires an observed running record; filesystem setup must not
+    // decide whether this unit control reaches that boundary.
+    vi.setSystemTime(deadline);
+    return { run: { status: "running", phase: "staging", steps: [], after: {}, origin: {} } };
+  });
   await runReleaseUpdateCli({
     json: false,
     restart: true,
@@ -493,6 +495,29 @@ it.each([undefined, "beta"] as const)(
     ]);
   },
 );
+
+it("updates an older Gateway before applying capability consent through its replacement", async () => {
+  capabilities.push(false, true);
+  runsGet.push(
+    () => ({ run: { status: "succeeded", phase: "finished", steps: [], after: {}, origin: {} } }),
+    () => ({ run: { status: "skipped", phase: "finished", steps: [], after: {}, origin: {} } }),
+  );
+  await runReleaseUpdateCli({
+    json: true,
+    restart: true,
+    runningRoot: root,
+    acceptCapabilities: true,
+  });
+  expect(sent).toEqual([
+    {},
+    {
+      checkout: { gitCommonDir: await fs.realpath(path.join(root, ".git")) },
+      acceptCapabilities: true,
+    },
+  ]);
+  expect(prepared).toEqual([]);
+  expect(process.exitCode).toBe(0);
+});
 
 it("does not claim consent was applied when the replacement Gateway still lacks support", async () => {
   capabilities.push(false, false);

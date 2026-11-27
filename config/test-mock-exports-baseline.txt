@@ -1723,7 +1723,6 @@
 ["src/agents/runtime-plan/tools.diagnostics.test.ts","../embedded-agent-runner/tool-schema-runtime.js","b507b4dc6e500b0dd9af10318026fa8c1a1fcf8fb5def71b4962dc4fd2a2cf39",1]
 ["src/agents/runtime-plan/tools.test.ts","../embedded-agent-runner/tool-schema-runtime.js","b507b4dc6e500b0dd9af10318026fa8c1a1fcf8fb5def71b4962dc4fd2a2cf39",1]
 ["src/agents/runtime-plugins.channel-ownership.test.ts","../plugins/loader.js","d6541763b2a22df47a2daa7c115cf716539d4966b9f50b4efe519b98e77c08d0",1]
-["src/agents/runtime-plugins.config-capture.test.ts","../plugins/loader.js","c0f9334e20e652991411705ccf6324b6049dea431d664a010c2af3571c332a10",1]
 ["src/agents/runtime-plugins.test.ts","../plugins/plugin-metadata-snapshot.js","75ca294a8ae3f9fa959f87a79adbe84522b9e13d8b843464664a49b68ad55b54",1]
 ["src/agents/runtime-plugins.test.ts","../plugins/runtime.js","533a3956249d604d1cd6d6451cf79c3c22170cdf1f7df2f3e165110b371311a8",1]
 ["src/agents/runtime-plugins.test.ts","./harness/runtime-plugin-load-plan.js","675960334ed8d829b0bbde4e48dad67eebe6b0916e9dde2e5e304b6ae3f7e8b6",1]

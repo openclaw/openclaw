@@ -15,11 +15,11 @@ import {
   readCronStoreSelectionForDoctor,
 } from "./default-store-selection.js";
 import { describeEndedOneTimeCronRepair, planEndedOneTimeCronRepair } from "./ended-one-time.js";
+import type { LegacyCronRepairState } from "./legacy-repair-plan.js";
 import {
   applyLegacyCronStoreRepair,
   loadLegacyCronRepairState,
   readLegacyCronStorePath,
-  type LegacyCronRepairState,
 } from "./legacy-repair.js";
 import {
   formatLegacyIssuePreview,

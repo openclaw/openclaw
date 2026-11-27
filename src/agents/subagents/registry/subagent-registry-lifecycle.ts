@@ -59,6 +59,7 @@ import type {
   SubagentRunRecord,
   SubagentSessionEffects,
 } from "./subagent-registry.types.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import {
   compareSubagentRunGeneration,
   getSubagentRunRuntimeKey,
@@ -80,7 +81,7 @@ const COMPLETION_SETTLING_ERROR = "Subagent completion is still settling; retry 
 /** Terminal rows still carrying session effects must revoke them before a reset. */
 const ownsSessionEffects = (entry: SubagentRunRecord): boolean =>
   entry.execution.status === "terminal" &&
-  entry.pauseReason !== "sessions_yield" &&
+  !isSubagentPausedByYield(entry) &&
   entry.execution.suppressSessionEffects !== true;
 
 export class SubagentLifecycleController {
@@ -336,7 +337,7 @@ export class SubagentLifecycleController {
     const current = getCurrentSubagentRunOwner(this.options.runs, entry);
     return (
       current !== undefined &&
-      current.pauseReason !== "sessions_yield" &&
+      !isSubagentPausedByYield(current) &&
       this.isCleanupGeneration(entry, generation)
     );
   };
@@ -356,7 +357,7 @@ export class SubagentLifecycleController {
     const current = this.liveRow(entry);
     return (
       (current === undefined || isSameSubagentRunOwner(current, entry)) &&
-      (current ?? entry).pauseReason !== "sessions_yield"
+      !isSubagentPausedByYield(current ?? entry)
     );
   };
   isEndedHookOwnerCurrent = (entry: SubagentRunRecord): boolean =>
@@ -368,7 +369,7 @@ export class SubagentLifecycleController {
     return (
       current !== undefined &&
       current.execution.status === "terminal" &&
-      current.pauseReason !== "sessions_yield" &&
+      !isSubagentPausedByYield(current) &&
       !current.killIntent &&
       current.endedReason === entry.endedReason &&
       current.execution.outcome?.status === entry.execution.outcome?.status &&

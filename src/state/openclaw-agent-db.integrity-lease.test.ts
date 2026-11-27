@@ -26,6 +26,7 @@ import { registerOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-ident
 import * as provenance from "./openclaw-agent-db-lease-provenance.js";
 import {
   claimOpenClawAgentDatabaseLease,
+  readOpenClawAgentDatabaseWorkerLeaseReceiptFromClaim,
   releaseOpenClawAgentDatabaseLease,
   type OpenClawAgentDatabaseWorkerLeaseReceipt,
 } from "./openclaw-agent-db-lease.js";
@@ -251,6 +252,26 @@ it.each(process.platform === "win32" ? [false] : [false, true])(
     ).toMatchObject({ schemaIdentity: sqliteDatabaseSealSchemaFor("agent")?.schemaIdentity });
   },
 );
+
+it("removes a refused worker claim while preserving the live borrower's validation", async () => {
+  const { database, env, cleanClose } = openOwner();
+  const params = { agentId: database.agentId, path: database.path, env };
+  const leaseId = claimOpenClawAgentDatabaseLease(params);
+  const receipt = readOpenClawAgentDatabaseWorkerLeaseReceiptFromClaim(leaseId, params);
+  await cleanupRetiredAgentDatabaseLease({
+    context: captureOpenClawStateWorkerContext({ env }),
+    stopped: Promise.resolve(),
+    assertOwned: () => {},
+    readOpenRefused: () => true,
+    lease: receipt,
+  });
+  const shared = openOpenClawStateDatabase({ env });
+  expect(
+    shared.db.prepare("SELECT lease_id FROM agent_database_leases WHERE lease_id = ?").get(leaseId),
+  ).toBeUndefined();
+  closeOpenClawAgentDatabaseByPath(database.path);
+  expect(cleanClose()).toBe(true);
+});
 
 it.each(["forced cleanup", "stale admission"])(
   "recovers a killed process via %s without certifying a surviving handle",
