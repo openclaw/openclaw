@@ -258,6 +258,16 @@ struct ChatMarkdownPreprocessorTests {
         #expect(result.cleaned == markdown.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
+    @Test(arguments: ["```", "~~~"])
+    func preservesAuthoredBlankLinesInsideFences(_ fence: String) {
+        let code = "\(fence)swift\na\n\n\nb\n\(fence)"
+        let markdown = "Before `inline`\n\n\n\n\(code)\n\n\nAfter"
+
+        let result = ChatMarkdownPreprocessor.preprocess(markdown: markdown)
+
+        #expect(result.cleaned == "Before `inline`\n\n\(code)\n\nAfter")
+    }
+
     @Test func preservesNonMetadataJsonFence() {
         let markdown = """
         Here is some json:

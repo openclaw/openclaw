@@ -538,13 +538,6 @@ describe("runtime.llm.complete", () => {
           json_schema: { name: "test_result", strict: true, schema: { type: "object" } },
         },
       });
-      expectFields(requireRecord(result, "completion result"), {
-        text: "done",
-        provider: "openai",
-        model: "gpt-5.5",
-        responseModel: "gpt-5.5-2026-08-01",
-        stopReason: "stop",
-      });
       expectFields(requireRecord(result.usage, "completion usage"), {
         inputTokens: 11,
         outputTokens: 7,

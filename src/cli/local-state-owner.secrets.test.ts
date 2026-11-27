@@ -2,9 +2,9 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { resolveCommandSecretRefsViaGateway } from "./command-secret-gateway.js";
-import { getModelsCommandSecretTargetIds } from "./command-secret-targets.js";
 import { useLocalStateOwnerFixture } from "./local-state-owner.fixture.test-support.js";
 import { runWithLocalStateOwner } from "./local-state-owner.js";
+import { getModelsCommandSecretTargetIds } from "./model-secret-targets.js";
 
 const fixture = useLocalStateOwnerFixture();
 

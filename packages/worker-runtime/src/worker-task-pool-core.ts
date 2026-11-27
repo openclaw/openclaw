@@ -459,7 +459,7 @@ export class WorkerTaskPoolCore<Input, Output> {
       options: this.options,
       host: this.host,
       runInContext: runInWorkerPoolContext,
-      unavailableError: (message, cause) => workerTaskUnavailableError(slot, message, cause),
+      preferShared: this.retirement.preferShared,
       onStarted: (worker) => {
         this.workers++;
         this.workersCreated++;

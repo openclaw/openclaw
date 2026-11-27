@@ -72,7 +72,6 @@ export const serviceStop = vi.fn();
 export const serviceRestart = vi.fn();
 // A fixed Gateway PID can collide with the updater and trigger its self-stop safeguard.
 export const gatewayFixturePid = process.pid + 1;
-export const unrelatedGatewayFixturePid = process.pid + 2;
 
 export const suspendScheduledTaskAutoStartForUpdate = vi.fn();
 export const resumeScheduledTaskAutoStartAfterUpdate = vi.fn();

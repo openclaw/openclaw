@@ -115,7 +115,8 @@ struct ChatInputHistory: Equatable, Sendable {
     }
 
     mutating func draftChanged(to draft: String) {
-        guard let cursor, self.entries.indices.contains(cursor), self.entries[cursor] != draft else { return }
+        guard let cursor, self.entries.indices.contains(cursor),
+              !self.entries[cursor].utf8.elementsEqual(draft.utf8) else { return }
         self.resetNavigation()
     }
 

@@ -66,6 +66,7 @@ it.each(["literal", "template"])(
     const finalized = native.finalize({ embeddedPaths });
     const requires = createStandaloneRequireAdapter({ runtimeRoot: root, embeddedPaths });
     const context = vm.createContext({
+      Buffer,
       root,
       path,
       fileURLToPath,

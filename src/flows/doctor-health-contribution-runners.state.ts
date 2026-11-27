@@ -1,10 +1,23 @@
 import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
+import type { DoctorMaintenancePending } from "../commands/doctor-maintenance-pending.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 import { noteDoctorRepairResult } from "./doctor-health-contribution-utils.js";
 import {
   recordDoctorHealthWarnings,
   renderStructuredHealthFindings,
 } from "./doctor-health-contribution.js";
+
+/** The repair rewrites exactly the manifests this collects. */
+export async function checkLegacyPluginManifestPending(
+  ctx: DoctorHealthFlowContext,
+): Promise<DoctorMaintenancePending> {
+  const { collectLegacyPluginManifestContractMigrations } =
+    await import("../commands/doctor-plugin-manifests.js");
+  return collectLegacyPluginManifestContractMigrations({ config: ctx.cfg, env: process.env })
+    .length > 0
+    ? "work"
+    : "none";
+}
 
 export async function runLegacyPluginManifestHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairLegacyPluginManifestContracts } =
@@ -18,6 +31,17 @@ export async function runLegacyPluginManifestHealth(ctx: DoctorHealthFlowContext
   if (pluginInventoryChanged) {
     ctx.invalidatePluginMetadataSnapshot?.();
   }
+}
+
+export async function checkAgentMemorySchemaPending(
+  ctx: DoctorHealthFlowContext,
+): Promise<DoctorMaintenancePending> {
+  const { checkDoctorAgentMemorySchemaPending } =
+    await import("../commands/doctor-agent-memory-schema.js");
+  return checkDoctorAgentMemorySchemaPending({
+    env: ctx.env ?? process.env,
+    shouldRepair: ctx.prompter.shouldRepair,
+  });
 }
 
 export async function runAgentMemorySchemaHealth(ctx: DoctorHealthFlowContext): Promise<void> {

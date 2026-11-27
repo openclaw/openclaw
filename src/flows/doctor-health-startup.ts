@@ -6,6 +6,7 @@ import { exitCliAfterOutput, watchCliExitAfterOutput } from "../cli/one-shot-exi
 import { getPendingCliDisposers } from "../cli/runtime-cleanup.js";
 import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import type { DoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
+import type { DoctorMaintenancePending } from "../commands/doctor-maintenance-pending.js";
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
 import { resolveDoctorRepairMode } from "../commands/doctor-repair-mode.js";
 import { isDefaultInstallIdentity, resolveIsNixMode, resolveStateDir } from "../config/paths.js";
@@ -276,12 +277,19 @@ export async function prepareDoctorMaintenanceArchives(
   return discovery;
 }
 
+/** Reads only the prepared preflight; the preflight refuses an unreadable state database. */
+export function checkDoctorStateSchemaPending(
+  schemas: DoctorDatabasePreflight,
+): DoctorMaintenancePending {
+  return schemas.pendingMigrations?.some((entry) => entry.kind === "state") ? "work" : "none";
+}
+
 export async function prepareDoctorStateSchema(
   schemas: DoctorDatabasePreflight,
   shouldRepair: boolean,
   integrityCheck?: "quick" | "full",
 ) {
-  if (!shouldRepair || !schemas.pendingMigrations?.some((entry) => entry.kind === "state")) {
+  if (!shouldRepair || checkDoctorStateSchemaPending(schemas) === "none") {
     return undefined;
   }
   const { prepareLegacyStateDatabaseSchema } = await import("../infra/state-migrations.doctor.js");
@@ -361,7 +369,8 @@ export async function prepareDoctorRuntimeChecks(
           ).prepareDoctorDatabasePreflight(),
         )
       : preflight;
-  const { inspectDoctorSqliteNoCow } = await import("../commands/doctor-sqlite-nocow.js");
+  const { checkDoctorSqliteNoCowPending, inspectDoctorSqliteNoCow } =
+    await import("../commands/doctor-sqlite-nocow.js");
   const { resolveOpenClawStateSqlitePath } = await import("../state/openclaw-state-db.paths.js");
   const nocow = inspectDoctorSqliteNoCow([
     resolveOpenClawStateSqlitePath(),
@@ -413,7 +422,7 @@ export async function prepareDoctorRuntimeChecks(
   noteStartupOptimizationHints();
   return {
     schemas,
-    nocowPaths: nocow.paths,
+    nocow: { paths: nocow.paths, pending: checkDoctorSqliteNoCowPending(nocow) },
     warnings: restartNotice
       ? [...deletionJournal.warnings, restartNotice]
       : deletionJournal.warnings,
