@@ -56,6 +56,7 @@
     {"path":"apps/macos/Sources/OpenClaw/GatewayConnectionPresentation.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.e14da7a07d5cacf8","source":"Disconnected from your remote Gateway. Open Connection settings to fix it."},
     {"path":"apps/macos/Sources/OpenClaw/GatewayConnectionPresentation.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.52fb09ebcfc49bbf","source":"Gateway connection failed."},
     {"path":"apps/macos/Sources/OpenClaw/GatewayConnectionPresentation.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.a01dac25f95ff13f","source":"Open Connection settings to fix it."},
+    {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/OpenClawSheetCloseItem.swift","kind":"ui-call","surface":"apple","id":"native.apple.50ae97042e9ad1b0","source":"Close"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawKit/WatchChatDeliveryStore.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.f18bea4d5075680e","source":"The Watch message queue is full. Reconnect to iPhone before sending more."},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawKit/WatchChatDeliveryStore.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.ce1fdbfed92d3e60","source":"This Watch message no longer matches its saved delivery owner."},
     {"path":"apps/macos/Sources/OpenClaw/MacSidebarIdentityMenu.swift","kind":"ui-call","surface":"apple","id":"native.apple.cf5cdb8c89e57ea2","source":"About OpenClaw"},
