@@ -172,7 +172,7 @@ export function sessionListQueryKey(options: SessionListOptions): string {
 export const initialSessionsTables = new WeakMap<
   object,
   {
-    waitForTable: (source: SessionsListParams["source"]) => Promise<void> | undefined;
+    requestWindow: typeof requestSessionListWindow;
     tablePresented: () => void;
   }
 >();

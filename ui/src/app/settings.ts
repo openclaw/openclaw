@@ -135,6 +135,48 @@ type BooleanSettingKey = {
 }[keyof UiPreferences] &
   keyof PersistedUiSettings;
 
+// These browser-local switches store only an explicit departure from their default.
+const LOCAL_TOGGLE_OVERRIDES = [
+  ["prioritizeSessionsTable", true],
+  ["lobsterPetVisits", false],
+  ["lobsterPetSounds", true],
+  ["sessionDeleteConfirm", false],
+  ["chatModelChangeConfirm", false],
+  ["openLinksInControlUiBrowser", true],
+  ["openLinksExternally", true],
+] as const;
+type LocalToggle = (typeof LOCAL_TOGGLE_OVERRIDES)[number][0];
+
+function normalizeLocalPreferences(settings: UiSettings | PersistedUiSettings) {
+  const overrides: Partial<Record<LocalToggle, boolean>> = {};
+  for (const [key, value] of LOCAL_TOGGLE_OVERRIDES) {
+    if (settings[key] === value) {
+      overrides[key] = value;
+    }
+  }
+  return {
+    ...overrides,
+    accent: normalizeAccentColor(settings.accent),
+    fontUi: normalizeTypefaceOverride(settings.fontUi),
+    fontChat: normalizeTypefaceOverride(settings.fontChat),
+    tabIcon: normalizeTabIconPreference(settings.tabIcon),
+    terminalFontFamily: normalizeTerminalFontFamily(settings.terminalFontFamily),
+    chatBubbleSessionKeys: normalizeChatBubbleSessionKeys(settings.chatBubbleSessionKeys),
+    chatBubbleDisabledSessionKeys: normalizeChatBubbleSessionKeys(
+      settings.chatBubbleDisabledSessionKeys,
+    ),
+    chatFollowUpMode: normalizeChatFollowUpModeOverride(settings.chatFollowUpMode),
+    realtimeTalkInputDeviceId: normalizeOptionalString(settings.realtimeTalkInputDeviceId),
+    realtimeTalkVideoDeviceId: normalizeOptionalString(settings.realtimeTalkVideoDeviceId),
+    dashboardsDisplay: normalizeDashboardsDisplay(settings.dashboardsDisplay),
+    sessionFilesDisplay: normalizeSessionFilesDisplay(settings.sessionFilesDisplay),
+    sidebarPreTeamScope: normalizeSidebarPreTeamScope(settings.sidebarPreTeamScope),
+    sidebarRecentlyCreatedAgentId: normalizeOptionalString(settings.sidebarRecentlyCreatedAgentId),
+    chatMessageMaxWidth: normalizeChatMessageMaxWidth(settings.chatMessageMaxWidth),
+    dismissedReadOnlyConfigNotice: normalizeOptionalString(settings.dismissedReadOnlyConfigNotice),
+  };
+}
+
 function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const basePath = resolveControlUiPaths(location.pathname)[0];
@@ -427,35 +469,21 @@ export function loadUiPreferences(
       selectedAgentId: scopedSessionSelection.selectedAgentId,
       theme: theme === "custom" && !customTheme ? "claw" : theme,
       themeMode: mode,
-      accent: normalizeAccentColor(parsed.accent),
-      fontUi: normalizeTypefaceOverride(parsed.fontUi),
-      fontChat: normalizeTypefaceOverride(parsed.fontChat),
       background: loadBackgroundPreference(gatewayUrl),
-      tabIcon: normalizeTabIconPreference(parsed.tabIcon),
-      terminalFontFamily: normalizeTerminalFontFamily(parsed.terminalFontFamily),
       chatShowThinking: booleanSetting("chatShowThinking"),
       chatShowToolCalls: booleanSetting("chatShowToolCalls"),
       chatInlineCommands: booleanSetting("chatInlineCommands"),
       chatPersistCommentary: booleanSetting("chatPersistCommentary"),
       chatShowTaskProgress: booleanSetting("chatShowTaskProgress"),
       chatCollapseTaskProgress: booleanSetting("chatCollapseTaskProgress"),
-      chatBubbleSessionKeys: normalizeChatBubbleSessionKeys(parsed.chatBubbleSessionKeys),
-      chatBubbleDisabledSessionKeys: normalizeChatBubbleSessionKeys(
-        parsed.chatBubbleDisabledSessionKeys,
-      ),
       chatSendShortcut: normalizeChatSendShortcut(parsed.chatSendShortcut),
-      chatFollowUpMode: normalizeChatFollowUpModeOverride(parsed.chatFollowUpMode),
       catalogOpenTarget: normalizeCatalogOpenTarget(parsed.catalogOpenTarget),
-      realtimeTalkInputDeviceId: normalizeOptionalString(parsed.realtimeTalkInputDeviceId),
-      realtimeTalkVideoDeviceId: normalizeOptionalString(parsed.realtimeTalkVideoDeviceId),
       composerHoldToRecord: booleanSetting("composerHoldToRecord"),
       talkCameraAutoEnable:
         typeof parsed.talkCameraAutoEnable === "boolean" ? parsed.talkCameraAutoEnable : undefined,
       chatSplitLayout: normalizeChatSplitLayout(parsed.chatSplitLayout),
       chatWorkspaceDock: normalizeChatWorkspaceDock(parsed.chatWorkspaceDock),
       boardSessionViews: normalizeBoardSessionViews(parsed.boardSessionViews),
-      dashboardsDisplay: normalizeDashboardsDisplay(parsed.dashboardsDisplay),
-      sessionFilesDisplay: normalizeSessionFilesDisplay(parsed.sessionFilesDisplay),
       sidebarSessionLayouts: normalizeSidebarSessionLayouts(parsed.sidebarSessionLayouts),
       sidebarSessionActivePanels: normalizeSidebarSessionActivePanels(
         parsed.sidebarSessionActivePanels,
@@ -468,27 +496,17 @@ export function loadUiPreferences(
           ? parsed.navWidth
           : defaults.navWidth,
       sidebarAgentsMode: parsed.sidebarAgentsMode === "roster" ? "roster" : "chip",
-      sidebarPreTeamScope: normalizeSidebarPreTeamScope(parsed.sidebarPreTeamScope),
       sidebarCollapsedAgentIds: normalizeUniqueTrimmedStringList(parsed.sidebarCollapsedAgentIds),
-      sidebarRecentlyCreatedAgentId: normalizeOptionalString(parsed.sidebarRecentlyCreatedAgentId),
       sidebarEntries: profileId
         ? (personalNavigation?.railShortcuts ?? defaults.sidebarEntries)
         : (normalizeSidebarEntries(parsedRecord.railShortcuts) ?? defaults.sidebarEntries),
       sidebarLiveActivity: booleanSetting("sidebarLiveActivity"),
-      chatMessageMaxWidth: normalizeChatMessageMaxWidth(parsed.chatMessageMaxWidth),
       showAdvancedSettings: booleanSetting("showAdvancedSettings"),
       pinnedAgentIds: normalizeUniqueTrimmedStringList(parsed.pinnedAgentIds),
       textScale: textScale !== UI_APPEARANCE_DEFAULTS.textScale ? textScale : undefined,
       customTheme: customTheme ?? undefined,
       locale: isSupportedLocale(parsed.locale) ? parsed.locale : undefined,
-      ...(parsed.lobsterPetVisits === false ? { lobsterPetVisits: false } : {}),
-      ...(parsed.lobsterPetSounds === true ? { lobsterPetSounds: true } : {}),
-      ...(parsed.sessionDeleteConfirm === false ? { sessionDeleteConfirm: false } : {}),
-      ...(parsed.prioritizeSessionsTable === true ? { prioritizeSessionsTable: true } : {}),
-      ...(parsed.chatModelChangeConfirm === false ? { chatModelChangeConfirm: false } : {}),
-      dismissedReadOnlyConfigNotice: normalizeOptionalString(parsed.dismissedReadOnlyConfigNotice),
-      ...(parsed.openLinksInControlUiBrowser === true ? { openLinksInControlUiBrowser: true } : {}),
-      ...(parsed.openLinksExternally === true ? { openLinksExternally: true } : {}),
+      ...normalizeLocalPreferences(parsed),
     };
     return settings;
   } catch {
@@ -590,26 +608,14 @@ export function saveSettings(
     gatewayUrl: next.gatewayUrl,
     theme: next.theme,
     themeMode: next.themeMode,
-    accent: normalizeAccentColor(next.accent),
-    fontUi: normalizeTypefaceOverride(next.fontUi),
-    fontChat: normalizeTypefaceOverride(next.fontChat),
-    tabIcon: normalizeTabIconPreference(next.tabIcon),
-    terminalFontFamily: normalizeTerminalFontFamily(next.terminalFontFamily),
     chatShowThinking: next.chatShowThinking,
     chatShowToolCalls: next.chatShowToolCalls,
     chatInlineCommands: next.chatInlineCommands === true ? true : undefined,
     chatPersistCommentary: next.chatPersistCommentary ?? true,
     chatShowTaskProgress: next.chatShowTaskProgress === false ? false : undefined,
     chatCollapseTaskProgress: next.chatCollapseTaskProgress === true ? true : undefined,
-    chatBubbleSessionKeys: normalizeChatBubbleSessionKeys(next.chatBubbleSessionKeys),
-    chatBubbleDisabledSessionKeys: normalizeChatBubbleSessionKeys(
-      next.chatBubbleDisabledSessionKeys,
-    ),
     chatSendShortcut: next.chatSendShortcut === "modifier-enter" ? "modifier-enter" : undefined,
-    chatFollowUpMode: normalizeChatFollowUpModeOverride(next.chatFollowUpMode),
     catalogOpenTarget: next.catalogOpenTarget === "terminal" ? "terminal" : undefined,
-    realtimeTalkInputDeviceId: normalizeOptionalString(next.realtimeTalkInputDeviceId),
-    realtimeTalkVideoDeviceId: normalizeOptionalString(next.realtimeTalkVideoDeviceId),
     composerHoldToRecord: next.composerHoldToRecord === false ? false : undefined,
     talkCameraAutoEnable: next.talkCameraAutoEnable,
     chatSplitLayout: next.chatSplitLayout || undefined,
@@ -619,8 +625,6 @@ export function saveSettings(
       next.boardSessionViews && Object.keys(next.boardSessionViews).length > 0
         ? next.boardSessionViews
         : undefined,
-    dashboardsDisplay: normalizeDashboardsDisplay(next.dashboardsDisplay),
-    sessionFilesDisplay: normalizeSessionFilesDisplay(next.sessionFilesDisplay),
     sidebarSessionLayouts:
       next.sidebarSessionLayouts && Object.keys(next.sidebarSessionLayouts).length > 0
         ? next.sidebarSessionLayouts
@@ -631,7 +635,6 @@ export function saveSettings(
         : undefined,
     navWidth: next.navWidth, // Persist size, not visibility: shared localStorage leaks across tabs.
     sidebarAgentsMode: next.sidebarAgentsMode === "roster" ? "roster" : "chip",
-    sidebarPreTeamScope: normalizeSidebarPreTeamScope(next.sidebarPreTeamScope),
     sidebarCollapsedAgentIds: next.sidebarCollapsedAgentIds?.length
       ? normalizeUniqueTrimmedStringList(next.sidebarCollapsedAgentIds)
       : undefined,
@@ -650,27 +653,14 @@ export function saveSettings(
       ),
     },
     sidebarLiveActivity: next.sidebarLiveActivity === false ? false : undefined,
-    chatMessageMaxWidth: normalizeChatMessageMaxWidth(next.chatMessageMaxWidth),
     showAdvancedSettings: next.showAdvancedSettings === true ? true : undefined,
     // Empty pin list is the default; only real pins persist.
     pinnedAgentIds: next.pinnedAgentIds?.length ? next.pinnedAgentIds : undefined,
-    sidebarRecentlyCreatedAgentId: normalizeOptionalString(next.sidebarRecentlyCreatedAgentId),
     textScale: next.textScale !== undefined ? normalizeTextScale(next.textScale) : undefined,
     customTheme: next.customTheme || undefined,
     sessionsByGateway,
     locale: next.locale || undefined,
-    // Visits default on; only an explicit opt-out persists. Sounds default
-    // off; only an explicit opt-in persists.
-    lobsterPetVisits: next.lobsterPetVisits === false ? false : undefined,
-    lobsterPetSounds: next.lobsterPetSounds === true ? true : undefined,
-    // Only the opted-out value is persisted; absence means the safe default.
-    sessionDeleteConfirm: next.sessionDeleteConfirm === false ? false : undefined,
-    prioritizeSessionsTable: next.prioritizeSessionsTable === true ? true : undefined,
-    chatModelChangeConfirm: next.chatModelChangeConfirm === false ? false : undefined,
-    dismissedReadOnlyConfigNotice: normalizeOptionalString(next.dismissedReadOnlyConfigNotice),
-    // External links keep host behavior unless the operator explicitly opts in.
-    openLinksInControlUiBrowser: next.openLinksInControlUiBrowser === true ? true : undefined,
-    openLinksExternally: next.openLinksExternally === true ? true : undefined,
+    ...normalizeLocalPreferences(next),
   };
   saveBackgroundPreference(next.gatewayUrl, next.background);
   const serialized = JSON.stringify(persisted);

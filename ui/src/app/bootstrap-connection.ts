@@ -118,11 +118,9 @@ export function prepareApplicationStartup() {
   const ownsWarmBoot =
     startsApplicationRouter && !isRemoteControlUiIngress() && !hasEmbedderTransport();
   const hasPendingGateway = startup.pendingGatewayUrl !== null;
-  const prioritizeSessionsTable =
-    settings.prioritizeSessionsTable === true &&
-    startsApplicationRouter &&
-    !hasPendingGateway &&
-    routeIdFromPath(applicationLocation.pathname, basePath) === "sessions";
+  const initialRoute = startsApplicationRouter
+    ? routeIdFromPath(applicationLocation.pathname, basePath)
+    : null;
   const readStartupBootRecord = () =>
     ownsWarmBoot && !hasPendingGateway
       ? readCredentialBootRecord({
@@ -157,7 +155,11 @@ export function prepareApplicationStartup() {
     applicationLocation,
     focusLocation,
     startsApplicationRouter,
-    prioritizeSessionsTable,
+    initialRoute,
+    prioritizeSessionsTable:
+      initialRoute === "sessions" &&
+      !hasPendingGateway &&
+      settings.prioritizeSessionsTable === true,
     ownsWarmBoot,
     hasPendingGateway,
   };

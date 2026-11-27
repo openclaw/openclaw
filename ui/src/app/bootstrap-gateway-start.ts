@@ -1,21 +1,38 @@
-import { prioritizeInitialSessionsTable } from "../lib/sessions/session-table-priority.ts";
 import type { EarlyApplicationGateway } from "./early-gateway.ts";
 import type { ApplicationGateway } from "./gateway.ts";
+import type { createStartupLifecycle, StartupStep } from "./startup-lifecycle.ts";
 
-export function startApplicationGatewayConnection(
+export function prepareApplicationGatewayStart(
   gateway: ApplicationGateway,
   earlyGateway: EarlyApplicationGateway | undefined,
   prioritizeSessionsTable: boolean,
-): () => void {
-  gateway.start();
-  const client = prioritizeSessionsTable ? gateway.snapshot.client : null;
-  if (client) {
-    prioritizeInitialSessionsTable(client);
-  }
+  lifecycle: ReturnType<typeof createStartupLifecycle>,
+): StartupStep {
+  // Fetch the optional scheduler alongside the Sessions view. A failed import falls
+  // back to ordinary list ordering so the Gateway can still start.
+  const tablePriority = prioritizeSessionsTable
+    ? import("../lib/sessions/session-table-priority.ts").then(
+        (module) => module.prioritizeInitialSessionsTable,
+        () => undefined,
+      )
+    : undefined;
+
   return () => {
-    if (earlyGateway && !earlyGateway.credentials && !gateway.snapshot.client) {
-      earlyGateway.transport.client.stop();
-    }
-    gateway.stop();
+    lifecycle.addDisposer(() => {
+      if (earlyGateway && !earlyGateway.credentials && !gateway.snapshot.client) {
+        earlyGateway.transport.client.stop();
+      }
+      gateway.stop();
+    });
+    const start = (prioritize?: (client: object) => void) => {
+      if (!lifecycle.signal.aborted) {
+        gateway.start();
+        const client = gateway.snapshot.client;
+        if (client) {
+          prioritize?.(client);
+        }
+      }
+    };
+    return tablePriority ? tablePriority.then(start) : start();
   };
 }

@@ -158,10 +158,8 @@ for (const route of APP_ROUTE_TREE as readonly AppRoute[]) {
 /** Starts route chunk downloads without running the route's loader. */
 export function warmApplicationRouteModule(
   router: ApplicationRouter,
-  location: RouteLocation,
-  basePath: string,
+  routeId: RouteId | null,
 ): void {
-  const routeId = routeIdFromPath(location.pathname, basePath);
   const route = routeId ? router.getRoute(routeId) : null;
   if (route) {
     // Navigation owns chunk errors; its import reuses the browser's module cache.

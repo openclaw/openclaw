@@ -34,7 +34,7 @@ import { selectShellRouteState } from "./app-host-route-state.ts";
 import { AssistantDock } from "./assistant-dock.ts";
 import { finishBootFrame } from "./boot-composer.ts";
 import { prepareApplicationStartup } from "./bootstrap-connection.ts";
-import { startApplicationGatewayConnection } from "./bootstrap-gateway-start.ts";
+import { prepareApplicationGatewayStart } from "./bootstrap-gateway-start.ts";
 import {
   applicationRouteLocation,
   createInitialApplicationLocationResolver,
@@ -108,7 +108,7 @@ export function bootstrapApplication(
     applicationLocation,
     focusLocation,
     startsApplicationRouter,
-    prioritizeSessionsTable,
+    initialRoute,
     ownsWarmBoot,
     hasPendingGateway,
   } = initial;
@@ -153,7 +153,7 @@ export function bootstrapApplication(
   initial.prewarmChatSnapshot();
   if (startsApplicationRouter && !firstRunDefaultLanding) {
     // Explicit routes download alongside snapshot reads, before shell construction.
-    warmApplicationRouteModule(router, applicationLocation, basePath);
+    warmApplicationRouteModule(router, initialRoute);
   }
   const stopWarmBootConnection = ownsWarmBoot
     ? subscribeWarmBootConnection(gateway, bootRecord, () => {
@@ -163,6 +163,12 @@ export function bootstrapApplication(
     : undefined;
   const agents = createAgentCapability(gateway);
   const startupLifecycle = createStartupLifecycle();
+  const startGateway = prepareApplicationGatewayStart(
+    gateway,
+    earlyGateway,
+    initial.prioritizeSessionsTable,
+    startupLifecycle,
+  );
   const parsedInitialSession = parseAgentSessionKey(settings.sessionKey);
   const deferInitialLocationUntilGateway = firstRunDefaultLanding && !parsedInitialSession;
   let resolveInitialFirstRunDecision: (() => void) | null = null;
@@ -571,7 +577,7 @@ export function bootstrapApplication(
         startupLifecycle.addDisposer(stopRouter);
       }
       const steps: StartupStep[] = [
-        () => startApplicationGatewayConnection(gateway, earlyGateway, prioritizeSessionsTable),
+        startGateway,
         () => startGatewayPageActivation(gateway, document, window),
         () => startGatewayPresenceActivity(gateway, document),
         () => guestWelcome?.start(),

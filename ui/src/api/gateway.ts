@@ -256,13 +256,18 @@ export class GatewayBrowserClient {
     if (client.remoteIngress) {
       return undefined;
     }
+    const documentUrl = globalThis.location?.href;
     const pending = Promise.withResolvers<void>();
     client.pendingOwner = pending;
     client.start();
     return {
       client,
       adopt(options: GatewayBrowserClientOptions): GatewayBrowserClient | null {
-        if (client.pendingOwner !== pending || options.url !== url) {
+        if (
+          client.pendingOwner !== pending ||
+          options.url !== url ||
+          globalThis.location?.href !== documentUrl
+        ) {
           client.stop();
           return null;
         }

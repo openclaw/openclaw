@@ -243,17 +243,13 @@ export function createSessionManagedListRefresh(
         ? managedIsCurrent(read)
         : [...read.primary].some((consumer) => consumer.presentation?.isCurrent() !== false);
     try {
-      const isCurrent = () => readIsCurrent(read) && hasDemand();
-      const tableReady = initialSessionsTables
-        .get(read.scope.client)
-        ?.waitForTable(read.params.source);
-      if (tableReady) {
-        await tableReady;
-      }
-      const window =
-        tableReady && !isCurrent()
-          ? null
-          : await requestSessionListWindow(read.scope.client, read.params, isCurrent);
+      const requestWindow =
+        initialSessionsTables.get(read.scope.client)?.requestWindow ?? requestSessionListWindow;
+      const window = await requestWindow(
+        read.scope.client,
+        read.params,
+        () => readIsCurrent(read) && hasDemand(),
+      );
       const response = window?.result ?? null;
       read.expiry = window?.expiry;
       if (readIsCurrent(read) && (read.managed || hasDemand())) {
