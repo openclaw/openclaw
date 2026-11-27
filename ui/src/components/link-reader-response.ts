@@ -1,3 +1,4 @@
+import { parseCanonicalIpAddress } from "@openclaw/net-policy/ip";
 import type { ControlUiLinkReaderPreview } from "../../../src/shared/control-ui-link-reader.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import {
@@ -24,6 +25,27 @@ export function linkReaderAuthorHref(value: unknown, source: string): string | u
     !url.username &&
     !url.password &&
     url.origin === URL.parse(source)?.origin
+    ? url.href
+    : undefined;
+}
+
+/** Author and preview images: bounded inline bytes, or a public HTTPS host loaded without credentials. */
+export function safePreviewImage(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  if (/^data:image\/(?:gif|jpeg|png|webp);base64,/u.test(value)) {
+    return value;
+  }
+  const url = URL.parse(value);
+  const host = url?.hostname.replace(/\.+$/u, "") ?? "";
+  return url?.protocol === "https:" &&
+    !url.username &&
+    !url.password &&
+    url.origin !== window.location.origin &&
+    host.includes(".") &&
+    !/(?:^|\.)(?:localhost|local|internal|localdomain)$/u.test(host) &&
+    !parseCanonicalIpAddress(host)
     ? url.href
     : undefined;
 }

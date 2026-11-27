@@ -65,7 +65,11 @@ export async function measureDoctorContribution(
   run: () => Promise<void>,
 ): Promise<void> {
   if (ctx.gatewayMaintenanceActive) {
-    await traceDoctorMaintenancePending(`contribution.${contribution.id}`, contribution.pending);
+    const { pending } = contribution;
+    await traceDoctorMaintenancePending(
+      `contribution.${contribution.id}`,
+      pending === "diagnostic-only" ? () => "none" : pending ? () => pending(ctx) : undefined,
+    );
   }
   await measureGatewayBootstrapStep(`doctor.contribution.${contribution.id}`, run);
 }

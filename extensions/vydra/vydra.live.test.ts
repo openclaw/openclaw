@@ -1,4 +1,3 @@
-// Vydra tests cover vydra plugin behavior.
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
@@ -12,10 +11,13 @@ const VYDRA_API_KEY = process.env.VYDRA_API_KEY?.trim() ?? "";
 const ENABLE_VYDRA_VIDEO_LIVE = process.env.OPENCLAW_LIVE_VYDRA_VIDEO === "1";
 const LIVE_IMAGE_MODEL = process.env.OPENCLAW_LIVE_VYDRA_IMAGE_MODEL?.trim() || "grok-imagine";
 const LIVE_VIDEO_MODEL = process.env.OPENCLAW_LIVE_VYDRA_VIDEO_MODEL?.trim() || "veo3";
-const DEFAULT_LIVE_KLING_IMAGE_URL =
-  "https://raw.githubusercontent.com/openclaw/openclaw/main/test/fixtures/media/roof-camera-sky.jpg";
+// The sample pair from fal's Kling motion-control API contains a character and a short performance.
 const LIVE_KLING_IMAGE_URL =
-  process.env.OPENCLAW_LIVE_VYDRA_KLING_IMAGE_URL?.trim() || DEFAULT_LIVE_KLING_IMAGE_URL;
+  process.env.OPENCLAW_LIVE_VYDRA_KLING_IMAGE_URL?.trim() ||
+  "https://v3b.fal.media/files/b/0a90ee31/VHtWK5BZMa-XoT6gahJKS_077.png";
+const LIVE_KLING_VIDEO_URL =
+  process.env.OPENCLAW_LIVE_VYDRA_KLING_VIDEO_URL?.trim() ||
+  "https://v3b.fal.media/files/b/0a90edae/3nvl30ic9g2otKRcOV5nO_output.mp4";
 const VYDRA_KLING_TIMEOUT_MS = 12 * 60_000;
 
 const registerVydraPlugin = () =>
@@ -75,8 +77,8 @@ describe.skipIf(!LIVE || !VYDRA_API_KEY)("vydra live", () => {
     expect(result.audioBuffer.byteLength).toBeGreaterThan(512);
   }, 60_000);
 
-  it.skipIf(!ENABLE_VYDRA_VIDEO_LIVE)(
-    "generates a short video through the registered provider",
+  it.skipIf(!ENABLE_VYDRA_VIDEO_LIVE || LIVE_VIDEO_MODEL === "kling")(
+    "generates a text-to-video clip through the registered provider",
     async () => {
       const { videoProviders } = await registerVydraPlugin();
       const provider = requireRegisteredProvider(videoProviders, "vydra");
@@ -97,7 +99,7 @@ describe.skipIf(!LIVE || !VYDRA_API_KEY)("vydra live", () => {
   );
 
   it.skipIf(!ENABLE_VYDRA_VIDEO_LIVE)(
-    "generates a kling image-to-video clip from a remote image url",
+    "transfers motion to a character image through the registered Kling provider",
     async () => {
       const { videoProviders } = await registerVydraPlugin();
       const provider = requireRegisteredProvider(videoProviders, "vydra");
@@ -105,10 +107,11 @@ describe.skipIf(!LIVE || !VYDRA_API_KEY)("vydra live", () => {
       const result = await provider.generateVideo({
         provider: "vydra",
         model: "kling",
-        prompt: "Animate the scene with subtle camera drift and soft cloud motion.",
+        prompt: "Animate the character using the movement in the reference video.",
         cfg: { plugins: { enabled: true } } as never,
         agentDir: "/tmp/openclaw-live-vydra-kling",
         inputImages: [{ url: LIVE_KLING_IMAGE_URL }],
+        inputVideos: [{ url: LIVE_KLING_VIDEO_URL }],
         timeoutMs: VYDRA_KLING_TIMEOUT_MS,
       });
 

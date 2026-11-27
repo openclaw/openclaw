@@ -1245,7 +1245,6 @@ describe("server-channels auto restart", () => {
   it("does not restart when a timed-out recovery stop settles as terminal before a start request", async () => {
     const releaseFirstTask = createDeferred();
     const startAccount = vi.fn(async (ctx: ChannelGatewayContext<TestAccount>) => {
-      ctx.abortSignal.addEventListener("abort", () => {}, { once: true });
       await releaseFirstTask.promise;
       ctx.setStatus({ accountId: DEFAULT_ACCOUNT_ID, terminalDisconnect: true });
     });
@@ -1897,8 +1896,7 @@ describe("server-channels auto restart", () => {
     const unhandledRejection = vi.fn();
     process.on("unhandledRejection", unhandledRejection);
     let isConfiguredCalls = 0;
-    const startAccount = vi.fn(async ({ abortSignal }: ChannelGatewayContext<TestAccount>) => {
-      abortSignal.addEventListener("abort", () => {}, { once: true });
+    const startAccount = vi.fn(async (_ctx: ChannelGatewayContext<TestAccount>) => {
       if (startAccount.mock.calls.length === 1 || mode === "manual-cancel") {
         await releaseFirstTask.promise;
         if (mode === "stale-rejection") {

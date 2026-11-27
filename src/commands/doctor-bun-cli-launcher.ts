@@ -9,7 +9,9 @@ import {
 } from "../../scripts/lib/bun-cli-launcher.mjs";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { resolveBunGlobalInstallOwner } from "../infra/detect-package-manager.js";
+import type { DoctorMaintenancePending } from "./doctor-maintenance-pending.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+import { shouldAutoApproveDoctorFix } from "./doctor-repair-mode.js";
 
 function hasPersistentNode(): boolean {
   for (const directory of (process.env.PATH ?? "").split(path.delimiter)) {
@@ -36,10 +38,11 @@ function hasPersistentNode(): boolean {
   return false;
 }
 
-export async function noteBunCliLauncherIssues(params: {
+/** Read-only: why this Bun installation's launcher is out of scope, or its global owner. */
+function resolveBunCliLauncherOwner(params: {
   root: string | null;
-  prompter: Pick<DoctorPrompter, "confirmAutoFix" | "repairMode">;
-}): Promise<void> {
+  prompter: Pick<DoctorPrompter, "repairMode">;
+}) {
   if (
     !params.root ||
     !process.versions.bun ||
@@ -47,31 +50,70 @@ export async function noteBunCliLauncherIssues(params: {
     params.prompter.repairMode.updateInProgress ||
     hasPersistentNode()
   ) {
-    return;
+    return undefined;
   }
   const owner = resolveBunGlobalInstallOwner(params.root);
   if (!owner) {
-    return;
+    return undefined;
   }
   const entryPath = path.join(params.root, "openclaw.mjs");
   const pathIssue = getBunCliLauncherPathIssue({ bunPath: process.execPath, entryPath });
   if (pathIssue) {
     const command = `${quoteCliArg(process.execPath)} ${quoteCliArg(entryPath)}`;
-    note(`${pathIssue}. Run ${command} instead.`, "Bun CLI launcher");
+    return { pathIssue: `${pathIssue}. Run ${command} instead.` } as const;
+  }
+  return { root: params.root, owner } as const;
+}
+
+/** Read-only: the launcher this installation would publish and its current state. */
+function inspectOwnedBunCliLauncher(params: {
+  root: string;
+  owner: NonNullable<ReturnType<typeof resolveBunGlobalInstallOwner>>;
+}) {
+  const binDir = resolveBunGlobalBinDir({
+    bunPath: process.execPath,
+    cwd: params.owner.globalProjectRoot,
+    env: {
+      ...process.env,
+      BUN_INSTALL_GLOBAL_DIR: params.owner.globalProjectRoot,
+      ...(params.owner.bunInstall ? { BUN_INSTALL: params.owner.bunInstall } : {}),
+    },
+  });
+  const launcher = { packageRoot: params.root, bunPath: process.execPath, binDir };
+  return { launcher, inspection: inspectBunCliLauncher(launcher) };
+}
+
+/** Read-only: whether {@link noteBunCliLauncherIssues} would rewrite the launcher. */
+export function checkBunCliLauncherPending(params: {
+  root: string | null;
+  prompter: Pick<DoctorPrompter, "repairMode">;
+}): DoctorMaintenancePending {
+  const owned = resolveBunCliLauncherOwner(params);
+  if (!owned || "pathIssue" in owned) {
+    return "none";
+  }
+  const { inspection } = inspectOwnedBunCliLauncher(owned);
+  if (inspection.state === "current" || inspection.state === "conflict") {
+    return "none";
+  }
+  const mode = params.prompter.repairMode;
+  return shouldAutoApproveDoctorFix(mode) ? "work" : mode.canPrompt ? "undecidable" : "none";
+}
+
+export async function noteBunCliLauncherIssues(params: {
+  root: string | null;
+  prompter: Pick<DoctorPrompter, "confirmAutoFix" | "repairMode">;
+}): Promise<void> {
+  const owned = resolveBunCliLauncherOwner(params);
+  if (!owned) {
+    return;
+  }
+  if ("pathIssue" in owned) {
+    note(owned.pathIssue, "Bun CLI launcher");
     return;
   }
   try {
-    const binDir = resolveBunGlobalBinDir({
-      bunPath: process.execPath,
-      cwd: owner.globalProjectRoot,
-      env: {
-        ...process.env,
-        BUN_INSTALL_GLOBAL_DIR: owner.globalProjectRoot,
-        ...(owner.bunInstall ? { BUN_INSTALL: owner.bunInstall } : {}),
-      },
-    });
-    const launcher = { packageRoot: params.root, bunPath: process.execPath, binDir };
-    const inspection = inspectBunCliLauncher(launcher);
+    const { launcher, inspection } = inspectOwnedBunCliLauncher(owned);
     if (inspection.state === "current") {
       return;
     }

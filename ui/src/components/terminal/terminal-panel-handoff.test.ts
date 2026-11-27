@@ -12,7 +12,7 @@ import {
 } from "./terminal-panel-lifecycle.test-support.ts";
 import { terminalOpenResult } from "./terminal-panel.test-support.ts";
 
-const { create: createTerminal, terminals, mount: mountFixture } = panelFixture(true);
+const { create: createTerminal, terminals, mount: mountFixture } = panelFixture();
 
 function gatewayFixture(liveCatalog = false) {
   const opened: TerminalSessionInfo[] = [];

@@ -2,9 +2,10 @@
 
 import { afterEach, expect, it, vi } from "vitest";
 import { openStartDialog, pluginButton } from "./scribe-dialog.js";
-import { openSettingsDialog } from "./scribe-settings-dialog.js";
+import { settingsValue } from "./scribe-settings-dialog.js";
 import { defaultOptions, runPrompt, scribeById, scribeSetup } from "./scribes-catalog.js";
-import type { PluginReadiness, ScribeDetection } from "./scribes-state.js";
+import type { PluginReadiness, ScribeDetection, ScribeJob } from "./scribes-state.js";
+import { fixture } from "./scribes-view.test-support.js";
 
 const slack = scribeById("slack")!;
 const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -95,12 +96,33 @@ it("blocks starting until the Slack account runs, and connects it on the Channel
 });
 
 it("lets a saved user-token opt-in be turned off after the user token is gone", () => {
-  const dialog = openSettingsDialog({
-    scribe: slack,
-    detection: { plugins: { slack: "ready" }, tokens: { slack: { bot: true, user: false } } },
-    options: { since: "7d", userToken: true, dms: false },
-    save: async () => {},
-  })!;
+  const { ui, page } = fixture({});
+  const job: ScribeJob = {
+    id: "job-slack",
+    enabled: true,
+    sessionTarget: "current",
+    schedule: { kind: "cron", expr: "0 4 * * *" },
+    state: {},
+  };
+  page.append(
+    settingsValue(
+      ui,
+      {
+        scribe: slack,
+        status: "on",
+        jobs: [job],
+        runMessage: {
+          state: "current",
+          options: { since: "7d", userToken: true, dms: false },
+        },
+      },
+      job,
+      "main",
+      { plugins: { slack: "ready" }, tokens: { slack: { bot: true, user: false } } },
+    ),
+  );
+  page.querySelector<HTMLButtonElement>('button[aria-label="Change settings"]')!.click();
+  const dialog = page.querySelector("dialog")!;
   const userToken = box(dialog, "scribe-slack-user-token");
   const save = [...dialog.querySelectorAll("button")].find(
     (b) => b.textContent === "Save settings",

@@ -98,6 +98,8 @@ const nodeRequiredFiles = new Set([
   ...nodeRequiredProcessFiles,
   // Bun reports peer ECONNRESET when destroying a socket with a pending reply; fork compat review pending.
   "src/infra/exec-host.socket.test.ts",
+  // Cron uses Node/libuv headroom on delegated Linux cgroup mounts.
+  "src/cron/service.delegated-memory-admission.test.ts",
   // The macOS directory watch helper serves Node's libuv watchers only.
   "src/infra/directory-watch-host.test.ts",
   // Git release launchers and service units are Node contracts; the suite skips on Bun.

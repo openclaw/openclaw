@@ -112,14 +112,14 @@ export async function readCodexAppServerProcessCommand(
 ): Promise<string> {
   let output: string;
   if (process.platform === "linux") {
+    const buffer = Buffer.allocUnsafe(4096);
     let pending = false;
     do {
-      remainingInspectionTime(deadline);
-      const command = await readProcFile(`/proc/${observed.pid}/cmdline`, deadline).catch(
-        (error: unknown) => {
-          throw inspectionFailure(error);
-        },
-      );
+      const command = await withinInspectionDeadline(deadline, () =>
+        readProcFile(`/proc/${observed.pid}/cmdline`, deadline, buffer),
+      ).catch((error: unknown) => {
+        throw inspectionFailure(error);
+      });
       // Linux can expose zero command bytes during exec startup. Wait only for
       // that state, with the original identity and deadline, including the final read.
       if (command.length === 0 || pending) {
@@ -268,17 +268,18 @@ function parseProcesses(output: string, selected: boolean): PosixProcess[] {
 
 // Linux exposes stronger start identities in procfs; BusyBox ps on supported
 // Alpine installs has no lstart. Boot identity prevents reuse across reboots.
-async function readLinuxProcesses(
+function readLinuxProcesses(
   selected: readonly number[] | undefined,
   deadline: number,
 ): Promise<PosixProcess[]> {
-  try {
+  return withinInspectionDeadline(deadline, async () => {
+    // The sequential scan consumes each record before reusing its buffer.
+    const buffer = Buffer.allocUnsafe(4096);
     const bootId = parseLinuxBootId(
-      (await readProcFile("/proc/sys/kernel/random/boot_id", deadline)).toString("utf8"),
+      (await readProcFile("/proc/sys/kernel/random/boot_id", deadline, buffer)).toString("utf8"),
     );
-    const entries = selected
-      ? selected.map(String)
-      : await withinInspectionDeadline(deadline, () => readdir("/proc"));
+    remainingInspectionTime(deadline);
+    const entries = selected ? selected.map(String) : await readdir("/proc");
     const rows: PosixProcess[] = [];
     let bytes = 0;
     for (const entry of entries) {
@@ -290,6 +291,7 @@ async function readLinuxProcesses(
         stat = await readProcFile(
           `/proc/${entry}/stat`,
           deadline,
+          buffer,
           PROCESS_INSPECTION_MAX_BYTES - bytes,
         );
       } catch (error) {
@@ -305,11 +307,10 @@ async function readLinuxProcesses(
         rows.push(row);
       }
     }
-    remainingInspectionTime(deadline);
     return rows;
-  } catch (error) {
+  }).catch((error: unknown) => {
     throw inspectionFailure(error);
-  }
+  });
 }
 
 function parseLinuxBootId(value: string): string {
@@ -374,39 +375,42 @@ async function withinInspectionDeadline<T>(deadline: number, read: () => Promise
   return value;
 }
 
-function readProcFile(
+async function readProcFile(
   file: string,
   deadline: number,
+  scratch: Buffer,
   maxBytes = PROCESS_INSPECTION_MAX_BYTES,
 ): Promise<Buffer> {
   // No runtime launch: procfs reads cannot load ambient preloads or project config.
-  return withinInspectionDeadline(deadline, async () => {
-    const handle = await open(file, "r");
-    const chunks: Buffer[] = [];
-    const buffer = Buffer.alloc(Math.min(4096, maxBytes + 1));
+  remainingInspectionTime(deadline);
+  const handle = await open(file, "r");
+  try {
+    let buffer = scratch;
     let bytes = 0;
-    try {
-      for (;;) {
-        remainingInspectionTime(deadline);
-        const { bytesRead } = await handle.read(
-          buffer,
-          0,
-          Math.min(buffer.length, maxBytes - bytes + 1),
-          null,
-        );
-        remainingInspectionTime(deadline);
-        if (bytesRead === 0) {
-          return Buffer.concat(chunks, bytes);
-        }
-        bytes += bytesRead;
-        if (bytes > maxBytes) {
-          throw new ProcessInspectionError("unavailable");
-        }
-        chunks.push(Buffer.from(buffer.subarray(0, bytesRead)));
+    for (;;) {
+      remainingInspectionTime(deadline);
+      const { bytesRead } = await handle.read(
+        buffer,
+        bytes,
+        Math.min(buffer.length - bytes, maxBytes - bytes + 1),
+        null,
+      );
+      remainingInspectionTime(deadline);
+      if (bytesRead === 0) {
+        return buffer.subarray(0, bytes);
       }
-    } finally {
-      // A timed-out syscall can finish later; its descriptor still belongs to this read.
-      await handle.close();
+      bytes += bytesRead;
+      if (bytes > maxBytes) {
+        throw new ProcessInspectionError("unavailable");
+      }
+      if (bytes === buffer.length) {
+        const next = Buffer.allocUnsafe(Math.min(buffer.length * 2, maxBytes + 1));
+        buffer.copy(next);
+        buffer = next;
+      }
     }
-  });
+  } finally {
+    // A timed-out syscall can finish later; its descriptor still belongs to this read.
+    await handle.close();
+  }
 }

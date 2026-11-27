@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveNodeRuntimeExecutable } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { terminateCodexAppServerDescendants } from "./transport-process-containment.js";
 import {
   type PosixProcess,
   readCodexAppServerProcessCommand,
@@ -342,7 +343,7 @@ describe("Codex procfs process inspector", () => {
     },
   );
 
-  it.for(["ESRCH", "EACCES", "exiting"] as const)(
+  it.for(["ENOENT", "ESRCH", "EACCES", "exiting"] as const)(
     "distinguishes vanished or exiting neighbors from unreadable state: %s",
     async (code, ctx) => {
       ctx.onTestFinished(() => {
@@ -388,6 +389,64 @@ describe("Codex procfs process inspector", () => {
         await expect(
           readCodexAppServerProcessSnapshot(undefined, [neighborPid]),
         ).rejects.toMatchObject({ reason: "unavailable" });
+      }
+    },
+  );
+
+  it.for(["pending stop", "reused pid", "changed boot"])(
+    "contains the same quiesced root across procfs observations: %s",
+    async (mode, ctx) => {
+      ctx.onTestFinished(() => {
+        procfs.readFile.mockReset();
+        procfs.readdir.mockReset();
+        vi.restoreAllMocks();
+      });
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      const root = process.pid + 1;
+      const neighbor = root + 1;
+      let stops = 0;
+      let rootReads = 0;
+      let enumerated = false;
+      procfs.readdir.mockImplementation(() => {
+        enumerated = true;
+        return [String(process.pid), String(root), String(neighbor)];
+      });
+      procfs.readFile.mockImplementation((file) => {
+        if (file === "/proc/sys/kernel/random/boot_id") {
+          return `00000000-0000-0000-0000-00000000000${enumerated && mode === "changed boot" ? 2 : 1}`;
+        }
+        if (file === `/proc/${neighbor}/stat`) {
+          // The neighbor may become uninspectable while the root stop is pending.
+          throw Object.assign(new Error("neighbor unavailable"), {
+            code: stops === 1 ? "EACCES" : "ENOENT",
+          });
+        }
+        if (file === `/proc/${root}/stat`) {
+          rootReads += 1;
+          const reused = mode === "reused pid" && rootReads > 1;
+          return `${root} (codex) ${stops === 2 ? "T" : "S"} ${process.pid} ${root}${" 0".repeat(14)} 1 0 ${reused ? 54321 : 12345}\n`;
+        }
+        expect(file).toBe(`/proc/${process.pid}/stat`);
+        return `${process.pid} (gateway) S ${process.ppid} ${process.pid}${" 0".repeat(14)} 1 0 12345\n`;
+      });
+      const kill = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+        expect(pid).toBe(root);
+        expect(signal).toBe("SIGSTOP");
+        stops += 1;
+        return true;
+      });
+      const resume = vi.fn();
+      const contained = await terminateCodexAppServerDescendants({ pid: root, kill: resume });
+      if (contained && contained !== "exited") {
+        contained.resume();
+      }
+      if (mode === "pending stop") {
+        expect(contained).toMatchObject({ root: { pid: root } });
+        expect(resume).toHaveBeenCalledWith("SIGCONT");
+        expect(kill).toHaveBeenCalledTimes(2);
+      } else {
+        expect(contained).toBeUndefined();
+        expect(kill).not.toHaveBeenCalled();
       }
     },
   );

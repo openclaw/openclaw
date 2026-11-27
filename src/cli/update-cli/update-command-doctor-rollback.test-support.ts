@@ -13,7 +13,6 @@ import {
   getUpdateRun,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
-import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import { createReadinessRollbackFixture } from "./update-command-readiness-rollback.test-support.js";
@@ -261,14 +260,19 @@ export function registerDoctorRestorationRollbackTests(
       if (!recorded) {
         throw new Error("Expected terminal rollback report");
       }
-      const report = renderUpdateRunReport(recorded);
-      expect(report.headline).toContain(`rolled back to ${installedVersion}:`);
       if (finishWithDeadline) {
         expect(recorded.verification).toMatchObject({ readyz: true, settled: true });
-        expect(report.markdown).toContain("timeout");
+        expect(recorded.steps).toContainEqual(
+          expect.objectContaining({
+            failureFacts: expect.arrayContaining([expect.objectContaining({ code: "timeout" })]),
+          }),
+        );
       } else {
-        expect(report.markdown).toContain("rpc-verification");
-        expect(report.markdown).toContain("openclaw gateway status --deep");
+        expect(recorded.steps).toContainEqual(
+          expect.objectContaining({
+            failureFacts: expect.arrayContaining(facts),
+          }),
+        );
       }
       expect(await fs.readFile(configPath, "utf8")).toBe(configRaw);
     },

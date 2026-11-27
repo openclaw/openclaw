@@ -750,6 +750,14 @@ export const statePostgresRuntime = {
         sql: '-- Generated runtime DDL; the owner supplies search_path and the transaction.\n\nCREATE TABLE "skill_workshop_changes" (\n  "cursor_id" bigint NOT NULL,\n  "change_id" text COLLATE "C" NOT NULL,\n  "agent_id" text COLLATE "C" NOT NULL,\n  "skill_name" text COLLATE "C" NOT NULL,\n  "action" text COLLATE "C" NOT NULL,\n  "actor" text COLLATE "C" NOT NULL,\n  "summary" text COLLATE "C" NOT NULL,\n  "version_id" text COLLATE "C",\n  "session_key" text COLLATE "C",\n  "run_id" text COLLATE "C",\n  "created_at_ms" bigint NOT NULL,\n  PRIMARY KEY ("change_id"),\n  CHECK (("action" IN (\'create\', \'patch\', \'write_file\', \'remove_file\', \'archive\', \'restore\'))),\n  CHECK (("actor" IN (\'agent\', \'review\', \'curator\', \'user\')))\n);\n\nCREATE INDEX "idx_skill_workshop_changes_agent_time" ON "skill_workshop_changes" (("agent_id") ASC, ("created_at_ms") ASC);\n\nCREATE UNIQUE INDEX "skill_workshop_changes_cursor_id_idx" ON "skill_workshop_changes" (("cursor_id") ASC);\n',
       },
       {
+        id: "skill_workshop_activity",
+        tables: ["skill_workshop_activity"],
+        indexes: [],
+        dependencies: [],
+        activation: "version-additive",
+        sql: '-- Generated runtime DDL; the owner supplies search_path and the transaction.\n\nCREATE TABLE "skill_workshop_activity" (\n  "agent_id" text COLLATE "C" NOT NULL,\n  "skill_name" text COLLATE "C" NOT NULL,\n  "changed_at_ms" bigint NOT NULL,\n  PRIMARY KEY ("agent_id", "skill_name")\n);\n',
+      },
+      {
         id: "worker_environment_ssh_fallback_ports",
         tables: ["worker_environment_ssh_fallback_ports"],
         indexes: [],
@@ -15430,6 +15438,62 @@ export const statePostgresRuntime = {
       },
       {
         table: "skill_usage",
+        kind: "checks",
+        value: 0,
+      },
+      {
+        table: "skill_workshop_activity",
+        kind: "table",
+        value: null,
+      },
+      {
+        table: "skill_workshop_activity",
+        kind: "column",
+        value: {
+          name: "agent_id",
+          type: "text",
+          nullable: false,
+          identity: false,
+          default: null,
+          position: 1,
+        },
+      },
+      {
+        table: "skill_workshop_activity",
+        kind: "column",
+        value: {
+          name: "skill_name",
+          type: "text",
+          nullable: false,
+          identity: false,
+          default: null,
+          position: 2,
+        },
+      },
+      {
+        table: "skill_workshop_activity",
+        kind: "column",
+        value: {
+          name: "changed_at_ms",
+          type: "bigint",
+          nullable: false,
+          identity: false,
+          default: null,
+          position: 3,
+        },
+      },
+      {
+        table: "skill_workshop_activity",
+        kind: "primaryKey",
+        value: ["agent_id", "skill_name"],
+      },
+      {
+        table: "skill_workshop_activity",
+        kind: "indexes",
+        value: 1,
+      },
+      {
+        table: "skill_workshop_activity",
         kind: "checks",
         value: 0,
       },
