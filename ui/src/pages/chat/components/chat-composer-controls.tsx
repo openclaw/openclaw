@@ -2,7 +2,12 @@ import type { JSX } from "@solidjs/web";
 import { Show, createSignal, createUniqueId, lazy, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Kbd, KeyboardShortcut, ShortcutHint } from "../../../components/solid/kbd.tsx";
-import { Menu, type MenuEntry, type MenuHandle } from "../../../components/solid/menu.tsx";
+import {
+  createMenuControls,
+  Menu,
+  type MenuEntry,
+  type MenuHandle,
+} from "../../../components/solid/menu.tsx";
 import { registerChatCorrectionsEnglish } from "../../../i18n/locales/en-chat-corrections.ts";
 import { registerSessionNavigationEnglish } from "../../../i18n/locales/en-session-navigation.ts";
 import { isMobileBrowserPlatform } from "../../../lib/browser-platform.ts";
@@ -38,6 +43,7 @@ type ChatRunControlsProps = ReturnType<typeof createChatComposerContext>["runCon
 
 export function renderMicrophonePickerSolid(props: MicrophonePickerProps) {
   const menuId = createUniqueId();
+  const controls = createMenuControls();
   let handle: MenuHandle | undefined;
   let host!: HTMLDivElement;
   let pointerDeviceSelection = false;
@@ -60,6 +66,7 @@ export function renderMicrophonePickerSolid(props: MicrophonePickerProps) {
         >
           <MicrophoneMenu
             picker={props}
+            controls={controls}
             renderItems={renderItems}
             onDevicePointer={(pointer) => {
               pointerDeviceSelection = pointer;
@@ -106,6 +113,7 @@ export function renderMicrophonePickerSolid(props: MicrophonePickerProps) {
         id={`chat-microphone-${menuId}`}
         lazy
         panelClass="chat-talk-input-picker__menu"
+        controls={controls}
         placement="top-end"
         pointerFocus="trigger"
         label={label()}

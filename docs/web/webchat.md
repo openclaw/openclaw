@@ -150,8 +150,9 @@ selection remain unchanged. Browser microphone capture requires a secure context
 
 ### Review spoken corrections
 
-In the Control UI's conversation composer, **Spoken corrections** starts **Off**.
-Choose **Review original (corrections unavailable)** to inspect recognized text
+In the Control UI's conversation composer, open **Microphone input** next to the
+microphone. **Spoken corrections** starts **Off**. Choose **Review original
+(corrections unavailable)** to inspect recognized text
 after you stop dictating. Spoken correction suggestions are unavailable in this
 revision. Words such as `no`, `sorry`, `actually`, and `scratch that` remain part
 of the recognized text. For example, `I work Tuesday, no Wednesday shifts are

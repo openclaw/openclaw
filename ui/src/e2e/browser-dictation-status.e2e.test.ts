@@ -167,11 +167,24 @@ suite.define(() => {
         sessionInfo: { key: "agent:main:main", sharingRole: "owner" },
       });
       await textarea.waitFor();
-      await button(page, "Start voice input", true).hover();
+      const microphone = button(page, "Start voice input", true);
+      const policy = page.getByRole("combobox", { name: "Spoken corrections", exact: true });
+      const composerHeight = () =>
+        page
+          .locator(".agent-chat__composer-shell")
+          .evaluate((shell) => shell.getBoundingClientRect().height);
+      await microphone.hover();
+      const idleHeight = await composerHeight();
+      expect(await policy.count()).toBe(0);
       await button(page, "Microphone input", true).click();
+      await policy.waitFor();
+      expect(await policy.inputValue()).toBe("off");
+      expect(await composerHeight()).toBe(idleHeight);
       await captureComposer(page, "guest-dictation-ready.png");
       await captureFullPage(page, "guest-dictation-capabilities");
       await page.keyboard.press("Escape");
+      await policy.waitFor({ state: "hidden" });
+      expect(await composerHeight()).toBe(idleHeight);
       await expect
         .poll(async () => (await gateway.getRequests("talk.catalog")).length)
         .toBeGreaterThan(0);
@@ -179,12 +192,7 @@ suite.define(() => {
         sessionKey: "agent:main:main",
       });
       expect(await gateway.getRequests("talk.config")).toHaveLength(0);
-      const composerHeight = () =>
-        page
-          .locator(".agent-chat__composer-shell")
-          .evaluate((shell) => shell.getBoundingClientRect().height);
-      const idleHeight = await composerHeight();
-      await button(page, "Start voice input", true).hover();
+      await microphone.hover();
       await page.mouse.down();
       await gateway.waitForRequest("talk.session.create");
       await page.mouse.up();

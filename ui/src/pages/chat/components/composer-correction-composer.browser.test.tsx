@@ -46,9 +46,14 @@ it.each([390, 1100])(
       onToggleRealtimeTalk: vi.fn(),
     });
     renderComposerInto(container, props);
-    await expect
-      .element(page.getByRole("combobox", { name: "Spoken corrections" }))
-      .toHaveValue("explicit");
+    const microphoneMenu = page.getByRole("button", { name: "Microphone input", exact: true });
+    const policy = page.getByRole("combobox", { name: "Spoken corrections" });
+    await expect.element(microphoneMenu).toBeInTheDocument();
+    (microphoneMenu.element() as HTMLElement).focus();
+    await userEvent.keyboard("{ArrowDown}");
+    await expect.element(policy).toHaveValue("explicit");
+    await userEvent.keyboard("{Escape}");
+    await expect.element(policy).not.toBeVisible();
     await page.screenshot({ path: `.artifacts/m03-review/composer-${width}-before-review.png` });
 
     const dictation = getChatComposerState(props.paneId).dictation;

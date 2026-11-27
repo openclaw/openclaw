@@ -664,10 +664,7 @@ export function renderChatComposerView(
               </div>
             </div>
           </div>
-          <ChatComposerCorrections
-            context={context()}
-            showControls={Boolean(context().dictation)}
-          />
+          <ChatComposerCorrections context={context()} />
           <ComposerWidthEdge options={() => props} shell={() => shell} />
         </regions.ComposerInputScope>
       ) : memberWelcome.active() ? (
