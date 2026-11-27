@@ -1,6 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
 import { listAgentIds } from "../agents/agent-scope-config.js";
-import { getGatewayStartGuardErrors } from "../cli/gateway-cli/pre-bootstrap.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { createConfigIO, readConfigSnapshotBeforeEngineSelection } from "../config/io.factory.js";
 import { createConfigReadError, isConfigReadFailure } from "../config/io.invalid-config.js";
@@ -453,7 +452,9 @@ export async function readAdmittedConfigSnapshot(params: {
         // wrong owners before readiness can refuse. The recovery owner applies
         // that candidate only after the unchanged readiness checks below admit it.
         if (!("recovery" in admitted && admitted.recovery)) {
-          // Schema maintenance must not load Doctor migrations for ordinary config reads.
+          // Ordinary config reads must not load Gateway bootstrap or schema maintenance.
+          const { getGatewayStartGuardErrors } =
+            await import("../cli/gateway-cli/pre-bootstrap.js");
           const { upgradeStateOnGatewayStart } = await import("../state/state-upgrade-startup.js");
           await upgradeStateOnGatewayStart(
             env,

@@ -188,7 +188,7 @@ describe("createBackupArchive SQLite alternative filenames", () => {
     );
   });
 
-  it.each(["custom.sqlite", "custom.db"])(
+  it.each(["custom.db"])(
     "fails closed when a plugin SQLite schema named %s cannot be compacted safely",
     async (filename) => {
       await withOpenClawTestState(

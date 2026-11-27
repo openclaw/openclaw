@@ -643,6 +643,9 @@ export function bindPostgresMemoryPublication(
             if (!source.header) {
               throw new Error("Memory source staging was not started");
             }
+            if (command.type === "source.replace") {
+              source.header.verifiedFile = command.input.verifiedFile;
+            }
             if (rebuilding) {
               stageSource(source.header, source.fragments);
             } else {

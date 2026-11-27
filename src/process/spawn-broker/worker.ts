@@ -15,8 +15,7 @@ import {
   terminateLostBrokerChild,
   type BrokerChildGroupIdentity,
 } from "./cleanup.js";
-import { captureBrokerCommandHandlers } from "./command-handlers.js";
-import { createBrokerExecaAdmissionFailure } from "./execa-protocol.js";
+import { captureBrokerCommandHandlers, reportBrokerCommandRefusal } from "./command-handlers.js";
 import type { BrokerExecaProcess } from "./execa-worker.js";
 import { prepareProcessOutputFile } from "./file-output.js";
 import { createBrokerReceiver } from "./ipc.js";
@@ -201,7 +200,7 @@ async function readFile(message: Extract<BrokerRequest, { type: "read-file" }>):
   const pending = { canceled: false, controller: new AbortController() };
   try {
     // Resource brokers can hold SQLite locks; only the command broker is a safe reader.
-    if (!commands.readers || starting.size + fileReads.size >= MAX_PENDING_SPAWNS) {
+    if (!commands?.readers || starting.size + fileReads.size >= MAX_PENDING_SPAWNS) {
       throw new SpawnBrokerError("Spawn broker cannot admit a raw file read");
     }
     fileReads.set(message.id, pending);
@@ -248,21 +247,14 @@ async function launch(
   message: Extract<BrokerRequest, { type: "spawn" | "prepare-spawn" | "spawn-execa" }>,
 ): Promise<void> {
   const refusal = childCapacityError(childAdmissions.values(), message.admission ?? "command");
-  if (stopping || starting.size + fileReads.size >= MAX_PENDING_SPAWNS || refusal) {
-    const error = new SpawnBrokerError(refusal ?? "Spawn broker startup capacity exceeded");
-    // The ordered failed-admission result proves no native work was started.
-    // No command metadata exists because this guard precedes spawn preparation.
-    await report({
-      type: "execa-result",
-      id: message.id,
-      result: createBrokerExecaAdmissionFailure(error),
-    });
-    await report({
-      type: "error",
-      id: message.id,
-      error: serializeBrokerError(error),
-      resultUnavailable: true,
-    });
+  const handlers = commands;
+  if (!handlers || stopping || starting.size + fileReads.size >= MAX_PENDING_SPAWNS || refusal) {
+    const error = new SpawnBrokerError(
+      handlers
+        ? (refusal ?? "Spawn broker startup capacity exceeded")
+        : "Attachment-only broker cannot run commands",
+    );
+    await reportBrokerCommandRefusal(message.id, error, report);
     return;
   }
   const pending: { canceled?: boolean; signal?: NodeJS.Signals | number } = {};
@@ -309,7 +301,7 @@ async function launch(
       let execa: BrokerExecaProcess | undefined;
       if (message.type === "spawn-execa") {
         assertActive();
-        execa = await commands.startBrokerExeca(
+        execa = await handlers.startBrokerExeca(
           message.argv,
           message.options,
           assertActive,
@@ -708,7 +700,7 @@ async function initialize(bootstrap: BrokerBootstrap): Promise<void> {
   if (stopping || !process.connected) {
     return;
   }
-  commands = await captureBrokerCommandHandlers(!bootstrap.nativeResource);
+  commands = await captureBrokerCommandHandlers(bootstrap);
   if (stopping || !process.connected) {
     return;
   }
