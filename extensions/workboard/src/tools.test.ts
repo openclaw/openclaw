@@ -282,6 +282,48 @@ describe("workboard tools", () => {
     );
   });
 
+  it("accepts the same unique short card ID in read, claim, comment, and move", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const card = await store.create({ title: "Short ID card" });
+    const id = card.id.slice(0, 8);
+    const tools = toolSet(store);
+
+    expect(await runTool(tools, "read", { id })).toMatchObject({ card: { id: card.id } });
+    expect(await runTool(tools, "claim", { id })).toMatchObject({
+      card: { id: card.id, status: "running" },
+    });
+    await runTool(tools, "comment", { id, body: "Using the displayed ID" });
+    await runTool(tools, "move", { id, status: "review" });
+    expect(await runTool(tools, "read", { id: card.id })).toMatchObject({
+      card: {
+        id: card.id,
+        status: "review",
+        metadata: { comments: [expect.objectContaining({ body: "Using the displayed ID" })] },
+      },
+    });
+  });
+
+  it("rejects ambiguous card prefixes without changing either card", async () => {
+    const { store, stores } = createWorkboardSqliteTestHarness();
+    const first = await store.create({ title: "First" });
+    const id = first.id.slice(0, 8);
+    const secondId = `${id}-second`;
+    await stores.cards.register(secondId, {
+      version: 1,
+      card: { ...first, id: secondId, title: "Second", events: [] },
+    });
+    const before = await store.list();
+    const tools = toolSet(store);
+
+    await expect(executeTool(tools, "read", { id })).rejects.toThrow(
+      `Ambiguous card id prefix: ${id} (2 matches)`,
+    );
+    await expect(executeTool(tools, "move", { id, status: "ready" })).rejects.toThrow(
+      `Ambiguous card id prefix: ${id} (2 matches)`,
+    );
+    expect(await store.list()).toEqual(before);
+  });
+
   it("keeps the read card and context together and reads committed edits on the next call", async () => {
     const { store, stores } = createWorkboardSqliteTestHarness();
     const card = await store.create({ title: "Before edit", notes: "Original instructions" });

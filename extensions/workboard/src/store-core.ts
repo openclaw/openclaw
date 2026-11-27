@@ -10,6 +10,7 @@ import type {
 import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { definedFields } from "../record-fields.js";
+import { resolveWorkboardCardByIdOrPrefix } from "./card-lookup.js";
 import type { PersistedWorkboardCard } from "./persistence-types.js";
 import { normalizeAutomationPatch, normalizeCardAutomation } from "./store-automation.js";
 import { WorkboardBoardStore } from "./store-boards.js";
@@ -198,6 +199,25 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
   async get(id: string): Promise<WorkboardCard | undefined> {
     const entry = await this.store.lookup(id.trim());
     return entry?.card;
+  }
+
+  async requireCardByIdOrPrefix(id: string): Promise<WorkboardCard> {
+    const exact = await this.get(id);
+    if (exact) {
+      return exact;
+    }
+    const prefix = id.trim();
+    if (!prefix) {
+      throw new Error(`card not found: ${id}`);
+    }
+    const match = resolveWorkboardCardByIdOrPrefix(await this.list(), prefix);
+    if (match.card) {
+      return match.card;
+    }
+    if (match.reason === "ambiguous") {
+      throw new Error(match.error);
+    }
+    throw new Error(`card not found: ${id}`);
   }
 
   protected async requireCard(id: string): Promise<WorkboardCard> {
