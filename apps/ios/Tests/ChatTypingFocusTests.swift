@@ -124,6 +124,58 @@ private struct ChatTypingRenderedComposer: View {
 /// XCTest keeps key-window checks outside Swift Testing's concurrent suites.
 @MainActor
 final class ChatTypingFocusTests: XCTestCase {
+    func testNativeChatTextSizeUpdatesFocusedComposerWithoutLosingDraft() throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previousKeyWindow = scene.windows.first(where: \.isKeyWindow)
+        let suite = "ChatTextSizeTyping.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let appearance = AppAppearanceModel(userDefaults: defaults)
+        let appModel = NodeAppModel(audioAdmissionInitiallyAllowed: false)
+        appModel.enterScreenshotFixtureMode()
+        appModel.chatPresentation.sync(appModel: appModel)
+        let model = try XCTUnwrap(appModel.chatPresentation.viewModel)
+        defer { model.detachTransport() }
+        model.input = "Keep the draft and cursor"
+        let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+        let controller = UIHostingController(rootView: ChatTypingRenderedOwner()
+            .environment(appearance)
+            .environment(appModel)
+            .environment(appModel.voiceWake)
+            .environment(gatewayController)
+            .environment(\.dynamicTypeSize, .large))
+        let window = UIWindow(windowScene: scene)
+        window.frame = scene.screen.bounds
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer {
+            window.endEditing(true)
+            window.isHidden = true
+            window.rootViewController = nil
+            previousKeyWindow?.makeKeyAndVisible()
+        }
+        controller.view.layoutIfNeeded()
+        ChatTypingMainRunLoop.settle { Self.composer(in: controller.view) != nil }
+        Self.completeDeferredInteractionUpdate()
+        let editor = try XCTUnwrap(Self.composer(in: controller.view))
+        XCTAssertTrue(editor.becomeFirstResponder())
+        editor.selectedRange = NSRange(location: 5, length: 0)
+        let originalPointSize = try XCTUnwrap(editor.font).pointSize
+        appearance.selectChatTextSize(.larger, userDefaults: defaults)
+        ChatTypingMainRunLoop.settle { (editor.font?.pointSize ?? 0) > originalPointSize }
+        XCTAssertTrue(Self.composer(in: controller.view) === editor)
+        XCTAssertTrue(editor.isFirstResponder)
+        XCTAssertEqual(editor.text, "Keep the draft and cursor")
+        XCTAssertEqual(editor.selectedRange, NSRange(location: 5, length: 0))
+        editor.insertText("x")
+        XCTAssertEqual(model.input, "Keep xthe draft and cursor")
+        appearance.selectChatTextSize(.smaller, userDefaults: defaults)
+        ChatTypingMainRunLoop.settle { (editor.font?.pointSize ?? .greatestFiniteMagnitude) < originalPointSize }
+        XCTAssertTrue(editor.isFirstResponder)
+        XCTAssertEqual(model.input, "Keep xthe draft and cursor")
+    }
+
     func testDraftKeepsSeparateStopAndSendDuringResponse() throws {
         let appModel = NodeAppModel()
         appModel.enterScreenshotFixtureMode()
