@@ -510,25 +510,38 @@ it("routes fence failures through quarantine and revokes the old owner's hooks",
   expect(ingest).not.toHaveBeenCalled();
 });
 
-it.each(["compact", "prepareSubagentSpawn"] as const)(
-  "quarantines %s without replaying it",
+it("quarantines compact without replaying it", async () => {
+  const failure = new Error("plugin operation failed");
+  const action = vi.fn<() => Promise<never>>().mockRejectedValue(failure);
+  raw.info.ownsCompaction = true;
+  raw.compact = action;
+  const value = await engine();
+  await expect(value.compact(session)).rejects.toBe(failure);
+  await expectFallback(value, "compact", failure.message);
+  expect(action).toHaveBeenCalledOnce();
+});
+
+it.each(["prepareSubagentSpawn", "onSubagentEnded"] as const)(
+  "reports %s failures to the caller without quarantine",
   async (method) => {
-    const failure = new Error("plugin operation failed");
+    const failure = new Error("database is locked");
     const action = vi.fn<() => Promise<never>>().mockRejectedValue(failure);
-    raw.info.ownsCompaction = true;
     raw[method] = action;
     const value = await engine();
-    const pending =
-      method === "compact"
-        ? value.compact(session)
-        : value.prepareSubagentSpawn?.({
+    const call = () =>
+      method === "prepareSubagentSpawn"
+        ? value.prepareSubagentSpawn?.({
             parentSessionKey: "agent:main",
             childSessionKey: "agent:child",
             contextMode: "isolated",
-          });
-    await expect(pending).rejects.toBe(failure);
-    await expectFallback(value, method, failure.message);
-    expect(action).toHaveBeenCalledOnce();
+          })
+        : value.onSubagentEnded?.({ childSessionKey: "agent:child", reason: "completed" });
+    await expect(call()).rejects.toBe(failure);
+    await expect(call()).rejects.toBe(failure);
+    expect(action).toHaveBeenCalledTimes(2);
+    expect(value.info.id).toBe(id);
+    expect(await resolvedId()).toBe(id);
+    expect(await quarantines()).toEqual([]);
   },
 );
 

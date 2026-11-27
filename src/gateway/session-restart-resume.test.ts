@@ -50,7 +50,7 @@ import {
   prepareAgentRestartRecovery,
   resumeMarkedSessions,
 } from "./session-restart-resume.js";
-import * as systemTurnAuthority from "./session-system-turn-authority.js";
+import * as systemTurnAuthority from "./session-sharing-authorization-async.js";
 
 it("requests original recorded custody only at the actual marked restart admission", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -82,7 +82,7 @@ it("requests original recorded custody only at the actual marked restart admissi
     });
     await persistRunningSessionsForRestart({ cfg });
     releaseAgentRunContext("restart-source-live", claim);
-    expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toBeDefined();
+    expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({});
     const context = createContext([], () => cfg);
     const admission = vi
       .spyOn(systemTurnAuthority, "prepareSessionSystemTurnAuthority")
@@ -116,7 +116,9 @@ it.for(["prepared", "managed", "crash", "slow-crash", "failed"] as const)(
       replaceSessionEntrySync(target, { sessionId: "prepared", updatedAt: 110 });
       replaceSessionEntrySync(target, {
         ...loadExactSessionEntry(target)!.entry,
-        ...(crash ? { lifecycleRunId: "predecessor", startedAt: 110 } : { resumeAfterRestart: {} }),
+        ...(crash
+          ? { lifecycleRunId: "predecessor", startedAt: 110 }
+          : { resumeAfterRestart: mode === "prepared" ? { sourceRunId: "retained-run" } : {} }),
       });
       const database = openOpenClawAgentDatabase({ agentId: "main" });
       const open = createDeferredCore();
@@ -239,6 +241,12 @@ it.for(["prepared", "managed", "crash", "slow-crash", "failed"] as const)(
                   entry: loadExactSessionEntry(target)?.entry,
                 }),
               ).toHaveBeenCalledOnce();
+              expect(resume.mock.calls[0]?.[1].sourceRunId).toBe(
+                crash ? "predecessor" : mode === "prepared" ? "retained-run" : undefined,
+              );
+              if (crash) {
+                expect(resume.mock.calls[0]?.[0]).toContain("for interrupted run predecessor");
+              }
               expect(recovered).toBe(false);
               if (mode === "prepared") {
                 expect(startupFinished).toBe(false);
@@ -293,7 +301,7 @@ it.each(["crash", "markers", "failed-preparation", "clean-or-unknown"] as const)
       };
       const cases: Array<[string, Partial<InternalSessionEntry>, boolean]> = [
         ["crash", {}, mode !== "clean-or-unknown"],
-        ["yielded", { endedAt: 120 }, false],
+        ["yielded", { endedAt: 120 }, true],
         ["stale", { startedAt: 1, updatedAt: 999 }, false],
         ["missing-start", { startedAt: undefined }, false],
         ["new-incarnation", { startedAt: 200 }, false],
@@ -400,13 +408,10 @@ it.each(["crash", "markers", "failed-preparation", "clean-or-unknown"] as const)
         expect(
           loadExactSessionEntry({ agentId: "main", sessionKey: "agent:main:live" })?.entry,
         ).toHaveProperty("lifecycleRunId", "live");
-        expect(loadExactSessionEntry(sessionTarget("yielded"))?.entry).toMatchObject({
-          status: "failed",
-          lastRunError: expect.stringContaining("child completion"),
-        });
-        expect(
-          loadExactSessionEntry(sessionTarget("yielded"))?.entry.lifecycleRunId,
-        ).toBeUndefined();
+        const yielded = loadExactSessionEntry(sessionTarget("yielded"))!.entry;
+        expect(yielded.status).toBe("killed");
+        expect(yielded.lastRunError).toBeUndefined();
+        expect(yielded.lifecycleRunId).toBeUndefined();
       } finally {
         resume.mockRestore();
         releaseAgentRunContext("live", claim);
@@ -447,43 +452,54 @@ it.for(["archived", "incognito"] as const)("does not mark a %s hidden message wa
   }),
 );
 
-it("marks the active execution when an older message wait remains in the same session", () =>
-  withOpenClawTestState({ scenario: "minimal" }, async () => {
-    setRuntimeConfigSnapshot({});
-    const target = {
-      agentId: "main",
-      sessionKey: "agent:main:dashboard:replaced-message-wait",
-      sessionId: "replaced-message-wait",
-    };
-    const runId = "current-execution";
-    replaceSessionEntrySync(target, {
-      sessionId: target.sessionId,
-      updatedAt: 1,
-      lifecycleRunId: runId,
-      activeWriterRunId: runId,
-    });
-    const oldRunId = "old-message-wait";
-    subagentRuns.set(
-      oldRunId,
-      createSubagentRunRecord({
-        runId: oldRunId,
-        childSessionKey: target.sessionKey,
-        childAgentId: target.agentId,
-        childSessionIdentity: { sessionId: target.sessionId },
-        endedAt: 1,
-        pauseReason: "sessions_yield",
-        waitForMessage: true,
-      }),
-    );
-    const claim = claimAgentRunContext(runId, target, { trackOwner: true, ownsContext: true });
-    try {
-      await persistRunningSessionsForRestart({ cfg: {} });
-      expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({});
-    } finally {
-      releaseAgentRunContext(runId, claim);
-      subagentRuns.delete(oldRunId);
-    }
-  }));
+it.each([false, true])(
+  "selects only an unambiguous live execution alongside an older wait (concurrent: %s)",
+  (concurrent) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
+      const target = {
+        agentId: "main",
+        sessionKey: "agent:main:dashboard:replaced-message-wait",
+        sessionId: "replaced-message-wait",
+      };
+      const runId = "current-execution";
+      replaceSessionEntrySync(target, {
+        sessionId: target.sessionId,
+        updatedAt: 1,
+        lifecycleRunId: runId,
+        activeWriterRunId: runId,
+      });
+      const oldRunId = "old-message-wait";
+      subagentRuns.set(
+        oldRunId,
+        createSubagentRunRecord({
+          runId: oldRunId,
+          childSessionKey: target.sessionKey,
+          childAgentId: target.agentId,
+          childSessionIdentity: { sessionId: target.sessionId },
+          endedAt: 1,
+          pauseReason: "sessions_yield",
+          waitForMessage: true,
+        }),
+      );
+      const claim = claimAgentRunContext(runId, target, { trackOwner: true, ownsContext: true });
+      const other = concurrent
+        ? claimAgentRunContext("another-live-root", target, { trackOwner: true, ownsContext: true })
+        : undefined;
+      try {
+        await persistRunningSessionsForRestart({ cfg: {} });
+        expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual(
+          concurrent ? {} : { sourceRunId: runId },
+        );
+      } finally {
+        if (other) {
+          releaseAgentRunContext("another-live-root", other);
+        }
+        releaseAgentRunContext(runId, claim);
+        subagentRuns.delete(oldRunId);
+      }
+    }),
+);
 
 it.each(["restart", "user", "completed"] as const)(
   "selects retained %s work at the restart marker snapshot",
@@ -569,10 +585,16 @@ it("keeps completed reply roots unmarked while accepted inputs remain durable", 
 it("marks ordinary conversations without inheriting cron or external execution ownership", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot({});
-    const cases: Array<{ sessionKey: string; resumable?: true; entry?: Partial<SessionEntry> }> = [
+    const cases: Array<{
+      sessionKey: string;
+      resumable?: true;
+      automation?: true;
+      entry?: Partial<SessionEntry>;
+    }> = [
       { sessionKey: "agent:other:main", resumable: true },
       { sessionKey: "agent:other:main:thread:123.456", resumable: true },
       { sessionKey: "agent:main:cron:scheduled:run:occurrence" },
+      { sessionKey: "agent:main:dashboard-automation", automation: true },
       { sessionKey: "agent:main:acp:external" },
       {
         sessionKey: "agent:main:external-acp-binding",
@@ -591,7 +613,7 @@ it("marks ordinary conversations without inheriting cron or external execution o
     ];
     const claims: Array<[string, string | undefined]> = [];
     try {
-      for (const { sessionKey, entry, resumable } of cases) {
+      for (const { sessionKey, entry, resumable, automation } of cases) {
         const agentId = resumable ? "other" : "main";
         replaceSessionEntrySync(
           { agentId, sessionKey },
@@ -614,7 +636,14 @@ it("marks ordinary conversations without inheriting cron or external execution o
           runId,
           claimAgentRunContext(
             runId,
-            { agentId, sessionKey, sessionId: sessionKey },
+            {
+              agentId,
+              sessionKey,
+              sessionId: sessionKey,
+              ...(automation
+                ? { cronRunsByJobId: new Map([["scheduled-job", { nextCheckEnabled: false }]]) }
+                : {}),
+            },
             { trackOwner: true, ownsContext: true },
           ),
         ]);

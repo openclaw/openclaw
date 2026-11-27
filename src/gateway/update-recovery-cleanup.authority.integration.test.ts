@@ -212,7 +212,7 @@ it(
           const tool = createGatewayTool({
             senderIsOwner: true,
             requesterSenderId: "owner",
-            allowConfigReads: false,
+            allowManagementActions: false,
           });
           const invoke = (dryRun: boolean) =>
             withGatewayToolCallerIdentity(

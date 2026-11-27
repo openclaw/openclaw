@@ -46,7 +46,7 @@ it.each(["predecessor", "pending", "late"] as const)(
     let evaluationCount = 0;
     const evaluateCronCheck = vi.fn(async () => ({
       kind: "evaluated" as const,
-      action: "wake",
+      action: "wake" as const,
       state: { owner: `evaluation-${++evaluationCount}` },
     }));
     const runIsolatedAgentJob = vi.fn(async () => {

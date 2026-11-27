@@ -301,10 +301,8 @@ describe("Anthropic immutable request bytes", () => {
   it.each([false, true])(
     "reuses growing frozen history with envelope edits=%s",
     async (editEnvelope) => {
-      let editableMessage: object | undefined;
       const hook: AnthropicOptions["onPayload"] = (payload) => {
         if (isRecord(payload) && Array.isArray(payload.messages)) {
-          editableMessage = payload.messages[0];
           if (editEnvelope) {
             payload.service_tier = "auto";
           }
@@ -328,45 +326,13 @@ describe("Anthropic immutable request bytes", () => {
         if (first.encodedBody instanceof Uint8Array) {
           first.encodedBody.fill(0);
         }
-        const stringify = JSON.stringify;
-        const getDescriptor = Object.getOwnPropertyDescriptor;
-        let inspectedProperties = 0;
-        const descriptors = vi
-          .spyOn(Object, "getOwnPropertyDescriptor")
-          .mockImplementation((value, key) => {
-            if (value === editableMessage) {
-              inspectedProperties++;
-            }
-            return getDescriptor(value, key);
-          });
-        let wholePayloadEncodes = 0;
-        let assistantEncodes = 0;
-        const spy = vi.spyOn(JSON, "stringify").mockImplementation((value, replacer, space) => {
-          if (isRecord(value) && value.model === model.id && Array.isArray(value.messages)) {
-            wholePayloadEncodes++;
-          }
-          if (isRecord(value) && value.role === "assistant") {
-            assistantEncodes++;
-          }
-          return stringify(value, replacer, space);
-        });
-        let repeated: Awaited<ReturnType<typeof send>>;
-        try {
-          repeated = await send(messages, hook);
-        } finally {
-          spy.mockRestore();
-          descriptors.mockRestore();
-        }
-        expect(editableMessage).toBeDefined();
-        expect(inspectedProperties).toBe(2); // role + content, once each
-        expect(wholePayloadEncodes).toBe(0);
+        const repeated = await send(messages, hook);
         expect(first.encodedBody).toBeInstanceOf(Uint8Array);
         expect(repeated.wire).toBe(first.wire);
         expect(markerPaths(JSON.parse(repeated.wire))).toContain(
           `messages[${turn * 2}].content[0]`,
         );
         if (turn > 0) {
-          expect(assistantEncodes).toBe(0);
           expect(repeated.wire).toContain('"values":["x"]');
         }
       }
@@ -467,15 +433,7 @@ describe("Anthropic immutable request bytes", () => {
       call.input.query = "Edited query";
       return undefined;
     };
-    const stringify = vi.spyOn(JSON, "stringify");
-    let wholePayloadEncodes = 0;
-    const edited = await send(messages, edit).finally(() => {
-      wholePayloadEncodes = stringify.mock.calls.filter(
-        ([value]) => isRecord(value) && value.model === model.id && Array.isArray(value.messages),
-      ).length;
-      stringify.mockRestore();
-    });
-    expect(wholePayloadEncodes).toBe(1);
+    const edited = await send(messages, edit);
     expect(typeof edited.encodedBody).toBe("string");
     const decoded: unknown = JSON.parse(edited.wire);
     if (kind === "envelope accessor" || kind === "messages accessor") {

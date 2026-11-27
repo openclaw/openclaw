@@ -23,7 +23,7 @@ describe("cron trigger SQLite codec", () => {
       check: { script: "json({ })", once: false },
       sessionTarget: "main",
       wakeMode: "now",
-      payload: { kind: "systemEvent", text: "changed" },
+      payload: { kind: "agentTurn", message: "changed" },
       state: {
         lastTriggerEvalAtMs: 10,
         triggerEvalCount: 3,

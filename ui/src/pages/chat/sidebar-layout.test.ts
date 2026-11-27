@@ -255,6 +255,7 @@ it("clamps and fits the single inherited resizable column", () => {
   expect(resizePanel(layout, columnId, 1).columns[0]?.width).toBe(SIDEBAR_MIN_WIDTH_PX);
   expect(resizePanel(layout, columnId, Number.MAX_VALUE).columns[0]?.width).toBe(1_200);
   expect(fitLayout(resizePanel(layout, columnId, 1_000), 1_200)?.columns[0]?.width).toBe(720);
+  expect(fitLayout(resizePanel(layout, columnId, 1_000), 800)?.columns[0]?.width).toBe(476);
   expect(fitLayout(layout, 560)).toBeNull();
 });
 
@@ -296,7 +297,8 @@ it("defers browser sizing in narrow and bottom layouts and preserves manual or l
     columns: [storedColumn("side", [tab("browser")], { width: 480 })],
   });
   expect(initBrowserWidth(legacy, 1_800, 804)).toEqual(legacy);
-  expect(initBrowserWidth(layout, 1_800, 804).columns[0]?.width).toBe(990);
+  expect(initBrowserWidth(layout, 1_800, 804).columns[0]?.width).toBe(984);
+  expect(initBrowserWidth(layout, 1_130, 804).columns[0]?.width).toBe(559);
 });
 
 it("persists and resizes the same panel at the bottom", () => {

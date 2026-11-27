@@ -275,7 +275,6 @@ function runBatch(
   onTriggerDisposition?: (disposition: "fired" | "dropped" | "error" | "busy") => void,
 ) {
   return cron.run(job.id, "force", {
-    evaluateTrigger: true,
     streamBatch: batch,
     payload: job.payload,
     onTriggerDisposition,
@@ -286,7 +285,7 @@ describe("cron stream trigger composition", () => {
   it("drops a fire:false batch and persists gate state", async () => {
     const evaluateCronCheck = vi.fn(async () => ({
       kind: "evaluated" as const,
-      action: "quiet",
+      action: "quiet" as const,
       state: { seen: true },
     }));
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
@@ -307,7 +306,7 @@ describe("cron stream trigger composition", () => {
   it("composes a final batch and rotates source identity when a once trigger disables the stream", async () => {
     const evaluateCronCheck = vi.fn(async () => ({
       kind: "evaluated" as const,
-      action: "wake",
+      action: "wake" as const,
       message: "gate message",
       state: { seen: true },
     }));
@@ -331,21 +330,21 @@ describe("cron stream trigger composition", () => {
     );
   });
 
-  it("passes a batch to a script payload without a gate and persists its state", async () => {
-    const runScriptJob = vi.fn(async () => ({
-      status: "ok" as const,
-      stateChanged: true,
+  it("passes a batch to a check-only job and persists its state", async () => {
+    const evaluateCronCheck = vi.fn(async () => ({
+      kind: "evaluated" as const,
+      action: "quiet" as const,
       state: { revision: 2 },
     }));
     await withStream(
-      { payload: { kind: "script", script: "return {}" } },
-      { runScriptJob },
+      { payload: { kind: "none" }, check: { script: "return {}" } },
+      { evaluateCronCheck },
       async (cron, job, storePath) => {
         await runBatch(cron, job, "script batch");
         expect((await loadCronStore(storePath)).jobs[0]?.state.triggerState).toEqual({
           revision: 2,
         });
-        expect(runScriptJob).toHaveBeenCalledWith(
+        expect(evaluateCronCheck).toHaveBeenCalledWith(
           expect.objectContaining({
             job: expect.objectContaining({ id: job.id }),
             streamBatch: "script batch",

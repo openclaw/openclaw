@@ -202,7 +202,10 @@ export class GatewaySessionMessageSubscriptionCoordinator {
         // Concurrent owners share this request without an unhandled side branch.
         void entry.ready.catch(() => undefined);
       }
-      const result = await this.#acquireCapability(entry, includeApprovals);
+      // Approval replays can be shared, but the history belongs to the caller that requested it.
+      const ownsSnapshot = created || (includeApprovals && !entry.approvalRequest);
+      const result = await this.#acquireCapability(entry, includeApprovals, options.initialHistory);
+      let initialHistory = ownsSnapshot ? result.initialHistory : undefined;
       if (created && result.initialHistory) {
         // The observer outlives this snapshot; later acquisitions must read current history.
         const { initialHistory: _initialHistory, ...subscriptionResult } = result;
@@ -213,7 +216,8 @@ export class GatewaySessionMessageSubscriptionCoordinator {
         (!narration && entry.mode === "narration") ||
         (includeLiveToolOutput && !entry.includeLiveToolOutput)
       ) {
-        await this.#requestSubscribe(entry, false);
+        const upgrade = await this.#requestSubscribe(entry, false, options.initialHistory);
+        initialHistory ??= upgrade.initialHistory;
       }
       if (this.#retired) {
         throw new Error("Session message subscription completed on a replaced Gateway connection");
@@ -222,7 +226,7 @@ export class GatewaySessionMessageSubscriptionCoordinator {
       const subscription: GatewaySessionMessageSubscription = {
         key: result.key,
         agentId,
-        ...(created && result.initialHistory ? { initialHistory: result.initialHistory } : {}),
+        ...(initialHistory ? { initialHistory } : {}),
         ...(narration ? { mode: "narration" as const } : {}),
         ...(includeLiveToolOutput ? { includeLiveToolOutput: true as const } : {}),
         ...(includeApprovals
@@ -340,6 +344,7 @@ export class GatewaySessionMessageSubscriptionCoordinator {
   #acquireCapability(
     entry: SessionMessageSubscriptionEntry,
     includeApprovals: boolean,
+    initialHistory: GatewaySessionMessageSubscriptionOptions["initialHistory"],
   ): Promise<SessionMessageSubscriptionResponse> {
     if (!includeApprovals) {
       if (entry.approvalRequest === entry.ready) {
@@ -370,7 +375,7 @@ export class GatewaySessionMessageSubscriptionCoordinator {
 
     return this.#trackApprovalRequest(
       entry,
-      entry.ready.then(() => this.#requestSubscribe(entry, true)),
+      entry.ready.then(() => this.#requestSubscribe(entry, true, initialHistory)),
     );
   }
 

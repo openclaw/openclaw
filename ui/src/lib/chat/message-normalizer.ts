@@ -25,10 +25,12 @@ import { readClawHubRecommendation } from "../../../../src/shared/clawhub-recomm
 import { readPluginInlineViewBlock } from "../../../../src/shared/plugin-inline-view.js";
 import { readTemplatePluginInstallNotice } from "../../../../src/shared/template-install-notice.js";
 import { getMediaFileExtension, labelForMediaPath } from "../media-file-extension.ts";
+import { AutomationCreationCardBlock } from "./automation-creation-card.ts";
 import type { NormalizedMessage, MessageContentItem, MessageImageSource } from "./chat-types.ts";
 import { getMessageDerivations, readMessageDerivations } from "./message-derivations.ts";
 import { normalizeAttachmentContentBlock } from "./message-normalizer-attachments.ts";
 import {
+  normalizeSenderIdentity,
   resolveMessageSender,
   resolveMessageSenderLabel,
   type SenderIdentity,
@@ -519,6 +521,9 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
         return [image];
       }
       const type = item.type;
+      if (type === "automation_creation_card") {
+        return isAssistantMessage && value instanceof AutomationCreationCardBlock ? [value] : [];
+      }
       if (type === "plugin_view") {
         const inline = isAssistantMessage ? readPluginInlineViewBlock(item) : undefined;
         return inline ? [inline] : [];
@@ -599,6 +604,8 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   const senderLabel = resolveMessageSenderLabel(m, metaSender);
   const sender = metaSender ?? (senderLabel ? { name: senderLabel } : null);
   const sourceClients = role === "user" ? readMessageClientSources(m) : [];
+  const suggestedBy =
+    role === "user" ? normalizeSenderIdentity(asOptionalRecord(openClawMeta?.suggestedBy)) : null;
 
   content = stripMessageDisplayMetadata(content, role);
   const senderSession = readMessageSenderSession(m.senderSession);
@@ -611,6 +618,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     senderLabel,
     ...(senderSession ? { senderSession } : {}),
     ...(sender ? { sender } : {}),
+    ...(suggestedBy ? { suggestedBy } : {}),
     ...(sourceClients.length ? { sourceClients } : {}),
     ...(audioAsVoice ? { audioAsVoice: true } : {}),
     ...(replyPreviewText || replyPreviewSender

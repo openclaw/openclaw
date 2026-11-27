@@ -395,6 +395,8 @@ it.each(["finite", "unlimited", "trigger evaluating"] as const)(
             },
           })
         : sessionEventJob("session-trigger-watchdog", {
+            schedule: { kind: "every", everyMs: 60_000 },
+            payload: { kind: "agentTurn", message: "Handle changes" },
             check: { script: "return { wake: '' };" },
           });
     const started = createDeferred<AbortSignal | undefined>();

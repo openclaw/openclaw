@@ -330,7 +330,8 @@ export async function generateVoiceResponse(params: VoiceResponseParams) {
                     currentProvider:
                       entry.providerOverride?.trim() ||
                       entry.modelProvider?.trim() ||
-                      configuredModel.provider,
+                      configuredModel?.provider ||
+                      provider,
                     selection: { provider, model },
                     selectionSource: "auto",
                   });

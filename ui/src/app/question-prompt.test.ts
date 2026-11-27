@@ -47,9 +47,14 @@ function rejectAfterRequestDeadline(options?: GatewayProtocolRequestOptions): Pr
 
 function createDeferredQuestionRequest() {
   const pending = createDeferred<unknown>();
-  const request = vi.fn<RequestFn>(() => pending.promise);
+  const started = createDeferred();
+  const request = vi.fn<RequestFn>(() => {
+    started.resolve();
+    return pending.promise;
+  });
   return {
     request,
+    started: started.promise,
     resolve: () => pending.resolve(resolvedQuestion(request.mock.calls.at(-1)?.[1])),
     reject: (message = "stale gateway unavailable") => pending.reject(new Error(message)),
   };
@@ -192,6 +197,7 @@ describe("question prompt state", () => {
     const pending = createDeferredQuestionRequest();
     const { state } = createConnectedState(pending.request);
     const submitting = answerQuestion(state);
+    await pending.started;
     recordQuestionResolution(state, { id: "question-1", status: "answered", answers });
     if (error) {
       pending.reject(error);
@@ -346,6 +352,16 @@ describe("question RPC helpers", () => {
 });
 
 describe("question resolution connection ownership", () => {
+  it("does not dispatch after disconnecting while submission code loads", async () => {
+    const request = createQuestionResolver();
+    const { state } = createConnectedState(request);
+    const submission = answerQuestion(state);
+    setQuestionPromptClient(state, null);
+    await submission;
+    expect(request).not.toHaveBeenCalled();
+    expectPrompt(state, { status: "pending", submitting: false });
+  });
+
   it.each(["success", "error"] as const)(
     "ignores an old answer %s after the gateway client changes",
     async (outcome) => {
@@ -354,11 +370,13 @@ describe("question resolution connection ownership", () => {
       const { state } = createConnectedState(stale.request);
 
       const staleResolution = answerQuestion(state);
+      await stale.started;
       setQuestionPromptClient(state, { request: current.request });
       expect(state.prompts.has("question-1")).toBe(false);
       requestQuestion(state);
 
       const currentResolution = answerQuestion(state);
+      await current.started;
       if (outcome === "success") {
         stale.resolve();
       } else {
@@ -392,6 +410,7 @@ describe("question resolution connection ownership", () => {
     const { state } = createConnectedState(client);
 
     const staleResolution = answerQuestion(state);
+    await stale.started;
     // Socket closure rejects its pending requests before reconnect callbacks.
     stale.reject();
     setQuestionPromptClient(state, null);
@@ -399,6 +418,7 @@ describe("question resolution connection ownership", () => {
     setQuestionPromptClient(state, client);
 
     const currentResolution = answerQuestion(state);
+    await current.started;
     await staleResolution;
 
     expectPrompt(state, {
@@ -423,6 +443,7 @@ describe("question resolution connection ownership", () => {
     const { state, client } = createConnectedState(request);
 
     const resolution = answerQuestion(state);
+    await pending.started;
     const original = state.prompts.get("question-1");
     refreshPendingQuestionsWithRetry(state, client);
     await waitForFast(() => expect(state.prompts.get("question-1")).not.toBe(original));

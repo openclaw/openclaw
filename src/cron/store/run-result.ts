@@ -16,7 +16,10 @@ export function cronRunResultEvent(
   job: CronJob,
   result: Omit<CronRunFinalizationOutcome, "errorReason">,
 ): CronEvent & { action: "finished" } {
-  const quiet = result.status === "ok" && result.triggerEval?.fired === false;
+  const quiet =
+    result.job.payload.kind !== "none" &&
+    result.status === "ok" &&
+    result.triggerEval?.fired === false;
   return {
     jobId: job.id,
     action: "finished",
@@ -55,7 +58,10 @@ export function cronRunResultHistory(
   result: CronRunFinalizationOutcome,
   defaultAgentId?: string,
 ): CronRunHistoryWrite {
-  const quiet = result.status === "ok" && result.triggerEval?.fired === false;
+  const quiet =
+    result.job.payload.kind !== "none" &&
+    result.status === "ok" &&
+    result.triggerEval?.fired === false;
   const entry = cronRunLogEntryFromEvent(
     cronRunResultEvent(job, result),
     result.endedAt,

@@ -97,7 +97,9 @@ export function finalizeCronRunsInWorker(
                 executionPending: completed.executionPending,
                 status: completed.interruptedByRestart
                   ? "interrupted"
-                  : completed.status === "ok" && completed.triggerEval?.fired === false
+                  : completed.job.payload.kind !== "none" &&
+                      completed.status === "ok" &&
+                      completed.triggerEval?.fired === false
                     ? "skipped"
                     : completed.status,
                 finishedAtMs: completed.endedAt,

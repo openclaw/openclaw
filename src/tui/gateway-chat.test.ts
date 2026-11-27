@@ -264,7 +264,9 @@ describe("GatewayChatClient", () => {
         expect(onConnectError).toHaveBeenCalledExactlyOnceWith(connectError);
         expect(connectError.message).toContain("Pairing request sent.");
         expect(connectError.message).toContain("Control UI (Settings -> Devices)");
-        expect(connectError.message).toContain("openclaw devices approve --latest");
+        expect(connectError.message).toMatch(
+          /on the gateway host.*`openclaw devices approve --latest`.*preview.*review.*`openclaw devices approve <requestId>`.*approve.*retry/isu,
+        );
         expect(connectError.details).toEqual({ code: "PAIRING_REQUIRED", requestId: "pair-1" });
         expect(onDisconnected).not.toHaveBeenCalled();
 
@@ -403,6 +405,68 @@ describe("GatewayChatClient", () => {
       ["chat.abort", { ...scope, runId }],
       ["models.list", { agentId: "work" }],
     );
+  });
+
+  it("shows the stored reply for display-capped history rows", async () => {
+    const preview = "a".repeat(8_000);
+    const capped = {
+      role: "assistant",
+      content: [{ type: "text", text: `${preview}\n...(truncated)...` }],
+      __openclaw: { id: "msg-long", truncated: true, reason: "display-cap" },
+    };
+    const short = { role: "assistant", content: [{ type: "text", text: "short" }] };
+    const full = {
+      role: "assistant",
+      content: [{ type: "text", text: `${preview} more text\n\nTHE END` }],
+      __openclaw: { id: "msg-long" },
+    };
+    const { client, request } = mockClient();
+    request.mockResolvedValueOnce({ sessionId: "session-1", messages: [capped, short] });
+    request.mockResolvedValueOnce({ ok: true, message: full });
+
+    await expect(
+      client.loadHistory({ sessionKey: "agent:main:long", limit: 50 }),
+    ).resolves.toMatchObject({ sessionId: "session-1", messages: [full, short] });
+    expectRequests(
+      request,
+      ["chat.history", { sessionKey: "agent:main:long", limit: 50 }],
+      [
+        "chat.message.get",
+        { sessionKey: "agent:main:long", sessionId: "session-1", messageId: "msg-long" },
+      ],
+    );
+  });
+
+  it("keeps a visibly marked preview when the stored reply cannot be loaded", async () => {
+    const preview = "a".repeat(8_000);
+    const capped = (id: string) => ({
+      role: "assistant",
+      content: [{ type: "text", text: `${preview}\n...(truncated)...` }],
+      __openclaw: { id, truncated: true, reason: "display-cap" },
+    });
+    const marked = (id: string, note: string) => ({
+      ...capped(id),
+      content: [{ type: "text", text: `${preview}\n...(truncated; ${note})...` }],
+    });
+    const retry = "couldn't load the full reply. Reopen the session to try again";
+    const { client, request } = mockClient();
+    request.mockResolvedValueOnce({ messages: [capped("huge"), capped("older"), capped("newer")] });
+    request.mockResolvedValueOnce({ ok: false, unavailableReason: "not_found" });
+    request.mockRejectedValueOnce(new Error("unknown method: chat.message.get"));
+    request.mockResolvedValueOnce({ ok: false, unavailableReason: "oversized" });
+
+    await expect(client.loadHistory({ sessionKey: "agent:main:long" })).resolves.toEqual({
+      messages: [
+        marked("huge", "the full reply is too large to show here"),
+        marked("older", retry),
+        marked("newer", retry),
+      ],
+    });
+    expect(request.mock.calls.slice(1).map(([, params]) => params)).toEqual([
+      { sessionKey: "agent:main:long", messageId: "newer" },
+      { sessionKey: "agent:main:long", messageId: "older" },
+      { sessionKey: "agent:main:long", messageId: "huge" },
+    ]);
   });
 
   it("retries session aborts without side-run preservation on older Gateways", async () => {

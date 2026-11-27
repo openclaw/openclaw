@@ -200,13 +200,13 @@ it("applies schedule, status, trigger, and cross-field phrase filters before pag
     { ...matching, schedule: { kind: "at", at: "2030-02-27T15:30:00.000Z" } },
     { ...matching, state: { lastStatus: "error" } },
     matching,
-    { ...matching, trigger: undefined },
+    { ...matching, check: undefined },
     { check: { script: "json({ wake: '' })" } },
   );
   const page = await listPage(state, {
     scheduleKind: "cron",
     lastRunStatus: "unknown",
-    trigger: "conditional",
+    check: "conditional",
     query: "report Quarterly",
     limit: 1,
   });

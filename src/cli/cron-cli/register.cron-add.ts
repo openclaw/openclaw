@@ -10,6 +10,7 @@ import { defaultRuntime } from "../../runtime.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { CronCliError } from "./cron-cli-error.js";
+import { parseCronCommandArgv } from "./input-options.js";
 import { listCronJobsFromGateway } from "./list-jobs.js";
 import { createCronOutputCommand } from "./output-mode.js";
 import {
@@ -25,7 +26,6 @@ import {
   coerceCronDeliveryPreviews,
   enrichCronJsonWithStatus,
   handleCronCliError,
-  parseCronCommandArgv,
   parseCronCommandEnv,
   parseCronIntegerOption,
   parseCronNoOutputTimeoutOption,
@@ -224,7 +224,9 @@ export function registerCronAddCommand(cron: Command) {
                 };
               }
               if (!message && checkPath) {
-                if (opts.timeoutSeconds !== undefined) assertCronTimeoutSupported("none");
+                if (opts.timeoutSeconds !== undefined) {
+                  assertCronTimeoutSupported("none");
+                }
                 return { kind: "none" as const, toolsAllow };
               }
               const timeoutSeconds = parseCronIntegerOption(

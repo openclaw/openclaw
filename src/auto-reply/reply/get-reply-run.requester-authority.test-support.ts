@@ -224,7 +224,7 @@ export function registerPendingRequesterAuthorityCases({
       const scope = createCronCreatorAuthorityCapability(
         originalRunId,
         { kind: "external", channel: "discord" },
-        { source: "channel-owner", isCurrent: () => true },
+        { source: "channel-owner" },
       )!;
       const params = baseParams();
       setRuntimeConfigSnapshot(params.cfg);

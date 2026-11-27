@@ -5,12 +5,34 @@ import {
   MANAGED_SANDBOX_SKILLS_PATH_JS,
 } from "../../shared/sandbox-workspace-paths.js";
 
+const AGP_BUILD_OUTPUT_SEGMENTS = [
+  // AGP output subtrees match at any module depth; authored build/ paths remain eligible.
+  "build/intermediates",
+  "build/outputs/apk",
+  "build/outputs/bundle",
+] as const;
+const DOTNET_BUILD_OUTPUT_SEGMENTS = [
+  "bin/Debug",
+  "bin/Release",
+  "obj/Debug",
+  "obj/Release",
+] as const;
+export type LegacyDerivedEligibilitySubset = readonly ("agp" | "pnpm" | "dotnet")[];
+// Three independent families bound this repair-only search to 8 eligibility candidates.
+export const LEGACY_DERIVED_ELIGIBILITY_SUBSETS = (["pnpm", "agp", "dotnet"] as const)
+  .reduce<LegacyDerivedEligibilitySubset[]>(
+    (subsets, family) => subsets.concat(subsets.map((subset) => [...subset, family])),
+    [[]],
+  )
+  .toSorted((left, right) => left.length - right.length);
 const DERIVED_WORKSPACE_DIRECTORY_NAMES = [
   "__pycache__",
   ".pytest_cache",
   ".mypy_cache",
   ".ruff_cache",
   "node_modules",
+  ...AGP_BUILD_OUTPUT_SEGMENTS,
+  ...DOTNET_BUILD_OUTPUT_SEGMENTS,
 ] as const;
 
 // These producers own exact checkout-relative roots, not every .cache or .artifacts path.
@@ -30,6 +52,9 @@ const TOOL_CACHE_ROOTS = [
   [".cargo/registry", "Cargo registry cache", "CARGO_HOME"],
   [".cargo/git", "Cargo Git cache", "CARGO_HOME"],
   [".gradle/caches", "Gradle cache", "GRADLE_USER_HOME"],
+  [".local/share/NuGet/http-cache", "NuGet HTTP cache", "NUGET_HTTP_CACHE_PATH"],
+  [".local/share/NuGet/v3-cache", "NuGet HTTP cache", "NUGET_HTTP_CACHE_PATH"],
+  [".nuget/packages", "NuGet global packages", "NUGET_PACKAGES"],
 ] as const;
 
 export function workspaceToolCacheHint(entryPath: string): string {
@@ -45,6 +70,7 @@ const DERIVED_WORKSPACE_ROOT_PATHS = [
   ".cache/bun-transpiler",
   ".cache/openclaw/bun",
   ".cache/ms-playwright",
+  ".cache/convex/binaries",
   ".local/share/pnpm/store",
   "artifacts/task-environment/local/share/pnpm/store",
   // pnpm falls back here for projects beneath the protected .openclaw self-bind.
@@ -75,12 +101,18 @@ export const WORKER_ATTACHMENT_DIRECTORY_PATTERN =
 
 // Match a whole segment without splitting each inventory path. The negative
 // class ends at a slash or the actual end, unlike "$" before a final newline.
-const DERIVED_WORKSPACE_SEGMENT_PATTERN = `(?:^|/)(?:${[
-  ...DERIVED_WORKSPACE_DIRECTORY_NAMES.map((name) => name.replaceAll(".", "\\.")),
-  ...DERIVED_WORKSPACE_FILE_NAMES.map((name) => name.replaceAll(".", "\\.")),
-  ...DERIVED_WORKSPACE_FILE_SUFFIXES.map((suffix) => `[^/]*${suffix.replaceAll(".", "\\.")}`),
-  WORKER_ATTACHMENT_DIRECTORY_PATTERN,
-].join("|")})(?![^/])`;
+function derivedWorkspaceSegmentPattern(includeLegacyAgp: boolean, includeLegacyDotnet: boolean) {
+  return `(?:^|/)(?:${[
+    ...DERIVED_WORKSPACE_DIRECTORY_NAMES.filter(
+      (name) =>
+        (!includeLegacyAgp || !AGP_BUILD_OUTPUT_SEGMENTS.some((segment) => segment === name)) &&
+        (!includeLegacyDotnet || !DOTNET_BUILD_OUTPUT_SEGMENTS.some((segment) => segment === name)),
+    ).map((name) => name.replaceAll(".", "\\.")),
+    ...DERIVED_WORKSPACE_FILE_NAMES.map((name) => name.replaceAll(".", "\\.")),
+    ...DERIVED_WORKSPACE_FILE_SUFFIXES.map((suffix) => `[^/]*${suffix.replaceAll(".", "\\.")}`),
+    WORKER_ATTACHMENT_DIRECTORY_PATTERN,
+  ].join("|")})(?![^/])`;
+}
 
 // Git ignores make only known build roots disposable, never arbitrary authored
 // reports. The Bun staging owner downloads its runtime under .cache/openclaw-bun.
@@ -122,7 +154,11 @@ function buildCacheInputPaths(paths = []) {
   return retained;
 }
 const RUNTIME_WORKSPACE_ROOT_PATHS = ${JSON.stringify(RUNTIME_WORKSPACE_ROOT_PATHS)};
-const DERIVED_WORKSPACE_SEGMENT_RE = new RegExp(${JSON.stringify(DERIVED_WORKSPACE_SEGMENT_PATTERN)});
+const DERIVED_WORKSPACE_SEGMENT_RES = ${JSON.stringify(
+  [false, true].flatMap((agp) =>
+    [false, true].map((dotnet) => derivedWorkspaceSegmentPattern(agp, dotnet)),
+  ),
+)}.map((pattern) => new RegExp(pattern));
 function isRuntimeOwnedWorkspacePath(relativePath) {
   return relativePath === ".git" || relativePath.startsWith(".git/") ||
     relativePath.endsWith("/.git") || relativePath.includes("/.git/") ||
@@ -130,7 +166,7 @@ function isRuntimeOwnedWorkspacePath(relativePath) {
     (root) => relativePath === root || relativePath.startsWith(root + "/"),
   );
 }
-function isDerivedWorkspacePath(relativePath, retainedInput = false, excludeBuildCaches = false, includeLegacyPnpmStore = false) {
+function isDerivedWorkspacePath(relativePath, retainedInput, excludeBuildCaches, legacyDerivedEligibilitySubset) {
   if (isRuntimeOwnedWorkspacePath(relativePath)) {
     return true;
   }
@@ -139,12 +175,14 @@ function isDerivedWorkspacePath(relativePath, retainedInput = false, excludeBuil
   }
   if (excludeBuildCaches && isBuildCacheWorkspacePath(relativePath)) return true;
   if (DERIVED_WORKSPACE_ROOT_PATHS.some(
-    (root) => (!includeLegacyPnpmStore || root !== PNPM_FALLBACK_STORE_ROOT_PATH) &&
+    (root) => (root !== PNPM_FALLBACK_STORE_ROOT_PATH || !legacyDerivedEligibilitySubset?.includes("pnpm")) &&
       (relativePath === root || relativePath.startsWith(root + "/")),
   )) {
     return true;
   }
-  return DERIVED_WORKSPACE_SEGMENT_RE.test(relativePath);
+  const legacySegments = (legacyDerivedEligibilitySubset?.includes("agp") ? 2 : 0) +
+    (legacyDerivedEligibilitySubset?.includes("dotnet") ? 1 : 0);
+  return DERIVED_WORKSPACE_SEGMENT_RES[legacySegments].test(relativePath);
 }
 function projectWorkspaceEntries(entries, isRetainedInput, excludeBuildCaches = false) {
   const nonemptyDirectories = new Set();
@@ -176,7 +214,7 @@ export const {
     relativePath: string,
     retainedInput?: boolean,
     excludeBuildCaches?: boolean,
-    includeLegacyPnpmStore?: boolean,
+    legacyDerivedEligibilitySubset?: LegacyDerivedEligibilitySubset,
   ) => boolean;
   isRuntimeOwnedWorkspacePath: (relativePath: string) => boolean;
   buildCacheInputPaths: (paths?: Iterable<string>) => Set<string>;

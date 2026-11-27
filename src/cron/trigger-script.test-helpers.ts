@@ -48,7 +48,7 @@ export function createCronScriptRuntimeFixture(deps: RuntimeDeps) {
     toolsAllowExecTarget: params.execTarget,
   });
   return {
-    evaluateTrigger: (params: ScriptFixture) =>
+    evaluateCheck: (params: ScriptFixture) =>
       runtime.evaluateCheck({
         occurrence: TEST_SCHEDULED_OCCURRENCE,
         deliveryAttemptFence: params.deliveryAttemptFence ?? null,

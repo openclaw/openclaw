@@ -218,7 +218,9 @@ export async function ensureLoaded(
   const durableNextRunAtMsByJobId = new Map<string, number | undefined>();
   const quarantinedConfigJobs: QuarantinedCronConfigJob[] = loaded.invalidConfigRows.filter(
     (row) => {
-      if (row.reason !== "legacy-check-repair-required") return true;
+      if (row.reason !== "legacy-check-repair-required") {
+        return true;
+      }
       const key = `check:${row.sourceIndex}`;
       if (!state.warnedInvalidPersistedJobKeys.has(key)) {
         state.warnedInvalidPersistedJobKeys.add(key);

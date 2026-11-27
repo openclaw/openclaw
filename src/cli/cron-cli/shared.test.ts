@@ -6,16 +6,15 @@ import type { RuntimeEnv } from "../../runtime.js";
 import { ExpectedCliError } from "../expected-cli-error.js";
 import { formatCliFailureLines, formatCliJsonFailure } from "../failure-output.js";
 import { CronCliError } from "./cron-cli-error.js";
+import { parseAt, parsePositiveCronDurationMs } from "./input-options.js";
 import { resolveCronCreateScheduleFromArgs as createSchedule } from "./schedule-options.js";
 import {
   coerceCronDeliveryPreviews,
   enrichCronJsonWithStatus,
   getCronChannelOptions,
   handleCronCliError,
-  parseAt,
   parseCronCommandEnv,
   parseCronStringList,
-  parsePositiveCronDurationMs,
   printCronList,
   printCronShow,
 } from "./shared.js";
@@ -167,20 +166,20 @@ const disabled = (reason: "consecutive-failures" | "schedule-errors", count: num
     state: { autoDisabled: { reason, atMs: Date.now(), consecutiveErrors: count } },
   });
 it.each`
-  name                                     | job                                                                                                                                                                                                                                   | list                                   | show                                                              | listNot      | json
-  ${"extended ISO year"}                   | ${makeJob({ schedule: { kind: "at", at: "+010000-01-15T14:34:56.789+02:00" }, state: {} })}                                                                                                                                           | ${["at +010000-01-15 12:34Z"]}         | ${["schedule: at +010000-01-15 12:34:56.789Z"]}                   | ${undefined} | ${undefined}
-  ${"invalid ISO time"}                    | ${makeJob({ schedule: { kind: "at", at: "not-a-time" }, check: { script: "json({ wake: '' })" }, state: {} })}                                                                                                                        | ${["at -+trigger"]}                    | ${["schedule: at -+trigger"]}                                     | ${undefined} | ${undefined}
-  ${"malformed row"}                       | ${{ id: "malformed-job", enabled: true } as unknown as CronJob}                                                                                                                                                                       | ${["malformed-job"]}                   | ${[]}                                                             | ${undefined} | ${undefined}
-  ${"staggered cron"}                      | ${makeJob({ schedule: { kind: "cron", expr: "* * * * *", staggerMs: 1_001 }, state: {} })}                                                                                                                                            | ${["cron * * * * * (stagger 1s 1ms)"]} | ${["schedule: cron * * * * * (stagger 1s 1ms)"]}                  | ${undefined} | ${undefined}
-  ${"exact cron"}                          | ${makeJob({ schedule: { kind: "cron", expr: "0 7 * * *", staggerMs: 0 }, state: {} })}                                                                                                                                                | ${["cron 0 7 * * * (exact)"]}          | ${["schedule: cron 0 7 * * * (exact)"]}                           | ${undefined} | ${undefined}
-  ${"interval with trigger"}               | ${makeJob({ schedule: { kind: "every", everyMs: 30_000 }, check: { script: "json({ wake: '' })", once: true }, state: { triggerEvalCount: 4, lastTriggerEvalAtMs: Date.now() - 30_000, lastTriggerFireAtMs: Date.now() - 60_000 } })} | ${["every 30s+trigger"]}               | ${["schedule: every 30s+trigger", "trigger: once=yes; evals=4;"]} | ${undefined} | ${undefined}
-  ${"stream with trigger"}                 | ${makeJob({ schedule: { kind: "stream", command: ["node", "events.mjs"] }, check: { script: "json({ wake: '' })" }, state: {} })}                                                                                                     | ${["stream node events.mjs+trigger"]}  | ${["schedule: stream node events.mjs+trigger"]}                   | ${undefined} | ${undefined}
-  ${"on-exit with cwd"}                    | ${makeJob({ schedule: { kind: "on-exit", command: "pnpm build", cwd: "/repo" }, state: {} })}                                                                                                                                         | ${["on-exit pnpm build @ /repo"]}      | ${["schedule: on-exit pnpm build @ /repo"]}                       | ${undefined} | ${undefined}
-  ${"repeated errors"}                     | ${makeJob({ state: { lastRunStatus: "error", consecutiveErrors: 12, lastError: "boom" } })}                                                                                                                                           | ${["error (12x)"]}                     | ${[]}                                                             | ${undefined} | ${undefined}
-  ${"single error"}                        | ${makeJob({ state: { lastRunStatus: "error", consecutiveErrors: 1, lastError: "boom" } })}                                                                                                                                            | ${["error"]}                           | ${[]}                                                             | ${"(1x)"}    | ${undefined}
-  ${"bounded error count"}                 | ${makeJob({ state: { lastRunStatus: "error", consecutiveErrors: 1440, lastError: "boom" } })}                                                                                                                                         | ${["error (99+x)"]}                    | ${[]}                                                             | ${"1440"}    | ${undefined}
-  ${"auto-disabled after run failures"}    | ${disabled("consecutive-failures", 10)}                                                                                                                                                                                               | ${["disabled (10x)"]}                  | ${["status: disabled (10x)"]}                                     | ${undefined} | ${{ status: "disabled", state: { autoDisabled: { reason: "consecutive-failures", consecutiveErrors: 10 } } }}
-  ${"auto-disabled after schedule errors"} | ${disabled("schedule-errors", 3)}                                                                                                                                                                                                     | ${["disabled (schedule)"]}             | ${[]}                                                             | ${undefined} | ${undefined}
+  name                                     | job                                                                                                                                                                                                                                   | list                                   | show                                                            | listNot      | json
+  ${"extended ISO year"}                   | ${makeJob({ schedule: { kind: "at", at: "+010000-01-15T14:34:56.789+02:00" }, state: {} })}                                                                                                                                           | ${["at +010000-01-15 12:34Z"]}         | ${["schedule: at +010000-01-15 12:34:56.789Z"]}                 | ${undefined} | ${undefined}
+  ${"invalid ISO time"}                    | ${makeJob({ schedule: { kind: "at", at: "not-a-time" }, check: { script: "json({ wake: '' })" }, state: {} })}                                                                                                                        | ${["at -+trigger"]}                    | ${["schedule: at -+trigger"]}                                   | ${undefined} | ${undefined}
+  ${"malformed row"}                       | ${{ id: "malformed-job", enabled: true } as unknown as CronJob}                                                                                                                                                                       | ${["malformed-job"]}                   | ${[]}                                                           | ${undefined} | ${undefined}
+  ${"staggered cron"}                      | ${makeJob({ schedule: { kind: "cron", expr: "* * * * *", staggerMs: 1_001 }, state: {} })}                                                                                                                                            | ${["cron * * * * * (stagger 1s 1ms)"]} | ${["schedule: cron * * * * * (stagger 1s 1ms)"]}                | ${undefined} | ${undefined}
+  ${"exact cron"}                          | ${makeJob({ schedule: { kind: "cron", expr: "0 7 * * *", staggerMs: 0 }, state: {} })}                                                                                                                                                | ${["cron 0 7 * * * (exact)"]}          | ${["schedule: cron 0 7 * * * (exact)"]}                         | ${undefined} | ${undefined}
+  ${"interval with trigger"}               | ${makeJob({ schedule: { kind: "every", everyMs: 30_000 }, check: { script: "json({ wake: '' })", once: true }, state: { triggerEvalCount: 4, lastTriggerEvalAtMs: Date.now() - 30_000, lastTriggerFireAtMs: Date.now() - 60_000 } })} | ${["every 30s+trigger"]}               | ${["schedule: every 30s+trigger", "check: once=yes; evals=4;"]} | ${undefined} | ${undefined}
+  ${"stream with trigger"}                 | ${makeJob({ schedule: { kind: "stream", command: ["node", "events.mjs"] }, check: { script: "json({ wake: '' })" }, state: {} })}                                                                                                     | ${["stream node events.mjs+trigger"]}  | ${["schedule: stream node events.mjs+trigger"]}                 | ${undefined} | ${undefined}
+  ${"on-exit with cwd"}                    | ${makeJob({ schedule: { kind: "on-exit", command: "pnpm build", cwd: "/repo" }, state: {} })}                                                                                                                                         | ${["on-exit pnpm build @ /repo"]}      | ${["schedule: on-exit pnpm build @ /repo"]}                     | ${undefined} | ${undefined}
+  ${"repeated errors"}                     | ${makeJob({ state: { lastRunStatus: "error", consecutiveErrors: 12, lastError: "boom" } })}                                                                                                                                           | ${["error (12x)"]}                     | ${[]}                                                           | ${undefined} | ${undefined}
+  ${"single error"}                        | ${makeJob({ state: { lastRunStatus: "error", consecutiveErrors: 1, lastError: "boom" } })}                                                                                                                                            | ${["error"]}                           | ${[]}                                                           | ${"(1x)"}    | ${undefined}
+  ${"bounded error count"}                 | ${makeJob({ state: { lastRunStatus: "error", consecutiveErrors: 1440, lastError: "boom" } })}                                                                                                                                         | ${["error (99+x)"]}                    | ${[]}                                                           | ${"1440"}    | ${undefined}
+  ${"auto-disabled after run failures"}    | ${disabled("consecutive-failures", 10)}                                                                                                                                                                                               | ${["disabled (10x)"]}                  | ${["status: disabled (10x)"]}                                   | ${undefined} | ${{ status: "disabled", state: { autoDisabled: { reason: "consecutive-failures", consecutiveErrors: 10 } } }}
+  ${"auto-disabled after schedule errors"} | ${disabled("schedule-errors", 3)}                                                                                                                                                                                                     | ${["disabled (schedule)"]}             | ${[]}                                                           | ${undefined} | ${undefined}
 `("renders $name", expectRendering);
 
 it("sanitizes, truncates and aligns names and session targets by terminal width", () => {
@@ -326,7 +325,7 @@ it.each([
 });
 
 describe("handleCronCliError", () => {
-  const recovery =
+  const machineMessage =
     "Automation not found: missing-job. Run `openclaw cron list` to see recent automation ids.";
   const missingJob = () =>
     new GatewayClientRequestError({
@@ -334,15 +333,15 @@ describe("handleCronCliError", () => {
       message: "transport-neutral lookup miss",
       details: { code: "CRON_JOB_NOT_FOUND", jobId: "missing-job" },
     });
-  it("renders typed lookup misses as expected machine failures", () => {
+  it("guides typed lookup misses to disabled automations without changing machine output", () => {
     const { thrown, json, stderr } = renderJsonError(
       missingJob(),
-      ["cron", "show", "missing-job"],
+      ["cron", "get", "missing-job"],
       "Could not start the CLI.",
     );
     expect(thrown).toBeInstanceOf(ExpectedCliError);
-    expect(json).toEqual({ ok: false, error: { type: "cli_error", message: recovery } });
-    expect(stderr).toContain(recovery);
+    expect(json).toEqual({ ok: false, error: { type: "cli_error", message: machineMessage } });
+    expect(stderr).toContain("`openclaw cron list --all`");
     for (const forbidden of ["Could not start the CLI.", "openclaw doctor", "OPENCLAW_DEBUG"]) {
       expect(stderr).not.toContain(forbidden);
     }

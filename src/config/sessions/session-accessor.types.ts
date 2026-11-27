@@ -634,7 +634,10 @@ export type SessionEntryTargetPatchScope = {
 };
 
 /** Detached candidate row; changes persist only when returned as a replacement. */
-export type SessionEntryReplacementSnapshot = SessionEntrySummary;
+export type SessionEntryReplacementSnapshot = SessionEntrySummary & {
+  /** Only explicitly requested by the internal Archive patch planner, outside entry metadata. */
+  archiveUndoMarker?: string;
+};
 
 /** Full row to replace in the transaction; missing keys are ignored. */
 export type SessionEntryReplacement = SessionEntrySummary;

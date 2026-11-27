@@ -79,10 +79,11 @@ describe("scheduled tool policy provenance", () => {
           agentId: "main",
           sessionTarget: kind === "script" ? "isolated" : `session:${sessionKey}`,
           owner: { agentId: "main", sessionKey, accountId: "default" },
+          ...(kind === "script" ? { check: { script: "return {}" } } : {}),
           payload:
             kind === "agentTurn"
               ? { ...jobInput.payload, toolsAllow: ["*"] }
-              : { kind: "script", script: "return {}", toolsAllow: ["*"] },
+              : { kind: "none", toolsAllow: ["*"] },
         },
         {
           operatorSource: source,
@@ -367,13 +368,16 @@ describe("scheduled tool policy provenance", () => {
           {
             ...jobInput,
             name: "trigger-capped",
-            check: { script: "return true" },
-            payload: { kind: "command", argv: ["true"] },
+            check: { script: "return {}" },
+            payload: { kind: "none" },
           },
           { captureRuntimeAuthority: () => baseAuthority },
         );
         expect(triggeredTransport.runtimeAuthority).toEqual(baseAuthority);
-        const nonToolRuntime = await update(state, triggeredTransport.id, { trigger: null });
+        const nonToolRuntime = await update(state, triggeredTransport.id, {
+          check: null,
+          payload: { kind: "command", argv: ["true"] },
+        });
         expect(nonToolRuntime.runtimeAuthority).toBeUndefined();
         expect(nonToolRuntime.runtimeAuthorityRecoveryRequired).toBeUndefined();
         const persistedNonToolRuntime = (await loadCronStore(storePath)).jobs.find(

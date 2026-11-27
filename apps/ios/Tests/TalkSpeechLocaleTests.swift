@@ -3,6 +3,40 @@ import Testing
 @testable import OpenClaw
 
 struct TalkSpeechLocaleTests {
+    @Test func `system voice keeps BCP 47 locale separate from provider language`() {
+        let parsed = TalkModeGatewayConfigParser.parse(
+            config: ["talk": ["speechLocale": "tr_TR"]],
+            defaultProvider: "elevenlabs",
+            defaultModelIdFallback: "eleven_v3",
+            defaultRealtimeModelIdFallback: "gpt-realtime-2",
+            defaultSilenceTimeoutMs: 900)
+        let configured = TalkSpeechLocale.resolvedLanguages(
+            directiveLanguage: nil,
+            gatewaySelection: parsed.snapshot.speechLocaleID,
+            isSystemVoiceAvailable: { _ in true })
+        let directive = TalkSpeechLocale.resolvedLanguages(
+            directiveLanguage: "de_DE",
+            gatewaySelection: parsed.snapshot.speechLocaleID,
+            isSystemVoiceAvailable: { _ in true })
+        let providerCompatible = TalkSpeechLocale.resolvedLanguages(
+            directiveLanguage: "tr",
+            gatewaySelection: parsed.snapshot.speechLocaleID,
+            isSystemVoiceAvailable: { _ in true })
+        let unavailableDirective = TalkSpeechLocale.resolvedLanguages(
+            directiveLanguage: "zz-ZZ",
+            gatewaySelection: parsed.snapshot.speechLocaleID,
+            isSystemVoiceAvailable: { $0 == "tr-TR" })
+
+        #expect(configured.provider == nil)
+        #expect(configured.systemVoice == "tr-TR")
+        #expect(directive.provider == nil)
+        #expect(directive.systemVoice == "de-DE")
+        #expect(providerCompatible.provider == "tr")
+        #expect(providerCompatible.systemVoice == "tr")
+        #expect(unavailableDirective.provider == nil)
+        #expect(unavailableDirective.systemVoice == "tr-TR")
+    }
+
     @Test @MainActor func `talk manager clears retired speech locale preference`() {
         let defaults = UserDefaults.standard
         let previous = defaults.object(forKey: "talk.speechLocale")

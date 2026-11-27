@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
@@ -41,6 +42,49 @@ function step(job: string, name: string) {
   assert(match, `missing workflow step: ${job}/${name}`);
   return match;
 }
+
+it("runs both release callers independently of Boat with the pinned Blacksmith watcher", () => {
+  const revision = "b5e0ed2fdd00553915067a258603606515236c58";
+  expect(workflow.jobs).not.toHaveProperty("boat_release_runners");
+  expect(workflow.jobs).not.toHaveProperty("cleanup_boat_release_runners");
+  for (const name of ["release_decision", "diagnostic_drain"]) {
+    const caller = workflowJob(name);
+    expect(caller.needs).toEqual([
+      "resolve_target",
+      "prepare_npm_package",
+      "npm_preflight_first",
+      "qualify_npm_package",
+      "prepare_plugin_npm",
+      "prepare_docker_release",
+      "release_execution_plan",
+    ]);
+    expect(caller.if).toBe("always()");
+    expect(caller.with?.runner_label).toBe("blacksmith-2vcpu-ubuntu-2404");
+    expect((workflowJob(name) as { uses?: string }).uses).toBe(
+      "openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@" + revision,
+    );
+  }
+  // Retain the exact pinned definition independently of current watcher edits.
+  // This fixture is the git blob at revision above, so shallow CI needs no history.
+  const selectedSource = readFileSync(
+    "test/scripts/fixtures/full-release-state-watcher-b5e0ed.yml",
+    "utf8",
+  );
+  expect(createHash("sha256").update(selectedSource).digest("hex")).toBe(
+    "532e32b7cdcc38587774a7f24853b113596fb51998f6cfb6f87819ce69c953ef",
+  );
+  const selected = parse(selectedSource);
+  expect(selected.jobs.watch["runs-on"]).toBe("blacksmith-2vcpu-ubuntu-2404");
+  expect(selected.jobs.watch["timeout-minutes"]).toBe(720);
+  expect(selected.jobs.watch.env.OPENCLAW_RELEASE_WAIVERS_PATH).toBe(
+    "${{ github.workspace }}/scripts/lib/release-validation-waivers.json",
+  );
+  expect(
+    selected.jobs.watch.steps.find(
+      (entry: { name: string }) => entry.name === "Checkout release state tooling",
+    ).if,
+  ).toBeUndefined();
+});
 
 it("runs release tooling only from the trusted revision without persisted credentials", () => {
   const tooling = allSteps.filter((entry) =>
@@ -178,7 +222,9 @@ describe("full release same-parent recovery workflow", () => {
     let workloadDispatches = 0;
     let artifactDispatches = 0;
     for (const job of Object.values(workflow.jobs)) {
-      const artifact = job.env?.CHILD_WORKFLOW_KIND?.startsWith("artifact-");
+      const artifact = (
+        job.env?.CHILD_WORKFLOW_KIND ?? job.env?.PREFLIGHT_FIRST_CHILD_WORKFLOW_KIND
+      )?.startsWith("artifact-");
       const dispatches = (job.steps ?? []).filter((entry) =>
         String(entry.name).startsWith("Dispatch"),
       );
@@ -213,12 +259,16 @@ describe("full release same-parent recovery workflow", () => {
         }
       }
     }
+    const original = step("npm_preflight_first", "Verify initial npm preflight on retry");
+    expect(original.if).toBe("github.run_attempt != 1 && github.job == 'npm_preflight_first'");
+    expect(original.run).toBe("node scripts/full-release-artifacts.mjs verify-initial-npm");
     expect(workloadDispatches).toBeGreaterThan(0);
     expect(artifactDispatches).toBeGreaterThan(0);
     expect(String(workflow.jobs.qualify_npm_package?.if)).not.toContain("github.run_attempt");
     expect(workflow.jobs.release_execution_plan?.needs).toEqual(
       expect.arrayContaining([
         "prepare_npm_package",
+        "npm_preflight_first",
         "qualify_npm_package",
         "prepare_plugin_npm",
         "prepare_docker_release",
@@ -228,6 +278,7 @@ describe("full release same-parent recovery workflow", () => {
       expect(workflow.jobs[jobName]?.needs).toEqual(
         expect.arrayContaining([
           "prepare_npm_package",
+          "npm_preflight_first",
           "qualify_npm_package",
           "prepare_plugin_npm",
           "prepare_docker_release",
@@ -235,7 +286,8 @@ describe("full release same-parent recovery workflow", () => {
       );
     }
     expect(workflow.jobs.summary?.env).toMatchObject({
-      NPM_PREPARATION_RESULT: "${{ needs.prepare_npm_package.result }}",
+      NPM_PREPARATION_RESULT:
+        "${{ needs.resolve_target.outputs.preflight_first == 'true' && needs.npm_preflight_first.result || needs.prepare_npm_package.result }}",
       NPM_QUALIFICATION_RESULT: "${{ needs.qualify_npm_package.result }}",
       PLUGIN_NPM_PREPARATION_RESULT: "${{ needs.prepare_plugin_npm.result }}",
       DOCKER_PREPARATION_RESULT: "${{ needs.prepare_docker_release.result }}",
@@ -277,8 +329,9 @@ describe("full release same-parent recovery workflow", () => {
           verifierCheckedOut ? verifierSha : "",
         );
       }
-      expect(evaluate(step("watch", "Checkout release state tooling").if ?? "true")).toBe(
-        !verifierCheckedOut,
+      expect(evaluate(step("watch", "Checkout release state tooling").if ?? "true")).toBe(true);
+      expect(workflowJob("watch").env?.OPENCLAW_RELEASE_WAIVERS_PATH).toBe(
+        "${{ github.workspace }}/scripts/lib/release-validation-waivers.json",
       );
       for (const jobName of ["watch", "summary", "release_execution_plan", "evidence_reuse"]) {
         const job = jobName === "watch" ? watcher.jobs.watch : workflow.jobs[jobName];
@@ -293,9 +346,25 @@ describe("full release same-parent recovery workflow", () => {
             `${verifierRoot}/scripts/full-release-validation-state.mjs`,
           );
         }
+        if (jobName === "release_execution_plan") {
+          const seal = step(jobName, "Seal immutable release execution plan");
+          const env = seal.env as Record<string, unknown>;
+          expect(evaluate(env.RELEASE_STATE_SCRIPT)).toBe(
+            `${verifierRoot}/scripts/full-release-validation-state.mjs`,
+          );
+          expect(seal.run).toContain('node "$RELEASE_STATE_SCRIPT" plan');
+        }
         for (const entry of job.steps) {
           const env = entry.env as Record<string, unknown> | undefined;
           if (env?.OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR) {
+            expect(
+              env.OPENCLAW_RELEASE_WAIVERS_PATH ?? job.env?.OPENCLAW_RELEASE_WAIVERS_PATH,
+              jobName,
+            ).toBe(
+              jobName === "evidence_reuse"
+                ? "${{ github.workspace }}/workflow/scripts/lib/release-validation-waivers.json"
+                : "${{ github.workspace }}/scripts/lib/release-validation-waivers.json",
+            );
             const root =
               jobName === "evidence_reuse" && !verifierCheckedOut
                 ? "/workspace/workflow"

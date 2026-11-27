@@ -282,6 +282,42 @@ export function registerAgentStoredOverrideTests({
     });
   });
 
+  it("runs a subagent-settle turn on the model the session inherits from its parent", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const parentKey = "agent:main:dashboard:inherit-parent";
+      const sessionKey = "agent:main:dashboard:inherit-child";
+      await writeSessionStoreSeed(store, {
+        [parentKey]: {
+          sessionId: "inherit-parent",
+          providerOverride: "anthropic",
+          modelOverride: "claude-opus-5-5",
+          modelOverrideSource: "user",
+          modelOverrideRouteResolution: "resolved",
+        },
+        // No selection of its own: user turns resolve the parent's pick.
+        [sessionKey]: { sessionId: "inherit-child", parentSessionKey: parentKey },
+      });
+      mockConfig(home, store, {
+        model: { primary: "clawrouter/anthropic/claude-opus-5-5" },
+      });
+      mockModelCatalogOnce([
+        { provider: "clawrouter", id: "anthropic/claude-opus-5-5", name: "Opus" },
+        { provider: "anthropic", id: "claude-opus-5-5", name: "Opus" },
+      ]);
+
+      await runCommand({
+        sessionKey,
+        inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle" },
+      });
+
+      expectLastRunProviderModel("anthropic", "claude-opus-5-5");
+      const entry = readSessionStore<SessionEntry>(store)[sessionKey];
+      expect(entry?.providerOverride).toBeUndefined();
+      expect(entry?.modelOverride).toBeUndefined();
+    });
+  });
+
   it.each([
     {
       name: "keeps a cataloged direct pick",

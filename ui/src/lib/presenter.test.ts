@@ -33,18 +33,19 @@ it("routes cron state and payload labels through whole catalog templates", async
       next: formatMs(2000),
       last: formatMs(1000),
     });
-    const cases: Array<[CronJob["payload"], string, Record<string, string>]> = [
+    const cases: Array<[CronJob["payload"], string, Record<string, string> | undefined]> = [
       [{ kind: "systemEvent", text: "User Text" }, "system", { text: "User Text" }],
       [{ kind: "command", argv: ["Run", "--Flag"] }, "command", { command: "Run --Flag" }],
-      [{ kind: "script", script: "Echo User Text" }, "script", { script: "Echo User Text" }],
+      [{ kind: "none" }, "checkOnly", undefined],
       [{ kind: "agentTurn", message: "User Prompt" }, "agent", { message: "User Prompt" }],
     ];
     for (const [payload, label, params] of cases) {
       cronJob.payload = payload;
-      const expectedPayload = i18n.t(`cron.job.${label}`, params);
+      const key = label === "checkOnly" ? "cron.form.checkOnly" : `cron.job.${label}`;
+      const expectedPayload = params ? i18n.t(key, params) : i18n.t(key);
       translate.mockClear();
       expect(formatCronPayload(cronJob)).toBe(expectedPayload);
-      expect.soft(translate).toHaveBeenCalledWith(`cron.job.${label}`, params);
+      expect.soft(translate).toHaveBeenCalledWith(key, params);
     }
     cronJob.payloadSource = { kind: "pluginCommand", command: "DoThing", pluginId: "Plugin-ID" };
     const params = { command: "DoThing", plugin: "Plugin-ID" };

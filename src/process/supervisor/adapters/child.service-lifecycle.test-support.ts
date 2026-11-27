@@ -37,6 +37,7 @@ export async function serviceChildHostTransportPrelude(directory: string): Promi
   // A source-loaded host must still launch the canonical built native owner.
   // Loader compiler children cannot share its exclusive kernel wait ownership.
   const bootstrap = await writeSealedRuntimeProcessFixture(directory, "serviceChildRelay", {
+    serviceChildRelay: resolveRuntimeProcessEntrypointUrl("serviceChildRelay"),
     serviceChildGroupAnchor: resolveRuntimeProcessEntrypointUrl("serviceChildGroupAnchor"),
   });
   const nativeOwner = `

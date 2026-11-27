@@ -92,7 +92,7 @@ function harness() {
       admitted.push(occurrence);
       return occurrence;
     }),
-    evaluateCronCheck: record("evaluateCronCheck", { kind: "evaluated", action: "wake" }),
+    evaluateCronCheck: record("evaluateCronCheck", { kind: "evaluated", action: "wake" as const }),
     runIsolatedAgentJob: record("runIsolatedAgentJob"),
     runSessionEvent: record("runSessionEvent"),
     runCommandJob: record("runCommandJob"),
@@ -114,7 +114,7 @@ describe("scheduled occurrence admission", () => {
   it.each(["quiet", "post", "wake"] as const)("dispatches only the %s effect", async (action) => {
     const { state, seen, release } = harness();
     state.deps.evaluateCronCheck = vi.fn(async () => ({
-      kind: "evaluated",
+      kind: "evaluated" as const,
       action,
       message: "Workspace degraded",
       state: { status: "degraded" },
@@ -139,7 +139,9 @@ describe("scheduled occurrence admission", () => {
         expect.objectContaining({ message: "Workspace degraded" }),
       );
       expect(result.delivered).toBe(true);
-    } else expect(state.deps.deliverCheckPost).not.toHaveBeenCalled();
+    } else {
+      expect(state.deps.deliverCheckPost).not.toHaveBeenCalled();
+    }
     if (action === "wake") {
       expect(state.deps.runIsolatedAgentJob).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -148,27 +150,13 @@ describe("scheduled occurrence admission", () => {
           }),
         }),
       );
-    } else expect(seen).toEqual([]);
+    } else {
+      expect(seen).toEqual([]);
+    }
     expect(release).toHaveBeenCalledOnce();
   });
-  it("classifies every executor that can start occurrence work", () => {
-    expect(Object.values(executorsRequireOccurrence).every(Boolean)).toBe(true);
-    expect(Object.keys(EXECUTOR_ADMISSION).toSorted()).toMatchInlineSnapshot(`
-      [
-        "enqueueSessionEvent",
-        "enqueueSystemEvent",
-        "evaluateCronCheck",
-        "runCommandJob",
-        "runCronFailureRepair",
-        "runIsolatedAgentJob",
-        "runSchedulerOwned",
-        "runSessionEvent",
-      ]
-    `);
-  });
-
   it.each(MATRIX)(
-    "$kind on $sessionTarget (trigger: $withTrigger) runs every executor with one admitted occurrence",
+    "$kind on $sessionTarget (check: $withTrigger) runs every executor with one admitted occurrence",
     async ({ kind, sessionTarget, withTrigger }) => {
       const { state, admitted, release, seen } = harness();
       const job: CronStoredJob = {
@@ -206,7 +194,7 @@ describe("scheduled occurrence admission", () => {
     const { state, admitted, release } = harness();
     state.deps.evaluateCronCheck = vi.fn(async () => ({
       kind: "evaluated" as const,
-      action: "quiet",
+      action: "quiet" as const,
     }));
     await executeJobCore(state, {
       ...makeCronJob({ payload: payloadFor("agentTurn") }),
@@ -220,7 +208,7 @@ describe("scheduled occurrence admission", () => {
   });
 
   it.each(MATRIX)(
-    "a paused $kind occurrence on $sessionTarget (trigger: $withTrigger) runs nothing",
+    "a paused $kind occurrence on $sessionTarget (check: $withTrigger) runs nothing",
     async ({ kind, sessionTarget, withTrigger }) => {
       const { state, seen } = harness();
       const pause = {
@@ -258,12 +246,14 @@ describe("scheduled occurrence admission", () => {
     await executeJobCore(state, makeCronJob({ payload: payloadFor("agentTurn") }));
     const occurrence = seen[0]?.occurrence as ScheduledOccurrence;
     expect(
-      occurrence.mint({
-        cfg: {},
-        agentId: "main",
-        runId: "run",
-        runSessionKey: "agent:main:cron:job",
-      }).result,
+      (
+        await occurrence.mint({
+          cfg: {},
+          agentId: "main",
+          runId: "run",
+          runSessionKey: "agent:main:cron:job",
+        })
+      ).result,
     ).toEqual({ status: "fail", error: "occurrence admission is not configured" });
   });
 });

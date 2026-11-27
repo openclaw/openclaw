@@ -21,7 +21,6 @@ import {
   normalizeSessionDeliveryState,
   type DeliveryContext,
 } from "../../utils/delivery-context.shared.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { callCron, createReadService } from "./cron-read.test-support.js";
 import { createCronCallerClient } from "./cron.validation.test-support.js";
@@ -37,7 +36,6 @@ async function withWebchatTool(
     ) => ReturnType<ReturnType<typeof createCronTool>["execute"]>;
     tool: ReturnType<typeof createCronTool>;
     cron: CronService;
-    revoke: () => void;
   }) => Promise<void>,
   storedContext: DeliveryContext = { channel: "webchat", to: sessionKey },
   channelsEnabled = true,
@@ -107,7 +105,6 @@ async function withWebchatTool(
       cron,
       cronStorePath: storePath,
       getRuntimeConfig: () => cfg,
-      validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
     });
     const gatewaySpy = vi
       .spyOn(gatewayModule, "callGatewayTool")
@@ -137,7 +134,6 @@ async function withWebchatTool(
       });
       await check({
         cron,
-        revoke,
         tool,
         add: async (delivery, target = "current") => {
           return await tool.execute("webchat-condition-watcher", {
@@ -190,7 +186,7 @@ describe("WebChat automation creation through the tool and Gateway", () => {
           },
           deleteAfterRun: true,
         },
-        patch: { name: "", schedule: { kind: "at", at: "" }, trigger: null },
+        patch: { name: "", schedule: { kind: "at", at: "" }, check: null },
       };
       await expect(tool.execute("blank-destination", args)).rejects.toThrow(
         "omit delivery.failureDestination if unused, or supply a valid target. No changes were saved. Retry with corrected arguments; do not report success unless the retry succeeds.",
@@ -200,13 +196,13 @@ describe("WebChat automation creation through the tool and Gateway", () => {
       // This main-session reminder needs no separate delivery destination.
       const retry = { ...args, job: { ...args.job, delivery: undefined } };
       await expect(tool.execute("incompatible-trigger", retry)).rejects.toThrow(
-        'schedule.kind="at" cannot include trigger. Remove trigger for a one-time reminder, or use a recurring every/cron schedule. No changes were saved. Retry with corrected arguments; do not report success unless the retry succeeds.',
+        "cron checks can only be combined with an agent prompt, not a command or system event",
       );
       expect(await cron.list({ includeDisabled: true })).toEqual([]);
 
       await tool.execute("corrected-reminder", {
         ...retry,
-        job: { ...retry.job, trigger: undefined },
+        job: { ...retry.job, check: undefined },
       });
       expect(await cron.list({ includeDisabled: true })).toEqual([
         expect.objectContaining({
@@ -284,27 +280,12 @@ describe("WebChat automation creation through the tool and Gateway", () => {
     }, storedContext);
   });
 
-  it.each([
-    {
-      revoked: false,
-      delivery: { mode: "announce", channel: "webchat" },
-      error: "delivery.channel must be one of: discord, telegram",
-    },
-    {
-      revoked: true,
-      delivery: { mode: "announce" },
-      error: "agent runtime authority is no longer active",
-    },
-  ] satisfies Array<{ revoked: boolean; delivery: CronDelivery; error: string }>)(
-    "rejects invalid delivery or revoked authority before persistence: $revoked",
-    async ({ revoked, delivery, error }) => {
-      await withWebchatTool(async ({ add, cron, revoke }) => {
-        if (revoked) {
-          revoke();
-        }
-        await expect(add(delivery)).rejects.toThrow(error);
-        expect(await cron.list({ includeDisabled: true })).toEqual([]);
-      });
-    },
-  );
+  it("rejects invalid delivery before persistence", async () => {
+    await withWebchatTool(async ({ add, cron }) => {
+      await expect(add({ mode: "announce", channel: "webchat" })).rejects.toThrow(
+        "delivery.channel must be one of: discord, telegram",
+      );
+      expect(await cron.list({ includeDisabled: true })).toEqual([]);
+    });
+  });
 });

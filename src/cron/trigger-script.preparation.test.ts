@@ -36,8 +36,8 @@ const invocation = (jobId: string, agentId = "main", toolsAllow = ["*"]) => ({
   script: "return {}",
   state: null,
 });
-const expectPayload = (result: ReturnType<Runtime["executePayload"]>, state: unknown) =>
-  expect(result).resolves.toMatchObject({ kind: "completed", state });
+const expectPayload = (result: ReturnType<Runtime["evaluateCheck"]>, state: unknown) =>
+  expect(result).resolves.toMatchObject({ kind: "evaluated", state });
 
 let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
 let config: OpenClawConfig;
@@ -213,7 +213,7 @@ it.each(["gateway", "standalone"] as const)(
     });
     const artifact = owner === "gateway" ? "built" : "source";
     const run = (jobId: string, agentId = "main", toolsAllow = ["*"]) =>
-      runtime.executePayload(invocation(jobId, agentId, toolsAllow));
+      runtime.evaluateCheck(invocation(jobId, agentId, toolsAllow));
     for (const [jobId, agentId] of [
       ["first", "main"],
       ["first", "main"],

@@ -314,7 +314,9 @@ function rewriteCheckSource(script: string, condition: boolean, main: boolean): 
         return undefined;
       }
     }
-    if (node.type === "ThisExpression") return undefined;
+    if (node.type === "ThisExpression") {
+      return undefined;
+    }
     const isJson =
       node.type === "CallExpression" &&
       node.callee.type === "Identifier" &&
@@ -327,26 +329,36 @@ function rewriteCheckSource(script: string, condition: boolean, main: boolean): 
           ancestor.type === "FunctionExpression" ||
           ancestor.type === "ArrowFunctionExpression",
       );
-    if (!isJson && !isResult) continue;
+    if (!isJson && !isResult) {
+      continue;
+    }
     const result = node.type === "CallExpression" ? node.arguments[0] : node.argument;
-    if (result?.type !== "ObjectExpression" || (isJson && node.arguments.length !== 1))
+    if (result?.type !== "ObjectExpression" || (isJson && node.arguments.length !== 1)) {
       return undefined;
+    }
     let fire = false;
     let hasMessage = false;
     for (const prop of result.properties) {
-      if (prop.type !== "Property" || prop.computed || prop.kind !== "init" || prop.method)
+      if (prop.type !== "Property" || prop.computed || prop.kind !== "init" || prop.method) {
         return undefined;
+      }
       const key =
         prop.key.type === "Identifier"
           ? prop.key.name
           : prop.key.type === "Literal"
             ? prop.key.value
             : undefined;
-      if (key === "state") continue;
+      if (key === "state") {
+        continue;
+      }
       if (condition) {
-        if (key === "fire" && !fire) fire = true;
-        else if (key === "message" && !hasMessage) hasMessage = true;
-        else return undefined;
+        if (key === "fire" && !fire) {
+          fire = true;
+        } else if (key === "message" && !hasMessage) {
+          hasMessage = true;
+        } else {
+          return undefined;
+        }
       } else if (key === "notify" && !main) {
         edits.push({
           start: prop.key.start - codeOffset,
@@ -359,7 +371,9 @@ function rewriteCheckSource(script: string, condition: boolean, main: boolean): 
       }
     }
     if (condition) {
-      if (!fire) return undefined;
+      if (!fire) {
+        return undefined;
+      }
       edits.push({
         start: result.start - codeOffset,
         end: result.start - codeOffset,
@@ -386,7 +400,9 @@ export function retireCronScriptJob(job: Record<string, unknown>): { paused?: st
   const payload = job.payload as Record<string, unknown> | undefined;
   const condition = Object.hasOwn(job, "trigger");
   const standalone = payload?.kind === "script";
-  if (!condition && !standalone) return undefined;
+  if (!condition && !standalone) {
+    return undefined;
+  }
   const trigger =
     typeof job.trigger === "object" && job.trigger !== null
       ? (job.trigger as Record<string, unknown>)

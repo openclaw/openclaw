@@ -471,13 +471,17 @@ it("preserves capacity and cancellation contexts when draining receipts", async 
   });
 });
 
-const quiet = { script: "return { fire: false }" };
+const quiet = { script: "return {}" };
 
 it("keeps checks beyond three queued in due order, off the run slots", async () => {
   await withOpenClawTestState({ label: "cron-condition-checks" }, async (fixture) => {
     const storeKey = fixture.statePath("cron", "jobs.json");
     const watch = (id: string, dueAtMs: number) =>
-      queueJob(id, now, { trigger: quiet, state: { nextRunAtMs: dueAtMs } });
+      queueJob(id, now, {
+        check: quiet,
+        payload: { kind: "agentTurn", message: "Handle changes" },
+        state: { nextRunAtMs: dueAtMs },
+      });
     const jobs = [
       ...["long-a", "long-b", "long-c"].map((id) => queueJob(id, now)),
       watch("late", now),
@@ -501,7 +505,7 @@ it("keeps checks beyond three queued in due order, off the run slots", async () 
     const fired = first.launches[1]!.runReceipt;
     const fire = () =>
       executeOpenClawStateWorker(captureOpenClawStateWorkerContext(), {
-        type: "cron.settleConditionCheck",
+        type: "cron.reconcileRunSlot",
         input: { storeKey, jobId: fired.jobId, receiptId: fired.receiptId },
       });
     // A fired condition waits for a run slot, and frees its check for the earliest waiter; it
@@ -529,7 +533,11 @@ it("gives freed run slots to fired conditions and queued runs in due order", asy
         queueJob(id, now, { state: { nextRunAtMs: now - 2_000 } }),
       ),
       queueJob("older", now, { state: { nextRunAtMs: now - 1_000 } }),
-      queueJob("watch", now, { trigger: quiet, state: { nextRunAtMs: now - 500 } }),
+      queueJob("watch", now, {
+        check: quiet,
+        payload: { kind: "agentTurn", message: "Handle changes" },
+        state: { nextRunAtMs: now - 500 },
+      }),
       queueJob("newer", now, { state: { nextRunAtMs: now } }),
     ];
     const queue = await queueStore(storeKey, jobs, now);
@@ -540,7 +548,7 @@ it("gives freed run slots to fired conditions and queued runs in due order", asy
     const watch = (await queue.read()).jobs.find((job) => job.id === "watch")!;
     const fire = () =>
       executeOpenClawStateWorker(captureOpenClawStateWorkerContext(), {
-        type: "cron.settleConditionCheck",
+        type: "cron.reconcileRunSlot",
         input: { storeKey, jobId: watch.id, receiptId: watch.state.runningReceiptId! },
       });
     expect(await fire()).toMatchObject({ runSlot: false });

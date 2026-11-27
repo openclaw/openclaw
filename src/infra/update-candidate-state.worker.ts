@@ -127,19 +127,15 @@ async function inspectCandidateState(input: UpdateStateInspectionInput): Promise
       return prepareUpdateDatabaseRestoreSourceInProcess(input);
     }
     case "database-generations": {
-      const { readUpdatePhysicalDatabaseGenerationPair, isLegacyUpdateGenerationRequest } =
-        await import("./update-physical-database-generations.js");
-      const pair = await readUpdatePhysicalDatabaseGenerationPair(input.paths, input.pluginOwners);
-      if (input.generationFormat === "paired") {
-        return pair;
+      const {
+        readUpdatePhysicalDatabaseGenerationPair,
+        readUnmarkedUpdatePhysicalDatabaseGenerations,
+      } = await import("./update-physical-database-generations.js");
+      if (input.generationFormat === undefined) {
+        return readUnmarkedUpdatePhysicalDatabaseGenerations(input);
       }
-      return input.generationFormat === undefined &&
-        (await isLegacyUpdateGenerationRequest({
-          ...process.env,
-          OPENCLAW_STATE_DIR: input.stateDir,
-        }))
-        ? pair.physical
-        : pair.committed;
+      const pair = await readUpdatePhysicalDatabaseGenerationPair(input.paths, input.pluginOwners);
+      return input.generationFormat === "paired" ? pair : pair.committed;
     }
     case "inventory": {
       const { resolveDatabaseFamilyEngines } = await import("./database-engine/registry.js");
@@ -175,6 +171,9 @@ async function inspectCandidateState(input: UpdateStateInspectionInput): Promise
     case "discover": {
       const plan = await discoverUpdateStateSchemaInspectionInProcess({
         ...input,
+        // Released requests lack prepared paths and a policy; their source WAL index must stay intact.
+        preserveSourceArtifacts:
+          input.preserveSourceArtifacts ?? input.additionalPaths === undefined,
         onProgress: createUpdateStateInspectionReporter(),
       });
       const { writeUpdateStateSchemaOwnership } =

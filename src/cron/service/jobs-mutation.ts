@@ -1,5 +1,4 @@
 /** Completes a canonical job edit before authority rebinding and persistence. */
-import { isDeepStrictEqual } from "node:util";
 import { isCronJobActive } from "../active-jobs.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { reconcileCronSourceIdentity } from "../source-schedule.js";
@@ -79,7 +78,7 @@ export function finalizeUpdatedJob(params: {
   // rotate it in the same write that changes the public job definition.
   reconcileCronSourceIdentity(job, nextJob, params.streamRestartExhaustedRequested);
 
-  if (!isDeepStrictEqual(job.check, nextJob.check)) {
+  if (job.check?.script !== nextJob.check?.script || job.check?.once !== nextJob.check?.once) {
     // Trigger and payload scripts share one durable state slot. Exact persisted
     // definitions own it, matching in-flight ownership; explicit replacements win.
     for (const field of [

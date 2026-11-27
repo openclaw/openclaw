@@ -39,11 +39,11 @@ describe("cron service run admission", () => {
   it("keeps a queued condition's ownership after a state edit before evaluation", async () => {
     const waitingJob = makeJob("condition-state-before-evaluation", dueAt);
     waitingJob.schedule = { kind: "every", everyMs: 60_000, anchorMs: dueAt };
-    waitingJob.trigger = { script: "fire", once: true };
+    waitingJob.check = { script: "fire", once: true };
     waitingJob.state.triggerState = { owner: "original" };
     const evaluateCronCheck = vi.fn(async () => ({
       kind: "evaluated" as const,
-      action: "wake",
+      action: "wake" as const,
       state: { owner: "completed evaluation" },
     }));
     const queue = await blockedRun(waitingJob, {

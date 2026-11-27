@@ -54,7 +54,7 @@ export function registerCronCreatorSessionTests(fixture: {
   it.each([
     ["agent-runtime", { kind: "agentTurn", message: "report", toolsAllow: ["*"] }],
     ["operator", { kind: "agentTurn", message: "report", toolsAllow: ["*"] }],
-    ["operator", { kind: "script", script: "return { notify: 'report' };", toolsAllow: [] }],
+    ["operator", { kind: "none", toolsAllow: [] }],
     ["operator", { kind: "command", argv: ["echo", "report"] }],
   ])("retains %s creator context for %j", async (caller, jobPayload) => {
     loadGatewaySessionEntry.mockReturnValue({
@@ -66,7 +66,12 @@ export function registerCronCreatorSessionTests(fixture: {
       },
     });
     const { options, payload } = await create(
-      agentTurnCronParams({ agentId: "ops", sessionKey: "conversation", payload: jobPayload }),
+      agentTurnCronParams({
+        agentId: "ops",
+        sessionKey: "conversation",
+        payload: jobPayload,
+        ...(jobPayload.kind === "none" ? { check: { script: "return {};" } } : {}),
+      }),
       caller === "agent-runtime"
         ? { client: callerClient("ops", undefined, sourceConversation.sessionKey) }
         : undefined,

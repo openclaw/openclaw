@@ -44,7 +44,7 @@ it.each(["captured", "legacy"] as const)(
     ]);
     plugins.setActivePluginRegistry(registry);
     const jobId = "script-message-payload";
-    const marker = markCronJobActive(jobId, { isMessageActionAuthorityCurrent: () => true });
+    const marker = markCronJobActive(jobId);
     onTestFinished(() => clearCronJobActive(jobId, marker));
     const signal = new AbortController().signal;
     const beforeAttempt = vi
@@ -63,10 +63,10 @@ it.each(["captured", "legacy"] as const)(
           target: "123",
           message: "Scheduled report",
         });
-        return { status: "completed", value: { fire: false }, output: [], toolCallCount: 1 };
+        return { status: "completed", value: {}, output: [], toolCallCount: 1 };
       },
     });
-    const params: Parameters<typeof runtime.executePayload>[0] = {
+    const params: Parameters<typeof runtime.evaluateCheck>[0] = {
       jobId,
       script: "return result",
       state: null,
@@ -80,13 +80,13 @@ it.each(["captured", "legacy"] as const)(
         onPostAdmission: (admitted) => bindCronJobAdmittedRun(marker, admitted, signal),
       },
     };
-    const invoke = () => runtime.executePayload(params);
+    const invoke = () => runtime.evaluateCheck(params);
     await expect(invoke()).resolves.toMatchObject({
       kind: "error",
       error: expect.stringContaining("occurrence delivery fence unavailable"),
     });
     expect([beforeAttempt.mock.calls.length, sendText.mock.calls.length]).toEqual([1, 0]);
-    await expect(invoke()).resolves.toMatchObject({ kind: "completed" });
+    await expect(invoke()).resolves.toMatchObject({ kind: "evaluated" });
     expect([beforeAttempt.mock.calls.length, sendText.mock.calls.length]).toEqual([2, 1]);
   },
 );

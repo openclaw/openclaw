@@ -9,6 +9,7 @@ import {
   SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END,
 } from "../utils/system-prompt-cache-boundary.js";
 import { makeProviderModel } from "./provider-model.test-support.js";
+import { sseResponse as createSseResponse } from "./provider-stream.test-support.js";
 
 const anthropicMockState = vi.hoisted(() => ({
   configs: [] as ClientOptions[],
@@ -53,16 +54,6 @@ function thinking(
   thinkingSignature: string,
 ): Extract<AssistantMessage["content"][number], { type: "thinking" }> {
   return { type: "thinking", thinking: text, thinkingSignature };
-}
-
-function createSseResponse(events: Record<string, unknown>[] = []): Response {
-  const body = events
-    .map((event) => `event: ${String(event.type)}\ndata: ${JSON.stringify(event)}\n\n`)
-    .join("");
-  return new Response(body, {
-    status: 200,
-    headers: { "content-type": "text/event-stream" },
-  });
 }
 
 function createAnthropicSseClient(events: Record<string, unknown>[] | string) {

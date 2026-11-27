@@ -229,7 +229,7 @@ it("normalizes trigger scripts and preserves patch clears", () => {
   expect(
     createMain({ check: { script: "  json({ wake: '' })  ", once: "true", ignored: true } }).check,
   ).toEqual({ script: "json({ wake: '' })", once: true });
-  expect(normalizeCronJobPatch({ trigger: null })).toEqual({ trigger: null });
+  expect(normalizeCronJobPatch({ check: null })).toEqual({ check: null });
 });
 
 it.each<[UnknownRecord, UnknownRecord]>([
@@ -412,7 +412,6 @@ it.each([
 const payloads = [
   { kind: "agentTurn", message: "Synthetic reminder" },
   { kind: "command", argv: ["printf", "synthetic-proof"] },
-  { kind: "script", script: "return { output: 'synthetic-proof' };" },
 ] satisfies CronPayload[];
 
 it.each(payloads)("sets, preserves, and clears a $kind timeout", (payload) => {

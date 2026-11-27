@@ -26,7 +26,7 @@ function releaseTokens(tokens: Iterable<SqliteStagingToken>): void {
   }
 }
 
-const isSqliteSnapshotStagingName = (name: string) =>
+export const isSqliteSnapshotStagingName = (name: string) =>
   SQLITE_SNAPSHOT_LEGACY_MARKER.test(name) || tokenMarker.test(name);
 
 export function acquireSqliteSnapshotToken(

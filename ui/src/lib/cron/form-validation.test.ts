@@ -24,9 +24,9 @@ describe("cron form validation", () => {
   it.each([
     ["main", "agentTurn", false, "announce"],
     ["main", "systemEvent", false, "none"],
-    ["main", "script", true, "none"],
+    ["main", "none", false, "announce"],
     ["main", "command", true, "none"],
-    ["isolated", "script", true, "announce"],
+    ["isolated", "none", false, "announce"],
     ["isolated", "command", true, "announce"],
   ] as const)(
     "normalizes announce delivery for %s/%s",
@@ -59,12 +59,13 @@ describe("cron form validation", () => {
       activeHoursEnd: "25:00",
       activeHoursTimezone: "Invalid/Timezone",
     });
-    expect(errors.name).toBe("cron.errors.nameRequired");
+    // Unnamed automations are named by the Gateway from their prompt.
+    expect(errors.name).toBeUndefined();
     expect(errors.cronExpr).toBe("cron.errors.cronExprRequired");
     expect(errors.payloadText).toBe("cron.errors.agentMessageRequired");
     expect(errors.triggerScript).toBe("cron.errors.triggerScriptRequired");
     expect(errors.timeoutSeconds).toBe("cron.errors.timeoutInvalid");
-    expect(errors.deliveryTo).toBe("cron.errors.webhookUrlInvalid");
+    expect(errors.deliveryTo).toBe("cron.errors.webhookUrlProtocol");
     expect(errors.activeHoursStart).toBe("cron.errors.activeHoursTime");
     expect(errors.activeHoursEnd).toBe("cron.errors.activeHoursTime");
     expect(errors.activeHoursTimezone).toBe("cron.errors.activeHoursTimezone");

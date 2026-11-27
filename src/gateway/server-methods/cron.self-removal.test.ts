@@ -31,7 +31,7 @@ const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-self-rem
 describe("cron self-removal", () => {
   it.each([
     ["agentTurn", "manual", 0, "exact"],
-    ["script", "timer", 60, "exact"],
+    ["none", "timer", 60, "exact"],
     ["agentTurn", "manual", 0, "unbound"],
     ["agentTurn", "manual", 0, "different instance"],
   ] as const)(
@@ -48,7 +48,10 @@ describe("cron self-removal", () => {
         job,
         abortSignal,
         executionIdentity,
-      }: Parameters<NonNullable<CronServiceDeps["runScriptJob"]>>[0]) => {
+      }: Pick<
+        Parameters<NonNullable<CronServiceDeps["runIsolatedAgentJob"]>>[0],
+        "job" | "abortSignal" | "executionIdentity"
+      >) => {
         const admission = prepareAgentRunAdmission({
           cfg: {},
           operationalRunInstance: createOperationalRunInstanceRef(`run-${job.id}`),
@@ -151,7 +154,11 @@ describe("cron self-removal", () => {
           }
         },
         runIsolatedAgentJob: runJob,
-        runScriptJob: runJob,
+        deliverCheckPost: async () => ({}),
+        evaluateCronCheck: async (params) => {
+          await runJob(params);
+          return { kind: "evaluated", action: "post", message: "final reply after self-cleanup" };
+        },
       });
       try {
         const job = await cron.add(
@@ -163,9 +170,10 @@ describe("cron self-removal", () => {
             sessionTarget: "isolated",
             wakeMode: "next-heartbeat",
             payload:
-              payloadKind === "script"
-                ? { kind: "script", script: "return {}", timeoutSeconds }
+              payloadKind === "none"
+                ? { kind: "none" }
                 : { kind: "agentTurn", message: "remove this job, then finish", timeoutSeconds },
+            ...(payloadKind === "none" ? { check: { script: "return {}", timeoutSeconds } } : {}),
             delivery: { mode: "none" },
           },
           { scheduledToolPolicy: { version: 1, mode: "trusted" } },

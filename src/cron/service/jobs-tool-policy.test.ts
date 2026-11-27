@@ -1,18 +1,23 @@
 import { expect, it } from "vitest";
 import { createDueIsolatedJob } from "../../../test/helpers/cron/service-regression-fixtures.js";
+import { createParticipationTestAuthority } from "../../agents/participation-ceiling.test-support.js";
+import { createTestCronOperatorSource } from "../execution-context.test-support.js";
 import { resolveCronRunAdmissionSource } from "../run-authority.js";
+import { resolveCronRunToolsAllow } from "../tools-allow.js";
 import type { CronStoredJob, CronToolsAllowExecTarget } from "../types.js";
 import {
   cronJobMessageActionAuthorityInputsEqual,
   reconcileCronChannelRequesterAuthority,
+  reconcileCronOperatorSource,
   reconcileToolsAllowAuthority,
-  resolveCronJobMessageToolAuthorityInputs,
 } from "./jobs-tool-policy.js";
 
 function toolJob(toolsAllow: readonly string[] | undefined): CronStoredJob {
   return {
     ...createDueIsolatedJob({ id: "job-1", nowMs: 1, nextRunAtMs: 1 }),
-    payload: { kind: "script", script: "return {}", toolsAllow: toolsAllow?.slice() },
+    schedule: { kind: "every", everyMs: 60_000 },
+    payload: { kind: "none", toolsAllow: toolsAllow?.slice() },
+    check: { script: "return {}" },
   };
 }
 
@@ -21,6 +26,7 @@ it.each(["operator", "owned", "external-content", "unknown", "external"])(
   (scenario) => {
     const previous: CronStoredJob = {
       ...toolJob(["read"]),
+      check: undefined,
       payload: { kind: "agentTurn", message: "work", toolsAllow: ["read"] },
       scheduledToolPolicy: { version: 1, mode: "trusted" },
       toolsAllowProvenance: {
@@ -119,15 +125,44 @@ it("binds a recorded caller origin to executable inputs but not display metadata
     }),
   ).toBe(false);
 });
-it("admits message access for an automatic snapshot that runs with its owner's tools", () => {
+it("uses its owner's tools instead of a stale automatic tool snapshot", () => {
   const job = toolJob(["read"]);
+  delete job.check;
   job.payload = { kind: "agentTurn", message: "post", toolsAllow: ["read"] };
   job.scheduledToolPolicy = { version: 1, mode: "trusted" };
-  expect(resolveCronJobMessageToolAuthorityInputs(job)).toBeUndefined();
+  expect(resolveCronRunToolsAllow(job)).toEqual(["read"]);
 
   // Older builds saved this snapshot without `message`; the run gets `*`.
   Object.assign(job.payload, { toolsAllowIsDefault: true });
-  expect(resolveCronJobMessageToolAuthorityInputs(job)).toEqual({
-    policy: { version: 1, mode: "trusted" },
-  });
+  expect(resolveCronRunToolsAllow(job)).toEqual(["*"]);
 });
+
+it.each([false, true])(
+  "does not drop a mandatory source on an incompatible edit (participant=%s)",
+  (participant) => {
+    const key = "agent:main:invited";
+    const source = createTestCronOperatorSource(key);
+    if (participant) {
+      source.source.snapshot = createParticipationTestAuthority({
+        kind: "send",
+        profileId: "profile-1",
+        sessionKey: key,
+      }).recoverySnapshot!;
+    }
+    const previousJob = { ...toolJob(["read"]), operatorSource: source };
+    const job: CronStoredJob = {
+      ...previousJob,
+      sessionTarget: "main",
+      check: undefined,
+      payload: { kind: "systemEvent", text: "changed execution" },
+    };
+    const reconcile = () =>
+      reconcileCronOperatorSource({ job, previousJob, defaultAgentId: "main" });
+    if (participant) {
+      expect(reconcile).toThrow(/participant/i);
+    } else {
+      reconcile();
+      expect(job.operatorSource).toBeUndefined();
+    }
+  },
+);

@@ -250,6 +250,10 @@ export function getInvalidPersistedCronJobReason(
       typeof check.script !== "string" ||
       !check.script.trim() ||
       (kind !== "agentTurn" && kind !== "accessAgentTurn" && kind !== "none") ||
+      (kind !== "none" &&
+        scheduleKind !== "every" &&
+        scheduleKind !== "cron" &&
+        scheduleKind !== "stream") ||
       (check.once !== undefined && typeof check.once !== "boolean") ||
       (check.timeoutSeconds !== undefined &&
         asSafeIntegerInRange(check.timeoutSeconds, { min: 1, max: 900 }) === undefined) ||
@@ -258,7 +262,9 @@ export function getInvalidPersistedCronJobReason(
     ) {
       return "invalid-check";
     }
-  } else if (asRecord(candidate.payload).kind === "none") return "invalid-check";
+  } else if (asRecord(candidate.payload).kind === "none") {
+    return "invalid-check";
+  }
   const payload = candidate.payload;
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     return "missing-payload";

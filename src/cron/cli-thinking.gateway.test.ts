@@ -119,7 +119,7 @@ async function withCronGateway(
       enqueueSystemEvent: execute,
       runIsolatedAgentJob: execute,
       runCommandJob: execute,
-      runScriptJob: execute,
+      evaluateCronCheck: execute,
     });
     using _ = { [Symbol.dispose]: () => cron.stop() };
     await withLocalGatewayRequestScope({ deps: {}, getRuntimeConfig: () => cfg }, async () => {
@@ -153,7 +153,7 @@ async function withCronGateway(
       await run({
         readJobs: async () =>
           (await loadCronJobsStoreWithConfigJobsReadOnly(storePath, state.env)).store.jobs,
-        writeScript: () => state.writeText("thinking-control.js", 'return { notify: "done" };'),
+        writeScript: () => state.writeText("thinking-control.js", 'return { post: "done" };'),
       });
       expect(execute).not.toHaveBeenCalled();
     });
@@ -225,7 +225,7 @@ it("preserves legal spellings, blank omission, and clear semantics on add and ed
     expect((await jobNamed("renamed"))?.payload).not.toHaveProperty("thinking");
   }));
 
-it.each(["systemEvent", "command", "script"])(
+it.each(["systemEvent", "command", "none"])(
   "keeps unused thinking ignored when adding a %s job",
   (kind) =>
     withCronGateway(async ({ readJobs, writeScript }) => {
@@ -234,7 +234,7 @@ it.each(["systemEvent", "command", "script"])(
           ? ["--system-event", "hello"]
           : kind === "command"
             ? ["--command-argv", '["printf","hello"]', "--no-deliver"]
-            : ["--script", await writeScript(), "--no-deliver"];
+            : ["--check-script", await writeScript(), "--no-deliver"];
       const result = await runCli(addArgs(kind, payloadArgs, "--thinking", "hihg"));
       const jobs = await readJobs();
       expect(result.exitCode).toBe(0);

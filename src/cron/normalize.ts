@@ -387,7 +387,14 @@ export function normalizeCronJobInput(
 
   if ("check" in base && base.check !== null) {
     if (isRecord(base.check)) {
-      next.check = snapshotOwnCronRecord(base.check);
+      const input = snapshotOwnCronRecord(base.check);
+      const once = parseBoolean(input.once);
+      next.check = {
+        script: typeof input.script === "string" ? input.script.trim() : "",
+        ...(once !== undefined ? { once } : {}),
+        ...(input.timeoutSeconds !== undefined ? { timeoutSeconds: input.timeoutSeconds } : {}),
+        ...(input.toolBudget !== undefined ? { toolBudget: input.toolBudget } : {}),
+      };
     } else {
       delete next.check;
     }

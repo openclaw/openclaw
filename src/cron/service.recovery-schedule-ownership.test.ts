@@ -39,7 +39,7 @@ async function createHarness(input: Partial<CronJobCreate> = {}) {
   const { storePath } = await makeStorePath();
   const evaluateCronCheck = vi.fn(async () => ({
     kind: "evaluated" as const,
-    action: "wake",
+    action: "wake" as const,
     state: { observed: "completed evaluation" },
   }));
   const runIsolatedAgentJob = vi.fn<CronServiceDeps["runIsolatedAgentJob"]>(async () => ({
@@ -142,7 +142,7 @@ async function finishWithPendingCronRow(
   const receipt = activated.launches[0]!.runReceipt;
   const nextRunAtMs = Object.hasOwn(options, "historicalNextRunAtMs")
     ? options.historicalNextRunAtMs
-    : job.trigger?.once
+    : job.check?.once
       ? undefined
       : result.status === "error"
         ? endedAtMs + 30_000

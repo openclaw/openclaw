@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { findMenuShortcut } from "../../../components/menu-shortcuts.ts";
-import type { ModelProviderAuthLabel } from "../../../lib/model-provider-auth-label.ts";
 import { installModelPickerLayout } from "../../../test-helpers/model-picker-layout.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import {
@@ -41,6 +40,7 @@ function accountSection(
   selectionKind: "automatic" | "personal" = "automatic",
 ) {
   return {
+    prefetch: undefined,
     onClose() {},
     viewProps: (startIndex: number) => ({
       selectionKind,
@@ -50,6 +50,8 @@ function accountSection(
       currentValue: "current",
       open,
       error: null,
+      loading: null,
+      onNextPage: undefined,
       startIndex,
       onToggle() {},
       onSelect,
@@ -213,10 +215,33 @@ it("keeps Anthropic runtime choices under one provider tab", async () => {
     ],
     selectedModelValue: "anthropic/claude-opus-4-8",
     triggerModelLabel: "claude-opus-4-8",
-    providerAuth: new Map<string, ModelProviderAuthLabel>([
-      ["claude-cli", { kind: "subscription", label: "Claude Max", detail: "you@example.com" }],
-      ["anthropic", { kind: "api", label: "API" }],
-    ]),
+    authProfileId: "claude-cli:personal",
+    modelAuthStatusResult: {
+      ts: 1,
+      providers: [
+        {
+          provider: "claude-cli",
+          displayName: "Claude CLI",
+          status: "ok",
+          profiles: [
+            {
+              profileId: "claude-cli:personal",
+              type: "oauth",
+              status: "ok",
+              displayName: "Claude Max",
+              email: "you@example.com",
+            },
+          ],
+        },
+        {
+          provider: "anthropic",
+          displayName: "Anthropic",
+          status: "static",
+          profiles: [],
+          apiKey: { source: "env" },
+        },
+      ],
+    },
   });
   await waitForMenu(container);
   const provider = (value: string) =>
@@ -234,6 +259,24 @@ it("keeps Anthropic runtime choices under one provider tab", async () => {
   expect(container.querySelectorAll("[data-chat-model-provider-toggle]")).toHaveLength(0);
   flush();
   expect(provider("anthropic/claude-sonnet-5-5")).toBe("anthropic");
+});
+
+it("drops a provider name from a row only when the group heading shows it", async () => {
+  const plan = { providerName: "Acme Pro plan" };
+  const { container } = mountPicker({
+    open: true,
+    modelOptions: [
+      option("acme", "acme-4-hydrogen", { label: "Acme 4 Hydrogen", presentation: plan }),
+      option("acme", "acme-pro-plan-mini", { label: "Acme Pro plan Mini", presentation: plan }),
+    ],
+    selectedModelValue: "acme/acme-4-hydrogen",
+  });
+  await waitForMenu(container);
+  const name = (value: string) =>
+    control(container, "option", value)?.querySelector(".chat-controls__model-option-name")
+      ?.textContent;
+  expect(name("acme/acme-4-hydrogen")).toBe("Acme 4 Hydrogen");
+  expect(name("acme/acme-pro-plan-mini")).toBe("Mini");
 });
 
 it("keeps search live while targets load, then ranks model, target, and account choices", async () => {
@@ -536,7 +579,10 @@ it.each(["missing-auth", "auth-failed"] as const)(
         option("openai", "two", { disabled: true, unavailableReason }),
       ],
       selectedModelValue: "openai/one",
-      providerAuth: new Map([["openai", { kind: "missing", label: "Sign-in needed" }]]),
+      modelAuthStatusResult: {
+        ts: 1,
+        providers: [{ provider: "openai", displayName: "OpenAI", status: "missing", profiles: [] }],
+      },
       modelCatalogState: { hasSnapshot: true, status: "ready" },
       onModelSetup,
       onModelSelect,
@@ -558,7 +604,7 @@ it.each(["missing-auth", "auth-failed"] as const)(
     expect(onModelSelect).not.toHaveBeenCalled();
     expect(container.querySelectorAll("[data-chat-model-auth-state] button")).toHaveLength(1);
     container.querySelector<HTMLButtonElement>("[data-chat-model-auth-state] button")!.click();
-    expect(onModelSetup).toHaveBeenCalledOnce();
+    expect(onModelSetup).toHaveBeenCalledExactlyOnceWith("openai");
     expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
   },
 );

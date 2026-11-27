@@ -77,8 +77,8 @@ it("gives each warm payload invocation fresh authority and releases it after com
     });
   });
   for (let index = 0; index < 2; index += 1) {
-    await expect(runtime.executePayload(input)).resolves.toMatchObject({
-      kind: "completed",
+    await expect(runtime.evaluateCheck(input)).resolves.toMatchObject({
+      kind: "evaluated",
       state: { owned: true },
     });
     expect(getAdmittedRunDelegatedAuthority(admitted[index]!)).toBeUndefined();
@@ -109,7 +109,7 @@ it.each(["admission", "gateway", "abort"] as const)(
         return args;
       },
     );
-    const result = runtime.executePayload({ ...input, abortSignal: controller.signal });
+    const result = runtime.evaluateCheck({ ...input, abortSignal: controller.signal });
     try {
       await entered.promise;
       expect(admitted[0]).toBeDefined();

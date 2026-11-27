@@ -25,6 +25,9 @@ type BuildTelegramMessageContextForTestParams = {
   promptContext?: BuildTelegramMessageContextParams["promptContext"];
   options?: BuildTelegramMessageContextParams["options"];
   cfg?: Record<string, unknown>;
+  accountId?: string;
+  /** Registered host builder, so ingress handoff binds the same way a live account does. */
+  buildContext?: TelegramTestSessionRuntime["buildChannelInboundEventContext"];
   historyLimit?: number;
   botApi?: Record<string, unknown>;
   sendChatActionHandler?: BuildTelegramMessageContextParams["sendChatActionHandler"];
@@ -43,9 +46,10 @@ function resolveSessionStorePathForTest(testName: string | undefined): string {
 
 function createTelegramMessageContextSessionRuntimeForTest(
   storePath: string,
+  buildContext = buildChannelInboundEventContext,
 ): TelegramTestSessionRuntime {
   return {
-    buildChannelInboundEventContext,
+    buildChannelInboundEventContext: buildContext,
     readAmbientTranscriptWatermarkAsync: async () => undefined,
     readSessionUpdatedAtAsync: async () => undefined,
     recordInboundSession: async () => undefined,
@@ -77,6 +81,7 @@ export async function buildTelegramMessageContextForTest(
       ? undefined
       : createTelegramMessageContextSessionRuntimeForTest(
           resolveSessionStorePathForTest(expect.getState().currentTestName),
+          params.buildContext,
         );
   return await buildTelegramMessageContext({
     primaryCtx: {
@@ -106,7 +111,7 @@ export async function buildTelegramMessageContextForTest(
       recordChannelActivity: () => undefined,
     },
     sessionRuntime,
-    account: { accountId: "default" } as never,
+    account: { accountId: params.accountId ?? "default" } as never,
     historyLimit: params.historyLimit ?? 0,
     dmHistoryLimit: 10,
     dmPolicy: "open",

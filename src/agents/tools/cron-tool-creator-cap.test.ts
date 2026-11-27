@@ -124,13 +124,16 @@ describe("cron tool creator cap", () => {
     expect(plainJob.payload).toEqual(wakePayload);
   });
 
-  it("captures the creator's tools when a wildcard agent turn becomes a script", () => {
+  it("captures the creator's tools when a wildcard agent turn becomes check-only", () => {
     const patch = readyPatch({
-      patch: { payload: { kind: "script", script: "return MCP.notes.read({})" } },
+      patch: {
+        payload: { kind: "none" },
+        check: { script: "return { state: await MCP.notes.read({}) }" },
+      },
       creatorToolAllowlist: ["read", "notes__read"],
       currentJob: { payload: { kind: "agentTurn", message: "work", toolsAllow: ["*"] } },
     });
-    expect(patch.payload).toMatchObject({ kind: "script", toolsAllow: ["read", "notes__read"] });
+    expect(patch.payload).toMatchObject({ kind: "none", toolsAllow: ["read", "notes__read"] });
   });
 
   it("rejects unavailable explicit updates without changing the caller's patch", () => {

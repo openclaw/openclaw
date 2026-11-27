@@ -1,10 +1,12 @@
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
+import { createTestOperatorAuthority } from "../agents/admitted-run-context.test-support.js";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 import { createQueueTestRun } from "../auto-reply/reply/queue.test-helpers.js";
 import { scheduleFollowupDrain } from "../auto-reply/reply/queue/drain.js";
 import { reserveSteerCandidate, enqueueFollowupRun } from "../auto-reply/reply/queue/enqueue.js";
 import { admitFollowupRunLifecycle } from "../auto-reply/reply/queue/lifecycle.js";
 import { clearFollowupQueue } from "../auto-reply/reply/queue/state.js";
+import { decideTurnGrant } from "../gateway/operator-admission.js";
 import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
@@ -128,6 +130,56 @@ function revocableAuthority(message: string, beforeThrow?: () => void) {
 }
 
 describe("controller mailbox scheduling", () => {
+  it("keeps participating inputs separate from owner collect batches and steering", async () => {
+    const active = activeOperation("participation-predecessor");
+    const runs = [
+      source("owner before"),
+      source("guest first"),
+      source("guest second"),
+      source("owner after"),
+    ];
+    const ceiling = { kind: "send" as const, profileId: "guest", sessionKey: key };
+    const authority = createTestOperatorAuthority({
+      canonicalIdentity: null,
+      profileId: "guest",
+      scopes: [],
+      participationCeiling: {
+        ...ceiling,
+        tools: ["read"],
+        permission: "workspace",
+        source: {
+          agentId: "main",
+          sessionId: "test",
+          lifecycleRevision: null,
+          creatorProfileId: "creator",
+          root: "/synthetic",
+        },
+      },
+    });
+    runs[1]!.operatorAuthority = authority;
+    runs[2]!.operatorAuthority = authority;
+    const dispatched: typeof runs = [];
+    const dispatch = async (run: ReturnType<typeof source>) => {
+      dispatched.push(run);
+    };
+    const settings = { mode: "collect" as const, debounceMs: 0 };
+    for (const run of runs) {
+      expect(enqueueFollowupRun(key, run, settings, "none", dispatch)).toBe(true);
+      ownedInputs.push(run.controllerInput!);
+    }
+    expect(runs[1]!.controllerInput!.policy.mode).toBe("followup");
+    expect(await inject(runs[1]!.controllerInput!).admit()).toBe(false);
+    active.complete();
+    await runs.at(-1)!.controllerInput!.settlement.promise;
+    await runs.at(-1)!.controllerInput!.claim?.settlement.promise;
+    expect(dispatched).toEqual(runs);
+    expect(dispatched.map((run) => run.prompt)).toEqual([
+      "owner before",
+      "guest first",
+      "guest second",
+      "owner after",
+    ]);
+  });
   it.each([-90_000, 90_000])(
     "preserves the debounce window after a %d ms wall-clock step",
     async (step) => {
@@ -215,9 +267,12 @@ describe("controller mailbox scheduling", () => {
     async (owner) => {
       let failure: Error | undefined;
       const signal = new AbortController().signal;
+      // This source assertion fails without recording operator revocation.
       const authority = {
+        canonicalIdentity: null,
         profileId: "queued-person",
         scopes: ["operator.write"],
+        grant: decideTurnGrant(["operator.write"]),
         signal,
         assertCurrent() {
           if (failure) {

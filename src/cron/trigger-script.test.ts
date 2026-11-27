@@ -37,9 +37,7 @@ function makeTool(name: string, execute: AnyAgentTool["execute"]): AnyAgentTool 
 }
 
 function createEvaluator(
-  result: CodeModeHeadlessResult | NonNullable<EvaluatorDeps["runHeadless"]> = completed({
-    fire: false,
-  }),
+  result: CodeModeHeadlessResult | NonNullable<EvaluatorDeps["runHeadless"]> = completed({}),
   deps: Partial<Omit<EvaluatorDeps, "runHeadless">> = {},
 ) {
   const config = deps.config ?? {};
@@ -53,16 +51,14 @@ function createEvaluator(
   type Input = Partial<Parameters<typeof runtime.evaluateCheck>[0]>;
   return {
     evaluate: (input: Input = {}) => runtime.evaluateCheck({ ...INPUT, ...input }),
-    executePayload: (input: Input = {}) => runtime.executePayload({ ...INPUT, ...input }),
     prepareRuntime,
     runHeadless,
   };
 }
 
 const INPUT = { jobId: "probe", script: "return result", state: null };
-const INTERNAL_ERROR = expect.objectContaining({ kind: "error", code: "internal_error" });
 
-it("snapshots a cron tool result without temporary object-value arrays", async () => {
+it("returns a nested cron tool result as trigger state", async () => {
   const details = {
     rows: Array.from({ length: 40 }, (_, snapshotRow) => ({ snapshotRow, state: "ready" })),
   };
@@ -70,23 +66,9 @@ it("snapshots a cron tool result without temporary object-value arrays", async (
   const { evaluate } = createEvaluator(runCodeModeScriptHeadless, {
     prepareRuntime: async ({ runtimeConfig }) => createPreparedRuntime(runtimeConfig, [probe]),
   });
-  const objectValues = Object.values;
-  let snapshotArraySlots = 0;
-  const values = vi.spyOn(Object, "values").mockImplementation((object) => {
-    const members = objectValues(object);
-    if (Object.hasOwn(object, "snapshotRow")) {
-      snapshotArraySlots += members.length;
-    }
-    return members;
-  });
-  try {
-    await expect(
-      evaluate({ script: "return { wake: '', state: await snapshot_probe({}) };" }),
-    ).resolves.toMatchObject({ kind: "evaluated", action: "wake", state: details });
-    expect(snapshotArraySlots).toBe(0);
-  } finally {
-    values.mockRestore();
-  }
+  await expect(
+    evaluate({ script: "return { wake: '', state: await snapshot_probe({}) };" }),
+  ).resolves.toMatchObject({ kind: "evaluated", action: "wake", state: details });
 });
 
 function execEvaluator(host: "auto" | "node" | "gateway", node?: string) {
@@ -102,7 +84,7 @@ function triggerNamespace(entries: Array<[string, unknown]>) {
   return [
     {
       id: "cron:trigger",
-      globalName: "trigger",
+      globalName: "check",
       scope: {
         kind: "object",
         entries: entries.map(([name, value]) => [name, { kind: "value", value }]),
@@ -255,17 +237,59 @@ it("projects typed exec details into trigger scripts without content wrappers", 
       scheduledToolPolicy: { version: 1, mode: "trusted" },
       script: `
         const result = await exec({ command: "printf watcher-ready" });
-        return {
-          fire:
-            result.status === "completed" &&
-            result.exitCode === 0 &&
-            result.aggregated === "watcher-ready" &&
-            result.content === undefined,
-        };
+        return result.status === "completed" &&
+          result.exitCode === 0 && result.aggregated === "watcher-ready" &&
+          result.content === undefined ? { wake: "ready" } : {};
       `,
     }),
-  ).resolves.toEqual({ kind: "evaluated", action: "wake" });
+  ).resolves.toEqual({ kind: "evaluated", action: "wake", message: "ready" });
 });
+
+it.skipIf(process.platform === "win32")(
+  "waits for a slow trigger command instead of handing back a running process",
+  async () => {
+    // The incident shape: a yield window shorter than the command, then a check for "completed".
+    await expect(
+      execEvaluator("gateway")({
+        ...INPUT,
+        toolsAllow: ["exec", "process"],
+        scheduledToolPolicy: { version: 1, mode: "trusted" },
+        script: `
+          const result = await exec({ command: "sleep 0.5; printf '[]'", yieldMs: 10 });
+          if (result.status !== "completed" || result.exitCode !== 0) {
+            throw new Error("GitHub search failed: " + JSON.stringify(result).slice(0, 200));
+          }
+          return { state: JSON.parse(result.aggregated) };
+        `,
+      }),
+    ).resolves.toEqual({ kind: "evaluated", action: "quiet", state: [] });
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "gives a trigger only the command's output when the command leaves a process running",
+  async () => {
+    // One JSON line, then a child that outlives the command (as `gh` does with its telemetry).
+    const command = `printf '{"ok":true}\\n'; (sleep 5 >/dev/null 2>&1 &)`;
+
+    await expect(
+      execEvaluator("gateway")({
+        ...INPUT,
+        toolsAllow: ["exec", "process"],
+        scheduledToolPolicy: { version: 1, mode: "trusted" },
+        script: `
+          const result = await exec({ command: ${JSON.stringify(command)} });
+          // Where the host hands a survivor off, the script can still stop it.
+          const left = /keeps running as background session (\\S+):/.exec(result.warningText ?? "");
+          if (left) {
+            await process({ action: "kill", sessionId: left[1] });
+          }
+          return { state: JSON.parse(result.aggregated) };
+        `,
+      }),
+    ).resolves.toEqual({ kind: "evaluated", action: "quiet", state: { ok: true } });
+  },
+);
 
 it.each([
   [
@@ -277,22 +301,30 @@ it.each([
   ],
   [
     "falls back to the last JSON entry",
-    completed({ ignored: true }, [
+    completed(undefined, [
       { type: "json", value: { state: { old: true } } },
       { type: "text", text: "ignored" },
       { type: "json", value: { wake: "", state: { current: true } } },
     ]),
-    { kind: "evaluated", action: "wake", state: { current: true } },
+    { kind: "evaluated", action: "wake", message: "", state: { current: true } },
   ],
-  ["rejects a nonboolean fire", completed({ fire: "yes" }), INTERNAL_ERROR],
-  ["rejects a nonstring message", completed({ wake: 42 }), INTERNAL_ERROR],
+  [
+    "rejects a retired fire result",
+    completed({ fire: true }),
+    expect.objectContaining({ kind: "error", code: "invalid_input" }),
+  ],
+  [
+    "rejects a nonstring message",
+    completed({ wake: 42 }),
+    expect.objectContaining({ kind: "error", code: "invalid_input" }),
+  ],
   [
     "rejects oversized state",
     completed({ state: { value: "x".repeat(16 * 1024) } }),
     {
       kind: "error",
       code: "output_limit_exceeded",
-      error: "cron trigger state exceeds the 16KB limit",
+      error: "cron check state exceeds the 16KB limit",
     },
   ],
 ] as const)("%s and injects trigger state", async (_name, result, expected) => {
@@ -436,9 +468,9 @@ it("keeps shared preparation when a later waiter is cancelled", async () => {
   }
 });
 
-it("lets a script payload prepare for its whole budget", async () => {
+it("lets a check prepare for its configured budget", async () => {
   vi.useFakeTimers({ toFake: ["performance", "setTimeout", "clearTimeout"] });
-  const { executePayload } = createEvaluator(completed({}), {
+  const { evaluate } = createEvaluator(completed({}), {
     prepareRuntime: async (params) => {
       await new Promise((resolve) => {
         setTimeout(resolve, 150_000);
@@ -448,9 +480,9 @@ it("lets a script payload prepare for its whole budget", async () => {
     },
   });
   try {
-    const result = executePayload({ timeoutSeconds: 300 });
+    const result = evaluate({ timeoutSeconds: 300 });
     await vi.advanceTimersByTimeAsync(150_000);
-    await expect(result).resolves.toMatchObject({ kind: "completed" });
+    await expect(result).resolves.toMatchObject({ kind: "evaluated" });
   } finally {
     vi.useRealTimers();
   }
@@ -561,7 +593,10 @@ it.each(["preparation", "headless"] as const)("survives a clock jump during %s",
         script:
           "await Promise.all([shift_clock({}), observe_clock({})]); await observe_clock({}); return { wake: '' };",
       }),
-    ).resolves.toMatchObject({ kind: "evaluated", fire: phase === "headless" });
+    ).resolves.toMatchObject({
+      kind: "evaluated",
+      action: phase === "headless" ? "wake" : "quiet",
+    });
     expect(runHeadless).toHaveBeenCalledOnce();
     if (phase === "preparation") {
       const delegatedBudgetMs = runHeadless.mock.calls[0]?.[0]?.wallClockMs;
@@ -577,28 +612,26 @@ it.each(["preparation", "headless"] as const)("survives a clock jump during %s",
   }
 });
 
-it("uses payload-grade capped budgets and exposes frozen trigger state", async () => {
-  const { executePayload, runHeadless } = createEvaluator(
+it("uses configured check budgets and exposes frozen state", async () => {
+  const { evaluate, runHeadless } = createEvaluator(
     completed({
-      notify: "queue changed",
-      wake: "now",
+      post: "queue changed",
       state: { revision: 2, dropped: undefined, nonFinite: Number.NaN },
       nextCheck: "5m",
     }),
   );
 
   await expect(
-    executePayload({
+    evaluate({
       state: { revision: 1 },
       streamBatch: "line one\nline two",
-      timeoutSeconds: 10_000,
-      toolBudget: 10_000,
+      timeoutSeconds: 900,
+      toolBudget: 200,
     }),
   ).resolves.toEqual({
-    kind: "completed",
-    notify: "queue changed",
-    wake: "now",
-    stateChanged: true,
+    kind: "evaluated",
+    action: "post",
+    message: "queue changed",
     state: { revision: 2, nonFinite: null },
     nextCheck: { delayMs: 300_000 },
   });
@@ -617,14 +650,14 @@ it("uses payload-grade capped budgets and exposes frozen trigger state", async (
 });
 
 it.each([
-  [{ notify: 42 }, "notify must be a string"],
-  [{ wake: "later" }, 'wake must be "now" or "next-heartbeat"'],
+  [{ post: 42 }, "at most one of post or wake"],
+  [{ post: "report", wake: "investigate" }, "at most one of post or wake"],
   [{ nextCheck: "tomorrowish" }, "nextCheck must be a positive duration"],
   [{ state: "x".repeat(17 * 1024) }, "state exceeds the 16KB limit"],
 ] as const)("rejects an invalid result %#", async (value, error) => {
   const runtime = createEvaluator(completed(value));
 
-  await expect(runtime.executePayload()).resolves.toMatchObject({
+  await expect(runtime.evaluate()).resolves.toMatchObject({
     kind: "error",
     error: expect.stringContaining(error),
   });

@@ -8,6 +8,7 @@ import { decodeLaunchAgentPlistFixture } from "../daemon/launchd-plist.test-supp
 import { resolveLaunchAgentPlistPath } from "../daemon/launchd-service-files.js";
 import { buildTaskScript } from "../daemon/schtasks-layout.js";
 import { withGatewayServiceInstallation } from "../infra/gateway-service-installation-context.js";
+import * as openClawRoot from "../infra/openclaw-root.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import * as exec from "../process/exec.js";
 import { assertGatewayServiceSchemaMigrationAllowed } from "../state/openclaw-state-service-installation.js";
@@ -67,6 +68,34 @@ beforeEach(() => {
       return decodeLaunchAgentPlistFixture(options.input, args[1]);
     });
   }
+});
+
+it("skips the CLI package when service inspection cannot identify an installation", async () => {
+  await withMockedPlatform("darwin", async () => {
+    const home = dirs.make("service-without-package-");
+    const env = { HOME: home, OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.test" };
+    const cliRoot = await openClawRoot.resolveOpenClawPackageRoot({ moduleUrl: import.meta.url });
+    expect(cliRoot).toBeTruthy();
+    const lookup = vi.spyOn(openClawRoot, "resolveOpenClawPackageRoot");
+    const realpath = vi.spyOn(fs, "realpath");
+
+    await expect(inspectCliGatewayServiceInstallation(env)).resolves.toBeUndefined();
+    const plist = resolveLaunchAgentPlistPath(env);
+    await fs.mkdir(path.dirname(plist), { recursive: true });
+    await fs.writeFile(
+      plist,
+      buildLaunchAgentPlist({
+        label: env.OPENCLAW_LAUNCHD_LABEL,
+        programArguments: ["node", "relative-entry.mjs", "gateway"],
+        stdoutPath: path.join(home, "stdout.log"),
+        stderrPath: path.join(home, "stderr.log"),
+      }),
+    );
+    await expect(inspectCliGatewayServiceInstallation(env)).resolves.toBeUndefined();
+    expect(realpath).toHaveBeenCalledWith(plist);
+    expect(realpath).not.toHaveBeenCalledWith(cliRoot);
+    expect(lookup).not.toHaveBeenCalled();
+  });
 });
 
 it.each(["default", "home", "profile", "state", "argv", "windows", "windows-lowercase"] as const)(

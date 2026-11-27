@@ -116,7 +116,9 @@ export type ConfigValidationIssue = {
 };
 
 /** Dot-path and migration or rejection message for a legacy config value. */
-export type LegacyConfigIssue = Pick<ConfigValidationIssue, "path" | "message">;
+export type LegacyConfigIssue = Pick<ConfigValidationIssue, "path" | "message"> & {
+  reviewOnly?: true;
+};
 
 export type ConfigFileSnapshot = {
   path: string;

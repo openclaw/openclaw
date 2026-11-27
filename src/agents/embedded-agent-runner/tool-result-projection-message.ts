@@ -31,15 +31,22 @@ function mergeProjectedToolResultMessage(
   if (cacheTtl) {
     return { ...message, content: projectedContent };
   }
-  if (getToolResultTextBlocks(message).length !== projectedText.length) {
+  const sourceTextCount = getToolResultTextBlocks(message).length;
+  if (
+    projectedText.length > sourceTextCount ||
+    (!sourceHash && projectedText.length !== sourceTextCount)
+  ) {
     return message;
   }
   let textIndex = 0;
-  const mergedContent = currentContent.map((block) => {
+  // Ordinary truncation can persist a shorter text prefix, ending in its
+  // notice. Canonical non-text blocks are never stored in the checkpoint.
+  const mergedContent = currentContent.flatMap((block) => {
     if (!isRecord(block) || block.type !== "text") {
-      return block;
+      return [block];
     }
-    return Object.assign({}, block, { text: projectedText[textIndex++] });
+    const text = projectedText[textIndex++];
+    return text === undefined ? [] : [Object.assign({}, block, { text })];
   });
   return { ...message, content: mergedContent };
 }

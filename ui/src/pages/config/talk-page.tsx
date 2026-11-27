@@ -9,6 +9,7 @@ import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { UserFacingError } from "../../lib/format-error.ts";
+import { canonicalModelAuthProviderId, loadModelAuthStatus } from "../../lib/model-auth.ts";
 import { projectNativeDeviceSettings } from "../../lib/reactive/application-native.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
@@ -372,6 +373,10 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
   const catalogScope = createMemo(() => catalogSource.read().connection);
   const [modelDefaultResetIntent, setModelDefaultResetIntent] =
     createSignal<ModelDefaultResetIntent | null>(null);
+  /** Providers Settings → Models can add a key for; undefined until Models answers. */
+  const [modelKeyProviders, setModelKeyProviders] = createSignal<readonly string[] | undefined>(
+    undefined,
+  );
   /** `undefined` = baseline not yet observed; `null` = no public revision token. */
   let lastCatalogConfigRevision: string | null | undefined;
 
@@ -400,6 +405,7 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
       return;
     }
     catalogState.connection = connection;
+    setModelKeyProviders(undefined);
     catalogState.value = { kind: client && connected ? "loading" : "unavailable" };
     if (!client || !connected) {
       catalogState.read = catalogState.value;
@@ -410,6 +416,7 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
   }
 
   function loadCatalog(client: GatewayClient, connection: CatalogConnection) {
+    loadModelKeyProviders(client, connection);
     const read = (async (): Promise<TalkCatalogState> => {
       const result = await client.request<TalkCatalogResult>("talk.catalog", {});
       return {
@@ -442,6 +449,30 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
         // Errored renders raw configured values; mutation policy has no provider facts.
         catalogSource.publish();
       },
+    );
+  }
+
+  /**
+   * Media-only providers (Deepgram, ElevenLabs) have no Models entry, so the
+   * voice-notes key hint links to Models only for providers it lists. Read on
+   * its own: the Talk catalog never waits for Models.
+   */
+  function loadModelKeyProviders(client: GatewayClient, connection: CatalogConnection) {
+    const agentId = context.gateway.snapshot.assistantAgentId;
+    if (!agentId) {
+      return;
+    }
+    void loadModelAuthStatus(client, { agentId }).then(
+      (modelAuth) => {
+        if (catalogState.connection === connection && modelAuth.providerCapabilities) {
+          setModelKeyProviders(
+            modelAuth.providerCapabilities.map(({ provider }) =>
+              canonicalModelAuthProviderId(provider),
+            ),
+          );
+        }
+      },
+      () => {},
     );
   }
 
@@ -644,6 +675,7 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
     catalog,
     catalogScope,
     modelDefaultResetIntent,
+    modelKeyProviders,
     changeModel,
     changeVoice,
     changeProvider,
@@ -729,6 +761,7 @@ export function TalkSettingsPage(props: TalkSettingsPageProps) {
           <TalkTranscriptionSection
             configObject={props.configObject ?? {}}
             catalog={transcriptionCatalog(catalog())}
+            modelKeyProviders={settings.modelKeyProviders()}
             configBusy={configBusy()}
           />
         )}

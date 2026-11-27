@@ -4,10 +4,14 @@ import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { addSessionMember } from "../config/sessions/session-sharing-store.native.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
+import { linkOpenClawIdUserProfile } from "../state/user-profile-openclaw-id.worker.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { setOpenClawIdTunnelPrincipalLookup } from "./openclaw-id/tunnel-principal.js";
+import {
+  setOpenClawIdMemberAccountLookup,
+  setOpenClawIdTunnelPrincipalLookup,
+} from "./openclaw-id/tunnel-principal.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
@@ -38,15 +42,28 @@ describe("session sharing sandbox requirements", () => {
         const maintainer = sandboxRoleClient("write");
         if (member) {
           delete cfg.gateway!.roles!.default;
+          cfg.gateway!.openclawId = { enabled: true };
           const principal = {
             kind: "member" as const,
             peerKey: "iroh:guest",
             accountId: "guest",
             role: "view",
           };
+          linkOpenClawIdUserProfile(
+            {
+              profileId: guest.authenticatedUserProfile!.profileId,
+              accountId: principal.accountId,
+              email: null,
+            },
+            {},
+          );
+          setOpenClawIdMemberAccountLookup((accountId) => accountId === principal.accountId);
           guest.internal = { openclawIdPrincipal: principal };
           setOpenClawIdTunnelPrincipalLookup(() => principal);
-          onTestFinished(() => setOpenClawIdTunnelPrincipalLookup(undefined));
+          onTestFinished(() => {
+            setOpenClawIdTunnelPrincipalLookup(undefined);
+            setOpenClawIdMemberAccountLookup(undefined);
+          });
         }
         using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         using authorizations = new DisposableStack();
@@ -133,7 +150,11 @@ describe("session sharing sandbox requirements", () => {
           getRuntimeConfig: () => ({}),
         } as GatewayRequestContext);
         if (member) {
-          expect(unscoped.error).toMatchObject({ code: "FORBIDDEN" });
+          // Without a profile role policy, the member cannot discover or run this session.
+          expect(unscoped.error).toEqual({
+            code: "INVALID_REQUEST",
+            message: `Session "${hostSessionKey}" was not found.`,
+          });
         } else {
           expect(unscoped.error).toBeNull();
         }

@@ -232,7 +232,7 @@ describe("cron service operations", () => {
           updatedAtMs: now - 30 * 60_000,
           schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
           check: { script: "json({ wake: '' })", once: true },
-          payload: { kind: "script", script: "return { state: { cursor: 'payload' } }" },
+          payload: { kind: "none" },
           state: {
             nextRunAtMs: now - 60_000,
             runningAtMs: startedAt,

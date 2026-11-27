@@ -370,7 +370,7 @@ it("publishes a queued quiet run's next schedule in its one terminal event", asy
     nowMs: () => dueAt,
     evaluateCronCheck: vi.fn(async () => ({
       kind: "evaluated" as const,
-      action: "quiet",
+      action: "quiet" as const,
     })),
     runIsolatedAgentJob,
     onEvent: (event, context) => {

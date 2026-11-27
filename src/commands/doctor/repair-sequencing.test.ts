@@ -1,6 +1,10 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  DEFERRED_UPDATE_MODEL_RETIREMENT_WARNING,
+  recordUpdateModelRetirement,
+} from "../../infra/update-deferred-model-retirement.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import {
   createPluginManifestRecordFixture,
@@ -658,6 +662,80 @@ describe("doctor repair sequencing", () => {
     expect(result.state.candidate.plugins?.allow).toEqual(["brave"]);
     expect(result.state.candidate.plugins?.entries?.brave?.enabled).toBe(true);
     expect(result.changeNotes).toStrictEqual([deferred]);
+  });
+
+  describe("package update doctor pass", () => {
+    const swapEnv = { OPENCLAW_UPDATE_IN_PROGRESS: "1" };
+    const staleRef = "ghost-provider/model-a";
+    const modelConfig = (): OpenClawConfig => ({
+      agents: { defaults: { model: { primary: staleRef } } },
+    });
+    const deferrals = () =>
+      vi.mocked(recordUpdateModelRetirement).mock.calls.filter(([status]) => status === "deferred");
+
+    it("does not wait for plugin convergence when it has nothing to change", async () => {
+      mocks.repairMissingConfiguredPluginInstalls.mockResolvedValueOnce({
+        changes: [],
+        warnings: [],
+        records: {},
+      });
+      const config = modelConfig();
+
+      const result = await runRepairs(config, { env: swapEnv });
+
+      expect(deferrals()).toStrictEqual([]);
+      expect(result.warningNotes).not.toContain(DEFERRED_UPDATE_MODEL_RETIREMENT_WARNING);
+      expect(result.state.candidate).toStrictEqual(modelConfig());
+      expect(result.state.pendingChanges).toBe(false);
+    });
+
+    it.each([
+      [
+        "a model reference would be retired",
+        () =>
+          mocks.repairStaleAgentModelRefs.mockImplementation((cfg: OpenClawConfig) =>
+            mutation(
+              { ...cfg, agents: { defaults: {} } },
+              `Removed agents.defaults.model.primary ${staleRef}`,
+            ),
+          ),
+      ],
+      [
+        "retirement cannot read the provider inventory",
+        () =>
+          mocks.repairStaleAgentModelRefs.mockImplementation((cfg: OpenClawConfig) => ({
+            ...unchanged(cfg),
+            warnings: ["Provider inventory unavailable"],
+          })),
+      ],
+      [
+        "a stale plugin entry would be removed",
+        () =>
+          mocks.maybeRepairStalePluginConfig.mockImplementation((cfg: OpenClawConfig) =>
+            mutation(cfg, "plugins.entries: removed 1 stale plugin entry (old-plugin)"),
+          ),
+      ],
+      [
+        "an installed plugin can still change in convergence",
+        () =>
+          mocks.repairMissingConfiguredPluginInstalls.mockResolvedValueOnce({
+            changes: [],
+            warnings: [],
+            records: { brave: { source: "npm", spec: "@openclaw/brave-plugin" } },
+          }),
+      ],
+    ])("waits for plugin convergence when %s", async (_case, arrange) => {
+      arrange();
+      const config = modelConfig();
+
+      const result = await runRepairs(config, { env: swapEnv });
+
+      expect(deferrals()).toHaveLength(1);
+      expect(result.warningNotes).toContain(DEFERRED_UPDATE_MODEL_RETIREMENT_WARNING);
+      // Deciding to wait must not apply the repair it is waiting for.
+      expect(result.state.candidate).toStrictEqual(modelConfig());
+      expect(result.state.pendingChanges).toBe(false);
+    });
   });
 
   it("preserves configured plugins when their install repair fails", async () => {

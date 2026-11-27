@@ -140,7 +140,9 @@ export function assertCheckSupport(
   opts?: { cronConfig?: CronConfig; validateAuthoredCheck?: boolean },
 ) {
   if (!job.check) {
-    if (job.payload.kind === "none") throw new Error('cron payload.kind="none" requires a check');
+    if (job.payload.kind === "none") {
+      throw new Error('cron payload.kind="none" requires a check');
+    }
     return;
   }
   if (job.payload.kind !== "none" && job.payload.kind !== "agentTurn") {

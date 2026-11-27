@@ -367,7 +367,7 @@ describe("unstarted scheduled admission", () => {
         summary: "Already spent occurrence",
       };
       const run = vi.fn(async () => result);
-      const evaluate = vi.fn(async () => ({ kind: "evaluated" as const, action: "wake" }));
+      const evaluate = vi.fn(async () => ({ kind: "evaluated" as const, action: "wake" as const }));
       const { cron, tick } = await service({
         runSessionEvent: run,
         runIsolatedAgentJob: run,

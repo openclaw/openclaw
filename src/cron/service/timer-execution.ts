@@ -4,6 +4,7 @@ import { isCronWithinActiveHours } from "../active-hours.js";
 import { isCronActiveJobMarkerCurrent } from "../active-jobs.js";
 import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { resolveCronOwnerTransferRecoveryError } from "../human-owner.js";
+import { cronOperatorSourceRefusal } from "../operator-source-error.js";
 import { readDefaultProactiveJobReceiptsByKeyAsync } from "../proactive-job-receipt.js";
 import { isProactiveJobMigrationPending } from "../proactive-job-receipt.kernel.js";
 import { resolveCronRunAdmissionSource } from "../run-authority.js";
@@ -215,12 +216,14 @@ export async function executeJobCore(
         !sessionPreparation?.notices.events.length &&
         isCronScratchEffectivelyEmpty(snapshot?.state.scratch?.content)
       ) {
+        // An empty checklist is a quiet check, not a failure: complete with nothing to deliver.
         return {
-          status: "skipped",
+          status: "ok",
           summary: "Automation scratch is explicitly empty",
           executionStarted: false,
           delivered: false,
           deliveryAttempted: false,
+          deliverySuppressionReason: "empty",
         };
       }
     }
@@ -287,12 +290,22 @@ export async function executeJobCore(
         streamBatch: options?.streamBatch,
         abortSignal,
         executionIdentity: options?.executionIdentity,
-      });
+      }).catch(cronOperatorSourceRefusal);
       sessionPreparation?.notices.assertCurrent();
+      if (job.payload.kind === "none" && !isCronActiveJobMarkerCurrent(options?.activeJobMarker)) {
+        return {
+          status: "error",
+          error: "Gateway restarting.",
+          errorClassification: { kind: "aborted" },
+        };
+      }
       // Trigger scripts may settle after cancellation; never start payload work
       // or persist trigger results for a run that has already been aborted.
       if (abortSignal?.aborted) {
         return resolveAbortError();
+      }
+      if ("status" in evaluation) {
+        return evaluation;
       }
       if (evaluation.kind === "error") {
         return {
@@ -318,7 +331,14 @@ export async function executeJobCore(
         };
       }
       if (evaluation.action === "quiet") {
-        return { status: "ok", triggerEval, nextCheck: evaluation.nextCheck };
+        return {
+          status: "ok",
+          triggerEval,
+          nextCheck: evaluation.nextCheck,
+          delivered: false,
+          deliveryAttempted: false,
+          deliverySuppressionReason: "empty",
+        };
       }
       if (evaluation.action === "wake" && job.payload.kind !== "agentTurn") {
         return {
@@ -497,6 +517,7 @@ async function executeMainSessionCronJob(
     onExecutionStarted: options?.onExecutionStarted,
     onExecutionPhase: options?.onExecutionPhase,
     onLaneWait: options?.onLaneWait,
+    providerRunSlot: options?.providerRunSlot,
     executionIdentity: options?.executionIdentity,
     job,
     text,
@@ -602,6 +623,7 @@ async function executeDetachedCronJob(
     onExecutionStarted: options?.onExecutionStarted,
     onExecutionPhase: options?.onExecutionPhase,
     onLaneWait: options?.onLaneWait,
+    providerRunSlot: options?.providerRunSlot,
     executionIdentity: options?.executionIdentity,
   });
 

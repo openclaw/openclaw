@@ -29,10 +29,7 @@ import {
 import { registerActiveEmbeddedRunHumanInputWait } from "../embedded-agent-runner/run-state.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "../subagents/registry/subagent-registry-read.js";
-import {
-  captureGatewayToolCallerAssertion,
-  getGatewayToolCallerIdentity,
-} from "./gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import {
   getInProcessGatewayToolContext,
   type AgentToolGatewayRequestCaller,
@@ -95,7 +92,6 @@ export async function prepareSessionsSendCommunication(params: {
   const targetSessionKey = params.target.sessionKey;
   const targetsThread = Boolean(resolveSessionThreadInfo(targetSessionKey).threadId);
   const caller = getGatewayToolCallerIdentity();
-  const assertCaller = captureGatewayToolCallerAssertion();
   const context = getInProcessGatewayToolContext();
   // Never replace the config against which identities and source ceilings were prepared.
   const config = params.config;
@@ -137,7 +133,6 @@ export async function prepareSessionsSendCommunication(params: {
       throw new Error("Session communication admission closed.");
     }
     params.signal?.throwIfAborted();
-    assertCaller?.();
     params.assertSourceCurrent?.();
     params.assertAccessCurrent?.();
     const targetEntry = currentTarget.entry;
@@ -288,8 +283,10 @@ export async function prepareSessionsSendCommunication(params: {
     if (!closed) {
       closed = true;
       unsubscribe();
+      params.signal?.removeEventListener("abort", close);
     }
   };
+  params.signal?.addEventListener("abort", close, { once: true });
   try {
     assertSource();
     let source = await readSessionCommunicationLineage(params.source, read, assertSource);
@@ -399,7 +396,7 @@ export async function prepareSessionsSendCommunication(params: {
         );
       }
       await refresh();
-      if (!context || (!assertCaller && !params.assertSourceCurrent)) {
+      if (!context || (!caller?.operationalRunInstance && !params.assertSourceCurrent)) {
         throw new Error("Human communication approval requires a live admitted Gateway caller.");
       }
       await requestSessionCommunicationApproval({
@@ -519,7 +516,6 @@ export async function prepareSessionsSendCommunication(params: {
     await refresh();
     const callGateway = async <T>(
       request: Parameters<AgentToolGatewayRequestCaller>[0],
-      requireDurableDelivery = false,
     ): Promise<T> => {
       if (request.method !== "agent") {
         return params.callGateway<T>(request);
@@ -592,11 +588,11 @@ export async function prepareSessionsSendCommunication(params: {
         return result;
       };
       const sender = source[0]!;
-      // A safely refused volatile steer needs pending-input recovery even for an
-      // owned task. Resume keeps its existing task owner and never uses this path.
+      // Task continuations keep their existing task owner. Ordinary peer input
+      // transfers to the Gateway pending-input owner, independent of the sender turn.
       if (
         context &&
-        (!ownedTask || requireDurableDelivery) &&
+        !ownedTask &&
         !resume &&
         sender.entry &&
         hasRunId &&
@@ -634,9 +630,6 @@ export async function prepareSessionsSendCommunication(params: {
           dispatch,
         );
       }
-      if (requireDurableDelivery) {
-        throw new Error("Durable steering fallback requires an in-process delivery owner.");
-      }
       return dispatch();
     };
     return {
@@ -644,8 +637,6 @@ export async function prepareSessionsSendCommunication(params: {
       assertCurrent,
       refresh,
       callGateway,
-      callDurableGateway: <T>(request: Parameters<AgentToolGatewayRequestCaller>[0]) =>
-        callGateway<T>(request, true),
       ownedTask,
       sourceSandboxed: sandboxed,
       captureReplyAdmission: (runId: string): SessionSendReplyAdmission => {

@@ -233,10 +233,13 @@ export function normalizeStoredCronJobs(
     const checkMigration = retireCronScriptJob(raw);
     if (checkMigration) {
       mutated = true;
-      const jobIdentity =
-        name && raw.id && name !== raw.id ? `${name} (${raw.id})` : (jobName ?? "<unnamed>");
-      if (checkMigration.paused) pausedCheckJobs.push(`${jobIdentity}: ${checkMigration.paused}`);
-      else convertedCheckJobs.push(jobIdentity);
+      const id = normalizeOptionalString(raw.id);
+      const jobIdentity = name && id && name !== id ? `${name} (${id})` : (jobName ?? "<unnamed>");
+      if (checkMigration.paused) {
+        pausedCheckJobs.push(`${jobIdentity}: ${checkMigration.paused}`);
+      } else {
+        convertedCheckJobs.push(jobIdentity);
+      }
     }
 
     setField(raw, "description", normalizeOptionalString(raw.description));

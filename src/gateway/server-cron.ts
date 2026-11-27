@@ -684,7 +684,6 @@ export function buildGatewayCronService(params: {
           fireStreamJob(job, {
             run: async (jobId, onDisposition) => {
               const result = await cron.run(jobId, "force", {
-                evaluateTrigger: true,
                 streamBatch: batch,
                 streamScheduleKey,
                 streamSourceIdentity,

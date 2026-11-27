@@ -201,6 +201,14 @@ export function restoreFinalizedStartupRun(params: {
       { scheduleOwnership, triggerOwnership },
     );
   }
+  // Released script payloads may have finalized before Doctor converted their job.
+  if (
+    entry.status === "ok" &&
+    triggerOwnership !== "stale" &&
+    params.scriptResult?.scriptStateChanged
+  ) {
+    job.state.triggerState = params.scriptResult.scriptState;
+  }
 
   state.deps.log.info(
     { jobId: job.id, runningAtMs, status: entry.status },

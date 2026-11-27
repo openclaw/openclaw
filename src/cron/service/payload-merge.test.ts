@@ -57,10 +57,10 @@ const mergeCases = [
     commandPayload,
   ],
   [
-    "command to script with execution limits",
+    "command to check-only without command fields",
     { kind: "command", argv: ["echo", "before"] },
-    { kind: "script", script: "return {};", timeoutSeconds: 30, toolBudget: 5 },
-    { kind: "script", script: "return {};", timeoutSeconds: 30, toolBudget: 5 },
+    { kind: "none" },
+    { kind: "none" },
   ],
   [
     "installs a newly stamped default marker on command",

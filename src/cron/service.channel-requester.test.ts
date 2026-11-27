@@ -165,7 +165,7 @@ it("rejects a minted requester token at commit after its MCP capture is deactiva
       expect(creator).toMatchObject({ active: true, signal: { aborted: false } });
       expect(getAdmittedRunDelegatedAuthority(admitted)).toBe(delegatedAuthority);
       await expect(cron.add(requesterDeclaration(), { ...authority, commitGuard })).rejects.toThrow(
-        "Configured MCP cron authority is no longer active",
+        "This run's MCP cron access has ended",
       );
       expect(commitGuard).toHaveBeenCalledOnce();
       expect((await loadCronStore(storePath)).jobs).toEqual([]);
@@ -221,7 +221,7 @@ it("persists and rebinds a finite authenticated requester cap", async () => {
   expect((await readJob())?.toolsAllowProvenance).toBeUndefined();
 });
 
-it.each<[string, CronJobPatch, CronJobCreate["trigger"]?, boolean?]>([
+it.each<[string, CronJobPatch, CronJobCreate["check"]?, boolean?]>([
   ["model selection", { payload: { kind: "agentTurn", model: "openai/test-model" } }],
   ["schedule", { schedule: { kind: "every", everyMs: 120_000 } }],
   ["delivery target", { delivery: { to: "channel:another", accountId: "work" } }],
@@ -241,7 +241,7 @@ it.each<[string, CronJobPatch, CronJobCreate["trigger"]?, boolean?]>([
     true,
   ],
 ])("reconciles requester authority for %s", async (_name, patch, trigger, preserves = false) => {
-  const created = await cron.add(requesterDeclaration({ trigger }), fullAuthority);
+  const created = await cron.add(requesterDeclaration({ check: trigger }), fullAuthority);
   await cron.update(
     created.id,
     patch,

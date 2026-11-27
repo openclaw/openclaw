@@ -73,7 +73,7 @@ it.each(["trigger", "payload"] as const)(
         const invoke = async (accountId: string, channel?: string) => {
           const script = `await message({ action: "send", channel: "telegram", accountId: ${JSON.stringify(accountId)}, target: "123", message: "Scheduled report" }); return { };`;
           const jobId = `account-${entry}-${accountId}`;
-          const marker = markCronJobActive(jobId, { isMessageActionAuthorityCurrent: () => true });
+          const marker = markCronJobActive(jobId);
           const ownerSessionKey = `agent:main:telegram:${accountId}:direct:123`;
           const job: CronStoredJob = makeCronJob({
             id: jobId,
@@ -81,7 +81,8 @@ it.each(["trigger", "payload"] as const)(
             payload:
               entry === "trigger"
                 ? { kind: "agentTurn", message: "Collect the report", toolsAllow: ["message"] }
-                : { kind: "script", script, toolsAllow: ["message"] },
+                : { kind: "none", toolsAllow: ["message"] },
+            check: { script },
             delivery: { mode: "none", channel: "slack", accountId: "delivery" },
             owner: { agentId: "main", sessionKey: ownerSessionKey, accountId },
             scheduledToolPolicy: {
@@ -111,15 +112,12 @@ it.each(["trigger", "payload"] as const)(
             },
           } satisfies Parameters<typeof runtime.evaluateCheck>[0];
           try {
-            return await (entry === "trigger"
-              ? runtime.evaluateCheck(params)
-              : runtime.executePayload(params));
+            return await runtime.evaluateCheck(params);
           } finally {
             clearCronJobActive(jobId, marker);
           }
         };
-        const expected =
-          entry === "trigger" ? { kind: "evaluated", action: "quiet" } : { kind: "completed" };
+        const expected = { kind: "evaluated", action: "quiet" };
         for (const [accountId, channel, error, sends] of [
           ["work", "telegram", undefined, 1],
           ["work", "slack", 'Scheduled account "work" is unavailable', 1],
@@ -221,11 +219,12 @@ it("reuses hydrated creator origin for script admission across warm cache change
       });
       const jobId = "script-delete-origin";
       const invoke = async (callerOrigin?: CronScheduledToolCallerOrigin) => {
-        const marker = markCronJobActive(jobId, { isMessageActionAuthorityCurrent: () => true });
+        const marker = markCronJobActive(jobId);
         const job: CronStoredJob = makeCronJob({
           id: jobId,
           agentId: "main",
-          payload: { kind: "script", script, toolsAllow: ["message"] },
+          payload: { kind: "none", toolsAllow: ["message"] },
+          check: { script },
           owner: { agentId: "main", sessionKey: ownerSessionKey, accountId },
           scheduledToolPolicy: {
             version: 1,
@@ -242,9 +241,11 @@ it("reuses hydrated creator origin for script admission across warm cache change
           };
         }
         try {
-          return await runtime.executePayload({
+          return await runtime.evaluateCheck({
             occurrence: TEST_SCHEDULED_OCCURRENCE,
             job,
+            script,
+            state: null,
             streamBatch: undefined,
             abortSignal: controller.signal,
             deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
@@ -262,7 +263,7 @@ it("reuses hydrated creator origin for script admission across warm cache change
 
       const validOrigin = { kind: "external", channel: "telegram" } as const;
       const first = await invoke(validOrigin);
-      expect(first, JSON.stringify(first)).toMatchObject({ kind: "completed" });
+      expect(first, JSON.stringify(first)).toMatchObject({ kind: "evaluated" });
       expect(handleAction).toHaveBeenCalledOnce();
       expect(handleAction.mock.calls[0]?.[0]).toMatchObject({
         action: "delete",
@@ -285,7 +286,7 @@ it("reuses hydrated creator origin for script admission across warm cache change
       }
 
       const restored = await invoke(validOrigin);
-      expect(restored, JSON.stringify(restored)).toMatchObject({ kind: "completed" });
+      expect(restored, JSON.stringify(restored)).toMatchObject({ kind: "evaluated" });
       expect(handleAction).toHaveBeenCalledTimes(2);
     } finally {
       configSnapshot.clearRuntimeConfigSnapshot();
@@ -308,23 +309,23 @@ it("flags reauthorization exactly when script preparation reaches the missing-ch
       const signal = new AbortController().signal;
       const ownerSessionKey = "agent:main:telegram:work:direct:123";
       const cases = [
-        ["payload", [], 'return { notify: "done" };', false],
+        ["payload", [], 'return { post: "done" };', false],
         ["trigger", [], "return { };", false],
-        ["payload", [], "return { notify: typeof MCP };", true],
-        ["trigger", [], 'return { fire: typeof MCP === "object" };', true],
-        ["payload", ["read"], 'return { notify: "done" };', true],
+        ["payload", [], "return { post: typeof MCP };", true],
+        ["trigger", [], 'return { state: typeof MCP === "object" };', true],
+        ["payload", ["read"], 'return { post: "done" };', true],
       ] as const;
       for (const [index, [entry, toolsAllow, script, blocked]] of cases.entries()) {
         const jobId = `reauthorization-${index}`;
-        const marker = markCronJobActive(jobId, { isMessageActionAuthorityCurrent: () => true });
+        const marker = markCronJobActive(jobId);
         const job: CronStoredJob = makeCronJob({
           id: jobId,
           agentId: "main",
           payload:
             entry === "payload"
-              ? { kind: "script", script, toolsAllow: [...toolsAllow] }
-              : { kind: "command", argv: ["true"], toolsAllow: [...toolsAllow] },
-          ...(entry === "trigger" ? { check: { script } } : {}),
+              ? { kind: "none", toolsAllow: [...toolsAllow] }
+              : { kind: "none", toolsAllow: [...toolsAllow] },
+          check: { script },
           owner: { agentId: "main", sessionKey: ownerSessionKey, accountId: "work" },
           scheduledToolPolicy: {
             version: 1,
@@ -346,13 +347,11 @@ it("flags reauthorization exactly when script preparation reaches the missing-ch
           },
         } satisfies Parameters<typeof runtime.evaluateCheck>[0];
         try {
-          const result = await (entry === "trigger"
-            ? runtime.evaluateCheck(params)
-            : runtime.executePayload(params));
+          const result = await runtime.evaluateCheck(params);
           expect(result, JSON.stringify(result)).toMatchObject(
             blocked
               ? { kind: "error", error: expect.stringContaining("no recorded creator channel") }
-              : { kind: entry === "trigger" ? "evaluated" : "completed" },
+              : { kind: "evaluated" },
           );
         } finally {
           clearCronJobActive(jobId, marker);
