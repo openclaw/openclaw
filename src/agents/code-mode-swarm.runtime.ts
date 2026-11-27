@@ -1,6 +1,6 @@
 import { stableStringify } from "@openclaw/normalization-core";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, omitUndefinedFields } from "@openclaw/normalization-core/record-coerce";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { runAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
 import type { PendingBridgeRequest } from "./code-mode-worker-types.js";
@@ -48,13 +48,10 @@ function readOptionalStringOption(
   key: "label" | "model" | "thinking" | "agentId",
 ): string | undefined {
   const value = options[key];
-  if (value === undefined) {
-    return undefined;
-  }
-  if (typeof value !== "string" || !value.trim()) {
+  if (value !== undefined && (typeof value !== "string" || !value.trim())) {
     throw new ToolInputError(`agents.run ${key} must be a non-empty string.`);
   }
-  return value.trim();
+  return value?.trim();
 }
 
 async function runAgentSpawnBridge(params: {
@@ -113,20 +110,18 @@ async function runAgentSpawnBridge(params: {
     runAgentToolSourceExecutionGuard(spawnTool);
   };
   assertCurrent();
-  const spawnInput: Record<PropertyKey, unknown> = {
+  const spawnInput: Record<PropertyKey, unknown> = omitUndefinedFields({
     task: prompt.trim(),
     collect: true,
     groupId: resolveCodeModeSwarmGroupId(params.ctx),
-    ...(label ? { label } : {}),
-    ...(model ? { model } : {}),
-    ...(thinking ? { thinking } : {}),
-    ...(options.cyberAccessProgram != null
-      ? { cyberAccessProgram: options.cyberAccessProgram }
-      : {}),
-    ...(agentId ? { agentId } : {}),
-    ...(fastMode !== undefined ? { fastMode } : {}),
-    ...(schema ? { outputSchema: schema } : {}),
-  };
+    label,
+    model,
+    thinking,
+    cyberAccessProgram: options.cyberAccessProgram ?? undefined,
+    agentId,
+    fastMode,
+    outputSchema: schema,
+  });
   const requestFingerprint = `sha256:${sha256Hex(stableStringify(spawnInput))}`;
   // The registry persists this exact tuple and payload hash before launch.
   const idempotencyKey = `${params.codeModeRunId}:${params.request.id}`;

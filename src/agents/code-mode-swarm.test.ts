@@ -340,6 +340,17 @@ describe("Code Mode swarm guest", () => {
 });
 
 describe("Code Mode swarm host bridge", () => {
+  it.each([null, ""])("rejects an invalid optional label %j before spawning", async (label) => {
+    const harness = createSwarmHarness();
+    const result = await runSwarmCode(
+      harness,
+      `return await agents.run("Research", { label: ${JSON.stringify(label)} });`,
+    );
+    expect(result).toMatchObject({ status: "failed", code: "invalid_input" });
+    expect(JSON.stringify(result)).toContain("agents.run label must be a non-empty string.");
+    expect(swarmMocks.spawnSubagentDirect).not.toHaveBeenCalled();
+  });
+
   it.each([
     { ordinaryCount: 144, afterSwarm: false },
     { ordinaryCount: 145, afterSwarm: false },
@@ -451,7 +462,7 @@ describe("Code Mode swarm host bridge", () => {
       try { await spawn({ task: "raw handle", collect: true }); }
       catch (error) { failures.push(error.message); }
       return { failures, advertised: "collect" in description.parameters.properties,
-        joined: await agents.run("Research", { schema: { type: "object" } }) };
+        joined: await agents.run("Research", { fastMode: false, schema: { type: "object" } }) };
     `,
       );
       expect(result).toMatchObject({
@@ -468,6 +479,7 @@ describe("Code Mode swarm host bridge", () => {
       expect(swarmMocks.spawnSubagentDirect).toHaveBeenCalledOnce();
       expect(swarmMocks.spawnSubagentDirect.mock.calls[0]?.[0]).toMatchObject({
         collect: true,
+        fastMode: false,
         outputSchema: { type: "object" },
       });
       expect(swarmMocks.waitForCollectorCompletion).toHaveBeenCalledOnce();
