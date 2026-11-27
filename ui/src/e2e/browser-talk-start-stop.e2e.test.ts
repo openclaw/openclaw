@@ -607,7 +607,7 @@ suite.define(() => {
         )
         .toEqual([
           { sessionId: staleRelaySessionId },
-          { sessionId: currentRelaySessionId, disposition: "abort" },
+          { sessionId: currentRelaySessionId, disposition: "detach" },
         ]);
     });
   });
