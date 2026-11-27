@@ -53,10 +53,7 @@ import {
 } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isRequesterSettleWakeForRun } from "./subagent-requester-settle-identity.js";
-import {
-  isSubagentBoundToRequesterTurn,
-  isSubagentPausedByYield,
-} from "./subagent-requester-turn-custody.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import {
   isSameSubagentRun,
   isSameSubagentRunOwner,
@@ -220,7 +217,7 @@ function listControlledSubagentRunsForTurn(
   );
   return controlledRuns.filter(
     (entry) =>
-      isSubagentBoundToRequesterTurn(entry, requesterTurnRunId) ||
+      entry.requesterTurnRunId === requesterTurnRunId ||
       isRequesterSettleWakeForRun({
         entry,
         runId: requesterTurnRunId,

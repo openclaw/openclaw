@@ -33,8 +33,6 @@ import {
 } from "./subagent-requester-settle-identity.js";
 import {
   hasRequesterTurnYielded,
-  isRequesterTurnAwaitingResult,
-  isSubagentBoundToRequesterTurn,
   isSubagentPausedByYield,
 } from "./subagent-requester-turn-custody.js";
 import {
@@ -74,8 +72,7 @@ export async function adoptSubagentRunForRequesterTurnInRuns(params: {
           isSameSubagentRunOwner(entry, params.expected) &&
           entry.requesterSessionKey === params.requesterSessionKey &&
           resolveRecordedRequester(entry) === params.requesterAgentId &&
-          (!entry.requesterTurnRunId ||
-            isSubagentBoundToRequesterTurn(entry, requesterTurnRunId)) &&
+          (!entry.requesterTurnRunId || entry.requesterTurnRunId === requesterTurnRunId) &&
           entry.expectsCompletionMessage === true &&
           entry.collect !== true &&
           !entry.killIntent &&
@@ -99,7 +96,7 @@ export async function adoptSubagentRunForRequesterTurnInRuns(params: {
         childSessionKey: entry.childSessionKey,
         expectsCompletionMessage: true,
       };
-      if (isSubagentBoundToRequesterTurn(entry, requesterTurnRunId)) {
+      if (entry.requesterTurnRunId === requesterTurnRunId) {
         subagentRuns.bindRequesterRunInstance(entry, params.requesterRunInstance);
         return { value: accepted };
       }
@@ -240,7 +237,7 @@ export function listUnsettledRequesterChildrenInRuns(params: {
       entry.collect === true ||
       entry.expectsCompletionMessage !== true ||
       (excludedTurnRunId !== undefined &&
-        (isSubagentBoundToRequesterTurn(entry, excludedTurnRunId) ||
+        (entry.requesterTurnRunId === excludedTurnRunId ||
           isRequesterSettleWakeForRun({
             entry,
             runId: excludedTurnRunId,
@@ -304,7 +301,8 @@ function selectRequesterTurnChildren(
       (entry) =>
         entry.requesterSessionKey === requesterSessionKey &&
         (!requesterAgentId || resolveRecordedRequester(entry) === requesterAgentId) &&
-        isRequesterTurnAwaitingResult(entry, requesterTurnRunId),
+        entry.requesterTurnRunId === requesterTurnRunId &&
+        entry.expectsCompletionMessage === true,
     )
     .filter((entry) => {
       if (
@@ -372,7 +370,7 @@ export async function markRequesterTurnYieldedInRuns(params: {
       },
       mutate: (entries) => {
         for (const entry of entries) {
-          if (!isSubagentBoundToRequesterTurn(entry, requesterTurnRunId)) {
+          if (entry.requesterTurnRunId !== requesterTurnRunId) {
             throw new SubagentRegistryMutationRejectedError("Requester child changed its turn");
           }
           entry.requesterTurnYielded = true;
@@ -433,7 +431,7 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
     const spawn = spawnsByRunId.get(entry.taskRunId ?? entry.runId);
     return (
       spawn !== undefined &&
-      isSubagentBoundToRequesterTurn(entry, requesterTurnRunId) &&
+      entry.requesterTurnRunId === requesterTurnRunId &&
       entry.childSessionKey === spawn.childSessionKey &&
       (!params.requesterYielded ||
         !owesRequesterCompletion(entry) ||
