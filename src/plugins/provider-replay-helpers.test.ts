@@ -16,7 +16,6 @@ import {
 } from "./provider-replay-helpers.js";
 
 const sonnet = "claude-sonnet-4-6";
-const legacySonnet = "claude-3-7-sonnet-20250219";
 const strictAnthropicPolicy = {
   sanitizeMode: "full",
   sanitizeToolCallIds: true,
@@ -27,7 +26,7 @@ const strictAnthropicPolicy = {
   allowSyntheticToolResults: true,
 };
 const hybridPolicy = (modelId: string, modelApi = "anthropic-messages") =>
-  hybrid({ provider: "minimax", modelApi, modelId }, { anthropicModelDropThinkingBlocks: true });
+  hybrid({ provider: "minimax", modelApi, modelId });
 
 describe("provider replay helpers", () => {
   it("builds strict openai-completions replay policy", () => {
@@ -109,74 +108,31 @@ describe("provider replay helpers", () => {
     },
   );
 
-  it("preserves thinking blocks only for Claude models with native history support", () => {
-    for (const modelId of [
-      "claude-fable-5",
-      "claude-opus-4-5-20251101",
-      "claude-opus-4-6",
-      "claude-sonnet-4-6",
-      "claude-opus-5",
-      "claude-sonnet-5",
-      "claude-mythos-5",
-      "us.anthropic.claude-opus-5-20260101-v1:0",
-    ]) {
-      const policy = anthropic(modelId);
-      expect(policy).not.toHaveProperty("dropThinkingBlocks");
-    }
-
-    for (const modelId of [
-      "claude-opus-4-1",
-      "claude-sonnet-4-5-20250929",
-      "claude-haiku-4-5-20251001",
-      "claude-3-7-sonnet-20250219",
-      "claude-3-5-sonnet-20240620",
-      "claude-3-opus-20240229",
-      "claude-sonnet-4-60",
-    ]) {
-      const policy = anthropic(modelId);
-      expect(policy.dropThinkingBlocks).toBe(true);
-    }
-
-    // Ids that only resemble a released generation are unknown models and keep their thinking.
-    for (const modelId of ["claude-opus-50", "claude-sonnet-50", "claude-zzz-9-9"]) {
-      expect(anthropic(modelId)).not.toHaveProperty("dropThinkingBlocks");
-    }
-  });
-
-  it("uses canonical deployment metadata for Claude replay policy", () => {
-    expect(
-      anthropic("prod-opus", {
-        params: { canonicalModelId: "claude-opus-5" },
-      }),
-    ).not.toHaveProperty("dropThinkingBlocks");
-    expect(
-      anthropic("prod-sonnet", {
-        params: { canonicalModelId: "claude-sonnet-4-5-20250929" },
-      }),
-    ).toHaveProperty("dropThinkingBlocks", true);
-  });
-
-  it.each([anthropic, nativeAnthropic])("derives strict Claude replay through %s", (build) => {
-    const policy = build(sonnet);
-    expect(policy).toMatchObject(strictAnthropicPolicy);
-    if (build === nativeAnthropic) {
-      expect(policy).toHaveProperty("preserveNativeAnthropicToolUseIds", true);
-    }
-    expect(policy).not.toHaveProperty("dropThinkingBlocks");
-    expect(build(legacySonnet)).toHaveProperty("dropThinkingBlocks", true);
-    expect(build("amazon.nova-pro-v1")).not.toHaveProperty("dropThinkingBlocks");
-  });
+  it.each([anthropic, nativeAnthropic])(
+    "replays stored thinking on every Claude model through %s",
+    (build) => {
+      for (const modelId of [
+        "claude-haiku-4-5-20251001",
+        "claude-sonnet-4-5-20250929",
+        "claude-3-7-sonnet-20250219",
+        sonnet,
+        "claude-opus-5",
+      ]) {
+        const policy = build(modelId);
+        expect(policy).toMatchObject(strictAnthropicPolicy);
+        expect(policy).not.toHaveProperty("dropThinkingBlocks");
+      }
+      if (build === nativeAnthropic) {
+        expect(build(sonnet)).toHaveProperty("preserveNativeAnthropicToolUseIds", true);
+      }
+    },
+  );
 
   it("builds hybrid anthropic or openai replay policy", () => {
-    const sonnet46Policy = hybridPolicy(sonnet);
-    expectFields(sonnet46Policy, { validateAnthropicTurns: true });
-    expect(sonnet46Policy).not.toHaveProperty("appendOnlyRuntimeContext");
-    expect(sonnet46Policy).not.toHaveProperty("dropThinkingBlocks");
-
-    expectFields(hybridPolicy(legacySonnet), {
-      validateAnthropicTurns: true,
-      dropThinkingBlocks: true,
-    });
+    const anthropicPolicy = hybridPolicy(sonnet);
+    expectFields(anthropicPolicy, { validateAnthropicTurns: true });
+    expect(anthropicPolicy).not.toHaveProperty("appendOnlyRuntimeContext");
+    expect(anthropicPolicy).not.toHaveProperty("dropThinkingBlocks");
     expect(hybridPolicy("MiniMax-M2.7", "openai-completions")).toMatchObject({
       sanitizeToolCallIds: true,
       applyAssistantFirstOrderingFix: true,
