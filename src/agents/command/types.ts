@@ -123,6 +123,11 @@ export type AgentCommandOpts = {
   allowModelOverride?: boolean;
   /** Optional runtime tool allow-list; when set, only these tools are exposed for this run. */
   toolsAllow?: string[];
+  /**
+   * Optional runtime tool deny-list; entries are removed from this run's tool surface.
+   * Explicit denies win at every policy layer, including over `toolsAllow` overlap.
+   */
+  toolsDeny?: string[];
   /** The installer owns initial bootstrap until shared setup has completed. */
   deferWorkspaceBootstrap?: true;
   /** Trusted owner-scoped plugin tool grant; normal policy and deny rules still apply. */

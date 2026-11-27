@@ -413,6 +413,11 @@ export function createAgentTurnService(
                 freshEntry === undefined
                   ? normalizeOptionalString(principal?.internal?.pluginRuntimeOwnerId)
                   : undefined,
+              pluginSubagentParentSessionKey:
+                freshEntry === undefined &&
+                principal?.internal?.agentRunTracking === "plugin_subagent"
+                  ? normalizeOptionalString(principal?.internal?.pluginSubagentParentSessionKey)
+                  : undefined,
               expectedExistingSessionId,
               requestedSessionId,
               fallbackSessionId,

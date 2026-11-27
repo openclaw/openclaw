@@ -59,6 +59,10 @@ export type DispatchGatewayMethodInProcessOptions = {
   pluginSubagentRequester?: PluginSubagentRequesterContext;
   runtimePluginToolGrant?: RuntimePluginToolGrant;
   pluginSubagentToolsAllow?: string[];
+  /** Host-owned per-run tool denials for a tracked plugin subagent run. */
+  pluginSubagentToolsDeny?: string[];
+  /** Opt-in parent lineage stamped on a fresh plugin subagent session entry. */
+  pluginSubagentParentSessionKey?: string;
   delegatedToolPolicyHandoff?: SubagentCompletionToolHandoffRegistration;
   sessionCreation?: TrustedSessionCreation;
   requireScopedClient?: boolean;

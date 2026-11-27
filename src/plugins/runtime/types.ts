@@ -27,6 +27,18 @@ type SubagentRunParams = {
   disableTools?: boolean;
   /** Add exact tools registered by the calling plugin to the worker's normal tool surface. */
   toolsAlsoAllow?: string[];
+  /**
+   * Remove exact tools from the worker's tool surface for this run. Explicit denies win at
+   * every policy layer, so this also overrides `toolsAlsoAllow` overlap. Cannot be combined
+   * with `disableTools` (that run has no tools to deny).
+   */
+  toolsDeny?: string[];
+  /**
+   * Optional parent session key recorded on the child's session entry, mirroring the
+   * sessions_spawn lineage stamps (`spawnedBy` + `parentSessionKey`). Opt-in: omitting it
+   * keeps the legacy parentless plugin child entry.
+   */
+  parentSessionKey?: string;
   provider?: string;
   model?: string;
   extraSystemPrompt?: string;

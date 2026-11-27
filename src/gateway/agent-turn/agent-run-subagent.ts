@@ -55,7 +55,12 @@ export function resolveGatewayPluginSubagentToolPolicy(client: AgentTurnPrincipa
     Array.isArray(client.internal.pluginSubagentToolsAllow)
       ? [...client.internal.pluginSubagentToolsAllow]
       : undefined;
-  return { runtimePluginToolGrant, pluginSubagentToolsAllow };
+  const pluginSubagentToolsDeny =
+    client?.internal?.agentRunTracking === "plugin_subagent" &&
+    Array.isArray(client.internal.pluginSubagentToolsDeny)
+      ? [...client.internal.pluginSubagentToolsDeny]
+      : undefined;
+  return { runtimePluginToolGrant, pluginSubagentToolsAllow, pluginSubagentToolsDeny };
 }
 
 export async function prepareGatewaySubagentRun(params: {

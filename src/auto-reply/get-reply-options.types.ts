@@ -287,6 +287,8 @@ export type GetReplyOptions = {
   disableTools?: boolean;
   /** Runtime tool allow-list for this turn. Empty means no tools. */
   toolsAllow?: string[];
+  /** Runtime tool deny-list for this turn; denies win over allows. */
+  toolsDeny?: string[];
   /** Trusted installer conversation only; instruction loading still uses the workspace. */
   deferWorkspaceBootstrap?: true;
   /**

@@ -54,6 +54,8 @@ export async function buildAgentSessionPatch(params: {
   requestLabel?: string;
   explicitSessionKey?: string;
   pluginOwnerId?: string;
+  /** Opt-in plugin subagent parent lineage; stamped on fresh entries only. */
+  pluginSubagentParentSessionKey?: string;
   fallbackSessionId?: string;
   touchInteraction: boolean;
 }) {
@@ -168,6 +170,28 @@ export async function buildAgentSessionPatch(params: {
         storeAgentId: params.sessionAgentId,
       })
     : undefined;
+  // Plugin-declared lineage mirrors the sessions_spawn stamps (`spawnedBy` +
+  // `parentSessionKey`); fresh entries only, so resumed sessions keep their origin.
+  const pluginSpawnParentKey =
+    params.freshEntry === undefined && params.pluginSubagentParentSessionKey
+      ? normalizeOptionalString(
+          (() => {
+            try {
+              return resolveSessionStoreKey({
+                cfg: params.cfg,
+                sessionKey: params.pluginSubagentParentSessionKey!,
+                storeAgentId: params.sessionAgentId,
+              });
+            } catch (error) {
+              if ((error as { code?: unknown })?.code === "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED") {
+                throw error;
+              }
+              // Unresolvable parent keys stay verbatim; lineage is metadata, not admission.
+              return params.pluginSubagentParentSessionKey;
+            }
+          })(),
+        )
+      : undefined;
   const storedGroup = normalizeTrustedGroupMetadata(params.freshEntry);
   let inheritedGroup: TrustedGroupMetadata | undefined;
   if (
@@ -276,6 +300,10 @@ export async function buildAgentSessionPatch(params: {
     ...(params.freshEntry === undefined && params.pluginOwnerId
       ? { pluginOwnerId: params.pluginOwnerId }
       : {}),
+    // Plugin subagent lineage is creation-only and opt-in (subagent.run parentSessionKey).
+    ...(pluginSpawnParentKey
+      ? { spawnedBy: pluginSpawnParentKey, parentSessionKey: pluginSpawnParentKey }
+      : {}),
     ...(shouldClearRotatedState || shouldClearTerminalState
       ? {
           status: undefined,
@@ -294,7 +322,7 @@ export async function buildAgentSessionPatch(params: {
   return {
     patch,
     ...(automaticResetReason ? { automaticResetReason } : {}),
-    spawnedBy: freshSpawnedBy,
+    spawnedBy: freshSpawnedBy ?? pluginSpawnParentKey,
     ...nextGroup,
     freshSessionRotatedSinceLoad,
     isNewSession,

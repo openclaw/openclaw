@@ -2099,6 +2099,79 @@ describe("loadGatewayPlugins", () => {
     expect(request.params).not.toHaveProperty("toolsAllow");
   });
 
+  test("stamps per-run tool denials without leaking them into agent params", async () => {
+    const runtime = await createSubagentRuntime({}, true);
+    const scope = {
+      context: createTestContext("plugin-tools-deny-scope"),
+      pluginId: "memory-core",
+      isWebchatConnect: () => false,
+    } satisfies PluginRuntimeGatewayRequestScope;
+
+    await gatewayRequestScopeModule.withPluginRuntimeGatewayRequestScope(scope, () =>
+      runtime.run({
+        sessionKey: "agent:main:subagent:deny-face",
+        message: "read-only work",
+        deliver: false,
+        toolsDeny: ["write", " edit ", "write"],
+      }),
+    );
+
+    const request = {
+      params: getRequiredLastDispatchedParams(),
+      internal: getLastDispatchedClientInternal(),
+    };
+    // Denials are normalized (trimmed + deduped) and stay host-internal.
+    expect(request.internal.pluginSubagentToolsDeny).toEqual(["write", "edit"]);
+    expect(request.params).not.toHaveProperty("toolsDeny");
+    expect(request.internal.pluginSubagentToolsAllow).toBeUndefined();
+  });
+
+  test("rejects tool denials on tool-free subagent runs", async () => {
+    const runtime = await createSubagentRuntime({}, true);
+    const scope = {
+      context: createTestContext("tool-free-deny-scope"),
+      pluginId: "memory-core",
+      isWebchatConnect: () => false,
+    } satisfies PluginRuntimeGatewayRequestScope;
+
+    await expect(
+      gatewayRequestScopeModule.withPluginRuntimeGatewayRequestScope(scope, () =>
+        runtime.run({
+          sessionKey: "agent:main:subagent:deny-empty-face",
+          message: "dream task",
+          deliver: false,
+          disableTools: true,
+          toolsDeny: ["write"],
+        }),
+      ),
+    ).rejects.toThrow(/cannot request tool denials/);
+  });
+
+  test("carries opt-in parent lineage as host-owned internal facts", async () => {
+    const runtime = await createSubagentRuntime({}, true);
+    const scope = {
+      context: createTestContext("plugin-parent-lineage-scope"),
+      pluginId: "memory-core",
+      isWebchatConnect: () => false,
+    } satisfies PluginRuntimeGatewayRequestScope;
+
+    await gatewayRequestScopeModule.withPluginRuntimeGatewayRequestScope(scope, () =>
+      runtime.run({
+        sessionKey: "agent:main:subagent:with-parent",
+        message: "tracked work",
+        deliver: false,
+        parentSessionKey: " agent:main:main ",
+      }),
+    );
+
+    const request = {
+      params: getRequiredLastDispatchedParams(),
+      internal: getLastDispatchedClientInternal(),
+    };
+    expect(request.internal.pluginSubagentParentSessionKey).toBe("agent:main:main");
+    expect(request.params).not.toHaveProperty("parentSessionKey");
+  });
+
   test.each<{ name: string; result: AgentWaitResult; expected?: AgentWaitResult }>([
     {
       name: "pending queue observation",

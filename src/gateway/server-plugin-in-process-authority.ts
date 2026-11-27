@@ -554,6 +554,8 @@ export function resolveInProcessGatewayDispatch(
     pluginSubagentRequester: options?.pluginSubagentRequester,
     runtimePluginToolGrant: options?.runtimePluginToolGrant,
     pluginSubagentToolsAllow: options?.pluginSubagentToolsAllow,
+    pluginSubagentToolsDeny: options?.pluginSubagentToolsDeny,
+    pluginSubagentParentSessionKey: options?.pluginSubagentParentSessionKey,
     delegatedToolPolicyHandoffId,
     ...(options?.sessionCreation ? { sessionCreation: options.sessionCreation } : {}),
     scopes: requestScopes,
@@ -572,6 +574,8 @@ export function resolveInProcessGatewayDispatch(
       options?.pluginSubagentRequester ||
       options?.runtimePluginToolGrant ||
       options?.pluginSubagentToolsAllow ||
+      options?.pluginSubagentToolsDeny ||
+      options?.pluginSubagentParentSessionKey ||
       options?.delegatedToolPolicyHandoff ||
       scope?.client?.internal?.delegatedToolPolicyHandoffId
       ? {
@@ -582,6 +586,8 @@ export function resolveInProcessGatewayDispatch(
             : {}),
           runtimePluginToolGrant: options?.runtimePluginToolGrant,
           pluginSubagentToolsAllow: options?.pluginSubagentToolsAllow,
+          pluginSubagentToolsDeny: options?.pluginSubagentToolsDeny,
+          pluginSubagentParentSessionKey: options?.pluginSubagentParentSessionKey,
           delegatedToolPolicyHandoffId,
         }
       : undefined,

@@ -193,6 +193,7 @@ export async function dispatchInboundMessage(params: {
   cfg: OpenClawConfig;
   dispatcher: ReplyDispatcher;
   toolsAllow?: string[];
+  toolsDeny?: string[];
   replyOptions?: InternalDispatchReplyOptions;
   replyResolver?: InternalGetReplyFromConfig;
   dispatchReplyFromConfig?: DispatchReplyFromConfig;
@@ -203,9 +204,13 @@ export async function dispatchInboundMessage(params: {
   onSettled?: () => void | Promise<void>;
 }): Promise<DispatchInboundResult> {
   const replyOptions =
-    params.toolsAllow === undefined
+    params.toolsAllow === undefined && params.toolsDeny === undefined
       ? params.replyOptions
-      : { ...params.replyOptions, toolsAllow: params.toolsAllow };
+      : {
+          ...params.replyOptions,
+          ...(params.toolsAllow !== undefined ? { toolsAllow: params.toolsAllow } : {}),
+          ...(params.toolsDeny !== undefined ? { toolsDeny: params.toolsDeny } : {}),
+        };
   const replyPayloadRunState = params.replyPayloadRunState ?? {
     runId: replyOptions?.runId,
   };
@@ -338,6 +343,7 @@ async function dispatchInboundMessageWithBufferedDispatcherCore(
       cfg: params.cfg,
       dispatcher,
       toolsAllow: params.toolsAllow,
+      toolsDeny: params.toolsDeny,
       replyResolver: params.replyResolver,
       dispatchReplyFromConfig: params.dispatchReplyFromConfig,
       replyOptions: {
@@ -410,6 +416,7 @@ async function dispatchInboundMessageWithPlainDispatcherCore(
     cfg: params.cfg,
     dispatcher,
     toolsAllow: params.toolsAllow,
+    toolsDeny: params.toolsDeny,
     replyResolver: params.replyResolver,
     replyOptions: params.replyOptions,
     replyPayloadRunState,

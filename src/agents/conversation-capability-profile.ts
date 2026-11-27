@@ -103,6 +103,8 @@ export type ConversationCapabilityProfileParams = {
   runtimeToolAllowlist?: string[];
   /** Persist the runtime allowlist as real parent authority on spawned children. */
   inheritRuntimeToolAllowlist?: boolean;
+  /** Runtime deny-list removed from this run's tool surface; denies win over allows. */
+  runtimeToolDenylist?: string[];
   runtimePluginToolGrant?: RuntimePluginToolGrant;
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
   inputProvenance?: InputProvenance;
@@ -195,6 +197,9 @@ export function resolveConversationCapabilityPolicy(params: ConversationCapabili
   const runtimeToolPolicy = params.runtimeToolAllowlist
     ? { allow: params.runtimeToolAllowlist }
     : undefined;
+  const runtimeToolDenyPolicy = params.runtimeToolDenylist?.length
+    ? { deny: params.runtimeToolDenylist }
+    : undefined;
   const runtimeToolPolicyForInheritance =
     params.inheritRuntimeToolAllowlist === true ? runtimeToolPolicy : undefined;
   const runtimeToolAlsoAllowlist = uniqueStrings(
@@ -211,6 +216,7 @@ export function resolveConversationCapabilityPolicy(params: ConversationCapabili
     ...configuredOverridePolicies,
     sessionInheritedToolPolicy,
     runtimeToolPolicy,
+    runtimeToolDenyPolicy,
   ];
   const inheritedToolPolicyForSpawn =
     requesterPolicies.inheritedToolPolicyForSpawn ?? inheritedToolPolicy;
@@ -237,6 +243,7 @@ export function resolveConversationCapabilityPolicy(params: ConversationCapabili
     sandboxPolicy: sandboxToolPolicy,
     sandboxSessionRenameOnly,
     subagentPolicy,
+    runtimeToolDenyPolicy,
     inheritedToolPolicy,
     sessionInheritedToolPolicy,
     inheritedToolPolicyForSpawn,

@@ -103,6 +103,9 @@ export function buildConversationToolPolicyPipelineSteps(params: {
     ...(params.includeRuntimeToolPolicy
       ? [step(params.policies.runtimeToolPolicy, "runtime tools.allow", "runtime")]
       : []),
+    ...(profile.runtimeToolDenyPolicy
+      ? [step(profile.runtimeToolDenyPolicy, "runtime tools.deny", "runtime")]
+      : []),
     step(params.policies.inheritedToolPolicy, "inherited tools"),
     ...(profile.operatorAuthority?.participationCeiling
       ? [

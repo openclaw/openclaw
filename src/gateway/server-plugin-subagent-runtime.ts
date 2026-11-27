@@ -42,7 +42,7 @@ import {
   prepareInProcessAgentExecution,
   withInProcessGatewayRead,
 } from "./server-plugin-in-process-dispatch.js";
-import { resolvePluginSubagentToolsAlsoAllow } from "./server-plugin-runtime-client.js";
+import { resolvePluginSubagentRunToolFace, resolvePluginSubagentToolsAlsoAllow } from "./server-plugin-runtime-client.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 
 function normalizePluginSubagentRunRuntime(
@@ -554,9 +554,12 @@ export function createGatewaySubagentRuntime(
       const params = { ...request };
       const assertCurrent = params.assertCurrent;
       assertCurrent?.();
-      if (params.disableTools === true && (params.toolsAlsoAllow?.length ?? 0) > 0) {
-        throw new Error("Tool-free plugin subagent runs cannot request additive tools.");
-      }
+      const { pluginSubagentToolsDeny } = resolvePluginSubagentRunToolFace({
+        disableTools: params.disableTools,
+        toolsAlsoAllow: params.toolsAlsoAllow,
+        toolsDeny: params.toolsDeny,
+      });
+      const pluginSubagentParentSessionKey = normalizeOptionalString(params.parentSessionKey);
       const pluginSubagentRequester = resolvePluginSubagentCompletionRequester(
         params.completionDelivery,
       );
@@ -648,6 +651,8 @@ export function createGatewaySubagentRuntime(
           ...(pluginSubagentRequester ? { pluginSubagentRequester } : {}),
           ...(runtimePluginToolGrant ? { runtimePluginToolGrant } : {}),
           ...(params.disableTools === true ? { pluginSubagentToolsAllow: [] } : {}),
+          ...(pluginSubagentToolsDeny ? { pluginSubagentToolsDeny } : {}),
+          ...(pluginSubagentParentSessionKey ? { pluginSubagentParentSessionKey } : {}),
           resolveGatewayContext,
         },
       );

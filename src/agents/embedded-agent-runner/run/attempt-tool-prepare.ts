@@ -277,6 +277,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     sandboxToolPolicy: params.setup.sandbox?.tools,
     inheritRuntimeToolAllowlist: true,
     runtimePluginToolGrant: attempt.runtimePluginToolGrant,
+    runtimeToolDenylist: attempt.toolsDeny,
     inputProvenance: attempt.inputProvenance,
     trustedInternalHandoff: attempt.trustedInternalHandoff,
     pluginMetadataSnapshot: attempt.preparedModelRuntime?.metadataSnapshot,

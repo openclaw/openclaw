@@ -535,6 +535,10 @@ closes. This does not sandbox trusted in-process plugin code.
 
     `toolsAlsoAllow` adds exact, uniquely owned tools registered by the calling plugin to the worker's normal tool surface. The runtime rejects core tools and names shared with another plugin. Profiles and operator tool policies still apply, including explicit allowlists and denies.
 
+    `toolsDeny` removes exact tools from the worker's tool surface for this run — for example `subagent.run({ toolsDeny: ["write", "edit"] })` keeps `read` available while blocking mutations. Entries are trimmed and deduplicated; explicit denies win at every policy layer, including over `toolsAlsoAllow` overlap and operator allowlists. It cannot be combined with `disableTools: true` (that run has no tools to deny).
+
+    `parentSessionKey` optionally records the invoking session on the child's session entry, mirroring the sessions_spawn lineage stamps (`spawnedBy` + `parentSessionKey`). Pass the session key your plugin run was invoked from (for example `ctx.session.sessionKey`); the Gateway canonicalizes it and stamps it only on freshly created child entries. Omit it to keep the legacy parentless plugin child entry.
+
     Owner-authorized command launches can pass their captured assertion as
     `subagent.run({ ..., assertCurrent })`; the Gateway applies it at run
     admission. Managed `worktrees.create({ ..., commitGuard })` accepts the same

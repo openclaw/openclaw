@@ -173,6 +173,8 @@ export type RunEmbeddedAgentParams = Pick<
   bootstrapContextMode?: "full" | "lightweight";
   /** Optional tool allow-list; when set, only these tools are sent to the model. */
   toolsAllow?: string[];
+  /** Optional tool deny-list; entries are removed from the run's tool surface. Denies win over allows. */
+  toolsDeny?: string[];
   /** Preserve the visible tool schemas while allowing execution only for these names. */
   toolExecutionAllow?: readonly string[];
   /** Set only by `runSessionFork`: each request replays the source session's request first. */

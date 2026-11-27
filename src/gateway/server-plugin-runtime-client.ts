@@ -50,6 +50,8 @@ export function createSyntheticPluginRuntimeClient(
       | "pluginSubagentRequester"
       | "runtimePluginToolGrant"
       | "pluginSubagentToolsAllow"
+      | "pluginSubagentToolsDeny"
+      | "pluginSubagentParentSessionKey"
       | "delegatedToolPolicyHandoffId"
       | "sessionCreation"
     > & { scopes?: string[] },
@@ -107,6 +109,12 @@ export function createSyntheticPluginRuntimeClient(
         : {}),
       ...(params?.pluginSubagentToolsAllow
         ? { pluginSubagentToolsAllow: [...params.pluginSubagentToolsAllow] }
+        : {}),
+      ...(params?.pluginSubagentToolsDeny
+        ? { pluginSubagentToolsDeny: [...params.pluginSubagentToolsDeny] }
+        : {}),
+      ...(params?.pluginSubagentParentSessionKey
+        ? { pluginSubagentParentSessionKey: params.pluginSubagentParentSessionKey }
         : {}),
       ...(params?.delegatedToolPolicyHandoffId
         ? { delegatedToolPolicyHandoffId: params.delegatedToolPolicyHandoffId }
@@ -185,6 +193,36 @@ export function mergePluginRuntimeClientInternal(
       readInProcessSubagentResume(client.internal),
     ),
   };
+}
+
+/**
+ * Validates a plugin subagent run's per-run tool-face requests before dispatch:
+ * tool-free runs stay exact-empty, and denials are normalized (trimmed + deduped).
+ */
+export function resolvePluginSubagentRunToolFace(params: {
+  disableTools?: boolean;
+  toolsAlsoAllow?: string[];
+  toolsDeny?: string[];
+}): { pluginSubagentToolsDeny?: string[] } {
+  if (params.disableTools === true && (params.toolsAlsoAllow?.length ?? 0) > 0) {
+    throw new Error("Tool-free plugin subagent runs cannot request additive tools.");
+  }
+  if (params.disableTools === true && (params.toolsDeny?.length ?? 0) > 0) {
+    throw new Error("Tool-free plugin subagent runs cannot request tool denials.");
+  }
+  if (params.toolsDeny === undefined) {
+    return {};
+  }
+  if (!Array.isArray(params.toolsDeny) || params.toolsDeny.length === 0) {
+    throw new Error("Plugin subagent toolsDeny must be a nonempty array of tool names.");
+  }
+  const names = params.toolsDeny.map((entry) => {
+    if (typeof entry !== "string" || !entry.trim()) {
+      throw new Error("Plugin subagent toolsDeny entries must be nonempty tool names.");
+    }
+    return entry.trim();
+  });
+  return { pluginSubagentToolsDeny: uniqueStrings(names) };
 }
 
 export function resolvePluginSubagentToolsAlsoAllow(params: {

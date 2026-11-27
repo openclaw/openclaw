@@ -685,6 +685,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
       params.opts.sessionEffects === "internal" && params.opts.deliver !== true,
     abortSignal: params.opts.abortSignal,
     toolsAllow: runtimeToolsAllow,
+    ...(params.opts.toolsDeny?.length ? { toolsDeny: params.opts.toolsDeny } : {}),
     runtimePluginToolGrant: params.opts.runtimePluginToolGrant,
     trustedInternalHandoff: trustedSubagentCompletionHandoff
       ? params.opts.trustedInternalHandoff

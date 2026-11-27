@@ -194,6 +194,7 @@ export function buildFallbackCandidateTurnParams(params: AgentFallbackCandidateC
     onUserMessagePersisted: params.notifyUserMessagePersisted,
     prepareAssistantTranscriptMessage: turn.opts?.prepareAssistantTranscriptMessage,
     toolsAllow: turn.opts?.toolsAllow,
+    toolsDeny: turn.opts?.toolsDeny,
     disableTools: turn.opts?.disableTools,
     bootstrapContextMode: turn.opts?.bootstrapContextMode,
     bootstrapContextRunKind: params.bootstrapContextRunKind,

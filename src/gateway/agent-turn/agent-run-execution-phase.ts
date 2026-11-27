@@ -350,7 +350,7 @@ async function executeAgentRun(
         const ingressAgentId = params.resolvedSessionKey
           ? params.activeSessionAgentId
           : params.agentId;
-        const { runtimePluginToolGrant, pluginSubagentToolsAllow } =
+        const { runtimePluginToolGrant, pluginSubagentToolsAllow, pluginSubagentToolsDeny } =
           resolveGatewayPluginSubagentToolPolicy(params.client);
         const runContext = {
           messageChannel: params.delivery.originMessageChannel,
@@ -462,6 +462,7 @@ async function executeAgentRun(
                 bootstrapContextMode: params.request.bootstrapContextMode,
                 bootstrapContextRunKind: params.effectiveBootstrapContextRunKind,
                 toolsAllow: pluginSubagentToolsAllow,
+                toolsDeny: pluginSubagentToolsDeny,
                 runtimePluginToolGrant,
                 trustedInternalHandoff: prepared.trustedInternalHandoff,
                 acpTurnSource: params.request.acpTurnSource,

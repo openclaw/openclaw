@@ -297,6 +297,32 @@ describe("resolveConversationCapabilityProfile", () => {
     );
   });
 
+  it("removes runtime denied tools from the explicit face even when allowlisted", () => {
+    const denied = resolveProfile({
+      runtimeToolAllowlist: [...readWrite, "exec"],
+      runtimeToolDenylist: ["exec", " write ", "exec"],
+    });
+    expect(denied.policy.explicitToolAllowlist).toEqual(expect.arrayContaining(readWrite));
+    expect(denied.policy.explicitToolDenylist).toEqual(expect.arrayContaining(["exec", "write"]));
+    // Denials stay in the session face so fixed plugin listings cannot resurrect them.
+    expect(denied.policy.sessionToolDenylist).toContain("exec");
+    // Denials are run-local: they never become inherited parent authority.
+    expect(denied.policy.runtimeToolPolicyForInheritance).toBeUndefined();
+    expect(project(denied)).toEqual(["read"]);
+  });
+
+  it("keeps runtime denials out of spawn inheritance policies", () => {
+    const profile = resolveProfile({
+      runtimeToolDenylist: ["write"],
+      inheritRuntimeToolAllowlist: true,
+    });
+    expect(profile.policy.inheritedToolPolicyForSpawn).toBeUndefined();
+    expect(profile.policy.runtimeToolPolicyForInheritance).toBeUndefined();
+    expect(profile.policy.inheritancePolicies).not.toContain(
+      expect.objectContaining({ deny: ["write"] }),
+    );
+  });
+
   it("drops caller group facts that the session key cannot vouch for", () => {
     const profile = resolveProfile({
       sessionKey: "agent:main:discord:dm:guest",
