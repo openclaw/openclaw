@@ -1,5 +1,5 @@
 import type { UiCommandParams } from "@openclaw/gateway-protocol";
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { isConversationConfigChange } from "../../../src/config/read-dependencies.js";
 import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../api/gateway.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import {
@@ -12,21 +12,13 @@ import {
 } from "../components/panel-toggle-contract.ts";
 import { rememberSessionPanelToggle } from "../components/session-panel-toggle-buffer.ts";
 import { i18n, isSupportedLocale, t } from "../i18n/index.ts";
-import {
-  invalidateChatMetadataForSessionEvent,
-  invalidateChatMetadataStore,
-} from "../lib/chat/chat-metadata-cache.ts";
 import { storedChatOutboxScopeKey } from "../lib/chat/outbox-store-scope.ts";
 import { currentDisplayConfig } from "../lib/config/config-state-model.ts";
-import {
-  invalidateModelAuthStatusRequests,
-  modelAuthEventInvalidates,
-} from "../lib/model-auth-request-state.ts";
-import { modelCatalogEventInvalidation } from "../lib/model-catalog-cache.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { showToast } from "../lib/toast.ts";
 import { retireSessionPaneHandoffs } from "../pages/chat/chat-pane-handoff-lifecycle.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
+import { handleShellMetadataEvent } from "./app-shell-metadata.ts";
 import type { ShellNavigationCapability } from "./app-shell-navigation.ts";
 import type { ApplicationContext } from "./context.ts";
 import { isNativeMobileHost } from "./native-web-chrome.ts";
@@ -84,6 +76,7 @@ export class ShellGatewayOwner {
     profileId: string;
     runtimeConfig: ApplicationContext["runtimeConfig"];
     invalidationId: number;
+    generation: number;
     failed: boolean;
     retryAttempt: number;
     retryTimer?: ReturnType<typeof globalThis.setTimeout>;
@@ -255,42 +248,7 @@ export class ShellGatewayOwner {
   }
 
   handleGatewayEvent(event: GatewayEventFrame): void {
-    const sourceContext = this.host.context;
-    const client = sourceContext?.gateway?.snapshot.client;
-    if (client && event.event === "sessions.changed") {
-      invalidateChatMetadataForSessionEvent(client, event.payload, {
-        hello: sourceContext?.gateway.snapshot.hello,
-        agentsList: sourceContext?.agents.state.agentsList,
-      });
-    }
-    const modelInvalidation = modelCatalogEventInvalidation(event);
-    const metadataChange =
-      event.event === "chat.metadata.changed" ? asNullableRecord(event.payload) : undefined;
-    const commandsChanged = metadataChange?.commandsChanged !== false;
-    if (client && modelAuthEventInvalidates(event)) {
-      invalidateModelAuthStatusRequests(
-        client,
-        typeof metadataChange?.agentId === "string" ? metadataChange.agentId : undefined,
-      );
-    }
-    if (
-      client &&
-      (modelInvalidation || (event.event === "chat.metadata.changed" && commandsChanged))
-    ) {
-      invalidateChatMetadataStore(
-        client,
-        typeof metadataChange?.agentId === "string"
-          ? { agentId: metadataChange.agentId }
-          : undefined,
-        undefined,
-        modelInvalidation ?? "preserve",
-        {
-          commandsChanged,
-          // Fulfillment observations change speed hints, not session descriptor facts.
-          refreshSessionFacts: metadataChange?.authChanged !== false,
-        },
-      );
-    }
+    handleShellMetadataEvent(this.host.context, event);
     if (event.event === "sessions.changed") {
       this.host.shellNavigation.recoverDeletedActiveSession();
       return;
@@ -312,7 +270,9 @@ export class ShellGatewayOwner {
         // Save notifications reconcile in place so active editors keep focus and stay interactive.
         void runtimeConfig.refreshDisplay({ background: true });
       }
-      this.scheduleAgentRosterRefresh();
+      if (isConversationConfigChange(event)) {
+        this.scheduleAgentRosterRefresh();
+      }
       return;
     }
     if (event.event === "users.prefs.changed") {
@@ -509,7 +469,7 @@ export class ShellGatewayOwner {
       void connectionBootstrap.run("runtime-config", () =>
         this.ensureRuntimeConfig(snapshot, context.runtimeConfig),
       );
-      if (this.host.routeState.routeId && !context.agents.state.agentsList) {
+      if (context.agents && !context.agents.state.agentsList) {
         void connectionBootstrap.run("agents", () =>
           this.ensureAgentsList(snapshot, context.agents),
         );
@@ -593,8 +553,7 @@ export class ShellGatewayOwner {
       this.agentsListClient = null;
       return Promise.resolve();
     }
-    const routeId = this.host.routeState.routeId;
-    if (!agents || !routeId || agents.state.agentsList) {
+    if (!agents || agents.state.agentsList) {
       return Promise.resolve();
     }
     if (this.agentsListClient === snapshot.client && this.agentsListSource === agents) {
@@ -626,10 +585,7 @@ export class ShellGatewayOwner {
   ): Promise<void> {
     const { client, selfUser, phase, hello } = context.gateway.snapshot;
     const profileId = selfUser?.id;
-    if (!profileId) {
-      return Promise.resolve();
-    }
-    if (phase !== "connected" || !client) {
+    if (!profileId || phase !== "connected" || !client) {
       return Promise.resolve();
     }
     const runtimeConfig = context.runtimeConfig;
@@ -638,6 +594,7 @@ export class ShellGatewayOwner {
       previous?.client === client &&
       previous.profileId === profileId &&
       previous.runtimeConfig === runtimeConfig &&
+      previous.generation === this.preferenceGeneration &&
       previous.invalidationId === profilePreferencesState.invalidationId;
     if (!force && sameSource && (!previous.failed || previous.retryTimer !== undefined)) {
       return previous.promise;
@@ -650,6 +607,7 @@ export class ShellGatewayOwner {
       profileId,
       runtimeConfig,
       invalidationId: profilePreferencesState.invalidationId,
+      generation: this.preferenceGeneration,
       failed: false,
       retryAttempt: !force && sameSource ? previous.retryAttempt : retryAttempt,
       promise: Promise.resolve(),

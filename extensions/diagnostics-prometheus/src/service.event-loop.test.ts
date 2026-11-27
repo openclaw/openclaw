@@ -27,6 +27,40 @@ function memorySample(
   return { type: "diagnostic.memory.sample" as const, memory: { ...memoryDefaults, ...memory } };
 }
 
+it.each([
+  "admission_entry",
+  "admission_other",
+  "receipt_entry",
+  "receipt_events",
+  "receipt_value",
+  "receipt_other",
+] as const)("exports numeric %s samples without repeating cumulative values", (component) => {
+  using metrics = createMetricsHarness();
+  const sample = memorySample({
+    workerMessages: [
+      {
+        kind: "authority",
+        direction: "from_worker",
+        messages: 3,
+        payloadBytes: 50,
+        unmeasuredMessages: 2,
+        payloadComponents: {
+          "session.actor.appendTranscriptEvent": {
+            [component]: { bytes: 123, samples: 2, unmeasured: 1 },
+          },
+        },
+      },
+    ],
+  });
+  metrics.record(sample);
+  metrics.record(sample);
+  const rendered = metrics.render();
+  const labels = `component="${component}",request_class="session.actor.appendTranscriptEvent"`;
+  expectMetrics(rendered)(`openclaw_worker_authority_component_sampled_bytes_total{${labels}} 123
+openclaw_worker_authority_component_samples_total{${labels},result="measured"} 2
+openclaw_worker_authority_component_samples_total{${labels},result="unmeasured"} 1`);
+});
+
 it("keeps the latest major-GC heap and observation time through scavenges", () => {
   using metrics = createMetricsHarness();
   expect(metrics.render()).not.toContain("openclaw_heap_used_after_major_gc");
@@ -443,9 +477,23 @@ openclaw_worker_retired_total{reason="idle_timeout",script="sqlite-store.worker.
   }
   expectMetrics(
     metrics.render(),
-  )(`openclaw_child_process_spawn_total{family="node",operation="none"} 5
-openclaw_child_process_spawn_total{family="node",operation="sqlite.scoped-read.broker"} 1
-openclaw_child_process_spawn_total{family="git",operation="repository.identities"} 4`);
+  )(`openclaw_child_process_spawn_total{family="node",operation="none",thread="unknown",transport="unknown"} 5
+openclaw_child_process_spawn_total{family="node",operation="sqlite.scoped-read.broker",thread="unknown",transport="unknown"} 1
+openclaw_child_process_spawn_total{family="git",operation="repository.identities",thread="unknown",transport="unknown"} 4`);
+  for (const transport of ["native.descriptor", "native.no-broker", "broker"] as const) {
+    metrics.record({
+      type: "diagnostic.child_process.spawn",
+      family: "git",
+      operation: "workspace.inventory",
+      transport,
+      thread: "main",
+      count: 2,
+      intervalMs: 60_000,
+    });
+    expectMetrics(metrics.render())(
+      `openclaw_child_process_spawn_total{family="git",operation="workspace.inventory",thread="main",transport="${transport}"} 2`,
+    );
+  }
 });
 
 it("accumulates trusted and internal runtime windows without recounting scrapes", () => {

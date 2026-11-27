@@ -78,6 +78,7 @@ export class WorkerConnection {
   private socket: WebSocket | undefined;
   private startPromise: Promise<WorkerHelloOk> | undefined;
   private reconnectPromise: Promise<void> | undefined;
+  private retryWindow: { startedAt: number; attempt: number; lastFailure?: Error } | undefined;
   private heartbeatTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly heartbeatWork = new Set<Promise<void>>();
   private readonly trackHeartbeat = createPendingPromiseTracker(this.heartbeatWork);
@@ -270,20 +271,21 @@ export class WorkerConnection {
   }
 
   private async connectUntilReady(): Promise<WorkerHelloOk> {
-    const startedAt = performance.now();
-    let attempt = 0;
-    let lastFailure: Error | undefined;
+    const retry = (this.retryWindow ??= { startedAt: performance.now(), attempt: 0 });
     while (!this.isTerminal()) {
-      let remainingMs = this.admissionDeadlineMs - (performance.now() - startedAt);
+      let remainingMs = this.admissionDeadlineMs - (performance.now() - retry.startedAt);
       if (remainingMs <= 0) {
-        throw this.failAdmissionDeadline(attempt, lastFailure);
+        throw this.failAdmissionDeadline(retry.attempt, retry.lastFailure);
       }
-      if (attempt > 0) {
-        this.transition({ kind: "reconnecting", attempt });
+      if (retry.attempt > 0) {
+        this.transition({ kind: "reconnecting", attempt: retry.attempt });
         try {
           await sleepWithAbort(
             Math.min(
-              computeBackoff(this.options.reconnectBackoff ?? DEFAULT_RECONNECT_BACKOFF, attempt),
+              computeBackoff(
+                this.options.reconnectBackoff ?? DEFAULT_RECONNECT_BACKOFF,
+                retry.attempt,
+              ),
               remainingMs,
             ),
             this.reconnectAbort.signal,
@@ -291,14 +293,14 @@ export class WorkerConnection {
         } catch (error) {
           throw this.isTerminal() ? this.terminalError() : toStructuredErrorObject(error);
         }
-        remainingMs = this.admissionDeadlineMs - (performance.now() - startedAt);
+        remainingMs = this.admissionDeadlineMs - (performance.now() - retry.startedAt);
         if (remainingMs <= 0) {
-          throw this.failAdmissionDeadline(attempt, lastFailure);
+          throw this.failAdmissionDeadline(retry.attempt, retry.lastFailure);
         }
       }
       try {
         const hello = await this.connectOnce(
-          attempt,
+          retry.attempt,
           Math.min(this.admissionTimeoutMs, remainingMs),
         );
         this.reportConnectionFailure(undefined);
@@ -310,13 +312,13 @@ export class WorkerConnection {
         if (this.isTerminal()) {
           throw this.terminalError();
         }
-        lastFailure = toStructuredErrorObject(error);
+        retry.lastFailure = toStructuredErrorObject(error);
         this.reportConnectionFailure(
-          new Error(formatWorkerConnectionFailure(this.options, lastFailure)),
+          new Error(formatWorkerConnectionFailure(this.options, retry.lastFailure)),
         );
         if (error instanceof WorkerAdmissionError) {
           if (error.retryable) {
-            attempt += 1;
+            retry.attempt += 1;
             continue;
           }
           this.finishTerminal(
@@ -330,7 +332,7 @@ export class WorkerConnection {
           this.finishTerminal({ kind: "failed", error });
           throw error;
         }
-        attempt += 1;
+        retry.attempt += 1;
       }
     }
     throw this.terminalError();
@@ -384,6 +386,9 @@ export class WorkerConnection {
       return;
     }
     if (!this.reconnectPromise) {
+      const retry = (this.retryWindow ??= { startedAt: performance.now(), attempt: 0 });
+      retry.attempt += 1;
+      retry.lastFailure = new WorkerConnectionInterruptedError();
       this.reconnectPromise = this.reconnectAfterClose();
     }
   }
@@ -429,6 +434,9 @@ export class WorkerConnection {
           // Fenced: state is now terminal, so the trailing kind==="ready" guard skips re-arming.
           this.finishTerminal({ kind: "fenced", reason: "owner-epoch-mismatch" });
         } else if (generation === this.generation && this.stateValue.kind === "ready") {
+          // A hello alone does not establish a stable transport. The current
+          // Gateway's heartbeat response clears the retry streak and budget.
+          this.retryWindow = undefined;
           const assertCurrent = () => {
             if (generation !== this.generation || this.stateValue.kind !== "ready") {
               throw new WorkerConnectionInterruptedError();

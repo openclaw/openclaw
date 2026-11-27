@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -34,6 +33,7 @@ import { resolveOutboundAttachmentFromUrl } from "../../media/outbound-attachmen
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { withChannelReadAuthority } from "../../shared/channel-read-authority.js";
+import { readClawHubRecommendations } from "../../shared/clawhub-recommendations.js";
 import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
@@ -55,7 +55,6 @@ import {
   applyMessageCrossContextMarker,
   executeGatewayAction,
 } from "./message-action-execution.js";
-import { recordGatewayActionSend } from "./message-action-gateway-transcript.js";
 import { collectAttachmentSources, normalizeSandboxMediaSource } from "./message-action-params.js";
 import { annotateSourceDelivery } from "./message-action-result-acceptance.js";
 import {
@@ -228,7 +227,8 @@ export async function buildMessagePayload(params: {
       hasBuffer ||
       mergedMediaUrls.length > 0 ||
       hasPresentation ||
-      hasInteractive),
+      hasInteractive ||
+      readClawHubRecommendations(params.resolvedChannelData).length > 0),
   );
   const normalization =
     hasLocationConflict && input.actionOrigin === "message-tool"
@@ -606,29 +606,8 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
         }),
       });
   if (gatewayPluginAction) {
-    const deliveryFact = projectPluginMessageDeliveryFact(gatewayPluginAction.payload);
-    if (!deliveryFact || deliveryFact.status === "settled") {
-      await commitOutboundSessionRoute();
-      // The Gateway owns source-reply history; other conversations get the
-      // confirmed send through the destination history owner.
-      if (!dryRun && outboundRoute && !deliveryFact?.partialDelivery) {
-        await recordGatewayActionSend({
-          cfg,
-          channel,
-          to,
-          accountId: ctx.accountId ?? undefined,
-          route: outboundRoute,
-          producerSessionKey: input.sourceReplySessionKey ?? input.sessionKey,
-          agentId,
-          payload: sendPayload.payload,
-          deliveryId:
-            normalizeOptionalString(params.idempotencyKey) ??
-            input.deliveryIntentId ??
-            randomUUID(),
-          signal: ctx.abortSignal,
-        });
-      }
-    }
+    // The Gateway commits the route and transcript together. Repeating the route
+    // write here opens a second process-local owner behind its resident session.
     return await annotateSourceDelivery(
       withSendNormalization(gatewayPluginAction, sendPayload.normalization),
       ctx,

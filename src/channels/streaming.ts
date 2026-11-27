@@ -16,7 +16,6 @@ import type {
   ChannelStreamingCommandTextMode,
   ChannelStreamingProgressConfig,
   StreamingMode,
-  TextChunkMode,
 } from "../config/types.base.js";
 import { isAgentPlanProgressToolName } from "../session-cards/progress-card-input.js";
 import { selectProgressLabel } from "../shared/progress-labels.js";
@@ -581,13 +580,6 @@ export function buildChannelProgressDraftLine(
     }
   }
   return undefined;
-}
-
-export function resolveChannelStreamingChunkMode(
-  entry: StreamingCompatEntry | null | undefined,
-): TextChunkMode | undefined {
-  const mode = getChannelStreamingConfigObject(entry)?.chunkMode;
-  return mode === "length" || mode === "newline" ? mode : undefined;
 }
 
 export function resolveChannelStreamingBlockEnabled(

@@ -29,8 +29,9 @@ struct ChatMarkdownBlockSegmenterTests {
         #expect(self.segments("  \n\n ") == [])
     }
 
-    @Test func `crlf input is normalized`() {
-        let blocks = self.segments("alpha\r\n```\r\ncode\r\n```")
+    @Test(arguments: ["\n", "\r\n", "\r"])
+    func `fenced code after prose recognizes CommonMark line endings`(_ newline: String) {
+        let blocks = self.segments(["alpha", "```", "code", "```"].joined(separator: newline))
         #expect(blocks == [
             .prose("alpha"),
             .code(ChatCodeBlock(language: nil, code: "code", isComplete: true)),
@@ -794,6 +795,7 @@ struct ChatMarkdownBlockSegmenterTests {
         ])
     }
 
+    #if !os(iOS)
     @Test func `trailing list and thematic break stay prose while streaming`() {
         for markdown in ["- streamed item", "---"] {
             #expect(self.segments(markdown, isComplete: false) == [.prose(markdown)])
@@ -822,6 +824,15 @@ struct ChatMarkdownBlockSegmenterTests {
             return
         }
     }
+
+    #else
+    @Test func `streaming lists retain final markers indentation and nesting`() {
+        for markdown in ["1. first\n2. second", "- **first**\n  - nested\n- second", "- [x] done\n- [ ] pending"] {
+            #expect(self.segments(markdown, isComplete: false) == self.segments(markdown))
+        }
+        #expect(self.segments("---", isComplete: false) == [.prose("---")])
+    }
+    #endif
 
     @Test func `oversized and overdeep lists stay raw prose`() {
         let oversized = Array(

@@ -1,5 +1,10 @@
+import type { SessionCatalogProfileRelation } from "../../../packages/gateway-protocol/src/index.ts";
 import type { AgentIdentityResult, GatewayAgentRow } from "../api/types.ts";
-import type { NavigationRouteId } from "../app-navigation.ts";
+import type {
+  NavigationRouteId,
+  ShellNavigationIntent,
+  SidebarNavigationView,
+} from "../app-navigation.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
 import type { NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
 import type { ThemeMode } from "../app/theme.ts";
@@ -8,6 +13,7 @@ import type { SessionOwnerOption } from "../lib/session-owner.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import type {
+  SidebarSavedPinTime,
   SidebarEmptyGroupsMode,
   SidebarRecentSession,
   SidebarSessionSortMode,
@@ -22,12 +28,19 @@ export interface SidebarRouteView {
   readonly onNavigate?: (
     routeId: NavigationRouteId,
     options?: ApplicationNavigationOptions,
+    intent?: ShellNavigationIntent,
   ) => void;
   readonly sessionDataContext: ApplicationContext | undefined;
   getRouteSessionKey(): string;
 }
 
 export interface SidebarMenusOwner extends SidebarRouteView {
+  prepareSessionNavigation(
+    sessionKey: string,
+    pathname: string,
+    profileRelation?: SessionCatalogProfileRelation,
+  ): void;
+  readonly gatewayTimeForSavedPin: SidebarSavedPinTime;
   sessionsGrouping: SidebarSessionsGrouping;
   sessionsShowCron: boolean;
   sessionsShowPreview: boolean;
@@ -43,7 +56,7 @@ export interface SidebarMenusOwner extends SidebarRouteView {
   readonly onPairMobile?: () => void;
   readonly onRetryConnect?: () => void;
   sidebarAgentsMode: "chip" | "roster";
-  navigationView: "pages" | "sessions" | "online";
+  navigationView: SidebarNavigationView;
   readonly pinnedAgentIds: readonly string[];
   readonly selectedSessionKeys: ReadonlySet<string>;
   readonly sessionData: SessionDataOwner;
@@ -61,7 +74,7 @@ export interface SidebarMenusOwner extends SidebarRouteView {
   readonly sidebarEntries: readonly string[];
   readonly catalogProjectGrouping: CatalogProjectGrouping;
   setCatalogProjectGrouping(grouping: CatalogProjectGrouping): void;
-  hideSessionCatalog(catalogId: string): void;
+  readonly ownerDocument: Document;
   readonly sessionsEmptyGroupsMode: SidebarEmptyGroupsMode;
   setSessionsEmptyGroupsMode(mode: SidebarEmptyGroupsMode): void;
   effectiveSessionSortMode(): SidebarSessionSortMode;
@@ -84,5 +97,8 @@ export interface SidebarMenusOwner extends SidebarRouteView {
   findSidebarMenuSessionByKey(sessionKey: string): SidebarRecentSession | undefined;
   getSessionNavigationState(): { selectedAgentId: string };
   selectedVisibleSessions(): SidebarRecentSession[];
-  switchChipAgent(agentId: string): void;
+  switchChipAgent(
+    agentId: string,
+    resolveKey: typeof import("./sidebar-agent-menu-session-key.ts").resolveAgentMenuSessionKey,
+  ): void;
 }

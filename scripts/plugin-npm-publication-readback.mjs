@@ -387,6 +387,7 @@ export async function createPluginNpmPublicationReadback(options) {
     );
   }
   const evidence = [];
+  const publisherPolicies = new Map();
   return {
     evidence,
     /**
@@ -471,8 +472,8 @@ export async function createPluginNpmPublicationReadback(options) {
           Number.isSafeInteger(receipt.artifactId) &&
           receipt.artifactId > 0 &&
           receipt.workflowEvent === "workflow_dispatch" &&
-          (receipt.workflowSha === workflowSha ||
-            (receipt.runId !== runId && receipt.workflowSha === sourceSha)) &&
+          SHA.test(receipt.workflowSha) &&
+          (receipt.runId !== runId || receipt.workflowSha === workflowSha) &&
           receipt.targetSha === sourceSha &&
           receipt.packageName === packageName &&
           receipt.packageDir === entry.packageDir &&
@@ -530,6 +531,36 @@ export async function createPluginNpmPublicationReadback(options) {
       if (qualified.workflowJobs) {
         writeFileSync(jobsPath, JSON.stringify(qualified.workflowJobs));
       }
+      if (!publisherPolicies.has(receipt.workflowSha)) {
+        // The exact P-owned consumed receipt authenticates the original Q.
+        // Read Q's policy, not C's checkout or the current publisher's policy.
+        const policy =
+          receipt.workflowSha === workflowSha
+            ? readFileSync(new URL("../.github/workflows/plugin-npm-release.yml", import.meta.url))
+            : await api(`contents/${WORKFLOW}?ref=${receipt.workflowSha}`, (value) => {
+                requireValue(
+                  value.type === "file" &&
+                    value.path === WORKFLOW &&
+                    value.encoding === "base64" &&
+                    Number.isSafeInteger(value.size) &&
+                    value.size > 0 &&
+                    value.size <= 1024 * 1024 &&
+                    typeof value.content === "string" &&
+                    value.content.length <= 2 * 1024 * 1024,
+                  "Invalid immutable npm publisher policy response.",
+                );
+                const bytes = Buffer.from(value.content, "base64");
+                requireValue(
+                  bytes.length === value.size,
+                  "Immutable npm publisher policy size mismatch.",
+                );
+                return bytes;
+              });
+        publisherPolicies.set(
+          receipt.workflowSha,
+          createHash("sha256").update(policy).digest("hex"),
+        );
+      }
       const consumed = verifyPluginPublicationArtifact({
         ...qualifiedBinding,
         packageDir: entry.packageDir,
@@ -542,20 +573,7 @@ export async function createPluginNpmPublicationReadback(options) {
         publisherPolicy: {
           schema: "openclaw.plugin-npm-publisher-policy/v1",
           policyId: "plugin-npm-release-workflow",
-          sha256: createHash("sha256")
-            .update(
-              // The authenticated P receipt records the original producer, not
-              // a new publication authority. Q's archive retains Q's policy.
-              receipt.workflowSha === workflowSha
-                ? readFileSync(
-                    new URL("../.github/workflows/plugin-npm-release.yml", import.meta.url),
-                  )
-                : readBoundedRegularFile(join(sourceRoot, WORKFLOW), {
-                    label: "frozen source npm publisher policy",
-                    maxBytes: 1024 * 1024,
-                  }),
-            )
-            .digest("hex"),
+          sha256: publisherPolicies.get(receipt.workflowSha),
         },
         sourcePackageJsonSha256: createHash("sha256")
           .update(

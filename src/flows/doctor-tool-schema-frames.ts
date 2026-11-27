@@ -5,7 +5,6 @@ import {
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
 import { resolveConversationCapabilityProfile } from "../agents/conversation-capability-profile.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { findModelInCatalog } from "../agents/model-catalog-lookup.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { supportsModelTools } from "../agents/model-tool-support.js";
@@ -72,6 +71,10 @@ export async function prepareDoctorToolSchemaFrames(
         agentId,
         allowPluginNormalization: !standalone,
       });
+      if (!modelRef) {
+        // An agent without a model sends no tool schemas to inspect.
+        return;
+      }
       let model: ProviderRuntimeModel;
       if (standalone) {
         const { resolveModelAsync } = await import("../agents/embedded-agent-runner/model.js");
@@ -106,8 +109,8 @@ export async function prepareDoctorToolSchemaFrames(
           providerDiscoveryProviderIds: [],
         });
         const entry = findModelInCatalog(catalog, modelRef.provider, modelRef.model);
-        const provider = modelRef.provider || DEFAULT_PROVIDER;
-        const id = modelRef.model || DEFAULT_MODEL;
+        const provider = modelRef.provider;
+        const id = modelRef.model;
         const api = entry?.api ?? (provider === "openai" ? "openai-responses" : undefined);
         const baseUrl =
           entry?.baseUrl ??

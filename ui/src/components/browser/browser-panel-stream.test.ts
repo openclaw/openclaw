@@ -455,6 +455,34 @@ describe("Browser panel streaming", () => {
     expect(controller.errorText).toBeNull();
   });
 
+  it("refreshes a switched tab's frame after viewport resize without an unsolicited repaint", async () => {
+    const { controller, calls, resizes } = setup();
+    controller.handleViewportResize(600, 900);
+    const first = controller.refreshAll();
+    await flush();
+    await receive(sockets[0]!, screencastFrame(PAGE_URL, 600, 900));
+    await first;
+    await vi.advanceTimersByTimeAsync(300);
+    expect(resizes()).toHaveLength(0);
+
+    const switching = controller.selectTab("tab-b");
+    await flush();
+    await receive(sockets[1]!, screencastFrame(NEXT_URL, 1280, 720));
+    await switching;
+    await vi.advanceTimersByTimeAsync(800);
+
+    expect(resizes().at(-1)?.[1]).toMatchObject({
+      body: { targetId: "tab-b", width: 600, height: 900 },
+    });
+    expect(calls("/screencast")).toHaveLength(3);
+    await receive(sockets[2]!, screencastFrame(NEXT_URL, 600, 900));
+    expect(controller.view).toMatchObject({
+      targetId: "tab-b",
+      dataUrl: "blob:frame-2",
+      metrics: { cssWidth: 600, cssHeight: 900 },
+    });
+  });
+
   it("does not let continuous mismatched frames postpone the debounced viewport sync", async () => {
     const { controller, resizes } = setup();
     controller.handleViewportResize(500, 300);

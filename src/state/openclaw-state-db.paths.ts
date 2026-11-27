@@ -1,9 +1,9 @@
 import { statSync } from "node:fs";
 import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
-import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
+import { resolveStateDir } from "../config/state-dir.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { LruCache } from "../infra/lru-cache.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "../infra/path-existence.js";
 import { isPathInside, normalizeWindowsPathPreservingCase } from "../infra/path-guards.js";
 import { normalizeDatabasePath } from "../infra/sqlite-worker-identity.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";

@@ -1,5 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { beforeEach, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MemoryProviderHandle } from "../plugins/memory-provider-runtime-types.js";
 import type { MemoryAudience } from "../plugins/memory-provider-types.js";
 import { cronTestJob } from "./service.fixture-builders.test-support.js";
@@ -27,13 +33,26 @@ vi.mock("../plugins/memory-state.js", () => ({ resolveLoadedMemoryProviderKind: 
 const profiles = vi.hoisted(() => ({ revoked: new Set<string>() }));
 vi.mock("../state/user-profile-list.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/user-profile-list.js")>()),
-  captureResidentUserProfileAccess: (profileId: string) => ({
-    assertCurrent: () => {
+  captureResidentUserProfileAccess: (profileId: string) => {
+    const assertCurrent = () => {
       if (profiles.revoked.has(profileId)) {
         throw new Error("profile revoked");
       }
-    },
-  }),
+    };
+    return {
+      assertCurrent,
+      readCurrentFacts: () => {
+        assertCurrent();
+        return {
+          profileId,
+          emails: [],
+          assignedRole: null,
+          githubLogin: null,
+          openclawIdAccountIds: [],
+        };
+      },
+    };
+  },
 }));
 
 const { fakeSessionOwner } = await import("../plugins/memory-audience.test-support.js");
@@ -54,6 +73,7 @@ const RUN_SESSION = randomUUID();
 beforeEach(() => {
   fakeSessionOwner.reset();
   profiles.revoked.clear();
+  clearRuntimeConfigSnapshot();
 });
 
 function storedJob(overrides: Partial<CronStoredJob> = {}): CronStoredJob {
@@ -90,20 +110,32 @@ function bindToRun(raw: MemoryProviderHandle, audience: MemoryAudience) {
   });
 }
 
-// Resolve both runtimes from the same admitted occurrence.
-async function runOccurrence(job: CronStoredJob) {
-  const owner = { cfg: {}, agentId: "main" };
+// Resolve both runtimes from the same admitted occurrence. Admission and the run each read
+// `config` when they start, as the Gateway reads its published config for each.
+async function runOccurrence(
+  job: CronStoredJob,
+  beforeRun?: () => void,
+  config: () => OpenClawConfig = () => ({}),
+) {
   const identity = { agentId: "main", sessionKey: RUN_KEY };
   const runRow = { sessionId: RUN_SESSION, updatedAt: 1 };
   fakeSessionOwner.rows.set(RUN_KEY, runRow);
-  const occurrence = await admitScheduledOccurrence({ ...owner, job, trigger: "cron" });
+  const occurrence = await admitScheduledOccurrence({
+    cfg: config(),
+    agentId: "main",
+    job,
+    trigger: "cron",
+  });
+  // Between admission and the run, as while a fired condition waits for a run slot.
+  beforeRun?.();
+  const owner = { cfg: config(), agentId: "main" };
   const admission = prepareCronRunAdmission({
     ...owner,
     runId: "run-1",
     sessionKey: RUN_KEY,
     jobId: job.id,
     deliveryAttemptFence: null,
-    scheduledExecution: occurrence.mint({
+    scheduledExecution: await occurrence.mint({
       ...owner,
       runId: "run-1",
       runSessionKey: RUN_KEY,
@@ -226,6 +258,47 @@ it("drops owner-private memory on the next run after the requester loses owner s
     expect(audience).toMatchObject({ kind: "conversation", sessionKey: PARENT_KEY });
   }
   next.settle();
+});
+
+it("drops owner-private memory when the requester loses owner status while the run waits", async () => {
+  setParent("direct");
+  const run = await runOccurrence(storedJob(), () => profiles.revoked.add(OWNER_PROFILE));
+  // Both the embedded and the CLI runtime resolve only the conversation's memory.
+  expect(run.audiences).toEqual([
+    expect.objectContaining({ kind: "conversation", sessionKey: PARENT_KEY }),
+    expect.objectContaining({ kind: "conversation", sessionKey: PARENT_KEY }),
+  ]);
+  run.settle();
+});
+
+it("drops owner-private memory when a published config removes the channel requester from the owners while the run waits", async () => {
+  setParent("direct");
+  const sender = "100000000000000001";
+  const owners = (owner: string) => ({ commands: { ownerAllowFrom: [`discord:${owner}`] } });
+  setRuntimeConfigSnapshot(owners(sender));
+  const run = await runOccurrence(
+    storedJob({
+      createdActor: undefined,
+      toolsAllowProvenance: {
+        version: 1,
+        source: "authenticated-requester",
+        channelRequester: {
+          version: 1,
+          channel: "discord",
+          accountId: "default",
+          senderId: sender,
+        },
+      },
+    }),
+    () => setRuntimeConfigSnapshot(owners("100000000000000002")),
+    () => getRuntimeConfigSnapshot() ?? {},
+  );
+  // Both the embedded and the CLI runtime resolve only the conversation's memory.
+  expect(run.audiences).toEqual([
+    expect.objectContaining({ kind: "conversation", sessionKey: PARENT_KEY }),
+    expect.objectContaining({ kind: "conversation", sessionKey: PARENT_KEY }),
+  ]);
+  run.settle();
 });
 
 it.each([

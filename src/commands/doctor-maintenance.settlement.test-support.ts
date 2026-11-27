@@ -151,7 +151,8 @@ vi.mock("../state/openclaw-agent-db-lease-inspection.js", async (importOriginal)
   assertNoOpenClawAgentDatabaseLeasesReadOnly: boundary.lease,
   readActiveOpenClawAgentDatabaseLeasesReadOnly: boundary.readLeases,
 }));
-vi.mock("../state/openclaw-database-preflight.js", () => ({
+vi.mock("../state/openclaw-database-preflight.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/openclaw-database-preflight.js")>()),
   preflightOpenClawDatabaseSchemas: boundary.schemas,
   assertOpenClawDatabasesReady: async () => {},
 }));

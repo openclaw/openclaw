@@ -1,6 +1,5 @@
 import { expect } from "vitest";
 import { findMarkdownCodeRegions as resolveTestFenceRanges } from "../../markdown-core/src/reasoning-tags.js";
-import { parseStandalonePlainTextToolCallBlocks } from "./payload.js";
 import {
   normalizePlainTextToolCallStreamEvents,
   projectScrubbedPlainTextToolCallMessage as scrubMessage,
@@ -19,12 +18,6 @@ type Stream = readonly Event[];
 type NormalizeOptions = Parameters<typeof normalizePlainTextToolCallStreamEvents>[1];
 
 export { resolveTestFenceRanges };
-
-export function parseSplitCall(parts: readonly string[]) {
-  let offset = 0;
-  const lineBreakOffsets = new Set(parts.slice(0, -1).map((part) => (offset += part.length)));
-  return parseStandalonePlainTextToolCallBlocks(parts.join(""), undefined, { lineBreakOffsets });
-}
 
 export const textContent = (...texts: string[]) => texts.map((text) => ({ type: "text", text }));
 

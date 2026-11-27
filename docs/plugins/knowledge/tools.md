@@ -196,7 +196,10 @@ The server:
    openers, role terms, and bare first names are not guessed. `infer_subject:
    false` turns this off for one item.
 3. Returns `duplicate` with the existing ID for an exact repeat: same normalized
-   text, kind, and linked subjects.
+   text, kind, linked subjects, assertion origin, occurrence/due/validity dates,
+   and commitment owner. Dates keep their original precision and explicit offset;
+   a date-only occurrence is not the same as a timestamp on that date. Different
+   dates or origins remain separate claims.
 4. Retains the excerpt as `artifacts/<requestId>/excerpt.txt` and cites it from
    every inserted claim.
 5. Publishes the inserted claims as one batch with one receipt.
@@ -379,7 +382,12 @@ Before authoring:
   relationships.
 - `knowledge_annotate` adds revision-fenced metadata (source page, identity
   uncertainty, attribution confidence, continuity links, fixture classification,
-  or extra evidence) without changing assertion text or lifecycle.
+  or extra evidence) without changing assertion text or lifecycle. `entities` and
+  `addEvidence` are top-level siblings beside `annotations`, not fields inside it.
+  Omit `annotations` for entity-only or evidence-only changes; `entities: []`
+  unlinks a claim. A call with no changes is rejected. Nested `entities` or
+  `addEvidence` are rejected with guidance naming the correct top-level fields;
+  the compact input hint also includes both fields within its size budget.
 - Creates never overwrite an assertion. Use
   [corrections](/plugins/knowledge/corrections) for lifecycle changes.
 

@@ -186,24 +186,27 @@ function requireCodeModeSwarmEnabled(ctx: ToolSearchToolContext): void {
   }
 }
 
-/** Recognize explicit required intent only on the authorized core tool bindings. */
+/**
+ * Recognize required intent only on the authorized core tool bindings. A native
+ * ask_user question is always required: parking it would let turn teardown cancel it.
+ */
 export function requiresCodeModeCompletion(
   requests: readonly PendingBridgeRequest[],
   catalogProjection: CodeModeCatalogProjection,
 ): boolean {
   return requests.some((request) => {
-    if (
-      request.method !== "callValue" ||
-      !isRecord(request.args[1]) ||
-      request.args[1].awaitResults !== true
-    ) {
+    if (request.method !== "callValue" || typeof request.args[0] !== "string") {
       return false;
     }
-    const binding =
-      typeof request.args[0] === "string"
-        ? catalogProjection.byCallableName.get(request.args[0])
-        : undefined;
-    return binding?.id === "openclaw:core:exec" || binding?.id === "openclaw:core:agents_wait";
+    const id = catalogProjection.byCallableName.get(request.args[0])?.id;
+    if (id === "openclaw:core:ask_user") {
+      return true;
+    }
+    return (
+      isRecord(request.args[1]) &&
+      request.args[1].awaitResults === true &&
+      (id === "openclaw:core:exec" || id === "openclaw:core:agents_wait")
+    );
   });
 }
 
@@ -220,6 +223,7 @@ export async function runBridgeRequest(params: {
   sessionStore?: CodeModeSessionStoreAccess;
   remainingMs: number;
   completionRequired?: boolean;
+  onDeadline?: (deadlineAtMs: number) => void;
   ctx: ToolSearchToolContext;
   request: PendingBridgeRequest;
   signal?: AbortSignal;
@@ -310,7 +314,8 @@ export async function runBridgeRequest(params: {
         const matches = await params.runtime.search(exactBinding?.id ?? exactMcpId ?? query, {
           limit: typeof options?.limit === "number" ? options.limit : undefined,
           allowedIds: catalogProjection.searchableIds,
-          parentToolCallId: params.parentToolCallId,
+          // Discovery returns lazy guest handles, not model-visible metadata.
+          // Their getters/serialization mark exposure; actual calls retain host provenance.
         });
         value = exactBinding
           ? [exactBinding.callableName]
@@ -531,7 +536,9 @@ export async function runBridgeRequest(params: {
         if (typeof delay !== "number" || !Number.isFinite(delay) || delay < 0) {
           throw new ToolInputError("setTimeout delay must be a non-negative finite number.");
         }
-        value = await sleep(resolveSafeTimeoutDelayMs(delay, { minMs: 0 }), null, {
+        const timeoutMs = resolveSafeTimeoutDelayMs(delay, { minMs: 0 });
+        params.onDeadline?.(Date.now() + timeoutMs);
+        value = await sleep(timeoutMs, null, {
           signal: params.signal,
         });
         break;

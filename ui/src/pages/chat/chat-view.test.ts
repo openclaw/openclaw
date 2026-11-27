@@ -1005,7 +1005,7 @@ describe("chat loading skeleton", () => {
     // The session provider matches a plan-usage group, so dollar estimates
     // yield to the subscription windows.
     container.querySelector<HTMLElement>(".context-usage summary")!.click();
-    flush();
+    await vi.dynamicImportSettled();
     expect(container.querySelector("[data-chat-usage-account='true']")?.textContent).toBe("OpenAI");
     expect(container.querySelectorAll(".context-usage__limit")).toHaveLength(1);
     const usageLink = container.querySelector<HTMLAnchorElement>(
@@ -1166,7 +1166,6 @@ describe("chat voice controls", () => {
     expect(visualizer?.getAttribute("data-level")).toBe(status === "connecting" ? "0" : "0.64");
     expect(visualizer?.getAttribute("data-source")).toBe("microphone");
     expect(visualizer?.getAttribute("aria-hidden")).toBe("true");
-    expect(visualizer?.querySelectorAll(".agent-chat__voice-activity-bar")).toHaveLength(7);
     const statusRegion = container.querySelector(
       status === "connecting"
         ? '[role="status"].agent-chat__talk-status'
@@ -1216,16 +1215,13 @@ describe("chat voice controls", () => {
     });
     try {
       const host = requireElement(container, "openclaw-microphone-activity", "voice meter");
-      const bars = Array.from(host.querySelectorAll(".agent-chat__voice-activity-bar"));
       const canvas = await waitForSolid(() => requireElement(host, "canvas", "decorative canvas"));
-      expect(bars).toHaveLength(7);
       expect(canvas.hasAttribute("data-ready")).toBe(false);
 
       inputLevel.set(0.8);
       flush();
       await waitForSolid(() => expect(getContext.mock.contexts).toContain(canvas));
       expect(container.querySelector("openclaw-microphone-activity")).toBe(host);
-      expect(Array.from(host.querySelectorAll(".agent-chat__voice-activity-bar"))).toEqual(bars);
       expect(host.getAttribute("data-level")).toBe("0.8");
       expect(canvas.hasAttribute("data-ready")).toBe(false);
       expectDefined(
@@ -1251,17 +1247,13 @@ describe("chat voice controls", () => {
     document.body.append(container);
     try {
       const visualizer = container.querySelector<HTMLElement>(".agent-chat__voice-activity");
-      const centerBar = visualizer?.querySelector<HTMLElement>(
-        ".agent-chat__voice-activity-bar:nth-child(4)",
-      );
+      const canvas = visualizer?.querySelector("canvas");
 
       inputLevel.set(0.8);
       flush();
 
       expect(visualizer?.getAttribute("data-level")).toBe("0.8");
-      expect(visualizer?.querySelector(".agent-chat__voice-activity-bar:nth-child(4)")).toBe(
-        centerBar,
-      );
+      expect(visualizer?.querySelector("canvas")).toBe(canvas);
 
       const replacement = new RealtimeTalkLevelSignal();
       replacement.set(0.35);
@@ -1991,7 +1983,29 @@ describe("chat attachment picker", () => {
     expect(rangeDrop.defaultPrevented).toBe(true);
   });
 
-  it("keeps a dropped file independent of native text paste", async () => {
+  it("registers a large paste before an immediate send", () => {
+    let attachments: ChatAttachment[] = [];
+    const onSend = vi.fn(() => {
+      expect(attachments).toHaveLength(1);
+    });
+    const container = renderChatView({
+      draft: "Review the attachment",
+      attachments,
+      getAttachments: () => attachments,
+      onAttachmentsChange: (next) => {
+        attachments = next;
+      },
+      onSend,
+    });
+    const textarea = getComposerTextarea(container);
+    const pastedText = `large paste ${"x".repeat(1100)}`;
+    textarea.dispatchEvent(createPasteEvent(pastedText));
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+
+    expect(onSend).toHaveBeenCalledOnce();
+  });
+
+  it("preserves a large paste when a dropped file finishes later", async () => {
     const readers: FileReader[] = [];
     const readAsDataUrl = vi
       .spyOn(FileReader.prototype, "readAsDataURL")
@@ -2013,13 +2027,11 @@ describe("chat attachment picker", () => {
     });
 
     try {
-      const paste = createPasteEvent(pastedText);
-      textarea.dispatchEvent(paste);
-      expect(paste.defaultPrevented).toBe(false);
+      textarea.dispatchEvent(createPasteEvent(pastedText));
       chat.dispatchEvent(dropEvent);
 
       expect(readers).toHaveLength(1);
-      expect(attachments).toHaveLength(0);
+      expect(attachments).toHaveLength(1);
       Object.defineProperty(readers[0], "result", {
         configurable: true,
         value: `data:application/pdf;base64,${btoa("%PDF-1.4\n")}`,
@@ -2028,26 +2040,27 @@ describe("chat attachment picker", () => {
         new ProgressEvent("load"),
       );
 
-      await waitForFast(() => expect(attachments).toHaveLength(1));
-      expect(attachments.map((attachment) => attachment.fileName)).toEqual(["brief.pdf"]);
+      await waitForFast(() => expect(attachments).toHaveLength(2));
+      expect(attachments.map((attachment) => attachment.fileName)).toEqual([
+        expect.stringMatching(/^pasted-text-\d+\.txt$/u),
+        "brief.pdf",
+      ]);
     } finally {
       readAsDataUrl.mockRestore();
     }
   });
 
   it("keeps the agent-aware placeholder with pasted text, files, images, and comments", () => {
-    const pastedTextAttachments = [
-      registerChatAttachmentPayload({
-        attachment: {
-          id: "retained-paste",
-          fileName: "pasted-text-123.txt",
-          mimeType: "text/plain",
-          origin: "paste",
-        },
-        dataUrl: `data:text/plain;base64,${btoa("retained pasted text")}`,
-        file: new File(["retained pasted text"], "pasted-text-123.txt", { type: "text/plain" }),
-      }),
-    ];
+    let pastedTextAttachments: ChatAttachment[] = [];
+    const pasteTarget = renderChatView({
+      draft: "Review the attachment",
+      getAttachments: () => pastedTextAttachments,
+      onAttachmentsChange: (next) => {
+        pastedTextAttachments = next;
+      },
+    });
+    const textarea = getComposerTextarea(pasteTarget);
+    textarea.dispatchEvent(createPasteEvent(`large paste ${"x".repeat(1100)}`));
 
     const namedLikePaste = registerChatAttachmentPayload({
       attachment: {
@@ -2244,18 +2257,14 @@ describe("chat welcome", () => {
 
   it.each([true, false])(
     "allows model-free setup commands only with write access (%s)",
-    (canSend) => {
+    async (canSend) => {
       const onModelSetup = vi.fn();
       const onSend = vi.fn();
       const container = renderChatView({
         draft: "/models",
         canSend,
         modelRequiredReason: "Connect a provider to send messages.",
-        ...(canSend
-          ? {
-              disabledBanner: createChatModelSetupBanner(onModelSetup),
-            }
-          : {}),
+        disabledBanner: canSend ? createChatModelSetupBanner(onModelSetup) : undefined,
         onSend,
       });
       expect(getComposerTextarea(container).disabled).toBe(!canSend);
@@ -2268,6 +2277,9 @@ describe("chat welcome", () => {
       expect(onSend).toHaveBeenCalledTimes(canSend ? 1 : 0);
       if (canSend) {
         expect(container.querySelector(".agent-chat__welcome")).toBeNull();
+        await waitForSolid(() =>
+          expect(container.querySelector(".agent-chat__disabled-banner button")).not.toBeNull(),
+        );
         container.querySelector<HTMLButtonElement>(".agent-chat__disabled-banner button")?.click();
         expect(onModelSetup).toHaveBeenCalledOnce();
       }
@@ -2437,11 +2449,11 @@ describe("chat model controls", () => {
             renderChatModelAccountControl({
               owner: state,
               client,
+              ownsScope: () => true,
               selection,
               model,
               modelAuthStatusResult: status,
               disabled: false,
-              ownsSelection: () => true,
               onSelect: vi.fn(),
             }),
         },

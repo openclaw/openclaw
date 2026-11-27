@@ -10,7 +10,7 @@ import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.
 import { resolveSandboxConfigForAgent } from "./config.js";
 import {
   formatSandboxToolPolicyBlockedMessage as formatSandboxToolPolicyBlockedMessageBase,
-  resolveOwnedSessionSandboxRuntimeStatus,
+  isOwnedSessionSandboxed,
   resolvePreparedSandboxRuntimeStatus,
   resolveSandboxRuntimeStatusAsync,
 } from "./runtime-status.js";
@@ -310,20 +310,13 @@ describe("sandbox/tool-policy", () => {
       session: { scope: "global", store: path.join(sessionDirs.make(), "sessions.json") },
     } satisfies OpenClawConfig;
     const params = { cfg, agentId: "work", sessionKey: "global", preparedSessionEntry: {} };
-    expect(resolveOwnedSessionSandboxRuntimeStatus(params)).toMatchObject({
-      agentId: "work",
-      classificationAgentId: "work",
-      classificationSessionKey: "global",
-      sandboxed: false,
-    });
+    expect(isOwnedSessionSandboxed(params)).toBe(false);
+    expect(isOwnedSessionSandboxed({ ...params, sessionKey: "unknown" })).toBe(true);
     expect(
-      resolveOwnedSessionSandboxRuntimeStatus({ ...params, sessionKey: "unknown" }).sandboxed,
-    ).toBe(true);
-    expect(
-      resolveOwnedSessionSandboxRuntimeStatus({
+      isOwnedSessionSandboxed({
         ...params,
         preparedSessionEntry: { sandbox: "required" },
-      }).sandboxed,
+      }),
     ).toBe(true);
     expect(() => resolvePreparedSandboxRuntimeStatus(params)).toThrowError(
       expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }),

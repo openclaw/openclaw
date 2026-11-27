@@ -51,7 +51,15 @@ const mocks = vi.hoisted(() => ({
   policy: vi.fn(),
   registered: vi.fn(),
 }));
-vi.mock("node:dns/promises", () => ({ lookup: mocks.lookup }));
+vi.mock("node:dns/promises", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:dns/promises") & { default: typeof import("node:dns/promises") }
+  >();
+  const overrides = {
+    lookup: mocks.lookup,
+  };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
 vi.mock("../../agents/agent-bundle-mcp-runtime-config.js", () => ({
   loadSessionMcpConfig: mocks.loadConfig,
 }));

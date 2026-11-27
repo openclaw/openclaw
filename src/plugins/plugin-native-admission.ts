@@ -8,6 +8,7 @@ import type { PluginCache } from "./plugin-cache.types.js";
 import {
   nativeAdmissionStateFor,
   queuePluginNativeAdmissionPublication,
+  releaseReplacedNamespaces,
   retainNativePath,
   snapshotOwners,
   startNativeAdmissionPublication,
@@ -17,11 +18,14 @@ import {
   capturePluginNativeDirectoryAliases,
   capturePluginNativeNamespace,
   finishPluginNativeNamespace,
+  nativeMemberForSource,
   pluginNativeNamespaceDirectory,
   pluginNativeNamespaceBoundary,
   pluginNativeNamespaceIsCurrent,
   pluginNativeNamespaceMemberPath,
   pluginNativeNamespaceMemberRelativePath,
+  refreshPluginNativeMemberIdentity,
+  writablePluginNativeMember,
 } from "./plugin-native-namespace.js";
 import {
   admitPluginNativeRecoveryReference,
@@ -50,29 +54,6 @@ import {
 
 type NativeSnapshot = ReturnType<typeof createPluginNativeCaptureRoot>;
 type NativeReceipt = { signature: string; sourceDigest: string };
-// Membership and source paths stay fixed; admission only updates identities and digests.
-const nativeSourceMembers = new WeakMap<PluginNativeNamespaceFact, Map<string, string>>();
-
-function nativeMemberForSource(namespace: PluginNativeNamespaceFact, source: string) {
-  const relative = path.relative(namespace.sourceDirectory, source);
-  // A file alias can be visited before its real pathname. The binary's real parent owns
-  // its companions; choosing the first alias would change native relative lookup again.
-  if (namespace.members[relative]?.source === source) {
-    return relative;
-  }
-  let members = nativeSourceMembers.get(namespace);
-  if (!members) {
-    members = new Map<string, string>();
-    for (const [key, { source: memberSource }] of Object.entries(namespace.members)) {
-      if (!members.has(memberSource)) {
-        members.set(memberSource, key);
-      }
-    }
-    nativeSourceMembers.set(namespace, members);
-  }
-  return members.get(source);
-}
-
 export type PluginNativeRecovery = {
   receipt: NativeReceipt;
   references: Map<string, PluginNativeArtifactFact>;
@@ -258,8 +239,11 @@ export function createPluginNativeAdmission(
   let hostRoot: string | undefined;
   let finalReceipt: NativeReceipt | undefined;
   const namespaces = () => [...new Set(selected.values())];
+  // A newer receipt can prune the shared map while this admission's generation is still live.
+  const owned = new Map<string, PluginNativeNamespaceFact>(recovery?.namespaces);
+  const namespaceById = (id: string) => owned.get(id) ?? state.namespaces.get(id);
   for (const [alias, id] of recovery?.directories ?? []) {
-    const namespace = state.namespaces.get(id);
+    const namespace = namespaceById(id);
     if (namespace) {
       selected.set(alias, namespace);
     }
@@ -273,7 +257,7 @@ export function createPluginNativeAdmission(
     if (file) {
       return {
         path: file.capturedPath,
-        boundary: pluginNativeNamespaceBoundary(state.namespaces.get(file.namespace)!),
+        boundary: pluginNativeNamespaceBoundary(namespaceById(file.namespace)!),
       };
     }
     if (!recovery) {
@@ -335,14 +319,14 @@ export function createPluginNativeAdmission(
     });
     // Overlapping managed namespaces share inodes; a new hardlink changes earlier captures too.
     for (const namespace of state.namespaces.values()) {
-      for (const [relative, member] of Object.entries(namespace.members)) {
-        const identity = changed.get(member.source);
+      for (const [relative, indexed] of Object.entries(namespace.members)) {
+        const identity = changed.get(indexed.source);
         const sourceChanged =
           identity !== undefined &&
-          pluginSourceIdentityChangedOnlyByCtime(member.sourceIdentity, identity);
+          pluginSourceIdentityChangedOnlyByCtime(indexed.sourceIdentity, identity);
         const captureChanged =
           identity !== undefined &&
-          pluginSourceIdentityChangedOnlyByCtime(member.capturedIdentity, identity);
+          pluginSourceIdentityChangedOnlyByCtime(indexed.capturedIdentity, identity);
         if (!identity || (!sourceChanged && !captureChanged)) {
           continue;
         }
@@ -357,6 +341,7 @@ export function createPluginNativeAdmission(
         ) {
           break;
         }
+        const member = writablePluginNativeMember(namespace, relative)!;
         if (namespace !== previous || !captureChanged) {
           const capturedHash = hashPluginSourceFile(
             pluginNativeNamespaceMemberPath(namespace, relative),
@@ -381,6 +366,7 @@ export function createPluginNativeAdmission(
       }
     }
     state.namespaces.set(root.directory, fact);
+    owned.set(root.directory, fact);
     return fact;
   };
   const publish = () => {
@@ -393,14 +379,20 @@ export function createPluginNativeAdmission(
       retainNativePath(state, path.join(fact.namespace, "content"));
     }
     const used = new Set([...files.values()].map((fact) => fact.namespace));
+    // A newer receipt may have pruned a namespace this admission still publishes.
+    for (const id of used) {
+      state.namespaces.set(id, namespaceById(id)!);
+    }
     const next = structuredClone({
       ...finalReceipt,
       nativeArtifacts: Object.fromEntries(files),
-      nativeNamespaces: Object.fromEntries([...used].map((id) => [id, state.namespaces.get(id)!])),
+      nativeNamespaces: Object.fromEntries([...used].map((id) => [id, namespaceById(id)!])),
     });
-    const unchanged = isDeepStrictEqual(state.receipts.get(key), next);
+    const replaced = state.receipts.get(key);
+    const unchanged = isDeepStrictEqual(replaced, next);
     if (!unchanged) {
       state.receipts.set(key, next);
+      releaseReplacedNamespaces(state, replaced);
     }
     if (!owner || !publishAdmission) {
       return;
@@ -422,9 +414,8 @@ export function createPluginNativeAdmission(
     );
   };
   const refreshReference = (fact: PluginNativeArtifactFact, input: string, target: string) => {
-    const namespace = state.namespaces.get(fact.namespace)!;
+    const namespace = namespaceById(fact.namespace)!;
     const relative = pluginNativeNamespaceMemberRelativePath(namespace, fact.capturedPath);
-    const member = namespace.members[relative]!;
     const linked = {
       ...fact,
       sourceIdentity: pluginSourceStatIdentity(fs.statSync(input, { bigint: true })),
@@ -434,13 +425,9 @@ export function createPluginNativeAdmission(
     } else {
       fileReferenceTargets.delete(target);
     }
-    const oldIdentity = member.capturedIdentity;
-    member.capturedIdentity = linked.capturedIdentity;
-    if (member.sourceIdentity === oldIdentity) {
-      member.sourceIdentity = linked.capturedIdentity;
-    }
-    fact.sourceIdentity = member.sourceIdentity;
-    fact.capturedIdentity = linked.capturedIdentity;
+    const { capturedIdentity } = linked;
+    fact.sourceIdentity = refreshPluginNativeMemberIdentity(namespace, relative, capturedIdentity);
+    fact.capturedIdentity = capturedIdentity;
     pendingTargets.add(target);
   };
   const assertReferenceNamespaces = (references: Iterable<string> = pendingTargets) => {
@@ -449,7 +436,7 @@ export function createPluginNativeAdmission(
         continue;
       }
       const fact = files.get(targets.get(target)!)!;
-      assertReference(target, fact, state.namespaces.get(fact.namespace)!, hostRoot);
+      assertReference(target, fact, namespaceById(fact.namespace)!, hostRoot);
     }
   };
   const linkHost = (selectedHost: string): void => {
@@ -461,7 +448,18 @@ export function createPluginNativeAdmission(
       }
       const link = path.join(namespace.capturedRoot, "node_modules", "openclaw");
       const present = fs.lstatSync(link, { throwIfNoEntry: false });
-      if (present && fs.realpathSync(link) !== hostRoot) {
+      let linkedHost: string | undefined;
+      if (present) {
+        try {
+          linkedHost = fs.realpathSync(link);
+        } catch (error) {
+          // An in-place package swap can remove the old versioned host path.
+          if (!present.isSymbolicLink() || !hasErrnoCode(error, "ENOENT")) {
+            throw error;
+          }
+        }
+      }
+      if (present && linkedHost !== hostRoot) {
         const replacement = createNamespace(
           namespace.sourceDirectory,
           namespace.sourceDirectory,
@@ -514,9 +512,7 @@ export function createPluginNativeAdmission(
           if (!hasErrnoCode(error, "EEXIST")) {
             throw error;
           }
-          if (fs.realpathSync(link) !== hostRoot) {
-            return linkHost(hostRoot);
-          }
+          return linkHost(hostRoot);
         }
       }
     }
@@ -536,7 +532,7 @@ export function createPluginNativeAdmission(
       return createNativeRecovery(
         receipt,
         references,
-        new Map([...used].map((id) => [id, structuredClone(state.namespaces.get(id)!)])),
+        new Map([...used].map((id) => [id, structuredClone(namespaceById(id)!)])),
         capturePluginNativeDirectoryAliases(selected, packageRoots),
         [...state.roots].filter((root) => used.has(root.directory)),
       );
@@ -590,7 +586,7 @@ export function createPluginNativeAdmission(
       }
       const found = namespaceFor(resolvedSource);
       let namespace = recovered
-        ? state.namespaces.get(recovered.namespace)
+        ? namespaceById(recovered.namespace)
         : (namespaces().find(
             (candidate) => nativeMemberForSource(candidate, resolvedSource) !== undefined,
           ) ?? found?.[1]);
@@ -641,6 +637,7 @@ export function createPluginNativeAdmission(
       } else if (recovered) {
         alias = [...selected].find(([, candidate]) => candidate === namespace)?.[0] ?? alias;
       }
+      owned.set(namespace.capturedRoot, namespace);
       const relative = recovered
         ? pluginNativeNamespaceMemberRelativePath(namespace, recovered.capturedPath)
         : (nativeMemberForSource(namespace, resolvedSource) ??
@@ -669,19 +666,26 @@ export function createPluginNativeAdmission(
           : undefined,
         record(content: { contentHash: string; sizeBytes: number }) {
           Object.assign(fact, content);
-          Object.assign(member, content);
+          let current = namespace.members[relative]!;
+          if (
+            current.contentHash !== content.contentHash ||
+            current.sizeBytes !== content.sizeBytes
+          ) {
+            current = Object.assign(writablePluginNativeMember(namespace, relative)!, content);
+          }
           for (const other of namespaces()) {
-            for (const sibling of Object.values(other.members)) {
+            for (const name of Object.keys(other.members)) {
+              const sibling = other.members[name]!;
               if (sibling.sizeBytes !== content.sizeBytes || sibling.contentHash) {
                 continue;
               }
               if (
-                (sibling.source === member.source &&
-                  sibling.sourceIdentity === member.sourceIdentity) ||
+                (sibling.source === current.source &&
+                  sibling.sourceIdentity === current.sourceIdentity) ||
                 sibling.capturedIdentity.split(":").slice(0, 2).join(":") ===
-                  member.capturedIdentity.split(":").slice(0, 2).join(":")
+                  current.capturedIdentity.split(":").slice(0, 2).join(":")
               ) {
-                Object.assign(sibling, content);
+                Object.assign(writablePluginNativeMember(other, name)!, content);
               }
             }
           }

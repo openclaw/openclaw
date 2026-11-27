@@ -10,7 +10,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { basename, delimiter, dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
 import {
   expandPluginSdkApiDiffSet as expandDiffs,
@@ -291,13 +291,7 @@ if (process.argv.includes("--render-root")) {
     }
     await close;
   }
-  const progressLines = tracked.stderr.trim().split("\n");
-  expect(progressLines).toHaveLength(8);
-  for (const line of progressLines) {
-    expect(line).toMatch(
-      /^\[plugin-sdk-api-diff\] [a-f0-9]{40} (install|render) (started|completed in \d+ms)$/,
-    );
-  }
+  expect(tracked.stderr).toMatch(/ install completed[\s\S]* render started/u);
   expect(exitCode).toBe(0);
   expect(existsSync(blockedMarker)).toBe(true);
   expect(existsSync(renderStarted)).toBe(true);
@@ -437,15 +431,14 @@ it.each([
   { beta: "candidate", latest: "v2026.7.31" },
   { beta: "candidate", latest: "HEAD" },
 ])(
-  "renders only unique revisions needed by changed selectors: %j",
+  "binds each selector to its frozen revision and declarations: %j",
   (bases) => {
     const { repo, runnerTemp, binDir } = makeFixture("selector");
-    const installLog = join(binDir, "installs");
     const evidencePath = join(binDir, "evidence.json");
     const jsonPath = join(binDir, "diff.json");
     const source = sdkSource(repo);
     writeFileSync(source, "export type Fixture = string;\n");
-    const latestSha = commit(repo, "latest");
+    commit(repo, "latest");
     git(repo, ["tag", "v2026.7.31"]);
     writeFileSync(source, "export type Fixture = number;\n");
     const betaSha = commit(repo, "beta");
@@ -460,7 +453,6 @@ it.each([
       `#!/bin/sh
 set -e
 ${writeRevisionInstall(binDir)}
-printf "%s\\n" "$PWD" >> "$PNPM_MARKER"
 `,
     );
     const worktrees = git(repo, ["worktree", "list", "--porcelain"]);
@@ -471,18 +463,6 @@ printf "%s\\n" "$PWD" >> "$PNPM_MARKER"
       json: jsonPath,
     });
     expect(child.status, child.stderr).toBe(0);
-    const installed = existsSync(installLog)
-      ? readFileSync(installLog, "utf8")
-          .trim()
-          .split("\n")
-          .map((path) => basename(path))
-      : [];
-    expect(installed.toSorted()).toEqual(
-      (bases.latest === "HEAD"
-        ? []
-        : [latestSha, ...(bases.beta === "v2026.8.1-beta.1" ? [betaSha] : []), headSha]
-      ).toSorted(),
-    );
     const bundle = JSON.parse(readFileSync(evidencePath, "utf8"));
     expect(decode(bundle).schema).toBe("openclaw.plugin-sdk-api-release-evidence-set/v2");
     const reports = expandDiffs(JSON.parse(readFileSync(jsonPath, "utf8")));

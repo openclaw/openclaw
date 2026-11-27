@@ -20,12 +20,38 @@ import {
 import { formatCliCommand } from "./command-format.js";
 import type { CronCliJobMatch } from "./cron-cli/cron-cli-error.js";
 import { ExpectedCliError } from "./expected-cli-error.js";
+import { getCliFailureContext, installProcessFailureListener } from "./failure-context.js";
 import { isJsonOutputModeActive } from "./json-output-mode.js";
 import { exitAfterSignalExitBarriers } from "./signal-exit-barrier.js";
 
 export { ExpectedCliError } from "./expected-cli-error.js";
 
-export function handleCliUncaughtException(error: unknown, argv?: string[]): void {
+/** A command already emitted its human diagnostic; retain its original JSON failure. */
+export class ReportedCliCommandError extends ExpectedCliError {
+  constructor(error: unknown) {
+    const message = formatCliOperatorError(error);
+    super({
+      message,
+      humanOutput: message,
+      humanOutputWritten: true,
+      machineOutput: message,
+      cause: error,
+    });
+  }
+}
+
+export function installCliUncaughtExceptionHandler(argv?: string[]): void {
+  const context = getCliFailureContext();
+  if (context && argv) {
+    context.argv = argv;
+  }
+  installProcessFailureListener("uncaughtException", handleCliUncaughtException);
+}
+
+export function handleCliUncaughtException(
+  error: unknown,
+  argv = getCliFailureContext()?.argv ?? process.argv,
+): void {
   if (isUncaughtExceptionHandled(error)) {
     return;
   }
@@ -36,13 +62,13 @@ export function handleCliUncaughtException(error: unknown, argv?: string[]): voi
     );
     return;
   }
-  if (isJsonOutputModeActive(argv ?? process.argv)) {
+  if (isJsonOutputModeActive(argv)) {
     defaultRuntime.writeJson(formatCliJsonFailure(error));
   }
   for (const line of formatCliFailureLines({
     title: "OpenClaw hit an unexpected runtime error.",
     error,
-    argv: argv ?? process.argv,
+    argv,
   })) {
     console.error(line);
   }
@@ -182,6 +208,9 @@ export function formatCliJsonFailure(
   error: unknown,
   options: CliFailureDebugOptions = {},
 ): CliJsonFailure {
+  if (error instanceof ReportedCliCommandError) {
+    return formatCliJsonFailure(error.cause, options);
+  }
   const message = isExpectedCliError(error)
     ? formatErrorMessage(resolveExpectedCliOutput(error).machineOutput.trimEnd())
     : formatCliOperatorError(error, options);

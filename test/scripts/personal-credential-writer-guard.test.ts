@@ -313,6 +313,21 @@ it("limits offline raw machine-state migration exceptions to their reviewed stat
   }
 });
 
+it.each(["DEL\\u0045TE", "D\\ELETE", "\\nDELETE", "\\tDELETE"])(
+  "inspects a raw write whose verb is spelled next to an escape: %s",
+  (verb) => {
+    // Only the escape locates this nested statement; its raw text holds no DELETE token.
+    expectDenied(
+      {
+        "src/escaped-writer.ts": `export function run(ready: boolean) {
+          if (ready) { db.exec('${verb} FROM auth_profile_store'); }
+        }`,
+      },
+      "raw authority-table write",
+    );
+  },
+);
+
 it.each([
   ["scripts/generate-postgres-schema.mts", "function generatePostgresSchemas() {", "}"],
   ["src/state/postgres-schema.generated/runtime.ts", "export const runtime = { sql:", "};"],
@@ -854,6 +869,11 @@ it("permits the audited telemetry count operation without admitting an unreviewe
 
 it.each([
   [
+    "src/secrets/store/secret-store-clawhub-template.ts",
+    "savePersonalTemplateClawHubToken",
+    "templateClawHub.write",
+  ],
+  [
     "src/agents/auth-profiles/store-update.ts",
     "runPreparedAuthProfileStoreUpdate",
     "authProfiles.update",
@@ -1083,10 +1103,11 @@ it("keeps session membership writes with the worker and canonical entry owners",
     [members]: `
       export function addSessionMember() { addSessionMemberInTransaction(); }
       export function addSessionMemberInTransaction() { db.insertInto('session_members'); }
+      export function setSessionMemberAccess() { db.updateTable('session_members'); }
     `,
     "src/config/sessions/session-sharing-store.worker.ts": `
-      import { addSessionMember } from './session-sharing-store.native.js';
-      function bindSqliteWorkerBackend() { return { execute() { addSessionMember(); } }; }
+      import { addSessionMember, setSessionMemberAccess } from './session-sharing-store.native.js';
+      function bindSqliteWorkerBackend() { return { execute() { addSessionMember(); setSessionMemberAccess(); } }; }
     `,
     "src/config/sessions/session-accessor.sqlite-involvement.worker.ts": `
       import { addSessionMemberInTransaction } from './session-sharing-store.native.js';
@@ -1109,7 +1130,11 @@ it("keeps session membership writes with the worker and canonical entry owners",
     `,
   });
 
-  for (const writer of ["addSessionMember", "addSessionMemberInTransaction"]) {
+  for (const writer of [
+    "addSessionMember",
+    "addSessionMemberInTransaction",
+    "setSessionMemberAccess",
+  ]) {
     reject(
       "src/new-writer.ts",
       `

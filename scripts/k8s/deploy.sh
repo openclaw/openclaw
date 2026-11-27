@@ -24,11 +24,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MANIFESTS="$SCRIPT_DIR/manifests"
 NS="${OPENCLAW_NAMESPACE:-openclaw}"
 
-for cmd in kubectl openssl; do
-  command -v "$cmd" &>/dev/null || { echo "Missing: $cmd" >&2; exit 1; }
-done
-kubectl cluster-info &>/dev/null || { echo "Cannot connect to cluster. Check kubeconfig." >&2; exit 1; }
-
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   cat <<'HELP'
 Usage: ./scripts/k8s/deploy.sh [OPTION]
@@ -51,6 +46,11 @@ Environment:
 HELP
   exit 0
 fi
+
+for cmd in kubectl openssl; do
+  command -v "$cmd" &>/dev/null || { echo "Missing: $cmd" >&2; exit 1; }
+done
+kubectl cluster-info &>/dev/null || { echo "Cannot connect to cluster. Check kubeconfig." >&2; exit 1; }
 
 SHOW_TOKEN=false
 MODE="deploy"

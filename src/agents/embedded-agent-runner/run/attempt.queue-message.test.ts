@@ -10,8 +10,11 @@ import { createDeferredCore as deferred } from "../../../shared/deferred.js";
 import type { AgentHarnessQuestionGatewayCall } from "../../harness/gateway-question-dispatch.js";
 import { runAgentHarnessGatewayQuestion } from "../../harness/gateway-question.js";
 import {
+  createAssistant,
+  createAssistantResultStream,
   createTestSession,
   registerAgentSessionLoopTestLifecycle,
+  streamMocks,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
 import type { AgentSessionEvent } from "../../sessions/agent-session-types.js";
 import { registerQueuedUserMessageRetirement } from "../../sessions/queued-user-message-retirement.js";
@@ -19,6 +22,7 @@ import {
   reportSteeringMessagePersistenceFailure,
   setSteeringMessageIdentity,
 } from "../../sessions/steering-message-identity.js";
+import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import {
   claimEmbeddedPendingUserInputAnswer,
   steerActiveSessionWithOptionalDeliveryWait,
@@ -127,6 +131,62 @@ async function admittedFixture(
   return { ...f, realSession: session };
 }
 
+it("keeps a steer through a long tool and delivers it at the next model boundary", async () => {
+  const started = deferred();
+  const release = deferred();
+  const requests: string[] = [];
+  streamMocks.streamSimple.mockImplementation((model, context) => {
+    requests.push(JSON.stringify(context.messages));
+    return createAssistantResultStream(
+      createAssistant(
+        model,
+        requests.length === 1
+          ? [{ type: "toolCall", id: "held", name: "hold", arguments: {} }]
+          : "Done",
+        requests.length === 1 ? "toolUse" : "stop",
+      ),
+    );
+  });
+  const { session } = await createTestSession({
+    customTools: [
+      {
+        ...createStubTool("hold"),
+        execute: async () => {
+          started.resolve();
+          await release.promise;
+          return { content: [{ type: "text", text: "Tool complete" }], details: {} };
+        },
+      },
+    ],
+  });
+  const active = session.prompt("Start the tool");
+  await started.promise;
+  vi.useFakeTimers();
+  const accepted = vi.fn();
+  const waiting = observe(
+    steerActiveSessionWithOptionalDeliveryWait(session, "Pending correction", {
+      waitForTranscriptCommit: true,
+      onQueueAccepted: accepted,
+    }),
+  );
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    expect(accepted).toHaveBeenCalledExactlyOnceWith(true);
+    await vi.advanceTimersByTimeAsync(120_001);
+    expect(waiting.isSettled()).toBe(false);
+    expect(session.getSteeringMessages()).toEqual(["Pending correction"]);
+  } finally {
+    vi.useRealTimers();
+    release.resolve();
+    await active;
+    await waiting.done;
+  }
+  expect(waiting.result.error).toBeUndefined();
+  expect(requests).toHaveLength(2);
+  expect(requests[1]).toContain("Pending correction");
+  expect(session.getSteeringMessages()).toEqual([]);
+});
+
 it.each([
   "transcript_commit_timeout",
   "tool_boundary_timeout",
@@ -152,6 +212,7 @@ it.each([
       {
         queueIdentity: "pending correction",
         waitForTranscriptCommit: true,
+        deliveryTimeoutMs: runtimeReason.endsWith("timeout") ? 120_000 : undefined,
         abortSignal: f.abort.signal,
         onQueueAccepted: f.accepted,
       },

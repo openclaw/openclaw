@@ -933,7 +933,7 @@ describe("OpenCode session catalog", () => {
         items: [{ type: "invalid", text: "bad" }],
       }),
     );
-    await expect(readPairedNode(catalog!)).rejects.toThrow("invalid transcript page");
+    await expect(readPairedNode(catalog!)).rejects.toThrow("invalid chat history page");
 
     invoke.mockClear();
     await expect(readPairedNode(catalog!, { cursor: "" })).rejects.toThrow("cursor is invalid");

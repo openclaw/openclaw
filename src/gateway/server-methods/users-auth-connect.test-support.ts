@@ -21,6 +21,7 @@ import { usersHandlers } from "./users.js";
 
 const resolveProfileId = vi.hoisted(() => vi.fn());
 const prepareUserProfileSelectionAuthority = vi.hoisted(() => vi.fn());
+const prepareUserProfileRolePolicyAuthority = vi.hoisted(() => vi.fn());
 const connectUserModelAccount = vi.hoisted(() => vi.fn());
 const listUserProfileAuthLinks = vi.hoisted(() => vi.fn());
 const listUserModelAccounts = vi.hoisted(() => vi.fn());
@@ -38,6 +39,7 @@ const modelAccountLinksCurrent = vi.hoisted(() => vi.fn());
 export {
   resolveProfileId,
   prepareUserProfileSelectionAuthority,
+  prepareUserProfileRolePolicyAuthority,
   connectUserModelAccount,
   listUserProfileAuthLinks,
   listUserModelAccounts,
@@ -70,11 +72,7 @@ vi.mock("../../state/user-profile-list.js", async (importOriginal) => ({
 vi.mock("../../state/user-channel-identity-operations.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/user-channel-identity-operations.js")>()),
   prepareUserProfileSelectionAuthority,
-  prepareUserProfileRolePolicyAuthority: async (reference: string) => ({
-    ...selectionAuthority(reference),
-    role: null,
-    githubLogin: null,
-  }),
+  prepareUserProfileRolePolicyAuthority,
 }));
 vi.mock("../../state/user-profile-events.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/user-profile-events.js")>()),
@@ -312,6 +310,11 @@ export function setupModelAccountConnectTest() {
         },
       );
     resolveProfileId.mockImplementation((id: string) => id);
+    prepareUserProfileRolePolicyAuthority.mockImplementation(async (reference: string) => ({
+      ...selectionAuthority(reference),
+      role: null,
+      githubLogin: null,
+    }));
     prepareUserProfileSelectionAuthority.mockImplementation(async (reference: string) =>
       selectionAuthority(reference),
     );

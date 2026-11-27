@@ -147,8 +147,11 @@ as text rather than becoming Markdown links.
 Use `awaitResults: true` when this program’s results are required to finish the
 current task. The existing cell owner keeps the tool call open while the VM is
 parked, then resumes that exact continuation when pending tool results settle.
-It does not return a `waiting` handle or make model polling calls. Completed
-actions are not replayed. Failure, Stop, owner replacement, and existing run
+It does not need model polling. If new steering arrives while the parked cell is
+waiting only for shell commands or `process` polls, it can return
+`status: "waiting"` with `reason: "steering"`. The command keeps running. Use `wait` with that `runId` to
+collect the original result without rerunning the program. Without room for a
+continuation, the cell keeps waiting inline. Completed actions are not replayed. Failure, Stop, owner replacement, and existing run
 and tool deadlines still end the operation.
 
 `awaitResults` pauses only off-VM tool waiting. Preparation, guest execution,
@@ -161,8 +164,9 @@ Ordinary cells retain their existing explicit-yield behavior.
 Required cells collect ordinary shell commands to completion. Explicit
 `background: true` remains the opt-out for intentionally detached servers.
 A shell `exec({awaitResults: true, ...})` or `agents_wait({awaitResults: true, ...})`
-inside an ordinary cell also makes that cell required. These declarations do
-not enable `tools.exec.notifyOnExit`.
+inside an ordinary cell also makes that cell required, as does any native
+`ask_user` call, so a pending question is never cancelled at turn end. These
+declarations do not enable `tools.exec.notifyOnExit`.
 
 For required collector results, await `agents.run(...)` in a required cell,
 or call `agents_wait({ids, awaitResults: true})`. Ordinary announcing children

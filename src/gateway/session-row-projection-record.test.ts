@@ -1,6 +1,9 @@
+import { syncBuiltinESMExports } from "node:module";
+import util from "node:util";
 import { expect, it, vi } from "vitest";
 import { projectGatewaySessionEntry } from "../config/sessions/combined-store-gateway.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
+import * as sessionKeys from "../routing/session-key.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { filterSessionEntries } from "./session-list-filters.js";
 import { indexSessionRow } from "./session-row-projection-identities.js";
@@ -26,6 +29,36 @@ const target = {
   agentId: "main",
   storeTarget: { agentId: "main", storePath: "/synthetic/sessions.sqlite" },
 };
+
+it.each(["agent:main:subagent:ordinary", "agent:main:subagent:incognito-private"])(
+  "checks matching row lifecycles without reclassifying keys: %s",
+  (key) => {
+    const row = { ...records.create({ ...target, key }, original), entry: original };
+    const current = { ...row, entry: { ...original } };
+    const classify = vi.spyOn(sessionKeys, "isIncognitoSessionKey");
+    try {
+      for (let recipient = 0; recipient < 16; recipient++) {
+        expect(records.isCurrentGeneration(row, current)).toBe(true);
+      }
+      expect(classify).not.toHaveBeenCalled();
+      expect(records.isCurrentGeneration(row, undefined)).toBe(false);
+      expect(
+        records.isCurrentGeneration(row, { ...current, generation: Symbol("replacement") }),
+      ).toBe(false);
+      for (const entry of [
+        undefined,
+        { ...original, sessionId: "replacement" },
+        { ...original, lifecycleRevision: "replacement" },
+      ]) {
+        expect(records.isCurrentGeneration(row, { ...current, entry })).toBe(
+          key === "agent:main:subagent:ordinary",
+        );
+      }
+    } finally {
+      classify.mockRestore();
+    }
+  },
+);
 
 it("shares singleton index buckets without coupling alias collisions or removals", () => {
   const indexes = {
@@ -200,7 +233,20 @@ it("keeps accepted facts and sharing revisions when database reads return equal 
     };
     const acquire = (candidate: records.Row, storedEntry: SessionEntry) =>
       records.acquireSessionRowEntry({ ...acquisition, row: candidate, storedEntry });
-    const next = acquire(row, structuredClone(original));
+    const reread = structuredClone(original);
+    const compare = vi.spyOn(util, "isDeepStrictEqual");
+    syncBuiltinESMExports();
+    let next: records.Row | undefined;
+    try {
+      next = acquire(row, reread);
+      // One value comparison admits a fresh database snapshot; acquisition reuses that fact.
+      expect(
+        compare.mock.calls.filter(([left, right]) => left === reread || right === reread),
+      ).toHaveLength(1);
+    } finally {
+      compare.mockRestore();
+      syncBuiltinESMExports();
+    }
     expect(next).toBe(row);
     expect(put).not.toHaveBeenCalled();
     expect(next?.databaseFactsRevision).toBe(0);
@@ -239,8 +285,21 @@ it("keeps accepted facts and sharing revisions when database reads return equal 
     parented.parents = parents;
     expect(acquire(parented, structuredClone(lineage))).toBe(parented);
     expect(parented.parents).toBe(parents);
-    const reparented = acquire(parented, { ...lineage, spawnedBy: undefined })!;
-    expect([...reparented.parents]).toEqual(["logical:main\0agent:main:parent"]);
+    const reparentedEntry = { ...lineage, spawnedBy: undefined };
+    const compareLineage = vi.spyOn(util, "isDeepStrictEqual");
+    syncBuiltinESMExports();
+    try {
+      const reparented = acquire(parented, reparentedEntry)!;
+      expect([...reparented.parents]).toEqual(["logical:main\0agent:main:parent"]);
+      expect(
+        compareLineage.mock.calls.some(
+          ([before, after]) => before === parented.entry && after === reparentedEntry,
+        ),
+      ).toBe(false);
+    } finally {
+      compareLineage.mockRestore();
+      syncBuiltinESMExports();
+    }
   });
 });
 

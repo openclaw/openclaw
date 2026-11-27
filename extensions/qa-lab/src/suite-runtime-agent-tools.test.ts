@@ -35,12 +35,7 @@ vi.mock("./node-exec.js", () => ({
   resolveQaNodeExecPath: resolveQaNodeExecPathMock,
 }));
 
-import {
-  callPluginToolsMcp,
-  findSkill,
-  handleQaAction,
-  writeWorkspaceSkill,
-} from "./suite-runtime-agent-tools.js";
+import { callPluginToolsMcp, writeWorkspaceSkill } from "./suite-runtime-agent-tools.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const { cleanup, makeTempDir } = createTempDirHarness();
@@ -67,11 +62,6 @@ beforeEach(() => {
   vi.clearAllMocks();
   listToolsMock.mockReset();
   callToolMock.mockReset();
-});
-
-it("finds a skill by exact name", () => {
-  expect(findSkill([{ name: "alpha" }, { name: "beta" }], "beta")).toEqual({ name: "beta" });
-  expect(findSkill([{ name: "alpha" }], "beta")).toBeUndefined();
 });
 
 it("writes a workspace skill under the gateway workspace", async () => {
@@ -101,15 +91,6 @@ it("rejects workspace skill names that escape the skills directory", async () =>
   }
 
   await expect(fs.readdir(path.join(workspaceDir, "skills"))).rejects.toThrow();
-});
-
-it("routes generic transport actions through the payload extractor", async () => {
-  const handleAction = vi.fn(async () => ({
-    content: [{ type: "text", text: "done" }],
-  }));
-
-  const env = { cfg: {}, transport: { handleAction } } as never;
-  await expect(handleQaAction({ env, action: "react", args: {} })).resolves.toEqual("done");
 });
 
 it("prefers the built plugin-tools MCP entry", async () => {

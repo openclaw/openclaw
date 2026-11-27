@@ -134,6 +134,7 @@ stopped_timer_attempted=0
 stopped_verified=0
 stopped_receipt_open=0
 native_update_root=""
+config_contract=""
 migration_guard=""
 worker_config_recovered=0
 worker_config_token=""
@@ -1855,6 +1856,16 @@ native_update() {
 	load_journal_witness
 }
 
+config_contract_state() {
+	local result
+	result="$(proof config-contract "$1" "$serving_root")" || return 1
+	[[ "$result" != null ]] || { config_contract=""; return 0; }
+	config_contract=1
+	protected_identity="$(printf '%s' "$result" | "$node_bin" -e 'process.stdout.write(JSON.stringify(JSON.parse(require("node:fs").readFileSync(0,"utf8")).protectedPaths));')" || return 1
+	policy_identity="$(printf '%s' "$result" | "$node_bin" -e 'process.stdout.write(JSON.stringify(JSON.parse(require("node:fs").readFileSync(0,"utf8")).policy));')" || return 1
+	session_witness_record="$(proof journal-read "$journal_file")" || return 1
+}
+
 rollback_activation() {
 	local exit_code="$1" predecessor_sha candidate_sha topology expected_pid expected_generation rollback_owner
 	local failure_code="$1" rollback_pid="" rollback_generation=""
@@ -1866,6 +1877,7 @@ rollback_activation() {
 	predecessor_sha="$(proof journal-field "$journal_file" predecessor.sha)" || return "$failure_code"
 	candidate_sha="$(proof journal-field "$journal_file" candidate.sha)" || return "$failure_code"
 	topology="$(proof journal-field "$journal_file" topology)" || return "$failure_code"
+	config_contract_state reconcile || return "$failure_code"
 	if [[ "$candidate_sha" != "$predecessor_sha" ]]; then
 		record_failed "$candidate_sha" || return "$failure_code"
 	fi
@@ -1915,7 +1927,7 @@ rollback_activation() {
 				return 1
 			fi
 		fi
-		if [[ -n "$native_update_root" && -f "$native_update_root.receipt.json" ]]; then
+		if [[ -n "$config_contract" || -n "$native_update_root" && -f "$native_update_root.receipt.json" ]]; then
 			if [[ "$rollback_owner" == running ]]; then
 				assert_policy && check_suspension && arm_suspension_handoff || return "$failure_code"
 				system_systemctl stop openclaw-gateway.service || return "$failure_code"
@@ -1923,11 +1935,15 @@ rollback_activation() {
 				predecessor_is_stopped "$expected_pid" || return "$failure_code"
 				rollback_owner=stopped
 			fi
-			native_update restore || {
-				proof journal-phase "$journal_file" ROLLBACK_FAILED "$session_witness_record" >/dev/null || true
-				fail 'native update restoration failed; Gateway remains stopped with recovery evidence retained'
-				return "$failure_code"
-			}
+			if [[ -n "$config_contract" ]]; then
+				stopped_system_owners && config_contract_state restore || return "$failure_code"
+			else
+				native_update restore || {
+					proof journal-phase "$journal_file" ROLLBACK_FAILED "$session_witness_record" >/dev/null || true
+					fail 'native update restoration failed; Gateway remains stopped with recovery evidence retained'
+					return "$failure_code"
+				}
+			fi
 			proof compatibility "$candidate_release" "$previous_release" "$state_database" >/dev/null &&
 				assert_protected_identity && assert_policy || return "$failure_code"
 		fi
@@ -2485,6 +2501,8 @@ recover_journal() {
 	protected_identity="$(proof journal-field "$journal_file" protectedPaths)"
 	native_update_root="$(proof journal-field "$journal_file" nativeUpdate.backupRoot 2>/dev/null || true)"
 	[[ "$native_update_root" != null ]] || native_update_root=""
+	config_contract_state reconcile || return 1
+	recovery_record="$session_witness_record"
 	policy_identity="$(proof policy "$config_file")"
 	current_sha=absent
 	if [[ -L "$current_link" ]]; then
@@ -3477,7 +3495,7 @@ activate_retained_repair() {
 activate_release() {
 	if [[ "$mode" == retained-repair ]]; then activate_retained_repair; return $?; fi
 	local topology="$1" old_pid old_generation old_instance suspension_result predecessor_sha candidate_sha
-	local prepare_profile=0
+	local prepare_profile=0 config_plan=""
 	local prior_current_sha=absent prior_previous_sha=absent
 	local prior_system_enabled prior_system_active prior_user_enabled prior_user_active
 	predecessor_sha="$(basename "$previous_release")"
@@ -3497,6 +3515,9 @@ activate_release() {
 	assert_scheduler_owner "$previous_release"
 	if [[ -n "${native_update_root:-}" ]]; then
 		migration_install_guard || return 1
+	elif [[ "$topology" == system && ("$mode" == deploy || "$mode" == continue-frozen) ]]; then
+		config_plan="$(run_gateway_node "$candidate_release/dist/infra/update-config-projection.worker.js" |
+			proof config-contract prepare "$serving_root" "$candidate_release" "$config_file" "$state_database" @stdin)" || return 1
 	else
 		run_gateway "$candidate_release" config validate >/dev/null
 	fi
@@ -3546,7 +3567,7 @@ activate_release() {
 		"$prior_system_enabled" "$prior_system_active" "$prior_user_enabled" "$prior_user_active" \
 		"$held_suspension" "$suspension_expiry" "$suspension_state"
 	if [[ "$topology" == system ]]; then
-		printf '%s' "$session_witness" | proof journal-create "$@" @stdin "$runtime_target" "${native_update_root:-}" >/dev/null || {
+		printf '%s' "$session_witness" | proof journal-create "$@" @stdin "$runtime_target" "${native_update_root:-}" "$config_plan" >/dev/null || {
 			printf 'JOURNAL_PUBLICATION_UNCONFIRMED proof_exit=%s journal=retained-if-present\n' "$?" >&2
 			return 1
 		}
@@ -3593,6 +3614,9 @@ activate_release() {
 		predecessor_is_stopped "$old_pid" || return 1
 		assert_protected_identity
 		assert_policy
+		if [[ -n "$config_plan" && "$config_plan" != null ]]; then
+			stopped_system_owners && config_contract_state apply || return 1
+		fi
 		if [[ -n "${native_update_root:-}" ]]; then
 			install -d -m 0700 -o "$runtime_uid" -g "$(id -g openclaw)" "$(dirname "$native_update_root")"
 			native_update_permit revoke || return 1

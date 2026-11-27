@@ -114,7 +114,7 @@ const { values } = parseArgs({
 });
 if (values.help) {
   console.log(
-    "--bundle-dir BASE [--compare-bundle-dir HEAD] --routes sessions,cron,usage --mode coverage|timing|all --pairs 10 --profiles local,remote [--screenshots] [--output DIR]. Default routes include every Settings section, Sessions, Cron, Agents, Usage, Plugins, Workboard and sharing. Select --routes systems,portals,desktop-document for the optional Desktop probes; they use a scripted RFB endpoint and loaded synthetic portal. portal-embedded navigates Chat and opens its Portal panel through native controls, including iframe readiness and the rail CSS cascade. Optional --interactions agents-files,cron-history,cron-transcript,worktree-create,templates-search,roster-create-template,model-search-and-compose probes follow cold readiness; new-session-typing-immediate types before artifact work with no hover or think time; preload-idle observes native New Session/roster prefetch without prior intent; --routes roster exercises the persisted sidebar roster on New Session. Security uses --routes advanced with one settings-security-immediate or settings-security-idle interaction. Coverage and timing run in separate fresh contexts; comparison timings include a base/base control. Apps packet aliases: apps-catalog,apps-open-immediate,apps-open-idle. First App opens use real catalog navigation, actual launch/view receipts and the native sandbox; no prior Chat visit or manual preload.",
+    "--bundle-dir BASE [--compare-bundle-dir HEAD] --routes sessions,cron,usage --mode coverage|timing|all --pairs 10 --profiles local,remote [--screenshots] [--output DIR]. Default routes include every Settings section, Sessions, Cron, Agents, Usage, Plugins, Workboard and sharing. Select --routes systems,portals,desktop-document for the optional Desktop probes; they use a scripted RFB endpoint and loaded synthetic portal. portal-embedded navigates Chat and opens its Portal panel through native controls, including iframe readiness and the rail CSS cascade. Optional --interactions agents-files,cron-history,worktree-create,templates-search,roster-create-template,model-search-and-compose probes follow cold readiness; new-session-typing-immediate types before artifact work with no hover or think time; preload-idle observes native New Session/roster prefetch without prior intent; --routes roster exercises the persisted sidebar roster on New Session. Security uses --routes advanced with one settings-security-immediate or settings-security-idle interaction. Coverage and timing run in separate fresh contexts; comparison timings include a base/base control. Apps packet aliases: apps-catalog,apps-open-immediate,apps-open-idle. First App opens use real catalog navigation, actual launch/view receipts and the native sandbox; no prior Chat visit or manual preload.",
     "Native Settings root: --routes settings-native-root uses the iOS phone embed at 390x844; do not combine with --interactions.",
     `Browser/Reader cells: ${DOCK_SCENARIO_IDS.join(",")}. Each owns its cold/native first-open phases; do not combine with --interactions.`,
     "Activity media: --routes activity --activity-media empty|gallery; --interactions activity-lightbox opens the viewer after the fixed warmup, activity-lightbox-immediate opens it before artifact analysis, and activity-idle records the warmup without a click.",
@@ -206,7 +206,6 @@ const creationInteractions: Record<string, ProbeRoute[]> = {
 const knownInteractions = [
   "agents-files",
   "cron-history",
-  "cron-transcript",
   "new-session-typing-immediate",
   "preload-idle",
   "activity-lightbox",
@@ -938,7 +937,6 @@ function fixtureFor(
           : []),
         ...(id === "search" ? ["webSearch.status"] : []),
         ...(id === "model-setup" ? ["openclaw.setup.detect"] : []),
-        ...(id === "cron" && interactionIds.length ? ["cron.history"] : []),
         ...(creationFixture
           ? ["templates.catalog.search", "templates.drafts.create", "chat.send"]
           : []),
@@ -1153,20 +1151,6 @@ function fixtureFor(
               limit: 50,
               hasMore: false,
               nextOffset: null,
-            },
-            "cron.history": {
-              messages: [
-                {
-                  role: "user",
-                  content: "Inspect this synthetic automation.",
-                  timestamp: 1_800_000_000_000,
-                },
-                {
-                  role: "assistant",
-                  content: "Synthetic route transcript ready.",
-                  timestamp: 1_800_000_000_120,
-                },
-              ],
             },
           }
         : {}),
@@ -2818,32 +2802,18 @@ try {
                 }
                 const cell: InteractionResult = { id };
                 try {
-                  // Transcript probing starts with the Activity list already available.
-                  if (
-                    id === "cron-transcript" &&
-                    !(await page.locator(".cron-activity .cron-run-entry").isVisible())
-                  ) {
-                    await page.locator('[data-test-id="cron-list-tab-activity"]').click();
-                    await page
-                      .locator('.cron-activity .cron-runs[aria-busy="false"] .cron-run-entry')
-                      .waitFor();
-                  }
                   const trigger =
                     id === "agents-files"
                       ? "#agents-tab-files"
                       : id === "cron-history"
                         ? '[data-test-id="cron-list-tab-activity"]'
-                        : id === "activity-lightbox"
-                          ? activityMediaTrigger
-                          : ".cron-activity .cron-run-entry button";
+                        : activityMediaTrigger;
                   const ready =
                     id === "agents-files"
                       ? "#agent-panel .agent-file-tabs [role=tab]"
                       : id === "cron-history"
                         ? '.cron-activity .cron-runs[aria-busy="false"] .cron-run-entry'
-                        : id === "activity-lightbox"
-                          ? activityLightboxImage
-                          : "[data-cron-run-transcript] .chat-text";
+                        : activityLightboxImage;
                   const creationBefore =
                     id in creationInteractions
                       ? await page.evaluate(
@@ -2935,12 +2905,6 @@ try {
                   } else {
                     await page.locator(trigger).first().click();
                     await page.locator(ready).first().waitFor({ state: "visible" });
-                  }
-                  if (id === "cron-transcript") {
-                    await page
-                      .locator(ready)
-                      .filter({ hasText: "Synthetic route transcript ready." })
-                      .waitFor();
                   }
                   if (id === "activity-lightbox") {
                     await waitForActivityLightbox(page);

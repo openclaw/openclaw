@@ -1,4 +1,4 @@
-import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
+import type { ChatRef } from "../../sessions/chat-ref.js";
 
 export const LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME = "outbound";
 export const OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME = "outbound-legacy-preparing-v1";
@@ -14,7 +14,7 @@ export const OUTBOUND_EXECUTABLE_QUEUE_NAMES = [
 ] as const;
 
 export function outboundDeliveryQueueName(entry: {
-  sessionGeneration?: SessionDeliveryGeneration;
+  sessionGeneration?: ChatRef;
   deliveryCompletion?: { kind: string; commandOwnerReference?: unknown };
 }): (typeof OUTBOUND_EXECUTABLE_QUEUE_NAMES)[number] {
   return entry.deliveryCompletion?.kind === "pending-final" &&

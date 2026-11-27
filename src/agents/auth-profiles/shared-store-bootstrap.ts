@@ -11,7 +11,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
-import { resolveSqliteInspectionSignal } from "../../infra/sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "../../infra/sqlite-readonly-worker-context.js";
 import {
   prepareSqliteReadOnlyLocation,
   prepareSqliteReadOnlyLocationSync,
@@ -170,9 +170,6 @@ export function readSharedAuthLegacyRowsFromDatabase(
 /** Released synchronous auth-store writes prepare fresh ownership before their transaction. */
 function inspectNativeSharedAuthLegacyRows(sourcePath: string): SharedAuthLegacyRows {
   const postgres = agentEngineInput() !== undefined;
-  if (postgres) {
-    assertEngineStoreExecutionAllowed();
-  }
   if (inspectSharedAuthLegacySourceFile(sourcePath).status === "missing") {
     return { store: null, state: null };
   }
@@ -206,9 +203,6 @@ export async function inspectSharedAuthLegacyRowsReadOnlyAsync(
   const signal = resolveSqliteInspectionSignal();
   signal?.throwIfAborted();
   const postgres = agentEngineInput() !== undefined;
-  if (postgres) {
-    assertEngineStoreExecutionAllowed();
-  }
   if (inspectSharedAuthLegacySourceFile(sourcePath).status === "missing") {
     return { store: null, state: null };
   }
@@ -243,6 +237,9 @@ function inspectSharedAuthLegacyRowsAtLocation(
   readLocation: string,
   postgres: boolean,
 ): SharedAuthLegacyRows {
+  if (postgres) {
+    assertEngineStoreExecutionAllowed();
+  }
   let anchor: DatabaseSync;
   try {
     anchor = openNodeSqliteDatabase(readLocation, { readOnly: !postgres });

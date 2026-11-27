@@ -45,28 +45,6 @@ describe("connection-local SQLite physical cache facts", () => {
     });
   });
 
-  it("shares deferred facts when a new handle first becomes ready", () => {
-    const filename = path.join(tempDirs.make("sqlite-deferred-adoption-"), "state.sqlite");
-    const writer = openDatabase(undefined, true, filename);
-    const exchange = vi.fn((_admissions: ReturnType<typeof captureSqliteDatabaseAdmissions>) => []);
-    withSqliteDatabaseAdmissionExchange(exchange, () => {
-      writer.exec("CREATE TABLE committed_sibling(id)");
-      const facts = getAdmittedSqliteSchemaFacts(writer)!;
-      admitSqliteSchema(writer);
-      expect(exchange).not.toHaveBeenCalled();
-      const reader = openDatabase("", false, filename);
-      expect(getAdmittedSqliteSchemaFacts(reader)?.admissionId).toBe(facts.admissionId);
-      admitSqliteSchema(reader);
-      expect(exchange).toHaveBeenCalledTimes(1);
-      const [published] = exchange.mock.calls[0]![0];
-      expect(published!.facts.get(schemaAdmission.name)?.value).toEqual(facts);
-      admitSqliteSchema(reader);
-      const alreadyShared = openDatabase("", false, filename);
-      admitSqliteSchema(alreadyShared);
-      expect(exchange).toHaveBeenCalledTimes(1);
-    });
-  });
-
   it("does not complete initial publication with transaction-local facts", () => {
     const filename = path.join(tempDirs.make("sqlite-scoped-readiness-"), "state.sqlite");
     const database = openDatabase(undefined, false, filename);

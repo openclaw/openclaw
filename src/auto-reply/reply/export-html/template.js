@@ -1451,7 +1451,7 @@
   }
 
   function renderMarkdownLink(token) {
-    const text = this.parser.parseInline(token.tokens);
+    const text = token.autolink ? escapeHtml(token.text) : this.parser.parseInline(token.tokens);
     const href = typeof token?.href === "string" ? token.href.trim() : "";
     if (!isSafeMarkdownLinkHref(href)) {
       return text;
@@ -1474,9 +1474,9 @@
         const highlighted = highlightCode(code, lang && hljs.getLanguage(lang) ? lang : undefined);
         return `<pre><code class="hljs">${highlighted}</code></pre>`;
       },
-      // Delegate nested inline tokens; leaf text keeps the existing escaping.
+      // Marked passes raw-block text through. Keep it literal and let Marked render ordinary text.
       text(token) {
-        return token.tokens ? false : escapeHtmlTags(escapeHtml(token.text));
+        return token.escaped && !token.tokens ? escapeHtmlTags(escapeHtml(token.text)) : false;
       },
       codespan(token) {
         return `<code>${escapeHtml(token.text)}</code>`;

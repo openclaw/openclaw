@@ -442,7 +442,8 @@ or suspension, and red when disconnected or a refresh is required. The sidebar f
 explains the interruption without moving the page and briefly shows **Connected** after recovery.
 With the sidebar collapsed, a flag beside the avatar appears for four seconds on status changes.
 Hover or focus the avatar to reopen it. If the flag would cover a composer or other writing
-controls, the avatar tooltip carries the status instead. The tooltip is hidden while the flag is visible.
+controls, the avatar tooltip shows only the connection status. Hovering or focusing the avatar
+shows no tooltip during normal operation or while the flag is visible.
 On mobile, status replaces the header breadcrumb and badges the menu button; opening the drawer
 shows the full footer row. Initial connection attempts use the two-second grace;
 an observed connection close shows status immediately.
@@ -497,10 +498,12 @@ The account and connection indicators describe identity and connectivity, not me
 The composer count covers only its conversation and does not promise automatic sending.
 Draft text and saved messages awaiting destination recovery are separate.
 
-While a connected chat finishes account recovery, Send stays unavailable and
-explains that recovery is pending. Your draft stays in the composer. Once recovery
-finishes, ordinary messages can enter the queue even if chat history is still loading.
-Stop and approval controls keep their existing availability.
+Send stays unavailable while the browser is making its first Gateway connection
+or the connected chat is finishing account recovery. Your draft stays in the
+composer. Once recovery finishes, ordinary messages can enter the queue even if
+chat history is still loading. If the browser already knows the account for this
+Gateway, you can still queue messages during a disconnect. Stop and approval
+controls keep their existing availability.
 
 These Inbox entries are a read-only view of the current account’s browser-tab/Gateway outbox,
 not a new server-side or cross-device inbox. They show available conversation labels, not message text,

@@ -433,6 +433,30 @@ pinning future deployments to that process. A subsequent approved deployment
 uses the installed shell normally, and a later controller adoption can use
 `steady-successor` again.
 
+The deployment lock's device/inode binds an in-flight adoption or bootstrap,
+not completed history. After a reboot recreates `/run`, ordinary entry still
+requires the current canonical, exclusively held FD9 file with its expected
+owner and safe mode, and verifies the completed closure and archived evidence.
+It does not require the adoption-time tmpfs inode. An unfinished adoption,
+including a closed bootstrap without completed adoption, remains fenced after
+an inode change; its owner must reconcile recovery. Do not replace the lock,
+rewrite its recorded identity, or delete gates to force replay.
+
+Older installed controllers report `controller adoption lock inode changed`
+even for completed gates after reboot. With no activation journal, recover using
+the `steady-successor` request and three commands above from a **staged fixed
+library**, with all four staged files from the same reviewed, merged commit.
+The installed buggy library cannot load its own historical gate to recover.
+Read fresh installed/staged descriptors, the completed gate and original archive,
+and the current process and pointer identities under the current FD9 lock;
+never reuse the prior boot's request. Preserve the existing operator environment.
+The old operation's `context` is not a successor dry run: it also checks that
+operation's original live source/process, which may have legitimately changed.
+There is no read-only `steady-successor` inspection action; `steady-successor`
+publishes intent and the gate, and `apply` installs the closure. Neither belongs
+in a read-only diagnosis. After completing adoption, `context` with the new
+binding verifies it without performing a deployment.
+
 The absent journal is the canonical owner's ordinary-admission fact, not a
 reconstructed receipt for the historical recovery. The prior immutable intent,
 original journal archive and completion remain evidence of their own operation.

@@ -4,6 +4,9 @@ import { readRootJsonObjectSync } from "@openclaw/fs-safe/json";
 import { isEmbeddedStandaloneModule, resolveRuntimeScriptEnv } from "../../cli-invocation.mjs";
 import { resolveRuntimeProcessDistRoot } from "../../runtime-process-bootstrap.generated.mjs";
 import { isBunRuntime } from "../daemon/runtime-binary.js";
+import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
+
+declare const SEALED_RUNTIME_BUILD: boolean;
 
 /** Resolve an explicit installed root, source sibling, or stable packaged worker path. */
 export function resolveRuntimeWorkerUrl(params: {
@@ -83,7 +86,11 @@ export function resolveRuntimeWorkerThreadExecArgv(
   url: URL,
   execPath = process.execPath,
 ): string[] {
+  // Sealed runtimes contain compiled workers and must not retain source-loader assets.
+  if (typeof SEALED_RUNTIME_BUILD === "boolean" && SEALED_RUNTIME_BUILD) {
+    return [];
+  }
   return url.protocol === "file:" && runtimeNeedsTypeScriptLoader(fileURLToPath(url), execPath)
-    ? ["--import", import.meta.resolve("tsx/esm")]
+    ? ["--import", resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.workerThreadLoader).href]
     : [];
 }

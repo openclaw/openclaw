@@ -46,6 +46,24 @@ const nestedHistory = [
     ],
   },
 ];
+// Claude CLI import: the MCP-prefixed call and its result share one assistant message.
+const claudeImportedHistory = [
+  {
+    role: "assistant",
+    runId: "parent-run",
+    timestamp: 2_000,
+    content: [
+      { type: "toolcall", id: "yield-call", name: "mcp__openclaw__sessions_yield", arguments: {} },
+      {
+        type: "tool_result",
+        tool_use_id: "yield-call",
+        name: "mcp__openclaw__sessions_yield",
+        is_error: false,
+        content: result.content,
+      },
+    ],
+  },
+];
 const yieldRequest = (args: Record<string, unknown>, before: unknown[] = []) => ({
   ...separateHistory[0],
   content: [...before, { ...call, arguments: args }],
@@ -79,6 +97,7 @@ describe("sessions_yield transcript projection", () => {
   it.each([
     ["separate tool result", separateHistory],
     ["nested exec activity", nestedHistory],
+    ["imported Claude CLI call and result", claudeImportedHistory],
   ])("leaves no transcript row for %s and reports the pending handoff", (_name, messages) => {
     const original = structuredClone(messages);
     expect(projectHistory(messages, { showToolCalls: false })).toEqual([silentBoundary]);

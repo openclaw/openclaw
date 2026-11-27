@@ -1,7 +1,7 @@
 import path from "node:path";
+import { resolveCompactionThreshold } from "@openclaw/ai/internal/shared";
 import { isPathRelativeEscape } from "@openclaw/fs-safe/path";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
-import { resolveCompactionThreshold } from "../../../../packages/agent-core/src/harness/compaction/compaction-threshold.js";
 import { getRuntimeConfigSnapshot } from "../../../config/config.js";
 import type { ModelCompatConfig } from "../../../config/zod-schema.model-compat.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
@@ -41,6 +41,7 @@ import { readModelPromptProjection } from "../../../sessions/user-turn-transcrip
 import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import { createStageTimingTracker } from "../../../shared/stage-timing.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
+import { decideContextPressure } from "../../context-pressure.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import type { EmbeddedContextFile } from "../../embedded-agent-helpers/context-file.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
@@ -61,6 +62,8 @@ import {
   installToolResultContextGuard,
 } from "../tool-result-context-guard.js";
 import {
+  estimateToolResultReductionPotential,
+  projectToolResultMessages,
   pruneExpiredCacheTtlToolResults,
   resolveCacheTtlPruningSettings,
   resolveLiveToolResultMaxChars,
@@ -299,10 +302,11 @@ export function installEmbeddedAttemptContextGuards(input: {
   const previousCacheTtlTransform = activeSession.agent.transformContext;
   const cacheTouch = createCacheTouchRecorder(
     cacheTtlSettings
-      ? readLastCacheTtlTimestamp(input.sessionManager, {
-          provider: attempt.provider,
-          modelId: attempt.modelId,
-        })
+      ? readLastCacheTtlTimestamp(
+          input.sessionManager,
+          { provider: attempt.provider, modelId: attempt.modelId },
+          attempt.promptCacheKeepWarm,
+        )
       : null,
   );
   if (cacheTtlSettings) {
@@ -362,6 +366,11 @@ export function installEmbeddedAttemptContextGuards(input: {
           }
         : {}),
       getPrePromptMessageCount: input.getPrePromptMessageCount,
+      getCurrentUserIdempotencyKey: () =>
+        (
+          attempt.userTurnTranscriptRecorder?.getPersistedMessage?.() ??
+          attempt.userTurnTranscriptRecorder?.message
+        )?.idempotencyKey,
       // Only the outer accepted-turn owner may advance an admitted engine.
       deferredTurn: attempt.onContextEngineTurnCandidate
         ? {
@@ -387,10 +396,11 @@ export function installEmbeddedAttemptContextGuards(input: {
               messagesSnapshot: messages,
               prePromptMessageCount,
               retention: input.getPromptCacheRetention(),
-              fallbackLastCacheTouchAt: readLastCacheTtlTimestamp(input.sessionManager, {
-                provider: attempt.provider,
-                modelId: attempt.modelId,
-              }),
+              fallbackLastCacheTouchAt: readLastCacheTtlTimestamp(
+                input.sessionManager,
+                { provider: attempt.provider, modelId: attempt.modelId },
+                attempt.promptCacheKeepWarm,
+              ),
             }),
         }),
       runtimeSettings,
@@ -441,7 +451,7 @@ export function installEmbeddedAttemptContextGuards(input: {
       request: Pick<
         Parameters<typeof resolveProjectedRequestPressure>[0],
         "context" | "previousRequest" | "fixedTokenPressure"
-      > & { measuredContextTokens?: number },
+      > & { measuredContextTokens?: number; boundarySafe?: () => boolean },
     ) => {
       // Deferring maintenance never authorizes an over-window provider request.
       const deferThreshold = activeSession[agentSessionDeferThresholdCompaction];
@@ -458,8 +468,21 @@ export function installEmbeddedAttemptContextGuards(input: {
         !deferThreshold &&
         compaction?.enabled !== false &&
         (request.measuredContextTokens ?? request.previousRequest?.contextTokens ?? 0) >= threshold;
+      // The reserve only selects the compaction target; context-pressure owns the verdict.
       const decision = resolveProjectedRequestPressure({
         ...request,
+        // Provider projections may contain text that the transcript owner cannot rewrite.
+        estimateRecoverableToolResultChars: () =>
+          estimateToolResultReductionPotential({
+            messages: projectToolResultMessages({
+              messages: input.sessionManager.buildSessionContext().messages,
+              projectionState: input.toolResultPromptProjectionState,
+              recovering: true,
+            }).messages,
+            contextWindowTokens: contextTokenBudget,
+            maxCharsOverride: toolResultMaxChars,
+            preserveSentToolResults: true,
+          }).maxReducibleChars,
         contextTokenBudget,
         reserveTokens: deferThreshold
           ? 0
@@ -473,13 +496,24 @@ export function installEmbeddedAttemptContextGuards(input: {
         replay: {
           model: attempt.model,
           sessionId: attempt.sessionId,
-          authProfileId: attempt.runtimePlan?.auth.forwardedAuthProfileId,
           enabled: input.getCompactionReplayEnabled(),
         },
       });
       await publishEmbeddedRequestContext(attempt, decision.estimatedPromptTokens);
-      if (decision.route !== "fits") {
-        pendingMidTurnPrecheckRequest = { ...decision, route: decision.route };
+      const pressure = decideContextPressure({
+        estimatedPromptTokens: decision.estimatedPromptTokens,
+        windowTokens: contextTokenBudget,
+        maintenanceDue: decision.route !== "fits",
+        // Evaluated lazily: only due maintenance needs the tool-batch evidence.
+        boundarySafe: decision.route !== "fits" && (request.boundarySafe?.() ?? false),
+        runId: attempt.runId,
+      });
+      if (pressure) {
+        pendingMidTurnPrecheckRequest = {
+          ...decision,
+          pressure,
+          route: decision.route === "fits" ? "compact_only" : decision.route,
+        };
         throw new MidTurnPrecheckSignal(pendingMidTurnPrecheckRequest);
       }
       return decision.estimatedPromptTokens;

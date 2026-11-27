@@ -176,6 +176,104 @@ it("versions and restores legacy names, including undoing an undo and an archive
   expect(await liveNames()).toEqual([name]);
 });
 
+it("undoes an archived version restore without changing the default or losing its redo", async () => {
+  const name = liveSkillName;
+  const file = "references/notes.md";
+  await create("instructions A");
+  await write(file, "notes A\n");
+  const older = await patch("instructions A", "instructions B");
+  await write(file, "notes B\n");
+  await archive();
+  const history = await versions();
+
+  const restoreId = (versionId: string | undefined) =>
+    lib.restoreWorkshopSkill(ctx, { name, versionId });
+  const undo = (undoRestoreChangeId: string) =>
+    lib.archiveWorkshopSkill(ctx, { name, undoRestoreChangeId });
+  const selected = await restoreId(older.versionId);
+  const undone = await undo(selected.id);
+  expect(await liveNames()).not.toContain(name);
+  expect(await versions()).toEqual(history);
+  expect(undone.versionId).toBe(older.versionId);
+  const redone = await restoreId(undone.versionId);
+  expect(await readLive()).toBe(skill(name, "instructions A"));
+  expect((await view(file)).content).toBe("notes A\n");
+  await refuses(undo(selected.id), /Refresh its history/);
+  await fs.writeFile(skillPath(name, file), "locally edited\n");
+  await refuses(undo(redone.id), /live files no longer match/);
+  expect((await view(file)).content).toBe("locally edited\n");
+  await fs.writeFile(skillPath(name, file), "notes A\n");
+  await undo(redone.id);
+
+  await restore();
+  expect(await readLive()).toBe(skill(name, "instructions B"));
+  expect((await view(file)).content).toBe("notes B\n");
+  expect(await fs.readdir(skillPath(".archive"))).toEqual([name]);
+});
+
+it.each([
+  { replaced: false, disconnected: false },
+  { replaced: true, disconnected: false },
+  { replaced: false, disconnected: true },
+  { replaced: true, disconnected: true },
+])(
+  "preserves a save at undo detach (replacement: $replaced, disconnected: $disconnected)",
+  async ({ replaced, disconnected }) => {
+    const name = liveSkillName;
+    const dir = skillPath(name);
+    const file = "references/notes.md";
+    await create("original");
+    await write(file, "saved\n");
+    await archive();
+    const restored = await restore();
+    const history = await versions();
+    const request = new AbortController();
+    let detached = "";
+    const rename = fs.rename;
+    vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      if (from !== dir) {
+        return rename(from, to);
+      }
+      await fs.writeFile(path.join(dir, file), "edited during undo\n");
+      await rename(from, to);
+      detached = String(to);
+      if (replaced) {
+        await fs.mkdir(path.join(dir, "references"), { recursive: true });
+        await fs.writeFile(path.join(dir, "SKILL.md"), skill(name, "new live copy"));
+        await fs.writeFile(path.join(dir, file), "new live notes\n");
+      }
+      if (disconnected) {
+        request.abort();
+      }
+    });
+    const inverse = lib.archiveWorkshopSkill(
+      { ...ctx, assertLive: () => request.signal.throwIfAborted() },
+      { name, undoRestoreChangeId: restored.id },
+    );
+    if (replaced) {
+      if (disconnected) {
+        await refuses(inverse, /retained at/);
+        await refuses(inverse, path.relative(skillPath(), detached));
+        expect(await fs.readFile(path.join(detached, file), "utf8")).toBe("edited during undo\n");
+        expect(await versions()).toEqual(history);
+      } else {
+        await refuses(inverse, /saved as version/);
+        const [archived] = await versions();
+        expect((await view(file, archived?.versions[0]?.id)).content).toBe("edited during undo\n");
+      }
+      expect((await view(file)).content).toBe("new live notes\n");
+      expect(await readLive()).toBe(skill(name, "new live copy"));
+    } else {
+      await refuses(inverse, /live files no longer match/);
+      expect((await view(file)).content).toBe("edited during undo\n");
+    }
+    const expectedEntries = replaced && disconnected ? [name, path.basename(detached)] : [name];
+    expect((await fs.readdir(skillPath(".archive"))).toSorted()).toEqual(
+      expectedEntries.toSorted(),
+    );
+  },
+);
+
 it("refuses invalid or unsafe writes with actionable errors and leaves files untouched", async () => {
   await refuses(create("x", "Deploy"), /Invalid skill name/);
   await refuses(

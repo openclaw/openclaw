@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { onWorkerRequestMetrics, trackWorkerRequest } from "./worker-request-diagnostics.js";
 
 const { report } = vi.hoisted(() => ({ report: vi.fn() }));
+// mock-isolation: Keep the logging sink outside the worker timing fixture.
 vi.mock("./worker-request-delivery-report.runtime.js", () => ({
   reportSlowWorkerDelivery: report,
 }));

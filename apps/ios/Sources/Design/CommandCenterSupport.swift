@@ -3,7 +3,7 @@ import OpenClawKit
 import SwiftUI
 
 struct CommandSessionRow: View {
-    let item: CommandCenterTab.WorkItem
+    let item: SessionPresentation.WorkItem
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
@@ -188,7 +188,7 @@ struct CommandSessionActionsModifier: ViewModifier {
                         .font(OpenClawType.subheadSemiBold)
                 }
             } message: {
-                Text("This permanently deletes the session and its transcript.")
+                Text("This permanently deletes the session and its chat history.")
                     .font(OpenClawType.caption)
             }
     }

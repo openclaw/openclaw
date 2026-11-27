@@ -18,6 +18,7 @@ import { loadavg } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { GCProfiler } from "node:v8";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -37,7 +38,7 @@ const iterations = parseStrictIntegerOption({
 assert(["plans", "timing", "allocation"].includes(values.mode));
 const sourceHash = createHash("sha256");
 const baseline = values["baseline-dir"] && path.resolve(values["baseline-dir"]);
-for (const owner of ["projection-read", "history-interval", "suffix-read"]) {
+for (const owner of ["projection-read", "history-interval", "suffix-read", "active-context"]) {
   const file = `src/config/sessions/session-accessor.sqlite-${owner}.ts`;
   const saved = baseline && path.join(baseline, file);
   sourceHash.update(file).update(readFileSync(saved && existsSync(saved) ? saved : file));
@@ -247,12 +248,7 @@ try {
     globalThis.gc();
     const inspector = values.mode === "allocation" ? new Session() : undefined;
     if (inspector) {
-      inspector.connect();
-      await inspector.post("HeapProfiler.startSampling", {
-        samplingInterval: 32768,
-        includeObjectsCollectedByMajorGC: true,
-        includeObjectsCollectedByMinorGC: true,
-      });
+      await startCollectedHeapSampling(inspector, 32768);
     }
     const gc = new GCProfiler();
     gc.start();

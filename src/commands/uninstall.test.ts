@@ -55,7 +55,7 @@ describe("uninstallCommand", () => {
     expectDataPreserved();
   });
 
-  it.each(["isLoaded", "stop", "uninstall", "nix"] as const)(
+  it.each(["isAbsent", "isLoaded", "stop", "uninstall", "nix"] as const)(
     "preserves user data when gateway teardown is blocked by %s",
     async (failure) => {
       if (failure === "nix") {
@@ -102,6 +102,7 @@ describe("uninstallCommand", () => {
     expect(removeWorkspaceDirs).toHaveBeenCalledWith(["/tmp/.openclaw/workspace"], runtime, {
       dryRun: true,
       preserveWorkspace: true,
+      retainedState: expect.any(Object),
     });
   });
 

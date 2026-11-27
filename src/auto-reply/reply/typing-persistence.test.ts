@@ -34,13 +34,13 @@ describe("typing persistence bug fix", () => {
     expect(vi.getTimerCount()).toBe(0);
   }
 
-  it("seals the controller when TTL cleanup throws after callback scope closure", async () => {
+  it("seals the controller when TTL cleanup throws after its plugin retires", async () => {
     await controller.startTypingLoop();
     onReplyStartSpy.mockImplementation(() => {
-      throw new Error("Plugin invocation scope is closed");
+      throw new Error("Plugin fixture was reloaded or disabled");
     });
     onCleanupSpy.mockImplementation(() => {
-      throw new Error("Plugin invocation scope is closed");
+      throw new Error("Plugin fixture was reloaded or disabled");
     });
     await vi.advanceTimersByTimeAsync(120_000);
     expect(onCleanupSpy).toHaveBeenCalledOnce();
