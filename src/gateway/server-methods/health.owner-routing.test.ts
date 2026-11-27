@@ -78,10 +78,11 @@ function createHealthReader(
   getEventLoopHealth?: () => HealthSummary["eventLoop"],
   getReadiness?: ReadinessChecker,
   scopes: string[] | null = ["operator.read"],
+  fresh: HealthSummary = snapshot,
 ) {
   const context = {
     getHealthCache: () => snapshot,
-    refreshHealthSnapshot: vi.fn(async () => snapshot),
+    refreshHealthSnapshot: vi.fn(async () => fresh),
     getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
     getEventLoopHealth,
     getReadiness,
@@ -425,6 +426,27 @@ describe("Gateway status owner routing", () => {
       const admin = await callStatus(config, ["operator.admin"]);
       expect(admin.startupMigrationWarning).toContain(warning);
       expect(admin.startupMigrationWarning).toContain(hint);
+    });
+  });
+
+  it("does not serve a public health cache to admin readers", async () => {
+    await withStateDirEnv("openclaw-gateway-admin-health-cache-", async ({ stateDir }) => {
+      const cached = healthSnapshot(stateDir, { durationMs: 0 });
+      const fresh = healthSnapshot(stateDir, { durationMs: 999 });
+
+      const reader = await createHealthReader(cached, undefined, undefined, undefined, fresh)();
+      expect(reader.mock.calls[0]?.[3]).toEqual({ cached: true });
+      expect(reader.mock.calls[0]?.[1]).toMatchObject({ durationMs: 0 });
+
+      const admin = await createHealthReader(
+        cached,
+        undefined,
+        undefined,
+        ["operator.admin"],
+        fresh,
+      )();
+      expect(admin.mock.calls[0]?.[3]).toBeUndefined();
+      expect(admin.mock.calls[0]?.[1]).toMatchObject({ durationMs: 999 });
     });
   });
 
