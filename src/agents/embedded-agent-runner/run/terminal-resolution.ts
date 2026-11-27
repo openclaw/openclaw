@@ -19,6 +19,7 @@ import { sanitizeAgentRunTerminalReply } from "../../agent-run-terminal-reply.js
 import { withAgentTerminalPayloadSnapshot } from "../../agent-terminal-snapshot.js";
 import type { AuthProfileFailureReason, AuthProfileStore } from "../../auth-profiles.js";
 import { buildAssistantFailoverSignal } from "../../embedded-agent-helpers/assistant-message-failures.js";
+import { resolveFailoverReasonFromError } from "../../failover-error.js";
 import { renderStorageFailureSummary } from "../../failover/assistant-request-failure-copy.js";
 import type { ResolvedProviderAuth } from "../../model-auth.js";
 import {
@@ -400,14 +401,15 @@ async function completeEmbeddedRun(
   const terminalAborted = isEmbeddedRunTerminalAbort(terminalOutcome);
   const terminalTimedOut = isEmbeddedRunTerminalTimeout(terminalOutcome);
   const terminalFailed = classifyAgentRunTerminalOutcome(terminalOutcome) === "failure";
+  const { promptError } = projectAgentRunAttemptTerminal(input.attempt.terminal);
   const terminalFailure =
-    projectAgentRunAttemptTerminal(input.attempt.terminal).promptError ??
-    terminalOutcome.error ??
-    input.incompleteTurnText ??
-    MISSING_REPLY_NOTICE_TEXT;
+    promptError ?? terminalOutcome.error ?? input.incompleteTurnText ?? MISSING_REPLY_NOTICE_TEXT;
   const storageFailureText = renderStorageFailureSummary(
     classifyGatewayStorageFailure(terminalFailure),
   );
+  // Classify the typed error object here; once rendered, its message is display text only.
+  const promptFailoverReason =
+    promptError === undefined ? null : resolveFailoverReasonFromError(promptError, input.provider);
   // Warning suppression is presentation only: an unrecovered terminal failure
   // must retain error metadata and must not enter successful auth/trace bookkeeping.
   const error =
@@ -418,6 +420,7 @@ async function completeEmbeddedRun(
           code:
             extractErrorCode(terminalFailure) ??
             resolveCurrentAttemptAssistant(input.attempt)?.errorCode,
+          ...(promptFailoverReason ? { reason: promptFailoverReason } : {}),
           fallbackSafe: input.incompleteTurnFallbackSafe ?? false,
           terminalPresentation: input.terminalToolPresentation !== undefined,
         }

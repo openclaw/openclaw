@@ -1,7 +1,8 @@
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { resolveProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import type { CommandQueueTaskDeadline } from "../../../process/command-queue.types.js";
-import type { AuthProfileStore } from "../../auth-profiles.js";
+import { resolveProfilesUnavailableReason, type AuthProfileStore } from "../../auth-profiles.js";
+import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
 import { resolvePreparedModelThinkingCompat } from "../../model-catalog-lookup.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import { resolveProviderEndpoint } from "../../provider-attribution.js";
@@ -423,8 +424,15 @@ export async function prepareEmbeddedRunTransport(input: {
         !admitAuthProfile(initialAttempt?.kind === "profile" ? initialAttempt.profileId : undefined)
       ) {
         if (!(await advancePluginHarnessAuthAttempt())) {
-          throw new Error(
+          // Keep the cooldown's recorded cause, so a usage-limit cooldown is not reported as unknown.
+          const reason =
+            resolveProfilesUnavailableReason({
+              store: attemptAuthProfileStore,
+              profileIds: profileCandidates.filter((id): id is string => Boolean(id)),
+            }) ?? "unknown";
+          throw new FailoverError(
             `Prepared auth profiles are temporarily unavailable for ${provider}/${modelId}.`,
+            { reason, provider, model: modelId, status: resolveFailoverStatus(reason) },
           );
         }
       } else {

@@ -121,6 +121,33 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     },
   );
 
+  it("classifies a usage-limit run-level failure as rate_limit, not unknown (#206434)", async () => {
+    await useRealOutcome();
+    const message = "You've hit your usage limit. Try again later.";
+    const usageLimit = Object.assign(new Error(message), { status: 429 });
+    const assistant = emptyAssistant({ stopReason: "error", errorMessage: message });
+    const native = await resolveEmbeddedRunTerminal(
+      makeTerminalInput({
+        assistant,
+        attemptOverrides: {
+          terminal: { kind: "failed", source: "prompt", error: usageLimit },
+          // Tools already ran, so the runner finishes instead of throwing for failover.
+          replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+        },
+      }),
+    );
+    expectComplete(native);
+    expect(native.result.meta.error).toMatchObject({
+      kind: "incomplete_turn",
+      reason: "rate_limit",
+    });
+    mockAgentRun(native.result);
+    mockDelivery({ disposition: { kind: "pending" } });
+    const result = await runTurn();
+    expect(result.status).toBe("error");
+    expect(result.errorClassification).toEqual({ kind: "reason", reason: "rate_limit" });
+  });
+
   it.each([false, true])(
     "keeps delivery target failure separate from execution (agent failed: %s)",
     async (agentFailed) => {
