@@ -8,7 +8,6 @@ import {
 } from "../../routing/session-key.js";
 import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import { resolveAgentsDirFromSessionStorePath, resolveSessionStorePathCore } from "./paths.js";
-import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import type { SessionStoreTarget } from "./targets-collision.js";
 
 const NON_FATAL_DISCOVERY_ERROR_CODES = new Set([
@@ -62,7 +61,7 @@ function shouldSkipDiscoveredAgentDirName(dirName: string, agentId: string): boo
   );
 }
 
-function resolveValidatedManagedFilePathSync(params: {
+export function resolveValidatedManagedFilePathSync(params: {
   agentsRoot: string;
   filePath: string;
   realAgentsRoot?: string;
@@ -81,33 +80,6 @@ function resolveValidatedManagedFilePathSync(params: {
     }
     throw err;
   }
-}
-
-export function resolveValidatedDiscoveredStorePathSync(params: {
-  sessionsDir: string;
-  agentsRoot: string;
-  realAgentsRoot?: string;
-  sqliteOnly?: boolean;
-}): string | undefined {
-  const storePath = path.join(params.sessionsDir, "sessions.json");
-  if (!params.sqliteOnly) {
-    const validatedStorePath = resolveValidatedManagedFilePathSync({
-      agentsRoot: params.agentsRoot,
-      filePath: storePath,
-      realAgentsRoot: params.realAgentsRoot,
-    });
-    if (validatedStorePath) {
-      return validatedStorePath;
-    }
-  }
-  const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath).path;
-  return resolveValidatedManagedFilePathSync({
-    agentsRoot: params.agentsRoot,
-    filePath: sqlitePath,
-    realAgentsRoot: params.realAgentsRoot,
-  })
-    ? storePath
-    : undefined;
 }
 
 export function isValidatedRecoveryCandidateSessionsDir(params: {

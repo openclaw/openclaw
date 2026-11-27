@@ -13,8 +13,8 @@ import { SessionStoreRegistryReadRequired } from "./session-sqlite-target.js";
 import {
   captureSessionStoreReadCandidates,
   prepareSessionStoreTargetInventory,
-  readSessionStoreTargetInventory,
 } from "./session-store-target-inventory.js";
+import { readSessionStoreTargetInventory } from "./session-store-target.worker.js";
 import { resolveExistingAgentSessionStoreTargetsReadOnlyResult } from "./targets-read-availability.worker.js";
 
 // mock-isolation: Inventory cases supply availability without opening persistent stores.

@@ -50,7 +50,7 @@ import {
   withSessionEntryReadOnlyInWorker,
 } from "./session-entry-read-runtime.js";
 import { readSessionRuntimeTargetWorkerRequest } from "./session-runtime-target-read.worker.js";
-import { readSessionStoreTargetResult } from "./session-store-target-inventory.js";
+import { readSessionStoreTarget } from "./session-store-target.worker.js";
 import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 import * as historyWorker from "./session-transcript-worker-runtime.js";
 
@@ -415,8 +415,8 @@ it("returns unavailable registry facts as locator data without catching candidat
       candidates: [],
       registeredDatabases: { status: "unavailable" as const },
     };
-    expect(readSessionStoreTargetResult(request)).toMatchObject({ ok: false });
-    expect(() => readSessionStoreTargetResult({ ...request, registeredDatabases: [] })).toThrow(
+    expect(readSessionStoreTarget(request)).toMatchObject({ readError: { kind: "read-error" } });
+    expect(() => readSessionStoreTarget({ ...request, registeredDatabases: [] })).toThrow(
       "outside captured discovery custody",
     );
   }));

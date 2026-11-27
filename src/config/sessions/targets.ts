@@ -19,6 +19,7 @@ import { resolveAgentsDirFromSessionStorePath, resolveSessionStorePathCore } fro
 import { listSqliteTargetCandidatePathsForSessionStorePath } from "./session-sqlite-target-paths.js";
 import {
   resolveSqliteTargetFromSessionStorePath,
+  resolveValidatedDiscoveredStorePathSync,
   type SessionStoreRegistryRead,
 } from "./session-sqlite-target.js";
 import { isPerAgentSessionStoreConfig } from "./session-store-config.js";
@@ -43,7 +44,6 @@ import {
   createRealAgentsRootResolver,
   dedupeTargetsByStorePath,
   isValidatedRecoveryCandidateSessionsDir,
-  resolveValidatedDiscoveredStorePathSync,
   shouldSkipDiscoveryError,
   toDiscoveredSessionStoreTarget,
   resolveExplicitSessionStoreTarget,

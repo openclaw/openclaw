@@ -325,10 +325,9 @@ export const startHostedWorker = serveOwnedWorkerTasks(
           ? cold.readSessionColdMetadataInWorker(options, request.sessionId, request.readCustody)
           : { kind: request.kind, ...cold.readSessionColdStorageInventoryInWorker(options) };
       }
-      if (request.kind === "session-target-prepare" || request.kind === "session-store-target") {
-        const { readSessionStoreTargetWorkerRequest } =
-          await import("./session-store-target.worker.js");
-        return readSessionStoreTargetWorkerRequest(request);
+      if (request.kind === "session-target-prepare") {
+        const targets = await import("./session-store-target-inventory.js");
+        return targets.prepareSessionStoreTargetCandidates(request.request);
       }
       if (request.kind === "session-retirement-read") {
         const { readSessionRetirementInWorker } =
@@ -350,10 +349,11 @@ export const startHostedWorker = serveOwnedWorkerTasks(
           await import("./session-entry-current-admission.worker.js");
         return readSessionEntryCurrentFacts(request);
       }
-      if (request.kind === "session-target-inventory") {
-        const { readSessionStoreTargetInventory } =
-          await import("./session-store-target-inventory.js");
-        return readSessionStoreTargetInventory(request.request);
+      if (request.kind === "session-target-inventory" || request.kind === "session-store-target") {
+        const targets = await import("./session-store-target.worker.js");
+        return request.kind === "session-target-inventory"
+          ? targets.readSessionStoreTargetInventory(request.request)
+          : targets.readSessionStoreTarget(request.request);
       }
       if (request.kind === "combined-store-topology") {
         const { readCombinedSessionStoreTopology } =

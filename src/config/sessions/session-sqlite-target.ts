@@ -20,6 +20,7 @@ import {
   assertSessionStoreReadCandidate,
   type SessionStoreReadCandidate,
 } from "./session-store-read-candidates.js";
+import { resolveValidatedManagedFilePathSync } from "./targets-path-validation.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 /** SQLite database target resolved from a legacy session store path. */
@@ -358,4 +359,31 @@ export function listDurableSqliteTargetPathsForSessionStorePath(storePath: strin
   return candidates.filter(
     (candidatePath, index) => index === 0 || resolveDatabaseOwner(candidatePath) !== undefined,
   );
+}
+
+export function resolveValidatedDiscoveredStorePathSync(params: {
+  sessionsDir: string;
+  agentsRoot: string;
+  realAgentsRoot?: string;
+  sqliteOnly?: boolean;
+}): string | undefined {
+  const storePath = path.join(params.sessionsDir, "sessions.json");
+  if (!params.sqliteOnly) {
+    const validatedStorePath = resolveValidatedManagedFilePathSync({
+      agentsRoot: params.agentsRoot,
+      filePath: storePath,
+      realAgentsRoot: params.realAgentsRoot,
+    });
+    if (validatedStorePath) {
+      return validatedStorePath;
+    }
+  }
+  const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath).path;
+  return resolveValidatedManagedFilePathSync({
+    agentsRoot: params.agentsRoot,
+    filePath: sqlitePath,
+    realAgentsRoot: params.realAgentsRoot,
+  })
+    ? storePath
+    : undefined;
 }

@@ -15,6 +15,14 @@ it.each([
     sessions("entry-json"),
     ["src/channels/bundled-channel-catalog-read.ts"],
   ],
+  [
+    "target preparation",
+    sessions("store-target-inventory"),
+    [
+      ...sessions("sqlite-target accessor.sqlite-entry-inventory"),
+      ...paths("src/config/sessions/", "targets-read-availability.worker targets-discovery.native"),
+    ],
+  ],
   ["transport", sessions("transcript-worker-runtime"), configIO],
   [
     "title and topology",
@@ -61,7 +69,9 @@ it.each([
     "lazy entry readers",
     [
       ...gateway("session-history-worker-reader"),
-      ...sessions("store-target-inventory entry-read.worker accessor.sqlite-model-context"),
+      ...sessions(
+        "store-target-inventory store-target.worker entry-read.worker accessor.sqlite-model-context",
+      ),
     ],
     [
       "src/config/sessions/lifecycle.ts",
@@ -153,6 +163,42 @@ it("dispatches private entry and runtime-target reads without the broad entry wo
     value: { kind: "session-runtime-target", target: { sessionKey: scope.sessionKey } },
   });
   expect(prewarm.broadEntryLoads).toBe(0);
+});
+
+it("loads native target readers on the first inventory read after preparation", async () => {
+  vi.resetModules();
+  const load = vi.fn();
+  // mock-isolation: Observe module evaluation while letting the real inventory request complete.
+  vi.doMock("./targets-read-availability.worker.js", async (importOriginal) => {
+    load();
+    return importOriginal();
+  });
+  try {
+    await import("./session-transcript.worker.js");
+    await expect(
+      prewarm.read({
+        kind: "session-target-prepare",
+        request: { storePath: "/synthetic/missing/fixture.sqlite" },
+      }),
+    ).resolves.toMatchObject({ ok: true, value: { kind: "session-target-prepare" } });
+    expect(load).not.toHaveBeenCalled();
+    await expect(
+      prewarm.read({
+        kind: "session-target-inventory",
+        request: {
+          config: {},
+          env: {},
+          agentIds: [],
+          paths: new Map(),
+          candidates: [],
+          registeredDatabases: [],
+        },
+      }),
+    ).resolves.toMatchObject({ ok: true, value: { kind: "session-target-inventory", agents: [] } });
+    expect(load).toHaveBeenCalledOnce();
+  } finally {
+    vi.doUnmock("./targets-read-availability.worker.js");
+  }
 });
 
 it("prepares presentation only for an explicit prewarm request", async () => {
