@@ -221,11 +221,14 @@ export function applyDictationPlan(
   request: DictationRefinementRequest,
   plan: DictationEditPlan,
 ): DictationRefinementResult {
+  // These generations belong to the dictation capture, not the chat session.
+  const { generation: planCaptureGeneration } = plan;
+  const { generation: requestCaptureGeneration } = request;
   if (
     plan.schemaVersion !== 1 ||
     plan.offsetEncoding !== "utf-16" ||
     plan.captureId !== request.captureId ||
-    plan.generation !== request.generation ||
+    planCaptureGeneration !== requestCaptureGeneration ||
     plan.transcriptRevision !== request.transcriptRevision ||
     !plan.supported ||
     typeof plan.profileId !== "string" ||
