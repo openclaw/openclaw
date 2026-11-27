@@ -202,10 +202,11 @@ function registerDetachedCompletion<Completion>(
   };
   const attempt = async () => {
     if (completion === undefined || released || timer || !lifecycle.isCurrent()) {
+      inFlight = undefined;
       return;
     }
     let waiting = false;
-    let consumedDuringAdmission = false;
+    let consumedAtAdmission: boolean | undefined;
     try {
       if (shared.retiring && !shared.token && !isConsumed()) {
         await lifecycle.retire("unavailable", assertActive);
@@ -252,9 +253,10 @@ function registerDetachedCompletion<Completion>(
       }
       const delivery = await lifecycle.deliver(completion, () => {
         assertCurrent();
-        // Another observer can confirm receipt while delivery awaits requester lookup.
-        if (isConsumed()) {
-          consumedDuringAdmission = true;
+        // A receipt during requester lookup suppresses a new wake. A later
+        // receipt cannot revoke an admitted handoff. Ownership stays live.
+        consumedAtAdmission ??= isConsumed();
+        if (consumedAtAdmission) {
           throw new Error("Completion was already consumed");
         }
       });
@@ -281,7 +283,7 @@ function registerDetachedCompletion<Completion>(
       }
     } catch (error) {
       if (!released && lifecycle.isCurrent()) {
-        if (consumedDuringAdmission) {
+        if (consumedAtAdmission) {
           await retire();
           return;
         }
@@ -299,6 +301,8 @@ function registerDetachedCompletion<Completion>(
         }
       }
     } finally {
+      // A detach or receipt can wake us before the outer promise settles.
+      inFlight = undefined;
       if (!waiting) {
         lifecycle.settleExecution();
       }
@@ -308,12 +312,15 @@ function registerDetachedCompletion<Completion>(
     if (inFlight) {
       return inFlight;
     }
-    inFlight = Promise.resolve().then(attempt);
-    const finished = () => {
-      inFlight = undefined;
-    };
-    void inFlight.then(finished, finished);
-    return inFlight;
+    const pending = Promise.resolve().then(attempt);
+    inFlight = pending;
+    void pending.catch(() => {
+      // isCurrent can throw before the attempt enters its try block.
+      if (inFlight === pending) {
+        inFlight = undefined;
+      }
+    });
+    return pending;
   };
   function wake() {
     clearTimeout(timer);

@@ -56,6 +56,44 @@ import {
   type AgentHarnessCompletionDelivery,
 } from "./agent-harness-completion.js";
 
+it("delivers when the parent detaches just as a waiting attempt settles", async () => {
+  const lookup = Promise.withResolvers<void>();
+  const receipt = Promise.withResolvers<boolean>();
+  let attached = true;
+  const send = vi.fn(async (_result: string, assertCurrent: () => void) => {
+    assertCurrent();
+    return direct();
+  });
+  const owner = registerAgentHarnessCompletion({
+    scope: createAgentHarnessCompletionScope(source),
+    assignmentId: "parent-detaching",
+    isCurrent: () => true,
+    readiness: () => (attached ? "waiting" : "ready"),
+    observeConsumption: () => {
+      lookup.resolve();
+      return receipt.promise;
+    },
+    deliver: send,
+    retire: async () => {},
+    settleExecution() {},
+    onError(error: unknown) {
+      throw error;
+    },
+  });
+  try {
+    const pending = owner.complete("saved answer");
+    await lookup.promise;
+    receipt.resolve(false);
+    await receipt.promise;
+    attached = false;
+    await Promise.all([pending, owner.complete("saved answer")]);
+    expect(send).toHaveBeenCalledExactlyOnceWith("saved answer", expect.any(Function));
+    expect(owner.isConsumed()).toBe(true);
+  } finally {
+    owner.release();
+  }
+});
+
 it("retires a native result consumed before its completion fact without delivering it again", async () => {
   const send = vi.fn(async () => direct());
   const retire = vi.fn(async () => {});
