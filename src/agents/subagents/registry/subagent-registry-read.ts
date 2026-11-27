@@ -53,13 +53,6 @@ export { isSubagentRunLive, isSubagentRunQueued } from "./subagent-run-liveness.
 export type { SubagentRunReadIndex } from "./subagent-registry-queries.js";
 export type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-export {
-  getSubagentSessionRuntimeMs,
-  getSubagentSessionStartedAt,
-  isSubagentRunPausedForContinuation,
-  resolveSubagentSessionStatus,
-} from "./subagent-session-metrics.js";
-
 export type SubagentRootRequester = {
   sessionKey: string;
   agentId?: string;
