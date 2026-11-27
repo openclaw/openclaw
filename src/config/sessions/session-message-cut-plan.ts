@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { parseCompactionDetails } from "../../../packages/agent-core/src/harness/compaction/compaction-details.js";
 import { readMessageWorkContext } from "../../chat/work-context.js";
 import { assertModelSelectionUnlocked } from "../../sessions/model-overrides.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
@@ -75,6 +76,8 @@ export type SessionMessageCutReader = {
    * silently ignore the request, so both modes refuse instead.
    */
   canonicalSelectionHolds(targetId: string | null): boolean;
+  /** Whether the selected path contains a compaction committed with degraded quality. */
+  hasDegradedCompaction(targetId: string | null): boolean;
   /** Canonical path to this leaf, as physical sequences; indexed readers only. */
   canonicalBranchPathSeqs?(leafEventId: string): readonly number[] | undefined;
   activeLeafEventId(): string | null;
@@ -137,6 +140,14 @@ export function createMemorySessionMessageCutReader(
       );
     },
     canonicalSelectionHolds: (targetId) => resolve(targetId).leafId === targetId,
+    hasDegradedCompaction: (targetId) =>
+      selectSessionTranscriptTreePathNodes(tree, targetId).some(({ entry }) => {
+        const event = asRecord(entry);
+        return (
+          event?.type === "compaction" &&
+          parseCompactionDetails(event.details)?.qualityDegraded === true
+        );
+      }),
     activeLeafEventId: () => tree.leafId,
     tailEventId: () => tree.nodes.at(-1)?.id ?? null,
     allocateEventId,

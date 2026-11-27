@@ -215,15 +215,18 @@ export function executeSessionActorMemoryForkCommand(
       // Rewind and switch share the file-backed identity contract: the transcript
       // keeps its id and gains one appended control row.
       if (preparedIntent.mode !== "fork") {
+        const reader = createMemorySessionMessageCutReader(sourceEvents);
         const plan = planInPlaceSessionMessageCut(
           source?.hot.entry,
-          createMemorySessionMessageCutReader(sourceEvents),
+          reader,
           { ...preparedIntent, mode: preparedIntent.mode },
           sourceRepositoryWorkspaceId,
         );
         if (plan.status !== "prepared") {
           return plan;
         }
+        plan.result.entry.compactionQualityDegraded =
+          reader.hasDegradedCompaction(plan.leafTargetId) || undefined;
         const target = context.edit(targetKey);
         const entry = installSessionActorMemoryEntry(target, plan.result.entry);
         createSessionActorMemoryEvents({ ...context, state: target }).appendNavigationControl(
