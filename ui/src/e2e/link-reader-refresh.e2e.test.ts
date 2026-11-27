@@ -98,6 +98,35 @@ it("keeps the retained title readable through refresh failure and retry at every
           node.scrollTop = 0;
         });
       }
+      const longError = "GitHub API rate limit exceeded (HTTP 429). Wait 60 seconds and retry.";
+      const after = await gateway.deferNext("forge.detail");
+      await refresh.click();
+      await gateway.waitForRequest("forge.detail", { after });
+      await gateway.rejectDeferred("forge.detail", {
+        code: "UNAVAILABLE",
+        message: longError,
+        retryable: true,
+      });
+      await expect.poll(() => refresh.isEnabled()).toBe(true);
+      const disclosure = panel.getByRole("button", { name: longError, exact: true });
+      expect(await disclosure.isVisible()).toBe(true);
+      const details = panel.getByRole("dialog", { name: longError, exact: true });
+      await disclosure.tap();
+      const expanded = await takeControlUiScreenshotFrame(page, panel, [details], {
+        animations: "disabled",
+      });
+      writeFileSync(path.join(artifacts, "390-error-expanded.png"), expanded.png);
+      expect(await details.textContent()).toBe(longError);
+      const bounds = await details.boundingBox();
+      const titleBounds = await heading.boundingBox();
+      expect(Math.abs(bounds!.x - titleBounds!.x)).toBeLessThan(1);
+      expect(await details.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
+      await page.keyboard.press("Escape");
+      await details.waitFor({ state: "hidden" });
+      await expect.poll(() => disclosure.getAttribute("aria-expanded")).toBe("false");
+      await disclosure.press("Enter");
+      await details.waitFor({ state: "visible" });
+      expect(await disclosure.getAttribute("aria-expanded")).toBe("true");
     },
     { hasTouch: true },
   );

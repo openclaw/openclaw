@@ -188,8 +188,14 @@ a {
   }
 }
 .lr-loading {
+  position: relative;
   max-width: 760px;
   margin-inline: auto;
+}
+.lr-loading-actions {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-end: 0;
 }
 .lr-skeleton {
   animation: lr-loading-pulse 1.8s ease-in-out infinite;

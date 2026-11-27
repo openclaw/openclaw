@@ -8,6 +8,7 @@ import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.
 import { createTabFocus } from "../lib/tabs.ts";
 import { DockResizer } from "./dock-layout-solid.tsx";
 import { LinkReaderContent } from "./link-reader-content.tsx";
+import { LinkReaderExternalAction } from "./link-reader-external-action.tsx";
 import type { LinkReaderPanelProps as LinkReaderOwnerProps } from "./link-reader-panel-lifecycle.ts";
 import {
   LINK_READER_TAB_LIMIT,
@@ -23,7 +24,7 @@ import {
   type ReaderSection,
 } from "./link-reader-panel-view.ts";
 import { LINK_READER_METADATA_REQUEST_EVENT } from "./link-reader-response.ts";
-import { EMPTY_LINK_READERS } from "./link-reader-target.ts";
+import { EMPTY_LINK_READERS, type LinkReaderTarget } from "./link-reader-target.ts";
 import type { PanelHostedTabsElement } from "./panel-hosted-tabs.ts";
 import { PanelTabStrip } from "./panel-tab-strip-solid.tsx";
 import { LINK_READER_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
@@ -32,10 +33,15 @@ import { PanelEmptyState } from "./solid/panel-empty-state.tsx";
 import { PanelIconButton } from "./solid/panel-icon-button.tsx";
 
 /** First load: the document's own geometry, so the header and section bar do not jump in. */
-function ReaderLoading() {
+function ReaderLoading(props: { target: LinkReaderTarget }) {
   return (
-    <div class="lr-loading" role="status">
-      <span class="sr-only">{t("linkReader.loadingPreview")}</span>
+    <div class="lr-loading">
+      <span class="sr-only" role="status">
+        {t("linkReader.loadingPreview")}
+      </span>
+      <span class="lr-actions lr-loading-actions">
+        <LinkReaderExternalAction target={props.target} />
+      </span>
       <div class="lr-skeleton" aria-hidden="true">
         <div class="lr-skeleton-identity">
           <span />
@@ -105,7 +111,7 @@ function PanelContent(props: {
           </a>
         </div>
       ) : props.tab.view.status !== "ready" ? (
-        <ReaderLoading />
+        <ReaderLoading target={target()!} />
       ) : (
         <LinkReaderContent
           detail={props.tab.view.detail}
@@ -145,6 +151,7 @@ function PanelView(
 ) {
   const tabFocus = createTabFocus();
   let address: HTMLInputElement | undefined;
+  let panel: HTMLElement | undefined;
   const content = new Map<string, HTMLElement>();
   const { owner, view: projection } = projectCallbackOwner(
     (notify) =>
@@ -178,8 +185,21 @@ function PanelView(
     } else {
       queueMicrotask(connect);
     }
+    // The shared overlay registry consumes Escape at the document before the reader closes.
+    const stopEscape = listen(window, "keydown", (event) => {
+      if (
+        event.key === "Escape" &&
+        !event.defaultPrevented &&
+        panel &&
+        event.composedPath().includes(panel)
+      ) {
+        event.preventDefault();
+        owner.closePanel();
+      }
+    });
     return () => {
       disposed = true;
+      stopEscape();
       owner.dispose();
       if (owners.get(host) === owner) {
         owners.delete(host);
@@ -266,12 +286,8 @@ function PanelView(
           class={["bp", props.embedded ? "bp--embedded" : "bp--right", "link-reader-panel"]}
           style={props.embedded ? undefined : { width: `${view().dockLayout.width}px` }}
           aria-label={t("linkReader.title")}
-          onKeyDown={(event) => {
-            if (event.key === "Escape" && !event.defaultPrevented) {
-              event.preventDefault();
-              event.stopPropagation();
-              owner.closePanel();
-            }
+          ref={(element) => {
+            panel = element;
           }}
         >
           {!props.embedded && (

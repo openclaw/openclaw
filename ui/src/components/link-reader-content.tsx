@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createSignal, For, onSettled, Repeat, Show } from "solid-js";
+import { createSignal, createUniqueId, For, onSettled, Repeat, Show } from "solid-js";
 import type { ControlUiLinkReaderDocument } from "../../../src/shared/control-ui-link-reader.js";
 import { registerLinkReaderEnglish } from "../i18n/locales/en-link-reader.ts";
 import { takeGraphemes } from "../lib/graphemes.ts";
@@ -9,6 +9,7 @@ import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { createIntersectionObserver } from "../lib/reactive/observers.ts";
 import { ChecksContent } from "./link-reader-checks.tsx";
+import { LinkReaderExternalAction } from "./link-reader-external-action.tsx";
 import { Diff, FileContent } from "./link-reader-files.tsx";
 import {
   LinkReaderMarkdown,
@@ -19,8 +20,9 @@ import {
 import type { ReaderReadyView, ReaderSection } from "./link-reader-panel-view.ts";
 import { linkReaderAuthorHref, safePreviewImage } from "./link-reader-response.ts";
 import type { LinkReaderTarget } from "./link-reader-target.ts";
-import { IconButton, iconButtonClass } from "./solid/icon-button.tsx";
+import { IconButton } from "./solid/icon-button.tsx";
 import { Icon } from "./solid/icon.tsx";
+import { Popover } from "./solid/popover.tsx";
 
 type ControlUiLinkReaderComment = NonNullable<ControlUiLinkReaderDocument["comments"]>[number];
 type SectionKey = "overview" | ReaderSection;
@@ -440,7 +442,7 @@ export function LinkReaderContent(props: {
 
   // A refresh in flight is announced, not shown: the button already spins.
   const notice = () => (props.refreshing ? undefined : props.notice);
-  const externalLabel = () => t("linkReader.openExternal", { provider: props.target.reader.label });
+  const noticeId = createUniqueId();
   return (
     <article class="lr-document">
       <header class="lr-document-header">
@@ -457,9 +459,24 @@ export function LinkReaderContent(props: {
           <Show when={!notice()}>
             <DateLabel value={props.detail.badge?.timestamp ?? props.detail.createdAt} />
           </Show>
-          <span class={notice() ? "lr-notice" : "sr-only"} role="status" title={notice()}>
+          <span class="sr-only" role="status">
             {props.refreshing ? t("linkReader.refreshingSaved") : notice()}
           </span>
+          <Show when={notice()} keyed>
+            {(message) => (
+              <Popover
+                id={noticeId}
+                label={message}
+                triggerClass="lr-notice"
+                class="lr-notice-popover"
+                placement="bottom-end"
+                sameRoot
+                lazy="while-open"
+              >
+                {message}
+              </Popover>
+            )}
+          </Show>
           <span class="lr-actions">
             <Show when={props.onRefresh}>
               {(refresh) => (
@@ -474,18 +491,7 @@ export function LinkReaderContent(props: {
                 />
               )}
             </Show>
-            <openclaw-tooltip prop:content={externalLabel()}>
-              <a
-                class={[iconButtonClass({ size: 28 }), "lr-external"]}
-                href={props.target.href}
-                target="_blank"
-                rel="noopener noreferrer"
-                data-link-reader-external=""
-                aria-label={externalLabel()}
-              >
-                <Icon name="externalLink" />
-              </a>
-            </openclaw-tooltip>
+            <LinkReaderExternalAction target={props.target} />
           </span>
         </div>
         <h1>{props.detail.title}</h1>

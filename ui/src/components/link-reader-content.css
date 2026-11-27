@@ -66,9 +66,30 @@
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
+  padding: 0;
+  border: 0;
+  background: none;
   color: var(--warn);
+  font: inherit;
   text-overflow: ellipsis;
   white-space: nowrap;
+  cursor: default;
+}
+.lr-notice:hover {
+  text-decoration: underline;
+}
+.lr-notice-popover {
+  width: min(18rem, calc(100vw - 32px));
+  padding: 12px;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 480px) {
+  .lr-notice-popover[data-placement="bottom-end"] {
+    width: calc(100dvw - 2 * var(--lr-content-padding));
+    position-area: bottom span-all;
+    justify-self: center;
+    position-try-fallbacks: flip-block;
+  }
 }
 /* A notice outranks the reference: the reference keeps only the room left over, on one line. */
 .lr-identity--notice .lr-eyebrow {
