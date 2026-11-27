@@ -31,6 +31,12 @@ JSON includes that result as `gatewayRuntime`, or `null` when unavailable.
 Known-incompatible plugins remain visible with their repair guidance. Their
 diagnostics do not prevent inspection of other plugins, including with `--runtime`.
 
+A registered tool can still be excluded by the session's base or provider tool
+profile, allowlist, or deny rules. Inspect and validation do not prove session
+callability. If a tool is loaded but missing, follow the
+[missing-tool checklist](/plugins/tool-plugins#tool-does-not-appear-after-install)
+before rebuilding or reloading repeatedly.
+
 An unfinished plugin data migration also prevents runtime evaluation. The plugin
 stays visible with its Doctor action instead of running against unmigrated data.
 Stop the Gateway, run `openclaw doctor --fix` against the same state and config,
