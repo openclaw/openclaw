@@ -16,6 +16,7 @@ import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { resolveOutboundMediaAccessForConfig } from "openclaw/plugin-sdk/outbound-media";
 import {
   deliverTextOrMediaReply,
+  getReplyPayloadTtsSupplement,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -542,6 +543,28 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
         const chunkMode = core.channel.text.resolveChunkMode(config, "zalo", accountId);
         const acceptedMessageIds: string[] = [];
         let visibleReplySent = false;
+        const ttsSupplement = getReplyPayloadTtsSupplement(payload);
+        const directRemoteMediaUrls = reply.mediaUrls.filter((mediaUrl) => {
+          try {
+            const parsed = new URL(mediaUrl);
+            return parsed.protocol === "http:" || parsed.protocol === "https:";
+          } catch {
+            return false;
+          }
+        });
+        const dropUnsupportedTtsMedia =
+          !canHostMedia &&
+          ttsSupplement !== undefined &&
+          directRemoteMediaUrls.length < reply.mediaUrls.length;
+        const deliveryText =
+          dropUnsupportedTtsMedia && ttsSupplement.visibleTextAlreadyDelivered === true
+            ? ""
+            : dropUnsupportedTtsMedia && !reply.hasText
+              ? ttsSupplement.spokenText
+              : reply.text;
+        const deliveryPayload = dropUnsupportedTtsMedia
+          ? { ...payload, mediaUrl: undefined, mediaUrls: directRemoteMediaUrls }
+          : payload;
         const recordAcceptedSend = (result: Awaited<ReturnType<typeof sendMessage>>) => {
           const messageId = result.result?.message_id;
           if (messageId) {
@@ -552,8 +575,8 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
         };
         try {
           await deliverTextOrMediaReply({
-            payload,
-            text: reply.text,
+            payload: deliveryPayload,
+            text: deliveryText,
             chunkText: (value) =>
               core.channel.text.chunkMarkdownTextWithMode(value, ZALO_TEXT_LIMIT, chunkMode),
             sendText: async (chunk) => {

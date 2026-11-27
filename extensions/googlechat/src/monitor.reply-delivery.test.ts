@@ -128,6 +128,65 @@ describe("Google Chat reply delivery", () => {
     }
   });
 
+  it("delivers TTS answer text once when its local audio is unsupported", async () => {
+    await deliver(
+      {
+        mediaUrl: "/tmp/tts-answer.mp3",
+        ttsSupplement: { spokenText: "spoken answer" },
+        replyToId: ROOT,
+      },
+      { typing: false },
+    );
+
+    expect(mocks.sendGoogleChatMessage).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ text: "spoken answer", thread: ROOT }),
+    );
+    expect(mocks.updateGoogleChatMessage).not.toHaveBeenCalled();
+  });
+
+  it("delivers TTS answer text once and preserves remote media beside unsupported local audio", async () => {
+    await deliver(
+      {
+        mediaUrls: [MEDIA, "/tmp/tts-answer.mp3"],
+        ttsSupplement: {
+          spokenText: "spoken answer",
+          visibleTextAlreadyDelivered: false,
+        },
+        replyToId: ROOT,
+      },
+      { typing: false },
+    );
+
+    expect(mocks.sendGoogleChatMessage).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        text: `spoken answer\n\nAttachment: ${MEDIA}`,
+        thread: ROOT,
+      }),
+    );
+    expect(mocks.updateGoogleChatMessage).not.toHaveBeenCalled();
+  });
+
+  it("preserves remote media without repeating already-delivered TTS text", async () => {
+    await deliver(
+      {
+        mediaUrls: [MEDIA, "/tmp/tts-answer.mp3"],
+        ttsSupplement: {
+          spokenText: "spoken answer",
+          visibleTextAlreadyDelivered: true,
+        },
+        replyToId: ROOT,
+      },
+      { typing: false },
+    );
+
+    expect(mocks.sendGoogleChatMessage).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ text: `Attachment: ${MEDIA}`, thread: ROOT }),
+    );
+    expect(mocks.sendGoogleChatMessage).not.toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining("spoken answer") }),
+    );
+  });
+
   it("preserves accepted caption receipts when a later attachment-link chunk fails", async () => {
     const caption = "a".repeat(35);
     const error = new Error("send failed");
@@ -198,6 +257,10 @@ describe("Google Chat reply delivery", () => {
   it.each([
     {
       payload: { mediaUrl: "/tmp/reply.png" },
+      reason: "Google Chat outbound attachments require remote HTTP(S) URLs.",
+    },
+    {
+      payload: { text: "caption", mediaUrl: "/tmp/reply.png" },
       reason: "Google Chat outbound attachments require remote HTTP(S) URLs.",
     },
     {
