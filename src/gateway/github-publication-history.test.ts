@@ -203,7 +203,7 @@ describe("GitHub publication branch history", () => {
           stage !== "show" ||
           !args.some((arg) => arg.startsWith("--format=%s%x00%b%x00%(trailers)"))
         ) {
-          return;
+          return undefined;
         }
         injected = true;
         return {
