@@ -26,6 +26,8 @@ defineDiscordVoiceTests(
     emitFinalRealtimeUserTranscript,
     receiveRecordedSpeech,
     agentCommandMock,
+    useConnection,
+    loggerWarnMock,
   }) => {
     it.each(["capture-first", "voice-first"])(
       "keeps explicit capture and wake-name conversation through occupancy (%s)",
@@ -95,6 +97,39 @@ defineDiscordVoiceTests(
         expect(onUtterance).toHaveBeenCalledTimes(count);
       },
     );
+    it("logs why a dropped autoJoin session ended and rejoins its channel", async () => {
+      const dropped = useConnection();
+      const manager = createManager({
+        voice: { enabled: true, autoJoin: [{ guildId: "g1", channelId: "1001" }] },
+      });
+      await manager.autoJoin();
+      expectConnectedStatus(manager, "1001");
+
+      entersStateMock.mockRejectedValueOnce(new Error("still disconnected"));
+      entersStateMock.mockRejectedValueOnce(new Error("still disconnected"));
+      useConnection();
+      await dropped.handlers.get("disconnected")?.();
+
+      await vi.waitFor(() => expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expectConnectedStatus(manager, "1001"));
+      expect(loggerWarnMock).toHaveBeenCalledWith(
+        "discord voice: session ended guild=g1 channel=1001: voice connection or audio worker stopped; rejoining autoJoin channel",
+      );
+    });
+    it("stays out of a plain autoJoin channel after an explicit leave", async () => {
+      useConnection();
+      const manager = createManager({
+        voice: { enabled: true, autoJoin: [{ guildId: "g1", channelId: "1001" }] },
+      });
+      await manager.autoJoin();
+      expect(await manager.leave({ guildId: "g1", channelId: "1001" })).toMatchObject({ ok: true });
+
+      expect(joinVoiceChannelMock).toHaveBeenCalledOnce();
+      expect(manager.status()).toEqual([]);
+      expect(loggerWarnMock).not.toHaveBeenCalledWith(
+        expect.stringContaining("discord voice: session ended"),
+      );
+    });
     it("autoJoin uses the last configured channel for duplicate guild entries", async () => {
       const manager = createManager({
         voice: {
