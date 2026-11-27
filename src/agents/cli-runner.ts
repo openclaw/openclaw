@@ -50,7 +50,11 @@ import {
   attachCliMessagingDeliveryEvidence,
   getCliMessagingDeliveryEvidence,
 } from "./cli-runner/delivery-evidence.js";
-import { createCliFailoverError, readCliStreamRefusalOutput } from "./cli-runner/exit-error.js";
+import {
+  createCliFailoverError,
+  readCliStreamRefusalOutput,
+  resolveCliRunError,
+} from "./cli-runner/exit-error.js";
 import { loadCliPromptImages } from "./cli-runner/helpers.js";
 import { cliBackendLog } from "./cli-runner/log.js";
 import { createCliRunModelRequestGate } from "./cli-runner/model-request-hook.js";
@@ -63,7 +67,7 @@ import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/type
 import { claudeCliSessionTranscriptHasContent } from "./command/attempt-execution.helpers.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner.js";
 import { resolveSourceReplyDelivery } from "./embedded-agent-runner/delivery-evidence.js";
-import { coerceToFailoverError, recordModelFallbackStop } from "./failover-error.js";
+import { recordModelFallbackStop } from "./failover-error.js";
 import { runBeforeAgentRunGate } from "./harness/before-agent-run.js";
 import { buildAgentHookContext } from "./harness/hook-context.js";
 import { buildAgentHookConversationMessages } from "./harness/hook-history.js";
@@ -236,13 +240,9 @@ async function runPreparedCliAgentOwned(
   diagnosticLifecycle?: ClaudeCliRunDiagnosticLifecycle,
 ): Promise<EmbeddedAgentRunResult> {
   let executePreparedCliRun: typeof import("./cli-runner/execute.runtime.js").executePreparedCliRun;
-  const { params } = context;
-  const cliFailoverContext = {
-    provider: params.provider,
-    model: context.modelId,
-    sessionId: params.sessionId,
-    lane: params.lane,
-  };
+  const { params, modelId } = context;
+  const { provider, sessionId: runSessionId, lane } = params;
+  const cliFailoverContext = { provider, model: modelId, sessionId: runSessionId, lane };
   const sessionBindingDisabled = context.preparedBackend.backend.sessionMode === "none";
   const preparedContextAgentMeta =
     isClaudeCliBackend(params.provider) && context.contextWindowInfo
@@ -740,6 +740,6 @@ async function runPreparedCliAgentOwned(
     diagnosticLifecycle?.publishResultContent(result);
     return result;
   } catch (error) {
-    throw coerceToFailoverError(error, cliFailoverContext) ?? error;
+    throw resolveCliRunError(error, context);
   }
 }
