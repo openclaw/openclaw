@@ -160,8 +160,8 @@ describe("happy path prompt snapshots", () => {
     }
     const layers = snapshot.slice(layersStart);
     const promptBytes = [...layers.matchAll(/^(`{3,})(\w*)\n([\s\S]*?)\n\1$/gmu)]
-      .filter((match) => match[2] !== "json")
-      .reduce((sum, match) => sum + Buffer.byteLength(match[3], "utf8"), 0);
+      .filter(([, , info]) => info !== "json")
+      .reduce((sum, [, , , body = ""]) => sum + Buffer.byteLength(body, "utf8"), 0);
     expect.soft(promptBytes).toBeLessThanOrEqual(CODEX_APP_SERVER_PROMPT_BUDGET_BYTES);
     const tools = JSON.stringify(JSON.parse(content("codex-dynamic-tools.telegram-direct.json")));
     expect
