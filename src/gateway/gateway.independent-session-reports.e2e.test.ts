@@ -146,6 +146,7 @@ it("keeps an independent opening's result obligation while accepting its peer si
   const openingPrompts: string[] = [];
   const notePrompts: string[] = [];
   let created: Record<string, unknown> | undefined;
+  let sendIssued = false;
   let sent: Record<string, unknown> | undefined;
   registerProofModelScript(marker, (request) => {
     if (request.tools.length === 0) {
@@ -170,7 +171,9 @@ it("keeps an independent opening's result obligation while accepting its peer si
       return { text: `${marker}_CREATED` };
     }
     if (prompt.includes(`${marker}_SEND`)) {
-      if (!result) {
+      // The parent's history already ends with the sessions_create output.
+      if (!sendIssued) {
+        sendIssued = true;
         return {
           tool: {
             name: "sessions_send",
