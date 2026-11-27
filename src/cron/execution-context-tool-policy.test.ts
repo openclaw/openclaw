@@ -41,7 +41,16 @@ vi.mock("../agents/tools/gateway.js", async (importOriginal) => ({
 // requester's profile is current, so an owner child gets the owner scope.
 vi.mock("../state/user-profile-list.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/user-profile-list.js")>()),
-  captureResidentUserProfileAccess: () => ({ assertCurrent: () => {} }),
+  captureResidentUserProfileAccess: (profileId: string) => ({
+    assertCurrent: () => {},
+    readCurrentFacts: () => ({
+      profileId,
+      emails: [],
+      assignedRole: null,
+      githubLogin: null,
+      openclawIdAccountIds: [],
+    }),
+  }),
 }));
 
 const { consumeCronNextCheckProposal } = await import("../infra/agent-run-registry.automation.js");
@@ -147,7 +156,7 @@ async function admitRun(stored: CronStoredJob, runKey: string, toolsAllow: strin
     agentId: "main",
     trigger: "cron",
   });
-  const scheduledExecution = occurrence.mint({
+  const scheduledExecution = await occurrence.mint({
     cfg: CFG,
     agentId: "main",
     runId: "run-1",

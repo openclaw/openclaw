@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { parse } from "yaml";
 import { WORKER_BUNDLE_DARWIN_NATIVE_ARTIFACTS } from "../../src/shared/worker-bundle-hash.ts";
 import { pnpmLockfileDocuments } from "./pnpm-lockfile-documents.mjs";

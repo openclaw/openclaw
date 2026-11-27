@@ -1,5 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { GatewayErrorDetailCodes } from "../../../../packages/gateway-protocol/src/gateway-error-details.js";
+import { TASK_WORKTREE_SOURCE_REQUIRED_ERROR_CODE } from "../../../../packages/gateway-protocol/src/gateway-error-codes.js";
 import type {
   ProjectsListResult,
   TaskSuggestion,
@@ -17,7 +17,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { ChatPaneSharing } from "./chat-pane-sharing.ts";
-import { resolveChatAgentId } from "./chat-state-route.ts";
+import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import type {
   TaskSuggestionAcceptance,
   TaskSuggestionStartMode,
@@ -274,7 +274,18 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
           ? operation.outcome
           : undefined;
       },
-      sessionSuggestions: multiIdentity ? this.collaboration.suggestions : [],
+      sessionSuggestions:
+        multiIdentity ||
+        (this.state && selectedChatSessionRow(this.state)?.invitedAccess === "suggest")
+          ? this.collaboration.suggestions
+          : [],
+      onCloseSessionSuggestion: (id: string) => {
+        this.collaboration.liveResolutions = new Map(this.collaboration.liveResolutions).set(
+          id,
+          false,
+        );
+      },
+      sessionSuggestionLiveResolutions: this.collaboration.liveResolutions,
       sessionSuggestionRole: this.collaboration.role,
       sessionSuggestionBusyIds: this.collaboration.busyIds,
       sessionSuggestionsArchived: archived,
@@ -284,6 +295,11 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
       onResolveSessionSuggestion: this.resolveCurrentSessionSuggestion.bind(this),
       canAcceptTaskSuggestions:
         canAdmin && isGatewayMethodAdvertised(gatewaySnapshot, "taskSuggestions.accept") === true,
+      taskSuggestionBlockedReason: !connected
+        ? t("chat.taskSuggestions.reconnectRequired")
+        : !canAdmin
+          ? t("chat.taskSuggestions.adminRequired")
+          : t("chat.taskSuggestions.unavailable"),
       canDismissTaskSuggestions:
         canWrite && isGatewayMethodAdvertised(gatewaySnapshot, "taskSuggestions.dismiss") === true,
       taskSuggestionCopiedIds: this.tasks.copiedIds,
@@ -440,7 +456,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
           details &&
           typeof details === "object" &&
           "code" in details &&
-          details.code === GatewayErrorDetailCodes.TASK_WORKTREE_SOURCE_REQUIRED;
+          details.code === TASK_WORKTREE_SOURCE_REQUIRED_ERROR_CODE;
         const repository: Extract<TaskSuggestionAcceptance, { phase: "failed" }>["repository"] =
           repositoryRequired
             ? { cwd: operation.cwd ?? operation.suggestion.cwd, open: true, projects: [] }

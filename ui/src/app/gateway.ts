@@ -1,3 +1,4 @@
+import type { readPairingConnectErrorDetails } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import type {
   ModelCatalogTarget,
   UserProfile,
@@ -52,6 +53,8 @@ export type ApplicationGatewaySnapshot = {
   lastErrorCode: string | null;
   reconnectAt?: number;
   lastErrorAuthReason?: string | null;
+  /** Structured pairing request from the last connect failure; names what approval grants. */
+  lastErrorPairing?: ReturnType<typeof readPairingConnectErrorDetails>;
   /** This connection owns identity: undefined is unresolved; null is resolved profileless. */
   selfUser?: AuthenticatedUser | null;
 };

@@ -32,6 +32,26 @@ function respond(body: string, init: ResponseInit) {
   return vi.fn<typeof fetch>(async () => new Response(body, init));
 }
 
+it.each([undefined, false, true])(
+  "keeps progress claims grounded with hostControlsInput=%s",
+  (hostControlsInput) => {
+    const session = buildOpenAIQuicksilverSession({ model: "gpt-live-test", hostControlsInput });
+    expect(session.instructions).toContain("Do not invent acknowledgments or progress claims.");
+    expect(session.instructions).toContain(
+      "When the host explicitly requests a natural launch acknowledgment, keep it brief and provisional",
+    );
+    expect(session.instructions).toContain(
+      "a delegation or task receipt is not evidence of progress",
+    );
+    expect(session.instructions.includes("Wait for the host control result")).toBe(
+      hostControlsInput === true,
+    );
+    expect(session.instructions.includes("Only that fresh result establishes")).toBe(
+      hostControlsInput === true,
+    );
+  },
+);
+
 it("bounds shared background UTF-8 without splitting emoji", () => {
   const text = "🦞".repeat(1_000);
   const initialItems = Array.from({ length: 20 }, (_, index) => ({

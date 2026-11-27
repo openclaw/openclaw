@@ -2,9 +2,11 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { captureAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import { readConversationBindingRouteFacts } from "../../channels/conversation-binding-route-facts.js";
+import { assertAgentInitializationComplete } from "../../config/sessions/agent-initialization.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadReplySessionInitializationSnapshot } from "../../config/sessions/session-accessor.reset.js";
+import type { SessionAdmissionTransition } from "../../config/sessions/session-admission-transition.types.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { resolveSessionWorkStartBlock } from "../../config/sessions/session-work-start.js";
@@ -14,7 +16,10 @@ import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-bi
 import { isAcpSessionKey, normalizeMainKey } from "../../routing/session-key.js";
 import { resolveAgentHarnessSessionContextError } from "../../sessions/agent-harness-session-key.js";
 import type { ReplyOperation } from "../../sessions/session-controller.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import { acknowledgeReplySessionTransition } from "../../sessions/session-controller.session-reader.js";
 import { getReplyOperationSessionReader } from "../../sessions/session-controller.state.js";
+import { cancelSelfSnooze } from "../../sessions/session-self-snooze.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import { shouldBypassAcpDispatchForCommand } from "./dispatch-acp-command-bypass.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
@@ -33,6 +38,7 @@ export type InitSessionStateParams = {
   ctx: FinalizedRuntimeMsgContext;
   expectedExistingSessionId?: string;
   recordedSessionActivity?: InternalGetReplyOptions["recordedSessionActivity"];
+  inputOwnedByRecorder?: boolean;
   pinExpectedExistingSession?: boolean;
   newlyCreatedSessionId?: string;
   requestedSessionId?: string;
@@ -53,6 +59,39 @@ export type InitSessionStateAttemptContext = {
   sessionCtxForState: FinalizedRuntimeMsgContext;
   storePath: string;
 };
+
+export async function loadReplySessionInitializationForAttempt(
+  target: Parameters<typeof loadReplySessionInitializationSnapshot>[0],
+  params: InitSessionStateParams,
+  attemptContext: InitSessionStateAttemptContext,
+  mainSessionKey: string,
+) {
+  const snapshot = await loadReplySessionInitializationSnapshot(target, {
+    reader: resolveInitializationSessionReader(params, attemptContext),
+    includeLifecycle: true,
+    assertCurrent: () => params.signal?.throwIfAborted(),
+  });
+  assertAgentInitializationComplete(snapshot.readEntry(mainSessionKey));
+  return snapshot;
+}
+
+export function acknowledgeCommittedReplyInitialization(
+  params: Pick<InitSessionStateParams, "replyOperation" | "inputOwnedByRecorder">,
+  target: Pick<InitSessionStateAttemptContext, "agentId" | "storePath" | "sessionKey">,
+  transition: SessionAdmissionTransition,
+  isUserInput: boolean,
+) {
+  // Gateway/recorded inputs transfer custody upstream, not again at dispatch.
+  // Plain channel inputs without a recorder are accepted by this initialization.
+  if (isUserInput && !params.inputOwnedByRecorder) {
+    cancelSelfSnooze(target);
+  }
+  return acknowledgeReplySessionTransition(
+    params.replyOperation,
+    transition,
+    captureSessionTarget({ ...target, storeScope: target.storePath }),
+  );
+}
 
 export function assertReplySessionInitializationAllowed(
   sessionKey: string,
@@ -130,7 +169,7 @@ export async function resolveInitSessionStateAttemptContext(
   };
 }
 
-export function resolveInitializationSessionReader(
+function resolveInitializationSessionReader(
   params: InitSessionStateParams,
   attemptContext: InitSessionStateAttemptContext,
 ) {
@@ -202,6 +241,7 @@ export function resolveReplySessionInitializationOptions(
     providerReviewAcknowledgment: opts?.providerReviewAcknowledgment,
     replyOperation: opts?.replyOperation,
     recordedSessionActivity: opts?.recordedSessionActivity,
+    inputOwnedByRecorder: opts?.userTurnTranscriptRecorder !== undefined,
     ...(opts?.expectedExistingSessionId
       ? { expectedExistingSessionId: opts.expectedExistingSessionId }
       : {}),

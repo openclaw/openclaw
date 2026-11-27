@@ -7,8 +7,9 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
+  iterateSqliteQuerySync,
 } from "./kysely-sync.js";
-import type { EngineConnection } from "./sql-connection.js";
+import { isPostgresSqlConnection, type EngineConnection } from "./sql-connection.js";
 import { MASKED_TRANSCRIPT_PROVIDER } from "./state-migrations.transcript-directives-transform.js";
 
 // Restored providers were all "***", so this row list is the complete undo record.
@@ -37,7 +38,7 @@ export function createMaskedProviderResolver(database: EngineConnection): Masked
     let providers = sessions.get(sessionId);
     if (!providers) {
       providers = new Map();
-      const rows = executeSqliteQuerySync(
+      const rows = iterateSqliteQuerySync(
         database,
         db
           .selectFrom("trajectory_runtime_events")
@@ -45,9 +46,9 @@ export function createMaskedProviderResolver(database: EngineConnection): Masked
             jsonPathValue<unknown>(database, eventJson, sql.lit("$.modelId")).as("model"),
             jsonPathValue<unknown>(database, eventJson, sql.lit("$.provider")).as("provider"),
           ])
-          .distinct()
+          .$if(isPostgresSqlConnection(database), (query) => query.distinct())
           .where("session_id", "=", sessionId),
-      ).rows;
+      );
       for (const row of rows) {
         if (
           typeof row.model !== "string" ||

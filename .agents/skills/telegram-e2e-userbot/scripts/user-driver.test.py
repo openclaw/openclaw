@@ -19,6 +19,7 @@ SPEC.loader.exec_module(driver)
 def observation_client(users=None):
     return SimpleNamespace(
         users=users or {},
+        set_startup_phase=Mock(),
         request=Mock(side_effect=AssertionError("unexpected TDLib request")),
     )
 
@@ -865,6 +866,52 @@ class PhotoContentTest(unittest.TestCase):
         self.assertIs(raised.exception, list_timeout)
         self.assertEqual(raised.exception.diagnostic_code, "")
 
+    def test_serve_cold_chat_timeout_has_bounded_private_startup_diagnostics(self):
+        client = driver.TdClient.__new__(driver.TdClient)
+        client.client, client.users, client.updates = 1, {}, []
+        now = 0
+        responses = [
+            {"@type": "error", "@extra": "1", "code": 400, "message": "Chat not found"},
+            {"@type": "updateConnectionState", "state": {"@type": "connectionStateConnecting"}},
+        ]
+        def receive(*_args):
+            nonlocal now
+            if responses:
+                return driver.json.dumps(responses.pop(0)).encode()
+            now = 30
+            return None
+        client.lib = SimpleNamespace(td_json_client_receive=receive)
+        client.send = Mock(side_effect=["1", "2"])
+        client.request = Mock(wraps=client.request)
+        instance = driver.UserDriver.__new__(driver.UserDriver)
+        instance.config, instance.bot_config, instance.client = {}, {}, client
+        instance.authorize = Mock()
+        events, stderr = Mock(), io.StringIO()
+        with patch.object(driver, "load_config", return_value=({"apiHash": "private-config"}, {})), \
+             patch.object(driver, "UserDriver", return_value=instance), \
+             patch.object(driver, "write_ndjson", events), \
+             patch.object(driver.time, "time", side_effect=lambda: now), \
+             patch.object(driver.time, "monotonic", side_effect=lambda: now), \
+             patch.object(driver.sys, "stderr", stderr):
+            with self.assertRaises(driver.DriverError) as raised:
+                driver.command_serve(SimpleNamespace(chat="-100987654321", timeout_ms=120000))
+        self.assertEqual(str(raised.exception), "Timed out waiting for loadChats")
+        self.assertEqual(raised.exception.tdlib_method, "loadChats")
+        self.assertTrue(raised.exception.tdlib_timed_out)
+        self.assertEqual(raised.exception.diagnostic_code, "")
+        events.assert_not_called()
+        self.assertEqual([call.kwargs["timeout"] for call in client.request.call_args_list], [10, 30])
+        diagnostics = [driver.json.loads(line) for line in stderr.getvalue().splitlines()]
+        self.assertEqual([entry["phase"] for entry in diagnostics[:2]], ["authorize", "selected-chat"])
+        self.assertEqual(diagnostics[-2]["outcome"], "chat-not-found")
+        self.assertEqual(diagnostics[-1], {
+            "type": "startup", "phase": "selected-chat", "method": "loadChats",
+            "outcome": "timeout", "elapsedMs": 30000,
+            "connectionState": "connectionStateConnecting",
+        })
+        self.assertNotIn("-100987654321", stderr.getvalue())
+        self.assertNotIn("private-config", stderr.getvalue())
+
     def test_ordinary_numeric_chat_refreshes_the_main_chat_list(self):
         instance = self.lookup_driver(
             ("getChat", self.lookup_error(error_type=driver.DriverError)),
@@ -1357,6 +1404,7 @@ class GroupWriteAccessTest(unittest.TestCase):
         import io
         instance, requests = self.make_driver({"@type": "chatMemberStatusLeft"})
         instance.authorize = lambda args: None
+        instance.client.set_startup_phase = Mock()
         instance.resolve_chat = lambda chat: -1001
         emitted = []
         with patch.object(driver, "load_config", return_value=({}, {})), patch.object(driver, "UserDriver", return_value=instance), patch.object(driver, "write_ndjson", side_effect=emitted.append), patch.object(driver.sys, "stdin", io.StringIO("")), patch.object(driver.select, "select", return_value=([driver.sys.stdin], [], [])):

@@ -404,8 +404,7 @@ function requestSynology(
         req.destroy();
       },
       body === undefined ? USER_LIST_REQUEST_TIMEOUT_MS : POST_REQUEST_TIMEOUT_MS,
-    );
-    deadlineTimer.unref?.();
+    ).unref();
     if (body !== undefined) {
       req.write(body);
       req.end();

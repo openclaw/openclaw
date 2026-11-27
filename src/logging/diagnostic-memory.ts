@@ -7,6 +7,7 @@ import {
   type DiagnosticMemoryPressureEvent,
   type DiagnosticMemoryUsage,
 } from "../infra/diagnostic-events.js";
+import { freezeOwnedDiagnosticSnapshot } from "../infra/diagnostic-value-snapshot.js";
 import { getSessionRowSelectionMetrics } from "../infra/gateway-work-metrics.js";
 import { getOldGenerationAfterGcBytes } from "../infra/gc-observer.js";
 import { sampleTrackedWorkerMemory } from "../infra/worker-cpu.js";
@@ -110,9 +111,12 @@ export function createDiagnosticMemorySampler(isCurrent: () => boolean) {
 function publishMemorySample(memory: DiagnosticMemoryUsage, uptimeMs: number): void {
   emitDiagnosticEvent({
     type: "diagnostic.memory.sample",
-    memory: {
-      ...memory,
-      heapSpaces: DEFAULT_IS_BUN_RUNTIME ? undefined : getHeapSpaceStatistics(),
+    // The dispatcher reads payload fields only after finding an interested listener.
+    get memory() {
+      return freezeOwnedDiagnosticSnapshot({
+        ...memory,
+        heapSpaces: DEFAULT_IS_BUN_RUNTIME ? undefined : getHeapSpaceStatistics(),
+      });
     },
     uptimeMs,
   });
@@ -371,8 +375,12 @@ export function emitDiagnosticMemorySample(
     options?.thresholds,
     processMemory,
   );
-  if (pressure?.level === "critical") {
-    memoryPressure.publish(undefined);
+  if (
+    pressure?.level === "critical" ||
+    (processMemory &&
+      processMemory.usedBytes >= Math.floor(processMemory.limitBytes * WARNING_RATIO))
+  ) {
+    memoryPressure.publish(pressure?.level === "critical");
   }
   if (
     collectDiagnostics &&

@@ -315,6 +315,7 @@ describe("AppSidebar group mutation collapsed state", () => {
           ),
         );
         expect(toast.querySelector(".app-toast__description")?.textContent).toBe("Try again.");
+        expect(toast.querySelector('.app-toast[role="alert"]')).not.toBeNull();
         toast.remove();
       }
     },

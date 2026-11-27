@@ -111,6 +111,11 @@ export class TuiSessionRunCoordinator {
     if (!confirmedRun && this.isRetiredOrphanRun(runId)) {
       return;
     }
+    if (!this.sessionRuns.has(runId) && !this.finalizedRuns.has(runId)) {
+      // A newer run supersedes retained errors: rebuilt history must not
+      // re-append them below it as if they were fresh failures.
+      this.liveTerminalErrorMessages.clear();
+    }
     if (confirmedRun) {
       this.confirmedStreamRunIds.add(runId);
       if (this.confirmedStreamRunIds.size > MAX_TRACKED_RUNS) {

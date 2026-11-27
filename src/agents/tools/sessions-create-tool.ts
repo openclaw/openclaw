@@ -1,5 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { readAdmittedUnlinkedChannelRequester } from "../../auto-reply/requester-profile.js";
 import { jsonResult, readToolStringParam, ToolInputError, type AnyAgentTool } from "./common.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { SessionsCreateToolSchema } from "./sessions-create-tool-schema.js";
 import type { SessionsSpawnToolOptions } from "./sessions-spawn-options.js";
 import { createSessionsSpawnTool } from "./sessions-spawn-tool.js";
@@ -16,7 +18,7 @@ export function createSessionsCreateTool(opts?: SessionsSpawnToolOptions): AnyAg
     label: "New session",
     name: "sessions_create",
     description:
-      "Use only when the user explicitly requests a new independent session or task. Ordinary helper delegation and unrequested follow-ups do not authorize independent creation. Create a normal independent persistent visible session, optionally starting work with message. Omit message for an idle session. Inherits this conversation's sandbox, tool, and permission limits; not a supervised child or transcript fork. Returns sessionKey, sessionId, and runStarted, plus runId or runError when available. Creation and initial-run acceptance are separate; a startup failure leaves the session available. No child completion event or yield expectation.",
+      "Create a persistent visible session only for user-requested independent sessions, tasks, or standalone recurring automations. Ordinary helper delegation and unrequested follow-ups do not authorize creation. For standalone recurring automation, create an idle named session, then schedule against its returned sessionKey. Omit message for idle; supply it to start work. Inherits this conversation's sandbox, tool, and permission limits; not a supervised child or transcript fork. Returns sessionKey, sessionId, runStarted and, when available, runId or runError. Startup failure leaves the session available. No child completion event or yield expectation.",
     parameters: SessionsCreateToolSchema,
     execute: async (toolCallId, rawArgs, signal) => {
       const params = asOptionalRecord(rawArgs);
@@ -36,6 +38,20 @@ export function createSessionsCreateTool(opts?: SessionsSpawnToolOptions): AnyAg
         }
       }
       const { message: _message, ...destination } = params;
+      // An unlinked source has no person to select. Ignore only this stray model selector,
+      // never a linked participant refusal or a missing/revoked requester context.
+      const caller = getGatewayToolCallerIdentity();
+      const unlinkedRequester = readAdmittedUnlinkedChannelRequester(
+        caller?.operationalRunInstance,
+      );
+      if (
+        readToolStringParam(params, "user") !== undefined &&
+        !caller?.operatorAuthority &&
+        unlinkedRequester
+      ) {
+        unlinkedRequester();
+        delete destination.user;
+      }
       const message =
         params.message === undefined
           ? undefined

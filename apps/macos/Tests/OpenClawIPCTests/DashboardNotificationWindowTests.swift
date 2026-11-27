@@ -344,7 +344,10 @@ extension DashboardWindowOwnershipTests {
             #expect(current.window === window)
             if scenario.hasSuffix("-close") {
                 #expect(!current.isWindowOpen)
-                #expect(current.webView.url?.path == "/")
+                // Close unloads the native document; reopening restores the route the late click left alone.
+                #expect(current.webView.url?.absoluteString == "about:blank")
+                current.show()
+                try await self.waitForDashboard(current, path: "/")
             } else {
                 try await self.waitForDashboard(current, path: "/chat/main/dashboard/completed")
             }

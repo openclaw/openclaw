@@ -235,12 +235,18 @@ function tabCloseHasTransparentBackground(tab: Locator) {
   });
 }
 
-async function dragDivider(page: Page, divider: Locator, axis: "x" | "y", delta: number) {
+async function dragDivider(
+  page: Page,
+  divider: Locator,
+  axis: "x" | "y",
+  delta: number,
+  grabOffset = 1,
+) {
   await waitForPanelGeometry(page);
   const box = await divider.boundingBox();
   expect(box).not.toBeNull();
-  const x = box!.x + (axis === "x" ? 1 : box!.width / 2);
-  const y = box!.y + (axis === "y" ? 1 : box!.height / 2);
+  const x = box!.x + (axis === "x" ? grabOffset : box!.width / 2);
+  const y = box!.y + (axis === "y" ? grabOffset : box!.height / 2);
   await page.mouse.move(x, y);
   await page.mouse.down();
   await page.mouse.move(axis === "x" ? box!.x + delta : x, axis === "y" ? box!.y + delta : y);
@@ -488,6 +494,11 @@ async function exerciseTabbedPanel(page: Page) {
   const divider = page.locator(".sidebar-column__divider");
   await dragDivider(page, divider, "x", -90);
   await expect.poll(() => panelSize(page, "width")).toBeGreaterThan(panelWidth + 70);
+  // Both sides of the centered line must grab without covering panel content.
+  const widenedWidth = await panelSize(page, "width");
+  const gutterWidth = (await divider.boundingBox())!.width;
+  await dragDivider(page, divider, "x", 40, gutterWidth / 2 + 2);
+  await expect.poll(() => panelSize(page, "width")).toBeLessThan(widenedWidth - 20);
   const resizedWidth = await panelSize(page, "width");
 
   await dockChatSidePanel(page, "bottom");
@@ -500,6 +511,10 @@ async function exerciseTabbedPanel(page: Page) {
   const bottomHeight = await panelSize(page, "height");
   await dragDivider(page, divider, "y", -70);
   await expect.poll(() => panelSize(page, "height")).toBeGreaterThan(bottomHeight + 50);
+  const tallerHeight = await panelSize(page, "height");
+  const gutterHeight = (await divider.boundingBox())!.height;
+  await dragDivider(page, divider, "y", 30, gutterHeight / 2 + 2);
+  await expect.poll(() => panelSize(page, "height")).toBeLessThan(tallerHeight - 15);
   const resizedHeight = await panelSize(page, "height");
   await page.mouse.move(80, 80);
   await page.mouse.click(300, 100);
@@ -743,6 +758,7 @@ suite.define(() => {
         const request = await gateway.waitForRequest("sessions.companion.ask");
         expect(request.params).toEqual({
           agentId: "main",
+          askId: expect.any(String),
           question: "Can I use side chat here?",
           sessionKey,
         });
@@ -804,7 +820,7 @@ suite.define(() => {
         await clear.waitFor({ state: "hidden" });
         await openChatPanels(page, "mobile");
         await companion
-          .getByText("Answers come from this session's transcript and its project files.", {
+          .getByText("Answers come from this session’s conversation and its project files.", {
             exact: true,
           })
           .waitFor();

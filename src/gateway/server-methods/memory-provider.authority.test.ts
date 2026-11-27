@@ -38,7 +38,7 @@ async function call(
   method: string,
   params: Record<string, unknown>,
   client: Client = cliClient(),
-  extra: Partial<Pick<GatewayRequestHandlerOptions, "signal" | "hasCurrentClientAuthority">> = {},
+  extra: Partial<Pick<GatewayRequestHandlerOptions, "signal">> = {},
 ) {
   const respond = vi.fn();
   await handleGatewayRequest({
@@ -120,16 +120,6 @@ describe("memory provider reads through Gateway dispatch", () => {
     expectRpcResult(admin, expect.objectContaining({ agentId: "main" }));
   });
 
-  it("refuses a content read before provider I/O when the Gateway becomes shared during open", async () => {
-    open.mockImplementation(async (input) => {
-      sharedGateway = true;
-      input.context.assertCurrent();
-      return { provider };
-    });
-    await expectDenied("memory.search", searchParams, "requires an administrator");
-    expect(provider.search).not.toHaveBeenCalled();
-  });
-
   it.each([
     { method: "memory.search", client: () => cliClient([]), message: "operator.read" },
     {
@@ -144,29 +134,23 @@ describe("memory provider reads through Gateway dispatch", () => {
     expect(open).not.toHaveBeenCalled();
   });
 
-  it.each(["request abort", "connection close", "client invalidation", "authority loss"] as const)(
+  it.each(["request abort", "connection close"] as const)(
     "refuses an operator read before provider I/O after %s during open",
     async (change) => {
       const client = cliClient();
       const request = new AbortController();
       const connection = new AbortController();
-      let authorized = true;
       Object.assign(client, { connectionSignal: connection.signal });
       open.mockImplementation(async () => {
         if (change === "request abort") {
           request.abort(new Error("request cancelled"));
-        } else if (change === "connection close") {
-          connection.abort(new Error("connection closed"));
-        } else if (change === "client invalidation") {
-          Object.assign(client, { invalidated: true });
         } else {
-          authorized = false;
+          connection.abort(new Error("connection closed"));
         }
         return { provider };
       });
       const respond = await call("memory.search", searchParams, client, {
         signal: request.signal,
-        hasCurrentClientAuthority: () => authorized,
       });
       expectRpcError(respond, { code: "UNAVAILABLE" });
       expect(provider.search).not.toHaveBeenCalled();

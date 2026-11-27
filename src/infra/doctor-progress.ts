@@ -45,6 +45,14 @@ export function formatDoctorProgressPhase(phase: DoctorProgressPhase): string {
 
 const CORE_LABELS = new Set(CORE_PHASES.map(formatDoctorProgressPhase));
 
+// Only core-owned reasons may leave the child; plugin/config values are not diagnostics.
+const RETIREMENT_WIDENING =
+  /^Retirement-only Doctor widened: (?:config\.(?:model-retirement(?:\.(?:pending-changes|change-notes|warning-notes(?:\.codex-routes)?|auth-findings|model-replacements|model-repair-warnings))?|config-repair|config-missing|config-invalid|legacy-write-blocked|heartbeat-deferred|preflight-unsettled|preflight-config-changed|state-migration-unsettled|cron-selection-unresolved|heartbeat-migration|billing-migration|repair-warning|mutable-allowlist-warning|plugin-warning|billing-warning|plugin-inventory-changed|channel-work|provider-renames|blocked-models|phone-cleanup|session-plan-unbound|session-plan-refused|preparation)|agent-admission|startup-findings|startup-warnings|doctor:(?:write-config-migrations|auth-profile-migration|session-transcripts|codex-session-routes|write-config|final-config-validation)(?:\.failed)?)$/u;
+
+export function parseDoctorRetirementWideningLine(line: string): string | undefined {
+  return RETIREMENT_WIDENING.test(line) ? line : undefined;
+}
+
 /** Reconstruct only bounded core facts, never arbitrary child diagnostic text. */
 export function parseDoctorProgressLine(line: string): string | undefined {
   if (line.length > 128) {

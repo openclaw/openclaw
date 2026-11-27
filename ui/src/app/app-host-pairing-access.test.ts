@@ -150,6 +150,7 @@ function createPairingShell(params: {
     pendingGatewayConnection: null,
     confirmPendingGatewayConnection: () => undefined,
     cancelPendingGatewayConnection: () => undefined,
+    navigateAppLink: () => false,
     setShell: () => undefined,
     start: async () => undefined,
     stop: () => router.stop(),
@@ -530,7 +531,7 @@ describe("application shell pairing access", () => {
     button?.click();
     expect(writeText).toHaveBeenCalledWith("pair-mobile-secret");
 
-    await waitForFast(() => expect(button?.textContent?.trim()).toBe("Copy failed"));
+    await waitForFast(() => expect(button?.textContent?.trim()).toBe("Couldn’t copy. Try again."));
     expect(button?.getAttribute("aria-label")).toBeNull();
     expect(button?.querySelector("svg")).not.toBeNull();
     expect(execCommand).toHaveBeenCalledWith("copy");

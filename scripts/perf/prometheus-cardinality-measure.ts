@@ -21,7 +21,7 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import shape from "../../extensions/diagnostics-prometheus/benchmarks/render-shape-2026-10-23.json" with { type: "json" };
 import {
-  PROMETHEUS_FAMILY_RESERVES,
+  PROMETHEUS_FAMILY_LIMITS,
   type PrometheusMetricName,
 } from "../../extensions/diagnostics-prometheus/src/prometheus-family-budget.js";
 import { createPrometheusMetricStore } from "../../extensions/diagnostics-prometheus/src/prometheus-metric-store.js";
@@ -72,7 +72,7 @@ for (const row of [...shape.histograms, ...shape.scalars]) {
   if (workerFamilies.has(row.name)) {
     continue;
   }
-  assert(Object.hasOwn(PROMETHEUS_FAMILY_RESERVES, row.name));
+  assert(Object.hasOwn(PROMETHEUS_FAMILY_LIMITS, row.name));
   // This committed fixture names only registered exporter families.
   const name = row.name as PrometheusMetricName;
   for (let index = 0; index < row.labelSets; index++) {

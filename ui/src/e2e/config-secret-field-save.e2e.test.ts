@@ -50,11 +50,8 @@ const storedSnapshot = {
 };
 // What the Gateway sends when the file holds "Bearer ${TOKEN}": redacted like plaintext, no text.
 const templateSnapshot = { ...storedSnapshot, raw: null };
-const includeSnapshot = {
-  ...storedSnapshot,
-  parsed: { logging: { $include: "./logging.json5" } },
-  raw: JSON.stringify({ logging: { $include: "./logging.json5" } }),
-};
+const include = { logging: { $include: "./logging.json5" } };
+const includeSnapshot = { ...storedSnapshot, parsed: include, raw: JSON.stringify(include) };
 
 async function openForm(page: Page, current: Record<string, unknown> = snapshot) {
   await page.clock.install();
@@ -166,7 +163,10 @@ suite.define(() => {
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
 
-      await token.fill(PARTIAL);
+      const ime = await page.context().newCDPSession(page);
+      await ime.send("Input.imeSetComposition", { text: "x", selectionStart: 1, selectionEnd: 1 });
+      await token.press("Enter");
+      await ime.send("Input.insertText", { text: PARTIAL });
       await gateway.deferNext("config.patch");
       await save.click();
       const request = await gateway.waitForRequest("config.patch");

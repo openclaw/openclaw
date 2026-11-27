@@ -121,6 +121,11 @@
   align-content: start;
 }
 
+/* Connection errors and suggested fixes can contain unbroken account or destination IDs. */
+.channels-detail__body > .callout {
+  overflow-wrap: anywhere;
+}
+
 .channels-detail__issue + .channels-detail__issue {
   margin-block-start: var(--space-2);
 }
@@ -322,11 +327,6 @@
   color: var(--text-strong);
   font-weight: 620;
   line-height: 1.4;
-}
-
-.channels-wizard__options {
-  display: grid;
-  gap: var(--space-2);
 }
 
 .channels-wizard__option {

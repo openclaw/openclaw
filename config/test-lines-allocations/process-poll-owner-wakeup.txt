@@ -1,2 +1,0 @@
-# Extend the existing process poll regression to require immediate output and exit observation.
-13

@@ -4,15 +4,15 @@ import { en } from "./en.ts";
 const enChatCommandResults = {
   chat: {
     commandResults: {
-      newUnavailable: "New Chat is unavailable.",
-      forkUnavailable: "Fork conversation is unavailable.",
-      notConnected: "Gateway not connected",
-      cannotRunDisconnected: "Cannot run `/{name}`: Control UI is not connected to the Gateway.",
+      newUnavailable: "Couldn’t start a new session. Try again.",
+      forkUnavailable: "Couldn’t fork this session. Try again.",
+      notConnected: "Reconnect to continue.",
+      cannotRunDisconnected: "Reconnect to use /{name}.",
       failedUnexpectedly: "Command `/{name}` failed unexpectedly.",
-      failed: "Command /{name} failed.",
+      failed: "Couldn’t use /{name}. Try again.",
       unknownCommand: "Couldn’t find `{command}`. Type `/` to see available commands.",
       options: "Options: {options}.",
-      connectionChanged: "The Gateway connection changed. Try the command again.",
+      connectionChanged: "The connection changed. Try the command again.",
       sessionUnavailable: "Couldn’t access this session. Open another session and try again.",
       help: {
         availableCommands: "Available commands",
@@ -87,6 +87,7 @@ const enChatCommandResults = {
         timeout: "Couldn’t guide the agent’s reply because it ended. Send a new message.",
         failed: "Couldn’t guide the agent’s reply. Try again.",
         usage: "Usage: `/steer <message>`",
+        requested: "Steering…",
         succeeded: "Steered.",
         requestFailed: "Couldn’t guide the agent’s reply. Try again.\n\n{error}",
       },
@@ -94,6 +95,7 @@ const enChatCommandResults = {
         timeout: "Couldn’t restart the agent’s reply because it ended. Send a new message.",
         failed: "Couldn’t restart the agent’s reply. Try again.",
         usage: "Usage: `/redirect <message>`",
+        requested: "Redirecting…",
         succeeded: "Redirected.",
         requestFailed: "Couldn’t restart the agent’s reply. Try again.\n\n{error}",
       },

@@ -2,6 +2,7 @@ import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coe
 import { isActiveEmbeddedRunId } from "../agents/embedded-agent-runner/runs.js";
 import { formatWorktreeGcResult } from "../agents/worktrees/gc-result.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { pruneRegisteredAgentToolUsage } from "../config/sessions/tool-usage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   hasAgentRunContextExecutionOwner,
@@ -22,11 +23,13 @@ import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { pruneOrphanedDeliveryQueueMedia } from "../infra/outbound/delivery-queue-media-spool.js";
 import { generateSecureInt } from "../infra/secure-random.js";
+import { reclaimAbandonedSqliteSnapshots } from "../infra/sqlite-readonly-worker.js";
 import { checkTelemetryUpdate } from "../infra/telemetry.js";
 import { cleanOldMedia, pruneOutboundMedia, prunePlaybackTranscodeCache } from "../media/store.js";
 import {
   getGatewayRestartDrainSignal,
   isGatewayWorkAdmissionClosed,
+  runWithGatewayDetachedWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import { listRpcSourceEntries } from "../sessions/session-controller.rpc-sources.js";
@@ -40,6 +43,7 @@ import {
 } from "./channel-thaw-restart.js";
 import { pruneStaleControlPlaneBuckets } from "./control-plane-rate-limit.js";
 import type { HealthSummary } from "./health/types.js";
+import { cleanupManagedOutgoingMediaRecords } from "./managed-image-attachments.js";
 import {
   chatAbortMarkerTimestampMs,
   type ChatRunEntry,
@@ -64,6 +68,7 @@ import { setBroadcastHealthUpdate } from "./server/health-state.js";
 import { startSessionColdStorageMaintenance } from "./session-cold-storage-maintenance.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
 import { captureGatewayScopeMatcher } from "./session-runtime-scope.js";
+import { sweepUnreachableSessionYields } from "./session-yield-sweep.js";
 import { checkGatewayInstallationReplacement } from "./stale-install.js";
 import { startWorktreeMaintenance } from "./worktree-maintenance.js";
 
@@ -438,10 +443,29 @@ export function startGatewayMaintenanceTimers(params: {
 
   const skillUsageCleanup = registerSkillUsageTracking();
 
+  scheduleMedia("tool-usage-retention", async () => {
+    try {
+      if (mediaScheduler.signal.aborted || isGatewayWorkAdmissionClosed()) {
+        return;
+      }
+      await runWithGatewayDetachedWorkAdmission(
+        () =>
+          pruneRegisteredAgentToolUsage({
+            now: mediaScheduler.now(),
+            assertCurrent: () => mediaScheduler.signal.throwIfAborted(),
+          }),
+        "runtime:tool-usage-retention",
+        mediaScheduler.signal,
+      );
+    } catch (error) {
+      if (!mediaScheduler.signal.aborted) {
+        params.logHealth.error(`tool usage retention failed: ${formatError(error)}`);
+      }
+    }
+  });
+
   scheduleMedia("sqlite-snapshots", async () => {
     try {
-      const { reclaimAbandonedSqliteSnapshots } =
-        await import("../infra/sqlite-snapshot-reclamation.js");
       const result = await reclaimAbandonedSqliteSnapshots(mediaScheduler.signal);
       if (result.removed || result.skipped) {
         params.logHealth.info(
@@ -453,7 +477,7 @@ export function startGatewayMaintenanceTimers(params: {
     }
   });
 
-  schedulePeriodic("dedupe", 60_000, () => {
+  schedulePeriodic("dedupe", 60_000, async () => {
     const AGENT_RUN_SEQ_MAX = 10_000;
     const now = scheduler.now();
     pruneExpiredArtifactDownloads(now);
@@ -548,10 +572,17 @@ export function startGatewayMaintenanceTimers(params: {
     }
     // Sweep stale agent run contexts (orphaned when lifecycle end/error is missed).
     sweepStaleRunContexts();
+    if (params.resolveGatewayContext && !isGatewayWorkAdmissionClosed()) {
+      const resolveGatewayContext = params.resolveGatewayContext;
+      await runWithGatewayDetachedWorkAdmission(
+        () => sweepUnreachableSessionYields(resolveGatewayContext, restartDrainSignal),
+        "runtime:yield-settlement",
+        restartDrainSignal,
+      );
+    }
   });
 
   const runManagedOutgoingMediaGc = async () => {
-    const { cleanupManagedOutgoingMediaRecords } = await import("./managed-image-attachments.js");
     return await cleanupManagedOutgoingMediaRecords({
       hasActiveSessionRun: (sessionKey, agentId) => {
         const cfg = params.getRuntimeConfig();

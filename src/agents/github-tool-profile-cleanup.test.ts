@@ -28,11 +28,11 @@ vi.mock("@openclaw/fs-safe/advanced", async (importOriginal) => {
   };
 });
 
+import { cleanupRetiredManagedGitHubProfiles } from "./github-tool-profile-cleanup.js";
 import {
   resolveManagedGitHubAgentKey,
   resolveManagedGitHubProfileRoot,
-} from "./github-tool-identity.js";
-import { cleanupRetiredManagedGitHubProfiles } from "./github-tool-profile-cleanup.js";
+} from "./github-tool-profile-path.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const makeProfileId = (digit: string) => `ghp_${digit.repeat(32)}`;
@@ -66,6 +66,33 @@ beforeEach(async () => {
   stateDir = await fs.realpath(tempDirs.make("openclaw-github-cleanup-"));
   env = { OPENCLAW_STATE_DIR: stateDir };
   systemRoot = resolveManagedGitHubProfileRoot({ agentId: "system", scope: "system", env });
+});
+
+it("skips the recovery store and agent roster when both profile roots are absent", async () => {
+  const readAgents = vi.fn(() => ({}));
+  const result = await cleanup({
+    get agents() {
+      return readAgents();
+    },
+  });
+
+  expect(result.warnings).toEqual([]);
+  expect([oauthMocks.list.mock.calls.length, readAgents.mock.calls.length]).toEqual([0, 0]);
+});
+
+it("preserves a replacement system root if it changes while reading recovery records", async () => {
+  const profileId = makeProfileId("1");
+  await createProfile(systemRoot, profileId);
+  const originalRoot = path.join(stateDir, "original-root");
+  oauthMocks.list.mockImplementationOnce(async () => {
+    await fs.rename(systemRoot, originalRoot);
+    await createProfile(systemRoot, profileId);
+    return [];
+  });
+
+  await expect(cleanup()).rejects.toThrow();
+  await expectProfile(path.join(originalRoot, profileId));
+  await expectProfile(path.join(systemRoot, profileId));
 });
 
 it.each(["EBUSY", "ENOENT"])("continues after agent-root %s errors", async (errorCode) => {
@@ -142,6 +169,7 @@ it.each(["root", "ancestor"])("preserves profiles behind a symlinked %s", async 
   const result = await cleanup();
 
   expect(result.warnings).toHaveLength(alias === "root" ? 1 : 2);
+  expect(oauthMocks.list).not.toHaveBeenCalled();
   await expectProfile(profile);
 });
 
@@ -188,21 +216,30 @@ it("bounds warnings while preserving every unexpected profile entry", async () =
   expect(await fs.readdir(systemRoot)).toHaveLength(23);
 });
 
-it("preserves a durable recovery generation until its OAuth record retires", async () => {
-  const configured = makeProfileId("8");
-  const recovery = makeProfileId("9");
-  await createSystemProfiles([configured, recovery, makeProfileId("a")]);
-  const record = { profileId: recovery, scope: "system", agentId: "system" };
-  oauthMocks.list.mockReturnValue([{ profileId: recovery, record }]);
+it.each(["system", "agent"] as const)(
+  "preserves a durable %s recovery generation until its OAuth record retires",
+  async (scope) => {
+    const configured = makeProfileId("8");
+    const recovery = makeProfileId("9");
+    const agentId = scope === "system" ? "system" : "reviewer";
+    const root = scope === "system" ? systemRoot : agentRootFor(agentId);
+    await Promise.all(
+      [configured, recovery, makeProfileId("a")].map((id) => createProfile(root, id)),
+    );
+    const record = { profileId: recovery, scope, agentId };
+    oauthMocks.list.mockReturnValue([{ profileId: recovery, record }]);
 
-  const config = { tools: { github: { profileId: configured } } };
-  expect((await cleanup(config)).warnings).toEqual([]);
-  expect((await fs.readdir(systemRoot)).toSorted()).toEqual([configured, recovery]);
+    const tools = { github: { profileId: configured } };
+    const config =
+      scope === "system" ? { tools } : { agents: { entries: { [agentId]: { tools } } } };
+    expect((await cleanup(config)).warnings).toEqual([]);
+    expect((await fs.readdir(root)).toSorted()).toEqual([configured, recovery]);
 
-  oauthMocks.list.mockReturnValue([]);
-  expect((await cleanup(config)).warnings).toEqual([]);
-  expect(await fs.readdir(systemRoot)).toEqual([configured]);
-});
+    oauthMocks.list.mockReturnValue([]);
+    expect((await cleanup(config)).warnings).toEqual([]);
+    expect(await fs.readdir(root)).toEqual([configured]);
+  },
+);
 
 it("refuses symlink generations without touching their targets", async () => {
   const outside = await fs.realpath(tempDirs.make("openclaw-github-cleanup-outside-"));

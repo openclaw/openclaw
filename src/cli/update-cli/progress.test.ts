@@ -6,6 +6,7 @@ import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import { getUpdateRunForProgressAsync } from "../../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import { createUpdateRunRecordFixture } from "../../infra/update-run-record.test-support.js";
+import { updateRunWarningMessages } from "../../infra/update-run-step.js";
 import { UPDATE_RUN_HEARTBEAT_MS } from "../../infra/update-run-timeouts.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
@@ -197,6 +198,84 @@ describe("update progress", () => {
       expect.objectContaining({ status: "ok", reportPath }),
     );
   });
+
+  it.each([
+    {
+      platform: "linux" as const,
+      path: "/report files/operator's $HOME `echo nope`;[1].md",
+      command:
+        "Read report (shell): cat -- '/report files/operator'\\''s $HOME `echo nope`;[1].md'",
+    },
+    {
+      platform: "win32" as const,
+      path: "C:\\report files\\operator's ‘notes’ $HOME `echo nope`;[1].md",
+      command:
+        "Read report (PowerShell): Get-Content -LiteralPath 'C:\\report files\\operator''s ‘‘notes’’ $HOME `echo nope`;[1].md'",
+    },
+  ])("prints a copyable $platform read command beside the saved path", async (fixture) => {
+    vi.spyOn(process, "platform", "get").mockReturnValue(fixture.platform);
+    vi.mocked(writeUpdateRunReportArtifact).mockResolvedValue(fixture.path);
+    await printResult(result, { run: context });
+    expect(log).toHaveBeenCalledWith(`Report: ${fixture.path}`);
+    expect(log).toHaveBeenCalledWith(fixture.command);
+  });
+
+  it("omits path and read guidance when the report could not be saved", async () => {
+    silenceErrors();
+    vi.mocked(writeUpdateRunReportArtifact).mockRejectedValue(new Error("report unavailable"));
+    await printResult(result, { run: context });
+    expect(printed()).not.toContain("Report:");
+    expect(printed()).not.toContain("Read report");
+  });
+
+  it.each([true, false])(
+    "replaces late warning snapshots without reopening history (JSON: %s)",
+    async (json) => {
+      const writeJson = jsonOutput();
+      const captured: UpdateRunRecord = {
+        ...run,
+        status: "succeeded",
+        phase: "finished",
+        steps: [
+          { step: "warning:cleanup", status: "completed", detail: "old warning" },
+          { step: "warning:cleanup:2", status: "completed", detail: "old extra warning" },
+          { step: "warning:cleanup:neighbor", status: "completed", detail: "other warning" },
+        ],
+      };
+      const saved = structuredClone(captured);
+      const read = refuseHistory("Captured reporting must not reopen history.").mockClear();
+      const emit = await prepareResult(
+        result,
+        { json, run: context },
+        { record: captured, writeArtifacts: false },
+      );
+      for (const warnings of [undefined, ["current warning"], []]) {
+        log.mockClear();
+        writeJson.mockClear();
+        emit([stepFixture("cleanup", { exitCode: 0, warnings })]);
+        const expected = [...(warnings ?? ["old warning", "old extra warning"]), "other warning"];
+        if (json) {
+          const output = writeJson.mock.calls.at(-1)?.[0] as { run: UpdateRunRecord };
+          expect(output.run.status).toBe("succeeded");
+          expect(updateRunWarningMessages(output.run.steps).toSorted()).toEqual(
+            expected.toSorted(),
+          );
+        } else {
+          expect(printed()).toContain(`${expected.length} warning`);
+          for (const message of expected) {
+            expect(printed()).toContain(message);
+          }
+          if (warnings) {
+            expect(printed()).not.toContain("old warning");
+            expect(printed()).not.toContain("old extra warning");
+          }
+        }
+      }
+      expect(read).not.toHaveBeenCalled();
+      expect(writeUpdateRunReportArtifact).not.toHaveBeenCalled();
+      expect(captured).toEqual(saved);
+    },
+  );
 
   it.each([true, false])(
     "renders step progress with only bound ledger phases (bound: %s)",

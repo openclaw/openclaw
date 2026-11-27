@@ -104,7 +104,7 @@ const question = (id: string, options: Partial<Question> = {}): Question => ({
   ...options,
 });
 const drained = { aborted: true, drained: true, forceCleared: false };
-const revoked = "Message injection authority is no longer current";
+const revoked = "The message input is no longer available. Start a new turn to retry.";
 const captureInjection = () => {
   let retained: (() => void) | undefined;
   const handle = nativeHandle({

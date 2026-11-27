@@ -63,7 +63,7 @@ const enPluginConsent = {
     community: "Community",
     enableNamed: "Enable {name}",
     installPolicy: {
-      technicalDetails: "Technical details",
+      technicalDetails: "Show details",
       severity: { info: "Info", warn: "Warning", critical: "Critical" },
       policyScope:
         "Continuing approves every install-policy warning encountered during this install. Each warning is checked again before installation continues.",

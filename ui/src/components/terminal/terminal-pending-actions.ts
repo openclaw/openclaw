@@ -1,3 +1,4 @@
+import { refreshControlUiServiceWorker } from "../../app/sw-refresh.ts";
 import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { TerminalPanelToggleDetail } from "../panel-toggle-contract.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
@@ -297,9 +298,10 @@ export function createTerminalIntentQueue(persistent = true) {
           releaseRefreshFence(host);
         }
       };
-      void import("../../app/sw-refresh.runtime.ts")
-        .then(({ refreshControlUiServiceWorker }) => refreshControlUiServiceWorker())
-        .then((replacementActivated) => (replacementActivated ? undefined : release()), release);
+      void refreshControlUiServiceWorker().then(
+        (replacementActivated) => (replacementActivated ? undefined : release()),
+        release,
+      );
     },
     beginRefreshFence(host: TerminalIntentHost, generation: number): void {
       const changed = !ownedRefreshPending || ownedRefreshTimedOut;

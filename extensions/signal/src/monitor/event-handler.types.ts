@@ -1,4 +1,5 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
+import type { ChannelIngressMonitorLifecycle } from "openclaw/plugin-sdk/channel-outbound";
 import type {
   DmPolicy,
   GroupPolicy,
@@ -8,6 +9,8 @@ import type {
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+
+export type SignalIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
 
 type SignalEnvelope = {
   sourceNumber?: string | null;
@@ -35,6 +38,7 @@ export type SignalDataMessage = {
   timestamp?: number;
   message?: string | null;
   attachments?: Array<SignalAttachment>;
+  viewOnce?: boolean | null;
   mentions?: Array<SignalMention> | null;
   groupInfo?: {
     groupId?: string | null;
@@ -42,6 +46,7 @@ export type SignalDataMessage = {
   } | null;
   quote?: {
     text?: string | null;
+    mentions?: Array<SignalMention> | null;
     author?: string | null;
     authorUuid?: string | null;
   } | null;

@@ -1,9 +1,8 @@
 import { setImmediate } from "node:timers/promises";
 import { format } from "node:util";
-import { afterEach, beforeEach, expect, expectTypeOf, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import type { UpdateCommandOptions } from "../cli/update-cli/shared.js";
-import type { MigratedUpdateFinalizationInput } from "../cli/update-cli/update-command-migrated-types.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -44,8 +43,8 @@ it.each([false, true])(
       vi.doUnmock("../flows/doctor-health.js");
     }
 
-    expect(fixture.stopService).not.toHaveBeenCalled();
     if (retirementOnly) {
+      expect(fixture.stopService).toHaveBeenCalledOnce();
       expect(doctor).toHaveBeenCalledExactlyOnceWith(
         expect.anything(),
         expect.anything(),
@@ -53,6 +52,7 @@ it.each([false, true])(
       );
       expect(process.exitCode).toBe(originalExitCode);
     } else {
+      expect(fixture.stopService).not.toHaveBeenCalled();
       expect(doctor).not.toHaveBeenCalled();
       expect(fixture.activation).not.toHaveBeenCalled();
       expect(process.exitCode).toBe(1);
@@ -71,7 +71,8 @@ const fixture = vi.hoisted(() => ({
   terminal: vi.fn(),
   writeFile: vi.fn(),
   stopService: vi.fn(),
-  ownerLease: vi.fn(),
+  createCapture:
+    vi.fn<typeof import("./update-doctor-result.js").createUpdateDoctorDatabaseWriteCapture>(),
   recordStep: vi.fn(),
   recordLedgerStep: vi.fn(),
   adopt: vi.fn(),
@@ -123,10 +124,6 @@ vi.mock("../cli/update-cli/update-command-service-maintenance.js", () => ({
   createWindowsTaskAutoStartGuard: vi.fn(),
   maybeStopManagedServiceBeforeMutableUpdate: fixture.stopService,
 }));
-vi.mock("../state/openclaw-state-db-doctor-schema.js", () => ({
-  openDoctorStateSchemaReadAdmission: vi.fn(),
-}));
-vi.mock("./gateway-owner-lease.js", () => ({ readGatewayOwnerLease: fixture.ownerLease }));
 vi.mock("../cli/update-cli/update-command-terminal.js", () => ({
   withUpdateCommandTerminalResult: async (run: (registerRun: () => void) => Promise<unknown>) =>
     run(vi.fn()),
@@ -149,7 +146,9 @@ vi.mock("./postgres-sync/pool.js", () => ({
 vi.mock("./update-finalization-budget.js", () => ({
   resolveUpdateFinalizationTimeoutMs: fixture.budget,
 }));
+// mock-isolation: Keep database capture and result-file writes outside the worker wiring fixture.
 vi.mock("./update-doctor-result.js", () => ({
+  createUpdateDoctorDatabaseWriteCapture: fixture.createCapture,
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV: "OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH",
   recordUpdateDoctorConfigWriteRefusal: vi.fn(),
   writeUpdatePostInstallDoctorResult: vi.fn(),
@@ -167,7 +166,7 @@ vi.mock("./update-run-ledger.js", () => ({
 vi.mock("./update-run-write.async.js", () => ({ recordUpdateRunStepAsync: fixture.recordStep }));
 
 const originalArgv = process.argv;
-const originalExitCode = process.exitCode;
+const originalExitCode = process.exitCode ?? 0;
 const originalRouting = loggingState.forceConsoleToStderr;
 const originalConsole = loggingState.rawConsole;
 const stdout: string[] = [];
@@ -216,8 +215,10 @@ function expectResultFile(
 }
 
 beforeEach(() => {
+  process.exitCode = originalExitCode;
   vi.resetModules();
   vi.clearAllMocks();
+  fixture.stopService.mockReset().mockResolvedValue({ stopped: false });
   stdout.length = 0;
   stderr.length = 0;
   loggingState.forceConsoleToStderr = false;
@@ -334,12 +335,6 @@ it.each(["database", "native"] as const)(
     expect(stderr.join("")).toContain(failure.message);
   },
 );
-
-it("keeps live callbacks and deadline owners out of the migrated wire contract", () => {
-  type Options = MigratedUpdateFinalizationInput["params"]["opts"];
-  expectTypeOf<Options>().not.toHaveProperty("onResult");
-  expectTypeOf<NonNullable<Options["run"]>>().not.toHaveProperty("deadline");
-});
 
 it("refuses a malformed post-core timeout before invoking the updater", async () => {
   const update = vi.fn();
@@ -685,7 +680,6 @@ it("does not stop a supervised predecessor when the delegated Doctor deadline ex
     return true;
   });
   vi.spyOn(Date, "now").mockImplementation(() => wallNow);
-  fixture.ownerLease.mockReturnValue({ state: "live", mode: "supervised" });
   await runDoctorWorker(doctor, { serviceInspectionDeadlineAtMs: deadlineAtMs }, () => {
     wallNow -= 90_000;
     elapsedMs = 501;
@@ -699,20 +693,13 @@ it("does not stop a supervised predecessor when the delegated Doctor deadline ex
   expect(process.exitCode).toBe(1);
 });
 
-it.each([
-  ["supervised", "stopped"],
-  ["supervised", "port-bound"],
-  ["supervised", "uncertain"],
-  ["foreground", "stopped"],
-  [undefined, "stopped"],
-] as const)(
-  "delegated Doctor respects %s owner and stop=%s before maintenance",
-  async (mode, stop) => {
+it.each(["stopped", "port-bound", "uncertain", "not-stopped"] as const)(
+  "delegated Doctor respects native service stop=%s before maintenance",
+  async (stop) => {
     const uncertain = stop === "uncertain";
     vi.spyOn(Date, "now").mockReturnValue(1_000);
     vi.spyOn(performance, "now").mockReturnValue(0);
-    const owner = mode ? { state: "live", mode } : undefined;
-    const stops = mode === "supervised";
+    const stops = stop !== "not-stopped";
     const doctor = vi.fn();
     const databasePluginOwners = {
       fixture: {
@@ -722,7 +709,6 @@ it.each([
         origin: "bundled",
       },
     };
-    fixture.ownerLease.mockReturnValue(owner);
     fixture.recordStep.mockImplementation(async (runId: string, step: unknown) => ({
       runId,
       status: "running",
@@ -739,6 +725,9 @@ it.each([
       serviceUpdateVerdict: { kind: "owned", root: "/synthetic", fingerprint: "f" },
     };
     fixture.stopService.mockImplementation(async (params: { onStopped?: (s: unknown) => void }) => {
+      if (!stops) {
+        return { stopped: false, inspected: true, runtimeInspected: true, running: false };
+      }
       params.onStopped?.(stoppedState);
       if (stop === "stopped") {
         return stoppedState;
@@ -754,6 +743,10 @@ it.each([
       serviceInspectionDeadlineAtMs: 1_500,
     });
 
+    expect(fixture.createCapture).toHaveBeenCalledExactlyOnceWith(
+      { "/synthetic/agent.sqlite": null },
+      expect.objectContaining({ root: "/synthetic", pluginOwners: databasePluginOwners }),
+    );
     if (uncertain) {
       expect(doctor).not.toHaveBeenCalled();
     } else {
@@ -766,15 +759,15 @@ it.each([
         }),
       );
     }
+    expect(fixture.stopService).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        root: "/synthetic",
+        phase: "prepare",
+        shouldRestart: true,
+        timeoutMs: 500,
+      }),
+    );
     if (stops) {
-      expect(fixture.stopService).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          root: "/synthetic",
-          phase: "prepare",
-          shouldRestart: true,
-          timeoutMs: 500,
-        }),
-      );
       // The receipt is a retained `finalize:` step whose key carries the identity,
       // so published parents' detail compaction cannot erase it.
       expect(fixture.recordStep).toHaveBeenCalledExactlyOnceWith(
@@ -788,7 +781,7 @@ it.each([
         );
       }
     } else {
-      expect(fixture.stopService).not.toHaveBeenCalled();
+      expect(fixture.recordStep).not.toHaveBeenCalled();
     }
   },
 );

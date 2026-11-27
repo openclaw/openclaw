@@ -1,6 +1,6 @@
 // Core-owned OpenRouter integration behind the existing focused provider contract.
 // Runtime setup stays lazy so other provider contracts do not load this fixture.
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderRuntimeHooks } from "../../agents/embedded-agent-runner/model.provider-hooks.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -9,7 +9,7 @@ import type { ProviderRuntimeContractPluginLoader } from "./provider-runtime-con
 export function describeOpenRouterRoutingCapabilitiesContract(
   load: ProviderRuntimeContractPluginLoader,
 ) {
-  const baseId = "openai/gpt-5.2";
+  const baseId = "acme/routing-capability-model";
   const row = {
     id: baseId,
     name: "Synthetic routing capability model",
@@ -17,6 +17,7 @@ export function describeOpenRouterRoutingCapabilitiesContract(
     top_provider: { max_completion_tokens: 23456 },
     architecture: { modality: "text+image->text", input_modalities: ["text", "image"] },
     supported_parameters: ["reasoning", "tools"],
+    reasoning: { mandatory: false, supported_efforts: ["high", "low"] },
     pricing: { prompt: "0.000002", completion: "0.000008" },
   };
   const providerConfig = {
@@ -41,7 +42,16 @@ export function describeOpenRouterRoutingCapabilitiesContract(
     let cfg: OpenClawConfig;
     let runtimeHooks: ProviderRuntimeHooks;
     let runtime: typeof import("../../agents/embedded-agent-runner/model.js");
-    const fetchCatalog = vi.fn(async () => Response.json({ data: rows }));
+    const realFetch = globalThis.fetch;
+    let loopbackUrl: string | undefined;
+    const fetchCatalog = vi.fn<typeof fetch>(async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url === loopbackUrl) {
+        return realFetch(input, init);
+      }
+      expect(url).toBe("https://openrouter.ai/api/v1/models");
+      return Response.json({ data: rows });
+    });
 
     beforeAll(async () => {
       vi.stubGlobal("fetch", fetchCatalog);
@@ -76,11 +86,18 @@ export function describeOpenRouterRoutingCapabilitiesContract(
         },
         runProviderDynamicModel: ({ context }) =>
           provider.resolveDynamicModel?.(context) ?? undefined,
+        shouldPreferProviderRuntimeResolvedModel: ({ context }) =>
+          provider.preferRuntimeResolvedModel?.(context) ?? false,
       };
       await loadOpenRouterModelCapabilities(baseId);
       expect(fetchCatalog).toHaveBeenCalled();
       expect(getLoadedOpenRouterModelCapabilities(baseId)?.contextWindow).toBe(456789);
     }, 60000);
+
+    // The node test config restores stubbed globals between cases.
+    beforeEach(() => {
+      vi.stubGlobal("fetch", fetchCatalog);
+    });
 
     afterAll(async () => {
       vi.unstubAllGlobals();
@@ -116,6 +133,7 @@ export function describeOpenRouterRoutingCapabilitiesContract(
           maxTokens: 23456,
           reasoning: true,
           input: ["text", "image"],
+          compat: { supportsTools: true, supportedReasoningEfforts: ["none", "high", "low"] },
         });
         expect(fetchCatalog).toHaveBeenCalledTimes(count);
       },
@@ -160,13 +178,15 @@ export function describeOpenRouterRoutingCapabilitiesContract(
             });
           }),
       });
+      const baseUrl = "http://127.0.0.1:" + reservation.claim.port + "/v1";
+      loopbackUrl = baseUrl + "/chat/completions";
       await runQaGatewayFixture(
         async () => {
           const stream = await createOpenAICompletionsTransportStreamFn()(
             {
               ...model,
               api: "openai-completions",
-              baseUrl: "http://127.0.0.1:" + reservation.claim.port + "/v1",
+              baseUrl,
             },
             { messages: [{ role: "user", content: "synthetic wire proof", timestamp: 0 }] },
             { apiKey: "synthetic-routing-test-key" },
@@ -179,6 +199,7 @@ export function describeOpenRouterRoutingCapabilitiesContract(
           expect(wireModel).toBe(requested);
         },
         async () => {
+          loopbackUrl = undefined;
           reservation.listener.closeAllConnections();
           await reservation.releaseListener();
         },
@@ -213,7 +234,7 @@ export function describeOpenRouterRoutingCapabilitiesContract(
         expect(await resolve(id)).toMatchObject({
           id,
           contextWindow: 200000,
-          maxTokens: 8192,
+          maxTokens: 32768,
           reasoning: false,
           input: ["text"],
         });
@@ -236,29 +257,36 @@ export function describeOpenRouterRoutingCapabilitiesContract(
         id: baseId + ":nitro",
         baseUrl: "https://proxy.example/api/v1",
         contextWindow: 200000,
-        maxTokens: 8192,
+        maxTokens: 32768,
         reasoning: false,
         input: ["text"],
       });
     });
 
-    it("preserves operator-authored model fields", async () => {
-      const id = baseId + ":nitro";
-      const authored = {
-        id,
-        name: "Operator model",
-        contextWindow: 98765,
-        maxTokens: 5432,
-        reasoning: false,
-        input: ["text" as const],
-        cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
-      };
-      const config: OpenClawConfig = {
-        models: {
-          providers: { openrouter: { ...providerConfig, models: [authored] } },
-        },
-      };
-      expect(await resolve(id, config)).toMatchObject(authored);
-    });
+    it.each([baseId, baseId + ":nitro"])(
+      "preserves authored limits and reasoning for %s",
+      async (id) => {
+        const authored = {
+          id,
+          name: "Operator model",
+          contextWindow: 98765,
+          maxTokens: 5432,
+          reasoning: false,
+          input: ["text" as const],
+          cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
+          compat: { supportedReasoningEfforts: ["low"] },
+        };
+        const config: OpenClawConfig = {
+          models: {
+            providers: { openrouter: { ...providerConfig, models: [authored] } },
+          },
+        };
+        expect(await resolve(id, config)).toMatchObject({
+          ...authored,
+          name: "Synthetic routing capability model",
+          compat: { supportsTools: true, supportedReasoningEfforts: ["low"] },
+        });
+      },
+    );
   });
 }

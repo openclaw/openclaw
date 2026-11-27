@@ -19,6 +19,7 @@ import { resolveStoredCredentialReadOnlyAvailability } from "../auth-profiles/re
 import { createSelectedAuthProfileUnavailableError } from "../auth-profiles/selection-error.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import {
+  getSoonestCooldownExpiry,
   isProfileInCooldown,
   resolveProfilesUnavailableReason,
 } from "../auth-profiles/usage-state.js";
@@ -74,6 +75,12 @@ function createAuthProfileCooldownError(
       reason,
       status: resolveFailoverStatus(reason),
       code: AUTH_PROFILE_COOLDOWN_ERROR_CODE,
+      rateLimitResetAt:
+        reason === "rate_limit" && params.authProfileStore
+          ? (getSoonestCooldownExpiry(params.authProfileStore, [profileId], {
+              forModel: params.modelId,
+            }) ?? undefined)
+          : undefined,
       provider: params.provider,
       model: params.modelId,
       profileId,
@@ -450,17 +457,18 @@ export function prepareAgentRuntimeAuth(
     availability?: boolean,
     authorization: ProviderModelAuthDirectSource["authorization"] = "declared",
   ) => buildProviderModelAuthDirectSource({ mode, evidence, availability, authorization });
-  const directPlanningCandidate = harnessAllowsAuthProfileForwarding
-    ? resolveProviderDirectAuthPlanningEvidence(
-        authProfileSelectionProvider,
-        params.env ?? process.env,
-        {
-          config: params.config,
-          workspaceDir: params.workspaceDir,
-          metadataSnapshot: params.metadataSnapshot,
-        },
-      )
-    : null;
+  const directPlanningCandidate =
+    harnessAllowsAuthProfileForwarding && !providerBindingSuppressesProfiles
+      ? resolveProviderDirectAuthPlanningEvidence(
+          authProfileSelectionProvider,
+          params.env ?? process.env,
+          {
+            config: params.config,
+            workspaceDir: params.workspaceDir,
+            metadataSnapshot: params.metadataSnapshot,
+          },
+        )
+      : null;
   // A setup hint does not supply a credential for a harness-owned login.
   const directPlanningEvidence =
     directPlanningCandidate?.kind === "setup-provider" &&

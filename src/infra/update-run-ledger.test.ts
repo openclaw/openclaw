@@ -126,6 +126,13 @@ describe("update run ledger", () => {
       host: "\0".repeat(255),
       pid: Number.MAX_SAFE_INTEGER - index,
       startIdentity: "9".repeat(128),
+      // The longest boot namespace the recorded shape admits.
+      namespace: JSON.stringify([
+        "freebsd",
+        "x".repeat(40),
+        `pid:[${"9".repeat(20)}]`,
+        "a".repeat(64),
+      ]),
     }));
     const run = createUpdateRun(
       {
@@ -143,8 +150,10 @@ describe("update run ledger", () => {
       options,
     );
     const retained = getUpdateRun(run.runId, options)!;
-    expect(retained.origin.driver).toEqual(drivers[0]);
-    expect(retained.origin.previousDrivers).toEqual(drivers.slice(1));
+    // Boot namespaces only skip a repair after a restart, so they yield before routing.
+    const identities = drivers.map(({ namespace: _namespace, ...identity }) => identity);
+    expect(retained.origin.driver).toStrictEqual(identities[0]);
+    expect(retained.origin.previousDrivers).toStrictEqual(identities.slice(1));
     expect(retained.origin).toMatchObject(admissionRouting);
     expect(retained.admission?.candidateVersion).toBe(candidateVersion);
     expect(retained.admission?.checks?.map((check) => check.name)).toEqual(
@@ -161,6 +170,83 @@ describe("update run ledger", () => {
       "Update safety checks ran in the candidate updater",
     );
     expect(Buffer.byteLength(JSON.stringify(retained.origin))).toBeLessThanOrEqual(16 * 1024);
+  });
+
+  it("drops driver boot namespaces, never a checkout activation, when receipts outgrow the origin", () => {
+    const options = isolatedOptions();
+    const identity = (index: number, host: string) => ({
+      host,
+      pid: Number.MAX_SAFE_INTEGER - index,
+      startIdentity: "9".repeat(128),
+    });
+    // The longest boot namespace the recorded shape admits.
+    const namespace = JSON.stringify([
+      "freebsd",
+      "x".repeat(40),
+      `pid:[${"9".repeat(20)}]`,
+      "a".repeat(64),
+    ]);
+    const drivers = Array.from({ length: UPDATE_RUN_DRIVER_LIMIT }, (_, index) =>
+      identity(index, "\0".repeat(255)),
+    );
+    const recorded = Array.from({ length: UPDATE_RUN_DRIVER_LIMIT }, (_, index) =>
+      Object.assign(identity(index, "\0".repeat(255)), { namespace }),
+    );
+    const managedHandoff = {
+      parent: identity(10, "\0".repeat(255)),
+      helper: identity(11, "h".repeat(255)),
+    };
+    // The longest checkout activation the recorded shape admits.
+    const gitActivation = {
+      sha: "f".repeat(64),
+      buildId: "b".repeat(96),
+      previousBuildId: "p".repeat(96),
+    };
+    const run = createUpdateRun(
+      {
+        trigger: "cli",
+        origin: {
+          driver: recorded[0],
+          previousDrivers: recorded.slice(1),
+          managedHandoff,
+          gitActivation,
+        },
+      },
+      options,
+    );
+
+    const retained = getUpdateRun(run.runId, options)!;
+    // Without namespaces a later update keeps explicit repair; the activation stays exact.
+    expect(retained.origin.driver).toStrictEqual(drivers[0]);
+    expect(retained.origin.previousDrivers).toStrictEqual(drivers.slice(1));
+    expect(retained.origin.gitActivation).toStrictEqual(gitActivation);
+    expect(retained.origin.managedHandoff).toStrictEqual(managedHandoff);
+    expect(Buffer.byteLength(JSON.stringify(retained.origin))).toBeLessThanOrEqual(16 * 1024);
+  });
+
+  it("keeps the closed cause enum exact when diagnostics overflow the origin budget", () => {
+    const options = isolatedOptions();
+    const detail = "d".repeat(1000);
+    // Just under the 16 KiB budget at creation, so only the terminal write overflows it.
+    const checks = Array.from({ length: 15 }, (_, index) => ({
+      name: `check-${index}`,
+      status: "refuse" as const,
+      detail,
+    }));
+    const run = createUpdateRun(
+      {
+        trigger: "cli",
+        origin: { admission: { owner: "candidate", protocol: 1, checks } },
+      },
+      options,
+    );
+    // Compaction halves diagnostic strings; "disk-full" must not become an invalid "disk".
+    finishUpdateRun(
+      run.runId,
+      { status: "failed", reason: "preflight-insufficient-space", nextAction: detail },
+      options,
+    );
+    expect(getUpdateRun(run.runId, options)?.origin.cause).toBe("disk-full");
   });
 
   it("keeps full-capacity recovery receipts exact while evicting admission and routing", () => {

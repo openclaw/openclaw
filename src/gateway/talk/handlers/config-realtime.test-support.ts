@@ -12,6 +12,37 @@ export function createTalkConfig(apiKey: unknown): OpenClawConfig {
   return { talk: { provider: "acme", providers: { acme } } } as OpenClawConfig;
 }
 
+export const talkRealtimeConfigProjectionCases: Array<{
+  name: string;
+  runtimeConfig: OpenClawConfig;
+  sourceConfig?: OpenClawConfig;
+  expected: Record<string, unknown>;
+  providerConfig?: Record<string, unknown>;
+}> = [
+  {
+    name: "runtime transport absent from source",
+    runtimeConfig: { talk: { realtime: { transport: "provider-websocket" } } },
+    sourceConfig: {},
+    expected: { transport: "provider-websocket" },
+  },
+  {
+    name: "unavailable non-OpenAI model without a bundled projector",
+    runtimeConfig: {
+      talk: {
+        realtime: {
+          provider: "other-realtime",
+          model: "other-live-model",
+          providers: {
+            "other-realtime": { model: "other-live-model", voice: "other-voice" },
+          },
+        },
+      },
+    },
+    expected: { provider: "other-realtime", model: "other-live-model" },
+    providerConfig: { model: "other-live-model", voice: "other-voice" },
+  },
+];
+
 /** Runs public wire/privacy cases inside the owning handler suite's isolated harness. */
 export function defineRealtimeConfigProjectionTests(
   requestConfig: (

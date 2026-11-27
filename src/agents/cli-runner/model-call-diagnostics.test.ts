@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -100,6 +100,23 @@ describe("Claude CLI model-call diagnostics", () => {
     );
     expect(Buffer.byteLength(outputJson, "utf8")).toBeLessThanOrEqual(CONTENT_LIMIT_BYTES);
     expect(outputJson).toContain("...(truncated)");
+  });
+
+  it("bounds JSON encoding of oversized prompts without splitting a surrogate pair", async () => {
+    using stringify = vi.spyOn(JSON, "stringify");
+    const marker = "...(truncated)";
+    // The escaped NUL and first emoji consume ten bytes, leaving two before the marker.
+    const prefix = "\0😀" + "a".repeat(CONTENT_LIMIT_BYTES - marker.length - 12);
+    const prompt = `${prefix}😀${"z".repeat(CONTENT_LIMIT_BYTES)}`;
+    const { inputMessages } = await captureModelContent(() => {}, "done", prompt);
+    expect(
+      stringify.mock.calls.some(
+        ([value]) => typeof value === "string" && value.length > CONTENT_LIMIT_BYTES,
+      ),
+    ).toBe(false);
+    expect(inputMessages).toEqual([
+      { role: "user", content: [{ type: "text", text: `${prefix}${marker}` }] },
+    ]);
   });
 
   it("bounds serialized escaped content across many envelopes", async () => {

@@ -1,3 +1,9 @@
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  resolveAgentModelFallbackValues,
+  resolveAgentModelPrimaryValue,
+} from "../../config/model-input.js";
+import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   providerSupportsNativePdfDocument,
@@ -14,7 +20,25 @@ import {
   resolveProviderVisionModelFromConfig,
 } from "./image-tool.helpers.js";
 import { hasProviderAuthForTool, resolveDefaultModelRef } from "./model-config.helpers.js";
-import { coercePdfModelConfig } from "./pdf-tool.helpers.js";
+
+type PdfModelConfig = Exclude<AgentModelConfig, string>;
+
+export function coercePdfModelConfig(cfg?: OpenClawConfig): PdfModelConfig {
+  const primary = resolveAgentModelPrimaryValue(cfg?.agents?.defaults?.pdfModel);
+  const fallbacks = resolveAgentModelFallbackValues(cfg?.agents?.defaults?.pdfModel);
+  const modelConfig: PdfModelConfig = {};
+  if (primary?.trim()) {
+    modelConfig.primary = primary.trim();
+  }
+  if (fallbacks.length > 0) {
+    modelConfig.fallbacks = fallbacks;
+  }
+  return modelConfig;
+}
+
+export function resolvePdfToolMaxTokens(modelMaxTokens: number | undefined) {
+  return Math.min(4096, asPositiveFiniteNumber(modelMaxTokens) ?? 4096);
+}
 
 export type PdfToolActiveModel = {
   provider: string;
@@ -24,7 +48,6 @@ export type PdfToolActiveModel = {
 
 type PdfModelConfigContext = {
   cfg?: OpenClawConfig;
-  agentDir: string;
   workspaceDir?: string;
   authStore?: AuthProfileStore;
 };
@@ -88,24 +111,29 @@ export function resolvePdfModelConfigForTool(
     hasProviderAuthForTool({ ...params, provider: activeProvider })
       ? formatProviderModelRef(activeProvider, activeModel)
       : null;
-  const providerOk = hasProviderAuthForTool({ ...params, provider: primary.provider });
-  const providerVision = resolveProviderVisionModelFromConfig({
-    cfg: params.cfg,
-    provider: primary.provider,
-  });
-  const providerDefault = providerVision
-    ? localModelIdForProvider(primary.provider, providerVision)
-    : resolveDefaultMediaModel({
-        cfg: params.cfg,
-        workspaceDir: params.workspaceDir,
-        providerId: primary.provider,
-        capability: "image",
-      });
-  const primarySupportsNativePdf = providerSupportsNativePdfDocument({
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-    providerId: primary.provider,
-  });
+  // No configured model contributes no primary-provider preference.
+  const providerOk =
+    primary !== undefined && hasProviderAuthForTool({ ...params, provider: primary.provider });
+  const providerVision =
+    primary &&
+    resolveProviderVisionModelFromConfig({ cfg: params.cfg, provider: primary.provider });
+  const providerDefault = !primary
+    ? undefined
+    : providerVision
+      ? localModelIdForProvider(primary.provider, providerVision)
+      : resolveDefaultMediaModel({
+          cfg: params.cfg,
+          workspaceDir: params.workspaceDir,
+          providerId: primary.provider,
+          capability: "image",
+        });
+  const primarySupportsNativePdf =
+    primary !== undefined &&
+    providerSupportsNativePdfDocument({
+      cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
+      providerId: primary.provider,
+    });
   const autoImageProviders = resolveAutoMediaKeyProviders({
     capability: "image",
     cfg: params.cfg,
@@ -152,7 +180,7 @@ export function resolvePdfModelConfigForTool(
     }
   }
   const textExtractionCandidates: string[] = [];
-  const providerIds = [primary.provider, ...autoImageProviders];
+  const providerIds = [...(primary ? [primary.provider] : []), ...autoImageProviders];
   for (const providerId of providerIds) {
     if (!providerId || !hasProviderAuthForTool({ ...params, provider: providerId })) {
       continue;
@@ -173,7 +201,7 @@ export function resolvePdfModelConfigForTool(
       mode: "image",
     });
     const preferredTextModel =
-      providerId === primary.provider
+      providerId === primary?.provider
         ? primary.model
         : resolveConfiguredTextModelFromConfig({ cfg: params.cfg, providerId });
     const providerDefaultImageModel = resolveDefaultMediaModel({
@@ -204,7 +232,9 @@ export function resolvePdfModelConfigForTool(
     }
   }
   const preferPrimaryTextExtraction =
-    providerOk && textExtractionCandidates.some((ref) => ref.startsWith(`${primary.provider}/`));
+    primary !== undefined &&
+    providerOk &&
+    textExtractionCandidates.some((ref) => ref.startsWith(`${primary.provider}/`));
 
   if (params.cfg?.models?.providers) {
     // Configured provider vision models are added even when not present in static media defaults.
@@ -244,7 +274,7 @@ export function resolvePdfModelConfigForTool(
     : [...nativePdfCandidates, ...genericImageCandidates, ...textExtractionCandidates];
 
   let preferred =
-    providerOk && primarySupportsNativePdf && (providerVision || providerDefault)
+    primary && providerOk && primarySupportsNativePdf && (providerVision || providerDefault)
       ? (providerVision ?? `${primary.provider}/${providerDefault}`)
       : (fallbackCandidates[0] ?? null);
 

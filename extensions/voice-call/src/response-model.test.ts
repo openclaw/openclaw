@@ -83,17 +83,14 @@ describe("resolveVoiceResponseModel", () => {
     });
   });
 
-  it("falls back to the compiled-in runtime default when nothing is configured", () => {
-    expect(
+  it("refuses to invent a model when nothing is configured", () => {
+    expect(() =>
       resolveVoiceResponseModel({
         cfg: {},
         agentId: "main",
         voiceConfig: normalizeVoiceCallConfig({}),
         agentRuntime,
       }),
-    ).toEqual({
-      provider: "openai",
-      model: "gpt-6-astra",
-    });
+    ).toThrow("No model configured for voice responses.");
   });
 });

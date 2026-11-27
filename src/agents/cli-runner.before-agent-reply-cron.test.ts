@@ -153,6 +153,7 @@ async function makeStubContext(params: Parameters<ProductionRunCliAgent>[0]) {
     authEpochVersion: 0,
     backendResolved: {},
     preparedBackend: { backend: { sessionMode: "none" } },
+    executionTarget: { kind: "process" },
     reusableCliSession: { mode: "none" },
   };
 }
@@ -340,8 +341,8 @@ describe("runCliAgent before_agent_reply seam", () => {
         } else {
           expect((await operation).payloads).toEqual([{ text: "hook result" }]);
           expect(effect).toHaveBeenCalledOnce();
-          expect(heldRequest).toThrow("no longer active");
-          expect(heldClaim).toThrow("no longer active");
+          expect(heldRequest).toThrow("The guarded request ended.");
+          expect(heldClaim).toThrow("The guarded request ended.");
         }
         expect(prepareMock).not.toHaveBeenCalled();
         expect(executeMock).not.toHaveBeenCalled();

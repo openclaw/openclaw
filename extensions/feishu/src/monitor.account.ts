@@ -9,12 +9,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv, HistoryEntry } from "../runtime-api.js";
 import { raceWithTimeoutAndAbort } from "./async.js";
-import {
-  handleFeishuMessage,
-  parseFeishuMessageEvent,
-  type FeishuMessageEvent,
-  type FeishuBotAddedEvent,
-} from "./bot.js";
+import { handleFeishuMessage } from "./bot.js";
 import { handleFeishuCardAction, type FeishuCardActionEvent } from "./card-action.js";
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 import { FEISHU_APPROVAL_REQUEST_ACTION } from "./card-ux-approval.js";
@@ -31,7 +26,9 @@ import {
   hasProcessedFeishuMessage,
   warmupDedupFromPluginState,
 } from "./dedup.js";
+import type { FeishuBotAddedEvent, FeishuMessageEvent } from "./event-types.js";
 import { createFeishuDurableIngress } from "./feishu-ingress.js";
+import { parseFeishuMessageEvent } from "./message-content.js";
 import { applyBotIdentityState, startBotIdentityRecovery } from "./monitor.bot-identity.js";
 import { createFeishuDriveCommentNoticeHandler } from "./monitor.comment-notice-handler.js";
 import type { FeishuStatusSink } from "./monitor.js";

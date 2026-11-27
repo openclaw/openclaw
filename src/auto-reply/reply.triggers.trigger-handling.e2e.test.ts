@@ -454,7 +454,7 @@ describe("trigger handling", () => {
       await expectInlineCommandHandledAndStripped({
         home,
         getReplyFromConfig,
-        body: "please /whoami now",
+        body: "/whoami please answer now",
         stripToken: "/whoami",
         blockReplyContains: "Identity",
         requestOverrides: { SenderId: "12345" },

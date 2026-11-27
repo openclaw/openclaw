@@ -1,5 +1,11 @@
-import type { SessionActorTarget } from "./session-actor-contract.js";
-import type { FileTarget, ReplicaCell, ReplicaPool } from "./session-actor-replica.types.js";
+import type { SessionActorHotState, SessionActorTarget } from "./session-actor-contract.js";
+import { sessionActorEntryFields } from "./session-actor-entry-fields.js";
+import type {
+  FileTarget,
+  ReplicaCell,
+  ReplicaPool,
+  SessionActorEntryFacts,
+} from "./session-actor-replica.types.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
 
 export function sessionActorReplicaTargetKey(target: SessionActorTarget): string {
@@ -53,4 +59,68 @@ export function unindexSessionActorReplicaCell(pool: ReplicaPool, cell: ReplicaC
       pool.cellsBySessionKey.delete(key);
     }
   }
+}
+
+// Residency is a heap estimate, not a wire-size limit. Trusted postimages are
+// acyclic plain data; count strings without allocating or scanning their JSON.
+export function estimateSessionActorReplicaBytes(
+  value: unknown,
+  sizes?: WeakMap<object, number>,
+  memoizeDescendants = true,
+  shared?: ReadonlySet<object>,
+): number {
+  if (typeof value === "string") {
+    return 16 + value.length * 2;
+  }
+  if (!value || typeof value !== "object") {
+    return 8;
+  }
+  if (shared?.has(value)) {
+    return 0;
+  }
+  const known = sizes?.get(value);
+  if (known !== undefined) {
+    return known;
+  }
+  const childSizes = memoizeDescendants ? sizes : undefined;
+  let bytes = 32;
+  if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index++) {
+      if (index in value) {
+        bytes += 16 + estimateSessionActorReplicaBytes(value[index], childSizes, false, shared);
+      }
+    }
+  } else {
+    for (const key in value) {
+      bytes +=
+        16 +
+        key.length * 2 +
+        estimateSessionActorReplicaBytes(Reflect.get(value, key), childSizes, true, shared);
+    }
+  }
+  sizes?.set(value, bytes);
+  return bytes;
+}
+
+const fieldSizes = new WeakMap<object, number>();
+
+export function chargeSessionActorReplicaEntryFields(
+  pool: ReplicaPool,
+  cell: ReplicaCell,
+  state: SessionActorEntryFacts | SessionActorHotState,
+): number {
+  cell.sharedFields = sessionActorEntryFields(state.entry);
+  for (const field of cell.sharedFields) {
+    let retained = pool.sharedFields.get(field);
+    if (!retained) {
+      retained = {
+        bytes: estimateSessionActorReplicaBytes(field, fieldSizes),
+        references: 0,
+      };
+      pool.sharedFields.set(field, retained);
+      pool.bytes += retained.bytes;
+    }
+    retained.references++;
+  }
+  return estimateSessionActorReplicaBytes(state, undefined, true, new Set(cell.sharedFields));
 }

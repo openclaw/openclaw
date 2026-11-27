@@ -6,6 +6,7 @@ import {
   type ToolsInvokeResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveGatewayConversationReadOrigin } from "../conversation-read-origin.js";
+import { readGatewayRequestAdmission } from "../operator-admission.js";
 import { invokeGatewayTool } from "../tools-invoke-shared.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -34,7 +35,7 @@ export const toolsInvokeHandlers: GatewayRequestHandlers = {
       operatorRoleActor: client?.internal?.operatorRoleActor,
       operatorScopes: client?.connect.scopes,
       approvalReviewerDeviceId: client?.connect.device?.id,
-      senderIsOwner: client?.connect?.scopes?.includes("operator.admin"),
+      senderIsOwner: readGatewayRequestAdmission(client).grant.owner,
       clientCaps: client?.connect?.caps,
       conversationReadOrigin: resolveGatewayConversationReadOrigin({
         client,

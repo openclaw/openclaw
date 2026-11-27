@@ -115,6 +115,13 @@ suite.define(() => {
       expect(await writes()).toBe(0);
 
       await detail.getByRole("button", { name: "Close", exact: true }).click();
+      const confirmation = page.getByRole("dialog", {
+        name: "Save changes to Telegram?",
+        exact: true,
+      });
+      await expect
+        .poll(() => confirmation.textContent())
+        .toContain("Your changes to Telegram aren’t saved. Discarding removes them.");
       await choose(page, "Keep editing");
       expect(await token.inputValue()).toBe(PARTIAL);
       expect(await writes()).toBe(0);

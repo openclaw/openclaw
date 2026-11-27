@@ -6,6 +6,7 @@ import { projectEffectiveExecPolicy } from "../agents/session-permission-exec-mo
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import type { WorkerLaunchPlan, WorkerToolAuthority } from "./launch-descriptor.js";
+import type { NodeExecutionContext } from "./node-execution-context.js";
 
 export const WORKER_TOOL_CONFIG = { plugins: { enabled: false } } satisfies OpenClawConfig;
 
@@ -21,6 +22,7 @@ export function createWorkerPlacementTools(params: {
   sessionId: string;
   runId: string;
   github?: PreparedGitHubToolEnvironment;
+  nodeExecution?: NodeExecutionContext;
   skillsSnapshot?: SkillSnapshot;
   createApprovalTransport?: ExecToolDefaults["createApprovalTransport"];
 }) {
@@ -47,7 +49,23 @@ export function createWorkerPlacementTools(params: {
     includeBaseCodingTools: true,
     shellTools: execUnavailable ? "patch-only" : "full",
     execDefaults: {
+      ...params.policy.execDefaults,
+      // Only the node can authorize an executable directory on its own filesystem.
+      pathPrepend: params.policy.execDefaults?.pathPrepend?.filter((dir) =>
+        params.nodeExecution?.pathPrepend?.includes(dir),
+      ),
+      ...(params.nodeExecution && {
+        preparedLocalToolEnv: {
+          ...(params.nodeExecution.gitConfigFile && {
+            GIT_CONFIG_SYSTEM: params.nodeExecution.gitConfigFile,
+          }),
+          ...(params.nodeExecution.toolData && {
+            OPENCLAW_WORKER_TOOL_DATA: JSON.stringify(params.nodeExecution.toolData),
+          }),
+        },
+      }),
       ...policy,
+      workerMemoryBoundary: params.execAuthority?.memoryBoundary,
       strictInlineEval: execAuthority.strictInlineEval,
       safeBins: execAuthority.safeBins ?? [],
       node: execAuthority.host === "node" ? execAuthority.node : undefined,

@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { getAsyncWorkSignal } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { GatewayRpcOpts } from "openclaw/plugin-sdk/gateway-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
@@ -23,11 +24,14 @@ async function runCommand(
 ): Promise<void> {
   const { callGatewayFromCli, redactSensitiveUrlLikeString } =
     await import("openclaw/plugin-sdk/gateway-runtime");
+  const signal = op === "status" || op === "grants" ? getAsyncWorkSignal() : undefined;
   try {
     const result = await callGatewayFromCli(`mcp-relay.${op}`, opts, params, {
       progress: !opts.json,
       scopes: [op === "status" ? "operator.read" : "operator.admin"],
+      ...(signal ? { signal } : {}),
     });
+    signal?.throwIfAborted();
     if (opts.json) {
       defaultRuntime.writeJson(result);
       return;
@@ -52,6 +56,7 @@ async function runCommand(
     }
     defaultRuntime.writeJson(result);
   } catch (error) {
+    signal?.throwIfAborted();
     const failure = createRelayCommandFailure(error, redactSensitiveUrlLikeString);
     if (opts.json) {
       throw failure;

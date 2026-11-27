@@ -1,13 +1,13 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { note as clackNote } from "@clack/prompts";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { iterateGraphemes, visibleWidth } from "./ansi.js";
-import { resolveNoteOutput } from "./note-output.js";
+import { areNotesSuppressedInScope, resolveNoteOutput } from "./note-output.js";
 import { stylePromptTitle } from "./prompt-style.js";
+
+export { withSuppressedNotes } from "./note-output.js";
 
 const MIN_NOTE_COLUMNS = 80;
 const FILE_LIKE_RE = /^[a-zA-Z0-9._-]+$/;
-const suppressNotesStorage = new AsyncLocalStorage<boolean>();
 
 function isSuppressedByEnv(value: string | undefined): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(value);
@@ -31,15 +31,19 @@ function wrapLine(line: string, maxWidth: number): string[] {
 
   // Printable ASCII width equals length; reuse that fact for every word and candidate.
   const isPrintableAscii = /^[\u0020-\u007E]*$/.test(content);
-  const words = content.split(/\s+/).filter(Boolean);
+  let wordEnd = 0;
   const lines: string[] = [];
   let current = "";
   let prefix = firstPrefix;
   let available = firstWidth;
 
-  for (const word of words) {
+  for (const wordMatch of content.matchAll(/\S+/g)) {
+    const word = wordMatch[0];
+    const whitespace = content.slice(wordEnd, wordMatch.index);
+    const separator = /^ +$/.test(whitespace) ? whitespace : " ";
+    wordEnd = wordMatch.index + word.length;
     if (current) {
-      const candidate = `${current} ${word}`;
+      const candidate = `${current}${separator}${word}`;
       if ((isPrintableAscii ? candidate.length : visibleWidth(candidate)) <= available) {
         current = candidate;
         continue;
@@ -80,7 +84,7 @@ function wrapLine(line: string, maxWidth: number): string[] {
     current = word;
   }
 
-  if (current || words.length === 0) {
+  if (current || lines.length === 0) {
     lines.push(prefix + current);
   }
 
@@ -145,10 +149,7 @@ export function noteToStream(
   title: string | undefined,
   output: NodeJS.WriteStream,
 ) {
-  if (
-    suppressNotesStorage.getStore() === true ||
-    isSuppressedByEnv(process.env.OPENCLAW_SUPPRESS_NOTES)
-  ) {
+  if (areNotesSuppressedInScope() || isSuppressedByEnv(process.env.OPENCLAW_SUPPRESS_NOTES)) {
     return;
   }
   const columns = resolveNoteColumns(output.columns);
@@ -160,8 +161,4 @@ export function noteToStream(
 
 export function note(message: unknown, title?: string) {
   noteToStream(message, title, resolveNoteOutput());
-}
-
-export function withSuppressedNotes<T>(callback: () => T): T {
-  return suppressNotesStorage.run(true, callback);
 }

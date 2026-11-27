@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
+import * as canvasDocuments from "../../canvas/documents.js";
 import { createShowWidgetTool } from "../../canvas/widget-tool.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveDefaultSessionStorePath } from "../../config/sessions/paths.js";
@@ -96,11 +97,13 @@ it("pins a saved Canvas receipt but refuses a known foreign document without cop
   await withCanvasBoard(async ({ scope, entry, saveWidget, request }) => {
     const docId = await saveWidget("Synthetic permitted document");
     expect((await request("canvas.document.view", { docId }))[0]).toBe(true);
+    const readDocument = vi.spyOn(canvasDocuments, "readCanvasDocumentHtmlSource");
     const allowed = await request("board.widget.put", {
       name: "permitted",
       content: { kind: "canvas-doc", docId },
     });
     expect(allowed[0], JSON.stringify(allowed)).toBe(true);
+    expect(readDocument).toHaveBeenCalledOnce();
     await boardStore.useWidgetDocument(scope, "permitted", (document) => {
       expect(document).toMatchObject({
         html: expect.stringContaining("Synthetic permitted document"),

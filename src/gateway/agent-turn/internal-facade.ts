@@ -170,7 +170,7 @@ export function createInternalAgentTurnFacade(
           const snapshot = watchdog?.snapshot();
           const decision = snapshot?.current ? watchdog?.decide() : undefined;
           const deadlineAtMs = decision
-            ? decision.action === "observe" || decision.action === "warn"
+            ? decision.action === "observe"
               ? Math.min(
                   snapshot?.executionDeadlineAtMs ?? Infinity,
                   decision.deadlineAtMs ?? Infinity,
@@ -344,6 +344,7 @@ export function createInternalAgentTurnFacade(
                 privateCompletion: dispatchOptions.privateCompletion,
                 replyExpectation: dispatchOptions.replyExpectation,
                 settleWakeReplay: dispatchOptions.settleWakeReplay,
+                subagentCompletions: dispatchOptions.subagentCompletions,
               });
             },
             {

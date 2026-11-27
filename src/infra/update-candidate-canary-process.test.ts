@@ -13,12 +13,18 @@ vi.mock("node:child_process", async (importOriginal) => ({
 }));
 
 const root = path.resolve("canary-image");
+function createChild() {
+  return Object.defineProperties(new ChildProcess(), {
+    stdin: { value: null },
+    stdout: { value: new PassThrough() },
+    stderr: { value: new PassThrough() },
+  });
+}
+
 beforeEach(() => {
   vi.stubGlobal("__openclawStandaloneRootUrl", pathToFileURL(root).href);
   mocks.spawn.mockImplementation(() => {
-    const child = new ChildProcess();
-    child.stdout = new PassThrough();
-    child.stderr = new PassThrough();
+    const child = createChild();
     queueMicrotask(() => {
       child.stdout?.destroy();
       child.stderr?.destroy();
@@ -33,28 +39,9 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-it("routes a worker target through the embedded entry dispatcher", async () => {
-  const entry = path.join(root, "dist/infra/update-migrated-finalize.worker.js");
-  const running = launchCanary({
-    target: { kind: "worker", url: pathToFileURL(entry) },
-    args: ["--check"],
-    root,
-    env: {},
-    stateDir: root,
-    capture() {},
-  });
-  await running.closed;
-  expect(await running.result).toBe(0);
-  expect(mocks.spawn).toHaveBeenCalledExactlyOnceWith(
-    process.execPath,
-    [...(process.versions.bun ? ["--no-install"] : []), entry, "--check"],
-    expect.objectContaining({ cwd: root }),
-  );
-});
-
 it("routes a CLI target through the standalone command entry", async () => {
   const running = launchCanary({
-    target: { kind: "cli", entryPath: path.join(root, "dist/index.js") },
+    entryPath: path.join(root, "dist/index.js"),
     args: ["gateway", "run"],
     root,
     env: {},

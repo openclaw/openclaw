@@ -1,14 +1,16 @@
-import { freezeJsonSnapshot, isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
-import { cloneConfigWithResolutionFacts, getConfigResolutionFacts } from "./resolution-facts.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
+import { cloneConfigWithResolutionFacts } from "./resolution-facts.js";
+import { runtimeConfigPublication } from "./runtime-config-publication.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 type RuntimeConfigCapture = Readonly<{
   source: OpenClawConfig;
   origin: OpenClawConfig;
+  /** Explicit live readers retain the owner selected before preparation yields. */
+  runtimeOwned: boolean;
 }>;
 
 const captures = new WeakMap<OpenClawConfig, RuntimeConfigCapture>();
-const immutableCaptures = new WeakMap<OpenClawConfig, OpenClawConfig>();
 
 export function getRuntimeConfigCapture(
   config: OpenClawConfig | undefined,
@@ -40,13 +42,8 @@ export function getPublishedRuntimeConfigSource(
 export function captureRuntimeConfigWithSource(
   config: OpenClawConfig,
   source: OpenClawConfig,
+  runtimeOwner = runtimeConfigPublication.current?.config,
 ): OpenClawConfig {
-  // Only a source-free immutable input has no mutable publication context to capture.
-  const reusable = config === source && isDeeplyFrozenPlainData(config);
-  const previous = reusable ? immutableCaptures.get(config) : undefined;
-  if (previous && getConfigResolutionFacts(previous) === getConfigResolutionFacts(config)) {
-    return previous;
-  }
   const clone = (value: OpenClawConfig) =>
     freezeJsonSnapshot(cloneConfigWithResolutionFacts(value));
   const captured = clone(config);
@@ -54,15 +51,14 @@ export function captureRuntimeConfigWithSource(
   captures.set(captured, {
     source: capturedSource,
     origin: config,
+    runtimeOwned: config === runtimeOwner,
   });
   if (capturedSource !== captured) {
     captures.set(capturedSource, {
       source: capturedSource,
       origin: source,
+      runtimeOwned: source === runtimeOwner,
     });
-  }
-  if (reusable) {
-    immutableCaptures.set(config, captured);
   }
   return captured;
 }

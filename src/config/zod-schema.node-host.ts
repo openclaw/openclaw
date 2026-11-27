@@ -63,7 +63,7 @@ export const NodeHostWorkerRunsSchema = z
       )
       .optional(),
     capacity: z.number().int().min(1).max(NODE_WORKER_CAPACITY_MAX).optional(),
-    isolation: z.enum(["none", "container"]).optional(),
+    isolation: z.enum(["none", "container", "filesystem"]).optional(),
     containerImage: z.string().trim().min(1).optional(),
   })
   .optional();
