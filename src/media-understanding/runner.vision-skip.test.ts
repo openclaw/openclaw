@@ -9,17 +9,17 @@ import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
-import { readImageMetadataFromHeader } from "../media/media-services.js";
+import { readImageMetadataFromHeader } from "../media/image-header-metadata.js";
 import type { ImageCompressionModelPolicy } from "../media/web-media.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { MediaAttachmentCache } from "./attachments.cache.js";
 import { mediaModels } from "./media-config.test-support.js";
+import type { ImageDescriptionRequest, MediaUnderstandingProvider } from "./provider-types.js";
 import { runMediaFixture } from "./runner-case.test-support.js";
 import { runProviderEntry } from "./runner.entries.js";
 import { resolveAutoImageModel } from "./runner.js";
 import { withMediaFixture } from "./runner.test-utils.js";
-import type { ImageDescriptionRequest, MediaUnderstandingProvider } from "./types.js";
 
 type TestCatalogEntry = Pick<ModelDefinitionConfig, "id" | "name" | "input"> & { provider: string };
 
@@ -624,7 +624,7 @@ describe("image resizing", () => {
         await expect(run()).rejects.toMatchObject({
           name: "MediaUnderstandingSkipError",
           reason: "maxBytes",
-          message: `Attachment 1 exceeds maxBytes ${maxBytes}`,
+          message: `Attachment 1 exceeds the size limit of ${maxBytes} bytes.`,
         });
         expect(describeImage).not.toHaveBeenCalled();
       },

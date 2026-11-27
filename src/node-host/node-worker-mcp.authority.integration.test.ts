@@ -10,6 +10,8 @@ import {
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
 } from "../infra/node-commands.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../infra/node-runner-inventory.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { startNodeHostMcpManager } from "./mcp.js";
 import { NodeWorkerMcpPolicy } from "./node-worker-mcp.js";
 import {
@@ -70,6 +72,7 @@ it("enforces turn and connection authority before tools/call reaches the MCP ser
         workerHost: { enabled: true, localMcp: true, capacity: { total: 1, available: 1 } },
       },
     });
+    registry.updateNodePluginTools(nodeId, connId, manager.descriptors);
     expect(policy.signal.aborted, connId).toBe(false);
     return () => {
       const session = policy.sessionForCommand(NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND, manager);
@@ -148,6 +151,30 @@ it("enforces turn and connection authority before tools/call reaches the MCP ser
     await annotate(
       `previous-turn-frame: no reply; server received ${staleCalls} tools/call before the current-turn control`,
     );
+
+    function publishPolicy(local: boolean) {
+      const pluginRegistry = createEmptyPluginRegistry();
+      pluginRegistry.nodeInvokePolicies.push({
+        pluginId: "managed-mcp",
+        source: "test",
+        policy: {
+          commands: [command],
+          allowLocalMcpTool: () => local,
+          handle: (ctx) => ctx.invokeNode(),
+        },
+      });
+      setActivePluginRegistry(pluginRegistry);
+      registry.refreshRuntimePolicy();
+    }
+    onTestFinished(() => resetPluginRuntimeStateForTest());
+    const secondSignal = oldSession().signal;
+    publishPolicy(true);
+    expect(secondSignal.aborted).toBe(false); // An equivalent reload keeps current turn grants.
+    publishPolicy(false);
+    expect(secondSignal.aborted).toBe(true);
+    await attempt(owner, "policy-replaced", second.launchId, "second-handle", false);
+    resetPluginRuntimeStateForTest();
+    registry.refreshRuntimePolicy();
 
     newSession = connect("replacement");
     await attempt(owner, "replaced-connection", second.launchId, "second-handle", false);

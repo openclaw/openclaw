@@ -6,6 +6,7 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, expect, vi } from "vitest";
+import { clearPromptCacheObservations } from "../../../agents/embedded-agent-runner/prompt-cache-observability.js";
 import { createAttemptNestedToolActivityState } from "../../../agents/embedded-agent-runner/run/attempt-nested-tool-activity.js";
 import type { RunEmbeddedAgentParams } from "../../../agents/embedded-agent-runner/run/params.js";
 import * as embeddedRuns from "../../../agents/embedded-agent-runner/runs.js";
@@ -27,6 +28,7 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../../../plugins/runtime.js";
+import { withPluginRuntimeGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { getCurrentSessionControllerOwner } from "../../../sessions/session-controller.lifecycle.js";
 import { rpcSourceTesting } from "../../../sessions/session-lifecycle-admission.test-support.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
@@ -38,6 +40,7 @@ import { createResponse } from "../../server-http.test-harness.js";
 import { handleGatewayRequest } from "../../server-methods.js";
 import type {
   GatewayClient,
+  GatewayContextResolver,
   GatewayRequestContext,
   RespondFn,
 } from "../../server-methods/types.js";
@@ -168,6 +171,7 @@ export async function withNativePlugin(
     nativeEffects?: boolean;
     operatorScopes?: string[];
     onConsult?: () => void;
+    consultScope?: GatewayContextResolver;
     configure?: (config: OpenClawConfig) => void;
   } = {},
 ): Promise<void> {
@@ -182,6 +186,7 @@ export async function withNativePlugin(
       const config: OpenClawConfig = {
         agents: {
           ownership: "explicit",
+          defaults: { model: "anthropic/claude-opus-4-6" },
           entries: {
             voice: { agentDir: state.agentDir(AGENT_ID), workspace: state.workspaceDir },
             other: {},
@@ -247,14 +252,18 @@ export async function withNativePlugin(
                 () => capabilityCatalogContext,
               );
               const createBrowserSession = provider.createBrowserSession;
-              if (createBrowserSession && options.onConsult) {
+              if (createBrowserSession && (options.onConsult || options.consultScope)) {
                 provider.createBrowserSession = (request) => {
                   const original = request.runAgentConsult;
                   if (original) {
                     request.runAgentConsult = Object.assign(
                       (...args: Parameters<typeof original>) => {
                         options.onConsult?.();
-                        return original(...args);
+                        return options.consultScope
+                          ? withPluginRuntimeGatewayContextResolver(options.consultScope, () =>
+                              original(...args),
+                            )
+                          : original(...args);
                       },
                       original,
                     );
@@ -352,7 +361,10 @@ export async function withNativePlugin(
         restoreActivePluginRegistrySnapshot(previousRegistry);
       }
     },
-  );
+  ).finally(() => {
+    // Fresh state reuses SESSION_ID only after the previous fixture's work has drained.
+    clearPromptCacheObservations(SESSION_ID);
+  });
 }
 
 export async function connectNativeSession(
@@ -432,6 +444,7 @@ export async function withParkedNativeTask(
   const runAbortController = new AbortController();
   let activeRun: RunEmbeddedAgentParams | undefined;
   let phase = "waiting for delegation";
+  let startReadinessDeadline: (() => void) | undefined;
   let backendAborted = false;
   const abortOwned = vi.fn(() => {
     backendAborted = true;
@@ -445,6 +458,8 @@ export async function withParkedNativeTask(
   upstream.runEmbeddedAgent
     .mockImplementationOnce(async (params) => {
       try {
+        // Session and model preparation precede the backend; the deadline times its registration.
+        startReadinessDeadline?.();
         phase = "admitting backend";
         if (!params.preparedRunAdmission) {
           throw new Error("Expected real Talk admission");
@@ -577,21 +592,27 @@ export async function withParkedNativeTask(
     let deadline: ReturnType<typeof setTimeout> | undefined;
     let stopObservingCompletion: (() => void) | undefined;
     const timeoutMs = 1000;
+    let registrationObserved = false;
+    startReadinessDeadline = () => {
+      if (deadline !== undefined) {
+        return;
+      }
+      deadline = setTimeout(() => {
+        failed.reject(
+          new Error(
+            `registration readiness not observed within ${timeoutMs} ms; last phase: ${phase}`,
+          ),
+        );
+      }, timeoutMs);
+    };
     const prepare = embeddedRuns.prepareEmbeddedAgentRunCompletionClaim;
     const observeRegistration = vi
       .spyOn(embeddedRuns, "prepareEmbeddedAgentRunCompletionClaim")
       .mockImplementation((sessionId, runId, target) => {
         const claim = prepare(sessionId, runId, target);
-        if (sessionId === SESSION_ID && deadline === undefined) {
-          // Workspace and session preparation precede the registration owner's lifetime.
+        if (sessionId === SESSION_ID && !registrationObserved) {
+          registrationObserved = true;
           phase = "waiting for embedded registration";
-          deadline = setTimeout(() => {
-            failed.reject(
-              new Error(
-                `registration readiness not observed within ${timeoutMs} ms; last phase: ${phase}`,
-              ),
-            );
-          }, timeoutMs);
           registered.resolve(claim.registered);
         }
         return claim;

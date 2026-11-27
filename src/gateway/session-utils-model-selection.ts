@@ -1,3 +1,4 @@
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
   readSessionRuntimeOwnership,
   readSessionRuntimeOwnershipAsync,
@@ -26,9 +27,11 @@ export function resolveSessionSelectedModelRef(
     /** Null records a worker-prepared absence; undefined retains final-authority reads. */
     preparedRuntimeOwnership?: AgentHarnessSessionRuntimeOwnership | null;
   } & ModelManifestNormalizationContext,
-): ReturnType<typeof resolveSessionConfiguredDefault> & {
-  storedOverrideSource: StoredModelOverride["source"] | null;
-} {
+):
+  | (NonNullable<ReturnType<typeof resolveSessionConfiguredDefault>> & {
+      storedOverrideSource: StoredModelOverride["source"] | null;
+    })
+  | undefined {
   // Native ownership remains session-specific even when configured defaults are shared.
   const ownership =
     params.preparedRuntimeOwnership === undefined
@@ -53,15 +56,16 @@ export function resolveSessionSelectedModelRef(
     sessionEntry: params.source.entry,
     sessionKey: params.sessionKey,
     parentSessionKey: params.source.entry?.parentSessionKey,
-    defaultProvider: configuredDefault.provider,
+    defaultProvider: configuredDefault?.provider ?? DEFAULT_PROVIDER,
     allowPluginNormalization: params.allowPluginNormalization,
     manifestPlugins: params.manifestPlugins,
   });
   if (!storedOverride) {
-    return { ...configuredDefault, storedOverrideSource: null };
+    // No stored and no configured model: the session has none.
+    return configuredDefault && { ...configuredDefault, storedOverrideSource: null };
   }
   return {
-    provider: storedOverride.provider ?? configuredDefault.provider,
+    provider: storedOverride.provider ?? configuredDefault?.provider ?? DEFAULT_PROVIDER,
     model: storedOverride.model,
     storedOverrideSource: storedOverride.source,
   };

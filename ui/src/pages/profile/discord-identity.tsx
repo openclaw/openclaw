@@ -46,29 +46,34 @@ export function DiscordIdentity() {
       <SettingsRow
         title={t("profilePage.discord.title")}
         description={
-          // One anatomy with the other accounts: status, then the identity; the action at the end.
-          // While linking, the two flow actions take their own line on phones, so no meta line.
-          view.read().flow ? (
-            <SettingsStatus kind="muted" label={t("profilePage.discord.waiting")} />
-          ) : linked() ? (
-            <span class="settings-row__meta">
-              <SettingsStatus kind="ok" label={t("profilePage.discord.verified")} />
-              <span class="identity-account">{view.read().selected?.senderIds.join(", ")}</span>
+          <span class="profile-discord-description">
+            <span class="profile-discord-reservation" aria-hidden="true">
+              {t("profilePage.discord.unavailable")}
             </span>
-          ) : unavailable() ? (
-            t("profilePage.discord.unavailable")
-          ) : (
-            // Holds the line while the status is pending or failed; the failure has its own row.
-            <span
-              class="settings-row__meta"
-              style={{
-                visibility: view.read().loading || view.read().error ? "hidden" : "visible",
-              }}
-              aria-hidden={view.read().loading || view.read().error ? "true" : undefined}
-            >
-              <SettingsStatus kind="muted" label={t("profilePage.discord.notConnected")} />
+            <span>
+              {view.read().flow ? (
+                <SettingsStatus kind="muted" label={t("profilePage.discord.waiting")} />
+              ) : linked() ? (
+                <span class="settings-row__meta">
+                  <SettingsStatus kind="ok" label={t("profilePage.discord.verified")} />
+                  <span class="identity-account">{view.read().selected?.senderIds.join(", ")}</span>
+                </span>
+              ) : unavailable() ? (
+                t("profilePage.discord.unavailable")
+              ) : (
+                // Holds the line while the status is pending or failed; the failure has its own row.
+                <span
+                  class="settings-row__meta"
+                  style={{
+                    visibility: view.read().loading || view.read().error ? "hidden" : "visible",
+                  }}
+                  aria-hidden={view.read().loading || view.read().error ? "true" : undefined}
+                >
+                  <SettingsStatus kind="muted" label={t("profilePage.discord.notConnected")} />
+                </span>
+              )}
             </span>
-          )
+          </span>
         }
         control={
           <>

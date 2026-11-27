@@ -170,6 +170,33 @@ async function openPullPreviewPage(
 }
 
 suite.define(() => {
+  it.each(["Control", "Meta"] as const)(
+    "cancels lazy preview intent after %s is pressed and released",
+    async (modifier) => {
+      const { card, page, pullLink, hovercardModule } = await openPullPreviewPage(
+        false,
+        pullPreviewResponse,
+        undefined,
+        true,
+      );
+      await pullLink.hover();
+      await hovercardModule!.request;
+      await page.keyboard.down(modifier);
+      await page.keyboard.up(modifier);
+      hovercardModule!.release();
+      await page.waitForFunction(() =>
+        Boolean(customElements.get("openclaw-link-reader-hovercard-provider")),
+      );
+      await page.clock.runFor(300);
+      expect(await card.count()).toBe(0);
+      expect(await page.locator("body").getAttribute("data-preview-mounts")).toBe("0");
+      await page.mouse.move(1, 1);
+      await pullLink.hover();
+      await page.clock.runFor(300);
+      await expect.poll(() => card.count()).toBe(1);
+    },
+  );
+
   it.each([false, true])(
     "reconciles status and compact metrics (reader first: %s)",
     async (readerFirst) => {
@@ -508,7 +535,7 @@ suite.define(() => {
         const error = "GitHub API rate limit exceeded (HTTP 403). Try again in 2 minutes.";
         await gateway.rejectDeferred("forge.preview", { message: error });
         await expectText(card.getByRole("status"), error);
-        await expectAttr(card, "aria-label", "Couldn’t load this preview.");
+        await expectAttr(card, "aria-label", "Couldn’t load preview");
         const externalLink = card.getByRole("link", { name: "Open on Forge" });
         await expectAttr(externalLink, "href", PULL_HREF);
         await expectAttr(externalLink, "target", "_blank");

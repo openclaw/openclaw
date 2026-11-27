@@ -22,6 +22,7 @@ import {
   readClawRouterCapabilityOffers,
   type ClawRouterCapabilityOffer,
 } from "./capability-offers.js";
+import { converseBaseUrl, selectConverseOffer } from "./converse-offer.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { CLAWROUTER_ROUTE_METADATA_KEY as ROUTE_METADATA_KEY } from "./provider-policy-api.js";
 
@@ -71,6 +72,9 @@ type CatalogProvider = {
   models: unknown[];
   hostedWebSearchModels: Set<string>;
   httpOffers: ClawRouterCapabilityOffer[];
+  offersDeclared: boolean;
+  declaration: Record<string, unknown>;
+  uniqueProvider: boolean;
 };
 
 type RouteMetadata = {
@@ -104,10 +108,17 @@ function readCatalogRows(body: unknown, baseUrl: string): readonly unknown[] {
     catalog?.version === "clawrouter.client-catalog.v1"
       ? readClawRouterCapabilityOffers(body, baseUrl)
       : [];
-  return providers.map((provider) => ({
-    provider,
-    httpOffers: offers.filter((offer) => offer.providerId === asOptionalRecord(provider)?.id),
-  }));
+  return providers.map((provider) => {
+    const id = normalizeOptionalString(asOptionalRecord(provider)?.id);
+    return {
+      provider,
+      offersDeclared: Object.hasOwn(asOptionalRecord(provider) ?? {}, "offers"),
+      uniqueProvider:
+        providers.filter((value) => normalizeOptionalString(asOptionalRecord(value)?.id) === id)
+          .length === 1,
+      httpOffers: offers.filter((offer) => offer.providerId === id),
+    };
+  });
 }
 
 function parseCatalogRoute(value: unknown): CatalogRoute | undefined {
@@ -146,12 +157,17 @@ function parseCatalogInput(value: unknown): Array<"text" | "image"> | undefined 
 
 function parseCatalogProvider(value: unknown): CatalogProvider | undefined {
   // SAFETY: readCatalogRows constructs every cached row with its parsed HTTP-offer array.
-  const envelope = value as { provider: unknown; httpOffers: ClawRouterCapabilityOffer[] };
+  const envelope = value as {
+    provider: unknown;
+    httpOffers: ClawRouterCapabilityOffer[];
+    offersDeclared: boolean;
+    uniqueProvider: boolean;
+  };
   const row = asOptionalRecord(envelope.provider);
   const id = normalizeOptionalString(row?.id);
   const nativeBaseUrl = normalizeOptionalString(row?.nativeBaseUrl);
   const isFusion = id === "clawrouter" && nativeBaseUrl === "/v1" && row?.openaiCompatible === true;
-  if (!id || !nativeBaseUrl || (!nativeBaseUrl.startsWith("/v1/native/") && !isFusion)) {
+  if (!row || !id || !nativeBaseUrl || (!nativeBaseUrl.startsWith("/v1/native/") && !isFusion)) {
     return undefined;
   }
   const models = Array.isArray(row?.models) ? row.models : [];
@@ -178,6 +194,9 @@ function parseCatalogProvider(value: unknown): CatalogProvider | undefined {
     openaiCompatible: row?.openaiCompatible === true,
     nativeBaseUrl,
     httpOffers: envelope.httpOffers,
+    offersDeclared: envelope.offersDeclared,
+    declaration: row,
+    uniqueProvider: envelope.uniqueProvider,
     routes: Array.isArray(row?.routes)
       ? row.routes.map(parseCatalogRoute).filter((route): route is CatalogRoute => Boolean(route))
       : [],
@@ -216,6 +235,8 @@ function parseCatalogProvider(value: unknown): CatalogProvider | undefined {
 // Older router catalogs omit input. Match exact native OpenAI identities, not a
 // GPT generation prefix: unknown siblings can have different modality contracts.
 const OPENAI_NATIVE_IMAGE_MODEL_IDS = new Set([
+  "gpt-6.2-sol",
+  "gpt-6.2-astra",
   "gpt-6.1-sol",
   "gpt-6-sol",
   "gpt-6-astra",
@@ -292,7 +313,16 @@ function buildRoutedModel(
             offer.url.endsWith("/chat/completions"),
         )
       : undefined;
-  if (
+  if (provider.id === "aws-bedrock") {
+    const converse = selectConverseOffer(provider.httpOffers, id, upstream);
+    if (!converse) {
+      return undefined;
+    }
+    api = "bedrock-converse-stream";
+    endpoint = converse.endpoint;
+    baseUrl = converseBaseUrl(converse);
+    upstreamModel = upstream;
+  } else if (
     provider.id === "vercel-ai-gateway" &&
     id === "vercel-ai-gateway/anthropic/claude-sonnet-4.6"
   ) {
@@ -342,10 +372,65 @@ function buildRoutedModel(
     )
   ) {
     api = "anthropic-messages";
-    endpoint = provider.routes.find(
-      (route) => route.methods.includes("POST") && route.requestFormat === "anthropic.messages",
-    )?.endpoint;
-    baseUrl = `${rootUrl}${provider.nativeBaseUrl}`;
+    if (
+      (Object.hasOwn(provider.declaration, "allowed") && provider.declaration.allowed !== true) ||
+      (Object.hasOwn(provider.declaration, "executable") &&
+        provider.declaration.executable !== true) ||
+      !provider.uniqueProvider
+    ) {
+      return undefined;
+    }
+    if (provider.offersDeclared) {
+      const candidates = provider.httpOffers.filter(
+        (offer) =>
+          offer.providerId === provider.id &&
+          offer.routeKind === "native" &&
+          offer.model?.id === id &&
+          offer.model.upstream === upstream &&
+          offer.requestFormat === "anthropic.messages" &&
+          offer.responseFormat === "anthropic.messages" &&
+          offer.methods.includes("POST") &&
+          offer.url.endsWith("/v1/messages"),
+      );
+      const messages = candidates[0];
+      if (
+        candidates.length !== 1 ||
+        !messages ||
+        provider.models.filter(
+          (model) => normalizeOptionalString(asOptionalRecord(model)?.id) === id,
+        ).length !== 1 ||
+        !Array.isArray(provider.declaration.routes) ||
+        provider.declaration.routes.filter(
+          (route) => asOptionalRecord(route)?.endpoint === messages.endpoint,
+        ).length !== 1 ||
+        !Array.isArray(provider.declaration.offers) ||
+        provider.declaration.offers.filter((offerValue) => {
+          const offer = asOptionalRecord(offerValue);
+          return (
+            offer?.modelId === id &&
+            offer.endpoint === messages.endpoint &&
+            offer.routeKind === "native"
+          );
+        }).length !== 1
+      ) {
+        return undefined;
+      }
+      endpoint = messages.endpoint;
+      // The SDK appends this exact suffix. Preserve every provider-owned prefix.
+      baseUrl = messages.url.slice(0, -"/v1/messages".length);
+    } else {
+      const legacyRoute = provider.routes.find(
+        (route) =>
+          route.methods.includes("POST") &&
+          route.requestFormat === "anthropic.messages" &&
+          route.path.endsWith("/v1/messages"),
+      );
+      if (!legacyRoute) {
+        return undefined;
+      }
+      endpoint = legacyRoute.endpoint;
+      baseUrl = `${rootUrl}${provider.nativeBaseUrl}`;
+    }
     upstreamModel = upstream;
   } else {
     const googleRoute =
@@ -492,6 +577,8 @@ export async function buildClawRouterProviderConfig(params: {
   apiKey: string;
   discoveryApiKey?: string;
   baseUrl?: string;
+  requestedModelId?: string;
+  requestedModelApi?: ProviderRuntimeModel["api"];
 }): Promise<ModelProviderConfig & { api: "openai-responses"; baseUrl: string }> {
   const rootUrl = normalizeClawRouterRootUrl(params.baseUrl);
   const rows = await getCachedLiveProviderModelRows({
@@ -518,6 +605,37 @@ export async function buildClawRouterProviderConfig(params: {
       models.set(routed.id, routed);
     }
   }
+  const requestedModelId = params.requestedModelId;
+  if (
+    requestedModelId &&
+    !models.has(requestedModelId) &&
+    (params.requestedModelApi === "anthropic-messages" ||
+      rows.some((value) => {
+        const provider = asOptionalRecord(asOptionalRecord(value)?.provider);
+        if (!provider) {
+          return false;
+        }
+        const declaredModels = Array.isArray(provider.models) ? provider.models : [];
+        const routes = Array.isArray(provider.routes) ? provider.routes : [];
+        return (
+          (requestedModelId.startsWith(`${normalizeOptionalString(provider.id)}/`) ||
+            declaredModels.some((model) => asOptionalRecord(model)?.id === requestedModelId)) &&
+          (routes.some(
+            (route) => asOptionalRecord(route)?.requestFormat === "anthropic.messages",
+          ) ||
+            declaredModels.some((model) => {
+              const row = asOptionalRecord(model);
+              return (
+                row?.id === requestedModelId &&
+                normalizeTrimmedStringList(row.capabilities).includes("llm.messages")
+              );
+            }))
+        );
+      }))
+  ) {
+    // An undefined preparation result lets a configured row bypass this catalog denial.
+    throw new Error("ClawRouter catalog does not offer the selected model");
+  }
   return {
     baseUrl: `${rootUrl}/v1`,
     api: "openai-responses",
@@ -535,7 +653,8 @@ function readRouteMetadata(params: ProviderRuntimeModel["params"]): RouteMetadat
     (api !== "openai-responses" &&
       api !== "openai-completions" &&
       api !== "anthropic-messages" &&
-      api !== "google-generative-ai")
+      api !== "google-generative-ai" &&
+      api !== "bedrock-converse-stream")
   ) {
     return undefined;
   }
@@ -572,13 +691,22 @@ export function normalizeClawRouterResolvedModel(
 }
 
 export function prepareClawRouterRequestModel(model: ProviderRuntimeModel): ProviderRuntimeModel {
-  const route = readRouteMetadata(model.params);
+  // OpenAI Responses treats omitted tool strictness as strict, so every optional tool input
+  // becomes required. Configured and catalog rows both dispatch here; declaring support makes
+  // the compatible-route policy send explicit strict=false.
+  const prepared =
+    model.api === "openai-responses" &&
+    model.id.startsWith("openai/") &&
+    model.compat?.supportsStrictMode === undefined
+      ? { ...model, compat: { ...model.compat, supportsStrictMode: true } }
+      : model;
+  const route = readRouteMetadata(prepared.params);
   if (!route) {
-    return model;
+    return prepared;
   }
   return {
-    ...model,
-    params: stripRouteMetadata(model.params),
+    ...prepared,
+    params: stripRouteMetadata(prepared.params),
     ...(route.upstreamModel && route.upstreamModel !== model.id ? { id: route.upstreamModel } : {}),
   };
 }

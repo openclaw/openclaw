@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import path from "node:path";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./service-http-mock.test-support.js";
 import {
@@ -541,6 +544,7 @@ describe("ClickClack discussion service contracts", () => {
       run,
       sideSessionKey,
       target: registration.target,
+      targetAsync: registration.targetAsync,
     };
   }
   async function expectSessionAccess(run: Awaited<ReturnType<typeof setup>>["run"], key: string) {
@@ -554,6 +558,43 @@ describe("ClickClack discussion service contracts", () => {
 
       expect(target(sideSessionKey, mainSessionKey)?.expectedSessionId).toBe("session-id");
       expect(await run("sessions_history", { sessionKey: mainSessionKey })).toBeUndefined();
+    });
+
+    it("prepares file-backed async grants off-thread and revokes them after rotation", async () => {
+      await withTempDir("clickclack-grant-credential-", async (directory) => {
+        const tokenFile = path.join(directory, "credential");
+        await fs.promises.writeFile(tokenFile, "first-placeholder");
+        h.config.channels!.clickclack!.token = undefined;
+        h.config.channels!.clickclack!.tokenFile = tokenFile;
+        const { target, targetAsync, sideSessionKey, run } = await setup();
+        const reads = vi.spyOn(fs, "lstatSync");
+        try {
+          expect(await targetAsync(sideSessionKey, mainSessionKey)).toEqual({
+            expectedSessionId: "session-id",
+          });
+          expect(await run("sessions_history", { sessionKey: mainSessionKey })).toBeUndefined();
+          expect(reads).not.toHaveBeenCalled();
+          const readEntry = vi
+            .mocked(h.runtime.agent.session.getSessionEntryAsync)
+            .getMockImplementation()!;
+          vi.mocked(h.runtime.agent.session.getSessionEntryAsync).mockImplementationOnce(
+            async (...args) => {
+              const entry = await readEntry(...args);
+              h.config.channels!.clickclack!.enabled = false;
+              return entry;
+            },
+          );
+          expect(await targetAsync(sideSessionKey, mainSessionKey)).toBeUndefined();
+          h.config.channels!.clickclack!.enabled = true;
+          await fs.promises.writeFile(tokenFile, "second-placeholder");
+          expect(await targetAsync(sideSessionKey, mainSessionKey)).toBeUndefined();
+          expect(reads).not.toHaveBeenCalled();
+        } finally {
+          reads.mockRestore();
+        }
+        // Explicit synchronous SDK callers retain live file-backed grant semantics.
+        expect(target(sideSessionKey, mainSessionKey)).toBeUndefined();
+      });
     });
 
     it("allows attached-session observers despite legacy room archive metadata", async () => {

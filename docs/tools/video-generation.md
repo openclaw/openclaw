@@ -20,6 +20,10 @@ available. If it is missing from your agent tools, set a provider API key or
 configure `agents.defaults.mediaModels.video`.
 </Note>
 
+A key in `models.providers.<provider>.apiKey` also makes the tool available,
+including an env-backed SecretRef. Inline keys in an auth or billing cooldown
+remain unavailable.
+
 `video_generate` has three runtime modes, resolved from the reference inputs
 in the call:
 

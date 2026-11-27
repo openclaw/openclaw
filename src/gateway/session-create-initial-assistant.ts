@@ -1,9 +1,30 @@
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
-import type { SessionEntry } from "../config/sessions.js";
 import { prepareInitialAssistantTranscript } from "../config/sessions/session-accessor.sqlite-transcript-message-append.js";
-import { isAgentHarnessSessionKeyOwnedBy } from "../sessions/agent-harness-session-key.js";
+import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../config/sessions/types.js";
+import {
+  AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
+  isAgentHarnessSessionKey,
+  isAgentHarnessSessionKeyOwnedBy,
+} from "../sessions/agent-harness-session-key.js";
 import type { CreateGatewaySessionParams } from "./session-create-service.types.js";
 import { invalidSessionRequest, unavailableSessionRequest } from "./session-request-error.js";
+
+/** Reject reserved harness targets before preparation and again at commit. */
+export function validateSessionCreateTarget(
+  key: string | undefined,
+  entry: Pick<SessionEntry, "modelSelectionLocked"> | undefined,
+  authorizedHarnessCreation: boolean,
+) {
+  if (
+    key &&
+    isAgentHarnessSessionKey(key) &&
+    !authorizedHarnessCreation &&
+    (!entry || entry.modelSelectionLocked === true)
+  ) {
+    return invalidSessionRequest(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
+  }
+  return undefined;
+}
 
 type FreshSessionConstraints = {
   params: Pick<
@@ -13,6 +34,7 @@ type FreshSessionConstraints = {
     | "initialAssistantMessage"
     | "fork"
     | "atomicInitialization"
+    | "deferInitialization"
     | "deviceFolder"
     | "catalogTarget"
   >;
@@ -35,13 +57,17 @@ export function validateFreshSessionConstraints(input: FreshSessionConstraints) 
     (existingEntry !== undefined ||
       params.fork === true ||
       params.atomicInitialization === true ||
+      params.deferInitialization === true ||
       params.initialEntry?.initializationPending === true)
   ) {
     return invalidSessionRequest(
       "initial assistant transcript requires a new session without fork or deferred initialization",
     );
   }
-  if ((params.initialEntry || params.initialCatalogContinuation) && existingEntry !== undefined) {
+  if (
+    (params.initialEntry || params.initialCatalogContinuation || params.deferInitialization) &&
+    existingEntry !== undefined
+  ) {
     return invalidSessionRequest("trusted initial session state requires a new session");
   }
   if (
@@ -64,13 +90,29 @@ export function validateFreshSessionConstraints(input: FreshSessionConstraints) 
   return undefined;
 }
 
-/** Keep the first assistant message in the same transcript transaction as the new row. */
-export function withInitialAssistantTranscript<T extends object>(
+/** Commit initial transcript content and its known context with the session row. */
+export function withInitialSessionTranscript<T extends object>(
   result: T,
   entry: SessionEntry,
-  message: CreateGatewaySessionParams["initialAssistantMessage"],
-  cwd: string | undefined,
+  params: Pick<
+    CreateGatewaySessionParams,
+    "initialEntry" | "initialAssistantMessage" | "initialCatalogContinuation"
+  >,
+  options: { cwd: string | undefined; isNew: boolean },
 ) {
+  const message = params.initialAssistantMessage;
+  // Seeded histories and pending initializers own their accounting; adopted rows keep theirs.
+  if (
+    options.isNew &&
+    !entry.initializationPending &&
+    !params.initialEntry &&
+    !message &&
+    !params.initialCatalogContinuation
+  ) {
+    entry.totalTokens = 0;
+    entry.totalTokensFresh = true;
+    entry.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
+  }
   return {
     ...result,
     entry,
@@ -79,7 +121,7 @@ export function withInitialAssistantTranscript<T extends object>(
           transcriptEvents: prepareInitialAssistantTranscript({
             ...message,
             sessionId: entry.sessionId,
-            cwd,
+            cwd: options.cwd,
           }),
         }
       : {}),

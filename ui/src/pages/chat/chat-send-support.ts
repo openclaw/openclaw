@@ -1,6 +1,9 @@
+import { isAbortTrigger } from "../../../../src/auto-reply/reply/abort-trigger-text.js";
 import type { SessionsListResult } from "../../api/types.ts";
+import { readOfflineStorageScope } from "../../app/boot-record.ts";
 import type { RetainedChatSubmission } from "../../app/chat-submissions.ts";
 import { t } from "../../i18n/index.ts";
+import { formatChatSelectionQuote } from "../../lib/chat/chat-selection-quote.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
@@ -26,7 +29,6 @@ import {
   updateQueuedMessage,
 } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
-import { formatChatSelectionQuote } from "./components/chat-selection-attachment.ts";
 import type { ChatQueueAdmissionResult } from "./composer-queue-persistence.ts";
 import {
   admitChatSubmission,
@@ -64,6 +66,20 @@ export function isChatResetCommand(text: string) {
   return (
     parsed?.command.key === "new" ||
     (parsed?.command.key === "reset" && !/^soft(?:\s|$)/i.test(parsed.args))
+  );
+}
+
+/** Commands and Goals never acquire ambient context, including during queued-row edits. */
+export function acceptsChatAmbientContext(
+  message: string,
+  quotedMessage: string,
+  intent?: ChatQueueItem["intent"],
+): boolean {
+  return (
+    !intent &&
+    !message.startsWith("/") &&
+    !message.startsWith("!") &&
+    !isAbortTrigger(quotedMessage)
   );
 }
 
@@ -105,7 +121,11 @@ export function chatSendHoldReason(
 }
 
 function chatConnectionPendingReason(host: Pick<ChatHost, "client" | "connected">): string | null {
-  return host.connected && host.client && !host.client.recoveryScopeReady
+  // A cold connection has no account to own an offline send yet. An established
+  // account can still queue locally while its Gateway is disconnected.
+  return host.client &&
+    !host.client.recoveryScopeReady &&
+    (host.connected || !readOfflineStorageScope(host))
     ? t("chat.queue.connectionPending")
     : null;
 }

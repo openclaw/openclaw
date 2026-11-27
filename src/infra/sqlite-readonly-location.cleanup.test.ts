@@ -7,14 +7,14 @@ import {
   registerSignalExitBarrier,
   waitForSignalExitBarriers,
 } from "../cli/signal-exit-barrier.js";
-import { setLoggerOverride } from "../logging/logger.js";
-import { testApi } from "../logging/logger.test-support.js";
+import { flushLogger, setLoggerOverride } from "../logging/logger.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import {
   captureSqliteDatabaseAdmissions,
   hasSqliteDatabaseSchemaAdmissionForPath,
 } from "./sqlite-database-admission.js";
+import { SqliteSnapshotCleanupError } from "./sqlite-lifecycle-errors.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import {
   adoptPreparedLocation,
@@ -23,7 +23,7 @@ import {
   cleanupSnapshotOperations,
   removeTempDirectory,
   removeTempDirectoryAsync,
-  SqliteSnapshotCleanupError,
+  withPreparedSqliteSnapshot,
 } from "./sqlite-readonly-location-cleanup.js";
 import * as readOnlyWorker from "./sqlite-readonly-worker.js";
 import { createReadBarrier, observeSettlement } from "./sqlite-readonly.test-support.js";
@@ -38,7 +38,7 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
-    await testApi.flushFileLogQueueForTests();
+    await flushLogger();
     setLoggerOverride(null);
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
@@ -251,6 +251,45 @@ it("keeps synchronous and asynchronous token cleanup in separate snapshot flight
   }
 });
 
+it.skipIf(process.platform !== "linux")(
+  "releases closed readers' descriptors before removing an awaited snapshot",
+  async () => {
+    const root = tempDirs.make("sqlite-closed-reader-");
+    const source = path.join(root, "source.sqlite");
+    const original = createDatabase(
+      source,
+      "CREATE TABLE probe(value TEXT); INSERT INTO probe VALUES('preserved');",
+    );
+    vi.stubEnv("XDG_CACHE_HOME", root);
+    const snapshot = await startSqliteReadOnlyLocationAsync(source, {
+      preserveSourceArtifacts: true,
+    }).result;
+    try {
+      let descriptorPath: string;
+      {
+        using reader = openNodeSqliteDatabase(snapshot.location, { readOnly: true });
+        admitSqliteSchema(reader);
+        expect(reader.prepare("SELECT value FROM probe").get()).toEqual({ value: "preserved" });
+        const admission = captureSqliteDatabaseAdmissions().find(
+          ({ location }) => location === snapshot.location,
+        );
+        expect(admission).toBeDefined();
+        descriptorPath = `/proc/self/fd/${admission!.descriptor}`;
+      }
+      expect(fs.realpathSync(descriptorPath)).toBe(snapshot.location);
+      expect(await snapshot.cleanupAsync()).toBe(true);
+      expect(fs.existsSync(snapshot.location)).toBe(false);
+      const remainingTarget = fs.existsSync(descriptorPath)
+        ? fs.readlinkSync(descriptorPath)
+        : undefined;
+      expect(remainingTarget).not.toBe(`${snapshot.location} (deleted)`);
+      expect(fs.readFileSync(source)).toEqual(original);
+    } finally {
+      await snapshot.cleanupAsync();
+    }
+  },
+);
+
 it("does not throw when the onCleanupFailure callback itself throws", async () => {
   const log = path.join(tempDirs.make("snapshot-cleanup-log-"), "cleanup.log");
   fs.writeFileSync(log, "");
@@ -267,7 +306,7 @@ it("does not throw when the onCleanupFailure callback itself throws", async () =
   expect(prepared.cleanup()).toBe(false);
   expect([processWarning.mock.calls, consoleWarning.mock.calls]).toEqual([[], []]);
   vi.restoreAllMocks();
-  await testApi.flushFileLogQueueForTests();
+  await flushLogger();
   const records = fs
     .readFileSync(log, "utf8")
     .trim()
@@ -313,6 +352,30 @@ it.each([false, true])(
     expect(fs.readFileSync(sibling, "utf8")).toBe("not owned by snapshot");
   },
 );
+it.each(["rmdir", "lstat"])(
+  "defers only retired directory removal when busy cleanup reports %s",
+  async (syscall) => {
+    const report = vi.fn();
+    const { ownedRoot, prepared } = fixture(false, report);
+    {
+      using _ = vi
+        .spyOn(fs.promises, "rm")
+        .mockRejectedValue(Object.assign(busyError(), { syscall }));
+      const read = withPreparedSqliteSnapshot(prepared, (location) =>
+        fs.readFileSync(location, "utf8"),
+      );
+      await (syscall === "rmdir"
+        ? expect(read).resolves.toBe("private synthetic snapshot")
+        : expect(read).rejects.toThrow(`SQLite snapshot cleanup failed: ${ownedRoot}`));
+      // Either way the failure is reported once and the copy waits for a later sweep.
+      expect(report).toHaveBeenCalledOnce();
+      expect(fs.existsSync(prepared.location)).toBe(true);
+    }
+    await cleanupSnapshotOperations();
+    expect(fs.existsSync(ownedRoot)).toBe(false);
+  },
+);
+
 it("keeps a best-effort lease read successful when shared removal stays busy", async () => {
   const report = vi.fn();
   const { ownedRoot, prepared } = fixture(false, report);

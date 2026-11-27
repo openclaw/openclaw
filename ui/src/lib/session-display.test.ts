@@ -142,19 +142,6 @@ describe("resolveSessionWorkSubtitle", () => {
   it("combines repo, branch, and node host", () => {
     expect(
       resolveSessionWorkSubtitle({
-        repository: {
-          url: "https://github.com/openclaw/openclaw.git",
-          branch: "openclaw/cloud-task",
-        },
-      }),
-    ).toBe("openclaw ⎇ openclaw/cloud-task");
-    expect(
-      resolveSessionWorkSubtitle({
-        worktree: { branch: "openclaw/session-ui", repoRoot: "/repo/clawdbot" },
-      }),
-    ).toBe("clawdbot ⎇ session-ui");
-    expect(
-      resolveSessionWorkSubtitle({
         worktree: { branch: "feature/x", repoRoot: "/repo/clawdbot" },
         execNode: "macbook",
       }),
@@ -292,6 +279,19 @@ describe("resolveChannelSessionInfo", () => {
     });
     expect(resolveChannelSessionInfo("agent:main:main", "telegram")).toEqual({
       channelSession: false,
+    });
+    // A thread suffix follows a complete base key, so `main` here is the agent
+    // main session (Telegram DM topics under dmScope=main), not a channel.
+    expect(resolveChannelSessionInfo("agent:main:main:thread:12345:678", "telegram")).toEqual({
+      channel: "telegram",
+      channelSession: true,
+    });
+    expect(resolveChannelSessionInfo("agent:main:main:thread:12345:678")).toEqual({
+      channelSession: false,
+    });
+    expect(resolveChannelSessionInfo("agent:main:telegram:group:-99:thread:7")).toEqual({
+      channel: "telegram",
+      channelSession: true,
     });
     expect(resolveChannelSessionInfo("agent:main:dashboard:uuid")).toEqual({
       channelSession: false,

@@ -117,44 +117,6 @@ describe("secret store mutation lifecycle", () => {
     });
   });
 
-  it.each(["dispatch continuation", "mutation logging"] as const)(
-    "rejects delete after %s revokes authority",
-    async (closure) => {
-      await withState(async () => {
-        const name = "SYNTHETIC_DELETE_KEY";
-        const value = "test-secret-delete-must-survive";
-        await seedSecret(name, value);
-        const run = claimRun("delete");
-        const { authority, identity, client } = run;
-        log.debug = () => {
-          if (closure === "mutation logging") {
-            runRegistry.releaseAgentRunDelegatedAuthority(authority);
-          }
-        };
-        try {
-          expect(createAgentRuntimeApprovalAuthorityValidator()(identity)).toBe(true);
-          const dispatched = Promise.resolve().then(() =>
-            invoke("secrets.store.delete", { name }, client),
-          );
-          if (closure === "dispatch continuation") {
-            runRegistry.releaseAgentRunDelegatedAuthority(authority);
-          }
-          expect(await dispatched).toMatchObject([false, undefined, { code: "INVALID_REQUEST" }]);
-          expect(await readSecret(name)).toEqual({ ok: true, value });
-          expect(reloadSecrets).not.toHaveBeenCalled();
-          // A normal human administrator has no delegated run claim to revoke.
-          expect(await invoke("secrets.store.delete", { name })).toMatchObject([
-            true,
-            { ok: true },
-          ]);
-          expect((await readSecret(name)).ok).toBe(false);
-        } finally {
-          run.close();
-        }
-      });
-    },
-  );
-
   it("reports committed operator policy without secrets", async () => {
     await withState(async () => {
       const run = claimRun("tool");

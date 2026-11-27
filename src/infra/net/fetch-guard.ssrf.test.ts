@@ -39,7 +39,15 @@ vi.mock("../../logger.js", async (original) => ({
   ...(await original<typeof import("../../logger.js")>()),
   logWarn: logWarnMock,
 }));
-vi.mock("node:dns/promises", { spy: true });
+vi.mock("node:dns/promises", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:dns/promises") & { default: typeof import("node:dns/promises") }
+  >();
+  const overrides = {
+    lookup: vi.fn(actual.lookup),
+  };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
 vi.mock("node:net", async (original) => ({
   ...(await original<typeof import("node:net")>()),
   getDefaultAutoSelectFamily: () => true,
@@ -342,34 +350,43 @@ describe("redirect boundaries", () => {
     },
   );
 
-  it("strips sensitive headers and symbols across origins without mutating caller headers", async () => {
-    const headers = {
-      Authorization: "Bearer secret",
-      Cookie: "session=abc",
-      Cookie2: "legacy=1",
-      "Proxy-Authorization": "Basic secret",
-      "X-Api-Key": "secret",
-      "Private-Token": "secret",
-      "X-Trace": "1",
-      Accept: "application/json",
-      "Content-Type": "application/json",
-      "User-Agent": "OpenClaw-Test/1.0",
-    };
-    Object.defineProperty(headers, Symbol("sensitiveHeaders"), {
-      value: new Set(["authorization"]),
-      enumerable: false,
-    });
-    const fetchImpl = redirectFetch("https://cdn.example/asset");
-    const result = await guardedRequest(fetchImpl, { init: { headers } });
-    expect(Object.getOwnPropertySymbols(recordedCall(fetchImpl.mock.calls)[1].headers)).toEqual([]);
-    expect(Object.getOwnPropertySymbols(headers)).toHaveLength(1);
-    expect(Object.fromEntries(new Headers(secondInit(fetchImpl).headers))).toEqual({
-      accept: "application/json",
-      "content-type": "application/json",
-      "user-agent": "OpenClaw-Test/1.0",
-    });
-    await result.release();
-  });
+  it.each([false, true])(
+    "strips sensitive headers across origins without mutating caller headers (symbols=%s)",
+    async (withSymbols) => {
+      const headers = {
+        Authorization: "Bearer secret",
+        Cookie: "session=abc",
+        Cookie2: "legacy=1",
+        "Proxy-Authorization": "Basic secret",
+        "X-Api-Key": "secret",
+        "Private-Token": "secret",
+        "X-Trace": "1",
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "User-Agent": "OpenClaw-Test/1.0",
+      };
+      const originalHeaders = { ...headers };
+      if (withSymbols) {
+        Object.defineProperty(headers, Symbol("sensitiveHeaders"), {
+          value: new Set(["authorization"]),
+          enumerable: false,
+        });
+      }
+      const fetchImpl = redirectFetch("https://cdn.example/asset");
+      const result = await guardedRequest(fetchImpl, { init: { headers } });
+      expect(Object.getOwnPropertySymbols(recordedCall(fetchImpl.mock.calls)[1].headers)).toEqual(
+        [],
+      );
+      expect(headers).toEqual(originalHeaders);
+      expect(Object.getOwnPropertySymbols(headers)).toHaveLength(withSymbols ? 1 : 0);
+      expect(Object.fromEntries(new Headers(secondInit(fetchImpl).headers))).toEqual({
+        accept: "application/json",
+        "content-type": "application/json",
+        "user-agent": "OpenClaw-Test/1.0",
+      });
+      await result.release();
+    },
+  );
 
   it("never restores authorization on an HTTPS-to-HTTP downgrade", async () => {
     const fetchImpl = redirectFetch("http://cdn.example/asset");

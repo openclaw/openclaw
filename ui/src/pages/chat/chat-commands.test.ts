@@ -261,6 +261,7 @@ describe("conversation reset confirmation", () => {
       expect(host.request).toHaveBeenCalledTimes(sharingRole === "owner" ? 1 : 0);
       if (sharingRole === "owner") {
         expect(host.request).toHaveBeenCalledWith("sessions.abort", {
+          userInitiated: true,
           key: sessionKey,
           clearQueued: true,
         });
@@ -305,7 +306,7 @@ describe("conversation reset confirmation", () => {
   it.each([
     ["run", "deferred", null],
     ["Gateway", "failed", "connection changed"],
-    ["scope", "failed", "operator.admin"],
+    ["scope", "failed", "You don’t have permission to do this."],
   ] as const)(
     "does not clear when %s changes during confirmation",
     async (change, result, error) => {

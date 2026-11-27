@@ -82,7 +82,9 @@ suite.define(() => {
         await expect.poll(() => trigger.isEnabled()).toBe(true);
         await pane
           .locator(".chat-error")
-          .getByText("Couldn’t refresh this session. Permissions were saved.", { exact: false })
+          .getByText("Couldn’t refresh this session. Reload to see the saved permissions.", {
+            exact: false,
+          })
           .waitFor();
       },
       async ({ page }) => {

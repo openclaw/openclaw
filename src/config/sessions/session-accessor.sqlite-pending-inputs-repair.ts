@@ -14,7 +14,10 @@ import {
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import { readSessionPendingInputByKey } from "./session-accessor.sqlite-pending-inputs.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
-import { isFinalInputCompletion } from "./session-pending-input-value.js";
+import {
+  isFinalInputCompletion,
+  isRetryableSessionPendingInputEndCause,
+} from "./session-pending-input-value.js";
 
 type PendingInputDatabase = Pick<OpenClawAgentDatabase, "db" | "path">;
 
@@ -30,12 +33,20 @@ export function copySessionPendingInputsForRepair(
   }
   const db = getSessionKysely(destination.db);
   if (source.db === destination.db) {
+    ensureSessionPendingInputsSchema(destination.db);
     executeSqliteQuerySync(
       destination.db,
       db
         .updateTable("session_pending_inputs")
         .set((eb) => ({
           session_key: canonicalKey,
+          end_cause: eb
+            .case()
+            .when("consumed_event_id", "is", null)
+            .then(eb.fn.coalesce("end_cause", eb.val("restart-unrecoverable")))
+            .else(eb.ref("end_cause"))
+            .end(),
+          origin_source_json: null,
           state: eb
             .case()
             .when("state", "=", "cancelled")
@@ -77,12 +88,21 @@ export function copySessionPendingInputsForRepair(
       ) {
         throw new Error("Canonical repair found conflicting accepted inputs");
       }
+      const consumedEventId = existing.consumed_event_id ?? row.consumed_event_id ?? null;
       executeSqliteQuerySync(
         destination.db,
         db
           .updateTable("session_pending_inputs")
           .set({
-            consumed_event_id: existing.consumed_event_id ?? row.consumed_event_id ?? null,
+            consumed_event_id: consumedEventId,
+            // A deliberate retirement in either copy must not become retryable.
+            end_cause:
+              (isRetryableSessionPendingInputEndCause(existing.end_cause)
+                ? row.end_cause
+                : undefined) ??
+              existing.end_cause ??
+              (consumedEventId === null ? "restart-unrecoverable" : null),
+            origin_source_json: null,
             state:
               existing.state === "cancelled" || row.state === "cancelled"
                 ? "cancelled"
@@ -99,6 +119,9 @@ export function copySessionPendingInputsForRepair(
         ...record,
         session_key: canonicalKey,
         state: row.state === "cancelled" ? "cancelled" : "interrupted",
+        end_cause:
+          row.end_cause ?? (row.consumed_event_id == null ? "restart-unrecoverable" : null),
+        origin_source_json: null,
       }),
     );
   }

@@ -73,7 +73,9 @@ export function buildCreatedSessionGoal(
   if (!objective.trim()) {
     throw new SessionGoalTransitionError("objective required");
   }
-  if (entry.goal) {
+  // A completed objective no longer blocks the next explicitly requested goal.
+  // Unfinished goals retain their status, budget, and operator-owned controls.
+  if (entry.goal && entry.goal.status !== "complete") {
     throw new SessionGoalTransitionError("goal already exists");
   }
   const tokenBudget = normalizeTokenBudget(options.tokenBudget);

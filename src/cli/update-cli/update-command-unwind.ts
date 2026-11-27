@@ -9,7 +9,9 @@ import { ExitError } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { UpdateActivationTimeoutError } from "./update-command-activation.js";
+import { runMutableUpdateRecovery } from "./update-command-mutable-signals.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
+import { assertUpdateCommandRecoveryState } from "./update-command-recovery.js";
 import {
   createUpdateCommandFailureResult,
   UpdateCommandFailure,
@@ -47,10 +49,19 @@ export async function withUpdateCommandRecoveryUnwind(
           }),
           runId: run.runId,
         });
-  const pendingFailure = (cause: unknown, original: unknown) =>
-    new UpdateCommandPendingRecoveryFailure(primaryResult(original), formatErrorMessage(cause), {
-      cause,
-    });
+  const pendingFailure = (cause: unknown, original: unknown, nextStep?: string) =>
+    new UpdateCommandPendingRecoveryFailure(
+      primaryResult(original),
+      [
+        formatErrorMessage(cause),
+        // The refusal describes retained state; only this line names what went wrong.
+        ...(original === cause
+          ? []
+          : [`First failure: ${createUpdateErrorFact("update", original, run.env).message}`]),
+        ...(nextStep ? [nextStep] : []),
+      ].join("\n"),
+      { cause },
+    );
   const settlePending = async (error: UpdateCommandFailure) => {
     if (opts.recovery) {
       return error;
@@ -161,10 +172,14 @@ export async function withUpdateCommandRecoveryUnwind(
         }
         paths.add(file);
         await assertUpdateRecoveryAdmission({ env, pluginCohort });
+        const current = assertUpdateCommandRecoveryState({ ...opts, run: { ...run, env } });
+        if (current && !pluginCohort) {
+          throw new UpdateRecoveryRequiredError(current.pair.reservation);
+        }
       }
     };
     try {
-      await admitRecovery();
+      await runMutableUpdateRecovery(admitRecovery);
     } catch (error) {
       const pending = pendingFailure(error, failure?.error ?? error);
       if (
@@ -201,12 +216,16 @@ export async function withUpdateCommandRecoveryUnwind(
     }
   }
   try {
-    await recoveryState.windowsTaskAutoStartRecovery?.restore();
-    await recoveryState.windowsTaskAutoStartRecovery?.complete();
+    await runMutableUpdateRecovery(async () => {
+      await recoveryState.windowsTaskAutoStartRecovery?.restore();
+      await recoveryState.windowsTaskAutoStartRecovery?.complete();
+    });
   } catch (restoreError) {
     let error = restoreError;
     try {
-      await recoveryState.windowsTaskAutoStartRecovery?.complete(false);
+      await runMutableUpdateRecovery(async () => {
+        await recoveryState.windowsTaskAutoStartRecovery?.complete(false);
+      });
     } catch (compensationError) {
       error = new AggregateError(
         [error, compensationError],
@@ -225,7 +244,10 @@ export async function withUpdateCommandRecoveryUnwind(
       if (failure.error instanceof UpdateCommandFailure) {
         completeUpdateCommandRun(failure.error.result, run);
       } else {
-        failure.error = await prepareUnexpectedUpdateCommandFailure(failure.error, opts);
+        const original = failure.error;
+        failure.error = await runMutableUpdateRecovery(() =>
+          prepareUnexpectedUpdateCommandFailure(original, opts),
+        );
       }
     }
     throw failure.error;

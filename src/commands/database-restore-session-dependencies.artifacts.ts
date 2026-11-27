@@ -1,11 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { computeWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest-worker.js";
 import {
   requireWorkspaceResultGit as git,
   workspaceResultCheckpointInitArgs,
   withWorkspaceResultRefMutation,
 } from "../gateway/worker-environments/workspace-result-git.js";
-import { readStagedWorkerWorkspaceResult } from "../gateway/worker-environments/workspace-result-staging.js";
 import {
   ensureDurableDirectory,
   pinDirectory,
@@ -27,7 +27,10 @@ async function checkCheckpoint(root: string, input: Input) {
   if (row.checkpoint_ref === null) {
     return;
   }
-  const snapshot = await readStagedWorkerWorkspaceResult(root, row.checkpoint_ref);
+  const snapshot = await computeWorkspaceManifest({
+    type: "workspace.manifest.result",
+    input: { root, ref: row.checkpoint_ref, verifyContents: true },
+  });
   if (
     snapshot.base.baseCommit !== row.base_commit ||
     snapshot.current.baseCommit !== row.base_commit ||
@@ -35,10 +38,6 @@ async function checkCheckpoint(root: string, input: Input) {
     snapshot.currentManifestRef !== row.manifest_hash
   ) {
     throw new Error("Repository checkpoint differs from the selected original workspace");
-  }
-  // Manifest admission is lazy: consuming the native iterator verifies every payload digest.
-  for await (const entry of snapshot.readEntries()) {
-    void entry;
   }
 }
 

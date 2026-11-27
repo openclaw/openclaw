@@ -15,9 +15,8 @@ OpenClaw assembles its own system prompt on every run. It includes:
 
 - Tool list + short descriptions
 - Skills list (metadata only; instructions load on demand with `read`). Native
-  Codex turns on the managed bundled app-server get the compact skills block
-  in parent-local model request instructions. Connections without that relay use
-  thread developer instructions; other harnesses get it in the normal prompt surface.
+  Codex turns get the compact skills block in thread developer instructions,
+  inside the cached prompt prefix; other harnesses get it in the normal prompt surface.
   Bounded by `skills.limits.maxSkillsPromptChars`, with optional per-agent
   override at `agents.entries.*.skillsLimits.maxSkillsPromptChars`.
 - Self-update instructions
@@ -29,7 +28,7 @@ OpenClaw assembles its own system prompt on every run. It includes:
   `60000`).
   - Native Codex turns do not paste raw `MEMORY.md` when memory tools are
     available for that workspace; they get a small memory pointer in
-    parent-local request instructions instead and use memory
+    thread developer instructions instead and use memory
     tools on demand. If tools are disabled, memory search is unavailable, or
     the active workspace differs from the agent memory workspace, `MEMORY.md`
     falls back to the normal bounded turn-context path.
@@ -231,6 +230,10 @@ Transcript reports preserve valid recorded per-call totals and allocations, incl
 Anthropic fast-mode estimates multiply base and tier rates alike, preserving tier thresholds and mixed 5-minute/1-hour cache-write pricing.
 
 Omitting `cost`, or setting it to `{}`, inherits the catalog pricing schedule.
+A provider without a price of its own, such as a custom proxy, inherits the price of the one
+vendor that publishes the same model id: a proxy serving `claude-opus-5-5` estimates at
+Anthropic's API rate. The id must match exactly, so serving variants such as `-fast` keep their own price.
+Private and loopback endpoints never inherit a published price.
 Explicit flat or all-zero model prices do not inherit a catalog tier schedule.
 Omitted flat-rate fields can still inherit catalog defaults. An explicit
 `tieredPricing` schedule takes precedence over the catalog schedule.
@@ -240,7 +243,8 @@ publisher reads public pricing sources, including OpenCode's official catalog
 and Venice's public model API when the provider declares the native source.
 Base rates and context tiers come from the same source; usage rendering makes no
 network requests. Hosted updates activate with the Gateway's next prepared
-catalog generation, without restarting. Each estimation operation captures one
+catalog generation, without restarting. A hosted row's price replaces the
+bundled row's for each new model call's recorded cost as well as for estimates. Each estimation operation captures one
 pricing context, so a publication cannot change its rates halfway through.
 Set `models.catalogRefresh.enabled: false` to disable
 hosted catalog traffic on offline or restricted networks; bundled pricing still

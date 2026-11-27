@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.GatewayConnectionDisplay
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NodeApp
 import ai.openclaw.app.NodeRuntime
@@ -38,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -68,10 +70,13 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowContentResolver
 import org.robolectric.shadows.ShadowToast
+import org.robolectric.util.ReflectionHelpers
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.net.InetAddress
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 private const val FILE_NAME = "notes.txt"
 private const val FIRST_BODY = "First workspace export.\n"
@@ -96,6 +101,7 @@ class WorkspaceFilesShareLayoutTest {
 
   private lateinit var app: NodeApp
   private lateinit var runtime: NodeRuntime
+  private lateinit var model: MainViewModel
   private lateinit var activity: Activity
   private lateinit var gateway: WorkspaceFilesGateway
   private lateinit var blockedCache: File
@@ -128,7 +134,7 @@ class WorkspaceFilesShareLayoutTest {
     prefs.saveGatewayCredentials(gateway.endpoint.stableId, token = "synthetic-workspace-share-proof")
     runtime = NodeRuntime(app, prefs)
     bindNodeRuntimeTestFixture(app, runtime)
-    val model = MainViewModel(app, prefs, SavedStateHandle())
+    model = MainViewModel(app, prefs, SavedStateHandle())
     models.put("workspace", model)
     model.setForeground(true)
     composeRule.setContent {
@@ -156,6 +162,63 @@ class WorkspaceFilesShareLayoutTest {
     composeRule.runOnIdle { model.connect(gateway.endpoint) }
     openPreview(FIRST_BODY)
     assertNull(shadowOf(activity).nextStartedActivity)
+  }
+
+  @Test
+  fun unloadedPreviewRecoversWhenTheSameGatewayReconnects() {
+    val sessionKey = model.mainSessionKey.value
+    val defaultAgentId = model.gatewayDefaultAgentId.value
+    composeRule.onNodeWithContentDescription("Back").performClick()
+    awaitFileRow()
+    setGatewayConnected(false)
+    composeRule.waitUntil(READY_TIMEOUT_MS) { !model.isConnected.value }
+    composeRule.onNode(hasText(FILE_NAME) and hasClickAction()).performClick()
+    composeRule.waitUntil(READY_TIMEOUT_MS) {
+      composeRule.onAllNodesWithText("No preview").fetchSemanticsNodes().isNotEmpty()
+    }
+    composeRule.onNodeWithContentDescription("Share file").assertDoesNotExist()
+    val requestsBeforeReconnect = gateway.fileRequests.get()
+
+    setGatewayConnected(true)
+    composeRule.waitUntil(READY_TIMEOUT_MS) { model.isConnected.value }
+    // No navigation or owner-key change may manufacture a fresh preview composition.
+    assertEquals(sessionKey, model.mainSessionKey.value)
+    assertEquals(defaultAgentId, model.gatewayDefaultAgentId.value)
+    composeRule.waitUntil(READY_TIMEOUT_MS) {
+      composeRule.onAllNodesWithText(FIRST_BODY.trimEnd()).fetchSemanticsNodes().isNotEmpty()
+    }
+    composeRule.onNodeWithText(FIRST_BODY.trimEnd()).assertIsDisplayed()
+    composeRule.onNodeWithText("No preview").assertDoesNotExist()
+    composeRule.onNodeWithContentDescription("Share file").assertIsEnabled()
+    assertEquals(requestsBeforeReconnect + 1, gateway.fileRequests.get())
+  }
+
+  @Test
+  fun loadedPreviewStaysReadableAcrossSameGatewayReconnect() {
+    val requestsBeforeDisconnect = gateway.fileRequests.get()
+    setGatewayConnected(false)
+    composeRule.waitUntil(READY_TIMEOUT_MS) { !model.isConnected.value }
+    composeRule.onNodeWithText(FIRST_BODY.trimEnd()).assertIsDisplayed()
+    composeRule.onNodeWithContentDescription("Share file").assertIsEnabled()
+    // A reconnect is a retry for missing content, not an unsolicited replacement of a read file.
+    gateway.body = SECOND_BODY
+
+    setGatewayConnected(true)
+    composeRule.waitUntil(READY_TIMEOUT_MS) { model.isConnected.value }
+    composeRule.waitForIdle()
+
+    composeRule.onNodeWithText(FIRST_BODY.trimEnd()).assertIsDisplayed()
+    composeRule.onNodeWithText(SECOND_BODY.trimEnd()).assertDoesNotExist()
+    composeRule.onNodeWithContentDescription("Share file").assertIsEnabled()
+    assertEquals(requestsBeforeDisconnect, gateway.fileRequests.get())
+  }
+
+  private fun setGatewayConnected(connected: Boolean) {
+    gateway.rejectFileGets.set(!connected)
+    composeRule.runOnIdle {
+      val display = ReflectionHelpers.getField<MutableStateFlow<GatewayConnectionDisplay>>(runtime, "_gatewayConnectionDisplay")
+      display.value = display.value.copy(isConnected = connected)
+    }
   }
 
   @Test
@@ -328,6 +391,8 @@ private class WorkspaceFilesGateway : AutoCloseable {
 
   @Volatile var encoding = "utf8"
   val endpoint: GatewayEndpoint
+  val fileRequests = AtomicInteger()
+  val rejectFileGets = AtomicBoolean(false)
 
   init {
     server.dispatcher =
@@ -390,7 +455,8 @@ private class WorkspaceFilesGateway : AutoCloseable {
             }
 
             "agents.workspace.get" -> {
-              if (params["agentId"]?.jsonPrimitive?.content == "main" && params["path"]?.jsonPrimitive?.content == name) {
+              fileRequests.incrementAndGet()
+              if (!rejectFileGets.get() && params["agentId"]?.jsonPrimitive?.content == "main" && params["path"]?.jsonPrimitive?.content == name) {
                 buildJsonObject {
                   put("agentId", JsonPrimitive("main"))
                   put("workspace", JsonPrimitive("/synthetic-workspace"))

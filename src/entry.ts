@@ -8,6 +8,7 @@ import { resolveCliArgvInvocation } from "./cli/argv-invocation.js";
 import { isRootHelpInvocation } from "./cli/argv.js";
 import { parseCliContainerArgs, resolveCliContainerTarget } from "./cli/container-target.js";
 import { resolveCliDatabaseProcessRole } from "./cli/database-process-role.js";
+import { shouldPreserveGatewayProcessArgv } from "./cli/gateway-run-argv.js";
 import { tryOutputPrecomputedCommandHelp } from "./cli/precomputed-help.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import { isNativeHookRelayArgv } from "./cli/respawn-policy.js";
@@ -218,7 +219,9 @@ async function runEntryMain(): Promise<void> {
       // Only the final child emits the diagnostic warning; parents still enforce admission.
       await assertSupportedRuntime(undefined, undefined, process.argv, true, inheritedRuntimeEnv);
       // Idle respawn parents retain argv so offline maintenance can identify its launchers.
-      process.title = "openclaw";
+      if (!shouldPreserveGatewayProcessArgv(process.argv)) {
+        process.title = "openclaw";
+      }
       const parsedContainer = parseCliContainerArgs(process.argv);
       if (!parsedContainer.ok) {
         await writeCapturedCliArgumentError(parsedContainer.error);
@@ -226,7 +229,8 @@ async function runEntryMain(): Promise<void> {
         return;
       }
 
-      const parsed = parseCliProfileArgs(parsedContainer.argv);
+      const containerTargetName = resolveCliContainerTarget(process.argv);
+      const parsed = parseCliProfileArgs(parsedContainer.argv, containerTargetName);
       if (!parsed.ok) {
         // Keep it simple; Commander will handle rich help/errors after we strip flags.
         await writeCapturedCliArgumentError(parsed.error);
@@ -234,7 +238,6 @@ async function runEntryMain(): Promise<void> {
         return;
       }
 
-      const containerTargetName = resolveCliContainerTarget(process.argv);
       if (parsed.profile) {
         applyCliProfileEnv({ profile: parsed.profile });
         // Keep Commander and ad-hoc argv checks consistent.

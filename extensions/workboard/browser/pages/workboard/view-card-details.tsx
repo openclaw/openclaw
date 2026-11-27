@@ -564,7 +564,6 @@ function CardDetailsContent(props: WorkboardProps & { card: WorkboardCard }) {
                         class="settings-input workboard-detail__note"
                         aria-label={t("workboard.detailOperatorNotes")}
                         rows="2"
-                        maxlength="2000"
                         placeholder={t("workboard.detailNotePlaceholder")}
                         ref={noteValue}
                         disabled={action().busy}

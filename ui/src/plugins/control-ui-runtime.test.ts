@@ -137,6 +137,40 @@ it("completes an unavailable catalog without requests or diagnostics for a limit
   expect(runtime).toMatchObject({ registryStatus: "complete", errors: [], hasPlugins: false });
 });
 
+it("reactivates plugin views when the first recovery account becomes ready", async () => {
+  const client = {
+    ...clientFor(async (method) =>
+      method === "plugins.controlUi.list" ? catalog([pluginDescriptor()]) : { ok: true },
+    ),
+    recoveryScope: "account-a",
+    recoveryScopeReady: false,
+  };
+  const context = connectedContext(client);
+  let onConnection: Parameters<ApplicationContext["gateway"]["subscribe"]>[0] = () => {};
+  context.gateway.subscribe = (listener) => {
+    onConnection = listener;
+    return () => {};
+  };
+  initializeWith((host) => {
+    host.ui.registerNavigation(navigation());
+  });
+  const runtime = runtimeFor(context);
+  runtime.start();
+  await vi.waitFor(() => expect(runtime.registrations("navigation")).toHaveLength(1));
+  const first = runtime.registrations("navigation")[0]!;
+  expect(first.host.recoveryStorage).toBeNull();
+
+  client.recoveryScopeReady = true;
+  onConnection(context.gateway.snapshot);
+  expect(first.signal.aborted).toBe(true);
+  await vi.waitFor(() => expect(runtime.registrations("navigation")).toHaveLength(1));
+  const second = runtime.registrations("navigation")[0]!;
+  expect(second.signal.aborted).toBe(false);
+  expect(second.host.recoveryStorage?.version).toBe(1);
+  onConnection(context.gateway.snapshot);
+  expect(runtime.registrations("navigation")[0]?.signal).toBe(second.signal);
+});
+
 it("dispatches only explicitly advertised inline versions and restores saved version eligibility", async () => {
   const first = { pluginId: "review", id: "incident", version: 1, label: "Incident" };
   let inlineViews = [first, { ...first, version: 2 }];
@@ -374,7 +408,7 @@ it.each(["document", "published", "listener"] as const)(
       await config.refresh();
       expect(links()).toEqual([]);
       expect(runtime.errors).toContainEqual(
-        diagnostic("Native plugin assets must be served by this Control UI Gateway."),
+        diagnostic("Native plugin assets must be served by this web app’s Gateway."),
       );
       modules = [];
       await config.refresh();
@@ -454,11 +488,11 @@ it.each([
   const loads = scenario === "base path" || scenario === "public HTTP";
   const error =
     scenario === "cross-origin"
-      ? "Native plugin UI requires the Control UI served by the connected Gateway. Open https://remote.example and reconnect there."
+      ? "Native plugin UI requires the web app served by the connected Gateway. Open https://remote.example and reconnect there."
       : scenario === "no grant"
         ? "Native plugin asset grant unavailable: review"
         : scenario === "authenticated HTTP"
-          ? "Native plugin UI requires HTTPS or localhost to authenticate its assets. Open this Gateway through HTTPS/Tailscale Serve, or use its loopback dashboard."
+          ? "Native plugin UI requires HTTPS or localhost to authenticate its assets. Open this Gateway through HTTPS/Tailscale Serve, or use its loopback address."
           : null;
   vi.stubGlobal("isSecureContext", secure);
   const request = vi.fn(async (method: string, _params: unknown) =>

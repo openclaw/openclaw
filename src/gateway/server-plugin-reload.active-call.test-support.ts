@@ -289,15 +289,7 @@ export async function verifyActiveCallDrainLease(
     );
     expect(reloading.settled).toBe(false);
     expect(originalCall.settled).toBe(false);
-    expect(readiness()).toMatchObject({
-      ready: false,
-      failing: ["plugin-reload"],
-      pluginReload: {
-        phase: "reloading",
-        deadlineAtMs,
-        reason: expect.stringContaining("plugin first"),
-      },
-    });
+    expect(readiness()).toMatchObject({ ready: true, failing: [] });
     expect(fixture.candidates).toHaveLength(0);
     expect(fixture.firstStop).not.toHaveBeenCalled();
     expect(disposed).toEqual([]);

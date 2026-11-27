@@ -116,3 +116,19 @@ export async function rollbackAtomicGatewaySessionCreation(
     initializationRolledBack: true,
   };
 }
+
+/** Clone initializer-owned state before exposing the exact committed row. */
+export function projectPendingSessionInitialization(
+  params: CreateGatewaySessionParams,
+): Partial<SessionEntry> {
+  return {
+    ...(params.initialEntry?.initializationPending === true ||
+    params.atomicInitialization === true ||
+    params.deferInitialization === true
+      ? { initializationPending: true }
+      : {}),
+    ...(params.deferInitialization && params.templateInitialization
+      ? { templateInitialization: structuredClone(params.templateInitialization) }
+      : {}),
+  };
+}

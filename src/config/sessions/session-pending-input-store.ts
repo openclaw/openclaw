@@ -54,8 +54,11 @@ export async function preparePendingInputStore(
     throw new Error("Restart resume requires a durable session.");
   }
   if (memoryOwner) {
+    assertCurrent();
     const acquired = await acquireSessionActorStorage(scope, {
-      lifetime: { assertCurrent, assertReadable: assertCurrent },
+      // The actor holds settlement custody after Stop ends execution authority.
+      // Stage, reads, and completion still use the caller's live authority.
+      lifetime: { assertCurrent() {}, assertReadable() {} },
       authority: { assertCurrent, authorize: assertCurrent },
     });
     if (!acquired) {
@@ -73,7 +76,7 @@ export async function preparePendingInputStore(
     throw new Error("Restart resume requires the current input actor.");
   }
   const logical = resolveSqliteScope({ ...captured, storePath: undefined });
-  const target = captureSessionStoreReadTarget(
+  const target = await captureSessionStoreReadTarget(
     captured,
     "Pending input changed its captured database owner",
   );
@@ -97,7 +100,8 @@ export async function preparePendingInputStore(
   ) {
     throw new Error("Input actor changed the pending input's physical target");
   }
-  const readTarget = target.resolve(resolved);
+  const readTarget = await target.resolve(resolved);
+  assertCurrent();
   const identity = readTarget.identity;
   if (!identity.key.startsWith("file:")) {
     throw new Error("Pending input changed its captured database owner");
@@ -130,10 +134,13 @@ export async function preparePendingInputStore(
     },
     close: drain,
   });
-  const assertOpen = () => {
+  const assertLifetimeCurrent = () => {
     if (revoked) {
       throw new Error("Pending input database owner has closed");
     }
+  };
+  const assertOpen = () => {
+    assertLifetimeCurrent();
     assertSource();
   };
   const track = <T>(operation: Promise<T>): Promise<T> => {
@@ -169,6 +176,14 @@ export async function preparePendingInputStore(
   return {
     sessionActor: undefined,
     assertCurrent: assertOpen,
+    assertReadCurrent() {
+      assertLifetimeCurrent();
+      const operation = readTarget.assertCurrentAsync().then(assertLifetimeCurrent);
+      pending.add(operation);
+      const untrack = () => pending.delete(operation);
+      void operation.then(untrack, untrack);
+      return operation;
+    },
     async withAdmission<T>(operation: () => Promise<T>, reentrant: boolean): Promise<T> {
       let entered = false;
       const run = () =>

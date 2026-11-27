@@ -6,10 +6,7 @@ import { getStateDatabaseSchemaLease } from "../infra/gateway-state-owner.js";
 import { createSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.media-persistence-targets.js";
 import { runWithDoctorMigrationBackup } from "../infra/update-doctor-migration-attribution.js";
-import {
-  createUpdateDoctorDatabaseWriteCapture,
-  DoctorMaintenanceRefusalError,
-} from "../infra/update-doctor-result.js";
+import { createUpdateDoctorDatabaseWriteCapture } from "../infra/update-doctor-result.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import {
   createOpenClawDatabaseMaintenanceScope,
@@ -22,6 +19,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { admitOpenClawMaintenanceLiveAuthorityReads } from "../state/openclaw-state-maintenance-context.js";
 import { assertDoctorAgentLeaseAdmission } from "./doctor-agent-lease-refusal.js";
 import { acquireDoctorGatewayMaintenanceOwner } from "./doctor-maintenance-foreground.js";
+import { traceDoctorMaintenancePending } from "./doctor-maintenance-pending.js";
 import type { DoctorMaintenanceParams } from "./doctor-maintenance-types.js";
 import { captureFreshDoctorMigrationTables } from "./doctor-migration-backup.js";
 import { sanitizeDoctorNote } from "./doctor/emit-notes.js";
@@ -70,14 +68,16 @@ export async function createDoctorMaintenanceState(options: {
     : env;
   let captureAdmitted = false;
   let liveAuthorityReadsAdmitted = false;
-  const capture = createUpdateDoctorDatabaseWriteCapture(params.databaseGenerations, {
-    env: selectedEnv,
-    pluginOwners: params.databasePluginOwners,
-    root: params.root ?? undefined,
-    signal: options.signal,
-    assertCurrent: () => owner!.assertCurrent(options.assertCurrent),
-    warn: options.warn,
-  });
+  const capture =
+    params.databaseWriteCapture ??
+    createUpdateDoctorDatabaseWriteCapture(params.databaseGenerations, {
+      env: selectedEnv,
+      pluginOwners: params.databasePluginOwners,
+      root: params.root ?? undefined,
+      signal: options.signal,
+      assertCurrent: () => owner!.assertCurrent(options.assertCurrent),
+      warn: options.warn,
+    });
   const closeResources = async (agentRoot?: string | null) => {
     const drainRoot =
       agentRoot === null
@@ -155,7 +155,11 @@ export async function createDoctorMaintenanceState(options: {
   const settleCapture = async () => {
     if (owner && capture && captureAdmitted) {
       // Settle the original receipt keys before their canonical path can change.
-      await settle(() => capture.settle());
+      await settle(async () => {
+        owner!.assertCurrent(options.assertCurrent);
+        await capture.settle();
+        owner!.assertCurrent(options.assertCurrent);
+      });
       captureAdmitted = false;
     }
   };
@@ -195,7 +199,10 @@ export async function createDoctorMaintenanceState(options: {
       throw error;
     }
     if (capture && !captureAdmitted) {
-      await settle(() => resources!.run(() => capture.admit()));
+      await settle(async () => {
+        await resources!.run(() => capture.admit());
+        acquired.assertCurrent(options.assertCurrent);
+      });
       captureAdmitted = true;
     }
   };
@@ -271,6 +278,9 @@ export async function createDoctorMaintenanceState(options: {
         );
         liveAuthorityReadsAdmitted = true;
       }
+      await traceDoctorMaintenancePending("legacy-state-dir", () =>
+        resolvePendingLegacyStateDirMigrationPaths({ env }) ? "work" : "none",
+      );
       const { prepareLegacyStateDirMigration } =
         await import("../infra/state-migrations.state-dir.js");
       const pending = resolvePendingLegacyStateDirMigrationPaths({ env });
@@ -397,52 +407,6 @@ export async function createDoctorMaintenanceState(options: {
         throw operationError;
       }
       return result!;
-    },
-    async cleanupRetainedRuntimes(inspectService: boolean) {
-      const { captureRetainedNativeWorkerSource } =
-        await import("../infra/worker-native-lifecycle.js");
-      const { retireIdleOpenClawStateReadWorkers } =
-        await import("../state/openclaw-state-read-worker.js");
-      const { prepareRetainedUpdateRuntimeCleanup } = await import("./doctor-retained-runtime.js");
-      assertOwnerCurrent();
-      const cleanup = await state.run(() =>
-        prepareRetainedUpdateRuntimeCleanup(selectedEnv, { inspectService }),
-      );
-      const nativeSource = captureRetainedNativeWorkerSource();
-      // This phase runs after the tracked Doctor callback has settled.
-      let readersRetired: boolean;
-      let brokerRetired: boolean;
-      try {
-        await closeResources();
-        readersRetired = await retireIdleOpenClawStateReadWorkers(nativeSource);
-        brokerRetired = await nativeSource.retireIdleBroker();
-      } catch (cause) {
-        throw new DoctorMaintenanceRefusalError(
-          `Doctor inspection resource cleanup failed: ${formatErrorMessage(cause)}. Resolve this cleanup failure before restarting the Gateway or rerunning openclaw doctor --fix.`,
-          { kind: "data-at-risk", reason: "active-mutation" },
-          { cause },
-        );
-      }
-      try {
-        await owner!.run(() =>
-          cleanup(true, {
-            assertCurrent() {
-              assertOwnerCurrent();
-              owner!.assertDatabaseAccess(resolveOpenClawStateSqlitePath(selectedEnv));
-            },
-            assertResourcesSettled() {
-              // Worker threads share this PID and are invisible to the process census.
-              if (!readersRetired || !brokerRetired || nativeSource.hasActiveWorkers) {
-                throw new Error(
-                  `independent native work in this process (PID: ${process.pid}); let these holders finish, then rerun openclaw doctor --fix`,
-                );
-              }
-            },
-          }),
-        );
-      } finally {
-        await enterResources(owner!);
-      }
     },
     /** Returns a settled cleanup failure; throws only while Doctor must retain custody. */
     async release(): Promise<Error | undefined> {

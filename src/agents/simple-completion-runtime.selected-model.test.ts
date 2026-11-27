@@ -10,9 +10,11 @@ import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtur
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as sessionAuthRuntime from "./auth-profiles/session-override.js";
+import { runIsolatedCompletion } from "./isolated-completion.js";
 import { acquireAgentRunPreparedModelRuntime } from "./prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 import type { BoundAgentRunSessionTarget } from "./run-session-target.types.js";
+import { ModelRegistry } from "./sessions/model-registry.js";
 import {
   acquireSimpleCompletionModelForAgent,
   completeWithPreparedSimpleCompletionModel,
@@ -36,11 +38,15 @@ afterEach(async () => {
 it.each([
   { mode: "agent", api: undefined },
   { mode: "worker", api: "openai-completions" },
+  { mode: "isolated", api: "openai-completions" },
 ] as const)(
   "normalizes initial $mode completion once without ambient runtime (API $api)",
   async ({ mode, api }) => {
     await withOpenClawTestState({ label: "selected-completion" }, async (state) => {
       const requests: string[] = [];
+      const credentials: Array<string | undefined> = [];
+      let concurrent = false;
+      const pendingReplies: Array<() => void> = [];
       await using server = await startCompletionServer((request, response) => {
         let body = "";
         request.setEncoding("utf8");
@@ -50,8 +56,19 @@ it.each([
         request.on("end", () => {
           const { model } = JSON.parse(body) as { model: string };
           requests.push(model);
-          response.writeHead(200, { "content-type": "text/event-stream" });
-          response.end(completionChunk(`materialized:${model}`, model));
+          credentials.push(request.headers.authorization);
+          const reply = () => {
+            response.writeHead(200, { "content-type": "text/event-stream" });
+            response.end(completionChunk(`materialized:${model}`, model));
+          };
+          if (concurrent) {
+            pendingReplies.push(reply);
+            if (pendingReplies.length === 2) {
+              pendingReplies.forEach((send) => send());
+            }
+          } else {
+            reply();
+          }
         });
       });
       const { baseUrl } = server;
@@ -123,6 +140,29 @@ module.exports = {
         },
       );
       await state.writeConfig(cfg);
+      if (mode === "isolated") {
+        await state.writeAuthProfiles({
+          version: 1,
+          profiles: {
+            [`${provider}:first`]: { type: "api_key", provider, key: "synthetic-first" },
+            [`${provider}:second`]: { type: "api_key", provider, key: "synthetic-second" },
+          },
+        });
+      }
+      const isolated = (model: string, authProfileId?: string) =>
+        runIsolatedCompletion({
+          config: cfg,
+          agentId: "main",
+          agentDir: state.agentDir(),
+          workspaceDir: state.workspaceDir,
+          provider,
+          model,
+          authProfileId,
+          agentHarnessRuntimeOverride: "openclaw",
+          systemPrompt: "Return text.",
+          prompt: "Synthetic input.",
+          timeoutMs: 30000,
+        });
       const sessionTarget: BoundAgentRunSessionTarget = {
         agentId: "main",
         sessionId: "selected-test",
@@ -147,7 +187,9 @@ module.exports = {
         ["middle", "final"],
         ["plain", "plain"],
       ] as const) {
-        if (mode === "worker") {
+        if (mode === "isolated") {
+          expect(await isolated(raw)).toMatchObject({ text: `materialized:${expected}` });
+        } else if (mode === "worker") {
           await using lease = await acquireAgentRunPreparedModelRuntime({
             config: cfg,
             agentId: "main",
@@ -190,6 +232,7 @@ module.exports = {
             },
           });
         } else {
+          const fork = vi.spyOn(ModelRegistry.prototype, "fork").mockClear();
           const acquired = await acquireSimpleCompletionModelForAgent({
             cfg,
             agentId: "main",
@@ -199,6 +242,7 @@ module.exports = {
           assertPrepared(acquired);
           await using prepared = acquired;
           expect(prepared.model.id).toBe(expected);
+          expect(fork.mock.lastCall?.[2]).toEqual({ provider, modelId: expected });
           const result = await completeWithPreparedSimpleCompletionModel({
             cfg,
             model: prepared.model,
@@ -212,6 +256,20 @@ module.exports = {
         }
       }
       expect(requests).toEqual(["middle", "final", "plain"]);
+      if (mode === "isolated") {
+        concurrent = true;
+        const replies = await Promise.all([
+          isolated("plain", `${provider}:first`),
+          isolated("plain", `${provider}:second`),
+        ]);
+        expect(replies.map((reply) => reply.text)).toEqual([
+          "materialized:plain",
+          "materialized:plain",
+        ]);
+        expect(credentials.slice(-2)).toEqual(
+          expect.arrayContaining(["Bearer synthetic-first", "Bearer synthetic-second"]),
+        );
+      }
     });
   },
 );

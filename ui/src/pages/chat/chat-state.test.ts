@@ -1007,67 +1007,6 @@ describe("chat state render lifecycle", () => {
     expect(state.pendingAbort?.runId).toBe("offline-run");
   });
 
-  it("publishes a pending run projection when an unrelated pane commit consumes its frame", () => {
-    const { frames } = captureAnimationFrames();
-    const awaitDomCommit = vi.fn(async () => true);
-    const controller = createChatState<ChatPageHost>({
-      awaitDomCommit,
-    });
-    let state: ChatPageHost;
-    const rendered: (string | null)[] = [];
-    const queueLengths: number[] = [];
-    const dispose = createRoot((stop) => {
-      state = createPageState(createChatPageStateContext(), controller.createRenderLifecycle(), {
-        dispatchEvent: () => true,
-      });
-      state.client = createTestGatewayClient(vi.fn());
-      controller.attach(state);
-      createEffect(
-        () => state.chatStream,
-        (stream) => {
-          rendered.push(stream);
-        },
-      );
-      createEffect(
-        () => state.chatQueue.length,
-        (length) => {
-          queueLengths.push(length);
-        },
-      );
-      return stop;
-    });
-    onTestFinished(() => {
-      controller.dispose();
-      dispose();
-    });
-    flush();
-    awaitDomCommit.mockClear();
-    chatRunPresentation(state!).batch(
-      () => (state!.chatStream = "queued stream"),
-      "animation-frame",
-    );
-    expect(frames.size).toBe(1);
-    controller.publishPendingRunState();
-    controller.captureRenderChanges();
-    flush();
-    expect(frames.size).toBe(0);
-    expect(rendered).toEqual([null, "queued stream"]);
-    keepVolatileQueuedMessage(state!, state!.sessionKey, {
-      id: "run-and-outbox-publication",
-      text: "Keep this queued input",
-      createdAt: 1,
-      sendState: "held",
-    });
-    expect(state!.chatQueue).toHaveLength(1);
-    flush();
-    expect(queueLengths).toEqual([0, 1]);
-    removeQueuedMessage(state!, "run-and-outbox-publication");
-    flush();
-    expect(queueLengths).toEqual([0, 1, 0]);
-    expect(rendered).toEqual([null, "queued stream"]);
-    expect(awaitDomCommit).not.toHaveBeenCalled();
-  });
-
   it("publishes run fields once per frame while preserving synchronous state and terminal ordering", () => {
     const { frames } = captureAnimationFrames();
     const rendered: Array<{ stream: string | null; run: string | null }> = [];
@@ -1473,41 +1412,6 @@ describe("chat state render lifecycle", () => {
       lifecycleEvent("approval-resolved", state.sessionKey, "approval-2"),
     );
     expect(state.waitingApprovalStatuses.size).toBe(0);
-  });
-
-  it("skips no-op assistant publication while tool changes render on the next frame", () => {
-    const requestAnimationFrame = vi
-      .spyOn(globalThis, "requestAnimationFrame")
-      .mockImplementation(() => 1);
-    const publication = vi.fn();
-    const state = createStreamEventState({
-      publication,
-      chatStreamSegments: [],
-      chatToolMessages: [],
-      toolStreamById: new Map(),
-      toolStreamOrder: [],
-      toolStreamSyncTimer: null,
-      sessions: {
-        reconcileMutation: vi.fn(async () => ({ status: "refreshed" as const })),
-      } as never,
-    });
-    const emitAgent = (seq: number, stream: string, data: Record<string, unknown>) =>
-      emitGatewayEvent(state, "agent", {
-        runId: "run-1",
-        seq,
-        stream,
-        ts: seq,
-        sessionKey: "main",
-        data,
-      });
-
-    emitAgent(1, "assistant", { text: "Hello", delta: "Hello" });
-    expect(publication).not.toHaveBeenCalled();
-
-    emitAgent(2, "tool", { phase: "start", name: "read", toolCallId: "tool-1" });
-    emitAgent(3, "tool", { phase: "update", name: "read", toolCallId: "tool-1" });
-    expect(requestAnimationFrame).toHaveBeenCalledOnce();
-    expect(publication).not.toHaveBeenCalled();
   });
 
   it("projects hidden Gateway state without scheduling animation frames", () => {

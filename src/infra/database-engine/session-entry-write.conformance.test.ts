@@ -572,7 +572,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
         }
       } finally {
         now.mockRestore();
-        f.close();
+        await f.close();
       }
     });
 

@@ -9,7 +9,6 @@ import {
   onSettled,
   Show,
 } from "solid-js";
-import { isQuestionThumbnail } from "../../../packages/gateway-protocol/src/question-media.js";
 import type {
   McpAppDiscoveredEntrypoint,
   McpAppDiscoveredServer,
@@ -22,6 +21,7 @@ import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { generateUUID } from "../lib/uuid.ts";
+import { McpAppIcon } from "./mcp-app-icon.tsx";
 import { requestMcpAppOpen } from "./mcp-app-launch.ts";
 import { Icon } from "./solid/icon.tsx";
 import { McpAppOperationError } from "./solid/mcp-app-operation-error.tsx";
@@ -29,19 +29,7 @@ import { McpAppOperationError } from "./solid/mcp-app-operation-error.tsx";
 const DiscoveryStatus = lazy(() => import("./mcp-app-discovery-status.tsx"));
 
 function CatalogIcon(props: { server: McpAppDiscoveredServer; entry: McpAppDiscoveredEntrypoint }) {
-  const icon = () =>
-    [...(props.entry.icons ?? []), ...(props.server.icons ?? [])].find(
-      (candidate) =>
-        (!candidate.theme || candidate.theme === document.documentElement.dataset.themeMode) &&
-        isQuestionThumbnail(candidate.src),
-    );
-  return (
-    <Show when={icon()} fallback={<Icon name="puzzle" />}>
-      {(image) => (
-        <img class="mcp-app-icon" src={image().src} alt="" referrerpolicy="no-referrer" />
-      )}
-    </Show>
-  );
+  return <McpAppIcon icons={[...(props.entry.icons ?? []), ...(props.server.icons ?? [])]} />;
 }
 
 export function McpAppCatalogView(props: {

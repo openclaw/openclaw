@@ -10,7 +10,7 @@ import {
 import { loadBundledPluginFacade } from "../../../test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../../../test-utils/channel-plugins.js";
 import { extractMessagingToolSend } from "../../embedded-agent-messaging-extraction.js";
-import { hasMessagingToolDeliveryToSource } from "./subagent-announce-completion-delivery.js";
+import { resolvePrivateCompletionDeliveryResult } from "./subagent-announce-obligation.js";
 
 const THREAD_ID = "1111111111111111111";
 const PARENT_ID = "2222222222222222222";
@@ -52,27 +52,35 @@ function settleResultFor(target: string) {
   );
   return {
     send,
-    result: {
-      didSendViaMessagingTool: true,
-      messagingToolSentTargets: send ? [{ ...send, accountId: "default" }] : [],
+    response: {
+      status: "ok",
+      inputProcessingCompleted: true,
+      result: {
+        didSendViaMessagingTool: true,
+        messagingToolSentTargets: send ? [{ ...send, accountId: "default" }] : [],
+      },
     },
   };
 }
 
 describe("Discord thread requester settle delivery", () => {
   it("credits a message-tool send to the requester's own thread", () => {
-    const { send, result } = settleResultFor(`channel:${THREAD_ID}`);
+    const { send, response } = settleResultFor(`channel:${THREAD_ID}`);
 
     expect(send).toMatchObject({ provider: "discord", to: `channel:${THREAD_ID}` });
     expect(send?.threadId).toBe(THREAD_ID);
-    expect(hasMessagingToolDeliveryToSource(result, threadOrigin)).toBe(true);
+    expect(
+      resolvePrivateCompletionDeliveryResult(response, threadOrigin).requesterVisibleFinalDelivered,
+    ).toBe(true);
   });
 
   it("does not credit a send to the thread's parent channel", () => {
-    const { send, result } = settleResultFor(`channel:${PARENT_ID}`);
+    const { send, response } = settleResultFor(`channel:${PARENT_ID}`);
 
     expect(send?.threadId).toBeUndefined();
     expect(send?.threadImplicit).toBeUndefined();
-    expect(hasMessagingToolDeliveryToSource(result, threadOrigin)).toBe(false);
+    expect(
+      resolvePrivateCompletionDeliveryResult(response, threadOrigin).requesterVisibleFinalDelivered,
+    ).toBeUndefined();
   });
 });

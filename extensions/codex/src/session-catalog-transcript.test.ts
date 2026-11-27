@@ -191,7 +191,7 @@ it("fails visibly when one complete raw item cannot fit the wire budget", async 
   const { control } = nativeItemControl([commandItem("oversized", "x".repeat(20 * 1024 * 1024))]);
 
   await expect(readTranscript(control, 1)).rejects.toThrow(
-    "Codex transcript item exceeds the safe response size",
+    "Codex chat history item exceeds the safe response size",
   );
 });
 
@@ -241,9 +241,9 @@ it.each([
   [
     "removed item",
     "turn-anchor",
-    "Codex transcript changed; refresh the session before loading older items",
+    "Codex chat history changed; refresh the session before loading older items",
   ],
-  ["absent turn", undefined, "Codex app-server did not provide a transcript continuation anchor"],
+  ["absent turn", undefined, "Codex app-server did not provide a chat history continuation anchor"],
 ] as const)("reports a %s anchor instead of losing the remainder", async (_kind, anchor, error) => {
   const source = textItems("oldest", "middle", "newest");
   const control = createEligibleControl({

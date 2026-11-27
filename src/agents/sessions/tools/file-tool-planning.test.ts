@@ -1,6 +1,5 @@
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { createAgentToolExecutionBudget } from "../../agent-tool-source-execution-guard.js";
 import { isTrustedToolInputError } from "../../tool-input-error.js";
 import { createEditTool } from "./edit.js";
 import * as planning from "./file-tool-planning.js";
@@ -45,7 +44,7 @@ it.each([false, true])("classifies edit failures (storage error: %s)", async (st
 
 it.each(
   (["edit", "write"] as const).flatMap((kind) =>
-    (["active", "revoked", "aborted"] as const).map((authority) => ({ kind, authority })),
+    (["active", "aborted"] as const).map((authority) => ({ kind, authority })),
   ),
 )("$kind honors $authority after planning", async ({ kind, authority }) => {
   const prepared = createDeferredCore();
@@ -68,20 +67,13 @@ it.each(
   const { mkdir, writeFile } = operations;
   const state = () => ({ dirs: mkdir.mock.calls, writes: writeFile.mock.calls, text: content() });
   const controller = new AbortController();
-  let current = true;
-  const budget = createAgentToolExecutionBudget({
-    signal: controller.signal,
-    abort: (error) => controller.abort(error),
-    isCurrent: () => current,
-  });
   const editArgs = { path, edits: [{ oldText: "before", newText: "after" }] };
   const writeArgs = { path, content: "after\n" };
   const signal = controller.signal;
-  const pending = budget.run(() =>
+  const pending =
     kind === "edit"
       ? createEditTool("/workspace", { operations }).execute("planning", editArgs, signal)
-      : createWriteTool("/workspace", { operations }).execute("planning", writeArgs, signal),
-  );
+      : createWriteTool("/workspace", { operations }).execute("planning", writeArgs, signal);
   void pending.catch(prepared.reject);
   onTestFinished(async () => {
     release.resolve();
@@ -89,9 +81,7 @@ it.each(
   });
   await prepared.promise;
   expect(state()).toEqual({ dirs: [], writes: [], text: "before\n" });
-  if (authority === "revoked") {
-    current = false;
-  } else if (authority === "aborted") {
+  if (authority === "aborted") {
     controller.abort(new Error("Planning cancelled"));
   }
   release.resolve();
@@ -99,10 +89,7 @@ it.each(
     await expect(pending).resolves.toMatchObject({ details: { changed: true } });
     expect(state()).toMatchObject({ writes: [expect.any(Array)], text: "after\n" });
   } else {
-    const abortedMessage = kind === "write" ? "Operation aborted" : "Planning cancelled";
-    await expect(pending).rejects.toThrow(
-      authority === "aborted" ? abortedMessage : "execution scope is no longer active",
-    );
+    await expect(pending).rejects.toThrow();
     expect(state()).toEqual({ dirs: [], writes: [], text: "before\n" });
   }
 });

@@ -202,6 +202,9 @@ export async function finishAlreadyCurrentUpdate(
     );
     const beforeRepair = configSnapshot;
     if (plan) {
+      // The legacy config repair is this already-current run's first state change.
+      await params.opts.run?.captureOriginal?.();
+      assertCurrent();
       configSnapshot = await withOwnedManagedUpdateEnv(env, () =>
         withPluginLifecycleLease({ assertCurrent }, () =>
           withConfigWriteLock(

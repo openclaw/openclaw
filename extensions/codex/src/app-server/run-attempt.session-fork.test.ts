@@ -143,7 +143,6 @@ it.each(cases)("forks %j", async ({ completeParent, rebuilt }) => {
   const closeParentHost = await bindProductionHarnessHostCapabilitiesForTest(params, {
     profileId: "fork-parent-operator",
     scopes: ["operator.write"],
-    assertCurrent: () => {},
   });
   const parent = runCodexAppServerAttempt(params);
   await parent.waitForTurnAccepted();

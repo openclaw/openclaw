@@ -21,7 +21,7 @@ RPC method families for gateway status and identity, models and usage, channels 
 - `system-event` appends a system event and can update/broadcast presence context.
 - `last-heartbeat` returns the latest persisted heartbeat event.
 - `set-heartbeats` enables or disables only the converted/default proactive jobs recorded by Doctor or setup. It does not affect unrelated automations or recreate deleted jobs.
-- `gateway.restart.preflight` is a deprecated, read-only compatibility preview of restart-specific active work. It does not close admission, create a suspension lease, or provide the atomic full-work fence of `gateway.suspend.prepare`; new restart flows should call `gateway.restart.request`.
+- `gateway.restart.preflight` is a deprecated, read-only compatibility preview of restart-specific active work, including live session admissions and lifecycle mutations. It does not close admission, create a suspension lease, or provide the atomic full-work fence of `gateway.suspend.prepare`; new restart flows should call `gateway.restart.request`.
 - `gateway.suspend.prepare` creates a short cooperative-suspension lease only when tracked Gateway work is idle. While prepared, authenticated WebSocket connects remain available, but only `gateway.suspend.*` and an exact targeted non-safe `gateway.restart.request` may run; safe and untargeted restarts remain fenced. `gateway.suspend.status` checks the lease, and `gateway.suspend.resume` releases it after thaw or an aborted host operation.
 
 ## Models and usage
@@ -201,7 +201,10 @@ Catalog and trending pages can return `nextCursor`. Filtering can produce an
 empty page with a continuation; continue while that cursor exists. Full catalog
 browsing uses the registry's paginated plugin and native skill catalogs. Trending
 is a bounded ranking feed, not the complete catalog. The existing initial
-`plugins.catalog.browse` overview retains its bounded behavior.
+`plugins.catalog.browse` overview retains its bounded behavior. A category can
+include an opaque `previewCursor`: pass it back with the same `category` and
+`intent: "all"` to continue that shelf’s curated overview selection. Omitting
+the cursor starts the full category listing instead.
 
 Text search returns at most `searchLimit` upstream candidates, equal to the
 requested page size. Official filtering can reduce that count. Upstream search

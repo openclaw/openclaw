@@ -3,7 +3,6 @@ import {
   type SessionBindingAdapterV2,
 } from "openclaw/plugin-sdk/thread-bindings-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withPluginRuntimePluginScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createAccountScopedBindingAdapterV2 } from "./session-binding-adapter.js";
 import { readSessionBindingInspectionConversation } from "./session-binding-normalization.js";
@@ -236,31 +235,6 @@ describe("awaited binding read ownership", () => {
     await expect(readSelection([ref])).rejects.toThrow("binding source changed");
     assertCurrent.mockImplementation(() => fail("closed adapter"));
     await expect(service.resolveByConversationAsync(ref)).rejects.toThrow("closed adapter");
-  });
-
-  it("warns once per legacy binding method while V2 construction and reads stay silent", async () => {
-    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
-    const run = <T>(body: () => T) =>
-      withPluginRuntimePluginScope({ pluginId: "binding-sdk-compat-fixture" }, body);
-    try {
-      await run(async () => {
-        registerV2(createV2());
-        expect(await service.resolveByConversationAsync(ref)).toEqual(record);
-        expect(warning).not.toHaveBeenCalled();
-        expect(service.resolveByConversation(ref)).toEqual(record);
-        service.touch("", undefined, ref);
-      });
-      run(() => service.resolveByConversation(ref));
-      expect(warning.mock.calls.map(([message]) => message)).toEqual(
-        [
-          "SessionBindingService.resolveByConversation",
-          "SessionBindingAdapter.resolveByConversation",
-          "SessionBindingService.touch",
-        ].map((method) => expect.stringContaining(`${method} is deprecated;`)),
-      );
-    } finally {
-      warning.mockRestore();
-    }
   });
 
   it("retains the explicit reader fallback for a legacy external adapter", async () => {

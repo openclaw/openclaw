@@ -4,8 +4,7 @@ import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { sanitizeSupportLogRecord } from "../logging/diagnostic-support-log-redaction.js";
 import { readConfiguredLogTail } from "../logging/log-tail.js";
 import { createSuiteLogPathTracker } from "../logging/log-test-helpers.js";
-import { resetLogger, setLoggerOverride } from "../logging/logger.js";
-import { testApi as loggerTest } from "../logging/logger.test-support.js";
+import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createDiagnosticLogRecordCapture } from "../logging/test-helpers/diagnostic-log-capture.js";
@@ -15,7 +14,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import {
   createPluginReloadCleanup,
-  PluginAdmittedWorkTimeoutError,
+  PluginAdmittedWorkDeferredError,
 } from "./server-plugin-reload-cleanup.js";
 
 const logPaths = createSuiteLogPathTracker("plugin-reload-retention-");
@@ -23,7 +22,7 @@ beforeAll(() => logPaths.setup());
 afterAll(() => logPaths.cleanup());
 afterEach(async () => {
   vi.useRealTimers();
-  await loggerTest.flushFileLogQueueForTests();
+  await flushLogger();
   resetLogger();
   resetDiagnosticEventsForTest();
   loggingState.rawConsole = null;
@@ -77,7 +76,10 @@ it.each(["release", "timeout"] as const)(
     expect(instance.disposing).toBe(false);
     if (outcome === "timeout") {
       await vi.advanceTimersByTimeAsync(60_000);
-      expect(await observed).toBeInstanceOf(PluginAdmittedWorkTimeoutError);
+      expect(await observed).toBeInstanceOf(PluginAdmittedWorkDeferredError);
+      expect(await observed).toMatchObject({
+        message: expect.stringContaining("plugin fixture admitted work did not settle within 60s"),
+      });
       expect(instance.retainedWorkCount).toBe(1);
       expect(instance.acceptingCalls).toBe(true);
       expect(instance.retentionSnapshot().references[0]!.referenceId).toBe(referenceId);
@@ -90,7 +92,7 @@ it.each(["release", "timeout"] as const)(
     expect(instance.retentionSnapshot().total).toBe(0);
     await vi.runOnlyPendingTimersAsync();
     vi.useRealTimers();
-    await loggerTest.flushFileLogQueueForTests();
+    await flushLogger();
     const lines = fs
       .readFileSync(file, "utf8")
       .trim()

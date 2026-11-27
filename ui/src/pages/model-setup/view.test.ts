@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SystemAgentSetupDetectResult, WizardStep } from "../../api/types.ts";
 import { i18n } from "../../i18n/index.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { activationTargetId } from "./state.ts";
 import {
   detected,
@@ -60,6 +61,49 @@ describe("renderModelSetup", () => {
     delete (document as unknown as { execCommand?: unknown }).execCommand;
   });
 
+  it("retains the rescan action through readiness and keeps unavailable actions disabled", () => {
+    const view = props({ page: { phase: "loading" }, detecting: true });
+    const container = mount(view);
+    const button = container.querySelector<HTMLButtonElement>(".model-setup__intro button")!;
+    expect(button).not.toBeNull();
+    expect(button.disabled).toBe(true);
+    expect(button.getAttribute("aria-hidden")).toBe("true");
+    expect(getComputedStyle(button).visibility).toBe("hidden");
+    expect(button.getAttribute("aria-label")).toBe("Checking…");
+    button.click();
+    expect(view.onDetect).not.toHaveBeenCalled();
+
+    view.page = { phase: "ready", result: detected };
+    view.detecting = false;
+    renderSetup(view, container);
+    expect(container.querySelector(".model-setup__intro button")).toBe(button);
+    expect(button.disabled).toBe(false);
+    expect(button.hasAttribute("aria-hidden")).toBe(false);
+    expect(getComputedStyle(button).visibility).toBe("visible");
+    expect(button.getAttribute("aria-label")).toBe("Check again");
+    button.click();
+    expect(view.onDetect).toHaveBeenCalledOnce();
+
+    view.detecting = true;
+    renderSetup(view, container);
+    expect(button.disabled).toBe(true);
+    expect(button.getAttribute("aria-label")).toBe("Checking…");
+    view.detecting = false;
+    for (const unavailable of [
+      { canAdmin: false },
+      { gatewayTooOld: true },
+      { activation: { phase: "success" as const, modelRef: "openai/gpt-5" } },
+      { page: { phase: "ready" as const, result: ready } },
+    ]) {
+      renderSetup({ ...view, ...unavailable }, container);
+      expect(container.querySelector(".model-setup__intro button")).toBe(button);
+      expect(button.disabled).toBe(true);
+      expect(button.getAttribute("aria-hidden")).toBe("true");
+      button.click();
+    }
+    expect(view.onDetect).toHaveBeenCalledOnce();
+  });
+
   it("shows detected authentication without credential values", () => {
     const detail = "logged in · ChatGPT account · alex@example.com";
     const secret = "synthetic-private-token";
@@ -78,6 +122,31 @@ describe("renderModelSetup", () => {
 
     expect(text(row)).toContain(detail);
     expect(text(row)).not.toContain(secret);
+  });
+
+  it("uses the guided choice label as the sign-in action", () => {
+    const authOptions = [
+      {
+        id: "sample-browser",
+        kind: "oauth" as const,
+        label: "Sign in with Sample",
+        groupLabel: "Sample",
+        featured: true,
+      },
+    ];
+    const onStartAuth = vi.fn();
+    const container = mount(
+      props({
+        onStartAuth,
+        page: { phase: "ready", result: { ...detected, authOptions } },
+      }),
+    );
+    const button = container.querySelector<HTMLButtonElement>(
+      '[data-auth-choice="sample-browser"] button',
+    )!;
+    expect(text(button)).toBe("Sign in with Sample");
+    button.click();
+    expect(onStartAuth).toHaveBeenCalledWith(authOptions[0]);
   });
 
   it("derives prepare rows from accepted choice ids and hides usable local candidates", () => {
@@ -217,37 +286,6 @@ describe("renderModelSetup", () => {
       }),
     );
     expect(withSignIn.querySelector(".model-setup__empty")).toBeNull();
-  });
-
-  it("uses explicit brand identity without guessing from labels or opaque ids", () => {
-    const container = mount(
-      props({
-        page: {
-          phase: "ready",
-          result: {
-            ...detected,
-            candidates: [],
-            authOptions: [],
-            recommendedInstalls: [],
-            manualProviders: [
-              {
-                id: "custom-login",
-                brandId: "claude",
-                label: "Company account",
-                icon: "https://cdn.example.com/custom.png",
-              },
-            ],
-          },
-        },
-        manualProviderId: "custom-login",
-        iconUrls: {},
-      }),
-    );
-
-    expect(
-      container.querySelector('.model-setup__manual [data-provider-icon="claude"]'),
-    ).not.toBeNull();
-    expect(container.querySelector(".model-setup__manual img")).toBeNull();
   });
 
   it("uses proxied artwork for unknown providers and invalidates broken blobs", () => {
@@ -416,6 +454,9 @@ describe("renderModelSetup", () => {
         : {}),
       deviceCode: { code: "ABCD-EFGH", ...(copied ? { expiresInMinutes: 10 } : {}) },
     });
+    await waitForFast(() =>
+      expect(container.querySelector(".wizard-sign-in__code button")).not.toBeNull(),
+    );
 
     if (copied) {
       const link = container.querySelector<HTMLAnchorElement>(
@@ -442,7 +483,7 @@ describe("renderModelSetup", () => {
     { sensitive: true, expectedType: "password" },
   ])(
     "labels a $expectedType input and associates validation errors until recovery",
-    ({ sensitive, expectedType }) => {
+    async ({ sensitive, expectedType }) => {
       const container = document.body.appendChild(document.createElement("div"));
       const renderStep = (validationError: string | null) =>
         renderSetup(
@@ -465,6 +506,9 @@ describe("renderModelSetup", () => {
           container,
         );
       renderStep(null);
+      await waitForFast(() =>
+        expect(container.querySelector("#model-setup-wizard-text-input")).not.toBeNull(),
+      );
       const input = container.querySelector<HTMLInputElement>("#model-setup-wizard-text-input");
       const label = container.querySelector<HTMLLabelElement>(
         'label[for="model-setup-wizard-text-input"]',

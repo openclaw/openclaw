@@ -1,0 +1,10 @@
+{
+  "id": "acme",
+  "providers": ["acme"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": { "origin": { "type": "string" } },
+    "required": ["origin"]
+  }
+}

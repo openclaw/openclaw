@@ -1008,12 +1008,11 @@ async function verifyPriorCiAdmin({
     );
   }
   const runHead = preExisting(evidence) ? head : evidence.priorHead;
+  // GitHub refreshes nested PR heads after pushes; the run's head_sha below
+  // binds the tested commit while this association binds the PR and repository.
   let samePullRequest =
     Array.isArray(run?.pull_requests) &&
-    run.pull_requests.some(
-      (pull) =>
-        pull.number === pr && pull.head?.sha === runHead && pull.base?.repo?.id === authority.id,
-    );
+    run.pull_requests.some((pull) => pull.number === pr && pull.base?.repo?.id === authority.id);
   let runAssociation = "pull-request";
   if (
     preExisting(evidence) &&

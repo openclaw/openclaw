@@ -1,6 +1,7 @@
 // Provider access keeps account credentials and plan limits together in each row.
 import type { JSX } from "@solidjs/web";
-import { createSignal, For, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
+import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
 import type { ModelsProbeResult } from "../../api/types.ts";
 import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -11,14 +12,22 @@ import {
 } from "../../components/solid/provider-usage.tsx";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { formatUiExternalText } from "../../lib/format-error.ts";
+import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
+import { modelSettingFallbacks, modelSettingPrimary } from "../../lib/model-setting.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { ModelProviderCard, ModelProviderRemovalTarget } from "./data.ts";
+import {
+  modelCatalogRef,
+  type ModelProviderCard,
+  type ModelProviderRemovalTarget,
+} from "./data.ts";
 import { apiKeySource, profileIdentity, ProviderProfiles } from "./profiles-view.tsx";
 import {
+  hasSeparateAccountLimits,
   isProviderUsable,
   needsAuthAttention,
   renderMutationMessage,
   renderProviderStatus,
+  probeStatus,
 } from "./view-status.tsx";
 import type { ModelProvidersViewProps } from "./view-types.ts";
 
@@ -127,6 +136,8 @@ function ProviderCredentials(props: ProviderRowProps) {
         <ProviderProfiles
           {...props}
           canMutate={props.canMutate && !props.configBusy}
+          canSignInAgain={() => props.canConnect(props.card)}
+          onSignInAgain={() => props.onConnect(props.card)}
           keyAction={keySource(props.card) === undefined ? keyAction : undefined}
         />
       </Show>
@@ -147,20 +158,10 @@ function renderProbeResult(result: ModelsProbeResult | undefined) {
   if (!result) {
     return undefined;
   }
-  const hasWarnings =
-    result.status === "ok" && result.results.some((target) => target.status !== "ok");
-  const kind = hasWarnings ? "warn" : result.status === "ok" ? "ok" : "danger";
   return (
     <div class="model-providers__probe" role="status">
       <div class="model-providers__probe-summary">
-        <SettingsStatus
-          kind={kind}
-          label={
-            hasWarnings
-              ? t("modelProviders.probe.status.partial")
-              : t(`modelProviders.probe.status.${result.status}`)
-          }
-        />
+        <SettingsStatus {...probeStatus(result)} />
       </div>
       {result.error ? <div>{formatUiExternalText(result.error)}</div> : undefined}
       <For each={result.results}>
@@ -294,7 +295,11 @@ function KeyForm(props: ProviderRowProps & { onCancel?: () => void }) {
           disabled={busy() || mutationDisabled() || authModeBlocked() || !props.keyDraft.trim()}
           onClick={() => props.onSaveKey(props.card.id, props.card.configKey ?? props.card.id)}
         >
-          {busy() ? t("modelProviders.saving") : t("common.save")}
+          {props.busy[`check:key:${props.card.id}`]
+            ? t("modelProviders.apiKey.checking")
+            : busy()
+              ? t("modelProviders.saving")
+              : t("common.save")}
         </button>
       </div>
     </div>
@@ -309,7 +314,27 @@ function KeyEditor(props: ProviderRowProps & { onCancel?: () => void }) {
   );
 }
 
-/** What "Remove provider" can delete, and the credential it has to leave behind. */
+/** Defaults for all agents served by this provider; removal keeps them selected. */
+function defaultModelsUsing(props: ProviderRowProps): string | undefined {
+  const { primary, fallbacks, utilityModel } = props.defaultModels;
+  const names = [
+    primary,
+    ...fallbacks,
+    modelSettingPrimary(utilityModel),
+    ...modelSettingFallbacks(utilityModel),
+  ].flatMap((ref) => {
+    const model = ref ? splitTrailingAuthProfile(ref).model : "";
+    // Aliases resolve through their catalog entry; other refs name the provider first.
+    const entry = props.configuredModels.find((candidate) => modelCatalogRef(candidate) === model);
+    const provider = entry?.provider ?? (model.includes("/") ? model.split("/", 1)[0] : "");
+    return provider && canonicalModelAuthProviderId(provider) === props.card.id
+      ? [entry?.name ?? model]
+      : [];
+  });
+  return names.length ? [...new Set(names)].join(", ") : undefined;
+}
+
+/** What credential removal can delete, and the credentials it has to leave behind. */
 function removalPlan(card: ModelProviderCard): {
   removeTargets: ModelProviderRemovalTarget[];
   keptSource?: string;
@@ -349,6 +374,12 @@ function removalPlan(card: ModelProviderCard): {
 
 function ProviderActions(props: ProviderRowProps) {
   const removal = () => removalPlan(props.card);
+  const defaultModels = () => defaultModelsUsing(props);
+  const removalLabel = (key: string) =>
+    t("modelProviders.actionNamed", {
+      action: t("modelProviders.remove.action"),
+      name: props.card.configKeys.length > 1 ? key : providerName(props.card),
+    });
   const connected = () => isProviderUsable(props.card) || props.card.profiles.length > 0;
   const connectName = () =>
     t(connected() ? "modelProviders.profiles.addAccount" : "modelProviders.login.action");
@@ -362,13 +393,37 @@ function ProviderActions(props: ProviderRowProps) {
     );
   return (
     <div class="model-providers__card-actions provider-row__footer">
+      <For each={props.card.configKeys}>
+        {(configKey) => (
+          <button
+            class="btn btn--sm btn--ghost danger"
+            disabled={
+              configMutationDisabled(props) || Boolean(props.busy["logout:" + props.card.id])
+            }
+            title={props.mutationBlockedReason ?? ""}
+            aria-label={removalLabel(configKey)}
+            onClick={() =>
+              props.onRequestLogout({
+                cardId: props.card.id,
+                label: providerName(props.card),
+                removeConfigKey: configKey,
+                defaultModels: defaultModels(),
+              })
+            }
+          >
+            {props.card.configKeys.length > 1
+              ? removalLabel(configKey)
+              : t("modelProviders.remove.action")}
+          </button>
+        )}
+      </For>
       <Show when={removal().removeTargets.length > 0}>
         <button
           class="btn btn--sm btn--ghost danger provider-row__remove"
           disabled={configMutationDisabled(props) || Boolean(props.busy[`logout:${props.card.id}`])}
           title={props.mutationBlockedReason ?? ""}
           aria-label={t("modelProviders.actionNamed", {
-            action: t("modelProviders.remove.action"),
+            action: t("modelProviders.remove.accessAction"),
             name: providerName(props.card),
           })}
           onClick={() =>
@@ -376,10 +431,11 @@ function ProviderActions(props: ProviderRowProps) {
               cardId: props.card.id,
               label: providerName(props.card),
               ...removal(),
+              ...(defaultModels() ? { defaultModels: defaultModels() } : {}),
             })
           }
         >
-          {t("modelProviders.remove.action")}
+          {t("modelProviders.remove.accessAction")}
         </button>
       </Show>
       <Show when={isProviderUsable(props.card)}>
@@ -434,6 +490,9 @@ function ProviderActions(props: ProviderRowProps) {
 
 /** Gateways often echo the raw id as the name; the shared label map reads better. */
 function providerName(card: ModelProviderCard): string {
+  if (card.providerName) {
+    return card.providerName;
+  }
   return card.displayName && card.displayName !== card.id
     ? card.displayName
     : providerDisplayLabel(card.id);
@@ -470,7 +529,32 @@ export function ProviderRow(props: ProviderRowProps) {
   let summary: HTMLButtonElement | undefined;
   const card = () => props.card;
   const message = () => props.messages[`key:${card().id}`] ?? props.messages[card().id];
-  const limits = () => (hasProviderUsageDetails(card().usage) ? card().usage : undefined);
+  // OpenAI also reports organization billing; account quota reads never replace that data.
+  const organizationUsage = () =>
+    card().usage?.costHistory || card().usage?.billing?.some((entry) => entry.type === "spend");
+  const accountScoped = () => hasSeparateAccountLimits(card()) && !organizationUsage();
+  const shownByAccount = createMemo(() => {
+    const { id, profiles, profileProviderIds, usage } = card();
+    return (
+      props.canViewProfiles &&
+      props.accountUsage &&
+      usage &&
+      canonicalModelAuthProviderId(usage.provider) === "openai" &&
+      id === "openai" &&
+      !organizationUsage() &&
+      profiles.some(
+        ({ profileId, type }) =>
+          type !== "api_key" &&
+          (profileProviderIds[profileId] ?? id) === "openai" &&
+          (usage.authProfileId === profileId || (!usage.authProfileId && !usage.error)),
+      )
+    );
+  });
+  const limits = () =>
+    !shownByAccount() &&
+    (hasProviderUsageDetails(card().usage) || (accountScoped() && card().usage?.plan))
+      ? card().usage
+      : undefined;
   const [expanded, setExpanded] = createSignal<boolean>();
   // Work in progress and broken credentials start open; a click always wins.
   const startsOpen = () =>
@@ -478,8 +562,14 @@ export function ProviderRow(props: ProviderRowProps) {
     Boolean(message()) ||
     Boolean(props.probeResults[card().id]) ||
     Boolean(props.busy[`probe:${card().id}`]) ||
-    needsCredentialFix(card());
+    needsCredentialFix(card()) ||
+    // Voice notices link here; open on the missing key they point to.
+    (props.providerQuery === card().id && Boolean(card().voiceApiKeyRequired));
   const open = () => expanded() ?? startsOpen();
+  // Once the account owns the reading, don't report the older sample as its status or plan.
+  const summaryCard = createMemo(() =>
+    open() && shownByAccount() ? { ...card(), usage: undefined } : card(),
+  );
   const detailId = () => `provider-detail-${card().id.replace(/[^a-z0-9-]/giu, "-")}`;
   // Open, the credential rows below name the account, so the summary doesn't.
   const credential = () => (open() ? undefined : credentialLine(card()));
@@ -496,23 +586,41 @@ export function ProviderRow(props: ProviderRowProps) {
         aria-controls={detailId()}
         onClick={() => setExpanded(!open())}
       >
-        <ProviderBrandIcon provider={card().id} class="provider-row__icon model-providers__icon" />
+        <ProviderBrandIcon
+          provider={card().id}
+          presentation={card()}
+          class="provider-row__icon model-providers__icon"
+        />
         <span class="provider-row__identity">
           <span class="provider-row__name">{providerName(card())}</span>
           <span class="provider-row__meta settings-row__desc">
             <span class="provider-row__meta-part">{credential()}</span>
-            <Show when={card().usage?.plan}>
+            <Show when={!accountScoped() && summaryCard().usage?.plan}>
               {(plan) => <span class="provider-row__meta-part provider-row__plan">{plan()}</span>}
             </Show>
             <span class="provider-row__meta-part">{modelsText(card())}</span>
           </span>
         </span>
-        <span class="provider-row__status">{renderProviderStatus(card())}</span>
+        <span class="provider-row__status">
+          {renderProviderStatus(summaryCard(), props.probeResults[card().id])}
+        </span>
         <Icon name="chevronDown" class="provider-row__chevron" />
       </button>
       <Show when={open()}>
         <div class="provider-row__detail" id={detailId()}>
           <ProviderCredentials {...props} />
+          <Show when={card().voiceApiKeyRequired}>
+            <CredentialRow
+              title={t("modelProviders.voice.title")}
+              detail={t(
+                card().id === "openai"
+                  ? "modelProviders.voice.detail"
+                  : "modelProviders.voice.providerDetail",
+                { provider: providerName(card()) },
+              )}
+              action={<SettingsStatus kind="warn" label={t("modelProviders.voice.status")} />}
+            />
+          </Show>
           <KeyEditor {...props} onCancel={() => summary?.focus()} />
           <Show when={limits()}>
             {(usage) => (
@@ -520,7 +628,15 @@ export function ProviderRow(props: ProviderRowProps) {
                 class="provider-row__limits-pane"
                 aria-label={t("modelProviders.limits.title")}
               >
-                <ProviderUsagePanel compact usage={usage()} />
+                <Show when={accountScoped()}>
+                  <span class="settings-row__title">
+                    {t("modelProviders.limits.oneAccount")}
+                    {usage().plan ? ` · ${usage().plan}` : ""}
+                  </span>
+                </Show>
+                <Show when={hasProviderUsageDetails(usage())}>
+                  <ProviderUsagePanel compact usage={usage()} />
+                </Show>
               </section>
             )}
           </Show>
@@ -549,7 +665,11 @@ export function UnconnectedProviderRow(props: ProviderRowProps) {
   return (
     <li class="provider-row provider-row--quiet model-providers__row" data-provider-id={card().id}>
       <div class="provider-row__summary model-providers__head">
-        <ProviderBrandIcon provider={card().id} class="provider-row__icon model-providers__icon" />
+        <ProviderBrandIcon
+          provider={card().id}
+          presentation={card()}
+          class="provider-row__icon model-providers__icon"
+        />
         <span class="provider-row__identity">
           <span class="provider-row__name">{providerName(card())}</span>
           <span class="provider-row__meta settings-row__desc">

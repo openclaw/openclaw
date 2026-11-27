@@ -29,24 +29,35 @@ import type { ConfigNodeRenderParams } from "../../components/config-form.node.s
 import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/modal-dialog.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { REDACTED_SENTINEL } from "../../lib/config-form-utils.ts";
+import {
+  currentConfigObject,
+  type RuntimeConfigState,
+} from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import {
+  clearCompositionEnd,
+  isComposingKeyboardEvent,
+  recordCompositionEnd,
+} from "../../lib/ime.ts";
 import "./credential-editor.css";
 import "./custom-elements.ts";
+import { t } from "../../lib/reactive/i18n.ts";
+import { CredentialProviderPicker } from "./credential-provider-picker.tsx";
+import { credentialSources, resolveCredentialProviders } from "./credential-providers.ts";
 
 registerPluginManagementEnglish();
-const credentialReferenceParts = ["provider", "id"] as const;
-const credentialSources = ["env", "file", "exec", "store"] as const;
 
 export type PluginCredentialEditorContext = {
   pluginId: string;
   baseHash: string | null;
   gateway: Pick<GatewayPageBinding, "capture" | "isCurrent" | "epoch" | "connected" | "client">;
   canInspect: boolean;
+  configState: Readonly<RuntimeConfigState>;
   getPresentationLifetime: () => Promise<void>;
   saveError?: string | null;
   /** Adapter stages through field.onPatch and awaits that exact config-owner write. */
@@ -68,6 +79,9 @@ export type PluginCredentialEditorProps = {
 };
 
 export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
+  const secretProviders = createMemo(() =>
+    resolveCredentialProviders(currentConfigObject(props.context.configState)),
+  );
   // Keep revealed values clearable; async computations retain completion, never the payload.
   const [inspection, setInspection] = createSignal<PluginCredentialInspection | null>(null);
   const [inspectionRequest, setInspectionRequest] = createSignal<{ promise: Promise<void> }>();
@@ -241,7 +255,7 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
     setReference(() =>
       value?.kind === "reference"
         ? { ...value.ref }
-        : { source: "env", provider: "default", id: "" },
+        : { source: "env", provider: secretProviders().env.defaultAlias, id: "" },
     );
     setDialogOpen(true);
   }
@@ -375,9 +389,9 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
   const Failure = (feedback: { message: string; dialog?: boolean }) => (
     <>
       {feedback.dialog ? (
-        <p role="alert" class="callout danger">
+        <InlineAlert tone="danger" role="alert">
           {feedback.message}
-        </p>
+        </InlineAlert>
       ) : (
         <div role="alert">
           {feedback.message}
@@ -474,6 +488,7 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
             <div
               class="plugin-credential__input settings-secret"
               onFocusOut={(event) => {
+                clearCompositionEnd(event);
                 if (
                   event.relatedTarget instanceof Element &&
                   event.relatedTarget.closest(".plugin-credential__input") === event.currentTarget
@@ -502,7 +517,12 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
                 }
                 disabled={disabled()}
                 onInput={(event) => setLiteral(event.currentTarget.value)}
+                onCompositionEnd={recordCompositionEnd}
+                onKeyUp={clearCompositionEnd}
                 onKeyDown={(event) => {
+                  if (isComposingKeyboardEvent(event)) {
+                    return;
+                  }
                   const value = enteredLiteral(event.currentTarget);
                   if (event.key === "Enter" && value) {
                     event.preventDefault();
@@ -611,26 +631,36 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
                         </For>
                       </select>
                     </label>
-                    <For each={credentialReferenceParts}>
-                      {(key) => (
-                        <label>
-                          {t(`pluginsPage.credentials.${key === "id" ? "identifier" : key}`)}
-                          <input
-                            class="settings-input"
-                            value={reference[key]}
-                            disabled={blocked()}
-                            onInput={(event) =>
-                              setReference((draft) => {
-                                draft[key] = event.currentTarget.value;
-                              })
-                            }
-                          />
-                        </label>
-                      )}
-                    </For>
+                    <CredentialProviderPicker
+                      source={reference.source}
+                      value={reference.provider}
+                      providers={secretProviders()}
+                      disabled={blocked()}
+                      onChange={(provider) =>
+                        setReference((draft) => {
+                          draft.provider = provider;
+                        })
+                      }
+                    />
+                    <label>
+                      {t("pluginsPage.credentials.identifier")}
+                      <input
+                        class="settings-input"
+                        aria-label={t("pluginsPage.credentials.identifier")}
+                        value={reference.id}
+                        disabled={blocked()}
+                        onInput={(event) =>
+                          setReference((draft) => {
+                            draft.id = event.currentTarget.value;
+                          })
+                        }
+                      />
+                    </label>
                     <p class="muted">{t(`pluginsPage.credentials.help.${reference.source}`)}</p>
                     {unresolved() ? (
-                      <p class="callout warn">{t("pluginsPage.credentials.unresolved")}</p>
+                      <InlineAlert tone="warning">
+                        {t("pluginsPage.credentials.unresolved")}
+                      </InlineAlert>
                     ) : null}
                   </>
                 )}

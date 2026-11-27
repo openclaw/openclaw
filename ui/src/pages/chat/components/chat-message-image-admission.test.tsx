@@ -382,7 +382,7 @@ it("retries signed artifact downloads without forwarding gateway or requester cr
   expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
   expect(fetch).toHaveBeenCalledTimes(2);
   for (const [requestUrl, init] of fetch.mock.calls) {
-    expect(requestUrl).toBe(`${ticketedUrl.replace(/\/full(?=\?)/u, "/thumbnail")}&v=4&width=480`);
+    expect(requestUrl).toBe(`${ticketedUrl.replace(/\/full(?=\?)/u, "/thumbnail")}&v=5&width=480`);
     const headers = new Headers(init?.headers);
     expect(headers.has("Authorization")).toBe(false);
     expect(headers.has("x-openclaw-requester-session-key")).toBe(false);
@@ -786,4 +786,28 @@ describe("message attachment availability", () => {
     }
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
+});
+
+it("retains inline pixels while parked and retires them before canonical admission", async () => {
+  const fetch = vi.fn(async () => ticketResponse());
+  vi.stubGlobal("fetch", fetch);
+  const local = "data:image/png;base64,cG5n";
+  const source = managedSource();
+  const mounted = draw([{ url: local }]);
+  const original = imageElement();
+  expect(original).not.toBeNull();
+  mounted.setPresented(false);
+  flush();
+  expect(imageElement()).toBe(original);
+  mounted.setPresented(true);
+  flush();
+  expect(imageElement()).toBe(original);
+  mounted.setPresented(false);
+  flush();
+  draw([{ url: source }]);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(imageElement()).toBeNull();
+  expect(fetch).not.toHaveBeenCalled();
+  unmount();
+  expect(disconnectMedia.size).toBe(0);
 });

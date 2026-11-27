@@ -13,7 +13,9 @@ import { resolveCronStoreKeyInDatabase } from "../cron/store/paths.js";
 import { loadCronRows, upsertCronJobRow } from "../cron/store/row-codec.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { prepareProviderModelPolicySurfaces } from "../plugins/provider-model-routes.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   collectHeartbeatCadenceMigrationFindings,
   ensureHeartbeatMonitorJobs,
@@ -41,6 +43,8 @@ import {
   maybeMigrateHeartbeatTasksToCron,
   migrateStoredHeartbeatTaskJobs,
 } from "./doctor-heartbeat-task-migration.js";
+import { decideDoctorPendingFromLiveStores } from "./doctor-live-store-pending.js";
+import type { DoctorMaintenancePending } from "./doctor-maintenance-pending.js";
 import { sanitizeDoctorNote } from "./doctor/emit-notes.js";
 import { migrateHeartbeatVisibility } from "./doctor/shared/channel-legacy-config-migrate.js";
 
@@ -53,6 +57,7 @@ export async function retireHeartbeatWithDoctor(
   const cfg = inheritLegacyDefaultAgentId(sourceConfig, structuredClone(sourceConfig));
   migrateHeartbeatVisibility(cfg, []);
   validateLegacyHeartbeatConfig(cfg);
+  await prepareProviderModelPolicySurfaces();
   const heartbeatSources = new Map(
     listAgentIds(cfg).map((agentId) => [agentId, resolveLegacyHeartbeatConfig(cfg, agentId)]),
   );
@@ -150,6 +155,15 @@ export async function retireHeartbeatWithDoctor(
             schedulingInputsRequested: true,
             scheduleChanged: false,
           });
+          if (job.state.runningAtMs !== undefined) {
+            // A resumed cutover can disable an already converted job whose
+            // interrupted run still belongs to Gateway startup recovery.
+            Object.assign(nextJob.state, {
+              runningAtMs: job.state.runningAtMs,
+              runningReceiptId: job.state.runningReceiptId,
+              runningScheduleChangeId: job.state.runningScheduleChangeId,
+            });
+          }
           upsertCronJobRow(
             db,
             storeKey,
@@ -231,17 +245,44 @@ export async function retireHeartbeatWithDoctor(
   return next;
 }
 
+/** Retirement runs exactly when these report a finding. */
+async function collectHeartbeatRetirementFindings(cfg: OpenClawConfig, env?: NodeJS.ProcessEnv) {
+  return (
+    await Promise.all([
+      collectHeartbeatCadenceMigrationFindings(cfg, env),
+      collectHeartbeatScratchMigrationFindings(cfg, env),
+    ])
+  ).flat();
+}
+
+/**
+ * Read-only: whether {@link maybeMigrateHeartbeatCadenceToCron} would retire heartbeats.
+ * Its findings read the cron rows in the state database and the workspace HEARTBEAT.md
+ * files, so the reads use the live state database (see {@link decideDoctorPendingFromLiveStores}).
+ */
+export async function checkHeartbeatRetirementPending(params: {
+  cfg: OpenClawConfig;
+  shouldRepair: boolean;
+  env?: NodeJS.ProcessEnv;
+}): Promise<DoctorMaintenancePending> {
+  if (!params.shouldRepair) {
+    return "none";
+  }
+  return decideDoctorPendingFromLiveStores(
+    [resolveOpenClawStateSqlitePath(params.env ?? process.env)],
+    async () =>
+      (await collectHeartbeatRetirementFindings(params.cfg, params.env)).length > 0
+        ? "work"
+        : "none",
+  );
+}
+
 export async function maybeMigrateHeartbeatCadenceToCron(params: {
   cfg: OpenClawConfig;
   shouldRepair: boolean;
   env?: NodeJS.ProcessEnv;
 }): Promise<{ changes: string[]; warnings: string[] }> {
-  const findings = (
-    await Promise.all([
-      collectHeartbeatCadenceMigrationFindings(params.cfg, params.env),
-      collectHeartbeatScratchMigrationFindings(params.cfg, params.env),
-    ])
-  ).flat();
+  const findings = await collectHeartbeatRetirementFindings(params.cfg, params.env);
   if (!params.shouldRepair || !findings.length) {
     return { changes: [], warnings: findings.map((finding) => finding.message) };
   }

@@ -56,7 +56,7 @@ suite.define(() => {
         expect(await page.locator(".provider-list--quiet").count()).toBe(0);
         expect(
           await page.locator('[data-provider-id="anthropic"] .provider-row__meta').textContent(),
-        ).toContain("Credentials managed outside OpenClaw");
+        ).toContain("Account access managed outside OpenClaw");
         expect(
           await page
             .locator('[data-provider-id="github-copilot"] .model-providers__profile-copy strong')

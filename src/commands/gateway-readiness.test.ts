@@ -166,6 +166,15 @@ describe("dashboard Gateway readiness", () => {
     expect(startGateway).toHaveBeenCalledTimes(installed ? 1 : 0);
   });
 
+  it("never installs or starts the gateway service for JSON output", async () => {
+    gatherStatus.mockResolvedValue(createStatus());
+
+    await dashboardCommand(runtime, { json: true });
+
+    expectNoCalls(confirm, installGateway, startGateway);
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
   it("does not recover a diagnostic-only native service for an active external target", async () => {
     const status = createStatus(
       {

@@ -29,6 +29,10 @@ export interface WorkerLifecycle {
 export type RetainedNativeWorker = WorkerLifecycle & {
   readonly started: boolean;
   readonly executionStopped: boolean;
+  /** Delivery can fail before the separate native owner reports why execution ended. */
+  readonly taskChannelFailure?: Error;
+  readonly terminalFailure?: Error;
+  readonly executionExitCode?: number;
   on(event: "started", listener: () => void): unknown;
   on(event: "execution-exit", listener: (code: number | undefined) => void): unknown;
   service(): void;

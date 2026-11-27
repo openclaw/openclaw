@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import type { JsonTestResults } from "vitest/node";
 import { resolveVitestCliEntry } from "../../scripts/lib/vitest-build-prerequisites.mts";
-import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
+import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-node-args.mts";
 import { resolveVitestTestCommand } from "../../scripts/lib/vitest-test-runtime.mts";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { runNodeScript } from "../helpers/run-node-script.js";

@@ -8,7 +8,7 @@ import {
   type ApprovedCwdSnapshot,
 } from "../infra/system-run-cwd-binding.js";
 import { buildGatewayExecApprovalDeniedToolResult } from "./bash-tools.exec-host-gateway.output.js";
-import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import type { ExecToolDetails } from "./bash-tools.exec-result.types.js";
 import type { AgentToolResult } from "./runtime/index.js";
 
 export async function resolveGatewayExecApprovalDrift(params: {
@@ -25,7 +25,7 @@ export async function resolveGatewayExecApprovalDrift(params: {
       return current.message;
     }
   }
-  if (params.cwdSnapshot && !revalidateApprovedCwdSnapshot(params.cwdSnapshot)) {
+  if (params.cwdSnapshot && !(await revalidateApprovedCwdSnapshot(params.cwdSnapshot))) {
     return APPROVAL_CWD_DRIFT_DENIED_MESSAGE;
   }
   return undefined;

@@ -73,7 +73,7 @@ it("keeps a materialized runtime's reply independent of its file count", async (
   vi.spyOn(runtimeTree, "linkUpdateCandidatePluginTrees").mockImplementation(async (input) => {
     expect(input).toBe(plan);
     clock.mockReturnValue(175);
-    return { linked: files.length - 1, copied: 1 };
+    return { linked: files.length - 1, copied: 1, linkFallback: { count: 1, code: "EXDEV" } };
   });
 
   const result = await prepareRetainedRuntimeFiles({
@@ -82,7 +82,13 @@ it("keeps a materialized runtime's reply independent of its file count", async (
     roots: [sourceRoot],
     retainedDependencyRoot: sourceRoot,
   });
-  const metrics = { inventoryMs: 25, materializationMs: 50, linked: files.length - 1, copied: 1 };
+  const metrics = {
+    inventoryMs: 25,
+    materializationMs: 50,
+    linked: files.length - 1,
+    copied: 1,
+    linkFallback: { count: 1, code: "EXDEV" },
+  };
   // The real worker serializes this producer's result to a capped stdout; its size
   // must not scale with the file inventory, which stays in private storage.
   const serialized = JSON.stringify(result);

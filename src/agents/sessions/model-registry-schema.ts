@@ -1,6 +1,6 @@
-/** Validation for authored and generated model registry catalogs. */
 import type { TLocalizedValidationError } from "typebox/error";
 import { Errors, Pointer } from "typebox/schema";
+/** Validation for authored and generated model registry catalogs. */
 import { ModelRegistryConfigSchema } from "./model-registry-schema-definition.js";
 import { isModelsConfig } from "./model-registry-validator.generated.js";
 

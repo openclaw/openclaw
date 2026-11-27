@@ -5,11 +5,9 @@ import { createPluginRuntime } from "../plugins/runtime/index.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { RealtimeVoiceAgentConsultToolPolicy } from "../talk/agent-consult-tool.js";
+import type { RealtimeVoiceBridgeCreateRequest } from "../talk/provider-contexts.js";
 import { REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ } from "../talk/provider-types.js";
-import type {
-  RealtimeVoiceBridge,
-  RealtimeVoiceBridgeCreateRequest,
-} from "../talk/provider-types.js";
+import type { RealtimeVoiceBridge } from "../talk/provider-types.js";
 import type { MeetingRealtimeAudioTransport } from "./realtime-audio-transport.js";
 import {
   startMeetingRealtimeEngine,

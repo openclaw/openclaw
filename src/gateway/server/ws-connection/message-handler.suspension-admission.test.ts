@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
@@ -26,6 +27,10 @@ vi.mock("../../../config/config.js", () => ({
 }));
 vi.mock("../../../config/io.js", () => ({
   getRuntimeConfig: loadConfigMock,
+}));
+vi.mock("../../../config/runtime-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../config/runtime-snapshot.js")>()),
+  readRuntimeConfig: loadConfigMock,
 }));
 vi.mock("../../../infra/system-presence.js", () => ({
   commitPresence: vi.fn(),
@@ -59,19 +64,20 @@ function attachHarness(params: { deferSocketSend?: boolean; startupPending?: boo
     }
     callback?.();
   });
-  const socket = {
+  const socket = Object.assign(new EventEmitter(), {
     _receiver: { _maxPayload: MAX_PREAUTH_PAYLOAD_BYTES, _allowSynchronousEvents: false },
     send: socketSend,
     on: vi.fn((event: string, handler: (data: WebSocket.RawData) => void) => {
       if (event === "message") {
         onMessage = handler;
       }
-      return socket;
+      return EventEmitter.prototype.on.call(socket, event, handler);
     }),
-  } as unknown as WebSocket;
+  }) as unknown as WebSocket;
   const close = vi.fn(() => {
     closed = true;
     finishSocketSend?.();
+    socket.emit("close");
   });
   cleanups.push(async () => {
     close();
@@ -217,11 +223,15 @@ describe("WebSocket connect suspension admission", () => {
 
       harness.sendConnect();
 
-      await vi.waitFor(() => expect(harness.setClient).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(harness.socketSend).toHaveBeenCalledOnce());
+      expect(harness.setClient).toHaveBeenCalledOnce();
       expect(harness.client).not.toBeNull();
       expect(harness.close).not.toHaveBeenCalled();
       const response = JSON.parse(harness.socketSend.mock.calls[0]?.[0] ?? "{}");
-      expect(response.payload.snapshot.suspension).toEqual({ phase });
+      expect(response, JSON.stringify(response)).toMatchObject({
+        ok: true,
+        payload: { type: "hello-ok", snapshot: { suspension: { phase } } },
+      });
       suspension?.release();
     },
   );

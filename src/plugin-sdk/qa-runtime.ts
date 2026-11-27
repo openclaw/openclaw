@@ -21,6 +21,10 @@ export { mergeAttemptToolMediaPayloads } from "../agents/embedded-agent-runner/r
 export { wrapPromptDataBlock } from "../agents/sanitize-for-prompt.js";
 export { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 export { writeGatewayRestartIntentSync } from "../infra/restart-intent.js";
+export { GATEWAY_RESTART_RESUME_TEXT } from "../gateway/session-restart-resume-prompt.js";
+// Private QA config projection reuses the canonical policy schema and target registry.
+export { SecretsConfigSchema } from "../config/zod-schema.core.js";
+export { discoverConfigSecretTargets } from "../secrets/target-registry.js";
 export {
   createLazyCliRuntimeLoader,
   createLiveTransportQaCliRegistration,
@@ -95,9 +99,7 @@ export async function closeQaRuntimeStores(tempRoot: string): Promise<void> {
   }
 }
 
-export { initializeQaRuntimeState } from "./qa-state-initializer.js";
-
-/** Read startup facts through the same packaged owners as the QA initializer. */
+/** Read startup facts through the packaged state owners without preparing them. */
 export async function snapshotQaStartupState(env: NodeJS.ProcessEnv) {
   const { collectQaStartupState } = await import("./qa-startup-state.js");
   return collectQaStartupState(env);

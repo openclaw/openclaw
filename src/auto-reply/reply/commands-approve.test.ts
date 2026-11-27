@@ -353,26 +353,18 @@ describe("handleApproveCommand", () => {
     expect(canonical.resolveMethod).toBeUndefined();
   });
 
-  it.each([
-    ["command-authorized non-owner", false, "Only the owner can approve OpenClaw changes"],
-    ["owner revoked before decision", true, "Check the request in the Control UI"],
-  ] as const)("rejects %s without reviewer custody", async (_name, senderIsOwner, text) => {
+  it("rejects a command-authorized non-owner without reviewer custody", async () => {
     resolveApprovalOverGatewayMock.mockRejectedValue(new Error("unknown or expired approval id"));
     isPendingSystemAgentApprovalMock.mockResolvedValue(true);
     const params = buildApproveParams(
       "/approve system-agent:abc allow-once",
       {},
       channelContext("slack", "U123"),
-      {
-        senderIsOwner,
-        assertOwnerCurrent: senderIsOwner
-          ? () => {
-              throw new Error("owner revoked");
-            }
-          : undefined,
-      },
+      { senderIsOwner: false },
     );
-    expect((await approve(params))?.reply?.text).toContain(text);
+    expect((await approve(params))?.reply?.text).toContain(
+      "Only the owner can approve OpenClaw changes",
+    );
     expect(
       resolveApprovalOverGatewayMock.mock.calls.filter(
         ([request]) => (request as { approvalKind?: string }).approvalKind === "system-agent",

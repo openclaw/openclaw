@@ -1,4 +1,8 @@
-import { WORKBOARD_STATUSES, type WorkboardCard } from "@openclaw/workboard-contract";
+import {
+  WORKBOARD_STATUSES,
+  WORKBOARD_VERIFICATION_OUTCOMES,
+  type WorkboardCard,
+} from "@openclaw/workboard-contract";
 import { jsonResult, readStringParam } from "openclaw/plugin-sdk/core";
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import type { AnyAgentTool, OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
@@ -174,6 +178,20 @@ const toolSchemas = {
       Type.Array(Type.String(), { description: "Cards created during this run." }),
     ),
   }),
+  verify: strictObject({
+    id: cardIdField(),
+    scope: Type.String({ description: "What you checked, and how." }),
+    outcome: Type.Union(
+      WORKBOARD_VERIFICATION_OUTCOMES.map((outcome) => Type.Literal(outcome)),
+      { description: "Your conclusion." },
+    ),
+    proofId: Type.Optional(Type.String({ description: "Worker proof record you checked." })),
+    artifactId: Type.Optional(Type.String({ description: "Artifact you checked." })),
+    runId: Type.Optional(Type.String({ description: "Run whose result you checked." })),
+    note: Type.Optional(Type.String({ description: "Short finding." })),
+    url: Type.Optional(Type.String({ description: "http(s) link to your check." })),
+    token: ScopedClaimTokenField,
+  }),
   attachment_add: strictObject({
     id: cardIdField(),
     fileName: Type.String({ description: "Attachment file name." }),
@@ -211,8 +229,9 @@ export function createWorkboardTools(params: {
 }): AnyAgentTool[] {
   const { store } = params;
   const ownerId = contextOwner(params.context);
+  const runId = params.context?.runId;
   const { readScopedCardToolParams, scopedCardMutation, claimedCardMutation } =
-    createWorkboardCardMutations(store, ownerId);
+    createWorkboardCardMutations(store, ownerId, runId);
   const tools: AnyAgentTool[] = [
     {
       name: "workboard_list",
@@ -268,7 +287,13 @@ export function createWorkboardTools(params: {
         const childId = readStringParam(record, "childId", { required: true });
         const token = record.token as string | undefined;
         return jsonResult({
-          card: redactClaimToken(await store.linkCards(parentId, childId, { ownerId, token })),
+          card: redactClaimToken(
+            await store.linkCards(
+              (await store.requireCardByIdOrPrefix(parentId)).id,
+              (await store.requireCardByIdOrPrefix(childId)).id,
+              { ownerId, token },
+            ),
+          ),
         });
       },
     },
@@ -281,7 +306,9 @@ export function createWorkboardTools(params: {
       execute: async (_toolCallId, rawParams) => {
         const record = rawParams as Record<string, unknown>;
         const id = readStringParam(record, "id", { required: true });
-        const { card, workerContext } = await store.readWithWorkerContext(id);
+        const { card, workerContext } = await store.readWithWorkerContext(id, {
+          allowPrefix: true,
+        });
         return jsonResult({
           card: redactClaimToken(card),
           workerContext,
@@ -297,7 +324,8 @@ export function createWorkboardTools(params: {
       execute: async (_toolCallId, rawParams) => {
         const record = rawParams as Record<string, unknown>;
         const id = readStringParam(record, "id", { required: true });
-        const claimed = await store.claim(id, {
+        const card = await store.requireCardByIdOrPrefix(id);
+        const claimed = await store.claim(card.id, {
           ownerId,
           ttlSeconds: record.ttlSeconds,
         });
@@ -368,6 +396,14 @@ export function createWorkboardTools(params: {
       execute: claimedCardMutation((id, record, scope) => store.complete(id, record, scope)),
     },
     {
+      name: "workboard_verify",
+      label: "Workboard Verify",
+      description:
+        "Record your check of a Workboard card's result: what you checked and what you concluded. Evidence only; it never changes the card's status.",
+      parameters: toolSchemas.verify,
+      execute: scopedCardMutation((id, record, scope) => store.verify(id, record, scope)),
+    },
+    {
       name: "workboard_attachment_add",
       label: "Workboard Attachment Add",
       description:
@@ -427,7 +463,7 @@ export function createWorkboardTools(params: {
         store.move(id, record.status, undefined, scope),
       ),
     },
-    ...createWorkboardOrchestrationTools({ store, ownerId }),
+    ...createWorkboardOrchestrationTools({ store, ownerId, runId }),
   ];
   for (const tool of tools) {
     const execute = tool.execute;

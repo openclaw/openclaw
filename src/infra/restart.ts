@@ -6,11 +6,11 @@ import {
   isGatewayRestartDraining,
   rollbackGatewayRestartSignalFence,
   runWithGatewayIndependentRootWorkAdmission,
-  type GatewayRestartSignalAdmissionLease,
 } from "../process/gateway-work-admission.js";
 import { formatErrorMessage } from "./errors.js";
 import { resolveGatewayRestartDeferralTimeoutMs } from "./restart-budget.js";
 import { type GatewayRestartIntent, normalizeRestartIntentReason } from "./restart-intent.js";
+import { pendingGatewayRestart } from "./restart-pending.js";
 import {
   GatewayRestartRequest,
   PendingGatewayRestart,
@@ -26,6 +26,7 @@ import {
 import { restartGatewayViaSupervisor } from "./restart-supervisor.js";
 import type { RestartAttempt } from "./restart.types.js";
 
+export { hasPendingGatewayRestart } from "./restart-pending.js";
 export { normalizeSystemdUnit } from "./restart-supervisor.js";
 export {
   normalizeGatewayRestartDelayMs,
@@ -57,27 +58,13 @@ let emittedRestartIntent: GatewayRestartIntent | undefined;
 // clock origin and impose a phantom cooldown during the first RESTART_COOLDOWN_MS
 // of process life.
 let lastRestartEmittedAt: number | null = null;
-let pendingRestartTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingRestartDueAt = 0;
 let pendingRestartReason: string | undefined;
 let pendingRestartSuccessorOwner: GatewayRestartIntent["successorOwner"];
 let pendingRestartRequest: PendingGatewayRestart | undefined;
 let pendingRestartSkipDeferral = false;
 let pendingRestartPreparing = false;
-let pendingRestartSignalAdmission: GatewayRestartSignalAdmissionLease | null = null;
 let restartTransientGeneration = 0;
-const activeDeferralPolls = new Set<ReturnType<typeof setInterval>>();
-
-/** Live restart work, including preparation that still leaves inbound admission open. */
-export function hasPendingGatewayRestart(): boolean {
-  // Idle preparation owns a poll; fenced preparation owns its admission lease. The preparing
-  // flag alone can outlive a refused custom emission and does not establish live recovery.
-  return (
-    pendingRestartTimer !== null ||
-    activeDeferralPolls.size > 0 ||
-    pendingRestartSignalAdmission !== null
-  );
-}
 
 function shouldPreferRestartReason(next?: string, current?: string): boolean {
   const isUpdateRestart = (reason?: string) => reason === "update.run" || reason === "update.auto";
@@ -85,8 +72,8 @@ function shouldPreferRestartReason(next?: string, current?: string): boolean {
 }
 
 function clearPendingScheduledRestart(): void {
-  clearTimeout(pendingRestartTimer ?? undefined);
-  pendingRestartTimer = null;
+  clearTimeout(pendingGatewayRestart.timer ?? undefined);
+  pendingGatewayRestart.timer = null;
   pendingRestartDueAt = 0;
   pendingRestartReason = undefined;
   pendingRestartSuccessorOwner = undefined;
@@ -97,8 +84,8 @@ function clearPendingScheduledRestart(): void {
 
 /** Releases a signal fence when the run loop rejects or fails to handle the signal. */
 export function rollbackGatewayRestartSignalAdmission(): boolean {
-  const lease = pendingRestartSignalAdmission;
-  pendingRestartSignalAdmission = null;
+  const lease = pendingGatewayRestart.signalAdmission;
+  pendingGatewayRestart.signalAdmission = null;
   if (lease?.rollback()) {
     return true;
   }
@@ -109,12 +96,12 @@ export function rollbackGatewayRestartSignalAdmission(): boolean {
 }
 
 function armPendingRestartTimer(requestedDueAt: number, nowMs: number): void {
-  pendingRestartTimer = setTimeout(
+  pendingGatewayRestart.timer = setTimeout(
     () => {
       const scheduledReason = pendingRestartReason;
       const scheduledSkipDeferral = pendingRestartSkipDeferral;
       const request = pendingRestartRequest;
-      pendingRestartTimer = null;
+      pendingGatewayRestart.timer = null;
       pendingRestartDueAt = 0;
       pendingRestartReason = undefined;
       pendingRestartSkipDeferral = false;
@@ -142,10 +129,10 @@ function armPendingRestartTimer(requestedDueAt: number, nowMs: number): void {
 }
 
 function clearActiveDeferralPolls(): void {
-  for (const poll of activeDeferralPolls) {
+  for (const poll of pendingGatewayRestart.deferralPolls) {
     clearInterval(poll);
   }
-  activeDeferralPolls.clear();
+  pendingGatewayRestart.deferralPolls.clear();
 }
 
 export function resetGatewayRestartStateForInProcessRestart(): void {
@@ -223,7 +210,7 @@ function emitGatewayRestartWithSignalAdmission(
   reasonOverride?: string,
   intent?: GatewayRestartIntent,
 ): boolean {
-  let signalAdmission = pendingRestartSignalAdmission;
+  let signalAdmission = pendingGatewayRestart.signalAdmission;
   if (!signalAdmission) {
     // Orphan fence: pending without a lease and without a delivered signal.
     // Reopen before acquiring so a lost lease cannot block all future emissions.
@@ -235,7 +222,7 @@ function emitGatewayRestartWithSignalAdmission(
       // Another emission owns the fence, or one-way drain already closed admission.
       return false;
     }
-    pendingRestartSignalAdmission = signalAdmission;
+    pendingGatewayRestart.signalAdmission = signalAdmission;
   }
   const hadUnconsumedRestartSignal = unhandledRestartSignal;
   const emitted = emitGatewayRestart(reasonOverride, intent);
@@ -503,7 +490,7 @@ async function emitPreparedGatewayRestartUnderAdmission(
     !scheduledRequest?.isCurrent() &&
     !pendingRestartRequest?.isCurrent()
   ) {
-    restartLog.warn("scheduled restart cancelled: requester authority changed");
+    restartLog.warn("scheduled restart cancelled: the requester may no longer restart the Gateway");
     clearPendingScheduledRestart();
     await rejectPreparedRestartHooks(preparedHooksList);
     return { status: "failed" };
@@ -573,7 +560,7 @@ async function emitPreparedGatewayRestart(
         }
         // Single live lease, multiple attempts may share it (deferred prepare →
         // concurrent emit / retry). Never invent a dead stand-in lease.
-        let signalAdmission = pendingRestartSignalAdmission;
+        let signalAdmission = pendingGatewayRestart.signalAdmission;
         let ownsFenceLease = false;
         if (!signalAdmission) {
           // Orphan fence: pending without a lease and without a delivered signal.
@@ -582,7 +569,7 @@ async function emitPreparedGatewayRestart(
           if (!signalAdmission) {
             return false;
           }
-          pendingRestartSignalAdmission = signalAdmission;
+          pendingGatewayRestart.signalAdmission = signalAdmission;
           ownsFenceLease = true;
         }
         let fenceActive = true;
@@ -602,8 +589,8 @@ async function emitPreparedGatewayRestart(
           }
           fenceActive = false;
           signalAdmission.rollback();
-          if (pendingRestartSignalAdmission === signalAdmission) {
-            pendingRestartSignalAdmission = null;
+          if (pendingGatewayRestart.signalAdmission === signalAdmission) {
+            pendingGatewayRestart.signalAdmission = null;
           }
         };
         setFenceRollback?.(rollbackFence);
@@ -696,7 +683,7 @@ export function deferGatewayRestartUntilIdle(
   const stopPoll = () => {
     if (poll) {
       clearInterval(poll);
-      activeDeferralPolls.delete(poll);
+      pendingGatewayRestart.deferralPolls.delete(poll);
       poll = null;
     }
   };
@@ -862,7 +849,7 @@ export function deferGatewayRestartUntilIdle(
   };
   const pending = readPendingCount();
   poll = setInterval(inspectPending, DEFAULT_DEFERRAL_POLL_MS);
-  activeDeferralPolls.add(poll);
+  pendingGatewayRestart.deferralPolls.add(poll);
   if (pending !== undefined && pending <= 0) {
     attemptEmission(false);
   }
@@ -950,7 +937,7 @@ export function scheduleGatewayRestart(opts?: {
   const requester = requestOwner.admit(opts?.emitHooks);
   let nextPendingEmitHooks = opts?.emitHooks ? requester : undefined;
 
-  if (pendingRestartTimer || pendingRestartPreparing) {
+  if (pendingGatewayRestart.timer || pendingRestartPreparing) {
     const remainingMs = pendingRestartPreparing ? 0 : Math.max(0, pendingRestartDueAt - nowMs);
     // Hookless forced restarts that own no sentinel may preserve an accepted
     // pending hook; update/handoff callers rely on the default clear path.
@@ -958,7 +945,7 @@ export function scheduleGatewayRestart(opts?: {
       opts?.preservePendingEmitHooksOnDeferralBypass === true &&
       opts?.emitHooks === undefined &&
       requestOwner.sessionKey !== undefined;
-    if (pendingRestartPreparing && skipDeferral && activeDeferralPolls.size > 0) {
+    if (pendingRestartPreparing && skipDeferral && pendingGatewayRestart.deferralPolls.size > 0) {
       restartLog.warn(
         `restart request bypassed active deferral reason=${reason ?? "unspecified"} pendingReason=${pendingRestartReason ?? "unspecified"} ${formatRestartAudit(opts?.audit)}`,
       );
@@ -989,8 +976,8 @@ export function scheduleGatewayRestart(opts?: {
         restartLog.warn(
           `restart continuation dropped: another session owns the pending restart (callerSessionKey=${opts?.sessionKey ?? "unspecified"} pendingSessionKey=${requestOwner.sessionKey ?? "unspecified"})`,
         );
-        clearTimeout(pendingRestartTimer ?? undefined);
-        pendingRestartTimer = null;
+        clearTimeout(pendingGatewayRestart.timer ?? undefined);
+        pendingGatewayRestart.timer = null;
         pendingRestartDueAt = requestedDueAt;
         pendingRestartReason = nextPendingReason;
         pendingRestartSuccessorOwner = nextPendingSuccessorOwner;

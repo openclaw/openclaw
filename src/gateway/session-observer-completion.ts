@@ -1,5 +1,6 @@
 import { isFailoverError, readDirectErrorCode } from "../agents/failover/error.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-selection.js";
+import { readUtilityModelSetting } from "../agents/utility-model-setting.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { emitAgentEvent, emitAgentEventForOwner } from "../infra/agent-events.js";
@@ -69,11 +70,14 @@ export function reportSessionObserverDegradation(
       message: `Session observer assessments stopped for this run after utility model${modelLabel} failed repeatedly.${details ? ` ${details}` : ""} To restore assessments, choose a capable utility model or add capable utilityModel.fallbacks.`,
     },
   };
-  const owner = getAgentRunContextOwnership(state.runId)?.exclusiveClaimId;
-  if (owner) {
-    emitAgentEventForOwner(notice, owner);
-  } else {
-    emitAgentEvent(notice);
+  const utility = readUtilityModelSetting(cfg, state.agentId);
+  if (utility.kind === "explicit" || (utility.kind === "auto" && utility.fallbacks.length > 0)) {
+    const owner = getAgentRunContextOwnership(state.runId)?.exclusiveClaimId;
+    if (owner) {
+      emitAgentEventForOwner(notice, owner);
+    } else {
+      emitAgentEvent(notice);
+    }
   }
   observerLog.warn("session observer disabled after consecutive failures", {
     sessionKey: state.sessionKey,
@@ -117,16 +121,19 @@ export function createSessionObserverCompletion(params: {
   return async (state: SessionObserverState, notes: readonly string[]) => {
     const controller = new AbortController();
     state.activeController = controller;
+    // Bounds preparation only; isolated completion owns each model call's deadline.
     const timeout = setTimeout(() => controller.abort(), SESSION_OBSERVER_MODEL_TIMEOUT_MS);
     const ownedWork = new AsyncWorkScope();
     try {
       const execute = async () => {
         const prepared = await ensurePrepared(state);
+        clearTimeout(timeout);
         let lastRejectedText = "";
         for (let attempt = 0; attempt < 2; attempt += 1) {
           if (!params.isCurrent(state) || controller.signal.aborted) {
             throw new Error("session observer state is no longer active");
           }
+          let parsed: ReturnType<typeof normalizeSessionObserverModelOutput> = null;
           const result = await params.completeModel({
             ...prepared,
             purpose: "session-observer",
@@ -137,8 +144,18 @@ export function createSessionObserverCompletion(params: {
             abortSignal: controller.signal,
             answerTokenBudget: 300,
             streamParams: { temperature: 0.2 },
+            classifyResult: ({ result: candidateResult }) => {
+              parsed = normalizeSessionObserverModelOutput(candidateResult.text);
+              return parsed
+                ? undefined
+                : {
+                    message: "session observer returned invalid JSON",
+                    code: "invalid_response",
+                    preserveResultOnExhaustion: true,
+                  };
+            },
           });
-          const parsed = normalizeSessionObserverModelOutput(result.text);
+          parsed ??= normalizeSessionObserverModelOutput(result.text);
           if (parsed) {
             return parsed;
           }

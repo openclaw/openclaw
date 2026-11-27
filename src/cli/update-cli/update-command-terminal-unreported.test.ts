@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as updateFailureReport from "../../infra/update-failure-report.js";
 import {
@@ -99,8 +98,6 @@ it.each([
     const { env, recorded, run } = createRun();
     closeOpenClawStateDatabaseForTest();
     const before = snapshotUpdateFixtureTree(env.OPENCLAW_STATE_DIR);
-    const detachedRoot = dirs.make("update-detached-report-");
-    vi.spyOn(os, "tmpdir").mockReturnValue(detachedRoot);
     const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
     const refusal = new UnreportedUpdateAdmissionOutcome(
       {
@@ -123,7 +120,6 @@ it.each([
     const result = output.mock.calls[0]?.[0] as {
       status: string;
       reason: string;
-      reportPath?: string;
       before?: unknown;
       runId?: string;
     };
@@ -140,11 +136,6 @@ it.each([
     }
     expect(result.runId).toBeUndefined();
     expect(result.before).toEqual(capturedBefore ? { version: null } : undefined);
-    assert(
-      typeof result.reportPath === "string" &&
-        result.reportPath.startsWith(detachedRoot + path.sep),
-    );
-    expect(await fs.readFile(result.reportPath, "utf8")).toContain("fixture-admission-refused");
     expect(snapshotUpdateFixtureTree(env.OPENCLAW_STATE_DIR)).toEqual(before);
     expect(getUpdateRun(run.runId, { env })).toEqual(recorded);
   },

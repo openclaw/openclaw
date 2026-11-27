@@ -848,12 +848,18 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
     }
 }
 
-/// Client-side session list policy shared by every session list surface.
-/// Ordering mirrors the gateway (`pinnedAt` desc, `updatedAt` desc, key) so
-/// cached/offline lists render in the same order as server responses.
+/// Legacy pins use their timestamp; personal pins carry their order in the list itself.
 public enum OpenClawChatSessionListOrganizer {
-    public static func organize(_ sessions: [OpenClawChatSessionEntry]) -> [OpenClawChatSessionEntry] {
+    public static func organize(
+        _ sessions: [OpenClawChatSessionEntry], preservingPersonalPinOrder: Bool = false) -> [OpenClawChatSessionEntry]
+    {
         sessions.sorted { lhs, rhs in
+            if preservingPersonalPinOrder {
+                let left = lhs.isPinned && lhs.pinnedAt == nil
+                let right = rhs.isPinned && rhs.pinnedAt == nil
+                // Swift's stable sort retains the Gateway's relative order within this group.
+                if left || right { return left && !right }
+            }
             let lhsPinnedAt = lhs.pinnedAt ?? (lhs.isPinned ? .greatestFiniteMagnitude : 0)
             let rhsPinnedAt = rhs.pinnedAt ?? (rhs.isPinned ? .greatestFiniteMagnitude : 0)
             if lhsPinnedAt != rhsPinnedAt {
@@ -932,6 +938,7 @@ public enum OpenClawChatChildSessionPager {
 
 public struct OpenClawChatSessionsListResponse: Codable, Sendable {
     public let ts: Double?
+    public let activityExpiresAt: Double?
     public let path: String?
     public var count: Int?
     public var totalCount: Int?
@@ -950,6 +957,7 @@ public struct OpenClawChatSessionsListResponse: Codable, Sendable {
 
     public init(
         ts: Double?,
+        activityExpiresAt: Double? = nil,
         path: String?,
         count: Int?,
         totalCount: Int? = nil,
@@ -967,6 +975,7 @@ public struct OpenClawChatSessionsListResponse: Codable, Sendable {
         sessions: [OpenClawChatSessionEntry])
     {
         self.ts = ts
+        self.activityExpiresAt = activityExpiresAt
         self.path = path
         self.count = count
         self.totalCount = totalCount
@@ -985,7 +994,7 @@ public struct OpenClawChatSessionsListResponse: Codable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case ts, path, count, totalCount, offset, nextOffset, hasMore, defaults, sessions
+        case ts, activityExpiresAt, path, count, totalCount, offset, nextOffset, hasMore, defaults, sessions
         case owners, ownerSessionCounts, people, peopleIncomplete, peopleSessionCount, involvingProfileId
     }
 
@@ -993,6 +1002,7 @@ public struct OpenClawChatSessionsListResponse: Codable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         try self.init(
             ts: container.decodeIfPresent(Double.self, forKey: .ts),
+            activityExpiresAt: container.decodeIfPresent(Double.self, forKey: .activityExpiresAt),
             path: container.decodeIfPresent(String.self, forKey: .path),
             count: container.decodeIfPresent(Int.self, forKey: .count),
             totalCount: container.decodeIfPresent(Int.self, forKey: .totalCount),

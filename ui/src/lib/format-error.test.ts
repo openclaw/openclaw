@@ -26,6 +26,28 @@ describe("formatUiError", () => {
       `Couldn’t complete this request. Ask an admin to grant ${access}.`,
     );
   });
+
+  it("keeps permission guidance when a denial only has the legacy message", () => {
+    const error = new GatewayProtocolRequestError({
+      code: "INVALID_REQUEST",
+      message: "missing scope: operator.write",
+    });
+
+    expect(formatUiError(error)).toBe(
+      "Couldn’t complete this request. Ask an admin to grant write access.",
+    );
+  });
+
+  it("does not turn malformed permission details into access guidance", () => {
+    const error = new GatewayProtocolRequestError({
+      code: "FORBIDDEN",
+      message: "permission denied",
+      details: { code: "MISSING_SCOPE", missingScope: "operator.read", requiredScopes: [] },
+    });
+
+    expect(formatUiError(error)).toBe("permission denied");
+  });
+
   it.each([
     ["Camera access is blocked.", "Camera access is blocked."],
     ["OPENAI_API_KEY=sk-1234567890abcdef", "OPENAI_API_KEY=sk-123...cdef"],
@@ -75,13 +97,10 @@ describe("formatUiError programming errors", () => {
     ["another realm's TypeError", runInNewContext("new TypeError('x is not a function')") as Error],
   ];
 
-  it.each(programmingErrors)("shows the caller's fallback for %s", (_name, error) => {
-    expect(formatUiError(error, "Logs could not load.")).toBe("Logs could not load.");
-  });
-
   it.each(programmingErrors)(
-    "shows the generic message without a fallback for %s",
+    "uses the caller fallback or generic message for %s",
     (_name, error) => {
+      expect(formatUiError(error, "Logs could not load.")).toBe("Logs could not load.");
       expect(formatUiError(error)).toBe("Request failed");
     },
   );

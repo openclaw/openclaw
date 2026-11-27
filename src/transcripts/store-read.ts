@@ -17,14 +17,14 @@ import {
 } from "../../packages/gateway-protocol/src/schema/transcripts.js";
 import {
   jsonExtractText,
-  jsonOrderedTextArray,
+  jsonArrayFrom,
   jsonRemoveKey,
 } from "../infra/database-engine/json-values.js";
 import { engineStringPosition } from "../infra/database-engine/scalar.js";
 import { executeSqliteQueryTakeFirstSync, iterateSqliteQuerySync } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import type { TranscriptSessionDescriptor } from "./provider-types.js";
 import { projectTranscriptSession } from "./read.js";
+import { transcriptParticipants, transcriptSpeakerRosterRows } from "./store-speakers.js";
 import {
   meetingTranscriptDb,
   meetingTranscriptSessionQuery,
@@ -32,7 +32,7 @@ import {
   sessionFromRow,
 } from "./store-sqlite.js";
 import type { TranscriptReadEntry, TranscriptReadNotes } from "./store-types.js";
-import type { TranscriptsSummary } from "./summary.js";
+import type { TranscriptSessionDescriptor, TranscriptsSummary } from "./types.js";
 
 export class TranscriptLibraryError extends Error {
   constructor(
@@ -166,32 +166,26 @@ function readQuery(
   const summarySource = notes
     .select((n) => jsonExtractText(database, n.ref("notes.summary_json"), "source").as("source"))
     .$asScalar();
-  const utterances = eb
-    .selectFrom("meeting_transcript_utterances as u")
-    .whereRef("u.session_id", "=", "meeting_transcript_sessions.session_id")
-    .whereRef("u.session_started_at", "=", "meeting_transcript_sessions.started_at");
-  // Group and order in SQL. The aggregate is byte-checked in this statement
-  // before any participant strings cross into JavaScript.
-  const speakers = utterances
-    .select("u.speaker_label")
-    .select((u) => u.fn.min<number>("u.sequence").as("first_sequence"))
-    .where("u.speaker_label", "is not", null)
-    .where("u.speaker_label", "!=", "")
-    .groupBy("u.speaker_label")
-    .orderBy((u) => u.fn.min("u.sequence"), "asc");
-  const participants = eb
-    .selectFrom(speakers.as("speakers"))
-    .select((s) =>
-      jsonOrderedTextArray(
-        database,
-        s.ref("speakers.speaker_label"),
-        s.ref("speakers.first_sequence"),
-      ).as("participants"),
+  const utterances = meetingTranscriptDb(database)
+    .selectFrom("meeting_transcript_utterances")
+    .where(
+      "meeting_transcript_utterances.session_id",
+      "=",
+      eb.ref("meeting_transcript_sessions.session_id"),
     )
-    .$asScalar();
+    .where(
+      "meeting_transcript_utterances.session_started_at",
+      "=",
+      eb.ref("meeting_transcript_sessions.started_at"),
+    );
+  // Group source identities in SQL, then assign display suffixes after the
+  // existing byte gate. A label is not an identity: distinct source IDs may
+  // share it, while label-only imports remain distinct from those IDs.
+  const speakers = transcriptSpeakerRosterRows(database, utterances);
+  const participants = jsonArrayFrom(database, speakers, ["first_sequence"]).$castTo<string>();
   const lastAt = utterances
-    .select((u) => u.fn.coalesce("u.ended_at", "u.started_at").as("at"))
-    .orderBy("u.sequence", "desc")
+    .select((u) => u.fn.coalesce("ended_at", "started_at").as("at"))
+    .orderBy("sequence", "desc")
     .limit(1)
     .$asScalar();
   const identityBytes = textBytes(eb.ref("session_id"), eb.ref("started_at"), eb.ref("selector"));
@@ -274,8 +268,7 @@ function transcriptReadEntryFromRow(
     selector: row.selector,
     hasSummary: Boolean(row.has_summary),
     utteranceCount: row.utterance_count,
-    // SAFETY: readQuery aggregates only non-null STRICT TEXT speaker labels into a JSON array.
-    participants: JSON.parse(row.participants_json ?? "[]") as string[],
+    participants: transcriptParticipants(row.participants_json),
     overview: typeof row.overview === "string" ? row.overview : undefined,
     summarySource,
     updatedAt: new Date(row.updated_at_ms).toISOString(),

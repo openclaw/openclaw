@@ -2,7 +2,7 @@ import { For, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { PluginArtTile } from "./consent-dialog.tsx";
+import { PluginArtTile } from "./presentation.tsx";
 import "../../styles/plugins.css";
 
 registerEnglishCatalog(registerPluginManagementEnglish);

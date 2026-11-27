@@ -5,11 +5,12 @@ import type {
   MigrationsMemoryApplyResult,
 } from "../../../../packages/gateway-protocol/src/schema/migrations.js";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 import "../../components/agent-select-registration.ts";
 import "../../components/modal-dialog.tsx";
 import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
-import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
   SettingsEmpty,
@@ -24,8 +25,10 @@ import { registerMemoryImportEnglish } from "../../i18n/locales/en-memory-import
 import { normalizeAgentLabel } from "../../lib/agents/display.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import type { MemoryImportViewProps } from "./view-types.ts";
+import { ModelProviderIcon } from "../../lib/reactive/provider-presentation.tsx";
+import { ImportFileLabel } from "./import-file-label.tsx";
 import "../../styles/memory-import.css";
+import type { MemoryImportViewProps } from "./view-types.ts";
 
 registerEnglishCatalog(registerMemoryImportEnglish);
 
@@ -36,10 +39,10 @@ type MemoryCollection = {
 
 function renderReadError(error: () => unknown) {
   return (
-    <div class="callout danger" role="alert">
+    <InlineAlert tone="danger" role="alert">
       <div>{t("memoryImport.loadFailed")}</div>
       {formatUiError(error())}
-    </div>
+    </InlineAlert>
   );
 }
 
@@ -100,8 +103,7 @@ function Collection(props: {
     <div class="settings-row settings-row--stacked memory-import__collection">
       <div class="memory-import__collection-header">
         <label class="memory-import__collection-choice">
-          <input
-            type="checkbox"
+          <Checkbox
             checked={checked()}
             disabled={selectableIds().length === 0 || props.disabled}
             onChange={(event) =>
@@ -133,7 +135,7 @@ function Collection(props: {
                 <span class="memory-import__file-icon" aria-hidden="true">
                   <Icon name="fileText" />
                 </span>
-                <code title={item().source ?? artifactLabel(item())}>{artifactLabel(item())}</code>
+                <ImportFileLabel path={artifactLabel(item())} source={item().source} />
                 <span
                   class={[
                     "memory-import__file-status",
@@ -250,7 +252,7 @@ function Provider(props: { view: MemoryImportViewProps; provider: MemoryMigratio
       <SettingsSection
         title={
           <span class="memory-import__provider-title">
-            <ProviderBrandIcon
+            <ModelProviderIcon
               provider={props.provider.providerId}
               class="memory-import__provider-icon"
             />
@@ -265,22 +267,24 @@ function Provider(props: { view: MemoryImportViewProps; provider: MemoryMigratio
               : "memoryImport.providerFallback",
         )}
         actions={
-          <SettingsStatus
-            kind={props.provider.found ? "ok" : "muted"}
-            label={
-              props.provider.found
-                ? countLabel("fileCount", props.provider.items.length)
-                : t("memoryImport.notFound")
-            }
-          />
+          <Show when={!props.provider.error}>
+            <SettingsStatus
+              kind={props.provider.found ? "ok" : "muted"}
+              label={
+                props.provider.found
+                  ? countLabel("fileCount", props.provider.items.length)
+                  : t("memoryImport.notFound")
+              }
+            />
+          </Show>
         }
       >
         <Show
           when={!props.provider.error}
           fallback={
-            <div class="callout danger" role="alert">
+            <InlineAlert tone="danger" role="alert">
               {formatUiExternalText(props.provider.error)}
-            </div>
+            </InlineAlert>
           }
         >
           <Show
@@ -388,10 +392,10 @@ function Confirmation(props: { view: MemoryImportViewProps; backfill?: boolean }
               )}
             </div>
             <Show when={!props.backfill && props.view.applyError}>
-              <div class="callout danger" role="alert">
+              <InlineAlert tone="danger" role="alert">
                 <div>{t("memoryImport.importFailed")}</div>
                 {props.view.applyError}
-              </div>
+              </InlineAlert>
             </Show>
           </div>
           <openclaw-modal-actions class="oc-dialog__footer">
@@ -548,10 +552,10 @@ function BackfillSection(props: { view: MemoryImportViewProps }) {
             }
           />
           <Show when={props.view.backfillError}>
-            <div class="callout danger" role="alert">
+            <InlineAlert tone="danger" role="alert">
               <div>{t("memoryImport.backfillFailed")}</div>
               {props.view.backfillError}
-            </div>
+            </InlineAlert>
           </Show>
           <Errored fallback={renderReadError}>
             <Loading on={props.view.readScope}>
@@ -591,7 +595,9 @@ function BackfillSection(props: { view: MemoryImportViewProps }) {
                       </ul>
                     </Show>
                     <Show when={result().truncated}>
-                      <div class="callout warn">{t("memoryImport.backfill.previewTruncated")}</div>
+                      <InlineAlert tone="warning">
+                        {t("memoryImport.backfill.previewTruncated")}
+                      </InlineAlert>
                     </Show>
                   </div>
                 )}
@@ -662,16 +668,16 @@ export function MemoryImport(props: MemoryImportViewProps) {
           <IntroSection view={props} />
           <BackfillSection view={props} />
           <Show when={props.error}>
-            <div class="callout danger" role="alert">
+            <InlineAlert tone="danger" role="alert">
               <div>{t("memoryImport.loadFailed")}</div>
               {props.error}
-            </div>
+            </InlineAlert>
           </Show>
           <Show when={props.applyError && !props.pendingProviderId}>
-            <div class="callout danger" role="alert">
+            <InlineAlert tone="danger" role="alert">
               <div>{t("memoryImport.importFailed")}</div>
               {props.applyError}
-            </div>
+            </InlineAlert>
           </Show>
           <Errored fallback={renderReadError}>
             <Loading

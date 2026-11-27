@@ -51,6 +51,37 @@ export function consumeMcpCodeModeGuestResult(result: AgentToolResult<unknown>):
   return safe;
 }
 
+export function projectMcpJsonAgentToolResult(params: {
+  serverName: string;
+  operation: string;
+  value: unknown;
+}): AgentToolResult<unknown> {
+  const publicValue = toToolSearchJsonSafe(
+    params.operation === "resources_list" && Array.isArray(params.value)
+      ? { resources: params.value }
+      : params.operation === "prompts_list" && Array.isArray(params.value)
+        ? { prompts: params.value }
+        : params.value,
+  );
+  if (isRecord(publicValue)) {
+    delete publicValue._meta;
+  }
+  const result: AgentToolResult<unknown> = {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(publicValue),
+      },
+    ],
+    details: {
+      mcpServer: params.serverName,
+      mcpOperation: params.operation,
+      untrustedMcpOutput: true,
+    },
+  };
+  return setMcpCodeModeGuestResult(result, publicValue);
+}
+
 function stringifyMcpContent(value: unknown): string {
   try {
     return JSON.stringify(value) ?? String(value);
@@ -110,17 +141,16 @@ function projectMcpCallToolResultContent(
   if (isRecord(structuredContent)) {
     try {
       const isStructuredMirror = createMcpStructuredContentMirrorMatcher(structuredContent);
-      const structuredJson = JSON.stringify(
-        JSON.parse(stableStringify(structuredContent)),
-        null,
-        2,
-      );
+      // Compact, key-sorted JSON: deterministic for prompt caching and loop digests, and
+      // indentation would only add tokens the model and the Tool Search envelope pay for.
+      const structuredJson = JSON.stringify(JSON.parse(stableStringify(structuredContent)));
       const structuredText = `structuredContent:\n${structuredJson}`;
       return {
         content: [
           { type: "text", text: structuredText },
           ...sourceContent
-            // Only a full JSON mirror of structuredContent is redundant; overlapping text can carry recovery guidance.
+            // Only a full mirror of structuredContent (or of its single wrapped value) is redundant;
+            // overlapping text can carry recovery guidance.
             .filter(
               (block) =>
                 !isRecord(block) ||

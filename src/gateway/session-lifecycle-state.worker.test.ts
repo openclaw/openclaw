@@ -57,6 +57,7 @@ it("commits lifecycle in one request while preserving a queued goal update", () 
         startedAt: 1_000,
         endedAt: 2_000,
         error: "Provider disconnected",
+        desktopErrorNotice: "Provider disconnected. Try again shortly.",
       },
     };
     Object.defineProperty(event, "lifecycleGeneration", { value: generation });
@@ -70,7 +71,12 @@ it("commits lifecycle in one request while preserving a queued goal update", () 
       expect.objectContaining({
         type: "custom_message",
         customType: "run-failed-before-reply",
-        details: { runId, error: "Provider disconnected" },
+        content: "Your request couldn't be completed.",
+        details: {
+          runId,
+          error: "Provider disconnected",
+          desktopNotice: "Provider disconnected. Try again shortly.",
+        },
       }),
     );
   }));
@@ -79,7 +85,7 @@ it("retains missed shutdown markers in terminal writes without marking resets or
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot({});
     const f = createSessionCompoundWorkerFixture();
-    const retained = { queuedInputIds: ["accepted-input"], hadBackgroundExec: true as const };
+    const retained = { sourceRunId: "previous" };
     const cases: Array<{
       name: string;
       key?: string;
@@ -87,15 +93,35 @@ it("retains missed shutdown markers in terminal writes without marking resets or
       stopReason?: string;
       stale?: boolean;
       unstarted?: boolean;
+      unstartedRunId?: string;
       entry?: Partial<SessionEntry>;
       marker?: SessionEntry["resumeAfterRestart"];
     }> = [
-      { name: "missing", shutdown: true, marker: { queuedInputIds: [] } },
-      { name: "queued", shutdown: true, entry: { resumeAfterRestart: retained }, marker: retained },
+      { name: "missing", shutdown: true, marker: { sourceRunId: "running" } },
+      {
+        name: "replaced-execution",
+        shutdown: true,
+        entry: { resumeAfterRestart: retained },
+        marker: { sourceRunId: "running" },
+      },
       { name: "reset" },
       { name: "stop", shutdown: true, stopReason: "aborted" },
       { name: "stale", shutdown: true, stale: true },
       { name: "unstarted", shutdown: true, unstarted: true },
+      {
+        name: "accepted-before-execution",
+        shutdown: true,
+        unstarted: true,
+        unstartedRunId: "running",
+        marker: {},
+      },
+      {
+        name: "pending-continuation",
+        shutdown: true,
+        unstarted: true,
+        entry: { lifecycleRunId: undefined, resumeAfterRestart: retained },
+        marker: retained,
+      },
       { name: "cron", shutdown: true, key: "agent:main:cron:scheduled" },
       { name: "child", shutdown: true, key: "agent:main:subagent:child" },
       { name: "external", shutdown: true, entry: { modelSelectionLocked: true } },
@@ -129,14 +155,14 @@ it("retains missed shutdown markers in terminal writes without marking resets or
         await persistGatewaySessionLifecycleEvent({
           sessionKey: scope.sessionKey,
           event: {
-            runId: test.unstarted ? "queued" : "running",
+            runId: test.unstarted ? (test.unstartedRunId ?? "queued") : "running",
             sessionId: test.stale ? "replaced-session" : scope.sessionId,
             ts: 2_000,
             data: {
               phase: "end",
               aborted: true,
               stopReason: test.stopReason ?? "restart",
-              ...(test.unstarted ? { executionStarted: false } : {}),
+              executionStarted: !test.unstarted,
             },
           },
         });

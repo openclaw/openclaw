@@ -1,11 +1,26 @@
 import type { z } from "zod";
 import type {
   UpdateDoctorConfigChangeSchema,
+  UpdateDoctorConfigFileWriteSchema,
   UpdateDoctorConfigWriteRefusalSchema,
 } from "./update-doctor-config-schema.js";
 
 export type UpdateDoctorConfigChange = z.infer<typeof UpdateDoctorConfigChangeSchema>;
 export type UpdateDoctorConfigWriteRefusal = z.infer<typeof UpdateDoctorConfigWriteRefusalSchema>;
+
+export type DoctorConfigCapture = {
+  path: string;
+  hash: string;
+  inputHash?: string;
+  fileWrites?: Record<string, z.infer<typeof UpdateDoctorConfigFileWriteSchema>>;
+  configChanges: UpdateDoctorConfigChange[];
+  configWriteRefusal?: UpdateDoctorConfigWriteRefusal;
+  deferredInspectionCheckIds?: string[];
+  warnings?: string[];
+};
+
+/** The only authority fields held by a config write capture. */
+export type DoctorConfigWriteAuthority = { inputHash: string; assertCurrent: () => void };
 
 export function formatUpdateDoctorConfigWriteRefusal(
   refusal: UpdateDoctorConfigWriteRefusal,
@@ -25,24 +40,4 @@ export function getUpdateDoctorConfigFailureReason(refusal?: UpdateDoctorConfigW
       ? "requester-revoked"
       : "repair-requires-config-change"
     : undefined;
-}
-
-export function createUpdateDoctorConfigWarningStep(
-  root: string,
-  changes: readonly UpdateDoctorConfigChange[],
-) {
-  const keys = [
-    ...new Set(changes.flatMap((change) => (change.kind === "key" ? [change.key] : []))),
-  ].toSorted();
-  return {
-    name: "doctor-config-changes",
-    command: "report Doctor config changes",
-    cwd: root,
-    durationMs: 0,
-    exitCode: 0,
-    advisory: {
-      kind: "recoverable-maintenance" as const,
-      message: `Doctor changed config keys ${keys.join(", ") || "none recorded"} during update checks. Check those settings after the update; this version cannot verify that they were applied.`,
-    },
-  };
 }

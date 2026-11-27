@@ -35,13 +35,16 @@ export function isThreadBackgroundOnly(
 }
 
 /**
- * Exact lifecycle inputs a live ephemeral thread was told. The generic policy is
- * creation-owned and cannot be refreshed or cold-resumed; skills, persona, and memory
- * share one refreshable section recording what was last delivered to the thread.
+ * Exact lifecycle inputs a live thread was told. Skills, persona, and memory share one
+ * refreshable section recording what was last delivered to the thread. Ephemeral threads
+ * also record their creation-owned generic policy, which cannot be refreshed or
+ * cold-resumed; persistent threads fingerprint it instead and omit it here.
  */
 export type CodexEphemeralThreadPolicy = {
   autoCompactTokenLimit?: number;
   autoCompactTokenLimitScope?: string;
+  /** OpenClaw's rendered base, in the base or developer carrier. */
+  baseInstructions?: string;
   developerInstructions?: string;
   refreshableInstructions?: string;
   /**
@@ -51,6 +54,18 @@ export type CodexEphemeralThreadPolicy = {
    */
   nativeRefreshableInstructions?: string;
 };
+
+/** Only ephemeral records carry generic policy; their history has no resume source. */
+export function isEphemeralThreadPolicy(policy: CodexEphemeralThreadPolicy | undefined): boolean {
+  return policy?.developerInstructions !== undefined;
+}
+
+/** A persistent thread's record: the section its native configuration now carries. */
+export function createCodexPersistentThreadPolicy(
+  refreshableInstructions: string | undefined,
+): CodexEphemeralThreadPolicy {
+  return { refreshableInstructions, nativeRefreshableInstructions: refreshableInstructions };
+}
 
 export type RetainedLiveThread = {
   ownerToken?: ThreadOwnerToken;
@@ -147,7 +162,7 @@ export function hasSiblingThreadWork(
   }
   // Ephemeral history exists only on this process, even after its turn settles.
   for (const [retainedThreadId, retained] of runtime.retainedThreads) {
-    if (retainedThreadId !== threadId && retained.ephemeralPolicy !== undefined) {
+    if (retainedThreadId !== threadId && isEphemeralThreadPolicy(retained.ephemeralPolicy)) {
       return true;
     }
   }
@@ -217,10 +232,14 @@ export function revertRetainedThreadInstructions(
 
 export function createCodexEphemeralThreadPolicy(
   {
+    baseInstructions,
     developerInstructions,
     refreshableInstructions,
     config,
-  }: Pick<CodexEphemeralThreadPolicy, "developerInstructions" | "refreshableInstructions"> & {
+  }: Pick<
+    CodexEphemeralThreadPolicy,
+    "baseInstructions" | "developerInstructions" | "refreshableInstructions"
+  > & {
     config?: {
       model_auto_compact_token_limit?: unknown;
       model_auto_compact_token_limit_scope?: unknown;
@@ -237,6 +256,7 @@ export function createCodexEphemeralThreadPolicy(
   return {
     ...(typeof limit === "number" ? { autoCompactTokenLimit: limit } : {}),
     ...(typeof scope === "string" ? { autoCompactTokenLimitScope: scope } : {}),
+    baseInstructions,
     developerInstructions,
     refreshableInstructions,
     nativeRefreshableInstructions: refreshableInstructions,

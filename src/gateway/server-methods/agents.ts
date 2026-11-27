@@ -14,7 +14,11 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { validateAgentIdInput } from "../../agents/agent-create.js";
 import { AgentSharedStoreOwnerError } from "../../agents/agent-delete-databases.js";
-import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import {
+  listAgentIds,
+  resolveAgentConfig,
+  resolveAgentWorkspaceDir,
+} from "../../agents/agent-scope.js";
 import {
   createAgentIdentityConfig,
   normalizeIdentityForFile,
@@ -34,6 +38,7 @@ import {
 } from "../../config/runtime-write-application.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { redactToolDetail } from "../../logging/redact.js";
 import {
   captureGatewayRootWorkAdmissionContinuationScope,
   runWithGatewayDetachedWorkContinuation,
@@ -45,9 +50,10 @@ import {
   authorizeCurrentOperatorRoleScopes,
   resolveOperatorRolePolicy,
 } from "../operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import type { PreparedGatewayModelCatalog } from "../server-model-catalog.types.js";
 import { reviveAgentDatabasesAfterConfigCommit } from "../server-reload-agent-databases.js";
+import { resolveAttendedSessionPermissionDefault } from "../session-create-permission-default.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { listAgentsForGateway } from "../session-utils.js";
 import { startSlowRequestDiagnostics } from "../slow-request-diagnostics.js";
@@ -75,6 +81,7 @@ import {
   startAgentOnboardingConversation,
   type PreparedAgentOnboarding,
 } from "./agents-onboarding.js";
+import { dispatchableWorkerProfileIds, listWorkerProfiles } from "./environments.profiles.js";
 import {
   captureLocalStateMutationGuard,
   localStateOwnerChangedError,
@@ -102,11 +109,30 @@ function createAgentConfigApplication(respond: RespondFn) {
       if (outcome === "applied") {
         return true;
       }
-      const message = `Agent configuration was saved but its application to the active Gateway was not confirmed (${outcome}); run config.get, then apply the saved config or restart the Gateway.`;
-      if (onUnconfirmed) {
-        onUnconfirmed(message);
+      // A busy plugin reload holds every saved change, including ones that need no reload.
+      // The reloader retries on its own, so name the wait instead of asking for a restart.
+      let failure;
+      if (typeof outcome === "object") {
+        const deferred = {
+          ...outcome,
+          reason: redactToolDetail(outcome.reason),
+          appliesWhen: redactToolDetail(outcome.appliesWhen),
+        };
+        failure = errorShape(
+          ErrorCodes.UNAVAILABLE,
+          `Agent configuration saved but deferred: ${deferred.reason} ${deferred.appliesWhen}`,
+          { details: { application: deferred } },
+        );
       } else {
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message));
+        failure = errorShape(
+          ErrorCodes.UNAVAILABLE,
+          `Agent configuration was saved but its application to the active Gateway was not confirmed (${outcome}); run config.get, then apply the saved config or restart the Gateway.`,
+        );
+      }
+      if (onUnconfirmed) {
+        onUnconfirmed(failure.message);
+      } else {
+        respond(false, undefined, failure);
       }
       return false;
     },
@@ -170,10 +196,19 @@ export const agentsHandlers: GatewayRequestHandlers = {
       }
       // Grants during enrichment appear on the next request; revocations apply now.
       const allowedAgents = resolveOperatorRolePolicy(client, currentConfig)?.agents;
-      const agents =
+      const agents = (
         allowedAgents && allowedAgents !== "*"
           ? result.agents.filter((agent) => allowedAgents.includes(agent.id))
-          : result.agents;
+          : result.agents
+      ).map((agent) => {
+        const newSessionPermissionMode = resolveAttendedSessionPermissionDefault(
+          resolveAgentConfig(currentConfig, agent.id)?.newSessionPermissionMode,
+          client?.connect.scopes ?? [],
+        );
+        return newSessionPermissionMode === agent.newSessionPermissionMode
+          ? agent
+          : Object.assign(agent, { newSessionPermissionMode });
+      });
       const policy = prepareOperatorModelPresentation({
         cfg: currentConfig,
         policyConfig: context.getCommittedRuntimeConfig?.() ?? currentConfig,
@@ -186,29 +221,37 @@ export const agentsHandlers: GatewayRequestHandlers = {
         params.includeSessionPlacement === true
           ? {
               ...result,
-              sessionPlacement: required
-                ? {
-                    requiredProfile: {
-                      id: required,
-                      ...(profile
-                        ? {
-                            providerId: profile.provider,
-                            executionModes:
-                              context.workerEnvironmentService?.supportsExecutionMode(
-                                required,
-                                "worker-turn",
-                              ) === true
-                                ? ["worker-turn" as const]
-                                : [],
-                            ...workerInferenceMetadata({
+              sessionPlacement: {
+                ...(dispatchableWorkerProfileIds(listWorkerProfiles(context), {
+                  context,
+                  client,
+                }).some((id) => !required || id === required)
+                  ? { hasDispatchableCloudProfile: true as const }
+                  : {}),
+                ...(required
+                  ? {
+                      requiredProfile: {
+                        id: required,
+                        ...(profile
+                          ? {
                               providerId: profile.provider,
-                              profileSnapshot: profile,
-                            }),
-                          }
-                        : {}),
-                    },
-                  }
-                : {},
+                              executionModes:
+                                context.workerEnvironmentService?.supportsExecutionMode(
+                                  required,
+                                  "worker-turn",
+                                ) === true
+                                  ? ["worker-turn" as const]
+                                  : [],
+                              ...workerInferenceMetadata({
+                                providerId: profile.provider,
+                                profileSnapshot: profile,
+                              }),
+                            }
+                          : {}),
+                      },
+                    }
+                  : {}),
+              },
             }
           : result;
       respond(
@@ -281,9 +324,14 @@ export const agentsHandlers: GatewayRequestHandlers = {
           avatar: params.avatar,
           beforePersistentApply: () => {
             assertOwnerCurrent?.();
-            preparation?.assertCurrent();
+            preparation?.assertAuthorityCurrent();
           },
-          ...(preparation ? { expectedConfigHash: preparation.expectedConfigHash } : {}),
+          ...(preparation
+            ? {
+                expectedConfigHash: preparation.expectedConfigHash,
+                assertBeforePublish: preparation.assertCurrent,
+              }
+            : {}),
           assertIdentityInputAllowed: captureGatewayClientUploadCommitGuard({
             method: "agents.create",
             requestParams: params,
@@ -326,14 +374,14 @@ export const agentsHandlers: GatewayRequestHandlers = {
               }),
               error: applicationError,
             }
-          : await completeAgentOnboarding(options, result.agentId, result.name)
+          : await completeAgentOnboarding(options, result.agentId)
         : undefined;
       let onboardingOperatorAuthority:
-        | Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>
+        | Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>>
         | undefined;
       if (onboarding?.status === "completed" && client) {
         try {
-          onboardingOperatorAuthority = await captureGatewayOperatorRunAuthority({
+          onboardingOperatorAuthority = await prepareGatewayOperatorRunAuthority({
             client,
             context,
             hasCurrentClientAuthority: options.hasCurrentClientAuthority,

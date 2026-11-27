@@ -1,5 +1,15 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  prepareSessionStoreCandidatesInWorker,
+  sessionStoreLane,
+  withSessionHistoryWorkerReadCandidates,
+} from "../config/sessions/session-transcript-worker-resources.js";
+import type {
+  SessionHistoryWorkerInput,
+  SessionTranscriptWorkerReply,
+} from "../config/sessions/session-transcript-worker.types.js";
+import { createOwnedWorkerTaskPool } from "../infra/worker-task-pool.js";
 import type { PluginHookHandlerMap } from "../plugins/hook-types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import * as gatewayWorkAdmission from "../process/gateway-work-admission.js";
@@ -27,13 +37,20 @@ export function registerGatewayStartupAdmissionTests(params: {
   startupModuleRestorers: Array<() => void>;
   stopSidecar: (sidecar: GatewayPostReadySidecarHandle) => Promise<void>;
 }): void {
-  it("keeps channel and external input closed until retained inputs have acquired queue custody", async () => {
+  it("opens channel and external input after discovery installs session admission waits", async () => {
+    const discovery = createStartupGate();
     const resume = createStartupGate();
     const unlocked = createDeferred();
     const tracked: Promise<unknown>[] = [];
     const lifetime = new AbortController();
     const owner = await import("./session-restart-resume.js");
-    const resumeSpy = vi.spyOn(owner, "resumeMarkedSessions").mockImplementation(resume.run);
+    const resumeSpy = vi
+      .spyOn(owner, "resumeMarkedSessions")
+      .mockImplementation(async ({ onPrepared }) => {
+        await discovery.run();
+        await onPrepared?.();
+        await resume.run();
+      });
     const unlockStartupMethods = vi.fn(() => unlocked.resolve());
     const onChannelsStarted = vi.fn();
     try {
@@ -52,28 +69,76 @@ export function registerGatewayStartupAdmissionTests(params: {
         params.createRuntimeDeps(),
       );
       await runtime.startupSettled;
-      await resume.entered;
+      await discovery.entered;
       expect(unlockStartupMethods).not.toHaveBeenCalled();
       expect(onChannelsStarted).not.toHaveBeenCalled();
-      resume.release();
+      discovery.release();
+      await resume.entered;
       await unlocked.promise;
       expect(unlockStartupMethods).toHaveBeenCalledOnce();
       expect(onChannelsStarted).toHaveBeenCalledOnce();
     } finally {
       lifetime.abort();
+      discovery.release();
       resume.release();
       await Promise.allSettled(tracked);
       resumeSpy.mockRestore();
     }
   });
 
-  it("opens external input after failed restart discovery", async () => {
+  it.each([
+    ["session.history.synthetic-private-suffix", "transcript_read"],
+    ["synthetic-private-operation\n/private/path", "execute"],
+    ["session-target-prepare", "session-target-prepare"],
+    ["session-target-inventory", "session-target-inventory"],
+  ])("opens external input after failed restart discovery (%s)", async (operation, label) => {
+    const pool = createOwnedWorkerTaskPool<
+      SessionHistoryWorkerInput,
+      SessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>
+    >({
+      workerUrl: new URL("file:///synthetic-private-root/private-worker.js"),
+      maxPendingBytes: 8,
+    });
+    const originalPool = sessionStoreLane.pool;
+    sessionStoreLane.pool = { ...pool, canCloseNativeResources: () => false };
     const tracked: Promise<unknown>[] = [];
     const lifetime = new AbortController();
     const owner = await import("./session-restart-resume.js");
-    const resumeSpy = vi
-      .spyOn(owner, "resumeMarkedSessions")
-      .mockRejectedValueOnce(new Error("fixture store unavailable"));
+    const resumeSpy = vi.spyOn(owner, "resumeMarkedSessions").mockImplementationOnce(async () => {
+      if (operation === "session-target-prepare") {
+        await prepareSessionStoreCandidatesInWorker({ storePath: "/synthetic-private/store" });
+        return;
+      }
+      if (operation === "session-target-inventory") {
+        await withSessionHistoryWorkerReadCandidates(
+          [],
+          (scope) =>
+            scope.readTargetInventory({
+              config: {},
+              agentIds: [],
+              env: { OPENCLAW_STATE_DIR: "/synthetic-private/state" },
+              paths: new Map(),
+              registeredDatabases: { status: "deferred" },
+            }),
+          sessionStoreLane,
+        );
+        return;
+      }
+      await pool
+        .runTask(
+          () => {
+            throw new Error("Rejected private input must not be prepared");
+          },
+          {
+            inputBytes: 9,
+            diagnosticOperation: operation,
+          },
+        )
+        .result.catch((error: unknown) => {
+          expect(error).toMatchObject({ code: "overloaded", capacityAvailable: undefined });
+          throw error;
+        });
+    });
     const unlockStartupMethods = vi.fn();
     const onChannelsStarted = vi.fn();
     const startup = params.createParams({
@@ -94,12 +159,19 @@ export function registerGatewayStartupAdmissionTests(params: {
       expect(unlockStartupMethods).toHaveBeenCalledOnce();
       expect(onChannelsStarted).toHaveBeenCalledOnce();
       expect(startup.log.warn).toHaveBeenCalledWith(
-        expect.stringContaining("Restart resume discovery failed"),
+        expect.stringMatching(
+          new RegExp(
+            "^Restart resume discovery failed: WorkerTaskError: worker task capacity reached " +
+              `\\[task=extension\\.${label} pool pending bytes: pendingBytes=0 maxPendingBytes=8 inputBytes=\\d+\\]$`,
+          ),
+        ),
       );
     } finally {
       lifetime.abort();
       await Promise.allSettled(tracked);
       resumeSpy.mockRestore();
+      sessionStoreLane.pool = originalPool;
+      await pool.close();
     }
   });
 

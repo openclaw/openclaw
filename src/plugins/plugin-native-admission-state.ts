@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { isPathInside } from "../infra/path-guards.js";
 import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
@@ -18,6 +19,7 @@ import { getPluginCache } from "./plugin-cache.js";
 import type { PluginCache } from "./plugin-cache.types.js";
 import type { PluginSourceCaptureStorage } from "./plugin-instance-invocation.types.js";
 import { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-env.js";
+import type { PluginNativeCaptureRoot as NativeSnapshot } from "./plugin-native-root.types.js";
 import type {
   PluginNativeArtifactFact,
   PluginNativeNamespaceFact,
@@ -30,7 +32,6 @@ import {
   retainPluginNativeCapturePath,
 } from "./plugin-source-capture-directory.js";
 
-type NativeSnapshot = ReturnType<typeof createPluginNativeCaptureRoot>;
 export type AdmissionState = {
   readonly viewKey: string;
   readonly captureStorage: PluginSourceCaptureStorage;
@@ -47,6 +48,7 @@ export type AdmissionState = {
   >;
   managedRoots: Map<string, "retained-npm" | "installed">;
   receipts: Map<string, PluginSourceAdmissionReceipt>;
+  receiptInventoryComplete: boolean;
   files: Map<string, PluginNativeArtifactFact>;
   namespaces: Map<string, PluginNativeNamespaceFact>;
   pins: Map<string, () => void>;
@@ -94,6 +96,7 @@ export function adoptPluginNativeAdmissions(
     state.roots.add(root);
   }
   for (const [key, receipt] of transfer.receipts) {
+    const replaced = state.receipts.get(key);
     state.receipts.set(key, receipt);
     for (const [source, fact] of Object.entries(receipt.nativeArtifacts)) {
       state.files.set(source, fact);
@@ -103,10 +106,58 @@ export function adoptPluginNativeAdmissions(
       state.namespaces.set(directory, namespace);
       retainNativePath(state, path.join(directory, "content"));
     }
+    releaseReplacedNamespaces(state, replaced);
   }
   if (publish) {
     for (const publication of transfer.publications) {
       queuePluginNativeAdmissionPublication(state, publication, publish);
+    }
+  }
+}
+
+/** Return a detached receipt only when the live generation has new facts to publish. */
+export function updatePluginNativeAdmissionReceipt(
+  state: AdmissionState,
+  key: string,
+  proposed: PluginSourceAdmissionReceipt,
+): PluginSourceAdmissionReceipt | undefined {
+  const replaced = state.receipts.get(key);
+  // A pending publication already owns a detached receipt. Otherwise preserve the
+  // clone-before-compare boundary, including normalization of caller-owned prototypes.
+  if (
+    replaced &&
+    state.publications.get(key)?.data.receipt === replaced &&
+    isDeepStrictEqual(replaced, proposed)
+  ) {
+    return undefined;
+  }
+  const next = structuredClone(proposed);
+  if (isDeepStrictEqual(replaced, next)) {
+    return undefined;
+  }
+  state.receipts.set(key, next);
+  releaseReplacedNamespaces(state, replaced);
+  return next;
+}
+
+/** A replaced receipt retires unreferenced file facts before pruning namespace maps. */
+function releaseReplacedNamespaces(
+  state: AdmissionState,
+  replaced: PluginSourceAdmissionReceipt | undefined,
+): void {
+  if (state.receiptInventoryComplete) {
+    for (const source of Object.keys(replaced?.nativeArtifacts ?? {})) {
+      if (![...state.receipts.values()].some((receipt) => source in receipt.nativeArtifacts)) {
+        state.files.delete(source);
+      }
+    }
+  }
+  for (const id of Object.keys(replaced?.nativeNamespaces ?? {})) {
+    if (
+      ![...state.receipts.values()].some((receipt) => id in receipt.nativeNamespaces) &&
+      ![...state.files.values()].some((file) => file.namespace === id)
+    ) {
+      state.namespaces.delete(id);
     }
   }
 }
@@ -157,11 +208,9 @@ export function queuePluginNativeAdmissionPublication(
     data,
     run: () =>
       publish(data)
-        .then((accepted) => {
+        .then(async (accepted) => {
           if (accepted) {
-            for (const root of roots) {
-              root.commit();
-            }
+            await Promise.all(roots.map(async (root) => root.commit()));
             if (state.publications.get(data.key) === publication) {
               state.publications.delete(data.key);
             }
@@ -261,6 +310,7 @@ export function nativeAdmissionStateFor(cache = getPluginCache()): AdmissionStat
       owners: new Map(),
       managedRoots: new Map(),
       receipts: new Map(),
+      receiptInventoryComplete: true,
       files: new Map(),
       namespaces: new Map(),
       pins: new Map(),
@@ -296,19 +346,36 @@ export function overlayPluginNativeAdmissions(
   if (!state || state.receipts.size === 0) {
     return index;
   }
+  // A filtered registry can share a wider cache. Only materialize receipts for its roots.
+  const receiptsByRoot = new Map<
+    string,
+    Record<string, PluginSourceAdmissionReceipt> | undefined
+  >();
+  const roots = index.plugins.map((record) => {
+    const root = path.resolve(record.rootDir);
+    receiptsByRoot.set(root, undefined);
+    return root;
+  });
+  for (const [key, receipt] of state.receipts) {
+    // The producer keeps the entry suffix opaque, including any further separators.
+    const separator = key.indexOf("\0");
+    if (separator < 0) {
+      continue;
+    }
+    const root = key.slice(0, separator);
+    const group = receiptsByRoot.get(root);
+    if (group) {
+      group[key] = receipt;
+    } else if (receiptsByRoot.has(root)) {
+      receiptsByRoot.set(root, { [key]: receipt });
+    }
+  }
   return {
     ...index,
-    plugins: index.plugins.map((record) => {
-      const prefix = `${path.resolve(record.rootDir)}\0`;
-      const receipts = [...state.receipts].filter(([key]) => key.startsWith(prefix));
-      return receipts.length
-        ? {
-            ...record,
-            sourceAdmissions: {
-              ...record.sourceAdmissions,
-              ...Object.fromEntries(receipts),
-            },
-          }
+    plugins: index.plugins.map((record, position) => {
+      const receipts = receiptsByRoot.get(roots[position]!);
+      return receipts
+        ? { ...record, sourceAdmissions: { ...record.sourceAdmissions, ...receipts } }
         : record;
     }),
   };
@@ -323,6 +390,7 @@ export function preparePluginNativeAdmissions(
   if (state.preparedIndexes.has(index)) {
     return;
   }
+  const immutable = isDeeplyFrozenPlainData(index);
   for (const record of index.plugins) {
     const root = path.resolve(record.rootDir);
     if (state.owners.has(root)) {
@@ -365,14 +433,15 @@ export function preparePluginNativeAdmissions(
     for (const [key, receipt] of Object.entries(record.sourceAdmissions ?? {})) {
       state.receipts.set(key, receipt);
       for (const [id, namespace] of Object.entries(receipt.nativeNamespaces)) {
-        state.namespaces.set(id, structuredClone(namespace));
+        // Retain published membership until a native admission needs writable identities.
+        state.namespaces.set(id, immutable ? { ...namespace } : structuredClone(namespace));
       }
       for (const [source, fact] of Object.entries(receipt.nativeArtifacts)) {
         state.files.set(source, { ...fact });
       }
     }
   }
-  if (isDeeplyFrozenPlainData(index)) {
+  if (immutable) {
     state.preparedIndexes.add(index);
   }
 }

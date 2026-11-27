@@ -18,7 +18,6 @@ const authorizeSearchHitsMock = vi.hoisted(() => vi.fn(async ({ hits }) => hits)
 const createMemoryRuntimeMock = vi.hoisted(() =>
   vi.fn((_host: MemoryCoreRuntimeHost = {}) => ({
     authorizeSearchHits: authorizeSearchHitsMock,
-    closeAllMemorySearchManagers: closeAllMemorySearchManagersMock,
     getMemorySearchManager: getMemorySearchManagerMock,
   })),
 );
@@ -26,6 +25,10 @@ const createMemoryRuntimeMock = vi.hoisted(() =>
 // mock-isolation: Keep the lazy manager engine outside registration tests.
 vi.mock("./src/runtime-provider.js", () => ({
   createMemoryRuntime: createMemoryRuntimeMock,
+}));
+// mock-isolation: Observe manager cleanup; the real close skips managers this test never loaded.
+vi.mock("./src/memory/manager-runtime-loader.js", () => ({
+  closeAllMemorySearchManagers: closeAllMemorySearchManagersMock,
 }));
 
 import plugin from "./index.js";
@@ -63,7 +66,10 @@ function captureCapability(
     registerTool,
     registerService(service) {
       if (service.id === "memory-core-index") {
-        assert(service.apiVersion !== 2, "Unexpected scheduled service");
+        assert(
+          service.apiVersion !== 2 && service.apiVersion !== 3,
+          "Unexpected scheduled service",
+        );
         services.push(service);
       }
     },
@@ -173,10 +179,16 @@ describe("buildPromptSection", () => {
     [["memory_search"], "off"],
   ] as const)("guides recall using %j with citations=%s", (tools, citationsMode) => {
     const result = buildMemoryPromptSection({ availableTools: new Set(tools), citationsMode });
-    expect(result[1]).toContain(`run ${tools[0]}`);
-    expect(result[1]).toContain("not already present in the current turn");
-    expect(result[1]).toContain("Do not repeat memory retrieval");
-    expect(result[1]?.includes("for memory-file hits, use memory_get")).toBe(tools.length === 2);
+    expect(result[1]).toContain(tools[0]);
+    expect(result[1]).toContain("not in this turn");
+    expect(result[1]).toContain("Skip it when supplied context fully answers");
+    expect(result[1]).toContain("say you checked");
+    expect(result[1]?.includes("; memory_get only the needed lines of file hits")).toBe(
+      tools.length === 2,
+    );
+    if (tools[0] === "memory_search") {
+      expect(result[1]).toContain("run memory_search without corpus");
+    }
     if (tools[0] === "memory_get") {
       expect(result[1]).not.toContain("run memory_search");
     }
@@ -208,8 +220,8 @@ describe("buildPromptSection", () => {
     for (const name of excluded) {
       expect(modelVisibleText).not.toContain(name);
     }
-    expect(prompt).toContain("Session search line numbers are not history offsets");
-    expect(prompt).toContain("Never read raw transcript files");
+    expect(prompt).toContain("Search line numbers are not history offsets");
+    expect(prompt).toContain("never read raw transcript files");
     if (sessionTools.length === 2) {
       expect(prompt).toContain("returned sessionKey, messageId, and sessionId");
     }
@@ -450,6 +462,20 @@ describe("memory-core plugin runtime registration", () => {
       }
     },
   );
+
+  it("closes index managers without first-loading the runtime provider", async () => {
+    const {
+      services: [service],
+      context,
+    } = captureCapability({ config: indexConfig() });
+    assert(service?.stop, "Expected memory index cleanup owner");
+    await service.start(context);
+    createMemoryRuntimeMock.mockClear();
+    // Gateway shutdown can run after an update replaced the provider's chunk on disk.
+    await service.stop(context);
+    expect(closeAllMemorySearchManagersMock).toHaveBeenCalledOnce();
+    expect(createMemoryRuntimeMock).not.toHaveBeenCalled();
+  });
 
   it("defers nested host runtime access until the injected operation runs", async () => {
     const acquireLocalService = vi.fn(async () => undefined);

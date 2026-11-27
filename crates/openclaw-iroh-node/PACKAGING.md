@@ -1,6 +1,11 @@
 # Packaging recommendation (not built yet)
 
-Status: proposal. Nothing is published, and nothing in OpenClaw loads this binding yet.
+Status: distribution proposal; the package is not published. Source checkouts load
+an in-place build through the Gateway's existing loader fallback.
+
+For local development, run `pnpm build:iroh` from the repository root. It uses this
+crate's pinned Rust toolchain and skips a current native binary. This is not part
+of the default build. See [source checkout setup](https://docs.openclaw.ai/gateway/remote#openclaw-id-from-a-source-checkout).
 
 ## Recommendation
 

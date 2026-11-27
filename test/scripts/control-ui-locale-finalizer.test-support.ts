@@ -4,6 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect } from "vitest";
 import { packControlUiLocaleArtifact } from "../../scripts/control-ui-locale-artifacts.ts";
+import { CONTROL_UI_LOCALE_ENTRIES } from "../../scripts/lib/control-ui-i18n-config.ts";
 import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 import {
@@ -34,7 +35,7 @@ export type FinalizerScenario = {
   ref?: string;
   fullRefresh?: boolean;
   preflightAllowed?: boolean;
-  change?: "glossary" | "canonical";
+  change?: "metadata" | "canonical";
   artifactFault?: "foreign-run" | "path" | "fallback";
   publish?: boolean;
   advanceDuringCheckout?: boolean;
@@ -86,7 +87,7 @@ function commit(root: string, message: string) {
   return runGit(root, ["rev-parse", "HEAD"]);
 }
 
-/** Real scripts and catalogs in a disposable source checkout; only services are fixtures. */
+/** Real workflow scripts with bounded catalog data and synthetic external services. */
 export function createLocaleFinalizerHarness() {
   const temporary = createTempDirTracker();
   let template: string;
@@ -133,22 +134,32 @@ export function createLocaleFinalizerHarness() {
       ]) {
         fs.mkdirSync(target(directory), { recursive: true });
       }
-      for (const file of fs.readdirSync(assets)) {
-        if (
-          file.endsWith(".tm.jsonl") ||
-          file.endsWith(".meta.json") ||
-          file.startsWith("glossary.")
-        ) {
-          fs.copyFileSync(path.join(assets, file), target(path.join(assets, file)));
-        }
-      }
+      // Workflow compatibility needs complete fixture data, not the production catalog.
+      // Catalog composition has separate coverage; source hashing stays real here.
+      const languages = {
+        en: "English",
+        ...Object.fromEntries(
+          CONTROL_UI_LOCALE_ENTRIES.map(({ languageKey, locale }) => [languageKey, locale]),
+        ),
+      };
+      put(template, sourceFile, `export const en = ${JSON.stringify({ languages })};\n${before}`);
+      put(
+        template,
+        "scripts/lib/control-ui-i18n-catalog.ts",
+        `import { readFile } from "node:fs/promises";
+import { en } from "../../ui/src/i18n/locales/en.ts";
+export const loadControlUiStartupCatalog = () => en;
+export const loadControlUiSourceCatalog = () => en;
+export const readControlUiSourceCatalog = () =>
+  readFile(new URL("../../ui/src/i18n/locales/en.ts", import.meta.url), "utf8");
+`,
+      );
       fs.symlinkSync(path.join(repo, "node_modules"), target("node_modules"), "junction");
       // Keep each publisher pathspec populated in this sparse checkout. This
       // non-UI plugin is not a generation input; plugin generation has its own proof.
       put(template, "extensions/fixture/openclaw.plugin.json", '{"id":"fixture"}\n');
       put(template, "extensions/fixture/i18n/.i18n/fixture.json", "{}\n");
       put(template, "extensions/fixture/i18n/locales/translated.json", "{}\n");
-      fs.appendFileSync(target(sourceFile), before);
       put(template, ".gitignore", "node_modules/\n.artifacts/\n.isolated-state/\n");
       execFileSync(
         testNodeExecPath,
@@ -181,8 +192,6 @@ export function createLocaleFinalizerHarness() {
       // actions/checkout disables GC; detached maintenance would race the Git owner's lock scan.
       runGit(root, ["config", "gc.auto", "0"]);
       runGit(root, ["config", "maintenance.auto", "false"]);
-      // Synthetic local transport does not need compression of the large warm TM.
-      runGit(root, ["config", "core.compression", "0"]);
       const providerLog = path.join(directory, "finalizer-provider-requests");
       const workerLog = path.join(directory, "worker-provider-requests");
       const states: Record<string, JobResult> = {};
@@ -301,6 +310,37 @@ export function createLocaleFinalizerHarness() {
         }
         return true;
       };
+      const runPublisher = (step: WorkflowStep) => {
+        const inputs = mapValues(step.with ?? {}, interpolate);
+        const action = readWorkflow(".github/actions/publish-generated-pr/action.yml");
+        const publication: WorkflowStep = action.runs.steps.find(
+          (candidate: WorkflowStep) => candidate.name === "Publish generated pull request",
+        );
+        const publicationContext: Context = {
+          ...context,
+          inputs: {
+            ...mapValues<{ default?: unknown }, unknown>(action.inputs, (input) => input.default),
+            ...inputs,
+          },
+          steps: tokenStep({
+            "contents-token": "contents-token",
+            "pull-request-token": "test-token",
+          }),
+        };
+        const publicationEnv = Object.fromEntries(
+          Object.entries(publication.env ?? {}).filter(([key]) => key !== "PUBLISH_ACTION_PATH"),
+        );
+        const run = shell(publication.run!, {
+          ...baseEnv,
+          ...mapValues(publicationEnv, (value) =>
+            String(evaluateWorkflowExpression(value, publicationContext)),
+          ),
+          CI_GIT_OWNER: at(".github/actions/git-owner/owner.py"),
+          PUBLISH_ACTION_PATH: at(".github/actions/publish-generated-pr"),
+        });
+        trace.push({ step: step.name!, status: run.status ?? 1 });
+        return run;
+      };
       const result = () => ({
         fresh,
         later,
@@ -350,12 +390,14 @@ export function createLocaleFinalizerHarness() {
       if (!resolved || !gate("publisher-preflight")) {
         return result();
       }
-      // App-token issuance and GitHub repository settings are external services.
-      context.steps = tokenStep({ "pull-request-token": "test-token" });
       const preflight: WorkflowStep = workflow.jobs["publisher-preflight"].steps.find(
-        (step: WorkflowStep) => step.run,
+        (step: WorkflowStep) => step.uses === "./.github/actions/publish-generated-pr",
       );
-      const ready = execute(preflight);
+      const admission = runPublisher(preflight);
+      const ready = admission.status === 0;
+      if (!ready) {
+        failure = admission.stdout + admission.stderr;
+      }
       states["publisher-preflight"] = jobResult(ready);
       if (!gate("refresh")) {
         gate("finalize");
@@ -387,8 +429,12 @@ export function createLocaleFinalizerHarness() {
       const english = read(at(sourceFile));
       expect(english).toContain(before);
       fs.writeFileSync(at(sourceFile), english.replace(before, after));
-      if (scenario.change === "glossary") {
-        put(root, assets + "/glossary.sv.json", '[{"source":"locale","target":"språk"}]\n');
+      if (scenario.change === "metadata") {
+        const file = at(assets, "sv.meta.json");
+        const metadata = JSON.parse(read(file));
+        metadata.fallbackKeys.push("localeWorkflowProof.keep");
+        metadata.translatedKeys -= 1;
+        fs.writeFileSync(file, JSON.stringify(metadata) + "\n");
       }
       if (scenario.change === "canonical") {
         const packed = JSON.parse(read(path.join(artifacts, "sv.json")));
@@ -456,34 +502,7 @@ export function createLocaleFinalizerHarness() {
           if (scenario.advanceAfterCatchup) {
             later = advanceMain("Latest locale proof", "Later locale proof");
           }
-          const inputs = mapValues(step.with ?? {}, interpolate);
-          const action = readWorkflow(".github/actions/publish-generated-pr/action.yml");
-          const publication: WorkflowStep = action.runs.steps.find(
-            (candidate: WorkflowStep) => candidate.name === "Publish generated pull request",
-          );
-          const publicationContext: Context = {
-            ...context,
-            inputs: {
-              ...mapValues<{ default?: unknown }, unknown>(action.inputs, (input) => input.default),
-              ...inputs,
-            },
-            steps: tokenStep({
-              "contents-token": "contents-token",
-              "pull-request-token": "test-token",
-            }),
-          };
-          const publicationEnv = Object.fromEntries(
-            Object.entries(publication.env ?? {}).filter(([key]) => key !== "PUBLISH_ACTION_PATH"),
-          );
-          const run = shell(publication.run!, {
-            ...baseEnv,
-            ...mapValues(publicationEnv, (value) =>
-              String(evaluateWorkflowExpression(value, publicationContext)),
-            ),
-            CI_GIT_OWNER: at(".github/actions/git-owner/owner.py"),
-            PUBLISH_ACTION_PATH: at(".github/actions/publish-generated-pr"),
-          });
-          trace.push({ step: step.name!, status: run.status ?? 1 });
+          const run = runPublisher(step);
           expect(run.status, run.stdout + run.stderr).toBe(0);
         } else {
           throw new Error("Unhandled finalizer step: " + step.name);

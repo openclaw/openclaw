@@ -1072,17 +1072,6 @@ describe("existing-session interaction navigation guard", () => {
     },
   );
 
-  it("skips the guard when no SSRF policy is configured", async () => {
-    const response = await runAction({ kind: "press", key: "Enter" }, null);
-
-    expect(response.statusCode).toBe(200);
-    expect(press).toHaveBeenCalledOnce();
-    expect(evaluate).not.toHaveBeenCalled();
-    expect(vi.mocked(resolveSafeRouteTabUrl)).toHaveBeenCalledOnce();
-    expect(routeState.profileCtx.listTabs).toHaveBeenCalledOnce();
-    expect(checkNavigation).not.toHaveBeenCalled();
-  });
-
   it("still probes navigation when the interaction command throws", async () => {
     click.mockImplementationOnce(() => {
       throw new Error("stale element");

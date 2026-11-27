@@ -77,7 +77,7 @@ describe("native completion durable receipts", () => {
     }
   });
 
-  it("keeps a durable delivery receipt when its next ownership read fails", async () => {
+  it("persists a durable delivery receipt without rereading its owner", async () => {
     const f = await fixture();
     const client = createClient();
     const read = f.store.read.bind(f.store);
@@ -110,7 +110,8 @@ describe("native completion durable receipts", () => {
       await f.spawn(client);
       await parent.unregister();
       await client.notify(completedChild());
-      expect(failedReads).toBe(1);
+      expect(failedReads).toBe(0);
+      failNextRead = false;
       expect(f.deliver).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ result }));
       expect(
         mutations.mock.calls.filter(

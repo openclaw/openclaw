@@ -1,4 +1,5 @@
 import { Type, type Static } from "typebox";
+import { ExpectedHash } from "./hash-fence.js";
 import { Evidence, id } from "./model.js";
 import { requestId, Receipt } from "./mutation-contract.js";
 
@@ -9,7 +10,7 @@ export const ReconcileEvidenceInput = Type.Object(
     id,
     expectedVaultId: requestId,
     expectedRevision: Type.Integer({ minimum: 1 }),
-    expectedHash: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+    expectedHash: ExpectedHash,
     expectedOntologyFingerprint: Type.String({ pattern: "^[a-f0-9]{64}$" }),
     reason: Type.String({ minLength: 1, maxLength: 2000 }),
     dryRun: Type.Boolean(),

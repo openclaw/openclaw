@@ -6,12 +6,11 @@ run_hosted_prepare_gates() {
   local current_head="$2"
   local changelog_only="$3"
   local recent_sha=""
-  local remote_record="${4:-}" remote_head remote_head_ref remote_is_cross_repository
+  local remote_record="${4:-}" remote_head remote_is_cross_repository
   if [ -z "$remote_record" ]; then
     remote_record=$(read_pr_observation "$pr") || return 1
   fi
   remote_head=$(pr_view_string_field "$remote_record" "headRefOid" "$pr" "Re-run prepare-init.") || return 1
-  remote_head_ref=$(printf '%s\n' "$remote_record" | jq -r .headRefName)
   remote_is_cross_repository=$(printf '%s\n' "$remote_record" | jq -r .isCrossRepository)
   if [ "$remote_head" != "$current_head" ]; then
     echo "PR head changed before hosted gate verification (expected $current_head, got $remote_head). Re-run prepare-init."
@@ -92,12 +91,7 @@ EOF_RECOVERY
     cat <<EOF_RECOVERY
 Missing hosted CI recovery:
   scripts/pr ci-dispatch $pr
-Underlying command:
 EOF_RECOVERY
-    printf '  gh workflow run ci.yml --ref %q -f %q -f release_gate=true -f %q\n' \
-      "$remote_head_ref" \
-      "target_ref=$remote_head" \
-      "pull_request_number=$pr"
   fi
   return 1
 }
@@ -154,7 +148,7 @@ resolve_pr_gates_remote_mode() {
         printf 'github\n'
       fi
       ;;
-    local|testbox|crabbox-aws|github)
+    local|boat|testbox|crabbox-aws|github)
       if [ "${OPENCLAW_TESTBOX:-}" = "1" ]; then
         echo "OPENCLAW_PR_GATES_REMOTE=$OPENCLAW_PR_GATES_REMOTE conflicts with OPENCLAW_TESTBOX=1; select one gate mode." >&2
         echo "Unset OPENCLAW_TESTBOX to use $OPENCLAW_PR_GATES_REMOTE gates, or unset OPENCLAW_PR_GATES_REMOTE to use completed hosted proof." >&2
@@ -163,7 +157,7 @@ resolve_pr_gates_remote_mode() {
       printf '%s\n' "$OPENCLAW_PR_GATES_REMOTE"
       ;;
     *)
-      echo "Unsupported OPENCLAW_PR_GATES_REMOTE=${OPENCLAW_PR_GATES_REMOTE} (supported: local, testbox, crabbox-aws, github)." >&2
+      echo "Unsupported OPENCLAW_PR_GATES_REMOTE=${OPENCLAW_PR_GATES_REMOTE} (supported: local, boat, testbox, crabbox-aws, github)." >&2
       return 1
       ;;
   esac
@@ -174,11 +168,25 @@ prepare_local_gate_workspace() {
   bootstrap_deps_if_needed
 }
 
-run_remote_testbox_gates() {
+run_remote_prepare_gates() {
   local label="$1"
   local log_file="$2"
   local lease_label="$3"
   local check_base="${5:-}"
+  local provider_args=() command_env=(env)
+  case "${6:-testbox}" in
+    boat)
+      provider_args=(--provider ascii-box --class fast --ttl 60m --stop-after always)
+      # Bound automatic lease extensions as well as the initial allocation.
+      command_env=(env CRABBOX_MAX_TTL=60m)
+      ;;
+    testbox)
+      provider_args=(--provider blacksmith-testbox --blacksmith-org openclaw
+        --blacksmith-workflow .github/workflows/ci-check-high-memory-testbox.yml
+        --blacksmith-job check --blacksmith-ref main --ttl 240m)
+      ;;
+    *) echo "Unsupported remote prepare provider: $6" >&2; return 2 ;;
+  esac
   if ! [[ "$check_base" =~ ^[0-9a-f]{40}$ ]]; then
     echo "Remote prepare gates require the captured check-base commit." >&2
     return 2
@@ -189,7 +197,7 @@ run_remote_testbox_gates() {
   fi
   local remote_env=(CI=1 OPENCLAW_TESTBOX_REMOTE_RUN=1 PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false)
   local name value
-  # Delegated Testbox commands do not inherit the caller's scheduling controls.
+  # Capsule commands do not inherit the caller's scheduling controls.
   for name in OPENCLAW_TEST_PROJECTS_PARALLEL OPENCLAW_VITEST_MAX_WORKERS; do
     [ -n "${!name:-}" ] || continue
     value=$(node --input-type=module -e '
@@ -203,20 +211,31 @@ run_remote_testbox_gates() {
     ' "$script_parent_dir" "${!name}" "$name") || return 2
     [ -z "$value" ] || remote_env+=("$name=$value")
   done
-  # Explicit full-suite proof retains the measured high-memory allocation.
   # The worktree wrapper syncs this prep tree, not the canonical checkout.
   run_quiet_logged "$label" "$log_file" \
-    node scripts/crabbox-wrapper.mjs run \
-    --provider blacksmith-testbox \
-    --blacksmith-org openclaw \
-    --blacksmith-workflow .github/workflows/ci-check-high-memory-testbox.yml \
-    --blacksmith-job check \
-    --blacksmith-ref main \
+    "${command_env[@]}" node scripts/crabbox-wrapper.mjs run \
+    "${provider_args[@]}" \
     --idle-timeout 15m \
-    --ttl 240m \
     --timing-json \
     --label "$lease_label" \
     -- env "${remote_env[@]}" /bin/bash -c "$gate_command"
+}
+
+require_remote_boat_gate_stamp() {
+  local stamp
+  stamp=$(jq -c -R '
+    fromjson?
+    | select(type == "object")
+    | select(.provider == "ascii-box" and .exitCode == 0 and .runStatus == "succeeded"
+        and .leaseStopped == true
+        and ((.leaseId // "") | startswith("cbx_"))
+        and ((.runId // "") | startswith("run_")))
+  ' "$1" | tail -n 1)
+  if [ -z "$stamp" ]; then
+    echo "Remote Boat gate lacks a successful run with confirmed lease cleanup in $1." >&2
+    return 1
+  fi
+  printf '%s\n' "$stamp"
 }
 
 read_remote_testbox_gate_stamp() {
@@ -456,6 +475,11 @@ require_correction_publication_gates() (
     full) [ "$FULL_GATES_HEAD_SHA" = "$qualified_head" ] || return 1 ;;
     docs_only|reused_docs_only) [ "$DOCS_ONLY" = true ] || return 1 ;;
     hosted_exact_or_recent_parent) [ "$HOSTED_GATES_TARGET_HEAD_SHA" = "$qualified_head" ] || return 1 ;;
+    remote_boat)
+      [ "$FULL_GATES_HEAD_SHA" = "$qualified_head" ] &&
+        [ "$REMOTE_GATES_PROVIDER" = ascii-box ] &&
+        [[ "$REMOTE_GATES_RUN_ID" == run_* ]] && [[ "$REMOTE_GATES_LEASE_ID" == cbx_* ]] || return 1
+      ;;
     remote_testbox)
       [ "$FULL_GATES_HEAD_SHA" = "$qualified_head" ] &&
         [ "$REMOTE_GATES_PROVIDER" = blacksmith-testbox ] &&
@@ -638,21 +662,25 @@ prepare_gates() {
     remote_gates_run_url=""
     echo "Crabbox AWS proof is deferred until prepare-push verifies the exact remote head."
   else
-    if [ "$gates_remote_mode" = "testbox" ]; then
+    if [ "$gates_remote_mode" = "testbox" ] || [ "$gates_remote_mode" = "boat" ]; then
       # The capsule owns the complete install/build/check/test boundary. Running
       # any package phase here can resolve an ancestor checkout's dependencies.
-      echo "Running prepare gates on Blacksmith Testbox (OPENCLAW_PR_GATES_REMOTE=testbox)."
-      run_remote_testbox_gates \
-        "prepare gates (blacksmith-testbox)" \
+      echo "Running prepare gates on $gates_remote_mode (OPENCLAW_PR_GATES_REMOTE=$gates_remote_mode)."
+      run_remote_prepare_gates \
+        "prepare gates ($gates_remote_mode)" \
         ".local/gates-test.log" \
-        "pr-$pr-gates" "$docs_only" "$check_base" || return $?
+        "pr-$pr-gates" "$docs_only" "$check_base" "$gates_remote_mode" || return $?
       local remote_stamp
-      remote_stamp=$(require_remote_testbox_gate_stamp ".local/gates-test.log") || return $?
-      remote_gates_provider="blacksmith-testbox"
-      remote_gates_run_id=""
+      if [ "$gates_remote_mode" = boat ]; then
+        remote_stamp=$(require_remote_boat_gate_stamp ".local/gates-test.log") || return $?
+      else
+        remote_stamp=$(require_remote_testbox_gate_stamp ".local/gates-test.log") || return $?
+      fi
+      remote_gates_provider=$(printf '%s\n' "$remote_stamp" | jq -r '.provider')
+      remote_gates_run_id=$(printf '%s\n' "$remote_stamp" | jq -r '.runId // ""')
       remote_gates_lease_id=$(printf '%s\n' "$remote_stamp" | jq -r '.leaseId')
       remote_gates_run_url=$(printf '%s\n' "$remote_stamp" | jq -r '.actionsRunUrl // ""')
-      echo "Remote testbox gate stamp: $remote_gates_lease_id${remote_gates_run_url:+ ($remote_gates_run_url)}"
+      echo "Remote $gates_remote_mode gate stamp: $remote_gates_lease_id${remote_gates_run_url:+ ($remote_gates_run_url)}"
     else
       prepare_local_gate_workspace
       local build_command=(pnpm build)
@@ -672,8 +700,8 @@ prepare_gates() {
       remote_gates_lease_id=""
       remote_gates_run_url=""
       echo "Docs-only change detected with high confidence; skipping pnpm test."
-    elif [ "$gates_remote_mode" = "testbox" ]; then
-      gates_mode="remote_testbox"
+    elif [ "$gates_remote_mode" = "testbox" ] || [ "$gates_remote_mode" = "boat" ]; then
+      gates_mode="remote_$gates_remote_mode"
       previous_full_gates_head="$current_head"
     else
       gates_mode="full"

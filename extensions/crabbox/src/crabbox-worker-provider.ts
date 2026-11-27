@@ -34,6 +34,7 @@ import {
   supportsCrabboxProjectPreparation,
 } from "./crabbox-worker-profile.js";
 import {
+  createCrabboxPreparedProjectRefresh,
   prepareCrabboxProjectFiles,
   prepareCrabboxWorkerRuntime,
 } from "./crabbox-worker-project.js";
@@ -649,6 +650,8 @@ export function createCrabboxWorkerProvider(
     id: CRABBOX_WORKER_PROVIDER_ID,
     supportsResourceReceipts: true,
     resolveDisplayId: (profile) => parseCrabboxProfile(profile).provider,
+    resolveExecMemoryBoundary: (profile) =>
+      parseCrabboxProfile(profile).provider === "azure-sandbox" ? "sandbox" : undefined,
     // Disposable worker desktops may resize only when the RFB server negotiates support.
     allowsDesktopResize: true,
     async dispose() {
@@ -697,6 +700,10 @@ export function createCrabboxWorkerProvider(
     resolvePreparationTarget: resolveCrabboxPreparationTarget,
     runSetupCommand: createCrabboxSetupCommandRunner({
       resolveBinary: async (...args) => (await resolveBinary(...args)).binary,
+    }),
+    refreshPreparedProject: createCrabboxPreparedProjectRefresh({
+      signal: providerAbort.signal,
+      resolveLeaseContext,
     }),
     notePreparedDemand: async (lease, preparation) =>
       await warmImages.notePreparedDemand(lease.leaseId, preparation),

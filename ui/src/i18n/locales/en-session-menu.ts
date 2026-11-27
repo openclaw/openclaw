@@ -6,10 +6,9 @@ const sharedSessions = registerSessionOrganizationSharedEnglish.catalog.sessions
 
 const catalog = {
   sessionsView: {
-    personalGroupAdd: sharedSessions.personalGroupAdd,
-    personalGroupNew: sharedSessions.personalGroupNew,
     advanced: "Advanced",
     searchGroups: "Search groups",
+    noGroupsMatch: "No groups match your search.",
     unassigned: "Unassigned",
     mobileConversation: "Conversation",
     mobileCopyPreviewLink: "Copy preview link",
@@ -85,7 +84,9 @@ const catalog = {
     markRead: "Mark as read",
     markUnreadCount: "Mark {count} as unread",
     markReadCount: "Mark {count} as read",
-    forkSession: "Fork session",
+    forkSession: sharedSessions.forkSession,
+    newNestedSession: "New child session",
+    creatingNestedSession: "Creating child session…",
     forkFromLastCompleted: "Fork from last completed message",
     copySessionId: "Session ID",
     copySessionPreviewLink: "Preview link",
@@ -130,6 +131,7 @@ const catalog = {
     groupMenu: en.sessionsView.groupMenu,
     groupDefaultsMenu: "New session defaults",
     renameGroupMenu: "Rename group",
+    archiveGroupMenu: "Archive all",
     deleteGroupMenu: "Delete group",
   },
 } satisfies TranslationMap;

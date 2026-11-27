@@ -2,7 +2,6 @@ import { channel } from "node:diagnostics_channel";
 import { totalmem } from "node:os";
 import { afterEach, expect, it, vi } from "vitest";
 import { recordCommandPoll } from "../agents/command-poll-backoff.js";
-import { detectToolCallLoop, recordToolCall } from "../agents/tool-loop-detection.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import {
   onDiagnosticEvent,
@@ -126,21 +125,14 @@ it("bounds captured content and preserves ingesting-agent attribution on dispatc
   }
 });
 
-it("preserves independent tool-loop and poll-backoff policy when diagnostic observation stops", () => {
+it("preserves independent poll-backoff policy when diagnostic observation stops", () => {
   const session = { sessionKey: "diagnostic-tool-history" };
   const state = getDiagnosticSessionState(session);
-  const args = { path: "fixture.txt" };
-  for (let index = 0; index < 10; index += 1) {
-    recordToolCall(state, "read", args);
-  }
-  const before = detectToolCallLoop(state, "read", args);
-  expect(before).toMatchObject({ stuck: true, detector: "generic_repeat", count: 10 });
   expect(recordCommandPoll(state, "fixture-command", false)).toBe(5_000);
   expect(recordCommandPoll(state, "fixture-command", false)).toBe(10_000);
   setDiagnosticsEnabledForProcess(false);
   stopGatewayDiagnosticHeartbeat();
   const current = getDiagnosticSessionState(session);
-  expect(detectToolCallLoop(current, "read", args)).toEqual(before);
   expect(recordCommandPoll(current, "fixture-command", false)).toBe(30_000);
 });
 

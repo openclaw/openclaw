@@ -5,7 +5,7 @@ import type {
   agentSessionSetPromptPreparation,
 } from "../../sessions/agent-session-prompting.js";
 import type { AgentSession } from "../../sessions/agent-session.js";
-import type { CreateAgentSessionOptions } from "../../sessions/index.js";
+import type { CreateAgentSessionOptions } from "../../sessions/sdk.js";
 
 export type MutableSession = {
   sessionId: string;
@@ -14,7 +14,13 @@ export type MutableSession = {
   isCompacting: boolean;
   isStreaming: boolean;
   subscribe: AgentSession["subscribe"];
-  agent: {
+  agent: Pick<
+    Agent,
+    | "hasPendingSteeringMessage"
+    | "getToolInterruptionStatus"
+    | "interruptTools"
+    | "subscribeToolInterruptionStatus"
+  > & {
     convertToLlm: Agent["convertToLlm"];
     prompt?: (...args: unknown[]) => Promise<unknown>;
     streamFn?: (...args: Parameters<StreamFn>) => Promise<unknown>;

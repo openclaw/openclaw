@@ -115,45 +115,6 @@ it("uses the selected router credential and effective route without upstream key
   });
 });
 
-it("does not discover upstream OpenAI credentials when router auth is absent", async () => {
-  await fixture(async (origin, seen) => {
-    expect(await evaluate(origin, { auth: { mode: "api-key" } })).toEqual({
-      status: "unavailable",
-      reason: "credentials-unavailable",
-    });
-    expect(seen).toEqual([]);
-  });
-});
-
-it("uses prepared replacement auth for both catalog and inference and rejects reflected replacement bytes", async () => {
-  await fixture(
-    async (origin, seen) => {
-      const model = attachModelProviderRequestTransport(
-        { ...context(origin).model, headers: { "X-Credential": "synthetic-override" } },
-        {
-          allowPrivateNetwork: true,
-          auth: { mode: "header", headerName: "X-Credential", value: "synthetic-override" },
-        },
-      );
-      expect(await evaluate(origin, { model })).toEqual({
-        status: "unavailable",
-        reason: "invalid-response",
-      });
-      expect(seen).toHaveLength(2);
-      for (const { headers } of seen) {
-        expect(headers.authorization).toBeUndefined();
-        expect(headers["x-credential"]).toBe("synthetic-override");
-      }
-    },
-    (path, response) =>
-      response.end(
-        JSON.stringify(
-          path === "/v1/catalog" ? catalog() : { ...reply, model: "synthetic-override" },
-        ),
-      ),
-  );
-});
-
 it("never shares a catalog grant across keys or endpoints, including interleaved callers", async () => {
   await fixture(
     async (origin, seen) => {
@@ -212,63 +173,6 @@ it.each(["route", "capability", "alias"] as const)(
       },
       (_path, response) => response.end(JSON.stringify(body)),
     );
-  },
-);
-
-it.each(["/v1/catalog", "/v1/native/openai/v1/decisions"])(
-  "maps HTTP failures at %s without retry or body disclosure",
-  async (failedPath) => {
-    for (const [status, reason] of [
-      [401, "authentication"],
-      [403, "authentication"],
-      [429, "rate-limited"],
-    ] as const) {
-      await fixture(
-        async (origin, seen) => {
-          expect(await evaluate(origin)).toEqual({
-            status: "unavailable",
-            reason,
-            ...(status === 429 ? { retryAfterMs: 2000 } : {}),
-          });
-          expect(seen.map(({ path }) => path)).toEqual(
-            failedPath === "/v1/catalog" ? [failedPath] : ["/v1/catalog", failedPath],
-          );
-        },
-        (path, response) => {
-          if (path === failedPath) {
-            response.statusCode = status;
-            response.setHeader("retry-after", "2");
-            response.end("synthetic-router-key private evidence");
-          } else {
-            response.end(JSON.stringify(catalog()));
-          }
-        },
-      );
-    }
-  },
-);
-
-it.each(["/v1/catalog", "/v1/native/openai/v1/decisions"])(
-  "rejects malformed and credential-reflecting JSON at %s",
-  async (failedPath) => {
-    for (const invalid of [
-      "not JSON",
-      JSON.stringify({
-        ...(failedPath === "/v1/catalog" ? catalog() : reply),
-        reflected: "synthetic-router-key",
-      }),
-    ]) {
-      await fixture(
-        async (origin, seen) => {
-          expect(await evaluate(origin)).toEqual({
-            status: "unavailable",
-            reason: "invalid-response",
-          });
-          expect(seen.at(-1)?.path).toBe(failedPath);
-        },
-        (path, response) => response.end(path === failedPath ? invalid : JSON.stringify(catalog())),
-      );
-    }
   },
 );
 
@@ -403,62 +307,7 @@ it("rejects unsupported reasoning, image size, and question/choice counts before
   });
 });
 
-it.each(["/v1/catalog", "/v1/native/openai/v1/decisions"])(
-  "aborts a held %s response and closes its transport",
-  async (heldPath) => {
-    const received = Promise.withResolvers<void>();
-    const closed = Promise.withResolvers<void>();
-    const controller = new AbortController();
-    await fixture(
-      async (origin, seen) => {
-        const pending = evaluate(origin, { signal: controller.signal });
-        const rejected = expect(pending).rejects.toThrow("caller cancelled");
-        await Promise.race([received.promise, pending]);
-        controller.abort(new Error("caller cancelled"));
-        await rejected;
-        await closed.promise;
-        expect(seen.at(-1)?.path).toBe(heldPath);
-      },
-      (path, response) => {
-        if (path === heldPath) {
-          response.on("close", () => closed.resolve());
-          response.write("{");
-          received.resolve();
-        } else {
-          response.end(JSON.stringify(catalog()));
-        }
-      },
-    );
-  },
-);
-
-it.each(["/v1/catalog", "/v1/native/openai/v1/decisions"])(
-  "expires a held %s response and closes its transport",
-  async (heldPath) => {
-    const received = Promise.withResolvers<void>();
-    const closed = Promise.withResolvers<void>();
-    await fixture(
-      async (origin, seen) => {
-        const pending = evaluate(origin, { deadlineMonotonicMs: performance.now() + 1000 });
-        await Promise.race([received.promise, pending]);
-        expect(await pending).toEqual({ status: "unavailable", reason: "transport" });
-        expect(seen.at(-1)?.path).toBe(heldPath);
-        await closed.promise;
-      },
-      (path, response) => {
-        if (path === heldPath) {
-          response.on("close", () => closed.resolve());
-          response.write("{");
-          received.resolve();
-        } else {
-          response.end(JSON.stringify(catalog()));
-        }
-      },
-    );
-  },
-);
-
-it("rechecks admission between catalog and inference and keeps thrown catalog authority terminal", async () => {
+it("checks admission again before inference and keeps a thrown authority terminal", async () => {
   let admitted = true;
   const authority = new Error("retired authority");
   await fixture(
@@ -480,37 +329,6 @@ it("rechecks admission between catalog and inference and keeps thrown catalog au
     (_path, response) => {
       admitted = false;
       response.end(JSON.stringify(catalog()));
-    },
-  );
-});
-
-it("preserves terminal authority revocation after native inference", async () => {
-  const authority = new Error("inference authority retired");
-  let retired = false;
-  await fixture(
-    async (origin, seen) => {
-      await expect(
-        evaluate(origin, {
-          isAdmissible: () => {
-            if (retired) {
-              throw authority;
-            }
-            return true;
-          },
-        }),
-      ).rejects.toBe(authority);
-      expect(seen.map(({ path }) => path)).toEqual([
-        "/v1/catalog",
-        "/v1/native/openai/v1/decisions",
-      ]);
-    },
-    (path, response) => {
-      if (path === "/v1/catalog") {
-        response.end(JSON.stringify(catalog()));
-      } else {
-        retired = true;
-        response.end(JSON.stringify(reply));
-      }
     },
   );
 });

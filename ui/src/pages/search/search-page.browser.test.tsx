@@ -1,5 +1,6 @@
 import { flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { userEvent } from "vitest/browser";
 import type {
   WebSearchStatusResult,
   WebSearchTestResult,
@@ -286,27 +287,25 @@ describe("Search settings", () => {
   });
 
   it.each(["success", "failure"] as const)(
-    "loads current status after catalog %s",
+    "shows current status while the background catalog ends in %s",
     async (outcome) => {
       const catalog = createDeferred<ModelCatalogResult>();
       const page = await mount({ modelsResponse: catalog.promise, waitReady: false });
-      expect(page.calls("webSearch.status")).toHaveLength(0);
+      await page.statusRequested;
       await waitForSolid(() =>
-        expect(page.element.querySelector(".settings-loading-skeleton")).not.toBeNull(),
+        expect(page.element.querySelector('select[aria-label="Search provider"]')).not.toBeNull(),
       );
+      expect(page.calls("webSearch.status")).toHaveLength(1);
+      expect(page.element.querySelector(".settings-loading-skeleton")).toBeNull();
+      expect(page.element.querySelector('select[aria-label="Search provider"]')).not.toBeNull();
+      page.expectText("Configured");
       if (outcome === "success") {
-        page.setResult({ ...ready, agentId: "scout" });
-        page.setAgent("scout");
         catalog.resolve({ models: [{ id: "local", name: "Local model", provider: "example" }] });
       } else {
         catalog.reject(new Error("Model catalog unavailable"));
       }
-      await page.statusRequested;
       await page.settle();
-      const statuses = page.calls("webSearch.status");
-      expect(statuses).toHaveLength(1);
-      expect(statuses[0]?.[1]).toEqual({ agentId: outcome === "success" ? "scout" : "main" });
-      expect(page.element.querySelector('select[aria-label="Search provider"]')).not.toBeNull();
+      expect(page.calls("webSearch.status")).toHaveLength(1);
       expect(page.element.querySelector(".settings-loading-skeleton")).toBeNull();
       page.expectText("Configured");
     },
@@ -416,6 +415,51 @@ describe("Search settings", () => {
     expect(page.input("Independent request key")).toBeNull();
   });
 
+  it("offers configured secret providers through Search's credential writer", async () => {
+    const credentialPath = [...providerPath, "apiKey"];
+    const page = await mount({
+      config: {
+        ...atPath(providerPath, {}),
+        secrets: {
+          defaults: { env: "shell-env" },
+          providers: { shell: { source: "env", allowlist: ["SEARCH_API_KEY"] } },
+        },
+      },
+      result: searchStatus("searxng", "SearXNG", {
+        configPath: providerPath,
+        credential: { path: credentialPath, label: "Provider credential", envVars: [] },
+      }),
+    });
+    page.click("SearXNG");
+    await page.settle();
+    page.click("Use a secret reference: Provider credential");
+    await waitForSolid(() =>
+      expect(page.element.querySelector('button[aria-label="Provider: shell-env"]')).not.toBeNull(),
+    );
+    page.element
+      .querySelector<HTMLButtonElement>('button[aria-label="Provider: shell-env"]')!
+      .click();
+    await waitForSolid(() =>
+      expect(document.querySelector('[role="option"][data-value="shell"]')).not.toBeNull(),
+    );
+    document.querySelector<HTMLElement>('[role="option"][data-value="shell"]')!.click();
+    flush();
+    editInput(
+      page.element.querySelector<HTMLInputElement>('input[aria-label="Identifier"]')!,
+      "SEARCH_API_KEY",
+      false,
+    );
+    flush();
+    expect(page.runtime.patchForm).not.toHaveBeenCalled();
+    page.click("Save");
+    await waitForSolid(() => expect(page.runtime.flushFormChanges).toHaveBeenCalledOnce());
+    expect(page.runtime.patchForm).toHaveBeenCalledWith(credentialPath, {
+      source: "env",
+      provider: "shell",
+      id: "SEARCH_API_KEY",
+    });
+  });
+
   it.each(["success", "provider error", "request error"] as const)(
     "locks the query through %s and clears health on editing",
     async (outcome) => {
@@ -493,6 +537,28 @@ describe("Search settings", () => {
       expect(page.element.querySelector('a[href="https://a.test/previous"]')).toBeNull();
     },
   );
+
+  it("keeps an over-limit query editable and submits the corrected 500 code points", async () => {
+    const page = await mount();
+    const query = page.input("Search query");
+    const atLimit = "🪁".repeat(499) + "駅";
+    await userEvent.fill(query, atLimit + "!");
+    expect(query.value).toBe(atLimit + "!");
+    expect(query.ariaInvalid).toBe("true");
+    page.expectText("Shorten the search query to 500 characters or fewer.");
+    expect(page.button("Test search").disabled).toBe(true);
+    await userEvent.keyboard("{Enter}");
+    expect(page.calls("webSearch.test")).toHaveLength(0);
+
+    await userEvent.keyboard("{End}{Backspace}");
+    expect(query.value).toBe(atLimit);
+    expect(query.ariaInvalid).toBeNull();
+    page.expectNoText("Shorten the search query to 500 characters or fewer.");
+    page.click("Test search");
+    await page.settle();
+    expect(page.calls("webSearch.test")).toHaveLength(1);
+    expect(page.calls("webSearch.test")[0]?.[1]).toMatchObject({ query: atLimit });
+  });
 
   it("submits Enter but ignores IME confirmation", async () => {
     const page = await mount();
