@@ -122,6 +122,15 @@ describe("OpenAI strict tool schema normalization", () => {
       objectSchema({ options: { type: "object", properties: { known: { type: "string" } } } }),
     ],
     [
+      "an optional key that already accepts null (null would clear, not omit)",
+      {
+        type: "object",
+        properties: { title: { type: "string" }, assignee: { type: ["string", "null"] } },
+        required: ["title"],
+        additionalProperties: false,
+      },
+    ],
+    [
       "optional keys beside a key-count constraint",
       {
         type: "object",

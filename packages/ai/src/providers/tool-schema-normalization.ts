@@ -313,7 +313,15 @@ function normalizeToolSchemaRecursive(
         : [],
     );
     const keys = Object.keys(properties);
-    if (keys.some((key) => !required.has(key))) {
+    const optional = keys.filter((key) => !required.has(key));
+    // Null must mean "omitted": an optional key that already accepts null (or whose
+    // reference this node cannot resolve) would turn omission into an explicit null, so the
+    // object stays as-is and its tool goes non-strict.
+    const nullMeansOmitted = optional.every(
+      (key) =>
+        !schemaAcceptsNull(properties[key]) && !JSON.stringify(properties[key]).includes('"$ref"'),
+    );
+    if (optional.length > 0 && nullMeansOmitted) {
       normalized.properties = Object.fromEntries(
         keys.map((key) => [
           key,
