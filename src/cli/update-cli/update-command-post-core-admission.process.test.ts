@@ -40,15 +40,20 @@ let packageRoot: string;
 let candidateRoot: string;
 
 async function wrapWorker(workerPath: string, imports = "", setup = "") {
-  const implementation = path.basename(workerPath).replace(".js", ".implementation.js");
-  await fs.promises.rename(workerPath, path.join(path.dirname(workerPath), implementation));
+  const bootstrap = path.basename(workerPath).replace(".js", ".fixture.js");
+  const implementation = await fs.promises.readFile(workerPath, "utf8");
   await fs.promises.writeFile(
-    workerPath,
+    path.join(path.dirname(workerPath), bootstrap),
     `${imports}import * as json5 from "json5";
 import { registerSealedRuntime } from "./sealed-runtime-registry.js";
 registerSealedRuntime({ json5, resolveSecureTempRoot: () => ${JSON.stringify(state.path("control"))} });
-${setup}await import(${JSON.stringify(`./${implementation}`)});
+${setup}
 `,
+  );
+  // Load fixture setup first while preserving exports used by the compiled worker graph.
+  await fs.promises.writeFile(
+    workerPath,
+    `import ${JSON.stringify(`./${bootstrap}`)};\n${implementation}`,
   );
 }
 
