@@ -7,6 +7,7 @@ import {
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import {
   buildOutboundMediaLoadOptions,
+  resolveFfmpegBin,
   type OutboundMediaAccess,
 } from "openclaw/plugin-sdk/media-runtime";
 import type { ChunkMode, ReplyPayload } from "openclaw/plugin-sdk/reply-chunking";
@@ -273,19 +274,22 @@ async function deliverWebReplyInActivityScope(params: WhatsAppReplyDeliveryParam
   const remainingText = [...textChunks];
 
   const leadingCaption = remainingText.shift() || "";
+  // Failure logs name the step, never the raw error, which can carry the media source.
+  let mediaStep: "loading" | "preparing" | "uploading" = "loading";
   await sendMediaWithLeadingCaption({
     mediaUrls: mediaList,
     caption: leadingCaption,
     send: async ({ mediaUrl, caption }) => {
-      const media = await prepareWhatsAppOutboundMedia(
-        // Keep raw localRoots ([] still denies local reads); only add the remote deny list.
-        await loadWebMedia(mediaUrl, {
-          maxBytes: maxMediaBytes,
-          localRoots: params.mediaLocalRoots,
-          ssrfPolicy: buildOutboundMediaLoadOptions({ mediaAccess: params.mediaAccess }).ssrfPolicy,
-        }),
-        mediaUrl,
-      );
+      mediaStep = "loading";
+      // Keep raw localRoots ([] still denies local reads); only add the remote deny list.
+      const loaded = await loadWebMedia(mediaUrl, {
+        maxBytes: maxMediaBytes,
+        localRoots: params.mediaLocalRoots,
+        ssrfPolicy: buildOutboundMediaLoadOptions({ mediaAccess: params.mediaAccess }).ssrfPolicy,
+      });
+      mediaStep = "preparing";
+      const media = await prepareWhatsAppOutboundMedia(loaded, mediaUrl);
+      mediaStep = "uploading";
       const quote = getQuote();
       const mediaContent =
         media.kind === "image"
@@ -325,8 +329,12 @@ async function deliverWebReplyInActivityScope(params: WhatsAppReplyDeliveryParam
         // Earlier accepted uploads do not make a genuinely rejected trailing upload successful.
         throw preserveAcceptedDeliveryError(error);
       }
-      whatsappOutboundLog.error(`Failed sending web media to ${conversationId}`);
-      replyLogger.warn({ to: conversationId }, "failed to send web media reply");
+      // Preparing converts audio to a voice note; a missing ffmpeg is the common cause.
+      const ffmpegHint = mediaStep === "preparing" ? missingFfmpegHint() : undefined;
+      whatsappOutboundLog.error(
+        `Failed sending web media to ${conversationId} while ${mediaStep}${ffmpegHint ? `: ${ffmpegHint}` : ""}`,
+      );
+      replyLogger.warn({ to: conversationId, step: mediaStep }, "failed to send web media reply");
       // A failed trailing attachment needs its own warning after earlier accepted media.
       const fallbackText = isFirst
         ? [caption ?? "", "⚠️ Media failed."].filter(Boolean).join("\n")
@@ -344,4 +352,13 @@ async function deliverWebReplyInActivityScope(params: WhatsAppReplyDeliveryParam
     await sendText(chunk);
   }
   return finishDelivery();
+}
+
+function missingFfmpegHint(): string | undefined {
+  try {
+    resolveFfmpegBin();
+    return undefined;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
 }

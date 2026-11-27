@@ -16,6 +16,7 @@ import { whatsappOutboundLog } from "./loggers.js";
 const hoisted = vi.hoisted(() => ({
   recordChannelActivity: vi.fn(),
   transcodeAudioBufferToOpus: vi.fn(),
+  resolveFfmpegBin: vi.fn(() => "/usr/bin/ffmpeg"),
 }));
 
 vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async (importOriginal) => ({
@@ -26,6 +27,7 @@ vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async (importOriginal) =
 vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
   transcodeAudioBufferToOpus: hoisted.transcodeAudioBufferToOpus,
+  resolveFfmpegBin: hoisted.resolveFfmpegBin,
 }));
 
 vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
@@ -336,7 +338,7 @@ describe("deliverWebReply", () => {
       expect(outboundError).toHaveBeenCalled();
       expect(JSON.stringify(outboundError.mock.calls)).not.toContain(errorDetail);
       expect(replyLogger.warn).toHaveBeenCalledWith(
-        { to: "+10000000000" },
+        { to: "+10000000000", step: "uploading" },
         "failed to send web media reply",
       );
       expect(JSON.stringify(replyLogger.warn.mock.calls)).not.toContain(errorDetail);
@@ -359,6 +361,27 @@ describe("deliverWebReply", () => {
     expect(msg.platform.reply).toHaveBeenCalledTimes(1);
     expect(replyText(msg)).toContain("⚠️ Media failed");
     expect(replyText(msg)).not.toContain(errorDetail);
+  });
+
+  it("logs the missing ffmpeg install hint when a voice note cannot be converted", async () => {
+    const { msg, params } = createDelivery({ text: "cap", mediaUrl: "http://example.com/a.mp3" });
+    mockLoadedMedia("mp3", "audio/mpeg", "audio", "private-name.mp3");
+    hoisted.transcodeAudioBufferToOpus.mockRejectedValueOnce(new Error("spawn failed"));
+    const missing = "ffmpeg not found in trusted system directories. Install it via brew.";
+    hoisted.resolveFfmpegBin.mockImplementationOnce(() => {
+      throw new Error(missing);
+    });
+    const outboundError = vi.spyOn(whatsappOutboundLog, "error").mockImplementation(() => {});
+    try {
+      await deliverWebReply(params);
+      expect(outboundError).toHaveBeenCalledWith(
+        `Failed sending web media to +10000000000 while preparing: ${missing}`,
+      );
+      expect(JSON.stringify(outboundError.mock.calls)).not.toContain("private-name");
+    } finally {
+      outboundError.mockRestore();
+    }
+    expect(replyText(msg)).toBe("cap\n⚠️ Media failed.");
   });
 
   it.each(["ogg", "mp3", "pdf"] as const)("delivers native %s with safe metadata", async (ext) => {
