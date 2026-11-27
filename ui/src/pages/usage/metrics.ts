@@ -3,6 +3,7 @@ import {
   addCostUsageTotals,
   createEmptyCostUsageTotals,
 } from "../../../../src/infra/session-cost-usage-totals.js";
+import type { SessionsUsageAggregates } from "../../../../src/shared/usage-types.js";
 import { t } from "../../i18n/index.ts";
 import { registerUsageEnglish } from "../../i18n/locales/en-usage.ts";
 import {
@@ -156,52 +157,28 @@ type UsageInsightStats = {
   errorRate: number;
 };
 
-/**
- * Active time for the current scope. Day selections narrow totals to those
- * days, so the denominator must come from the matching dailyLatency buckets;
- * when those buckets are unavailable the tiles keep their empty value instead
- * of mixing unselected days' activity into the rate. Without a day selection
- * the full-range aggregate is already scoped right.
- */
-export function usageActiveMs(
-  input: {
-    latency?: { count: number; avgMs: number };
-    dailyLatency?: ReadonlyArray<{ date: string; count: number; avgMs: number }>;
-  },
+export function usageThroughputStats(
+  { latency, dailyLatency }: Pick<SessionsUsageAggregates, "latency" | "dailyLatency">,
   selectedDays: readonly string[],
-): number {
-  if (selectedDays.length > 0) {
-    const days = new Set(selectedDays);
-    let activeMs = 0;
-    for (const day of input.dailyLatency ?? []) {
-      if (days.has(day.date) && day.count > 0) {
-        activeMs += day.avgMs * day.count;
-      }
-    }
-    return activeMs;
+): Pick<UsageInsightStats, "throughputTokensPerMin" | "throughputCostPerMin"> {
+  const samples = selectedDays.length
+    ? (dailyLatency ?? []).filter((day) => selectedDays.includes(day.date))
+    : latency
+      ? [latency]
+      : [];
+  let activeMs = 0;
+  let tokens = 0;
+  let cost = 0;
+  for (const sample of samples) {
+    activeMs += sample.timedMs ?? 0;
+    tokens += sample.timedTokens ?? 0;
+    cost += sample.timedCost ?? 0;
   }
-  const { latency } = input;
-  return latency && latency.count > 0 ? latency.avgMs * latency.count : 0;
-}
-
-/**
- * Throughput divides by recorded turn time — the assistant-turn durations
- * already shipped in aggregates.latency — not the wall-clock session span,
- * which also counts every idle gap between turns.
- */
-export function usageThroughputStats(input: {
-  totals: { totalTokens: number; totalCost: number } | null;
-  activeMs: number;
-}): { throughputTokensPerMin?: number; throughputCostPerMin?: number } {
-  const { totals, activeMs } = input;
-  if (!totals || activeMs <= 0) {
-    return { throughputTokensPerMin: undefined, throughputCostPerMin: undefined };
+  if (activeMs <= 0) {
+    return {};
   }
-  const perMinute = activeMs / 60000;
-  return {
-    throughputTokensPerMin: totals.totalTokens / perMinute,
-    throughputCostPerMin: totals.totalCost / perMinute,
-  };
+  const minutes = activeMs / 60_000;
+  return { throughputTokensPerMin: tokens / minutes, throughputCostPerMin: cost / minutes };
 }
 
 export type { UsageInsightStats };

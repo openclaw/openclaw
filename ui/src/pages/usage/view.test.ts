@@ -548,31 +548,39 @@ describe("renderUsage", () => {
     expect(textAt(container, ".cost-window--range .cost-window__value")).toBe("$10.00");
   });
 
-  it("shows the selected day's recorded-turn rate on the throughput tile, not the idle span", () => {
-    // One recorded one-minute turn on the selected day; the session itself
-    // spans 48 idle hours, which must not dilute the tile's rate.
-    const latency = { count: 1, avgMs: 60_000, p95Ms: 60_000, minMs: 60_000, maxMs: 60_000 };
+  it("shows throughput from timed turns on the selected day", () => {
+    const latency = {
+      count: 1,
+      avgMs: 60_000,
+      p95Ms: 60_000,
+      minMs: 60_000,
+      maxMs: 60_000,
+      timedMs: 60_000,
+      timedTokens: 1_000,
+      timedCost: 0.1,
+    };
+    const otherDay = { ...latency, timedTokens: 5_000, timedCost: 0.5 };
     const container = mountFixture(
       {
-        totals: usageTotals(60_000, 30),
+        totals: usageTotals(10_000, 1),
         overview: createUsageOverview({ durationMs: 48 * 60 * 60 * 1000, durationCount: 1 }),
         aggregates: {
           ...buildAggregatesFromSessions([]),
-          latency,
-          dailyLatency: [{ date: "2026-05-14", ...latency }],
+          latency: { ...otherDay, count: 2, timedMs: 120_000, timedTokens: 6_000, timedCost: 0.6 },
+          dailyLatency: [
+            { date: "2026-05-13", ...otherDay },
+            { date: "2026-05-14", ...latency },
+          ],
         },
       },
       { startDate: "2026-05-01", endDate: "2026-05-14", selectedDays: ["2026-05-14"] },
     );
 
-    const throughputValue = [
-      ...container.querySelectorAll(".usage-overview-card .usage-summary-card"),
-    ]
-      .find((card) =>
-        card.querySelector(".usage-summary-title")?.textContent?.startsWith("Throughput"),
-      )
-      ?.querySelector(".usage-summary-value");
-    expect(throughputValue?.textContent?.trim()).toBe("60.0K tok/min");
+    const throughput = container
+      .querySelector("#usage-summary-hint-throughput")
+      ?.closest(".usage-summary-card");
+    expect(throughput && textAt(throughput, ".usage-summary-value")).toBe("1.0K tok/min");
+    expect(throughput && textAt(throughput, ".usage-summary-sub")).toBe("$0.10 / min");
   });
 
   it("retains an accepted zero overview and guards refresh until settlement, but not an error or retired result", async () => {

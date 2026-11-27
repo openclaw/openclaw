@@ -130,6 +130,9 @@ export type SessionLatencyStats = {
   p95Ms: number;
   minMs: number;
   maxMs: number;
+  timedMs?: number;
+  timedTokens?: number;
+  timedCost?: number;
 };
 
 export type SessionDailyLatency = SessionLatencyStats & {

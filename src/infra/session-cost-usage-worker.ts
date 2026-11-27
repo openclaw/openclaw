@@ -428,10 +428,13 @@ export async function executeUsageCostWorker(
       ((invalid?.valueJson === row.valueJson && invalid.updatedAt === row.updatedAt) ||
         (row.bodyBytes !== undefined && envelope?.body.storedBytes !== row.bodyBytes));
     const checkpoint = envelope?.checkpoint;
+    const refreshTimedUsage = operation.sessionFiles !== undefined && !envelope?.includesTimedUsage;
     const outdated =
       rebuild ||
       (!isCarriedArchiveCurrent(checkpoint, file) &&
-        (!envelope?.projection || !isUsageCostRollupFresh({ checkpoint, file })));
+        (!envelope?.projection ||
+          refreshTimedUsage ||
+          !isUsageCostRollupFresh({ checkpoint, file })));
     if (outdated && !old) {
       stale.push({ file, row, envelope, rebuild, backfill: false });
     } else if (!outdated && row && gap) {
@@ -514,7 +517,7 @@ export async function executeUsageCostWorker(
     if (
       !rebuild &&
       row &&
-      envelope &&
+      envelope?.includesTimedUsage &&
       canUseUsageCostRollupForPartial({ checkpoint: envelope.checkpoint, file })
     ) {
       ({

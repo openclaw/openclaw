@@ -88,6 +88,7 @@ export type UsageCostQuarterBlock = {
   models: ReadonlyArray<readonly [string | null, string | null]>;
   tools: readonly string[];
   missingKeys: readonly string[];
+  timedUsage?: readonly number[];
 };
 
 function sumParts(parts: readonly (readonly number[] | undefined)[], row: number): number {
@@ -165,8 +166,16 @@ export function encodeUsageCostQuarters(
   };
   let ownedModels = 0;
   const buckets = Object.values(month.buckets).toSorted((a, b) => a.timestampMs - b.timestampMs);
+  // The optional header vector leaves the existing binary columns readable by older builds.
+  let timedUsage: number[] | undefined;
   for (const [row, bucket] of buckets.entries()) {
     const latency = computeLatencyStats(bucket.latency);
+    if (latency?.timedMs) {
+      timedUsage ??= Array<number>(buckets.length * 3).fill(0);
+      timedUsage[row * 3] = latency.timedMs;
+      timedUsage[row * 3 + 1] = latency.timedTokens ?? 0;
+      timedUsage[row * 3 + 2] = latency.timedCost ?? 0;
+    }
     push(QUARTERS, [
       (bucket.timestampMs - monthStartMs) / QUARTER_MS,
       (bucket.firstTimestampMs ?? bucket.timestampMs) - bucket.timestampMs,
@@ -235,6 +244,7 @@ export function encodeUsageCostQuarters(
       format: FORMAT,
       rows: TABLE_WIDTHS.map((_, table) => columns[TABLE_OFFSETS[table]!]!.length),
       columns: codes.join(""),
+      timedUsage,
       models,
       tools,
       missingKeys,
@@ -277,7 +287,7 @@ export function decodeUsageCostQuarters(
     if (!isRecord(header) || header.format !== FORMAT) {
       return undefined;
     }
-    const { rows, columns: codes, models, tools, missingKeys } = header;
+    const { rows, columns: codes, models, tools, missingKeys, timedUsage } = header;
     if (
       !isCountList(rows) ||
       rows.length !== TABLE_WIDTHS.length ||
@@ -285,7 +295,11 @@ export function decodeUsageCostQuarters(
       codes.length !== COLUMN_COUNT ||
       !isModelList(models) ||
       !isStringList(tools) ||
-      !isStringList(missingKeys)
+      !isStringList(missingKeys) ||
+      (timedUsage !== undefined &&
+        (!Array.isArray(timedUsage) ||
+          timedUsage.length !== rows[QUARTERS]! * 3 ||
+          !timedUsage.every(Number.isFinite)))
     ) {
       return undefined;
     }
@@ -323,6 +337,7 @@ export function decodeUsageCostQuarters(
       models,
       tools,
       missingKeys,
+      timedUsage,
     };
     // Derived columns sum stored columns of their table, which may follow them.
     const derived = sections[3];
