@@ -127,6 +127,32 @@ it("starts clipboard writing before the snapshot resolves", async () => {
   await expect(result).resolves.toBe("png");
 });
 
+it.each(["snapshot", "clipboard"] as const)(
+  "preserves the %s error after immediate clipboard failure",
+  async (failure) => {
+    const clipboardError = new Error("clipboard denied");
+    const png = Promise.withResolvers<Blob>();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ blob: () => png.promise }));
+    vi.stubGlobal("ClipboardItem", vi.fn());
+    const write = vi.fn(() => {
+      throw clipboardError;
+    });
+    vi.stubGlobal("navigator", { clipboard: { write } });
+
+    const { reply, result } = snapshot("Current widget", "copy");
+    const rejection = expect(result).rejects.toThrow(
+      failure === "snapshot" ? "snapshot failed" : clipboardError,
+    );
+    expect(write).toHaveBeenCalledOnce();
+    reply(failure === "snapshot" ? { error: "snapshot failed" } : undefined);
+    await rejection;
+    // A failed write must still consume a later PNG preparation rejection.
+    if (failure === "clipboard") {
+      png.reject(new Error("PNG read failed"));
+    }
+  },
+);
+
 it.each([
   ["bridge error", { error: "canvas is not exportable" }],
   ["JPEG", { dataUrl: "data:image/jpeg;base64,aW1hZ2U=" }],
