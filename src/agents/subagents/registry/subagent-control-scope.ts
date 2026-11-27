@@ -54,6 +54,10 @@ import {
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isRequesterSettleWakeForRun } from "./subagent-requester-settle-identity.js";
 import {
+  isSubagentBoundToRequesterTurn,
+  isSubagentPausedByYield,
+} from "./subagent-requester-turn-custody.js";
+import {
   isSameSubagentRun,
   isSameSubagentRunOwner,
   getSubagentRunRuntimeKey,
@@ -98,7 +102,7 @@ export async function prepareSessionSubagentKillSelection(params: {
     if (
       entry.execution.status !== "terminal" ||
       entry.execution.suppressSessionEffects !== true ||
-      entry.pauseReason === "sessions_yield" ||
+      isSubagentPausedByYield(entry) ||
       !ownsRoot(entry)
     ) {
       continue;
@@ -112,7 +116,7 @@ export async function prepareSessionSubagentKillSelection(params: {
         !ownsRoot(current) ||
         current.execution.status !== "terminal" ||
         current.execution.suppressSessionEffects !== true ||
-        current.pauseReason === "sessions_yield"
+        isSubagentPausedByYield(current)
       ) {
         throw new Error("Subagent completion changed during session cleanup; retry.");
       }
@@ -216,7 +220,7 @@ function listControlledSubagentRunsForTurn(
   );
   return controlledRuns.filter(
     (entry) =>
-      entry.requesterTurnRunId === requesterTurnRunId ||
+      isSubagentBoundToRequesterTurn(entry, requesterTurnRunId) ||
       isRequesterSettleWakeForRun({
         entry,
         runId: requesterTurnRunId,
@@ -464,7 +468,7 @@ export async function buildControlledSubagentRunsReadContext(
       snapshot,
       runIds: visible.map((entry) => entry.runId),
       sessionKeys: visible
-        .filter((entry) => entry.pauseReason === "sessions_yield")
+        .filter((entry) => isSubagentPausedByYield(entry))
         .map((entry) => entry.childSessionKey),
     };
   };

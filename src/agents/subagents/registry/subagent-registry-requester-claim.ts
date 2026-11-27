@@ -9,6 +9,10 @@ import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context
 import { getSubagentRunsForRequesterSession, subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { resumeSubagentRun, settleRequesterAfterSessionSpawns } from "./subagent-registry.js";
+import {
+  isRequesterTurnAwaitingResult,
+  isSubagentBoundToRequesterTurn,
+} from "./subagent-requester-turn-custody.js";
 import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
 
 /** An inline terminal result consumes the same durable obligation as a late completion. */
@@ -27,7 +31,7 @@ export async function acknowledgeSubagentResultForRequesterTurn(params: {
         !entry ||
         entry.requesterSessionKey !== params.requesterSessionKey ||
         entry.requesterAgentId !== params.requesterAgentId ||
-        entry.requesterTurnRunId !== params.requesterTurnRunId ||
+        !isSubagentBoundToRequesterTurn(entry, params.requesterTurnRunId) ||
         entry.requesterTurnYielded ||
         entry.killIntent ||
         entry.killReconciliation
@@ -75,8 +79,7 @@ export async function reconcileRequesterTurnClaimForRun(params: {
     [...getSubagentRunsForRequesterSession(params.requesterSessionKey)].filter(
       (entry) =>
         entry.requesterAgentId === params.requesterAgentId &&
-        entry.requesterTurnRunId === requesterTurnRunId &&
-        entry.expectsCompletionMessage === true,
+        isRequesterTurnAwaitingResult(entry, requesterTurnRunId),
     );
   const owned = ownedEntries();
   const acceptedEntry = owned.find((entry) => entry.runId === params.runId);

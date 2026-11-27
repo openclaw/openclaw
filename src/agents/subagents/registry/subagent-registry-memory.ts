@@ -38,6 +38,7 @@ import {
 import { bindSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import type { SubagentRunSqliteRow } from "./subagent-registry.store.row.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import {
   getSubagentRunRuntimeKey,
   copySubagentRunRuntimeOwner,
@@ -477,7 +478,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
         record.generation !== entry.generation ||
         ((!record.requesterTurnRunId || record.expectsCompletionMessage === false) &&
           !record.requesterSettleWake &&
-          record.pauseReason !== "sessions_yield" &&
+          !isSubagentPausedByYield(record) &&
           (record.cleanupCompletedAt !== undefined ||
             record.delivery?.status === "suspended" ||
             record.delivery?.status === "discarded" ||
