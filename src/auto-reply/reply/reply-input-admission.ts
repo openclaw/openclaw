@@ -47,7 +47,6 @@ export function createReplyInputAdmission(params: {
     if (replyOperation.lifecycleGeneration) {
       assertAgentRunLifecycleGenerationCurrent(replyOperation.lifecycleGeneration);
     }
-    followupRun.operatorAuthority?.assertCurrent();
   };
   const bindSource = () => {
     assertCurrent();

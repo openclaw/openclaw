@@ -48,6 +48,7 @@ import type {
   SubagentCompletionRecord,
 } from "./subagent-completion-mutation.types.js";
 import { buildSubagentCompletionFailureNotice } from "./subagent-completion-notice-text.js";
+import { resolveSubagentCompletionResultText } from "./subagent-completion-result.js";
 
 export class SubagentCompletionSourceChangedError extends SubagentRegistryMutationRejectedError {}
 class SubagentRequesterWakeProgressChangedError extends SubagentCompletionSourceChangedError {}
@@ -80,6 +81,19 @@ export async function recordRequiredCompletionNotice(
     entry.execution.status !== "terminal" ||
     entry.pauseReason === "sessions_yield"
   ) {
+    return;
+  }
+  // An intentional stop with nothing captured has nothing to show; live siblings still do.
+  const shown =
+    kind === "result"
+      ? batch
+      : batch.filter(
+          (child) =>
+            child.endedReason !== SUBAGENT_ENDED_REASON_KILLED ||
+            child.suppressAnnounceReason === "steer-restart" ||
+            resolveSubagentCompletionResultText(child) !== undefined,
+        );
+  if (shown.length === 0) {
     return;
   }
   // Share the yielded requester's failure identity with its lifecycle settlement.
@@ -118,12 +132,7 @@ export async function recordRequiredCompletionNotice(
   if (!current?.sessionId || current.status === "killed") {
     return;
   }
-  const customType =
-    kind === "delayed"
-      ? "subagent-delivery-delayed"
-      : kind === "result"
-        ? "subagent-completion"
-        : "run-failed-before-reply";
+  const customType = kind === "delayed" ? "subagent-delivery-delayed" : "subagent-completion";
   const findings =
     kind === "result"
       ? (
@@ -144,7 +153,7 @@ export async function recordRequiredCompletionNotice(
             }),
           )
         ).join("\n\n")
-      : buildSubagentCompletionFailureNotice(batch, kind);
+      : buildSubagentCompletionFailureNotice(shown, kind);
   const result = await runWithoutOwnedSessionTranscriptWrites(() =>
     appendSessionTranscriptReport(
       {

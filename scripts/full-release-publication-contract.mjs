@@ -237,9 +237,21 @@ function validatePublicationSourceFact(value, expected = {}) {
   // Retire with those release lines and their retained publication recovery.
   object(
     value.coverage,
-    [...coverageKeys, "known_flaky_jobs_json", "telegram_waiver"],
+    [
+      ...coverageKeys,
+      "known_flaky_jobs_json",
+      "telegram_waiver",
+      "publication_artifact_source_json",
+    ],
     "source admission coverage",
   );
+  // beta.3 Q seals this empty field; retain its digest without enabling historical artifact reuse.
+  if (
+    Object.hasOwn(value.coverage, "publication_artifact_source_json") &&
+    value.coverage.publication_artifact_source_json !== ""
+  ) {
+    throw new Error("source admission publication_artifact_source_json must be empty");
+  }
   if (Object.hasOwn(value.coverage, "telegram_waiver") && value.coverage.telegram_waiver !== "") {
     throw new Error("source admission telegram_waiver must be empty");
   }
@@ -427,6 +439,11 @@ export function validatePublicationSourceBinding(record, expected = {}) {
       ) {
         throw new Error(`source admission coverage ${key} differs from manifest`);
       }
+    }
+    if ((record.validationInputs.publicationArtifactSourceJson ?? "") !== "") {
+      throw new Error(
+        "source admission coverage publicationArtifactSourceJson differs from manifest",
+      );
     }
     if ((record.validationInputs.coveragePolicy ?? "") !== fact.coverage.coverage_policy) {
       throw new Error("source admission coverage policy differs from manifest");

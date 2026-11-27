@@ -35,6 +35,7 @@ import {
   sharedRuntimeProcessBuildEntries,
   shouldBundleRuntimeSqliteDependency,
   standaloneRuntimeProcessBuildEntries,
+  standaloneRuntimeProcessBuildGroups,
 } from "./scripts/lib/runtime-process-core-build-entries.mts";
 import { createSqliteSchemaAssetsPlugin } from "./scripts/lib/sqlite-schema-assets.mts";
 import { createStandaloneSourceModuleUrlPlugin } from "./scripts/lib/standalone-source-module-urls.mjs";
@@ -1035,22 +1036,27 @@ const configs: UserConfig[] = [
       false,
     );
   }),
-  ...Object.entries(standaloneRuntimeProcessBuildEntries).flatMap(([name, source]) => {
-    if (!Object.hasOwn(unifiedDistEntries, name)) {
-      return [];
-    }
-    const bundleFsSafe = [
-      "infra/sqlite-readonly-location.worker",
-      "state/openclaw-state-read.worker",
-      // Hosts the state reader and must load fs-safe the same way.
-      "infra/shared-worker-host.worker",
-    ].includes(name);
+  ...standaloneRuntimeProcessBuildGroups(
+    Object.fromEntries(
+      Object.entries(standaloneRuntimeProcessBuildEntries).filter(([name]) =>
+        Object.hasOwn(unifiedDistEntries, name),
+      ),
+    ),
+  ).map((entry) => {
+    const bundleFsSafe = Object.keys(entry).some((name) =>
+      [
+        "infra/sqlite-readonly-location.worker",
+        "state/openclaw-state-read.worker",
+        // Hosts the state reader and must load fs-safe the same way.
+        "infra/shared-worker-host.worker",
+      ].includes(name),
+    );
     const isFsSafe = (id: string) =>
       id === "@openclaw/fs-safe" || id.startsWith("@openclaw/fs-safe/");
     return nodeBuildConfig(
       {
         name: TSDOWN_UNIFIED_CONFIG_GROUP,
-        entry: { [name]: source },
+        entry,
         minify: { codegen: true, compress: true, mangle: { keepNames: true } },
         deps: {
           ...unifiedDeps,
@@ -1066,7 +1072,7 @@ const configs: UserConfig[] = [
                   (packageName) => id === packageName || id.startsWith(`${packageName}/`),
                 ))),
         },
-        outputOptions: getStandaloneRuntimeProcessOutputOptions(name),
+        outputOptions: getStandaloneRuntimeProcessOutputOptions(Object.keys(entry)[0]!),
         plugins: [
           createStateSchemaInlinePlugin(),
           ...(bundleFsSafe ? [createPackageRuntimeUrlBuildPlugin("@openclaw/fs-safe")] : []),

@@ -167,13 +167,18 @@ the owned service PID. Listener ownership, the lock, and native service identity
 are rechecked before stopping. Missing listener attribution or an unrelated
 connection error keeps the normal drain path.
 
-When the service's Node fails the Gateway's runtime check, OpenClaw reruns the
-Gateway under a compatible Node it finds, such as its private runtime in
-`~/.openclaw/tools/cli-node`. The service's main process is then that
-launcher, and its direct child serves the Gateway. Maintenance drain accepts the
-child as the service's Gateway only when every listener on the Gateway port is
-that process and its parent is the service's main process; stopping the service
-stops both.
+Two layouts run the Gateway as the direct child of a launcher that is the
+service's main process: a release install, whose service runs
+`~/.openclaw/git-install/openclaw-launcher.mjs`, and a service whose Node fails
+the Gateway's runtime check, which OpenClaw reruns under a compatible Node it
+finds, such as its private runtime in `~/.openclaw/tools/cli-node`. Maintenance
+drain, which Doctor and `openclaw update repair` also use, accepts the child as
+the service's Gateway only when every listener on the Gateway port is that
+process and its parent is the service's main process. When no listener names
+its process, for example on a Linux host without `lsof` or `ss` or when `ss`
+cannot see the owner, the drain instead requires the kernel parent of the
+process the Gateway reports to be the service's main process. Stopping the
+service stops both.
 
 With `--no-restart`, the package is replaced under a running Gateway, and that
 Gateway restarts itself when its installation check sees the new files. On a

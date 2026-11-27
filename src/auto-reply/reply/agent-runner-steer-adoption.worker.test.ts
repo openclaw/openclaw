@@ -60,57 +60,6 @@ function preparedDelivery(
   };
 }
 
-it.each([false, true])(
-  "keeps refused pre-handoff steering unless its source records cancellation (cancelled=%s)",
-  async (cancelled) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const key = "agent:main:refused-steering-custody";
-      const run = createQueueTestRun({ prompt: "retain this input", messageId: "refused-steer" });
-      Object.assign(run.run, { agentId: "main", sessionKey: key });
-      const { operation } = await prepareOperation(run);
-      const cancellation = new AbortController();
-      const failure = new Error("internal SDK assertion failure");
-      run.abortSignal = cancellation.signal;
-      // Only the source cancellation below records revocation, not this assertion.
-      const authority = {
-        canonicalIdentity: null,
-        profileId: "steering-requester",
-        scopes: ["operator.write"],
-        signal: new AbortController().signal,
-        assertCurrent() {
-          if (run.controllerInput?.phase === "injecting") {
-            if (cancelled) {
-              cancellation.abort(new Error("session lifecycle cancelled the source"));
-            }
-            throw failure;
-          }
-        },
-      };
-      run.operatorAuthority = authority;
-      const followup = vi.fn(async () => {});
-      try {
-        await expect(
-          runActiveReplySteer(createSteerParams(key, run, operation, { runFollowup: followup })),
-        ).rejects.toBe(failure);
-        const input = run.controllerInput!;
-        expect(authority.signal?.aborted).toBe(false);
-        if (!cancelled) {
-          expect(input.retirementRequested).toBeUndefined();
-          expect(input.phase).toBe("waiting");
-        }
-        operation.complete();
-        await input.settlement.promise;
-        await input.claim?.settlement.promise;
-        expect(followup).toHaveBeenCalledTimes(cancelled ? 0 : 1);
-        expect(input.phase).toBe("consumed");
-      } finally {
-        clearSessionQueues([key], getSessionControllerEntryForOperation(operation).target);
-        operation.complete();
-      }
-    });
-  },
-);
-
 it("consumes human steering once after the same logical owner recovers its detached backend", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const key = "agent:main:recovered-worker-steering";

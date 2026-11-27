@@ -86,8 +86,6 @@ export function createCodingToolsGatewayCaller(params: {
           ...(options.sourceReplyDeliveryMode === "message_tool_only"
             ? { sessionEventDelivery: false as const }
             : {}),
-          // The existing source fence rechecks this after tool preparation and at final I/O.
-          receiptAuthority: settleBatch?.isCurrent,
           receiptAdmissions: settleBatch?.receiptAdmission
             ? [settleBatch.receiptAdmission]
             : undefined,
@@ -123,13 +121,7 @@ export function createCodingToolsGatewayCaller(params: {
       isToolWrappedWithBeforeToolCallHook(guarded)
         ? rewrapToolWithBeforeToolCallHook(guarded)
         : guarded,
-      {
-        ...identity,
-        receiptAuthority: () => {
-          assertDelegationCurrent();
-          return identity.receiptAuthority?.() ?? true;
-        },
-      },
+      { ...identity, receiptAuthority: assertDelegationCurrent },
     );
   };
 }

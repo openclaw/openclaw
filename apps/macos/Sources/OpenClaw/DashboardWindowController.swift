@@ -458,7 +458,11 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 
     func show() {
         if let route = self.retiredDocumentURL { self.load(route) }
-        (self.window as? DashboardWindow)?.isHiddenForExperience = false
+        if let window = self.window as? DashboardWindow, window.isHiddenForExperience {
+            window.isHiddenForExperience = false
+            // The retained page missed browser state changes while it was hidden.
+            self.publishBrowserState(self.nativeBrowser.state)
+        }
         (self.window as? DashboardWindow)?.isUnshownPreload = false
         self.window?.isExcludedFromWindowsMenu = false
         self.deviceSettingsMessageHandler.startObserving()

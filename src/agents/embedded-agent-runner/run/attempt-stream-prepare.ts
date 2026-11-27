@@ -8,7 +8,7 @@ import {
 } from "../../../infra/agent-run-registry.js";
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import type { MessagePresentation } from "../../../interactive/payload.js";
-import type { AssistantMessage } from "../../../llm/types.js";
+import type { AssistantHistoryMessage } from "../../../llm/types.js";
 import { closeDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { getModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
@@ -85,7 +85,7 @@ function prepareStream(
   let beforeAgentFinalizeRevisionReason: string | undefined;
   let beforeAgentFinalizeRevisionEntryId: string | undefined;
   let finalPresentationCandidate:
-    | { assistant: AssistantMessage; presentation: MessagePresentation }
+    | { assistant: AssistantHistoryMessage; presentation: MessagePresentation }
     | undefined;
   let activeQueueAdmissions = 0;
   const isSteeringAdmissionOpen = () => {
@@ -123,7 +123,8 @@ function prepareStream(
           ) {
             return;
           }
-          const lastAssistant = event.lastAssistant as AssistantMessage | undefined;
+          const lastAssistant =
+            event.lastAssistant?.role === "assistant" ? event.lastAssistant : undefined;
           const lastAssistantMessage =
             normalizeOptionalString(resolveFinalAssistantVisibleText(lastAssistant)) ??
             normalizeOptionalString(resolveFinalAssistantRawText(lastAssistant)) ??
@@ -711,7 +712,7 @@ function prepareStream(
     toolSearchCatalogExecutor,
     getBeforeAgentFinalizeRevisionReason: () => beforeAgentFinalizeRevisionReason,
     getBeforeAgentFinalizeRevisionEntryId: () => beforeAgentFinalizeRevisionEntryId,
-    getFinalPresentation: (assistant: AssistantMessage | undefined) =>
+    getFinalPresentation: (assistant: AssistantHistoryMessage | undefined) =>
       assistant && finalPresentationCandidate?.assistant === assistant
         ? finalPresentationCandidate.presentation
         : undefined,

@@ -80,7 +80,6 @@ it.each<{
         scopes,
         gatewayAccessGrant: null,
         getRuntimeConfig: context.getRuntimeConfig,
-        assertCurrent: captured.authority.assertCurrent,
       });
       const programs = ["standard", "daybreak_blue", "daybreak_red"] as const;
       for (const authority of [captured.authority, channel]) {

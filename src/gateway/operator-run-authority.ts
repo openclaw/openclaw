@@ -155,11 +155,9 @@ export function captureChannelOperatorRunAuthority(input: {
   scopes: readonly string[];
   gatewayAccessGrant: AdmittedRunOperatorAuthority["gatewayAccessGrant"];
   getRuntimeConfig: () => OpenClawConfig;
-  assertCurrent: () => void;
   signal?: AbortSignal;
 }): AdmittedRunOperatorAuthority {
   const params = { ...input };
-  params.assertCurrent();
   const initialConfig = params.getRuntimeConfig();
   const metadata = getProcessGatewayPluginMetadataSnapshot();
   const role = structuredClone(

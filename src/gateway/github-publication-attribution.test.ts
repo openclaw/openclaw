@@ -428,9 +428,10 @@ describe("Gateway GitHub publication attribution", () => {
 
   it.each(
     (["local", "repository"] as const).flatMap((surface) =>
-      ["private", "public", "revoked", "newly-public", "replaced", "revoked-before-run"].map(
-        (state) => ({ surface, state }),
-      ),
+      ["private", "public", "revoked", "newly-public", "replaced"].map((state) => ({
+        surface,
+        state,
+      })),
     ),
   )("publishes $surface with $state session disclosure", async ({ surface, state }) => {
     const repository =
@@ -447,7 +448,6 @@ describe("Gateway GitHub publication attribution", () => {
     const config = { gateway: { publicOrigin: "https://team.example" } };
     mocks.getConfigSnapshot.mockReturnValue({ config, sourceConfig: config });
     let changed = false;
-    let beforeRun = false;
     const change = () => {
       changed = true;
       replaceSessionEntrySync(scope, {
@@ -460,17 +460,8 @@ describe("Gateway GitHub publication attribution", () => {
               : undefined,
       });
     };
-    mocks.matchesIdentity.mockImplementation(() => {
-      if (beforeRun) {
-        beforeRun = false;
-        change();
-      }
-      return true;
-    });
     const onEffect = () => {
-      if (state === "revoked-before-run") {
-        beforeRun = true;
-      } else if (["revoked", "newly-public", "replaced"].includes(state)) {
+      if (["revoked", "newly-public", "replaced"].includes(state)) {
         change();
       }
     };

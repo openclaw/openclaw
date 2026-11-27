@@ -83,7 +83,7 @@ export async function prepareLocalSandboxWorkspace(params: {
   const assertCurrent = () => {
     params.assertCurrent?.();
     if (disposed) {
-      throw new Error("Local sandbox workspace authority changed");
+      throw new Error("The local sandbox workspace was released. Start a new turn to retry.");
     }
     owner.assertCurrent();
   };

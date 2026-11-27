@@ -640,18 +640,6 @@ describe("subagent announce formatting", () => {
     ).toEqual(["channel:thread-child-a", "channel:thread-child-b"]);
   });
 
-  it.each([
-    [{ status: "timeout" }, "timed out"],
-    [
-      { status: "timeout", error: "child run failed before completing" },
-      "timed out: child run failed before completing",
-    ],
-  ] as const)("includes completion status details: %s", async (outcome, expectedStatus) => {
-    setCompletionSessions();
-    await deliverCompletion({ roundOneReply: "child details", outcome });
-    expectText(getAgentCallContext(), [expectedStatus, "child details"], ["✅ Subagent"]);
-  });
-
   const telegramRoute = { channel: "telegram", to: "telegram:123" };
   const telegramSession = { lastChannel: "telegram", lastTo: "telegram:123", lastThreadId: 42 };
   const slackRoute = { channel: "slack", to: "channel:C123", accountId: "acct-1" };

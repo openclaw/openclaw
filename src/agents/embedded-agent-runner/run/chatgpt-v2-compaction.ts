@@ -4,7 +4,7 @@ import {
   requestPreparedOpenAIResponsesCompaction,
   usesNativeOpenAICodexResponsesBackend,
 } from "@openclaw/ai/transports";
-import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
+import type { AssistantHistoryMessage, Context, Model } from "@openclaw/llm-core";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { decideContextPressure } from "../../context-pressure.js";
@@ -86,7 +86,7 @@ export function createChatGPTV2CompactionBoundary(params: {
   options: Parameters<StreamFn>[2],
   requestAnchor?: MeasuredRequestContext,
   fixedTokenPressure?: FixedRequestTokenPressure,
-) => Promise<AssistantMessage | undefined> {
+) => Promise<AssistantHistoryMessage | undefined> {
   let failed = false;
   return async (streamFn, model, context, options, requestAnchor, fixedTokenPressure) => {
     if (!usesNativeOpenAICodexResponsesBackend(model) || params.session.isCompacting) {
@@ -234,7 +234,7 @@ export function createChatGPTV2CompactionBoundary(params: {
                 {
                   maxTokens: outgoing.promptBudgetBeforeReserve,
                   estimateTokens: (output, outputTokens) => {
-                    const checkpoint: AssistantMessage = {
+                    const checkpoint: AssistantHistoryMessage = {
                       role: "assistant",
                       content: [],
                       api: model.api,
@@ -293,7 +293,7 @@ export function createChatGPTV2CompactionBoundary(params: {
           // A separate, empty assistant owns the exact covered prefix, including the
           // pending user and settled tool outputs. Reusing an earlier assistant would
           // replay its already-covered suffix after the returned complete window.
-          const checkpoint: AssistantMessage = {
+          const checkpoint: AssistantHistoryMessage = {
             role: "assistant",
             content: [],
             api: compacted.model.api,

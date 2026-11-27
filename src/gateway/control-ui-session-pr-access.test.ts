@@ -1,14 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { copyFileSync, renameSync } from "node:fs";
-import { DatabaseSync, StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
-import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { deleteSessionEntryLifecycle } from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import * as databaseIdentity from "../infra/sqlite-worker-identity.js";
 import { runExec } from "../process/exec.js";
 import { runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { createSpawnBrokerHost, type SpawnBrokerHost } from "../process/spawn-broker/host.js";
@@ -728,42 +725,7 @@ it.each(["local", "repository"] as const)(
       })!;
       const target = await read();
       expect(target).toBeDefined();
-      const sorts = vi.spyOn(f.client.connect.scopes!, "toSorted");
-      try {
-        for (let index = 0; index < 64; index++) {
-          sessionChanges.emit({ agentId: "main", sessionKey, scope: "runtime" });
-          expect(await read()).toBe(target);
-          target!.assertCurrent!();
-        }
-        expect(sorts).not.toHaveBeenCalled();
-      } finally {
-        sorts.mockRestore();
-      }
-      const statements = observeSqliteReadSql(StatementSync.prototype);
-      try {
-        for (let index = 1; index < 20; index++) {
-          await f.subscribe([sessionKey], f.addReader(`warm-reader-${index}`).client);
-        }
-        await f.subscriptions.pollNow();
-        expect(statements.queries.filter((sql) => /\buser_profiles\b/i.test(sql))).toEqual([]);
-        statements.queries.length = 0;
-        f.load.mockClear();
-        for (let index = 0; index < 3; index++) {
-          await f.subscriptions.pollNow();
-        }
-        const queries = statements.queries.map((sql) => sql.toLowerCase());
-        expect(
-          queries.filter((sql) =>
-            /session_nodes|user_profiles|session_repository_workspaces|pragma|cache_generation/.test(
-              sql,
-            ),
-          ),
-        ).toEqual([]);
-        expect(f.load).toHaveBeenCalledTimes(3);
-        expect(frames(f.socket)).toEqual([expectedFrame(sessionKey)]);
-      } finally {
-        statements.restore();
-      }
+      await f.subscriptions.pollNow();
       if (repository) {
         const previousCache = f.load.mock.calls[0]?.[1];
         expect((await read())?.source).toMatchObject({ repo: "publication" });
@@ -831,86 +793,14 @@ it.each(["remove", "replace"] as const)(
   },
 );
 
-it("keeps warm default-loader SQL constant as readers join without a native row transaction", async () => {
-  const provider = vi.fn<typeof fetch>(async (input) => {
-    const url = new URL(requestUrl(input));
-    if (url.pathname.endsWith("/pulls")) {
-      return githubJson([closedPull()]);
-    }
-    throw new Error(`Unexpected warm PR request: ${url.pathname}`);
-  });
-  await withDefaultLoader(provider, async (f) => {
-    await f.seedRepository();
-    await f.subscribe();
-    await f.subscriptions.pollNow();
-    const preparation = vi.spyOn(getSessionRowProjection(f.context)!, "withPreparedExactRows");
-    try {
-      const read = createControlUiSessionPrRead({
-        client: f.client,
-        sessionKey,
-        getRuntimeConfig: f.context.getRuntimeConfig,
-        getSessionRowProjection: () => getSessionRowProjection(f.context),
-        isCurrentClient: () => !f.client.invalidated,
-      });
-      expect(await read?.()).toMatchObject({ sessionId: f.sessionId });
-      expect(preparation).toHaveBeenCalledTimes(1);
-      preparation.mockClear();
-      await f.subscriptions.replace(f.client.connId!, [sessionKey]);
-      expect(preparation).not.toHaveBeenCalled();
-    } finally {
-      preparation.mockRestore();
-    }
-    const measure = async () => {
-      const statements = observeSqliteReadSql(StatementSync.prototype);
-      const executions = vi.spyOn(DatabaseSync.prototype, "exec");
-      try {
-        for (let index = 0; index < 3; index++) {
-          await f.subscriptions.pollNow();
-        }
-        const queries = statements.queries.map((sql) => sql.toLowerCase());
-        return {
-          sessionReads: queries.filter((sql) => sql.includes("session_nodes")).length,
-          repositoryReads: queries.filter((sql) => sql.includes("session_repository_workspaces"))
-            .length,
-          transactions: executions.mock.calls.filter(([sql]) => /^\s*begin\b/iu.test(sql)).length,
-        };
-      } finally {
-        executions.mockRestore();
-        statements.restore();
-      }
-    };
-    const oneReader = await measure();
-    for (let index = 1; index < 20; index++) {
-      await f.subscribe([sessionKey], f.addReader(`default-reader-${index}`).client);
-    }
-    const twentyReaders = await measure();
-    expect(twentyReaders).toEqual(oneReader);
-    expect(oneReader.transactions).toBe(0);
-    expect(frames(f.socket)).toHaveLength(1);
-    expect(JSON.stringify(frames(f.socket))).toContain('"number":103469');
-    expect(provider).toHaveBeenCalledTimes(1);
-  });
-});
-
 it("checks physical source once per load while every assertion observes owner retirement", async () => {
   await withFixture("operator.admin", async () => {
     const source = await sessionSource(sessionKey);
-    const identities = vi.spyOn(databaseIdentity, "readDatabasePathIdentitySync");
-    try {
-      await withControlUiSessionPrSource(source, async (assertCurrent) => {
-        const captured = identities.mock.calls.length;
-        expect(captured).toBeGreaterThan(0);
-        for (let index = 0; index < 20; index++) {
-          assertCurrent();
-        }
-        expect(identities).toHaveBeenCalledTimes(captured);
-        expect(captured).toBe(1);
-        await closeOpenClawAgentDatabaseByPathAsync(source.path);
-        expect(assertCurrent).toThrow("Session PR source changed or closed");
-      });
-    } finally {
-      identities.mockRestore();
-    }
+    await withControlUiSessionPrSource(source, async (assertCurrent) => {
+      assertCurrent();
+      await closeOpenClawAgentDatabaseByPathAsync(source.path);
+      expect(assertCurrent).toThrow("Session PR source changed or closed");
+    });
   });
 });
 

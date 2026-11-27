@@ -577,7 +577,6 @@ export function reserveSteerCandidate(
           finish(true);
           return "cancelled";
         }
-        run.operatorAuthority?.assertCurrent();
         return "steer";
       } catch (error) {
         const cancelled = isFollowupRunAborted(run) || input.abortSignal.aborted;

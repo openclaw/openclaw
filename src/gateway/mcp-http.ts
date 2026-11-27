@@ -254,16 +254,15 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
           { retain: true },
         );
         async function handlePreparedRequest() {
-          // A completion grant is current only while its requester lineage verifies. The
-          // child entry can go away while preparation, hooks or approvals await, so the
-          // dispatch authorization and the tools' source-effect guard both re-check it.
+          // A completion grant is current only while its grant row and requester lineage
+          // verify. Each tool call checks both at dispatch; a started call finishes, and
+          // Stop reaches it through the grant's abort signal.
           const lineage = createCompletionGrantLineageAdmission({ cfg, context: requestContext });
-          const isGrantAndLineageCurrent = () =>
-            (boundClientGrant?.isCurrent() ?? true) && lineage.isCurrent();
           const authorizeToolCall = () =>
             !work.isClosing &&
             getActiveMcpLoopbackRuntime()?.ownerToken === ownerToken &&
-            isGrantAndLineageCurrent();
+            (boundClientGrant?.isCurrent() ?? true) &&
+            lineage.isCurrent();
           const harnessEntry = isAgentHarnessSessionKey(requestContext.sessionKey)
             ? await readResolvedSessionEntryInWorker({ cfg, sessionKey: requestContext.sessionKey })
             : undefined;
@@ -297,7 +296,6 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
             const callerIdentity = boundClientGrant
               ? createAdmittedGatewayToolCallerIdentity({
                   admittedRunContext: boundClientGrant.admittedRunContext,
-                  receiptAuthority: isGrantAndLineageCurrent,
                   receiptAdmission: lineage.admission,
                   approvalSignals: boundClientGrant.abortSignal && [boundClientGrant.abortSignal],
                   // Management binding needs the admitted identity, not execution's issuer.

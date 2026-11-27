@@ -1,7 +1,5 @@
-import { expectDefined } from "@openclaw/normalization-core/expect";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { truncateUtf16WithEllipsis } from "../../../shared/text-truncate.js";
-import { renderRuntimeCoordinationFailureCopy } from "../../failover/assistant-request-failure-copy.js";
 import { hasPrivateRequesterInput } from "../registry/subagent-delivery-state.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { resolveSubagentCompletionResultText } from "./subagent-completion-result.js";
@@ -17,14 +15,19 @@ export function buildSubagentCompletionFailureNotice(
   batch: readonly SubagentRunRecord[],
   kind: "failed" | "delayed",
 ): string {
+  const sorted = batch.toSorted((a, b) => (a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : 0));
+  const only = sorted.length === 1 ? sorted[0] : undefined;
+  const endedAt = only?.execution.endedAt;
   const heading =
     kind === "delayed"
       ? "Automatic delivery of a child result timed out. The result is still saved and may still arrive automatically."
-      : expectDefined(
-          renderRuntimeCoordinationFailureCopy("child_completion_delivery_failed"),
-          "child completion failure notice",
-        );
-  const sorted = batch.toSorted((a, b) => (a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : 0));
+      : only
+        ? `${truncateUtf16WithEllipsis(only.label?.trim() || "A child agent", 200)} finished${
+            typeof endedAt === "number"
+              ? ` on ${new Date(endedAt).toISOString().slice(0, 16).replace("T", " ")} UTC`
+              : ""
+          }, but its result couldn't be added to this conversation automatically. Details are below.`
+        : `${sorted.length} child agents finished, but their results couldn't be added to this conversation automatically. Details are below.`;
   const overflow = (count: number) =>
     `[${count} additional child results omitted; list the requester's children with the available session tools and read their history.]`;
   // Reserve framing, recovery guidance and the overflow count before allocating result heads.
@@ -41,7 +44,7 @@ export function buildSubagentCompletionFailureNotice(
           ? "Interrupted by Gateway restart; not resumed."
           : outcome.error
         : outcome?.status;
-    const identity = `Child ${child.childSessionKey} (run ${child.runId})\n${status ?? "unknown"}`;
+    const identity = `Child session ${child.childSessionKey} (run ${child.runId})\n${child.label?.trim() || "A child agent"}: ${status ?? "unknown"}`;
     const header = truncateUtf16WithEllipsis(identity, 512);
     const captured = hasPrivateRequesterInput(child)
       ? ""

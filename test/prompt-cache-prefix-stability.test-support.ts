@@ -31,6 +31,7 @@ import { listenProofProvider, useRuntimeProofFixture } from "./runtime-proof.tes
 const TOKEN = "prefix-stability-token";
 const TARGET = "agent:main:prefix-stability-target";
 const SENDER = "agent:main:prefix-stability-sender";
+const HOSTED_SEARCH = "agent:hosted:prefix-stability-hosted-search";
 // An unrelated chat on a small context window: its tool results overflow, then it compacts
 // while the target runs.
 const OTHER = "agent:other:prefix-stability-other";
@@ -185,6 +186,7 @@ export function usePrefixStabilityJourney() {
     const fixture = await createFixture(`openclaw-prefix-stability-${api}-`, TOKEN, "0");
     const targetRequests: WireRequest[] = [];
     const forkRequests: WireRequest[] = [];
+    const hostedSearchRequests: WireRequest[] = [];
     const targetResponses: Array<{ id?: string; previousResponseId?: string }> = [];
     const storedResponses = new Map<string, { input: unknown[]; output: unknown[] }>();
     // The hidden subagent: its spawn task turn has no inter-session provenance, later turns do.
@@ -250,6 +252,10 @@ export function usePrefixStabilityJourney() {
         }
         return { text: "child-done" };
       }
+      if (session === HOSTED_SEARCH) {
+        hostedSearchRequests.push(request);
+        return { text: latest.includes(FORK_PROBE) ? "fork-done" : "hosted-parent-done" };
+      }
       if (session !== TARGET) {
         unclassified.push(session);
         return { text: "child-done" };
@@ -302,6 +308,12 @@ export function usePrefixStabilityJourney() {
       return { text: `ok ${targetRequests.length}` };
     };
     const server = createServer((request, response) => {
+      if (request.method === "GET" && request.url === "/v1/catalog") {
+        // Discovery may refresh the router catalog; this fixture uses explicit model rows.
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ providers: [] }));
+        return;
+      }
       let body = "";
       request.setEncoding("utf8");
       request.on("data", (chunk) => {
@@ -372,10 +384,12 @@ export function usePrefixStabilityJourney() {
     let steersTaken = 0;
     let transportEnv: ReturnType<typeof captureEnv> | undefined;
     try {
-      const provider = buildFakeProvider(api, await listenProofProvider(server), {
-        continuation: true,
-      });
-      const runtime = fakeTransportRuntime(api);
+      const origin = await listenProofProvider(server);
+      const provider = buildFakeProvider(api, origin, { continuation: true });
+      const runtime =
+        api === "openai-responses"
+          ? { pluginId: "clawrouter", env: {} }
+          : fakeTransportRuntime(api);
       transportEnv = captureEnv(Object.keys(runtime.env));
       for (const [key, value] of Object.entries(runtime.env)) {
         setTestEnvValue(key, value);
@@ -415,6 +429,13 @@ export function usePrefixStabilityJourney() {
           },
         },
       );
+      if (api === "openai-responses") {
+        // Keep the router's hosted-tool route separate from the fake native provider whose
+        // Responses continuation is exercised by the main journey.
+        const hosted = buildFakeProvider(api, origin, { hostedSearch: true });
+        cfg.models!.providers![hosted.providerId] = hosted.config;
+        cfg.agents!.entries!.hosted = { model: { primary: hosted.modelRef } };
+      }
       // The unrelated chat belongs to an exec-only agent on a small window, so a few large
       // tool results reach the pressure check.
       cfg.agents!.ownership = "explicit";
@@ -506,6 +527,33 @@ export function usePrefixStabilityJourney() {
       const sentToTarget = (marker: string) => targetRequests.some((r) => r.text.includes(marker));
 
       try {
+        // Only Responses carries provider-hosted web_search (here through the router's hosted
+        // route), so this step runs on that lane; the forks below stay tool-free on every lane.
+        if (api === "openai-responses") {
+          step = "fork of a parent that lists hosted web_search";
+          await send(HOSTED_SEARCH, "TARGET parent with hosted search");
+          const parent = hostedSearchRequests.at(-1)!;
+          expect(JSON.parse(parent.tools), "The parent must list hosted web_search").toContainEqual(
+            {
+              type: "web_search",
+            },
+          );
+          const forkAt = hostedSearchRequests.length;
+          const fork = await client.request<{ status: string; value?: unknown }>(
+            "prefixfork.run",
+            // Like the skill review: the fork runs its own client tool.
+            { sessionKey: HOSTED_SEARCH, tools: ["prefix_fork_note"] },
+            { timeoutMs: 65_000 },
+          );
+          expect(fork).toMatchObject({ status: "settled", value: "fork-settled" });
+          expect(hostedSearchRequests.length).toBeGreaterThan(forkAt);
+          const request = hostedSearchRequests[forkAt]!;
+          expect(
+            request.tools,
+            "A fork with a granted client tool must preserve the parent's hosted web_search tool bytes",
+          ).toBe(parent.tools);
+          expect(JSON.parse(request.tools)).toContainEqual({ type: "web_search" });
+        }
         step = "mid-turn fork";
         const midTurn = await start(TARGET, "STEP-SLOW mid turn fork");
         const midTurnGate = path.join(fixture.workspaceDir, "release-0");

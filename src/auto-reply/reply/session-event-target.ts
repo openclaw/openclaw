@@ -143,7 +143,6 @@ export async function captureSessionEventTargetForHost(
   const operatorAuthority = options.operatorAuthority;
   if (operatorAuthority) {
     assertAdmittedRunOperatorAuthority(operatorAuthority);
-    operatorAuthority.assertCurrent();
   }
   options.assertCaptureCurrent?.();
   options.assertCurrent?.();
@@ -172,7 +171,6 @@ export async function captureSessionEventTargetForHost(
       ? await prepareGatewayToolCallerAssertion()
       : undefined;
   const assertCaptureCurrent = () => {
-    operatorAuthority?.assertCurrent();
     options.assertCaptureCurrent?.();
     options.assertCurrent?.();
     if (!callerAgentMatches || !caller) {
@@ -180,11 +178,11 @@ export async function captureSessionEventTargetForHost(
     }
     if (preparedCaller) {
       preparedCaller.assertCurrent?.();
-    } else if (
-      caller.receiptAuthority?.() === false ||
-      caller.approvalSignals?.some((signal) => signal.aborted)
-    ) {
-      throw new Error("Session event producer no longer owns its invocation");
+    } else {
+      caller.receiptAuthority?.();
+      if (caller.approvalSignals?.some((signal) => signal.aborted)) {
+        throw new Error("Session event producer no longer owns its invocation");
+      }
     }
   };
   try {

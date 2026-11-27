@@ -140,7 +140,7 @@ it.each(["realpath", "mkdir"] as const)(
           placementSandbox: createSandboxTestContext(),
           admittedRunContext,
         }),
-      ).rejects.toThrow("admitted run authority is no longer active");
+      ).rejects.toThrow("This agent run is no longer active. Start a new turn to retry.");
       // A revoked path lookup must not admit the following directory mutation.
       expect(mkdir).toHaveBeenCalledOnce();
     });

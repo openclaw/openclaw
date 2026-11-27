@@ -708,7 +708,7 @@ describe("prepareCliRunContext", () => {
         trigger: "user",
         sessionKey: sessionTarget.sessionKey,
       }),
-    ).rejects.toThrow("authority");
+    ).rejects.toThrow("This agent run is no longer active");
   });
 
   it("honors an explicit auth agent directory independently of session identity", async () => {

@@ -67,9 +67,6 @@ export async function loadVisibleApproval(params: {
     : undefined;
   let sourceSessionKey = admittedRecord?.request.sessionKey;
   let sourceAgentId = admittedRecord?.request.agentId;
-  if (admittedRecord) {
-    params.authority.bindSource(admittedRecord.request);
-  }
   let sessionAccess = await prepareApprovalSessionAccess({
     client: params.client,
     getCfg: params.getCfg,
@@ -116,14 +113,9 @@ export async function loadVisibleApproval(params: {
       admittedRecord &&
       (admittedManager?.getLocalSnapshot(bindingId) !== admittedRecord ||
         admittedRecord.request.sessionKey !== sourceSessionKey ||
-        admittedRecord.request.agentId !== sourceAgentId ||
-        !canAccess(
-          () => readApprovalRequestSource(admittedRecord!),
-          () => admittedRecord!.approvalReviewerDeviceIds,
-          true,
-        ))
+        admittedRecord.request.agentId !== sourceAgentId)
     ) {
-      throw new Error("Approval lookup authority is no longer active");
+      throw new Error("The approval record changed. Look up the approval again.");
     }
   };
   const lookupAuthority = {
@@ -212,7 +204,6 @@ export async function loadVisibleApproval(params: {
     ) {
       return null;
     }
-    params.authority.bindSource(lookup.record.source);
     const manager =
       lookup.record.kind === "exec"
         ? params.execApprovalManager

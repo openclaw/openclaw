@@ -76,7 +76,7 @@ it.each([
   expect(payload.tool_choice).toEqual(api === "anthropic-messages" ? { type: "none" } : "auto");
 });
 
-it("replays for a fork that runs tools only when the parent lists them and no hosted tool", () => {
+it("replays for a fork that runs tools only when the parent lists them", () => {
   const own = { input: [user("Q"), user("Review")], max_output_tokens: 512 };
   const parent = (tools: unknown[]) => ({
     tools,
@@ -96,7 +96,9 @@ it("replays for a fork that runs tools only when the parent lists them and no ho
   expect(fork([note])).toEqual({ ...parent([note]), input: own.input });
   // The caller's own output limit survives the replay.
   expect(fork([note], true)).toMatchObject({ tools: [note], max_output_tokens: 512 });
-  // The parent never listed the fork's tool, or listed one the provider runs itself.
+  // A hosted tool stays listed with the parent's bytes; a fork that runs tools may use it.
+  const search = { type: "web_search" };
+  expect(fork([note, search])).toEqual({ ...parent([note, search]), input: own.input });
+  // The parent never listed the fork's tool.
   expect(fork([{ type: "function", name: "other" }])).toEqual(own);
-  expect(fork([note, { type: "web_search" }])).toEqual(own);
 });

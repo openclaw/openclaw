@@ -226,7 +226,6 @@ describe("ordinary steering into automatic model fallback", () => {
     { preparation: "fingerprint-1", revoked: false, aborted: true, replaceBackend: false },
     { preparation: "fingerprint-1", revoked: false, aborted: false, replaceBackend: true },
     { preparation: "backend-ready", revoked: false, aborted: false, replaceBackend: false },
-    { preparation: "backend-ready", revoked: true, aborted: false, replaceBackend: false },
   ])(
     "preserves input at $preparation (caller revoked: $revoked, target aborted: $aborted, backend replaced: $replaceBackend)",
     async ({ preparation, revoked, aborted, replaceBackend }) => {

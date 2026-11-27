@@ -294,6 +294,8 @@ export const preservedModuleBuildAssets = [
 
 // Test-only roots share the invocation generation without changing package entries.
 export const vitestWorkerBuildEntries = {
+  "state/openclaw-state-read-maintenance.test-support":
+    "src/state/openclaw-state-read-maintenance.test-support.ts",
   "plugins/test-helpers/installed-plugin-index":
     "src/plugins/test-helpers/installed-plugin-index.ts",
   "legacy-config-binding-repair.runtime":

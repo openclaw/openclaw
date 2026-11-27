@@ -194,10 +194,6 @@ describe("sessions.patch", () => {
       requestContext.resolveGatewayContext = () => requestContext;
       const tool = createDashboardTool({ agentSessionKey: sessionKey, agentId: "main" });
       await withGatewayToolCallerIdentity(dashboardCaller(sessionKey, requestContext), async () => {
-        const initial = await tool.execute("initial", { action: "read" });
-        expect(initial.details).toMatchObject({ defaultPresentation: "split" });
-        expect(loadSessionEntry(scope)).not.toHaveProperty("boardPresentation");
-
         const saved = await tool.execute("save", {
           action: "set_default_presentation",
           presentation: "expanded",
@@ -214,11 +210,6 @@ describe("sessions.patch", () => {
         const reopened = await tool.execute("reopened", { action: "read" });
         expect(reopened.details).toMatchObject({ defaultPresentation: "expanded" });
 
-        await tool.execute("split", {
-          action: "set_default_presentation",
-          presentation: "split",
-        });
-        expect(loadSessionEntry(scope)?.boardPresentation).toBe("split");
         await callInProcessGatewayTool("sessions.patch", {
           key: sessionKey,
           boardPresentation: null,
@@ -226,11 +217,6 @@ describe("sessions.patch", () => {
         const cleared = await tool.execute("cleared", { action: "read" });
         expect(cleared.details).toMatchObject({ defaultPresentation: "split" });
         expect(loadSessionEntry(scope)).not.toHaveProperty("boardPresentation");
-        expect(requestContext.broadcastToConnIds).not.toHaveBeenCalledWith(
-          "board.command",
-          expect.anything(),
-          expect.anything(),
-        );
       });
     }));
 

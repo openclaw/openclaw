@@ -231,6 +231,22 @@ jobs:
           path: ${{ runner.temp }}/linux-updater-carry
           if-no-files-found: ignore
 
+  plugin_npm_trust_closeout:
+    name: Close out beta.1 plugin trust
+    needs: [publish, finalize]
+    if: ${{ !cancelled() && needs.finalize.result == 'success' && needs.publish.outputs.npm_dist_tag == 'beta' && endsWith(needs.publish.outputs.release_tag, '-beta.1') }}
+    permissions:
+      actions: write
+      contents: read
+    uses: ./.github/workflows/plugin-npm-trust-closeout.yml
+    with:
+      release_tag: ${{ needs.publish.outputs.release_tag }}
+      source_sha: ${{ needs.publish.outputs.source_sha }}
+      tooling_sha: ${{ fromJSON(needs.publish.outputs.request).tooling.sha }}
+      tooling_ref: ${{ fromJSON(needs.publish.outputs.request).tooling.ref }}
+      release_run_id: ${{ needs.publish.outputs.release_run_id }}
+      release_run_attempt: ${{ format('{0}', fromJSON(needs.publish.outputs.request).releaseRunAttempt) }}
+
   dispatch_linux_mirror:
     name: Dispatch legacy Linux mirror after activation
     needs: [publish, finalize]

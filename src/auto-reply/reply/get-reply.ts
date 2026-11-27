@@ -160,7 +160,6 @@ async function resolveReplyFromConfig(
       resolveReplyAgentScope({ cfg, ctx: finalized, signal: opts?.abortSignal }),
     );
     assertReplyPreprocessingActive(opts?.abortSignal);
-    opts?.operatorAuthority?.assertCurrent();
     opts?.internalEventExecution?.assertCurrent?.();
     const refusal = readAgentDatabaseAdmissionRefusal(initialAgentScope.agentId);
     if (refusal) {
@@ -344,7 +343,6 @@ async function resolveReplyFromConfig(
           useFastTestBootstrap,
           provisioningInput: acpWorkspaceProvisioningInput,
           abortSignal: optsWithSkillFilter?.abortSignal,
-          operatorAuthority: optsWithSkillFilter?.operatorAuthority,
         }),
       );
     } catch (error) {
@@ -735,8 +733,6 @@ async function resolveReplyFromConfig(
       const action = resetMatch[1]?.toLowerCase() === "reset" ? "reset" : "new";
       await resolvedOpts?.awaitSessionDiffBaseline?.();
       assertReplyPreprocessingActive(resolvedOpts?.abortSignal);
-      resolvedOpts?.operatorAuthority?.assertCurrent();
-      command.assertOwnerCurrent?.();
       await emitResetCommandHooks({
         action,
         agentId,

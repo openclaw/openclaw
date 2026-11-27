@@ -56,14 +56,74 @@ async function fixture(newSource: string) {
   }
   await switchLink("releases/old/openclaw", prefix);
   const launcher = await writeLauncher(prefix);
-  return { state, prefix, launcher };
+  const clock = path.join(state, "clock.mjs");
+  await fs.writeFile(
+    clock,
+    `
+    import childProcess from "node:child_process";
+    import { syncBuiltinESMExports } from "node:module";
+    if (process.argv[1] === ${JSON.stringify(launcher)}) {
+      let child;
+      const fork = childProcess.fork;
+      childProcess.fork = (...args) => {
+        child = fork(...args);
+        child.on("message", message => {
+          if (message.type === "openclaw.trial") {
+            setImmediate(() => console.log("MIGRATION SETTLED"));
+          }
+        });
+        return child;
+      };
+      syncBuiltinESMExports();
+      let now = Date.now();
+      Date.now = () => now;
+      const timers = new Map();
+      const schedule = globalThis.setTimeout;
+      const cancel = globalThis.clearTimeout;
+      globalThis.setTimeout = (callback, delay, ...args) => {
+        if (delay < 1) return schedule(callback, delay, ...args);
+        const timer = schedule(() => {}, 2147483647);
+        timers.set(timer, { at: now + delay, run: () => callback(...args) });
+        return timer;
+      };
+      globalThis.clearTimeout = (timer) => { timers.delete(timer); cancel(timer); };
+      let input = "";
+      process.stdin.setEncoding("utf8");
+      process.stdin.on("data", chunk => {
+        input += chunk;
+        while (input.includes("\\n")) {
+          const end = input.indexOf("\\n");
+          const command = JSON.parse(input.slice(0, end));
+          input = input.slice(end + 1);
+          if (command.advance) {
+            const until = now + command.advance;
+            for (const [timer, task] of [...timers].sort((a, b) => a[1].at - b[1].at)) {
+              if (task.at > until) break;
+              now = task.at;
+              clearTimeout(timer);
+              task.run();
+            }
+            now = until;
+          }
+          if (command.send && child.connected) child.send(command.send, () => {});
+          console.log("CLOCK " + command.label);
+        }
+      });
+    }
+    `,
+  );
+  return { state, prefix, launcher, clock };
 }
 
-function start(launcher: string, args = ["gateway", "run"]) {
-  const child = spawn(process.execPath, [launcher, ...args], {
-    stdio: "pipe",
-    env: { ...process.env, NODE_OPTIONS: "" },
-  });
+function start(launcher: string, args = ["gateway", "run"], clock?: string) {
+  const child = spawn(
+    process.execPath,
+    [...(clock ? ["--import", clock] : []), launcher, ...args],
+    {
+      stdio: "pipe",
+      env: { ...process.env, NODE_OPTIONS: "" },
+    },
+  );
   let stdout = "";
   let stderr = "";
   child.stdout.on("data", (chunk) => {
@@ -231,6 +291,51 @@ describe("resident update launcher", () => {
     expect(await readTrial(prefix)).toMatchObject({
       phase: "rolled-back",
       outcome: { reason: `new build did not become ready in ${TRIAL_BUDGET_MS / 60000} min` },
+    });
+  });
+
+  it("restores the old release ten minutes after migration settles, not twenty", async () => {
+    const { prefix, launcher, clock } = await fixture(`
+      process.send({ type: 'openclaw.trial', phase: 'trial' });
+      console.log('MIGRATED');
+    `);
+    await pending(prefix);
+    const run = start(launcher, undefined, clock);
+    await output(run.child, "MIGRATION SETTLED", run.stdout);
+    // The timer must restore service without another child message waking the launcher.
+    run.child.stdin.write(JSON.stringify({ advance: 600_001, label: "deadline" }) + "\n");
+    await output(run.child, "OLD", run.stdout);
+    expect(await readTrial(prefix)).toMatchObject({
+      phase: "rolled-back",
+      outcome: {
+        reason: "The new version did not finish starting within 10 minutes",
+      },
+    });
+  });
+
+  it("allows migration to exceed ten minutes before committing a healthy candidate", async () => {
+    const { prefix, launcher, clock } = await fixture(`
+      process.on('message', message => {
+        if (message.type === 'fixture.ready') {
+          process.send({ type: 'openclaw.trial', phase: 'trial' });
+          ready();
+        }
+      });
+      console.log('MIGRATING');
+    `);
+    await pending(prefix);
+    const run = start(launcher, undefined, clock);
+    await output(run.child, "MIGRATING", run.stdout);
+    run.child.stdin.write(JSON.stringify({ advance: 660_000, label: "slow-migration" }) + "\n");
+    await output(run.child, "CLOCK slow-migration", run.stdout);
+    expect(await readTrial(prefix)).toMatchObject({ phase: "trial", attempts: 1 });
+    run.child.stdin.write(
+      JSON.stringify({ send: { type: "fixture.ready" }, label: "ready" }) + "\n",
+    );
+    await output(run.child, "READY", run.stdout);
+    expect(await readTrial(prefix)).toMatchObject({
+      phase: "committed",
+      outcome: { status: "succeeded", buildId: "new-build" },
     });
   });
 

@@ -79,7 +79,7 @@ describe("worker turn launcher local placement", () => {
     sql.expectIdle();
     await fx.seedActivePlacement("remote-exec");
     sql.clear();
-    expect(prepared.assertCurrent).toThrow("placement authority changed");
+    expect(prepared.assertCurrent).toThrow("placement changed");
     sql.expectIdle();
   });
 
@@ -251,7 +251,7 @@ describe("worker turn launcher local placement", () => {
           expect(await fx.placements.listAsync()).toEqual([]);
         } else {
           await expect(operation).rejects.toThrow(
-            change === "placement publication" ? "placement authority changed" : refusal.message,
+            change === "placement publication" ? "placement changed" : refusal.message,
           );
           expect(runLocal).not.toHaveBeenCalled();
         }
@@ -680,7 +680,7 @@ describe("worker turn launcher local placement", () => {
       if (scenario !== "current") {
         await expect(provider.prepareSandbox(sandboxInput())).rejects.toThrow(
           scenario === "placement-replaced"
-            ? "placement authority changed"
+            ? "placement changed"
             : "environment changed while preparing its sandbox",
         );
         return;

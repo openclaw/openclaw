@@ -460,7 +460,7 @@ describe("POST /tools/invoke request cancellation", () => {
         await next.arrayBuffer();
         expect(lifecycle.execute).toHaveBeenCalledOnce();
         admission?.close();
-        expect(() => authority?.assertCurrent()).toThrow(/no longer active/);
+        expect(() => authority?.assertCurrent()).toThrow(/Operator execution ended/);
       } finally {
         admission?.close();
         resolveGatewayContext = undefined;

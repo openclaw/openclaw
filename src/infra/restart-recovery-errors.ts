@@ -9,10 +9,10 @@ export class GatewayDispatchUnavailableError extends Error {
   }
 }
 
-/** A committed authorization change retires the interrupted input, not its session. */
+/** A refused recovery admission retires the interrupted input, not its session. */
 export class GatewayOperatorRecoveryAuthorizationError extends Error {
   constructor(
-    message = "Restart recovery operator authority changed; start a new user turn.",
+    message = "Restart recovery could not admit this input. Start a new user turn.",
     options?: ErrorOptions,
   ) {
     super(message, options);

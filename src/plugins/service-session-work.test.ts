@@ -32,7 +32,6 @@ const state = vi.hoisted(() => ({
 }));
 // mock-isolation: keep durable storage and original operator fixtures local to this host-boundary test.
 vi.mock("../agents/tools/gateway-caller-context.js", () => ({
-  captureGatewayToolCallerAssertion: () => state.assertCurrent,
   getGatewayToolCallerIdentity: () => ({
     agentId: "main",
     sessionKey: "agent:main:research",

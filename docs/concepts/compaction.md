@@ -406,6 +406,11 @@ prompt. When a retry reloads history in the middle of a turn whose tool results
 exceed the guard, the loader keeps the request that opened the turn in front of
 those frames, so the retry still sees its task.
 
+The summary request that recovers a cut-off tool turn is the one exception. It answers
+for that turn alone under its own cache key, so it stays within eight bytes per context
+token. When screenshots fill that bound, it replaces the largest tool-result bodies with
+short notices before it drops the turn's request.
+
 This selection does not delete saved history, create a summary, run a memory
 flush, or trigger compaction notifications. Use `/compact` when you want semantic
 summarization. The normal compaction triggers and the opt-in active-transcript byte

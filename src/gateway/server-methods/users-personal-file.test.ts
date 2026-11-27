@@ -230,7 +230,11 @@ describe("personal USER.md self-service", () => {
       sessionKey,
       operationalRunInstance: { instanceId: sessionKey, runId: "personal-test-run" },
       operatorAuthority: authority,
-      receiptAuthority: () => active,
+      receiptAuthority: () => {
+        if (!active) {
+          throw new Error("agent tool caller authority is no longer active");
+        }
+      },
       gatewayContextResolver: () => context,
     };
     return {
@@ -426,7 +430,7 @@ describe("personal USER.md self-service", () => {
             GATEWAY_OWNER_PROFILE_ID,
           ]);
           captured.release();
-          await expect(call({ action: "get" })).rejects.toThrow("no longer active");
+          await expect(call({ action: "get" })).rejects.toThrow("Operator execution ended");
         } finally {
           captured.release();
         }

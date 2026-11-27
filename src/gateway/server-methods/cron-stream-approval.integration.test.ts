@@ -1,12 +1,10 @@
-import fsp, { access, symlink, unlink, writeFile } from "node:fs/promises";
+import fsp, { symlink, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { AUTOMATIONS_TOOL_NAME } from "../../agents/tools/automations-tool-name.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
-import * as logger from "../../logger.js";
-import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
 import { getOperatorApprovalDetailed } from "../operator-approval-store.js";
 import {
   approvedStreamJob,
@@ -131,46 +129,6 @@ describe("agent stream approval through the automation tool", () => {
       );
     },
   );
-
-  it("diagnoses an approved ordinary exec whose waiting authority changed without executing it", async () => {
-    const warnings = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
-    try {
-      await withStreamApprovalFixture(async ({ tools, manager, takeApproval, decide }) => {
-        const marker = path.join(stateDir, "denied-command-ran");
-        const script = path.join(stateDir, "ordinary-approval.cjs");
-        await writeFile(script, 'require("node:fs").writeFileSync(process.argv[2], "executed");');
-        const waiting = createDeferred();
-        const awaitDecision = manager.awaitDecision.bind(manager);
-        const observedWait = vi.spyOn(manager, "awaitDecision").mockImplementation((id) => {
-          const decision = awaitDecision(id);
-          waiting.resolve();
-          return decision;
-        });
-        try {
-          const operation = tools.invoke("exec", {
-            command: `"${process.execPath}" "${script}" "${marker}"`,
-          });
-          const request = await takeApproval(operation);
-          await waiting.promise;
-          bumpGatewayAccessRevision();
-          await decide(request.id, "allow-once");
-          const result = await operation;
-          expect(result).toMatchObject({ details: { status: "failed" } });
-          expect(JSON.stringify(result)).toContain("approval-request-failed");
-          expect(manager.getLocalSnapshot(request.id)?.decision).toBe("allow-once");
-          await expect(access(marker)).rejects.toMatchObject({ code: "ENOENT" });
-          expect(warnings).toHaveBeenCalledWith(
-            `exec approval wait failed (id=${request.id}, reason=authority-changed)`,
-          );
-          expect(JSON.stringify(warnings.mock.calls)).not.toContain(marker);
-        } finally {
-          observedWait.mockRestore();
-        }
-      });
-    } finally {
-      warnings.mockRestore();
-    }
-  });
 
   it.each(["allow-once", "deny"] as const)(
     "carries the admitted sandbox through %s without creating a host stream",

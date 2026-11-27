@@ -99,7 +99,11 @@ it.each([
               sessionKey: requesterSessionKey,
               operationalRunInstance,
               approvalAuthority,
-              receiptAuthority: () => runs.validateAgentRunDelegatedAuthority(approvalAuthority),
+              receiptAuthority: () => {
+                if (!runs.validateAgentRunDelegatedAuthority(approvalAuthority)) {
+                  throw new Error("agent tool caller authority is no longer active");
+                }
+              },
             },
             () =>
               runWithCronCreatorAuthorityCapability(capability, () =>
@@ -213,9 +217,7 @@ it.each([
           vi.useRealTimers();
         }
       } else if (change === "revoked") {
-        await expect(attempt()).rejects.toThrow(
-          "Requester followup authority is no longer current",
-        );
+        await expect(attempt()).rejects.toThrow("Requester followup ended");
       } else {
         await expect(attempt()).resolves.toBe("accepted");
       }

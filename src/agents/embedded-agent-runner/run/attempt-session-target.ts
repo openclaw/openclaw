@@ -80,7 +80,7 @@ export function createPreparedSessionTargetAssertion(input: {
       assertActiveRun.assertScopeCurrent();
     } catch (cause) {
       recordTargetRefusal("scope_authority_refused");
-      throw new SessionWorkStartChangedError("Session target scope authority is no longer active", {
+      throw new SessionWorkStartChangedError("Session target preparation outlived its attempt", {
         cause,
       });
     }

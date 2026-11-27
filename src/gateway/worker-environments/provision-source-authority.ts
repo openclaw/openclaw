@@ -6,7 +6,7 @@ import type { WorkerEnvironmentRecord } from "./store.js";
 /** Distinguishes a refused original source from a later retry caller's refusal. */
 export class WorkerProvisionSourceChangedError extends Error {
   constructor(cause: unknown) {
-    super("Worker creation authority changed; submit a new request.", { cause });
+    super("Worker creation was refused; submit a new request.", { cause });
   }
 }
 
@@ -73,5 +73,5 @@ export async function restoreWorkerProvisionSource(
     // A failed identity read or an unavailable runtime context does not prove revocation.
     throw new WorkerProvisionSourceRecoveryPendingError(error);
   }
-  return { assertCurrent: wrap(restored.authority.assertCurrent), release: restored.release };
+  return { assertCurrent: assertOwner, release: restored.release };
 }

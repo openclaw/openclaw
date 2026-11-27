@@ -1008,7 +1008,7 @@ describe("trajectory preparation through the public runtime", () => {
         }
         return f.trajectoryRecorder;
       });
-      await expect(f.prepare()).rejects.toThrow("admitted run authority is no longer active");
+      await expect(f.prepare()).rejects.toThrow("This agent run is no longer active");
       expect(f.trajectoryRecorder.recordEvent).not.toHaveBeenCalled();
     },
   );

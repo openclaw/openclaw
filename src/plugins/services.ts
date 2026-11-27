@@ -617,15 +617,17 @@ async function startPreparedPluginServices({
           // service-owned Gateway/worker context, never that caller's authority or generation.
           await runOutsideOperatorToolGatewayAuthority(() =>
             runOutsidePluginRuntimeGenerationScope(() =>
-              pluginInstanceInvocation.exit(() =>
-                runServiceStart(async () =>
-                  withPluginHttpRouteRegistry(
-                    registry,
-                    () =>
-                      ownedService.startupConsumer
-                        ? ownedService.startupConsumer.run(start)
-                        : start(),
-                    lease,
+              pluginInvocationContext.exit(() =>
+                pluginInstanceInvocation.exit(() =>
+                  runServiceStart(async () =>
+                    withPluginHttpRouteRegistry(
+                      registry,
+                      () =>
+                        ownedService.startupConsumer
+                          ? ownedService.startupConsumer.run(start)
+                          : start(),
+                      lease,
+                    ),
                   ),
                 ),
               ),

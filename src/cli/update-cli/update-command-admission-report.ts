@@ -72,6 +72,11 @@ export async function assertReleaseUpdateAdmission(
       "--reapply-local-overrides is not supported by prepared-release updates. Save your local dist edits, update without this flag, then reapply the overrides by hand. See https://docs.openclaw.ai/install/updating#local-packaged-code-overrides",
     );
   }
+  if (params.opts.fullIntegrityCheck) {
+    throw new Error(
+      "--full-integrity-check is not supported by prepared-release updates. Run openclaw doctor --fix --full-integrity-check separately for full checks during migrations, then update without this flag. Doctor does not scan an already-current database as a separate verification job.",
+    );
+  }
 }
 
 /** Report rejected read-only admission without creating a run or recovery diagnostics. */

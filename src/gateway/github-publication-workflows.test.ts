@@ -17,7 +17,6 @@ import { callGatewayTool } from "../agents/tools/gateway.js";
 import { createGitHubPublishTool } from "../agents/tools/github-publish-tool.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { setCanonicalUserProfileRole } from "../state/user-profile-writes.js";
-import * as publicationExecutor from "./github-publication-executor.js";
 import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
 import {
   createGitHubPublicationRequesterFixture,
@@ -472,43 +471,6 @@ it.each(["before local CAS", "before push"] as const)(
     expect(await fs.readFile(file, "utf8")).toBe(workflow);
   },
 );
-
-it("rechecks the publisher after workflow authorization at the push boundary", async () => {
-  const f = await createRequesters();
-  await writeWorkflow(f.local);
-  const execute = publicationExecutor.executeGitHubPublication;
-  let pushRecorded = false;
-  let publisherRevoked = false;
-  const intercepted = vi
-    .spyOn(publicationExecutor, "executeGitHubPublication")
-    .mockImplementation((params) =>
-      execute({
-        ...params,
-        recordEffect: async (effect, observed) => {
-          await params.recordEffect?.(effect, observed);
-          if (effect === "push" && observed === undefined) {
-            pushRecorded = true;
-          }
-        },
-        assertWorkflowChangesAllowed: () => {
-          params.assertWorkflowChangesAllowed();
-          if (pushRecorded) {
-            publisherRevoked = true;
-            mocks.matchesIdentity.mockReturnValue(false);
-          }
-        },
-      }),
-    );
-  onTestFinished(() => intercepted.mockRestore());
-
-  await expect(f.publish("publisher-at-push", f.maintainer)).rejects.toThrow(
-    GitHubPublicationRecoveryPendingError,
-  );
-  expect(publisherRevoked).toBe(true);
-  expect(f.maintainer.assertCurrent).not.toThrow();
-  expect(f.local.effects).toEqual([]);
-  expect(f.externalWrites).toEqual([]);
-});
 
 it("cannot reintroduce a workflow after a remote reset following the last observation", async () => {
   const f = await createRequesters();

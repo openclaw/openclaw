@@ -29,6 +29,17 @@ The release live/E2E child keeps broad native `pnpm test:live` coverage, but it 
 
 That keeps the same file coverage while making slow live provider failures easier to rerun and diagnose. The aggregate `native-live-src-gateway`, `native-live-extensions-o-z`, `native-live-extensions-media`, and `native-live-extensions-media-music` shard names remain valid for manual one-shot reruns.
 
+### Z.AI credentials
+
+Configure two Actions secrets in `openclaw/openclaw` under **Settings → Secrets and variables → Actions**:
+
+- `ZAI_API_KEY`: a Standard API key with funded API balance or an applicable usage bundle. General model, gateway, and media checks use this key; `Z_AI_API_KEY` remains its legacy alias.
+- `ZAI_CODING_API_KEY`: a Personal or Team Coding Plan key with an active subscription and available quota. Only `native-live-src-agents-zai-coding` uses this secret, mapped to `ZAI_API_KEY` before live profile hydration.
+
+The selected Coding Plan shard fails with a setup error if `ZAI_CODING_API_KEY` is missing; it never falls back to the standard key. `Z_AI_API_KEY` is not a separate Coding Plan credential. Callers using an explicit reusable-workflow secret map must forward `ZAI_CODING_API_KEY`; callers using `secrets: inherit` need no mapping change. See [Z.AI's key management guide](https://docs.z.ai/devpack/notice/api-key-management) for key types and billing.
+
+### Native live execution
+
 Stable/full release validation includes the configless `agent exec --auth-env-only` Code Mode smoke in `native-live-test`. The test runner builds the runtime before starting workers. The smoke copies that built distribution outside the source checkout, applies the package's plugin exclusions, and reuses installed dependencies. It supplies only `OPENAI_API_KEY` to a fresh CLI environment, runs `openai/gpt-5.6-luna` without a runtime override, and verifies Code Mode engagement, nested tool calls, and an exact read-to-write artifact. This proves built-distribution behavior; Package Acceptance owns tarball installation proof. The shard requires passing evidence from this test; a missing key or skipped test cannot satisfy the release gate.
 
 Gateway-profile shards and shards containing the image-tool provider or OpenAI plugin live tests prepare the `sourcePerformance` build profile before starting Vitest. This supplies executable provider and agent runtime artifacts without building declarations or the Control UI. Provider requests, assertions, and test deadlines remain unchanged; gateway diagnostic environment settings apply only to gateway-profile shards. Cold source-plugin Jiti import cost remains a separate performance follow-up, not live provider latency.

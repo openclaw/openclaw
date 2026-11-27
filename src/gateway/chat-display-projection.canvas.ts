@@ -204,7 +204,8 @@ export type ChatCanvasBlock = ChatCanvasPreview & { type: "canvas" };
 export function extractChatToolResultCanvasPreview(
   message: unknown,
 ): ChatCanvasPreview | undefined {
-  const entry = readRecord(message);
+  // CLI runtimes report a tool result as its raw content-block array.
+  const entry = Array.isArray(message) ? { content: message } : readRecord(message);
   if (!entry) {
     return undefined;
   }
@@ -287,7 +288,18 @@ export function augmentChatHistoryWithCanvasBlocks(messages: unknown[]): unknown
     const role = typeof entry.role === "string" ? entry.role.toLowerCase() : "";
     if (role === "assistant") {
       lastAssistantIndex = index;
-      if (!messageContainsToolHistoryContent(entry)) {
+      if (messageContainsToolHistoryContent(entry)) {
+        // Claude CLI history coalesces tool results into the assistant tool-call message.
+        for (const block of Array.isArray(entry.content) ? entry.content : []) {
+          const result = readObjectRecord(block);
+          const preview = isToolResultHistoryBlockType(result?.type)
+            ? extractChatToolResultCanvasPreview(result)
+            : undefined;
+          if (preview) {
+            pending.push(preview);
+          }
+        }
+      } else {
         lastRenderableAssistantIndex = index;
         if (pending.length > 0) {
           next[index] = appendChatCanvasBlocksToMessage(entry, pending);

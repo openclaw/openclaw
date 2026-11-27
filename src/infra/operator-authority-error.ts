@@ -41,11 +41,8 @@ export function createOperatorAuthorityInactiveError(
   check: OperatorAuthorityFailure["operatorAuthorityCheck"],
   capturedAt: number,
 ): Error {
-  const kind = reason.startsWith("closure-") ? "execution" : "source";
   return Object.defineProperty(
-    new Error(
-      `operator ${kind} authority is no longer active. Reconnect to the Gateway, then resend your message. If access is denied, ask an administrator to restore it.`,
-    ),
+    new Error("Operator execution ended. Reconnect to the Gateway, then resend your message."),
     failureMetadata,
     {
       value: Object.freeze({

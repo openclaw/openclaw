@@ -1024,7 +1024,6 @@ describe("runMemoryFlushIfNeeded", () => {
     { stage: "after start notice", invalidation: "authorization" },
     { stage: "after awaited compactor", invalidation: "authorization" },
     { stage: "after awaited compactor", invalidation: "abort" },
-    { stage: "after awaited compactor", invalidation: "operator" },
   ] as const)(
     "rejects $invalidation invalidation $stage without accounting or adopting compaction",
     async ({ stage, invalidation }) => {
@@ -1033,23 +1032,9 @@ describe("runMemoryFlushIfNeeded", () => {
       const followupRun = createTestFollowupRun({ workspaceDir: rootDir });
       const controller = new AbortController();
       let authorized = true;
-      let operatorCurrent = true;
-      if (invalidation === "operator") {
-        followupRun.operatorAuthority = createTestOperatorAuthority({
-          profileId: "guest",
-          scopes: ["operator.write"],
-          assertCurrent: () => {
-            if (!operatorCurrent) {
-              throw new Error("operator authority revoked");
-            }
-          },
-        });
-      }
       const invalidate = () => {
         if (invalidation === "authorization") {
           authorized = false;
-        } else if (invalidation === "operator") {
-          operatorCurrent = false;
         } else {
           controller.abort(new Error("caller aborted"));
         }
@@ -1093,9 +1078,7 @@ describe("runMemoryFlushIfNeeded", () => {
       await expect(pending).rejects.toThrow(
         invalidation === "authorization"
           ? "Session compaction maintenance is no longer active"
-          : invalidation === "abort"
-            ? "caller aborted"
-            : "operator authority revoked",
+          : "caller aborted",
       );
 
       expect(onCompactionStart).toHaveBeenCalledTimes(stage === "before start" ? 0 : 1);

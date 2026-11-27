@@ -216,7 +216,11 @@ it.each(["allowed", "revoked", "session changed", "selected Bob"] as const)(
                   requesterOrigin: origin,
                   operatorAuthority: source.authority,
                   operationalRunInstance: createOperationalRunInstanceRef("closed-invocation"),
-                  receiptAuthority: () => receiptCurrent,
+                  receiptAuthority: () => {
+                    if (!receiptCurrent) {
+                      throw new Error("agent tool caller authority is no longer active");
+                    }
+                  },
                   fullPermission: true,
                   personalToolParticipants: participants,
                 },

@@ -583,7 +583,11 @@ describe("session event target custody", () => {
         sessionKey,
         sessionEventToolsAllow: toolsAllow,
         operationalRunInstance: createOperationalRunInstanceRef(runId),
-        receiptAuthority: () => invocationActive,
+        receiptAuthority: () => {
+          if (!invocationActive) {
+            throw new Error("agent tool caller authority is no longer active");
+          }
+        },
       },
       () =>
         captureTarget("main", sessionKey, {
@@ -624,7 +628,15 @@ describe("session event target custody", () => {
     async (owner, { state: { env } }) => {
       let active = true;
       const capture = withGatewayToolCallerIdentity(
-        { agentId: "main", sessionKey, receiptAuthority: () => owner !== "invocation" || active },
+        {
+          agentId: "main",
+          sessionKey,
+          receiptAuthority: () => {
+            if (owner === "invocation" && !active) {
+              throw new Error("agent tool caller authority is no longer active");
+            }
+          },
+        },
         () =>
           captureTarget("main", sessionKey, {
             env,
@@ -644,7 +656,7 @@ describe("session event target custody", () => {
       } else {
         active = false;
         await expect(capture).rejects.toThrow(
-          owner === "invocation" ? "no longer owns its invocation" : "Background producer retired",
+          owner === "invocation" ? "no longer active" : "Background producer retired",
         );
       }
       expect(peekSystemEventEntries(sessionKey)).toEqual([]);

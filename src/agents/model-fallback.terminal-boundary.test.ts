@@ -128,7 +128,9 @@ it.each([
         policy.assertCurrent({ tools: { deny: ["exec"] } }, []);
       } catch (cause) {
         return new Error("Session target preparation outlived its attempt", {
-          cause: new Error("admitted run authority is no longer active", { cause }),
+          cause: new Error("This agent run is no longer active. Start a new turn to retry.", {
+            cause,
+          }),
         });
       }
       throw new Error("Expected policy refusal");
@@ -141,7 +143,7 @@ it.each([
         Failure.name,
         () =>
           new Error("Session target preparation outlived its attempt", {
-            cause: new Error("admitted run authority is no longer active", {
+            cause: new Error("This agent run is no longer active. Start a new turn to retry.", {
               cause: new Failure(),
             }),
           }),

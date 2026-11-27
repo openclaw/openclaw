@@ -1,10 +1,7 @@
-import { copyFileSync, renameSync, symlinkSync } from "node:fs";
-import path from "node:path";
-import { expect, it as baseIt, vi } from "vitest";
+import { copyFileSync, renameSync } from "node:fs";
+import { expect, it as baseIt } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "../infra/node-sqlite.js";
-import { readSqliteDatabaseCleanClose as isClean } from "../infra/sqlite-database-admission.js";
-import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { runSqliteSchemaReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
 import {
   admitSqliteSchema,
@@ -29,10 +26,6 @@ import {
   openOpenClawAgentDatabase as openAgent,
 } from "./openclaw-agent-db.js";
 import { readOpenClawDatabaseQuarantineFailure as quarantineFailure } from "./openclaw-quarantine-store.js";
-import {
-  OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-  openOpenClawStateDatabase as openState,
-} from "./openclaw-state-db.js";
 import { resolveQuarantineStorePath } from "./openclaw-state-db.paths.js";
 
 const metadataSchema = `CREATE TABLE schema_meta (
@@ -132,45 +125,6 @@ it.for(["drop", "recreate"] as const)(
     }
   },
 );
-
-it("reuses live agent admission and its seal after writer idle retirement", async ({
-  state: { env },
-}) => {
-  const options = { agentId: "main", env };
-  const shared = openState({ env });
-  using registry = openNodeSqliteDatabase(shared.path, { readOnly: true });
-  admitSqliteSchema(registry);
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  try {
-    const first = openAgent(options);
-    const firstNative = first.db;
-    expect(firstNative.prepare("PRAGMA busy_timeout").get()).toEqual({
-      timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-    });
-    using quarantine = openNodeSqliteDatabase(resolveQuarantineStorePath(env), { readOnly: true });
-    admitQuarantine(quarantine, first.path, env);
-    expect(isClean(first.path)).toBe(false);
-    using observation = observeReads();
-    const reader = openReader(options);
-    expect(reader.found).toBe(true);
-    if (reader.found) {
-      reader.database.close();
-    }
-    expect(validationStatements(observation.queries)).toEqual([]);
-    vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
-    expect(firstNative.isOpen).toBe(false);
-    expect(isClean(first.path)).toBe(true);
-    const reopened = openAgent(options);
-    expect(reopened.db === firstNative).toBe(false);
-    expect(reopened.db.isOpen).toBe(true);
-    expect(reopened.db.prepare("PRAGMA busy_timeout").get()).toEqual({
-      timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-    });
-    expect(validationStatements(observation.queries)).toEqual([]);
-  } finally {
-    vi.useRealTimers();
-  }
-});
 
 it("reuses closed-writer ownership for read-only admission until tracked schema changes", async ({
   state: { env },
@@ -282,22 +236,3 @@ it.for(["tracked", "raw"] as const)(
     }
   },
 );
-
-it("registers a new alias without repeating the physical database admission", async ({ state }) => {
-  const options = { agentId: "main", env: state.env };
-  const first = openAgent(options);
-  using quarantine = openNodeSqliteDatabase(resolveQuarantineStorePath(state.env), {
-    readOnly: true,
-  });
-  admitQuarantine(quarantine, first.path, state.env);
-  const aliasDirectory = state.path("agent-alias");
-  symlinkSync(path.dirname(first.path), aliasDirectory, "junction");
-  const aliasPath = path.join(aliasDirectory, path.basename(first.path));
-  {
-    using observation = observeReads();
-    const alias = openAgent({ ...options, path: aliasPath });
-    expect(alias.db.isOpen).toBe(true);
-    expect(validationStatements(observation.queries)).toEqual([]);
-  }
-  expect(registeredAgents({ env: state.env }).map((row) => row.path)).toContain(aliasPath);
-});

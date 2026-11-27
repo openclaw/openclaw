@@ -10,6 +10,7 @@ import type { CallGatewayOptions } from "../gateway/call-options.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
+import { VERSION } from "../version.js";
 import { runReleaseUpdateCli } from "./cli.js";
 import { resolvePrefix, switchLink } from "./store.js";
 import type * as TargetModule from "./target.js";
@@ -22,13 +23,15 @@ beforeEach(async () => {
   root = path.join(home.home, "checkout");
   await fs.mkdir(root);
   await runCommandWithTimeout(["git", "init", root], { timeoutMs: 10_000 });
+  // The selected release is this build's version unless a case asks for a downgrade.
+  packageTarget.version = VERSION;
 });
 
 const sent = vi.hoisted(() => [] as unknown[]);
 const missingCredentials = vi.hoisted(() => ({ enabled: false }));
 const install = vi.hoisted(() => ({ kind: "git" }));
 const localRun = vi.hoisted(() => ({ status: "skipped", phase: "finished" }));
-const packageTarget = vi.hoisted(() => ({ version: "2026.11.6" }));
+const packageTarget = vi.hoisted(() => ({ version: "" }));
 const confirmDowngrade = vi.hoisted(() =>
   vi.fn<() => Promise<"confirmed" | "cancelled" | "confirmation-required">>(),
 );
@@ -64,6 +67,13 @@ vi.mock("../infra/update-install-status.js", async (importOriginal) => ({
   }),
 }));
 const prepared = vi.hoisted(() => [] as unknown[]);
+const maintainRuntimes = vi.hoisted(() =>
+  vi.fn(async (_repair: boolean, _authority: { assertCurrent: () => void }) => [] as string[]),
+);
+// mock-isolation: reclamation scans host temp directories; prepare.test.ts runs it for real.
+vi.mock("../commands/doctor-retained-runtime.js", () => ({
+  prepareRetainedUpdateRuntimeMaintenance: async () => maintainRuntimes,
+}));
 // mock-isolation: preparation builds a real release; this test checks only the channel it is given.
 vi.mock("./run.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./run.js")>()),
@@ -123,13 +133,15 @@ vi.mock("../gateway/call.js", async (importOriginal) => ({
 }));
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await home.restore();
   capabilities.length = 0;
   install.kind = "git";
   missingCredentials.enabled = false;
   localRun.status = "skipped";
   localRun.phase = "finished";
-  packageTarget.version = "2026.11.6";
+  maintainRuntimes.mockReset();
+  maintainRuntimes.mockResolvedValue([]);
   confirmDowngrade.mockReset();
   createRun.mockClear();
   mutateConfig.mockClear();
@@ -150,9 +162,16 @@ it("sends a pinned commit and the --timeout budget that the Gateway protocol acc
       timeoutMs: 5_000,
     }),
   ).rejects.toThrow("refused for the test");
+  // The Gateway gets what remains of the budget after this command's own work.
   expect(sent).toEqual([
-    { target: { kind: "git", upstreamRef: "origin/main", upstreamSha: sha }, timeoutMs: 5_000 },
+    {
+      target: { kind: "git", upstreamRef: "origin/main", upstreamSha: sha },
+      timeoutMs: expect.any(Number),
+    },
   ]);
+  const { timeoutMs } = sent[0] as { timeoutMs: number };
+  expect(timeoutMs).toBeGreaterThan(0);
+  expect(timeoutMs).toBeLessThanOrEqual(5_000);
   expect(validateUpdateRunParams(sent[0])).toBe(true);
 });
 
@@ -195,6 +214,63 @@ it("keeps following the run while the restarting Gateway refuses connections", a
   );
   await runReleaseUpdateCli({ json: true, restart: true, runningRoot: root });
   expect(process.exitCode).toBe(0);
+});
+
+it.each([false, true])(
+  "reclaims earlier updaters' runtimes itself before the Gateway updates (json=%s)",
+  async (json) => {
+    const removed = "Removed abandoned updater runtime: /tmp/openclaw-update-runtime-Gone01";
+    maintainRuntimes.mockImplementation(async () => {
+      // The Gateway's census would count this requesting command as a possible holder.
+      expect(sent).toEqual([]);
+      return [removed];
+    });
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    runsGet.push(() => ({
+      run: {
+        status: "succeeded",
+        phase: "finished",
+        steps: [],
+        after: { version: "2026.11.7" },
+        origin: {},
+      },
+    }));
+    await runReleaseUpdateCli({ json, restart: true, runningRoot: root });
+    expect(maintainRuntimes).toHaveBeenCalledOnce();
+    const lines = (spy: typeof log) => spy.mock.calls.map(([line]) => line);
+    if (json) {
+      // stdout carries only the record.
+      expect(lines(error)).toEqual([removed]);
+      expect(log).not.toHaveBeenCalled();
+      expect(writeJson).toHaveBeenCalledOnce();
+    } else {
+      expect(lines(log)).toEqual([removed, "finished: finished", "Updated to 2026.11.7."]);
+      expect(error).not.toHaveBeenCalled();
+    }
+    expect(process.exitCode).toBe(0);
+  },
+);
+
+it("skips cleanup under a short --timeout and gives the update the budget", async () => {
+  await expect(
+    runReleaseUpdateCli({ json: true, restart: true, runningRoot: root, timeoutMs: 5_000 }),
+  ).rejects.toThrow("refused for the test");
+  // A census cannot be interrupted, so a 5 s budget does not start one.
+  expect(maintainRuntimes).not.toHaveBeenCalled();
+  expect(sent).toEqual([{ timeoutMs: expect.any(Number) }]);
+});
+
+it("leaves kept-runtime lines to the cleanup owner's log", async () => {
+  const removed = "Removed abandoned updater runtime: /tmp/openclaw-update-runtime-Gone01";
+  maintainRuntimes.mockResolvedValue([
+    removed,
+    "Runtime retained at /tmp/openclaw-update-runtime-Held01: still in use",
+  ]);
+  const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+  await runReleaseUpdateCli({ json: false, restart: false, runningRoot: root });
+  expect(log.mock.calls.map(([line]) => line)).toEqual([removed, "Already up to date."]);
 });
 
 it("says the update is still running when the --timeout budget ends first", async () => {
@@ -326,6 +402,7 @@ it("refuses --no-restart from another checkout before preparation or creating a 
   );
   await expect(fs.stat(path.join(resolvePrefix(), "releases", ".trial"))).rejects.toThrow();
   expect(prepared).toEqual([]);
+  expect(maintainRuntimes).not.toHaveBeenCalled();
 });
 
 it("restarts the local Gateway after preparing an explicit package tag and follows its outcome", async () => {
@@ -358,7 +435,7 @@ it.each([
   "requires downgrade consent before admission (yes=$yes, decision=$decision)",
   async ({ yes, decision, code }) => {
     install.kind = "package";
-    packageTarget.version = "2026.11.5";
+    packageTarget.version = "2000.1.1";
     confirmDowngrade.mockResolvedValueOnce(decision);
     const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
     await runReleaseUpdateCli({

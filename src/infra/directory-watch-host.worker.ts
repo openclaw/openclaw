@@ -3,15 +3,26 @@ import { Worker } from "node:worker_threads";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
 
-// Watch errors can block this event loop in native FSEvents cleanup. The separate
-// thread still ends the helper if its caller dies while the input pipes stay open.
-const parentMonitor = resolveRuntimeProcessEntrypointUrl("directoryWatchParent");
-new Worker(parentMonitor, {
-  execArgv: resolveRuntimeWorkerThreadExecArgv(parentMonitor),
-  workerData: { caller: Number(process.argv[2]) },
-})
-  .on("error", () => {})
-  .unref();
+const caller = Number(process.argv[2]);
+if (process.platform === "linux") {
+  // Linux has no FSEvents cleanup to hold this loop, so a timer here ends the helper
+  // after its caller dies, even while the input pipes stay open, without a second isolate.
+  setInterval(() => {
+    if (process.ppid !== caller) {
+      process.kill(process.pid, "SIGKILL");
+    }
+  }, 1_000).unref();
+} else {
+  // Watch errors can block this event loop in native FSEvents cleanup. The separate
+  // thread still ends the helper if its caller dies while the input pipes stay open.
+  const parentMonitor = resolveRuntimeProcessEntrypointUrl("directoryWatchParent");
+  new Worker(parentMonitor, {
+    execArgv: resolveRuntimeWorkerThreadExecArgv(parentMonitor),
+    workerData: { caller },
+  })
+    .on("error", () => {})
+    .unref();
+}
 
 type Request = { id: number; path?: string; recursive?: boolean };
 const live = new Map<number, fs.FSWatcher>();

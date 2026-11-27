@@ -185,20 +185,19 @@ the session's cached prefix:
   the session's pinned system prompt and tool definitions.
 - The fork sends its rebuilt request instead of the replay when the parent sent
   an item the rebuilt context lacks, the parent request is a continuation that
-  carries only its delta, the fork may run a tool the parent request never
-  listed, or the fork may run tools and the parent request lists a
-  provider-hosted tool.
+  carries only its delta, or the fork may run a tool the parent request never
+  listed.
 
-Every tool the session lists stays in the request; the fork runs only the tools
-it was given. A call to any other tool returns a normal result such as
-`exec is not available in this background run.` A tool-free fork also sets tool
-choice to `none` on OpenAI Responses (including native ChatGPT), Chat
-Completions and Anthropic Messages, so provider-hosted tools cannot run; it lists
-the session's hosted tools (for example web search) like the session does. A
-fork that runs tools lists provider-hosted search only when it was given
-`web_search`, because the provider runs hosted tools before the fork's tool
-gate. Other APIs keep the parent's tool choice; a tool-free fork whose request
-carries a provider-hosted tool on those APIs fails before it is sent.
+Every tool the session lists stays in the request, including provider-hosted
+tools such as web search, so the fork shares the session's cached tool list. The
+fork runs only the client tools it was given; a call to any other client tool
+returns a normal result such as `exec is not available in this background
+run.` A fork that runs tools may also use the session's provider-hosted tools,
+because the provider runs those before the fork's tool gate. A tool-free fork
+sets tool choice to `none` on OpenAI Responses (including native ChatGPT), Chat
+Completions and Anthropic Messages, so no tool runs. Other APIs keep the
+parent's tool choice; a tool-free fork whose request carries a provider-hosted
+tool on those APIs fails before it is sent.
 
 A fork uses the session's full model context with the model's own context
 window and compaction, not an excerpt. Thinking follows the session, because

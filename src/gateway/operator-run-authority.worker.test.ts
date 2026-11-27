@@ -291,7 +291,6 @@ it("admits channel role and model policy once while retaining explicit cancellat
     const config = readerConfig(["operator.read"]);
     context.getRuntimeConfig = () => config;
     const lifecycle = new AbortController();
-    let permitted = true;
     const input = {
       profileId: profile.id,
       canonicalIdentity: null,
@@ -299,11 +298,6 @@ it("admits channel role and model policy once while retaining explicit cancellat
       scopes: ["operator.read"],
       gatewayAccessGrant: null,
       getRuntimeConfig: context.getRuntimeConfig,
-      assertCurrent: () => {
-        if (!permitted) {
-          throw new Error("channel requester is no longer admitted");
-        }
-      },
       signal: lifecycle.signal,
     };
     const admitted = captureChannelOperatorRunAuthority(input);
@@ -312,7 +306,6 @@ it("admits channel role and model policy once while retaining explicit cancellat
       sandbox: "required",
       agents: ["restricted"],
     });
-    permitted = false;
     publishOperatorRoleConfigChange(context);
     expect(admitted.assertCurrent).not.toThrow();
     expectModels(admitted, [true, true, false]);
@@ -320,10 +313,6 @@ it("admits channel role and model policy once while retaining explicit cancellat
     expect(admitted.readCurrentRoleFacts?.().policy?.modelPolicy).toEqual({
       allow: ["fixture/a", "fixture/b"],
     });
-    expect(() => captureChannelOperatorRunAuthority(input)).toThrow(
-      "channel requester is no longer admitted",
-    );
-    permitted = true;
     const next = captureChannelOperatorRunAuthority(input);
     expectModels(next, [false, true, true]);
     expect(next.rolePolicy).toMatchObject({ sandboxRequired: true, agents: ["restricted"] });
@@ -441,7 +430,7 @@ it.each(["capture", "operator tool"])(
           retained.release();
           authority.assertCurrent();
           release();
-          expect(authority.assertCurrent).toThrow("no longer active");
+          expect(authority.assertCurrent).toThrow("Operator execution ended.");
         } else {
           await scoped({ profile, client, context }, () =>
             withOperatorToolGatewayAuthority({ scopes: ["operator.read"] }, async () => {

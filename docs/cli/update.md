@@ -827,10 +827,11 @@ follow the recovery guidance for that installed release first.
 
 Candidate SQLite migrations use whole-database `quick_check`, full integrity
 checks of rewritten or re-indexed tables, and foreign-key checks by default.
-Use `openclaw update --full-integrity-check` for a full check of every table and
-index during migration. The default can miss index/table mismatches in untouched
-tables. An older installed updater keeps its own checks until candidate code
-runs and does not recognize the new flag. See
+Prepared-release updates (Git and npm, pnpm or Bun installs) refuse
+`--full-integrity-check` before creating a run; they do not support this selection.
+Run `openclaw doctor --fix --full-integrity-check` separately for full checks
+during Doctor migrations, then update without the flag. This does not scan an
+already-current database as a separate verification job. See
 [migration integrity checks](/install/updating#migration-integrity-checks).
 
 Updates preserve each store's physical engine. Before database mutation, the
@@ -1042,7 +1043,7 @@ Use `openclaw update status` and Doctor for recovery guidance.
 | `--yes`                                          | Skip confirmation prompts (for example downgrade confirmation).                                                                                                                                                                                                                                                                                                                                  |
 | `--reapply-local-overrides`                      | Currently refused by prepared-release updates. Save edits, update without the flag, then [reapply overrides manually](/install/updating#local-packaged-code-overrides).                                                                                                                                                                                                                          |
 | `--accept-capabilities`                          | Accept each plugin's reviewed capability changes during post-update sync. This acknowledges the exact staged capability surface; it does not disable capability checks or establish future trust.                                                                                                                                                                                                |
-| `--full-integrity-check`                         | Request full SQLite integrity checks during candidate migrations, including Doctor subprocesses. Also accepted by `update repair` and `update wizard`.                                                                                                                                                                                                                                           |
+| `--full-integrity-check`                         | Refused by prepared-release updates. Use `openclaw doctor --fix --full-integrity-check` separately for full migration checks. Still accepted by `update repair`; `update wizard` follows the selected update path.                                                                                                                                                                               |
 
 Invalid `--channel` values are quoted as JSON strings in diagnostics, including
 escaped quotes, newlines, and control characters. This applies to `update`,

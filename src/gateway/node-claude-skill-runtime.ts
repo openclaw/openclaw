@@ -181,15 +181,8 @@ export async function prepareNodeClaudeSkillRuntime(
     controller.abort();
     return releaseSource();
   };
-  const assertCallerCurrent = Object.assign(() => {
-    if (caller?.receiptAuthority?.() === false) {
-      throw new Error(
-        "Paired-node skill assignment or run authority changed. Retry from a fresh turn.",
-      );
-    }
-  }, caller?.receiptAuthority);
   const assertCurrent = composeSessionSourceAssertion(
-    [assertRun, assertCallerCurrent],
+    [assertRun, caller?.receiptAuthority],
     (assertSources) => {
       assertSources();
       combinedSignal.throwIfAborted();

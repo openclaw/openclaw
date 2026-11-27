@@ -174,7 +174,7 @@ it("carries the authenticated model policy and releases it after answering", asy
     );
     expect(respond).toHaveBeenCalledExactlyOnceWith(true, { answer: "Allowed answer.", ts: 125 });
     expect(captured).toBeDefined();
-    expect(() => captured?.assertCurrent()).toThrow("no longer active");
+    expect(() => captured?.assertCurrent()).toThrow("Operator execution ended.");
   });
 });
 

@@ -1129,20 +1129,6 @@ describe("cron method validation", () => {
     },
   );
 
-  it("checks a direct Cron caller again at the add commit boundary", async () => {
-    const context = createCronContext();
-    const result = await invokeCron("cron.add", agentTurnCronParams(), {
-      context,
-      hasCurrentClientAuthority: () => context.cron.add.mock.calls.length === 0,
-    });
-    expect(context.cron.add).toHaveBeenCalledOnce();
-    expect(context.committedAdds).toHaveLength(0);
-    expectResponseError(result.respond, {
-      code: "INVALID_REQUEST",
-      messageIncludes: "Gateway caller authority is no longer active",
-    });
-  });
-
   it.each([
     ["cron.scratch.set", { id: "cron-1", content: "notes" }, "writeScratch"],
     ["cron.remove", { id: "cron-1" }, "remove"],

@@ -1149,7 +1149,7 @@ jobs:
           DISPATCH_ID: ${{ inputs.dispatch_id }}
           TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
           WORKFLOW_REVISION: *workflow_sha
-          EVENT_BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha || '' }}
+          EVENT_BASE_SHA: &event_base_sha ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha || '' }}
           GH_TOKEN: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && github.token || '' }}
           PULL_REQUEST_NUMBER: *pr_number
           RELEASE_GATE: ${{ inputs.release_gate }}
@@ -1408,7 +1408,7 @@ jobs:
         uses: ./.ci-harness/.github/actions/ensure-base-commit
         with:
           base-sha: *diff_base
-          fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
+          fetch-ref: &base_fetch_ref ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
 
       - name: Detect docs-only changes
         id: docs_scope
@@ -1439,14 +1439,14 @@ jobs:
           fi
 
       - name: Setup manifest pnpm
-        if: github.event_name == 'workflow_dispatch' && steps.checkout_ref.outputs.sha != github.workflow_sha
+        if: &manual_foreign_checkout github.event_name == 'workflow_dispatch' && steps.checkout_ref.outputs.sha != github.workflow_sha
         uses: ./.ci-harness/.github/actions/setup-pnpm-store-cache
         with:
           cache-mode: ${{ steps.candidate_trust.outputs.cache_mode }}
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Install manifest dependencies
-        if: github.event_name == 'workflow_dispatch' && steps.checkout_ref.outputs.sha != github.workflow_sha
+        if: *manual_foreign_checkout
         run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
 
       - name: Check hybrid hosted assignment health
@@ -1612,7 +1612,7 @@ jobs:
       - name: Resolve security diff base
         id: diff_base
         env:
-          EVENT_BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha || '' }}
+          EVENT_BASE_SHA: *event_base_sha
         run: |
           set -euo pipefail
           base_sha="$EVENT_BASE_SHA"
@@ -1641,7 +1641,7 @@ jobs:
         uses: ./.ci-harness/.github/actions/ensure-base-commit
         with:
           base-sha: *diff_base
-          fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
+          fetch-ref: *base_fetch_ref
 
       - name: Prepare trusted scanner config
         id: scanner_config
@@ -1843,7 +1843,7 @@ jobs:
 
       - name: Verify Control UI i18n source
         id: control_ui_i18n_source
-        if: ${{ !cancelled() && needs.preflight.outputs.reuse_control_ui_i18n_setup == 'true' && steps.node_setup.outcome == 'success' }}
+        if: &control_ui_i18n_setup_ready ${{ !cancelled() && needs.preflight.outputs.reuse_control_ui_i18n_setup == 'true' && steps.node_setup.outcome == 'success' }}
         continue-on-error: true
         env:
           COMPATIBILITY_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
@@ -1859,7 +1859,7 @@ jobs:
 
       - name: Check Control UI locale parity
         id: control_ui_i18n_parity
-        if: ${{ !cancelled() && needs.preflight.outputs.reuse_control_ui_i18n_setup == 'true' && steps.node_setup.outcome == 'success' }}
+        if: *control_ui_i18n_setup_ready
         continue-on-error: true
         run: &control_ui_i18n_parity_run pnpm ui:i18n:check
 
@@ -1945,7 +1945,7 @@ jobs:
           retention-days: 7
 
       - name: Check bundled plugin generated assets
-        if: ${{ !cancelled() && (steps.dist_build.outcome == 'success' || steps.dist_build_cache.outputs.cache-hit == 'true') }}
+        if: &dist_build_ready ${{ !cancelled() && (steps.dist_build.outcome == 'success' || steps.dist_build_cache.outputs.cache-hit == 'true') }}
         run: |
           set -euo pipefail
 
@@ -1962,7 +1962,7 @@ jobs:
           fi
 
       - name: Check generated schema validators
-        if: ${{ !cancelled() && (steps.dist_build.outcome == 'success' || steps.dist_build_cache.outputs.cache-hit == 'true') }}
+        if: *dist_build_ready
         run: |
           set -euo pipefail
           if node --input-type=module <<'NODE'
@@ -2016,11 +2016,11 @@ jobs:
           retention-days: 1
 
       - name: Smoke test CLI launcher help
-        if: ${{ !cancelled() && (steps.dist_build.outcome == 'success' || steps.dist_build_cache.outputs.cache-hit == 'true') }}
+        if: *dist_build_ready
         run: node openclaw.mjs --help
 
       - name: Smoke test CLI launcher status json
-        if: ${{ !cancelled() && (steps.dist_build.outcome == 'success' || steps.dist_build_cache.outputs.cache-hit == 'true') }}
+        if: *dist_build_ready
         run: node openclaw.mjs status --json --timeout 1
 
       - name: Smoke test built CLI with Bun
@@ -2100,7 +2100,7 @@ jobs:
             ${{ github.repository }}-vitest-workers-built-v1-protected-${{ steps.node_setup.outputs.node-toolchain-cache-key }}-
 
       - name: Run built artifact checks
-        if: ${{ !cancelled() && (steps.dist_build.outcome == 'success' || steps.dist_build_cache.outputs.cache-hit == 'true') }}
+        if: *dist_build_ready
         id: built_artifact_checks
         env:
           PARALLEL_GATEWAY_WATCH: ${{ runner.environment != 'github-hosted' && 'true' || 'false' }}
@@ -2616,7 +2616,7 @@ jobs:
         if: matrix.task == 'control-ui'
         timeout-minutes: 20
         env:
-          OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: .artifacts/control-ui-e2e-timeouts/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: &ui_e2e_diagnostic_dir .artifacts/control-ui-e2e-timeouts/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
           VITEST_SHARD_INDEX: ${{ matrix.shard }}
           VITEST_SHARD_COUNT: ${{ matrix.vitest_shard_count }}
           OPENCLAW_VITEST_MAX_WORKERS: ${{ matrix.vitest_max_workers || 2 }}
@@ -2683,7 +2683,7 @@ jobs:
         # Fail the step before the job deadline so progress diagnostics can upload.
         timeout-minutes: 20
         env:
-          OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: .artifacts/control-ui-e2e-timeouts/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: *ui_e2e_diagnostic_dir
           VITEST_SHARD_INDEX: ${{ matrix.shard }}
           VITEST_SHARD_COUNT: ${{ matrix.vitest_shard_count }}
           OPENCLAW_VITEST_MAX_WORKERS: ${{ matrix.vitest_max_workers || 2 }}
@@ -2706,8 +2706,8 @@ jobs:
       - name: Collect synthetic Control UI failure evidence
         if: failure() && steps.ui_e2e_tests.outcome == 'failure'
         env:
-          DIAGNOSTIC_DIR: .artifacts/control-ui-e2e-timeouts/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
-          EVIDENCE_DIR: .artifacts/control-ui-e2e-failures/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          DIAGNOSTIC_DIR: *ui_e2e_diagnostic_dir
+          EVIDENCE_DIR: &ui_e2e_evidence_dir .artifacts/control-ui-e2e-failures/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
         shell: python
         run: |
           import os
@@ -2738,7 +2738,7 @@ jobs:
         uses: *upload_artifact_v7
         with:
           name: control-ui-e2e-failure-${{ matrix.shard }}-${{ github.run_attempt }}
-          path: .artifacts/control-ui-e2e-failures/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          path: *ui_e2e_evidence_dir
           include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 7
@@ -3100,6 +3100,7 @@ jobs:
         uses: ./.ci-harness/.github/actions/setup-ripgrep
 
       - name: Run baseline ratchets
+        timeout-minutes: 12
         env:
           RATCHET_PR_HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
         shell: bash
@@ -3176,10 +3177,10 @@ jobs:
       - *linux_node_checkout_step
       - name: Smoke test trusted Git owner action
         id: git_owner_smoke
-        if: matrix.task == 'bundled-protocol' || matrix.task == 'ci-routing' || matrix.task == 'contracts-plugins-ci-routing'
+        if: &protocol_routing_task matrix.task == 'bundled-protocol' || matrix.task == 'ci-routing' || matrix.task == 'contracts-plugins-ci-routing'
         uses: ./.ci-harness/.github/actions/git-owner
       - name: Verify trusted Git owner bootstrap
-        if: matrix.task == 'bundled-protocol' || matrix.task == 'ci-routing' || matrix.task == 'contracts-plugins-ci-routing'
+        if: *protocol_routing_task
         env:
           OWNER_PATH: ${{ steps.git_owner_smoke.outputs.owner-path }}
         shell: bash
@@ -4889,16 +4890,16 @@ jobs:
           fi
 
       - name: Check config docs baseline
-        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && needs.preflight.outputs.run_docs_content == 'true' }}
+        if: &docs_content_ready ${{ !cancelled() && steps.node_setup.outcome == 'success' && needs.preflight.outputs.run_docs_content == 'true' }}
         run: pnpm config:docs:check
 
       - name: Check plugin inventory
-        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && needs.preflight.outputs.run_docs_content == 'true' }}
+        if: *docs_content_ready
         run: pnpm plugins:inventory:check
 
       - name: Checkout ClawHub docs source
         id: clawhub_docs
-        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && needs.preflight.outputs.run_docs_content == 'true' }}
+        if: *docs_content_ready
         shell: bash
         env:
           CHECKOUT_KIND: clawhub
@@ -5164,8 +5165,8 @@ jobs:
     env:
       NATIVE_RUNTIME_ARTIFACT_ID: ${{ needs.build-artifacts.outputs.native_runtime_artifact_id }}
       HISTORICAL_TARGET: *historical_target
-      MACOS_PRIMARY_PHASE: ${{ github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && 'release' || 'tests' }}
-      OPENCLAWKIT_TEST_EXECUTION: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && needs.preflight.outputs.ci_shape != 'main') || github.run_attempt > 1) && 'serial' || 'parallel' }}
+      MACOS_PRIMARY_PHASE: &macos_primary_phase ${{ github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && 'release' || 'tests' }}
+      OPENCLAWKIT_TEST_EXECUTION: &openclawkit_test_execution ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && needs.preflight.outputs.ci_shape != 'main') || github.run_attempt > 1) && 'serial' || 'parallel' }}
     steps: &macos_swift_steps
       - name: Start Swift cache clock
         id: swift-cache-clock
@@ -5720,8 +5721,8 @@ jobs:
     timeout-minutes: 30
     env:
       HISTORICAL_TARGET: *historical_target
-      MACOS_PRIMARY_PHASE: ${{ github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && 'release' || 'tests' }}
-      OPENCLAWKIT_TEST_EXECUTION: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && needs.preflight.outputs.ci_shape != 'main') || github.run_attempt > 1) && 'serial' || 'parallel' }}
+      MACOS_PRIMARY_PHASE: *macos_primary_phase
+      OPENCLAWKIT_TEST_EXECUTION: *openclawkit_test_execution
     steps: *macos_swift_steps
 
   ios-build:
@@ -5766,7 +5767,7 @@ jobs:
 
       - name: Restore iOS source packages
         id: ios-packages-cache
-        if: steps.ios-cache-inputs.outputs.xcode != '' && needs.preflight.outputs.cache_mode != 'off'
+        if: &ios_cache_enabled steps.ios-cache-inputs.outputs.xcode != '' && needs.preflight.outputs.cache_mode != 'off'
         continue-on-error: true
         timeout-minutes: 3
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -5776,7 +5777,7 @@ jobs:
 
       - name: Restore Watch RTC build inputs
         id: watch-rtc-cache
-        if: steps.ios-cache-inputs.outputs.xcode != '' && needs.preflight.outputs.cache_mode != 'off'
+        if: *ios_cache_enabled
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with: &watch_rtc_cache_inputs
           path: &watch_rtc_cache_paths |
@@ -6376,7 +6377,7 @@ jobs:
 
       - name: Restore Watch RTC build inputs
         id: watch-rtc-cache
-        if: steps.ios-cache-inputs.outputs.xcode != '' && needs.preflight.outputs.cache_mode != 'off'
+        if: *ios_cache_enabled
         continue-on-error: true
         timeout-minutes: 3
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -6384,7 +6385,7 @@ jobs:
 
       - name: Restore screenshot source packages
         id: ios-packages-cache
-        if: steps.ios-cache-inputs.outputs.xcode != '' && needs.preflight.outputs.cache_mode != 'off'
+        if: *ios_cache_enabled
         continue-on-error: true
         timeout-minutes: 3
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

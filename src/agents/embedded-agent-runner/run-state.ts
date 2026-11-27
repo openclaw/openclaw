@@ -231,7 +231,7 @@ export function captureActiveEmbeddedRunPersonalToolParticipants(
       handle.isStopped?.() ||
       !ownsRegistration()
     ) {
-      throw new Error("Personal-tool turn authority is no longer active; ask again in a new turn.");
+      throw new Error("This agent run is no longer active. Start a new turn to retry.");
     }
   };
   assertCurrent();

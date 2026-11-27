@@ -350,10 +350,11 @@ async function resumeRestartStore(
   deferred: Map<string, () => Promise<void>>,
 ): Promise<boolean> {
   let completed = true;
-  const { assertCurrent: assertRecoveryCurrent, resume } = await prepareRestartCompletionCustody(
-    { context, signal, log },
-    { target, entries },
-  );
+  const {
+    assertCurrent: assertRecoveryCurrent,
+    ownsInput,
+    resume,
+  } = await prepareRestartCompletionCustody({ context, signal, log }, { target, entries });
   const summary = createRestartResumeSummary("startup");
   const queuedKeys = new Set(orphaned.map(({ sessionKey }) => sessionKey));
   const ended = new Set(outOfScope);
@@ -600,7 +601,12 @@ async function resumeRestartStore(
         const remaining = await continueSessionQueuedInputs(
           context,
           { ...target, ...session, agentId },
-          { signal, assertCurrent: () => signal.throwIfAborted(), endCause },
+          {
+            signal,
+            assertCurrent: () => signal.throwIfAborted(),
+            endCause,
+            ownsInput: (row) => ownsInput(row, agentId),
+          },
         );
         if (remaining) {
           completed = false;

@@ -187,7 +187,9 @@ it.each([
         ok: false,
         payload: { runId, status: "error" },
         error: {
-          message: expect.stringContaining("Message injection authority is no longer current"),
+          message: expect.stringContaining(
+            "The message input is no longer available. Start a new turn to retry.",
+          ),
         },
       });
     }

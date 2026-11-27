@@ -532,11 +532,11 @@ export function registerRequesterWakeReceiptBoundaryTests({
         expect(
           events
             .map((event) => JSON.parse(event.eventJson))
-            .filter((event) => event.customType === "run-failed-before-reply"),
+            .filter((event) => event.customType === "subagent-completion"),
         ).toEqual([
           expect.objectContaining({
             content: expect.stringContaining(
-              "The child result couldn't be delivered to this conversation.",
+              "couldn't be added to this conversation automatically.",
             ),
             display: true,
             details: expect.objectContaining({

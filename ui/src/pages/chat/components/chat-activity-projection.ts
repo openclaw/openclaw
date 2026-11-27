@@ -311,8 +311,9 @@ export function segmentActivityGroup<State extends ActivityStructure>(
         : undefined;
     const imageInspection = Boolean(media?.images.length && media.attachments.length === 0);
     const coalescible =
-      outcome === "running" ||
-      launch?.phase === "succeeded" ||
+      (launch
+        ? launch.phase === "running" || launch.phase === "succeeded"
+        : outcome === "running") ||
       Boolean(operation && readSubagentCancellation(operation.card)?.stopped) ||
       imageInspection;
     const action = operation && state.actionOrder.get(operation.card);

@@ -16,9 +16,10 @@ export function CatalogDiscoverySearch(props: { children: JSX.Element }): JSX.El
 
 export function CatalogDiscoveryChips(props: {
   label: string;
+  revision?: unknown;
   children: JSX.Element;
 }): JSX.Element {
-  const scrollState = useScrollState(true);
+  const scrollState = useScrollState(true, true, { revision: () => props.revision });
   return (
     <div class="plugin-catalog-chips" role="group" aria-label={props.label} ref={scrollState}>
       {props.children}

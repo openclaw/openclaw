@@ -1,4 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { extractEnvAssignmentKeysFromDispatchWrappers } from "./dispatch-wrapper-resolution.js";
 import { parseInlineOptionToken } from "./inline-option-token.js";
 import {
   advancePosixInlineOptionScan,
@@ -123,5 +124,10 @@ export function hasPosixShellStartupEnvironment(params: {
   if (params.env?.BASH_ENV?.trim() || params.env?.ENV?.trim()) {
     return true;
   }
-  return params.argv.some((token) => /^(?:BASH_ENV|ENV)=/u.test(token.trim()));
+  return (
+    params.argv.some((token) => /^(?:BASH_ENV|ENV)=/u.test(token.trim())) ||
+    extractEnvAssignmentKeysFromDispatchWrappers(params.argv).some(
+      (key) => key === "BASH_ENV" || key === "ENV",
+    )
+  );
 }

@@ -167,7 +167,7 @@ export function registerRequesterWakeSettlementBoundaryTests<Response>({
           "sess-main",
         )
           .map((row) => JSON.parse(row.eventJson))
-          .filter((event) => event.customType === "run-failed-before-reply");
+          .filter((event) => event.customType === "subagent-completion");
         expect(notices).toEqual([expect.objectContaining({ display: true })]);
         return;
       }

@@ -108,7 +108,6 @@ type JoinCase = {
     | "delivery"
     | "link-revoke"
     | "identity-disconnect"
-    | "owner-revoke"
     | "shared-revoke";
   crossSurface?: "incoming" | "outgoing" | "different" | "shared" | "delegated" | "initiator";
   linkedBot?: "incoming" | "incumbent";
@@ -252,11 +251,6 @@ it.each<[string, Outcome, JoinCase?]>([
     { sharedOwner: { direction: "incoming", differentSession: true } },
   ],
   [
-    "channel ownership revoked before submission",
-    "failed",
-    { sharedOwner: { direction: "incoming" }, after: "owner-revoke" },
-  ],
-  [
     "admitted shared WebUI continuation survives source revocation",
     "accepted",
     { sharedOwner: { direction: "outgoing" }, after: "shared-revoke" },
@@ -360,7 +354,7 @@ it.each<[string, Outcome, JoinCase?]>([
               }),
             })
           : operatorAuthority);
-      let channelOwnerCurrent = true;
+      const channelOwnerCurrent = true;
       run.operatorAuthority = operatorAuthority;
       let originalIdentityCurrent = true;
       let incomingIdentityCurrent = true;
@@ -682,9 +676,6 @@ it.each<[string, Outcome, JoinCase?]>([
         }
         if (c.after === "identity-disconnect") {
           originalIdentityCurrent = false;
-        }
-        if (c.after === "owner-revoke") {
-          channelOwnerCurrent = false;
         }
         if (c.after === "shared-revoke") {
           sharedRevocation.abort(new Error("Shared browser authority revoked"));

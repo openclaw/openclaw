@@ -575,7 +575,13 @@ export interface ToolResultMessage<TDetails = unknown> {
   timestamp: number; // Unix timestamp in milliseconds
 }
 
-export type Message = UserMessage | AssistantMessage | ToolResultMessage;
+/** Historical token counts can survive without a recorded price; absence is not zero cost. */
+export type HistoryUsage = Omit<Usage, "cost"> & { cost?: Usage["cost"] };
+
+/** Replay input is weaker than a live provider result, which always supplies Usage. */
+export type AssistantHistoryMessage = Omit<AssistantMessage, "usage"> & { usage: HistoryUsage };
+
+export type Message = UserMessage | AssistantHistoryMessage | ToolResultMessage;
 
 export type ImagesInputContent = TextContent | ImageContent;
 export type ImagesOutputContent = TextContent | ImageContent;

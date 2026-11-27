@@ -19,14 +19,8 @@ function issueAuthority(
   scopes: readonly string[] = ["operator.sessions.write"],
   profileId = "create-requester",
 ) {
-  const controller = new AbortController();
-  const authority = createTestOperatorAuthority({
-    profileId,
-    scopes,
-    signal: controller.signal,
-    assertCurrent: () => {},
-  });
-  return { authority, revoke: () => controller.abort(new Error("creation source revoked")) };
+  const authority = createTestOperatorAuthority({ profileId, scopes, assertCurrent: () => {} });
+  return { authority };
 }
 
 // A channel turn: a live agent caller with no admitted operator authority.
@@ -163,7 +157,7 @@ describe("sessions_create", () => {
 });
 
 describe("prepareSandboxSessionTools", () => {
-  it("projects only the captured operator grant, including its absence and revocation", async () => {
+  it("projects only the captured operator grant, including its absence", async () => {
     const allow = ["read"];
     const policy: SandboxToolPolicy = { allow, deny: [], [SANDBOX_DEFAULT_TOOL_ALLOW]: allow };
     const captured = issueAuthority();
@@ -186,8 +180,6 @@ describe("prepareSandboxSessionTools", () => {
           "sessions",
           "sessions_create",
         ]);
-        captured.revoke();
-        expect(() => prepareSandboxSessionTools(params)).toThrow("creation source revoked");
       },
     );
   });

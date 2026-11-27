@@ -911,7 +911,7 @@ async function requireFanoutCapacity(packages, params, commandLimit) {
   );
   requireValue(
     required <= remaining,
-    `GitHub publication request budget requires ${required} requests for ${packages} packages; ${remaining} remain. Select at most ${maximum} packages or resume after ${new Date(reset * 1000).toISOString()} with fresh parent authorization.`,
+    `GitHub publication request budget requires ${required} requests for ${packages} packages; ${remaining} remain. Select at most ${maximum} packages or resume after ${new Date(reset * 1000).toISOString()} with fresh publication authorization.`,
   );
 }
 
@@ -983,10 +983,15 @@ async function runPreparedNpmCommand(argv) {
       fullReleaseValidationRunId: process.env.PREPARED_NPM_FRV_RUN_ID,
       fullReleaseValidationRunAttempt: process.env.PREPARED_NPM_FRV_RUN_ATTEMPT,
     };
-    if (options["--evidence-output"] || process.env.PREPARED_NPM_EVIDENCE_ID) {
+    // The CLI owns handoff eligibility for both direct and parent-backed preview.
+    // Non-FRV preparation keeps its existing independent validation path.
+    const evidenceOutput =
+      options["--evidence-output"] &&
+      (adoptionParams.fullReleaseValidationRunId || adoptionParams.fullReleaseValidationRunAttempt);
+    if (evidenceOutput || process.env.PREPARED_NPM_EVIDENCE_ID) {
       const binding = npmEvidenceBinding(adoptionParams);
       const { createReleaseEvidenceClient } = await import("./release-ci-summary.mjs");
-      adoptionParams.immutableReads = options["--evidence-output"]
+      adoptionParams.immutableReads = evidenceOutput
         ? createReleaseEvidenceReplay(binding, undefined, { shareAcquisitionReads: true })
         : await loadNpmEvidenceReplay({
             binding,
@@ -998,14 +1003,14 @@ async function runPreparedNpmCommand(argv) {
             shareAcquisitionReads: true,
           });
     } else if (command === "authorize" || command === "consume") {
-      // Parent dispatch and direct recovery lack a carrier. Share raw reads only
+      // Parent dispatch and reruns without a current preview lack a carrier. Share raw reads only
       // within this command; the final sweep still refreshes live authority.
       adoptionParams.immutableReads = createReleaseEvidenceReplay({}, undefined, {
         shareAcquisitionReads: true,
       });
     }
     adoption = await authenticatePreparedNpmArtifactEvidence(adoptionParams, false);
-    if (options["--evidence-output"]) {
+    if (evidenceOutput) {
       requireValue(command === "load", "Only trusted preview load can write an evidence handoff");
       writeEvidenceOutput = () => {
         const {
@@ -1132,7 +1137,7 @@ async function runPreparedNpmCommand(argv) {
     await requireFanoutCapacity(
       matrix.length,
       common,
-      options["--evidence-output"] ? CARRIER_COMMAND_REQUEST_LIMIT : PACKAGE_COMMAND_REQUEST_LIMIT,
+      writeEvidenceOutput ? CARRIER_COMMAND_REQUEST_LIMIT : PACKAGE_COMMAND_REQUEST_LIMIT,
     );
     await adoption.revalidateAuthority?.();
     capacity?.report(selectedPackages.length);
@@ -1146,6 +1151,7 @@ async function runPreparedNpmCommand(argv) {
       matrix: JSON.stringify(matrix),
       all_matrix: JSON.stringify(selectedPackages),
       core_deferrals: JSON.stringify(corePluginDeferrals),
+      evidence_attempt: writeEvidenceOutput ? process.env.GITHUB_RUN_ATTEMPT : "",
     });
   } else if (command === "consume") {
     const entry = JSON.parse(options["--package"]);

@@ -18,11 +18,7 @@ import { settleUserTurnPendingInput } from "../../sessions/user-turn-transcript-
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
 import { prepareCommandOwnerAuthority } from "../command-auth.js";
-import {
-  bindCommandOwnerAuthority,
-  captureCommandOwnerAssertion,
-  getCommandOwnerAuthority,
-} from "../command-owner-authority.js";
+import { bindCommandOwnerAuthority, getCommandOwnerAuthority } from "../command-owner-authority.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { completeFollowupRunLifecycle } from "./queue/lifecycle.js";
 import type { FollowupRun } from "./queue/types.js";
@@ -48,7 +44,6 @@ export async function prepareReplySourceAdmission(params: {
     if (operation.lifecycleGeneration) {
       assertAgentRunLifecycleGenerationCurrent(operation.lifecycleGeneration);
     }
-    followupRun.operatorAuthority?.assertCurrent();
     assertSessionControllerOperation(operation);
   };
   assertCurrent();
@@ -288,9 +283,6 @@ export async function prepareReplyCommandOwnerAuthority(params: {
         isCurrent: () => senderIsOwner,
       },
     });
-    if (senderIsOwner) {
-      captureCommandOwnerAssertion(run)?.();
-    }
   } else if (!params.hasOperatorAuthority && retainedOwner) {
     // A profile-only or legacy owner has no authenticated source for another owner turn.
     run.senderIsOwner = false;

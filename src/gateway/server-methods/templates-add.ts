@@ -120,8 +120,7 @@ export function reportTemplateAddFailure(
     error instanceof TemplatesDisabledError ||
     error instanceof ClawHubSourceError ||
     (operation === "apply" &&
-      (error instanceof TemplateGatewayAuthorityError ||
-        error instanceof TemplateGatewayConsentError ||
+      (error instanceof TemplateGatewayConsentError ||
         error instanceof TemplateSkillConsentError ||
         error instanceof TemplateGatewayPlanBlockedError ||
         error instanceof TemplateGatewayPlanChangedError))
@@ -195,7 +194,6 @@ export async function planTemplateAddForRequest(
     },
   });
   assertTemplatesEnabled(context.getRuntimeConfig());
-  assertLocalSourceAuthority();
   return plan;
 }
 
@@ -214,18 +212,6 @@ export async function applyTemplateAddForRequest(
   const assertCurrent = () => {
     signal?.throwIfAborted();
     sessionMutationCommitGuard?.();
-    if (
-      hasCurrentClientAuthority?.() === false ||
-      (client &&
-        (client.invalidated ||
-          (client.connect.role ?? "operator") !== "operator" ||
-          !client.connect.scopes?.includes(ADMIN_SCOPE))) ||
-      (!client && !context.localEmbedded)
-    ) {
-      throw new TemplateGatewayAuthorityError(
-        "Template installation authority is no longer active.",
-      );
-    }
   };
   assertTemplatesEnabled(context.getRuntimeConfig());
   assertTemplatesEnabled(
@@ -577,7 +563,7 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
         "kind" in params.source ? params.source.kind : undefined,
       );
       const code =
-        error instanceof TemplateGatewayAuthorityError || error instanceof TemplatesDisabledError
+        error instanceof TemplatesDisabledError
           ? ErrorCodes.FORBIDDEN
           : (error instanceof TemplateProjectError && error.code === "project_invalid") ||
               error instanceof TemplateGatewayPlanChangedError ||

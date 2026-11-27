@@ -290,8 +290,7 @@ export async function runCronAdmissionCase(
       c.releaseRecovered.resolve();
     } else if (scenario === "before-start") {
       // This is the receipt capability's next-use boundary, not operator
-      // admission. Its in-flight guards remain in LIFETIME_CHECK_CALLS until
-      // the later lifetime PR; removing a job must retire the receipt.
+      // admission; removing a job must retire the receipt.
       await admin.request("cron.remove", { id: job.id });
       jobRemoved = true;
       assert(standingAuthority);

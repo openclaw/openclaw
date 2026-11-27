@@ -28,6 +28,8 @@ import { startSessionRowDeltaSubagents } from "./session-row-delta-run.test-supp
 import {
   closeSessionRowSocket,
   collectSessionRowFrames,
+  resolveLegacyAncestorRefs,
+  withoutAncestorRevisions,
 } from "./session-row-delta-sockets.test-support.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils-store.js";
@@ -66,7 +68,7 @@ function expectSessionRowFrame(
 ): void {
   const encoded = expectDefined(frame, "encoded frame");
   expect(encoded.payload).toHaveProperty(`session.${kind}`);
-  expect(decodeFrame(decoder, encoded).payload).toEqual(
+  expect(withoutAncestorRevisions(decodeFrame(decoder, encoded).payload)).toEqual(
     expectDefined(legacy, "legacy frame").payload,
   );
 }
@@ -394,11 +396,14 @@ test("capable and legacy sockets produce identical session payloads and consumer
   });
   disposeConsumers = () => consumers.forEach((consumer) => consumer.dispose());
   let patches = 0;
+  const resolvedBaseline = resolveLegacyAncestorRefs(baseline);
   for (const [index, frame] of encoded.entries()) {
     const original = expectDefined(baseline[index], "corresponding legacy frame");
     patches += JSON.stringify(frame.payload).includes('"base":') ? 1 : 0;
     const decoded = decodeFrame(decoder, frame);
-    expect(decoded.payload, `frame ${index} ${frame.event}`).toEqual(original.payload);
+    expect(withoutAncestorRevisions(decoded.payload), `frame ${index} ${frame.event}`).toEqual(
+      resolvedBaseline[index]?.payload,
+    );
     const rosterFrame = expectDefined(rosterFrames[index], "corresponding roster frame");
     const rosterDecoded = decodeFrame(rosterDecoder, rosterFrame);
     const expectedPayload = { ...(decoded.payload as Record<string, unknown>) };
@@ -414,10 +419,17 @@ test("capable and legacy sockets produce identical session payloads and consumer
       }
       if (omittedRosterMessages === 1) {
         // Decoding preserves the full envelope, independent of object property order.
-        expect({ ...decoded, seq: original.seq }).toEqual(original);
+        expect({
+          ...decoded,
+          seq: original.seq,
+          payload: withoutAncestorRevisions(decoded.payload),
+        }).toEqual(resolvedBaseline[index]);
       }
     }
-    expect(rosterDecoded?.payload, `roster frame ${index} ${frame.event}`).toEqual(expectedPayload);
+    expect(
+      withoutAncestorRevisions(rosterDecoded?.payload),
+      `roster frame ${index} ${frame.event}`,
+    ).toEqual(withoutAncestorRevisions(expectedPayload));
     consumers[0]?.apply(decoded);
     consumers[1]?.apply(original);
     expect(consumers[0]?.snapshot(), `consumer state after frame ${index}`).toEqual(
@@ -450,7 +462,12 @@ test("capable and legacy sockets produce identical session payloads and consumer
   const publishRecap = () => publishSummary(summaryTarget);
   await publishRecap();
   await drain();
-  expectSessionRowFrame(encoded.at(-1), baseline.at(-1), decoder, "base");
+  expectSessionRowFrame(
+    encoded.at(-1),
+    resolveLegacyAncestorRefs(baseline).at(-1),
+    decoder,
+    "base",
+  );
   await closeSessionRowSocket(roster.ws);
   await closeSessionRowSocket(capable.ws);
   const reopened = await harness.openClient({
@@ -461,10 +478,20 @@ test("capable and legacy sockets produce identical session payloads and consumer
   const reopenedDecoder = new GatewayChatEvents(reconnect);
   await publishRecap();
   await drain([reopened.ws, legacy.ws]);
-  expectSessionRowFrame(reopenedFrames.at(-1), baseline.at(-1), reopenedDecoder, "full");
+  expectSessionRowFrame(
+    reopenedFrames.at(-1),
+    resolveLegacyAncestorRefs(baseline).at(-1),
+    reopenedDecoder,
+    "full",
+  );
   await publishRecap();
   await drain([reopened.ws, legacy.ws]);
-  expectSessionRowFrame(reopenedFrames.at(-1), baseline.at(-1), reopenedDecoder, "base");
+  expectSessionRowFrame(
+    reopenedFrames.at(-1),
+    resolveLegacyAncestorRefs(baseline).at(-1),
+    reopenedDecoder,
+    "base",
+  );
   expect(reconnect).not.toHaveBeenCalled();
   await Promise.all([closeSessionRowSocket(reopened.ws), closeSessionRowSocket(legacy.ws)]);
   await vi.waitFor(async () =>

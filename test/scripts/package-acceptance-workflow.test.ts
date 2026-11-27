@@ -2202,7 +2202,6 @@ describe("frozen admission workflow barriers", () => {
       "release_execution_plan",
       "release_decision",
       "diagnostic_drain",
-      "cleanup_boat_release_runners",
     ]);
     const outputs = new Proxy(
       {
@@ -9504,7 +9503,6 @@ test "$package_manager" = "pnpm@12.1.0"
     const drainDownloads = workflowStep(summary, "Download diagnostic drain attempts");
 
     const terminalNeeds = [
-      "boat_release_runners",
       "resolve_target",
       "prepare_npm_package",
       "qualify_npm_package",
@@ -9513,15 +9511,14 @@ test "$package_manager" = "pnpm@12.1.0"
       "release_execution_plan",
     ];
     expect(decision.uses).toBe(
-      "openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@b720fcdb58b62c90eaae10c2d1ba99ba813adb36",
+      "openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@b5e0ed2fdd00553915067a258603606515236c58",
     );
     expect(drain.uses).toBe(decision.uses);
     expect(decision.with?.mode).toBe("decision");
     expect(drain.with?.mode).toBe("drain");
     expect(decision.needs).toEqual(terminalNeeds);
     expect(drain.needs).toEqual(terminalNeeds);
-    const waiterCondition =
-      "always() && (vars.OPENCLAW_CI_RUNNER_BACKEND != 'boat' || needs.boat_release_runners.result == 'success')";
+    const waiterCondition = "always()";
     expect(decision.if).toBe(waiterCondition);
     expect(drain.if).toBe(waiterCondition);
     expect(decisionStep.run).toBe(drainStep.run);
@@ -10072,7 +10069,7 @@ describe("package artifact reuse", () => {
     ];
     const hostedDefault = reusable.on?.workflow_call?.inputs?.use_github_hosted_runners?.default;
     for (const [overrides, packagePresent, expected] of [
-      [{}, "true", 48],
+      [{}, "true", 64],
       [{ use_github_hosted_runners: false }, "true", 32],
       [{ runner_group: "release-runners" }, "true", 32],
       [{}, "false", 32],
@@ -10831,6 +10828,58 @@ describe("package artifact reuse", () => {
     expect(upload.with?.path).toContain(".artifacts/live-shards/");
     expect(upload.with?.path).toContain(".artifacts/qa-e2e/");
   });
+
+  it("forwards the Coding Plan secret through scheduled, release, and package callers", () => {
+    for (const [file, job] of [
+      [".github/workflows/openclaw-scheduled-live-checks.yml", "live_and_openwebui_checks"],
+      [RELEASE_CHECKS_WORKFLOW, "live_repo_e2e_release_checks"],
+      [RELEASE_CHECKS_WORKFLOW, "package_acceptance_release_checks"],
+      [PACKAGE_ACCEPTANCE_WORKFLOW, "docker_acceptance"],
+    ] as const) {
+      expect(workflowJob(file, job).secrets).toMatchObject({
+        ZAI_CODING_API_KEY: "${{ secrets.ZAI_CODING_API_KEY }}",
+      });
+    }
+  });
+
+  it.each(["fixture-coding-key", ""])(
+    "isolates the Z.AI Coding Plan credential (%s)",
+    (codingKey) => {
+      const job = workflowJob(LIVE_E2E_WORKFLOW, "validate_live_provider_suites");
+      const step = job.steps?.find((entry) => entry.name === "Select Z.AI Coding Plan credential");
+      const root = tempDirs.make("zai-coding-credential-");
+      const githubEnv = join(root, "github-env");
+      writeFileSync(githubEnv, "");
+      const result = runWorkflowShellScript(
+        `${step?.run ?? ""}\nsource "$GITHUB_ENV"\nprintf '%s|%s' "$ZAI_API_KEY" "$Z_AI_API_KEY"`,
+        {
+          env: {
+            PATH: process.env.PATH,
+            GITHUB_ENV: githubEnv,
+            ZAI_API_KEY: "fixture-standard-key",
+            Z_AI_API_KEY: "fixture-legacy-key",
+            ZAI_CODING_API_KEY: codingKey,
+          },
+        },
+      );
+      if (codingKey) {
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toBe("fixture-coding-key|");
+      } else {
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("ZAI_CODING_API_KEY");
+        expect(readFileSync(githubEnv, "utf8")).toBe("");
+      }
+      expect(step?.if).toBe(
+        "steps.selection.outputs.run == 'true' && matrix.suite_id == 'native-live-src-agents-zai-coding'",
+      );
+      expect(step?.env?.ZAI_CODING_API_KEY).toBe("${{ secrets.ZAI_CODING_API_KEY }}");
+      const names = job.steps?.map((entry) => entry.name) ?? [];
+      expect(names.indexOf(step?.name)).toBeLessThan(
+        names.indexOf("Hydrate live auth/profile inputs"),
+      );
+    },
+  );
 
   it("shards broad native live tests instead of one serial live-all job", () => {
     const workflow = readFileSync(LIVE_E2E_WORKFLOW, "utf8");
@@ -16199,7 +16248,7 @@ ${operation} plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     ) =>
       timeoutForProfile(
         workflow.jobs?.[job]?.uses ===
-          "openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@b720fcdb58b62c90eaae10c2d1ba99ba813adb36"
+          "openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@b5e0ed2fdd00553915067a258603606515236c58"
           ? workflowJob(FULL_RELEASE_STATE_WATCHER, "watch")["timeout-minutes"]
           : workflow.jobs?.[job]?.["timeout-minutes"],
         profile,

@@ -194,13 +194,17 @@ export function scheduleGatewayPostReadyMaintenance(params: {
   params.scheduler.schedule({
     id: "startup:maintenance",
     delayMs: params.delayMs,
-    run: () => {
+    run: async () => {
       if (params.isClosing()) {
+        return undefined;
+      }
+      // Wait outside admission: a root held here would keep lean's post-ready release busy.
+      await params.waitForPostReadyWork();
+      if (params.isClosing() || params.signal.aborted) {
         return undefined;
       }
       return runWithGatewayIndependentRootWorkAdmission(
         async () => {
-          await params.waitForPostReadyWork();
           if (params.isClosing() || params.signal.aborted) {
             return;
           }

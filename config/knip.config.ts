@@ -10,6 +10,7 @@ import { runtimeProcessBuildEntries } from "../scripts/lib/runtime-process-build
 import {
   isInlineUpdateCompatibilityExport,
   readUpdateCompatibilityInventory,
+  resolveUpdateCompatibilityOrigin,
 } from "../scripts/lib/update-compat-chunks.mts";
 import { ModuleGraph } from "../scripts/lib/update-compat-module-graph.mts";
 import { buildPackageDistEntriesFromExports } from "../scripts/lib/workspace-package-entries.mts";
@@ -67,6 +68,8 @@ const repositoryScriptEntries = [
   "test/scripts/fixtures/mantis-telegram-failure.mts",
   // Spawned directly by beam-handoff.joined.e2e.test.ts.
   "test/fixtures/beam-live-handoff-client/beam.mjs",
+  // Spawned directly by fs-safe-drvfs-calls.test.ts under Node and Bun.
+  "test/fixtures/fs-safe-drvfs-calls.mjs!",
   // Forked by update-command-doctor-child.test.ts to model the successor's state swap.
   "src/cli/update-cli/update-command-state-handoff.process.test-support.ts!",
   // Their source headers document standalone benchmark and measurement commands.
@@ -472,6 +475,8 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/update-timeout-diagnostics.mjs!",
   "scripts/e2e/lib/upgrade-survivor/mobile-pairing-client.mts!",
   "scripts/e2e/lib/upgrade-survivor/watchos-direct-node.mjs!",
+  // upgrade-survivor-docker.sh runs the release-update scenario by path.
+  "scripts/e2e/lib/upgrade-survivor/release-update.mjs!",
   "scripts/embedded-run-abort-leak.ts!",
   "scripts/embedded-run-liveness-leak.ts!",
   "scripts/fixtures/packed-plugin-sdk-type-smoke.ts!",
@@ -571,6 +576,9 @@ const repositoryScriptEntries = [
   "scripts/run-vitest-child.mts",
   // The isolated Vitest adapter executes this entry by path inside its container.
   "scripts/lib/vitest-isolated-entry.mts",
+  // docs/reference/fast-track-release-approval.md runs this manual-only Vitest config by path.
+  "test/manual-release-approval.config.ts",
+  "test/manual-release-approval.checks.ts",
   "scripts/secrets/openclaw-bws-resolver.mjs!",
   // Security Review stages these entrypoints from isolated checkout attempts.
   "scripts/github/security-review-event.mjs!",
@@ -1082,9 +1090,8 @@ function compileUpdateCompatibilityConsumers(rootDir: string): string[] {
       );
       continue;
     }
-    const currentOrigin = graph.localOrigin(sourceFile, origin.symbol);
+    const currentOrigin = resolveUpdateCompatibilityOrigin(origin, rootDir, graph);
     if (
-      !currentOrigin ||
       (currentOrigin.module === origin.module && currentOrigin.symbol === origin.symbol) ||
       !graph.names(path.join(rootDir, currentOrigin.module)).includes(currentOrigin.symbol)
     ) {
@@ -1092,6 +1099,9 @@ function compileUpdateCompatibilityConsumers(rootDir: string): string[] {
         `Recorded updater binding ${origin.module}:${origin.symbol} is neither a named export nor an imported named binding`,
       );
     }
+    imports.push(
+      `import { ${currentOrigin.symbol} as __updateCompatibilityConsumer${index} } from ${JSON.stringify(`./${currentOrigin.module}`)};`,
+    );
   }
   return imports;
 }
@@ -1257,6 +1267,16 @@ const config = {
     "src/auto-reply/reply/request-native-subagent.ts": ["exports"],
     // Scheduled-command tests exercise registry replacement and persisted-job validation at the owner.
     "src/gateway/plugin-command-scheduled-run.ts": ["exports"],
+    // Cron regression fixtures reset the process-wide provider backoff between cases.
+    "src/cron/service/provider-backoff.ts": ["exports"],
+    // Cookie and plugin-route tests exercise the authorization step directly.
+    "src/gateway/http-auth-plugin-cookie.ts": ["exports"],
+    // Post-ready release tests drive the lean deferral clock with these bounds.
+    "src/gateway/server-post-ready-release.ts": ["exports"],
+    // Launcher rollback tests age the trial record against this budget.
+    "src/update/launcher.ts": ["exports"],
+    // Session and cron state type this slot through `import(...)` type queries.
+    "src/cron/service/timer-execution-timeout.ts": ["types"],
     // Diagnostic fixtures reset owner-private state; the full-tree audit checks these consumers.
     "src/logging/diagnostic-memory.ts": ["exports"],
     "src/logging/diagnostic-phase.ts": ["exports"],
@@ -1408,6 +1428,8 @@ const config = {
         "ngrok",
         "open",
         "openclaw",
+        // The release-update upgrade-survivor scenario mints its registry TLS certificate with it.
+        "openssl",
         // Native checkpoint measurements run their synthetic guest through the host engine.
         "podman",
         "sleep",

@@ -112,7 +112,11 @@ export function registerRequesterAutomationCustodyTests({
                     operationalRunInstance,
                     approvalAuthority: delegated,
                     operatorAuthority: source.authority,
-                    receiptAuthority: () => validateAgentRunDelegatedAuthority(delegated),
+                    receiptAuthority: () => {
+                      if (!validateAgentRunDelegatedAuthority(delegated)) {
+                        throw new Error("agent tool caller authority is no longer active");
+                      }
+                    },
                   },
                   async () => {
                     await registerSubagentRun(
