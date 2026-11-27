@@ -4,6 +4,7 @@ import {
   type readPairingConnectErrorDetails,
 } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
+import { BROWSER_WEBSOCKET_SECURITY_ERROR_CODE } from "../api/gateway-browser-socket.ts";
 import {
   redactLoginFailureError,
   resolveAuthHintKind,
@@ -289,6 +290,15 @@ export function resolveLoginFailureFeedback(
       kind: "auth-rate-limited",
       tone: "warn",
       stepKeys: ["stepStop", "stepWait", "stepCheckClients"],
+    });
+  }
+
+  if (lastErrorCode === BROWSER_WEBSOCKET_SECURITY_ERROR_CODE) {
+    return buildFeedback(rawError, "login.failure.browserBlocked", {
+      kind: "insecure-context",
+      placement: "form",
+      docsHref: "https://docs.openclaw.ai/web/control-ui/connect-and-pair#insecure-http",
+      stepKeys: [],
     });
   }
 
