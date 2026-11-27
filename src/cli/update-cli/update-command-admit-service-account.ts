@@ -72,8 +72,13 @@ async function formatRefusal(
   params: { env: NodeJS.ProcessEnv; packageManager: string; candidateVersion: string },
 ) {
   const { username: caller, uid } = os.userInfo();
-  const { serviceUser: user, unitName: unit } = mismatch;
-  const home = mismatch.selectors.HOME ?? (await readSystemdAccountHome(user));
+  const { serviceUser, unitName: unit } = mismatch;
+  // systemd's User= may be empty (root) or a numeric UID; sudo needs "#<uid>" for the latter.
+  const numeric = /^\d+$/u.test(serviceUser);
+  const user = serviceUser === "" ? "root" : numeric ? `UID ${serviceUser}` : serviceUser;
+  const sudoUser =
+    serviceUser === "" ? "root" : numeric ? `'#${serviceUser}'` : quoteCliArg(serviceUser);
+  const home = mismatch.selectors.HOME ?? (await readSystemdAccountHome(serviceUser));
   const unitEnv = { ...mismatch.selectors, ...(home ? { HOME: home } : {}) };
   const unitState =
     !mismatch.selectorsIncomplete && home ? resolveStateDir(unitEnv, () => home) : undefined;
@@ -86,8 +91,8 @@ async function formatRefusal(
   const selectors = Object.entries(unitEnv).map(([key, value]) => `${key}=${quoteCliArg(value)}`);
   const backup =
     mismatch.selectorsIncomplete || !home
-      ? `sudo -u ${quoteCliArg(user)} env <the unit's HOME, OPENCLAW_HOME, OPENCLAW_STATE_DIR, OPENCLAW_CONFIG_PATH and OPENCLAW_PROFILE> openclaw backup create --verify --output <directory>`
-      : `sudo -u ${quoteCliArg(user)} env ${selectors.join(" ")} openclaw backup create --verify --output ${quoteCliArg(home)}`;
+      ? `sudo -u ${sudoUser} env <the unit's HOME, OPENCLAW_HOME, OPENCLAW_STATE_DIR, OPENCLAW_CONFIG_PATH and OPENCLAW_PROFILE> openclaw backup create --verify --output <directory>`
+      : `sudo -u ${sudoUser} env ${selectors.join(" ")} openclaw backup create --verify --output ${quoteCliArg(home)}`;
   const spec = quoteCliArg(`openclaw@${params.candidateVersion}`);
   // The package stays with the account that ran this update, and its global directory.
   const owner = uid === 0 ? "sudo " : "";

@@ -205,6 +205,17 @@ describe("candidate admission for a system unit run by another account", () => {
     );
   });
 
+  it("names a numeric service account the way sudo accepts it", async () => {
+    systemd.readCommand.mockRejectedValue(mismatch({ serviceUser: "1001" }));
+
+    const verdict = await admit();
+
+    expect(verdict.reasons[0]?.message).toContain("runs as UID 1001, but this update runs as root");
+    expect(verdict.reasons[0]?.nextAction).toContain(
+      "First make a verified backup of its state as UID 1001: sudo -u '#1001' env HOME=/var/lib/openclaw",
+    );
+  });
+
   it("asks for the unit's own selectors when they come from an environment file", async () => {
     systemd.readCommand.mockRejectedValue(mismatch({ selectorsIncomplete: true }));
 
