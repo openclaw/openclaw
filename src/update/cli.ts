@@ -485,9 +485,7 @@ async function requestGatewayUpdate(
     return null;
   }
   const checkout = await resolveUpdateInstallationIdentity(opts.runningRoot);
-  const params: UpdateRunParams = {
-    ...(target ? { target } : {}),
-  };
+  const params: UpdateRunParams = target ? { target } : {};
   let supportsConsent = false;
   try {
     const response = await callGatewayBeforeDeadline<{

@@ -161,6 +161,10 @@ vi.mock("../gateway/call.js", async (importOriginal) => ({
 }));
 
 afterEach(async () => {
+  // Wire fixtures restore their clock before closing their peers.
+  if (!useWireGateway.enabled) {
+    vi.useRealTimers();
+  }
   vi.restoreAllMocks();
   await home.restore();
   capabilities.length = 0;
@@ -170,21 +174,14 @@ afterEach(async () => {
   localRun.phase = "finished";
   localRun.origin = {};
   maintainRuntimes.mockReset();
-  maintainRuntimes.mockResolvedValue([]);
   confirmDowngrade.mockReset();
   createRun.mockClear();
   mutateConfig.mockClear();
   sent.length = 0;
   prepared.length = 0;
   prepareReply.mockReset();
-  prepareReply.mockResolvedValue({
-    status: "current",
-    version: "2026.11.6",
-    pluginsChanged: false,
-  });
   runsGet.length = 0;
   restartReply.mockReset();
-  restartReply.mockResolvedValue({ ok: true });
   useWireGateway.enabled = false;
   process.exitCode = undefined;
 });
@@ -288,70 +285,54 @@ registerReleaseUpdateGatewayTests(() => ({
   prepared,
 }));
 
-it("keeps a terminal status captured before expiry when RPC cleanup settles afterward", async () => {
-  const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-  const deadline = Date.now() + 5_000;
-  const record = createUpdateRunRecordFixture(gatewayRunId, { status: "succeeded" });
-  runsGet.push(() => {
-    // callGateway joins teardown after capturing a response. Its successful
-    // return remains authoritative even if that cleanup crosses our deadline.
-    vi.setSystemTime(deadline + 1);
-    return { run: record };
-  });
-  try {
+it.each(["status", "restart"] as const)(
+  "keeps the %s result when RPC cleanup settles after expiry",
+  async (method) => {
+    const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const deadline = Date.now() + 5_000;
+    const record = createUpdateRunRecordFixture(gatewayRunId, { status: "succeeded" });
+    if (method === "status") {
+      runsGet.push(() => {
+        // A captured response survives the RPC owner's joined cleanup.
+        vi.setSystemTime(deadline + 1);
+        return { run: record };
+      });
+    } else {
+      localRun.status = "running";
+      localRun.phase = "activating";
+      localRun.origin.releaseAdmission = {
+        owner: "candidate",
+        candidateVersion: VERSION,
+        verdict: "admit",
+        warnings: [],
+      };
+      restartReply.mockImplementationOnce(async () => {
+        vi.setSystemTime(deadline + 1);
+        return { ok: true };
+      });
+    }
     await runReleaseUpdateCli({
       json: true,
       restart: true,
       runningRoot: root,
       yes: true,
-      timeoutMs: 5_000,
-    });
-    expect(json).toHaveBeenCalledWith(record);
-    expect(process.exitCode).toBe(0);
-  } finally {
-    vi.useRealTimers();
-  }
-});
-
-it("keeps published activation and admission when restart cleanup leaves no polling budget", async () => {
-  const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-  localRun.status = "running";
-  localRun.phase = "activating";
-  localRun.origin.releaseAdmission = {
-    owner: "candidate",
-    candidateVersion: VERSION,
-    verdict: "admit",
-    warnings: [],
-  };
-  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-  const deadline = Date.now() + 5_000;
-  restartReply.mockImplementationOnce(async () => {
-    vi.setSystemTime(deadline + 1);
-    return { ok: true };
-  });
-  try {
-    await runReleaseUpdateCli({
-      json: true,
-      restart: true,
-      runningRoot: root,
-      yes: true,
-      tag: VERSION,
+      tag: method === "restart" ? VERSION : undefined,
       timeoutMs: 5_000,
     });
     expect(json).toHaveBeenCalledWith(
-      expect.objectContaining({
-        status: "running",
-        phase: "activating",
-        origin: localRun.origin,
-      }),
+      method === "status"
+        ? record
+        : expect.objectContaining({
+            status: "running",
+            phase: "activating",
+            origin: localRun.origin,
+          }),
     );
     expect(sent).toHaveLength(1);
     expect(process.exitCode).toBe(0);
-  } finally {
-    vi.useRealTimers();
-  }
-});
+  },
+);
 
 it("distinguishes completed plugin maintenance from an unconfirmed restart at expiry", async () => {
   const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
@@ -361,25 +342,19 @@ it("distinguishes completed plugin maintenance from an unconfirmed restart at ex
     vi.setSystemTime(deadline);
     return { status: "current", version: VERSION, pluginsChanged: true };
   });
-  try {
-    await expect(
-      runReleaseUpdateCli({
-        json: true,
-        restart: true,
-        runningRoot: root,
-        yes: true,
-        tag: VERSION,
-        timeoutMs: 5_000,
-      }),
-    ).rejects.toThrow(
-      "Plugin maintenance completed, but the Gateway restart could not be confirmed",
-    );
-    expect(sent).toEqual([]);
-    expect(json).not.toHaveBeenCalled();
-    expect(prepared).toHaveLength(1);
-  } finally {
-    vi.useRealTimers();
-  }
+  await expect(
+    runReleaseUpdateCli({
+      json: true,
+      restart: true,
+      runningRoot: root,
+      yes: true,
+      tag: VERSION,
+      timeoutMs: 5_000,
+    }),
+  ).rejects.toThrow("Plugin maintenance completed, but the Gateway restart could not be confirmed");
+  expect(sent).toEqual([]);
+  expect(json).not.toHaveBeenCalled();
+  expect(prepared).toHaveLength(1);
 });
 
 it.each([false, true])(
@@ -457,20 +432,16 @@ it("says the update is still running when the --timeout budget ends first", asyn
     vi.setSystemTime(deadline);
     return { run: { status: "running", phase: "staging", steps: [], after: {}, origin: {} } };
   });
-  try {
-    await runReleaseUpdateCli({
-      json: false,
-      restart: true,
-      runningRoot: root,
-      timeoutMs: 100,
-    });
-    expect(error.mock.calls.map(([message]) => message)).toEqual([
-      "The update did not finish in time. Run `openclaw update status` to see it.",
-    ]);
-    expect(process.exitCode).toBe(1);
-  } finally {
-    vi.useRealTimers();
-  }
+  await runReleaseUpdateCli({
+    json: false,
+    restart: true,
+    runningRoot: root,
+    timeoutMs: 100,
+  });
+  expect(error.mock.calls.map(([message]) => message)).toEqual([
+    "The update did not finish in time. Run `openclaw update status` to see it.",
+  ]);
+  expect(process.exitCode).toBe(1);
 });
 
 it.each([true, false])(

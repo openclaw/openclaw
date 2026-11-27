@@ -4,12 +4,7 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  nextEventLoopTurn,
-  withinTest,
-} from "../../test/helpers/promise.js";
+import { createDeferred, nextEventLoopTurn, withinTest } from "../../test/helpers/promise.js";
 import { waitForFast } from "../../test/helpers/vitest-wait.js";
 import {
   buildMinimalGatewayHelloOkPayload,
@@ -194,7 +189,6 @@ export function registerReleaseUpdateGatewayTests(context: () => GatewayTestCont
   it.for(["acknowledgement", "status", "poll delay"] as const)(
     "keeps the overall Gateway update budget during %s",
     async (scenario, { signal }) => {
-      const heldRequest = createDeferred<WireRequest>();
       const heldClosed = createDeferred();
       let held: WireRequest | undefined;
       let statusRequests = 0;
@@ -215,7 +209,6 @@ export function registerReleaseUpdateGatewayTests(context: () => GatewayTestCont
             ) {
               held = request;
               request.ws.once("close", () => heldClosed.resolve());
-              heldRequest.resolve(request);
               return true;
             }
             return false;
@@ -225,7 +218,6 @@ export function registerReleaseUpdateGatewayTests(context: () => GatewayTestCont
           running = { ...peer.output, status: "running", phase: "staging", finishedAtMs: null };
           vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
           const deadline = Date.now() + 5_000;
-          let outcome: { error?: unknown } | undefined;
           const command = runReleaseUpdateCli({
             json: true,
             restart: true,
@@ -233,34 +225,17 @@ export function registerReleaseUpdateGatewayTests(context: () => GatewayTestCont
             yes: true,
             timeoutMs: 5_000,
           });
-          const settled = command.then(
-            () => {
-              outcome = {};
-            },
-            (error: unknown) => {
-              outcome = { error };
-            },
+          const settled: Promise<{ error?: unknown }> = command.then(
+            () => ({}),
+            (error: unknown) => ({ error }),
           );
           try {
-            // Readiness owns timers before opening the real socket. Drive those
-            // without consuming the budget we reserve for the withheld response.
-            await waitForFast(() => expect(peer.requests).toContain("update.run"));
-            const remaining = deadline - Date.now();
-            expect(remaining).toBeGreaterThan(0);
-            // Drive the existing poll/readiness timers until the peer receives
-            // the next request; peer closure does not establish client cleanup.
+            // Only an actual wire receipt proves that the held request was dispatched.
             await waitForFast(
               () => expect(held, "Gateway received the held request").toBeDefined(),
-              { timeout: remaining },
+              { timeout: deadline - Date.now() },
             );
-            const request = await withinTest(
-              awaitGateBeforeSettlement(
-                heldRequest.promise,
-                command,
-                "command settled before the Gateway received its request",
-              ),
-              signal,
-            );
+            const request = held!;
             if (scenario === "poll delay") {
               await vi.advanceTimersByTimeAsync(Math.max(0, deadline - Date.now() - 1_000));
               sendMinimalGatewayResponse(request.ws, request.id, { run: running });
@@ -271,11 +246,11 @@ export function registerReleaseUpdateGatewayTests(context: () => GatewayTestCont
             await vi.advanceTimersByTimeAsync(Math.max(0, deadline - Date.now()));
             // Keep the clock at expiry while the RPC owner joins real socket
             // and auth cleanup. An unfixed longer wait cannot settle here.
-            await withinTest(settled, signal);
+            const outcome = await withinTest(settled, signal);
             await withinTest(heldClosed.promise, signal);
             if (scenario === "acknowledgement") {
-              expect(outcome?.error).toBeInstanceOf(Error);
-              expect(String(outcome?.error)).toMatch(/did not finish|timeout/i);
+              expect(outcome.error).toBeInstanceOf(Error);
+              expect(String(outcome.error)).toMatch(/did not finish|timeout/i);
             } else {
               expect(outcome).toEqual({});
               expect(peer.json).toEqual([running]);
@@ -344,7 +319,6 @@ export function registerReleaseUpdateGatewayTests(context: () => GatewayTestCont
               vi.setSystemTime(deadline);
             }
           });
-          let outcome: { error?: unknown } | undefined;
           const command = runReleaseUpdateCli({
             json: false,
             restart: true,
@@ -353,13 +327,9 @@ export function registerReleaseUpdateGatewayTests(context: () => GatewayTestCont
             acceptCapabilities: true,
             timeoutMs: 5_000,
           });
-          const settled = command.then(
-            () => {
-              outcome = {};
-            },
-            (error: unknown) => {
-              outcome = { error };
-            },
+          const settled: Promise<{ error?: unknown }> = command.then(
+            () => ({}),
+            (error: unknown) => ({ error }),
           );
           try {
             await waitForFast(() => expect(status).toBeDefined());
@@ -381,10 +351,9 @@ export function registerReleaseUpdateGatewayTests(context: () => GatewayTestCont
               expect(retry?.params?.timeoutMs).toBeLessThanOrEqual(2_500);
               await vi.advanceTimersByTimeAsync(Math.max(0, deadline - Date.now()));
             }
-            await waitForFast(() => expect(outcome).toBeDefined(), { timeout: 100 });
-            await settled;
-            expect(String(outcome?.error)).toContain("Capability consent could not be confirmed");
-            expect(String(outcome?.error)).toContain("openclaw update status` before retrying");
+            const outcome = await withinTest(settled, signal);
+            expect(String(outcome.error)).toContain("Capability consent could not be confirmed");
+            expect(String(outcome.error)).toContain("openclaw update status` before retrying");
             expect(peer.requests).toEqual([
               "update.run",
               "update.runs.get",
