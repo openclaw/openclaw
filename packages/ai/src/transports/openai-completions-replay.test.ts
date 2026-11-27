@@ -217,23 +217,27 @@ describe("Chat Completions historical tools", () => {
   it.each([{ tools: [] }, { tools: undefined }])(
     "keeps history native when the request offers no tools (%j)",
     ({ tools }) => {
-      const params = buildOpenAICompletionsParams(openAIModel, {
-        tools,
-        messages: [
-          { role: "user", content: "Run it", timestamp: 1 },
-          {
-            role: "assistant",
-            api: openAIModel.api,
-            provider: openAIModel.provider,
-            model: openAIModel.id,
-            content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: { cmd: "ls" } }],
-            usage: createZeroUsage(),
-            stopReason: "toolUse",
-            timestamp: 2,
-          },
-          makeTextToolResult("call_1", "exec", "done", false, 3),
-        ],
-      });
+      const params = buildOpenAICompletionsParams(
+        openAIModel,
+        {
+          tools,
+          messages: [
+            { role: "user", content: "Run it", timestamp: 1 },
+            {
+              role: "assistant",
+              api: openAIModel.api,
+              provider: openAIModel.provider,
+              model: openAIModel.id,
+              content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: { cmd: "ls" } }],
+              usage: createZeroUsage(),
+              stopReason: "toolUse",
+              timestamp: 2,
+            },
+            makeTextToolResult("call_1", "exec", "done", false, 3),
+          ],
+        },
+        undefined,
+      );
       expect(params.tools).toEqual([]);
       expect(params.messages.slice(-2)).toEqual([
         {
