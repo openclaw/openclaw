@@ -31,7 +31,6 @@ import {
 } from "../../routing/session-key.js";
 import { errorShapeFromError } from "../error-shape.js";
 import { hasOperatorBoundary, operatorSessionCap } from "../operator-role-policy.js";
-import { resolveTelegramSessionGroup } from "../session-channel-group.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { withReadySessionRows, type SessionRowReadView } from "../session-row-prepared-read.js";
@@ -426,12 +425,9 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           cfg,
           membership: row?.membership,
         });
-        const channel =
-          row && resolveTelegramSessionGroup(row.key, row.entry)
-            ? prepareSessionSharing({ client, cfg }).directEntryFilter
-            : undefined;
         return (key: string | undefined, entry: SessionEntry) =>
-          ordinary?.(key, entry) !== false || channel?.(key, entry) === true;
+          ordinary?.(key, entry) !== false ||
+          prepareSessionSharing({ client, cfg }).directEntryFilter?.(key, entry) === true;
       };
       const previews: SessionsPreviewEntry[] = [];
       const buffered: Array<{

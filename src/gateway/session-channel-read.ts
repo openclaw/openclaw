@@ -246,7 +246,15 @@ export async function prepareTelegramSessionEntryRead(params: {
   const { cfg, getConfig, profileId, key, entry, signal } = params;
   const group = resolveTelegramSessionGroup(key, entry);
   if (group) {
-    const fact = await prepareTelegramGroupMembership({ cfg, profileId, ...group, signal });
+    // Bound adapter I/O here; request cancellation and current identity are rechecked through publication.
+    const fact = await prepareTelegramGroupMembership({
+      cfg,
+      profileId,
+      ...group,
+      signal: signal
+        ? AbortSignal.any([signal, AbortSignal.timeout(5_000)])
+        : AbortSignal.timeout(5_000),
+    });
     const checkedAt = Date.now();
     return (currentKey, currentEntry) => {
       const current = resolveTelegramSessionGroup(currentKey, currentEntry);

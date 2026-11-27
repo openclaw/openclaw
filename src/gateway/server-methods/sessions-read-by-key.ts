@@ -11,7 +11,6 @@ import { captureAgentHarnessLifecycleHooks } from "../../agents/harness/registry
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { projectOperatorModelRead } from "../operator-model-presentation.js";
 import { hasOperatorBoundary } from "../operator-role-policy.js";
-import { resolveTelegramSessionGroup } from "../session-channel-group.js";
 import { prepareTelegramSessionEntryRead } from "../session-channel-read.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { withReadySessionRows } from "../session-row-prepared-read.js";
@@ -267,11 +266,7 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
         const profileId = client?.authenticatedUserProfile?.profileId;
         // Eligibility only: no transcript is read or returned before the fresh adapter check.
         const sharing = prepareSessionSharing({ client, cfg: policyConfig }, undefined, () => true);
-        if (
-          !profileId ||
-          !resolveTelegramSessionGroup(record.key, record.entry) ||
-          sharing.directEntryFilter?.(record.key, record.entry) !== true
-        ) {
+        if (!profileId || sharing.directEntryFilter?.(record.key, record.entry) !== true) {
           respond(true, { messages: [] }, undefined);
           return undefined;
         }
@@ -285,19 +280,16 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
     let channelRead: Awaited<ReturnType<typeof prepareTelegramSessionEntryRead>> | undefined;
     if (channelRequest) {
       const request = channelRequest;
+      const channelSignals = [signal, client?.connectionSignal].filter(
+        (item): item is AbortSignal => Boolean(item),
+      );
       channelRead = await prepareTelegramSessionEntryRead({
         cfg: request.cfg,
         getConfig: context.getRuntimeConfig,
         profileId: request.profileId,
         key: selected.key,
         entry: selected.entry,
-        // Match the existing membership adapter deadline while retaining request cancellation.
-        signal: AbortSignal.any([
-          AbortSignal.timeout(5_000),
-          ...[signal, client?.connectionSignal].filter((item): item is AbortSignal =>
-            Boolean(item),
-          ),
-        ]),
+        signal: channelSignals.length ? AbortSignal.any(channelSignals) : undefined,
       });
       sessionMutationAuthorization?.assertCurrent();
       if (
