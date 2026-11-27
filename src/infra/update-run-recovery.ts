@@ -6,12 +6,10 @@ import { resolveIdentityPathViaExistingAncestorSync } from "./path-existence.js"
 import type { PluginCohortRecoveryPair } from "./update-plugin-cohort-schema.js";
 import { withUpdateRunRead } from "./update-run-read-admission.js";
 import {
-  isUpdateRecoveryPending,
-  decodeUpdateRecovery,
   UpdateRecoveryRequiredError,
   type UpdateRecoveryRecord,
 } from "./update-run-recovery-schema.js";
-import { readRecovery, readUpdateRecoveryAdmissionFacts } from "./update-run-recovery-store.js";
+import { readRecovery } from "./update-run-recovery-store.js";
 import type { PluginCohortRecoveryContinuation } from "./update-run-recovery-types.js";
 export type { UpdateRecoveryFence, UpdateRecoveryHandoff } from "./update-run-recovery-types.js";
 export { UpdateRecoveryRequiredError } from "./update-run-recovery-schema.js";
@@ -61,34 +59,4 @@ export function assertPluginCohortRecoveryContinuation(
     throw new UpdateRecoveryRequiredError(pair.reservation);
   }
   continuation.fence.assertCurrent();
-}
-
-/** Workers return coherent rows, never executor authority or a pre-admitted continuation. */
-export function assertUpdateRecoveryAdmissionFacts(
-  facts: ReturnType<typeof readUpdateRecoveryAdmissionFacts> | undefined,
-  options: UpdateRecoveryAdmissionOptions,
-): PluginCohortRecoveryPair | undefined {
-  let admittedCohort: PluginCohortRecoveryPair | undefined;
-  const pending = facts?.recoveries.find((entry) => {
-    if (!isUpdateRecoveryPending(entry.record)) {
-      return false;
-    }
-    const continuation = options.pluginCohort;
-    const pair =
-      continuation?.runId === entry.record.runId
-        ? facts.cohorts.find(({ cohort }) => cohort.runId === entry.record.runId)
-        : undefined;
-    if (!continuation || !pair) {
-      return true;
-    }
-    assertPluginCohortRecoveryContinuation(pair, continuation, options);
-    admittedCohort = pair;
-    return false;
-  });
-  if (pending) {
-    // Historical completion does not grant current execution authority. An
-    // unfinished legacy operation still requires explicit compatible recovery.
-    throw new UpdateRecoveryRequiredError(decodeUpdateRecovery(pending.raw, pending.record.runId));
-  }
-  return admittedCohort;
 }

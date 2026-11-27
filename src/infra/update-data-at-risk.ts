@@ -12,11 +12,9 @@ import { hasErrnoCode } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import type { RecordedDataAtRisk } from "./update-run-data-at-risk.js";
 import {
-  assertUpdateRecoveryAdmission,
   assertUpdateRecoveryDirectoryAdmission,
   InterruptedStateRestoreError,
 } from "./update-run-recovery-admission.js";
-import { UpdateRecoveryRequiredError } from "./update-run-recovery-schema.js";
 
 const UPDATE_INTERRUPTED_RESTORE_DOCS_URL =
   "https://docs.openclaw.ai/cli/update/repair-and-recovery#interrupted-state-restore";
@@ -176,8 +174,8 @@ function classify(
 
 /**
  * Is the state on disk consistent with the installed build? Read-only and safe beside a
- * live Gateway: recovery admission reads rows, and the runtime schema preflight reads
- * headers and schema shape in one native read transaction without copying a database.
+ * live Gateway: the runtime schema preflight reads headers and schema shape in one
+ * native read transaction without copying a database.
  */
 export async function verifyUpdateStateConsistency(params: {
   env: NodeJS.ProcessEnv;
@@ -273,23 +271,6 @@ async function checkStateEvidence(
   if (verdict.status !== "consistent") {
     // A schema finding explains why recovery rows may be unreadable, so it reports first.
     return verdict;
-  }
-  try {
-    await assertUpdateRecoveryAdmission({ env: params.env });
-  } catch (error) {
-    if (error instanceof UpdateRecoveryRequiredError) {
-      return {
-        status: "inconsistent",
-        detail: `update ${error.record.runId} has unfinished state recovery`,
-        nextAction: `run \`${params.formatCommand("openclaw update status")}\` for that recovery's next step.`,
-      };
-    }
-    params.signal?.throwIfAborted();
-    return {
-      status: "unverifiable",
-      detail: `update recovery records could not be read: ${formatErrorMessage(error)}`,
-      nextAction: retryRepair(params.formatCommand),
-    };
   }
   // Checked last, so evidence a state check can see is never hidden behind a deferral.
   if (!params.writersExcluded && params.marks?.some(({ mark }) => mark === "active-mutation")) {

@@ -3,10 +3,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { verifyPackageUpdateRecovery } from "../../infra/update-global.js";
 import type { PluginCohortRecoveryPair } from "../../infra/update-plugin-cohort-schema.js";
 import { withUpdateRunRead } from "../../infra/update-run-read-admission.js";
-import {
-  assertUpdateRecoveryAdmission,
-  readUpdateRecoveryAdmissionFactsAsync,
-} from "../../infra/update-run-recovery-admission.js";
+import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { isUpdateRecoveryPending } from "../../infra/update-run-recovery-schema.js";
 import {
   loadPluginCohortRecovery,
@@ -15,7 +12,6 @@ import {
 } from "../../infra/update-run-recovery-store.js";
 import {
   assertPluginCohortRecoveryContinuation,
-  assertUpdateRecoveryAdmissionFacts,
   loadUpdateRecovery,
   pluginCohortRecoveryMatchesSource,
   UpdateRecoveryRequiredError,
@@ -139,18 +135,10 @@ export async function assertUpdateCommandPackageFinalization(
     const pluginCohort = run && executor ? { runId: run.runId, fence: executor } : undefined;
     const selected = { env, path: targetPath, pluginCohort };
     await assertUpdateRecoveryAdmission(selected);
-    assertUpdateRecoveryAdmissionFacts(
-      await readUpdateRecoveryAdmissionFactsAsync(selected),
-      selected,
-    );
     assertCurrent();
     if (run && resolveOpenClawStateSqlitePath(run.env) !== targetPath) {
       const history = { env: cloneEnvWithPlatformSemantics(run.env ?? process.env), pluginCohort };
       await assertUpdateRecoveryAdmission(history);
-      assertUpdateRecoveryAdmissionFacts(
-        await readUpdateRecoveryAdmissionFactsAsync(history),
-        history,
-      );
       assertCurrent();
     }
   } catch (cause) {

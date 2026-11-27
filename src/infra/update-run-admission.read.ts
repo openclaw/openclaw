@@ -4,14 +4,6 @@ import type { UpdateRunAdmissionReadCommand } from "./update-run-admission.types
 
 /** Load only the selected policy before admission. No SQLite handle spans the module await. */
 export async function prepareUpdateRunAdmissionRead(command: UpdateRunAdmissionReadCommand) {
-  if (command.type === "updateRuns.recoveryAdmission") {
-    const { readUpdateRecoveryAdmissionFacts } = await import("./update-run-recovery-store.js");
-    return (db: EngineConnection) =>
-      runSqliteReadSnapshotSync(db, () => ({
-        type: command.type,
-        facts: readUpdateRecoveryAdmissionFacts(db),
-      }));
-  }
   if (command.type === "updateRuns.pluginCohortRecovery") {
     const { readPluginCohortRecoveryInDatabase } = await import("./update-run-recovery-store.js");
     return (db: EngineConnection) =>

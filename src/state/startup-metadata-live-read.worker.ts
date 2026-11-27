@@ -62,9 +62,7 @@ export const startupMetadataReadOperations = {
     const inspect = (db: EngineConnection) => {
       let sourceAdmitted = false;
       try {
-        const cohortRead =
-          command.type === "updateRuns.recoveryAdmission" ||
-          command.type === "updateRuns.pluginCohortRecovery";
+        const cohortRead = command.type === "updateRuns.pluginCohortRecovery";
         const release = cohortRead ? openDoctorStateSchemaReadAdmission(db) : undefined;
         return runWithSqliteCleanup({ release: () => release?.() }, "Current metadata read", () => {
           const schemaContext = cohortRead ? "doctor-maintenance" : "runtime";

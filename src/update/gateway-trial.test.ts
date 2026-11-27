@@ -571,7 +571,7 @@ it.each(["warning", "error"] as const)(
 );
 
 it.each([undefined, true, false])(
-  "settles the aggregate once after plugins without delaying the committed core (consent=%s)",
+  "settles and notifies at ready before plugin maintenance (consent=%s)",
   async (acceptCapabilities) => {
     const state = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trial-plugins-"));
     directories.push(state);
@@ -654,17 +654,17 @@ it.each([undefined, true, false])(
       await entered.promise;
       const committed = await getUpdateRunAsync(run.runId, options);
       expect(committed).toMatchObject({
-        status: "running",
-        phase: "verifying",
-        finishedAtMs: null,
+        status: "succeeded",
+        phase: "finished",
+        finishedAtMs: expect.any(Number),
         verification: { coreReady: true, serviceRunning: true, versionMatch: true },
       });
-      expect(committed?.steps).toContainEqual(
+      expect(committed?.steps).not.toContainEqual(
         expect.objectContaining({ step: "plugins", status: "in_progress" }),
       );
       expect(await readTrial()).toMatchObject({ phase: "committed" });
       expect((await readTrial())?.reported).toBe(true);
-      expect(notices).toEqual([]);
+      expect(notices).toEqual([{ runId: run.runId, kind: "finished", status: "succeeded" }]);
       expect(runPostActivationInspections).not.toHaveBeenCalled();
       expect(reload).not.toHaveBeenCalled();
       const [argv, commandOptions] = vi.mocked(runCommandWithTimeout).mock.calls[0]!;
@@ -728,7 +728,7 @@ it.each([undefined, true, false])(
   },
 );
 
-it("stops plugin command work when the Gateway watcher closes", async ({ signal }) => {
+it("finishes a ready update before plugin work can be aborted", async ({ signal }) => {
   const state = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trial-stop-"));
   directories.push(state);
   vi.stubEnv("OPENCLAW_STATE_DIR", state);
@@ -793,14 +793,18 @@ process.stdout.write("maintenance-ready\\n");`,
       outcome: { status: "succeeded", at: Date.now() },
     });
     await withinTest(entered.promise, signal);
+    const committed = await getUpdateRunAsync(run.runId);
+    expect(committed).toMatchObject({
+      status: "succeeded",
+      phase: "finished",
+      finishedAtMs: expect.any(Number),
+    });
     await withinTest(watcher.stop(), signal);
     expect((await stopped.promise).termination).toBe("signal");
     expect(runPostActivationInspections).not.toHaveBeenCalled();
     const finished = await getUpdateRunAsync(run.runId);
-    expect(finished?.status).toBe("running");
-    expect(finished?.steps).toContainEqual(
-      expect.objectContaining({ step: "plugins", status: "in_progress" }),
-    );
+    expect(finished?.status).toBe("succeeded");
+    expect(finished?.finishedAtMs).toBe(committed?.finishedAtMs);
   } finally {
     if (childPid && !commandFinished) {
       killProcessTree(childPid, { detached: true, force: true });

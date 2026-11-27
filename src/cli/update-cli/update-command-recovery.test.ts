@@ -497,35 +497,10 @@ it("refuses checkpoint recovery before package mutation and preserves the primar
   expect(getUpdateRun(f.run.runId, f.options)?.status).toBe("running");
 });
 
-it.each(["lost context", "interrupted displacement"] as const)(
-  "does not reinterpret %s as permission for package rollback",
-  async (change) => {
-    const f = await checkpointRollbackFixture();
-    f.opts.recovery = undefined;
-    if (change === "interrupted displacement") {
-      f.displace();
-      await f.invoke(undefined, [f.displaced]);
-      expect(fsSync.existsSync(f.file)).toBe(false);
-    } else {
-      expect(await f.invoke(undefined, [f.file, f.configPath])).toMatchObject(deferred);
-    }
-  },
-);
-
-it.each(["service", "admitted"] as const)(
-  "checks pending recovery in the %s root when service and history differ",
-  async (pendingRoot) => {
-    const f = await checkpointRollbackFixture();
-    f.opts.recovery = undefined;
-    const cleanEnv = { OPENCLAW_STATE_DIR: dirs.make("rollback-other-root-") };
-    f.opts.run = { ...f.run, env: pendingRoot === "admitted" ? f.env : cleanEnv };
-    const { result } = await f.invoke({
-      stopped: false,
-      inspected: true,
-      runtimeInspected: true,
-      running: false,
-      serviceEnv: pendingRoot === "service" ? f.env : cleanEnv,
-    });
-    expect(result.reason).toBe("candidate-failed");
-  },
-);
+it("does not reinterpret interrupted displacement as permission for package rollback", async () => {
+  const f = await checkpointRollbackFixture();
+  f.opts.recovery = undefined;
+  f.displace();
+  await f.invoke(undefined, [f.displaced]);
+  expect(fsSync.existsSync(f.file)).toBe(false);
+});
