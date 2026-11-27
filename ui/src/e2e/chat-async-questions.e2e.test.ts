@@ -147,7 +147,7 @@ suite.define(() => {
       const sessionKey = "agent:main:dashboard:async-question-proof";
       const followUpTitle = "What should I emphasize?";
       const multipleQuestions = {
-        ...(!active ? openAiAuthor : {}),
+        ...(!active ? { ...openAiAuthor, phase: "commentary" } : {}),
         ...questionMessage,
         runId: "working-run",
         __openclaw: { id: "audience-prompt", seq: 2 },

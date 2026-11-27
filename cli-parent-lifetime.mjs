@@ -40,13 +40,19 @@ export function requestCliParentTermination(
 
 export function watchCliRespawnParent() {
   const parent = globalThis[parentKey];
-  if (!parent || parent.watching || !process.channel) {
+  if (!parent || parent.watching) {
+    return;
+  }
+  // Node clears the channel before emitting disconnect. Late startup must still
+  // terminate, while a Node process that never had IPC has connected === undefined.
+  if (process.connected === false) {
+    requestCliParentTermination();
+    return;
+  }
+  if (!process.channel) {
     return;
   }
   parent.watching = true;
   process.once("disconnect", requestCliParentTermination);
   process.channel.unref();
-  if (!process.connected) {
-    requestCliParentTermination();
-  }
 }

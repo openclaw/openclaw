@@ -39,6 +39,7 @@ function createWorker() {
 describe("stopTelegramIngressWorker", () => {
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllEnvs();
     workerHarness.instances.length = 0;
   });
 
@@ -57,6 +58,16 @@ describe("stopTelegramIngressWorker", () => {
     handle.onMessage = undefined;
     worker.emit("message", message);
     expect(onMessage).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { setting: undefined, enabled: false },
+    { setting: "1", enabled: true },
+  ])("passes capture=$enabled to the polling worker", ({ setting, enabled }) => {
+    vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", setting);
+    const { worker } = createWorker();
+    expect(worker.options.workerData).toMatchObject({ debugProxyCapture: enabled });
+    worker.emit("exit", 0);
   });
 
   it.each([true, false])("stops within budget (cooperative=%s)", async (cooperative) => {

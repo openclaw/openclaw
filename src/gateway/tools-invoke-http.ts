@@ -9,12 +9,8 @@ import {
   watchClientDisconnect,
 } from "./http-common.js";
 import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
-import {
-  authorizeScopedGatewayHttpRequestOrReply,
-  getHeader,
-  resolveOpenAiCompatibleHttpSenderIsOwner,
-} from "./http-utils.js";
-import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
+import { authorizeScopedGatewayHttpRequestOrReply, getHeader } from "./http-utils.js";
+import { prepareGatewayHttpOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { invokeGatewayTool, type ToolsInvokeInput } from "./tools-invoke-shared.js";
@@ -45,9 +41,9 @@ export async function handleToolsInvokeHttpRequest(
     return true;
   }
 
-  // /tools/invoke intentionally uses the same shared-secret HTTP trust model as
-  // the OpenAI-compatible APIs: token/password bearer auth is full operator
-  // access for the gateway, not a narrower per-request scope boundary.
+  // /tools/invoke uses the same HTTP trust model as the OpenAI-compatible APIs: the request is
+  // admitted once as the principal its credential names (the shared token or password names the
+  // Gateway owner) and the tool runs with that admitted grant.
   const authResult = await authorizeScopedGatewayHttpRequestOrReply({
     ...opts,
     req,
@@ -66,6 +62,7 @@ export async function handleToolsInvokeHttpRequest(
   // Admitted once above; operator access revocation applies to the next request.
   const signal = abortController.signal;
   const stopWatchingDisconnect = watchClientDisconnect(req, res, abortController);
+  let releaseAdmission: (() => void) | undefined;
 
   try {
     const bodyUnknown = await readJsonBodyOrError(
@@ -85,25 +82,34 @@ export async function handleToolsInvokeHttpRequest(
     const accountId = normalizeOptionalString(getHeader(req, "x-openclaw-account-id"));
     const agentTo = normalizeOptionalString(getHeader(req, "x-openclaw-message-to"));
     const agentThreadId = normalizeOptionalString(getHeader(req, "x-openclaw-thread-id"));
-    const senderIsOwner = resolveOpenAiCompatibleHttpSenderIsOwner(req, requestAuth);
-    const client = createSyntheticPluginRuntimeClient({
-      authenticatedUserProfile: requestAuth.authenticatedUserProfile,
-      operatorRoleActor: requestAuth.operatorRoleActor,
-      openclawIdPrincipal: requestAuth.openclawIdPrincipal,
-      operatorAccessAuthority,
-      scopes: operatorScopes,
-    });
     const context = opts.resolveGatewayContext?.();
-    if (
-      (requestAuth.openclawIdPrincipal !== undefined ||
-        resolveGatewayOperatorRoleActor(client)?.kind === "operator") &&
-      !context
-    ) {
+    if ((requestAuth.authenticatedUserProfile || requestAuth.openclawIdPrincipal) && !context) {
       sendJson(res, 503, {
         error: { message: "Gateway context is unavailable; retry shortly.", type: "unavailable" },
       });
       return true;
     }
+    const principal = {
+      authenticatedUserProfile: requestAuth.authenticatedUserProfile,
+      operatorRoleActor: requestAuth.operatorRoleActor,
+      openclawIdPrincipal: requestAuth.openclawIdPrincipal,
+      operatorAccessAuthority,
+    };
+    const admitted = context
+      ? await prepareGatewayHttpOperatorRunAuthority({
+          client: createSyntheticPluginRuntimeClient({ ...principal, scopes: operatorScopes }),
+          context: { ...context, resolveGatewayContext: opts.resolveGatewayContext },
+          sourceAuthority: operatorAccessAuthority,
+          hasCurrentClientAuthority: requestAuth.hasCurrentClientAuthority,
+        })
+      : undefined;
+    releaseAdmission = admitted?.release;
+    const authority = admitted?.authority;
+    const client = createSyntheticPluginRuntimeClient({
+      ...principal,
+      operatorRunAuthority: authority,
+      scopes: authority ? [...authority.scopes] : operatorScopes,
+    });
     const outcome = await withPluginRuntimeGatewayRequestScope(
       {
         client,
@@ -125,8 +131,8 @@ export async function handleToolsInvokeHttpRequest(
           authenticatedUserProfile: requestAuth.authenticatedUserProfile,
           operatorRoleActor: requestAuth.operatorRoleActor,
           openclawIdPrincipal: requestAuth.openclawIdPrincipal,
-          operatorScopes,
-          senderIsOwner,
+          operatorScopes: client.connect.scopes,
+          senderIsOwner: authority?.grant.owner,
           conversationReadOrigin: "direct-operator",
           toolCallIdPrefix: "http",
           signal,
@@ -146,6 +152,7 @@ export async function handleToolsInvokeHttpRequest(
     }
   } finally {
     stopWatchingDisconnect();
+    releaseAdmission?.();
     abortController.abort(new Error("HTTP tool invocation authority ended"));
   }
 

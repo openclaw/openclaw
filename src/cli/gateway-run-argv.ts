@@ -1,5 +1,9 @@
 // Fast-path argv parser for `openclaw gateway ...` without full Commander registration.
-import { GATEWAY_RUN_BOOLEAN_FLAGS, GATEWAY_RUN_VALUE_FLAGS } from "../../gateway-run-argv.mjs";
+import {
+  GATEWAY_RUN_BOOLEAN_FLAGS,
+  GATEWAY_RUN_VALUE_FLAGS,
+  isForegroundGatewayRunArgv,
+} from "../../gateway-run-argv.mjs";
 import {
   WINDOWS_TASK_SUPERVISOR_CHILD_FLAG,
   WINDOWS_TASK_SUPERVISOR_FLAG,
@@ -12,7 +16,20 @@ import {
   isValueToken,
 } from "../infra/cli-root-options.js";
 
-export { isForegroundGatewayRunArgv } from "../../gateway-run-argv.mjs";
+export { isForegroundGatewayRunArgv };
+
+// Linux rewrites /proc cmdline when setting process.title. Keep the actual
+// entrypoint for foreground update ownership, but never retain inline credentials.
+export function shouldPreserveGatewayProcessArgv(
+  argv: string[],
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  return (
+    platform === "linux" &&
+    isForegroundGatewayRunArgv(argv) &&
+    !argv.slice(2).some((arg) => /^--(?:token|password)(?:=|$)/u.test(arg))
+  );
+}
 
 export function consumeGatewayRunOptionToken(args: ReadonlyArray<string>, index: number): number {
   return consumeKnownOptionToken(args, index, GATEWAY_RUN_BOOLEAN_FLAGS, GATEWAY_RUN_VALUE_FLAGS);

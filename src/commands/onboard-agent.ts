@@ -49,6 +49,8 @@ export async function ensureOnboardingAgent(params: {
   baseConfig?: OpenClawConfig;
   expectedConfigHash?: string | null;
   beforePersistentApply?: () => void;
+  /** Baseline setup creates the agent without starter files; the first conversation seeds them. */
+  skipBootstrap?: true;
 }): Promise<{
   config: OpenClawConfig;
   /** Comparison basis for the returned proposal, including any agent-creation rebase. */
@@ -150,7 +152,7 @@ export async function ensureOnboardingAgent(params: {
           workspace: params.workspace,
         },
         bootstrapMain: normalizeAgentId(firstAgentName) === "main",
-        skipBootstrap: params.config.agents?.defaults?.skipBootstrap,
+        skipBootstrap: params.skipBootstrap ?? params.config.agents?.defaults?.skipBootstrap,
         skipOptionalBootstrapFiles: params.config.agents?.defaults?.skipOptionalBootstrapFiles,
       });
   if (created.status === "error") {

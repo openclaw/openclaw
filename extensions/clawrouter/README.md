@@ -163,9 +163,9 @@ deployment that declares endpoint formats for the offered route is required.
 Set `tools.web.search.provider` to `clawrouter` to use the configured ClawRouter
 credential. Each search resolves that credential and refreshes its catalog before
 dispatch. Supported formats are `tavily.search`, `brave.search`, `exa.search`,
-`parallel.search` and `searxng.search`, through eligible native or manifest offers
+`parallel.search`, `perplexity.search` and `searxng.search`, through eligible native or manifest offers
 with matching declared methods and request/response formats. Brave and SearXNG
-use GET query parameters; Exa, Parallel and Tavily use their native JSON bodies.
+use GET query parameters; Exa, Parallel, Perplexity and Tavily use their native JSON bodies.
 Brave, Exa, Parallel and SearXNG share their request/result codecs with the native
 OpenClaw plugins.
 Model-less offers are supported. The adapter does not infer `/v1/search`, use
@@ -174,6 +174,10 @@ that includes endpoint format declarations for the selected offer is required.
 
 Queries accept `query` and `count` (1–10). Catalog and search responses are bounded,
 cancellation is propagated, and result text is marked as untrusted web content.
+
+Perplexity Search sends only `query` and `max_results`, without a model or Agent
+API fallback. Queries must also fit 8192 UTF-8 bytes. Its ordered result window
+does not refill malformed or unsafe links from later rows.
 
 Parallel queries are limited to 200 characters. Native provider-specific advanced
 filters are not exposed by this adapter. Request counters alone do not establish

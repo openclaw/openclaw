@@ -57,7 +57,7 @@ const isWindowsEnv = (env: EnvMap, platform: NodeJS.Platform): boolean => {
 };
 
 type VitestPerformanceConfig = {
-  fsModuleCache?: true;
+  fsModuleCache: boolean;
   fsModuleCachePath?: string;
   experimental?: {
     importDurations?: { print: true };
@@ -76,15 +76,13 @@ export function loadVitestPerformanceConfig(
   platform: NodeJS.Platform = process.platform,
   cwd = process.cwd(),
 ): VitestPerformanceConfig {
-  const config: VitestPerformanceConfig = {};
   const windowsEnv = isWindowsEnv(env, platform);
-
-  if (!windowsEnv && !isDisabled(env.OPENCLAW_VITEST_FS_MODULE_CACHE)) {
-    config.fsModuleCache = true;
-  }
-  if (windowsEnv && isEnabled(env.OPENCLAW_VITEST_FS_MODULE_CACHE)) {
-    config.fsModuleCache = true;
-  }
+  const config: VitestPerformanceConfig = {
+    // Vitest defaults to true, so omission does not disable its filesystem cache.
+    fsModuleCache: windowsEnv
+      ? isEnabled(env.OPENCLAW_VITEST_FS_MODULE_CACHE)
+      : !isDisabled(env.OPENCLAW_VITEST_FS_MODULE_CACHE),
+  };
   if (config.fsModuleCache) {
     // The default leaf cannot contain the scheduler's concurrent cache leaves:
     // Vitest recursively removes its selected directory when lockfiles change.

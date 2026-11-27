@@ -72,7 +72,9 @@ export function resolveFollowupAuthorizationKey(run: FollowupRun): string {
       operatorAuthority: run.operatorAuthority,
     }),
     resolveReplyOperatorAuthorityKey(run.operatorAuthority),
+    stableStringify(run.operatorAuthority?.participationCeiling ?? null),
     execution.senderId ?? "",
+    execution.mcpRequesterProfileId ?? "",
     JSON.stringify(execution.channelContext ?? null),
     stableStringify(execution.conversationToolPolicy ?? null),
     execution.senderE164 ?? "",
@@ -231,7 +233,7 @@ export async function prepareNextDeliveryGroup(
   });
 }
 
-function resolveFollowupReplyAnchor(run: FollowupRun): string | undefined {
+export function resolveFollowupReplyAnchor(run: FollowupRun): string | undefined {
   if (run.originatingReplyToMode === "off") {
     return undefined;
   }
@@ -384,12 +386,12 @@ export function collectRuntimeMetadata(items: FollowupRun[], abortSignal?: Abort
       callbackCustodies.length > 0
         ? {
             retain: () => {
-              const releases = callbackCustodies.map((custody) => custody.retain());
-              return () => {
-                for (const release of releases) {
-                  release();
-                }
-              };
+              using holds = new DisposableStack();
+              for (const custody of callbackCustodies) {
+                holds.defer(custody.retain());
+              }
+              const retained = holds.move();
+              return () => retained.dispose();
             },
           }
         : undefined,

@@ -319,7 +319,8 @@ describe("renderAgents", () => {
             "openai/gpt-5.4": {},
           },
         },
-        entries: { alpha: {}, beta: {} },
+        // Even the default agent can explicitly pin the same model a sibling inherits.
+        entries: { alpha: { model: "openai/gpt-5.4" }, beta: {} },
       },
     };
 

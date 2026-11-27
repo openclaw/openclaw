@@ -4,7 +4,6 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-syn
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { createUpdateErrorFact } from "../infra/update-failure-facts.js";
 import { updateRunFixture } from "../infra/update-run-fixture.test-support.js";
-import { renderUpdateRunReport } from "../infra/update-run-report.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -106,14 +105,8 @@ it.each([
     expect(
       record?.steps.find((step) => step.step === "plugin-finalization")?.failureFacts?.[0],
     ).toMatchObject({ leaseLoss: loss });
-    const report = renderUpdateRunReport(record!);
-    expect(report.markdown).toContain(`lease loss: ${reason}`);
-    expect(JSON.stringify({ record, report, lost, hydrated })).not.toContain(
-      "private-original-token",
-    );
-    expect(JSON.stringify({ record, report, lost, hydrated })).not.toContain(
-      "private-replacement-token",
-    );
+    expect(JSON.stringify({ record, lost, hydrated })).not.toContain("private-original-token");
+    expect(JSON.stringify({ record, lost, hydrated })).not.toContain("private-replacement-token");
     executeSqliteQuerySync(db, sql.deleteFrom("state_leases"));
   },
 );

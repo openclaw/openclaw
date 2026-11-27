@@ -187,6 +187,17 @@ describe("prepared session control target", () => {
     },
   );
 
+  it("uses shared-session write access for snooze without granting archive", async () => {
+    const { request } = seedTarget("snooze");
+    const { authority } = issueAuthority(callerId);
+    await withCapture({ ...request, operation: "snooze", authority }, (current) =>
+      expect(current.assertCurrent).not.toThrow(),
+    );
+    await expect(
+      prepareSessionControlTarget({ ...request, operation: "archive", authority }),
+    ).rejects.toThrow(/session creator/i);
+  });
+
   it("rejects insufficient and unissued sources even for the real creator", async () => {
     const { request } = seedTarget("invalid-source", {
       createdActor: { type: "human", source: "profile", id: callerId },
@@ -230,7 +241,7 @@ describe("prepared session control target", () => {
     }
   });
 
-  it("fences a prepared action after reassignment or profile revocation", async () => {
+  it("fences a prepared action after reassignment", async () => {
     const { scope, request } = seedTarget("revocation");
     assign(scope, "human", callerId);
     const { authority } = issueAuthority(callerId);
@@ -253,12 +264,17 @@ describe("prepared session control target", () => {
       assign(scope, "human", callerId);
       expect(unobserved.assertCurrent).toThrow(/facts are unavailable/i);
     });
+  });
+
+  // Admitted once: a role change after the turn started applies to the caller's next turn.
+  it("keeps the admitted role for a prepared action after a role change", async () => {
+    const { scope, request } = seedTarget("role-change");
+    assign(scope, "human", callerId);
+    const { authority } = issueAuthority(callerId);
     try {
-      await withCapture(authorized, (profileCapture) => {
+      await withCapture({ ...request, authority }, (capture) => {
         setUserProfileRole(callerId, "reader");
-        expect(profileCapture.assertCurrent).toThrow(
-          /facts are unavailable|current authenticated profile/i,
-        );
+        expect(capture.assertCurrent).not.toThrow();
       });
     } finally {
       setUserProfileRole(callerId, null);

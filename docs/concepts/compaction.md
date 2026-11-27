@@ -14,7 +14,7 @@ Every model has a context window: the maximum number of tokens it can process. W
 2. The summary is saved in the session transcript.
 3. Recent messages are kept intact.
 
-In the Control UI, the **Context compacted** divider shows the tokens saved and the percentage reduction from the pre-compaction token count when both before and after counts are available.
+In the Control UI, compaction appears as ordinary activity: **Compacting** while running and **Compacted context** when complete. It joins nearby tool activity; the collapsed tool summary describes the work without showing operation counts. If the turn has a **Worked** disclosure, expand it to find the compaction rows. Manual compaction while the agent is idle uses the same standalone activity row. Expand a compaction row to see tokens saved and the percentage reduction when both before and after counts are available.
 
 OpenClaw keeps assistant tool calls paired with their matching `toolResult` entries when it picks a compaction split point. If the point lands inside a tool block, OpenClaw moves the boundary so the pair stays together and the current unsummarized tail is preserved.
 
@@ -121,6 +121,14 @@ still fit the model window: a single large pending message or tool result can
 consume the remaining headroom before a safe boundary, in which case OpenClaw
 keeps the existing client-side fallback rather than dropping pending content.
 Manual `/compact` and overflow recovery keep their existing behavior.
+
+After a tool batch has fully settled, the request boundary can defer soft
+compaction for one ordinary model call so the agent can answer from the intact
+history. This requires the larger of the outgoing and maintenance input estimates
+plus the full output allowance to fit within the effective context window. There
+is at most one such deferral per turn, including retries. If the model requests
+more tools, compaction is reevaluated at the next boundary. Unfinished tool work,
+hard overflow, and insufficient output headroom do not qualify.
 
 If the provider rejects a request after tool calls have completed, the built-in runtime can compact and continue from their recorded results. It keeps the current model and account, preserves the original request, and does not replay completed actions. This recovery requires settled tool results; pending tools, approvals, cancellation, and a tool that intentionally ended the turn retain their normal handling. If a Gateway restart later interrupts that continuing run, recovery preserves the accepted input even when compaction has summarized it.
 

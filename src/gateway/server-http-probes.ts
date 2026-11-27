@@ -5,6 +5,7 @@ import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import { authorizeHttpGatewayConnect } from "./auth.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { classifyGatewayProbePath } from "./gateway-http-route-contracts.js";
+import type { PreparedReadinessChecker } from "./health/types.js";
 import {
   hasGatewayProxyIdentityHeaders,
   readPreparedGatewayIngressAttribution,
@@ -17,11 +18,7 @@ import {
   resolveHostName,
 } from "./net.js";
 import { getHttpAuthUtilsModule } from "./server-http-modules.js";
-import type {
-  PreparedReadinessChecker,
-  StartupChecker,
-  StartupResult,
-} from "./server/readiness.js";
+import type { StartupChecker, StartupResult } from "./server/readiness.js";
 import { hasGatewayDelegationClaim } from "./trusted-proxy-delegation.js";
 
 function startupProbeBody(
@@ -149,6 +146,9 @@ export async function handleGatewayProbeRequest(
     body = JSON.stringify({ ok: true, status });
   }
   res.statusCode = statusCode;
+  if (statusCode === 503) {
+    res.setHeader("Retry-After", "1");
+  }
   // Node suppresses the HEAD body but never synthesizes Content-Length; set it
   // explicitly so probes keep GET/HEAD header parity (RFC 9110 §8.6).
   res.setHeader("Content-Length", String(Buffer.byteLength(body)));

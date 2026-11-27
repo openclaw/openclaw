@@ -172,9 +172,10 @@ function readPool(state: ReadRuntime, admitted: boolean, awaitedOnly: boolean) {
   if ((state.sealed && !admitted) || state.closing) {
     throw new WorkerTaskError("Shared-state readers are closing", "unavailable");
   }
-  // Long-lived hosts reuse their boot readers; one-shot inspection avoids a native supervisor.
+  // Explicit one-shot callers never inherit a retained pool from earlier ordinary reads.
+  const role = getDatabaseProcessRole();
   const retained =
-    !awaitedOnly || state.pool !== undefined || getDatabaseProcessRole() === "gateway";
+    role !== "cli-oneshot" && (!awaitedOnly || state.pool !== undefined || role === "gateway");
   const key = retained ? "pool" : "awaitedPool";
   if (!state[key]) {
     state[key] = createStateReadPool(state.workerUrl, retained ? state.nativeSource : undefined);
@@ -343,6 +344,9 @@ class StateReadTransport {
       // Maintenance reuses this reader; standalone inspection releases it before metadata loads.
       const retireAfterRead =
         !pool.retained && !context.maintenanceScope && readCommand.type !== "admit";
+      // A one-shot CLI keeps its reader isolate for later reads and releases only the native
+      // handles here; CLI cleanup closes the pool when the command ends.
+      const releaseInPlace = retireAfterRead && getDatabaseProcessRole() === "cli-oneshot";
       const prepareDispatch = async () => {
         const physicalLocation = resolveSqliteDatabaseFilePath(location);
         try {
@@ -424,7 +428,8 @@ class StateReadTransport {
         let outcome: OpenClawStateReadOutcome;
         try {
           const reply = await task.result;
-          cleanup.retire = retireAfterRead || Boolean(reply.nativeCleanupFailure);
+          cleanup.retire =
+            (retireAfterRead && !releaseInPlace) || Boolean(reply.nativeCleanupFailure);
           outcome = decodeOpenClawStateReadReply(reply);
         } catch (error) {
           outcome = { error };
@@ -433,6 +438,13 @@ class StateReadTransport {
         releaseAdmission = undefined;
         // Native closes and quarantine cleanup can require exit even when the domain read succeeds.
         cleanup.retire ||= "error" in outcome;
+        if (retireAfterRead && !("error" in outcome)) {
+          await this.closeTask(task);
+          if (!cleanup.retire) {
+            // Joined before the result returns: no SQLite handle outlives a successful read.
+            await closeReadResources(pool.pool);
+          }
+        }
         return outcome;
       })();
       return { task, result };

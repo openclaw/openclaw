@@ -706,6 +706,7 @@ describe("Provider model discovery auth preparation", () => {
             get provider() {
               return {
                 baseUrl: "https://api.chutes.ai/v1",
+                api: "openai-completions" as const,
                 apiKey: other.apiKey,
                 models: reads++ === 0 ? [independentModel] : [],
               };

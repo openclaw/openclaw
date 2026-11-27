@@ -336,7 +336,16 @@ export async function runCommandBuffered(
     }
     return true;
   };
-  const capturedOutput = ({ chunks, bytes }: CapturedBytes) => Buffer.concat(chunks, bytes);
+  const capturedOutput = ({ chunks, bytes }: CapturedBytes) => {
+    if (bytes === 0) {
+      return Buffer.alloc(0);
+    }
+    const first = chunks[0];
+    // Reuse a complete backing store without retaining unrelated bytes.
+    return first?.byteLength === bytes && first.buffer.byteLength === bytes
+      ? first
+      : Buffer.concat(chunks, bytes);
+  };
 
   try {
     const result = await runCommandWithTimeout(argv, {

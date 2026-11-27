@@ -116,10 +116,60 @@ async function isRetainedRuntimeMarker(marker: string): Promise<boolean> {
   return isRecord(value) && value.name === "openclaw";
 }
 
+function projectRetainedSource(directory: string, source: string): string {
+  const base = path.parse(source).root;
+  return path.join(
+    directory,
+    "tree",
+    Buffer.from(base).toString("hex"),
+    path.relative(base, source),
+  );
+}
+
+const retainedFileList = "retained-files.json";
+const shippedRuntimeEntries = new Set([retainedFileList, "tree", "update-native-gate.mjs"]);
+
+/**
+ * Updaters through 2026.11.10 record no owner, and their projection encodes the
+ * installation they ran from, which pnpm global installs and Git release folders
+ * replace with a new path. Their own file list begins with the retained
+ * package.json, so the runtime still proves what it holds after that move.
+ */
+async function recognizesShippedRuntime(directory: string): Promise<boolean> {
+  const entries = await fs.readdir(directory, { withFileTypes: true });
+  if (
+    entries.length !== shippedRuntimeEntries.size ||
+    !entries.every(
+      (entry) =>
+        shippedRuntimeEntries.has(entry.name) &&
+        (entry.name === "tree" ? entry.isDirectory() : entry.isFile()),
+    )
+  ) {
+    return false;
+  }
+  // The list holds every retained path (tens of MB); only its first entry is needed.
+  const handle = await fs.open(path.join(directory, retainedFileList), "r");
+  let head: string;
+  try {
+    const buffer = Buffer.alloc(64 * 1024);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    head = buffer.toString("utf8", 0, bytesRead);
+  } finally {
+    await handle.close();
+  }
+  const first = /^\[("(?:[^"\\]|\\.)*")/u.exec(head)?.[1];
+  const manifest: unknown = first ? JSON.parse(first) : undefined;
+  return (
+    typeof manifest === "string" &&
+    path.isAbsolute(manifest) &&
+    path.normalize(manifest) === manifest &&
+    path.basename(manifest) === "package.json" &&
+    (await isRetainedRuntimeMarker(projectRetainedSource(directory, manifest)))
+  );
+}
+
 async function recognizesRetainedRuntime(directory: string, packageRoot: string): Promise<boolean> {
-  const base = path.parse(packageRoot).root;
-  const tree = path.join(directory, "tree", Buffer.from(base).toString("hex"));
-  const projectedRoot = path.join(tree, path.relative(base, packageRoot));
+  const projectedRoot = projectRetainedSource(directory, packageRoot);
   if (await isRetainedRuntimeMarker(path.join(projectedRoot, "package.json"))) {
     return true;
   }
@@ -165,6 +215,8 @@ export async function maintainRetainedUpdateRuntimes(params: {
   repair: boolean;
   assertCurrent: () => void;
   assertResourcesSettled?: (directory: string) => void;
+  /** Called for each runtime an updater created, before any removal attempt. */
+  onRecognized?: (directory: string) => void;
 }): Promise<string[]> {
   const messages: string[] = [];
   // Native spelling matches the projection, registration, and marker realpaths
@@ -200,9 +252,13 @@ export async function maintainRetainedUpdateRuntimes(params: {
               break;
             }
           }
+          marked ||= await recognizesShippedRuntime(directory);
           if (!marked) {
-            throw new Error("no recognized runtime marker; inspect it before manual cleanup");
+            throw new Error(
+              "it does not match a runtime an OpenClaw updater created, so it is kept",
+            );
           }
+          params.onRecognized?.(directory);
           if (!params.repair) {
             messages.push(
               `Runtime retained at ${directory}: run \`openclaw doctor --fix\` after its workers stop`,

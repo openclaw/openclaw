@@ -8,7 +8,7 @@ import {
   type WorkerOptions,
 } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { createSpawnBrokerHost, type SpawnBrokerHost } from "../process/spawn-broker/host.js";
+import { createAttachmentBrokerHost } from "../process/spawn-broker/host.js";
 import { attachBrokerNativeResource } from "../process/spawn-broker/resource-client.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
@@ -85,7 +85,7 @@ export type RetainedNativeWorkerSource = {
 };
 
 type NativeBrokerLifetime = {
-  host?: SpawnBrokerHost;
+  host?: ReturnType<typeof createAttachmentBrokerHost>;
   closing?: Promise<void>;
   idleTimer?: ReturnType<typeof setTimeout>;
   retainedUntilProcessExit?: boolean;
@@ -114,6 +114,7 @@ const lifetime = resolveGlobalSingleton(
     defaultBroker: {},
   }),
   closeDefaultRetainedNativeWorkerSource,
+  "native-workers",
 );
 
 /** Terminal process cleanup joins the existing unbound owner without starting another. */
@@ -137,11 +138,11 @@ function nativeCleanupFailures(results: PromiseSettledResult<unknown>[]): unknow
 
 const NATIVE_BROKER_IDLE_MS = 60_000;
 
-function nativeResourceBroker(source: NativeSource): SpawnBrokerHost {
+function nativeResourceBroker(source: NativeSource) {
   clearTimeout(source.broker.idleTimer);
   source.broker.idleTimer = undefined;
   return (source.broker.host ??= runInDetachedAsyncContext(() =>
-    createSpawnBrokerHost({ nativeResources: true, workerUrl: source.brokerModuleUrl }),
+    createAttachmentBrokerHost(source.brokerModuleUrl),
   ));
 }
 

@@ -4,8 +4,6 @@ import { captureSessionEventTargetForHost } from "../auto-reply/reply/session-ev
 import { resolveScheduledRequester } from "../cron/execution-context.js";
 import type { CronStoredJob } from "../cron/types.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
-import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
-import { hasAutomationAdminDelegation } from "./operator-run-recovery-source.codec.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 
 /** Capture the requester's reference; the event admits it when its work starts. */
@@ -32,7 +30,7 @@ export async function captureCronJobTurnTarget(params: {
         throw new Error("Automation requester changed.");
       }
     };
-    return await capture({ requesterOwner: { requester }, assertCurrent });
+    return await capture({ scheduledRequester: requester, assertCurrent });
   }
   const { source } = requester;
   if (
@@ -44,10 +42,6 @@ export async function captureCronJobTurnTarget(params: {
   const captured = job.operatorSource;
   return await capture({
     operatorSource: source,
-    ...(hasAutomationAdminDelegation(source.snapshot) &&
-    operatorScopeSatisfied("operator.admin", source.snapshot.scopes)
-      ? { ownerContinuation: true as const }
-      : {}),
     assertCurrent: () => {
       if (!isDeepStrictEqual(context.cron.getJob(job.id)?.operatorSource, captured)) {
         throw new Error("Automation operator source changed");

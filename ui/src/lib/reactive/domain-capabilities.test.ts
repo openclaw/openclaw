@@ -8,6 +8,7 @@ import { createChannelCapability } from "../channels/index.ts";
 import { configSnapshot } from "../config/config-snapshot.test-support.ts";
 import { createRuntimeConfigCapability } from "../config/runtime-config-capability.ts";
 import * as project from "./domain-capabilities.ts";
+import { sharedRuntimeConfigProjection } from "./shared-application-projections.ts";
 
 function owned<T extends { dispose(): void }>(owner: T): T {
   onTestFinished(() => owner.dispose());
@@ -27,10 +28,12 @@ it("publishes mutable agent state", async () => {
   const original = state.read();
   expect(original.agentsList).toBeNull();
   source.publish({ ...source.gateway.snapshot, client, phase: "connected" });
-  await agents.ensureList();
+  const loading = agents.ensureList();
+  changed.mockClear();
+  await loading;
   expect(state.read()).toBe(original);
   expect(state.read().agentsList?.agents).toEqual([{ id: "main" }]);
-  expect(changed).toHaveBeenCalled();
+  expect(changed).toHaveBeenCalledOnce();
 });
 
 it("invalidates channel state on the real connection boundary", () => {
@@ -52,6 +55,7 @@ it("reads config permissions with the mutable draft snapshot", async () => {
   const source = createApplicationGateway();
   const config = owned(createRuntimeConfigCapability(source.gateway));
   const projection = owned(project.projectRuntimeConfig(config));
+  const shared = sharedRuntimeConfigProjection(config);
   projection.subscribe(() => {});
   expect(projection.read().canSet).toBe(false);
   const client = createTestGatewayClient(async () => configSnapshot({}));
@@ -63,9 +67,34 @@ it("reads config permissions with the mutable draft snapshot", async () => {
   });
   await config.ensureLoaded();
   expect(projection.read().canSet).toBe(false);
+  expect(shared.read().canSet).toBe(false);
   const previousRevision = projection.revision();
   config.setRaw('{"agents":{}}');
   flush();
   expect(projection.read().state.configRaw).toBe('{"agents":{}}');
   expect(projection.revision()).toBeGreaterThan(previousRevision);
+  source.publish({
+    ...source.gateway.snapshot,
+    hello: gatewayHelloForMethods(
+      ["config.get", "config.set", "config.apply", "config.patch", "config.openFile"],
+      ["operator.admin"],
+    ),
+  });
+  for (const view of [projection, shared]) {
+    const facts = view.read();
+    expect(facts).toEqual({
+      state: config.state,
+      canSet: true,
+      canApply: true,
+      canPatch: true,
+      canOpenFile: true,
+    });
+    expect(facts.state).toBe(config.state);
+  }
+  source.publish({
+    ...source.gateway.snapshot,
+    hello: gatewayHelloForMethods(["config.get"], ["operator.read"]),
+  });
+  expect(projection.read().canSet).toBe(false);
+  expect(shared.read().canSet).toBe(false);
 });

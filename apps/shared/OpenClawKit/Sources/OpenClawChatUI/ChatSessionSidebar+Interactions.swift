@@ -17,21 +17,20 @@ struct ChatSidebarDrag: Codable, Transferable {
 }
 
 extension ChatSessionSidebar {
-    func interactionSections(now: Date = .now) -> [ChatSessionSidebarModel.Section] {
+    func interactionSections(now localNow: Date = .now) -> [ChatSessionSidebarModel.Section] {
+        let now = self.sidebarClock.gatewayDate(at: localNow)
         var sections = self.rosterSections(now: now, observedOrder: self.observedOrder)
-        let positions = Dictionary(
-            self.batch.sidebarEntries.enumerated().map { ($0.element, $0.offset) },
-            uniquingKeysWith: min)
+        let positions = self.batch.pinPositions
         sections = sections.map { section in
             guard section.id == "pinned" else { return section }
             let nodes = section.nodes.enumerated().sorted {
-                (positions["session:\($0.element.id)"] ?? Int.max, $0.offset) <
-                    (positions["session:\($1.element.id)"] ?? Int.max, $1.offset)
+                (positions[$0.element.id] ?? Int.max, $0.offset) <
+                    (positions[$1.element.id] ?? Int.max, $1.offset)
             }.map(\.element)
             return .init(id: section.id, title: section.title, nodes: nodes)
         }
         // Preserve the roster owner's grouping and empty-group filters; only Pages needs an empty drop target.
-        if self.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        if self.menuActions.canDropPins, self.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
            !sections.contains(where: { $0.id == "pinned" })
         {
             sections.insert(.init(id: "pinned", title: String(localized: "Pinned"), nodes: []), at: 0)
@@ -126,7 +125,7 @@ extension ChatSessionSidebar {
                 ProgressView().controlSize(.small)
             }
             if !self.batch.errors.isEmpty {
-                Text(String(localized: "Some thread operations failed. See the affected rows and try again."))
+                Text(String(localized: "Check the affected threads."))
                     .foregroundStyle(OpenClawChatTheme.danger)
             }
             ForEach(Array(Set(self.batch.notices + Array(self.batch.errors.values))).sorted(), id: \.self) {
@@ -191,7 +190,8 @@ extension ChatSessionSidebar {
         var loaded = false
         for await event in self.viewModel.transport.events() {
             switch event {
-            case .health(true) where !loaded, .modelSelectionChanged, .reconnected, .routeChanged, .seqGap:
+            case .health(true) where !loaded, .personalPinsChanged, .modelSelectionChanged, .reconnected, .routeChanged,
+                 .seqGap:
                 let scope = self.batch.scope
                 do {
                     guard let connection = self.menuActions.connection else { return }
@@ -308,33 +308,64 @@ extension ChatSessionSidebar {
               held.sessionId == item.sessionID else { return false }
         let row = self.batchTarget(held)
         let patch: [String: AnyCodable]?
-        switch ChatSessionSidebarBatch.drop(row, section: section, target: pinTarget.map(self.batchTarget)) {
+        var insert: (key: String, target: String)?
+        switch ChatSessionSidebarBatch.drop(
+            row,
+            section: section,
+            target: pinTarget.map(self.batchTarget),
+            now: self.sidebarClock.gatewayDate())
+        {
         case .selfDrop?: return true
-        case let .mutation(fields)?: patch = fields
+        case let .insert(key, target)? where self.menuActions.canEditPins:
+            // The Gateway refuses a thread snoozed, archived or replaced elsewhere before any layout write.
+            patch = ["pinned": .init(true)]
+            insert = (key, target)
+        case .insert?: return false
+        case let .mutation(fields)? where self.menuActions.canEditPins: patch = fields
+        case let .mutation(fields)?:
+            // A read-only pin does not prevent a separate group change.
+            guard let category = fields?["category"] else {
+                return false
+            }
+            patch = ["category": category]
         case nil: return false
         }
-        if section == "pinned", !connection.allows("config.patch", scope: "operator.admin") { return false }
-        let keys = visibleRows.filter { $0.pinned == true }.map(\.key) + [row.key]
+        guard connection.allows(patch == nil ? "users.prefs.set" : "sessions.patch"),
+              insert == nil || connection.allows("users.prefs.set") else { return false }
         let owner = self.viewModel.sidebarData
         self.interact(refresh: patch != nil) { connection in
             self.batch.errors = [:]
-            if let patch {
-                let data = try await connection.request(OpenClawChatGatewayRequests.sessionMenu(
-                    "sessions.patch",
-                    session: row,
-                    fields: patch))
+            // Shared category and personal pin edits have separate transaction owners.
+            let patches: [[String: AnyCodable]] = patch.map { fields in
+                if fields["category"] != nil, let pin = fields["pinned"] {
+                    return [fields.filter { $0.key != "pinned" }, ["pinned": pin]]
+                }
+                return [fields]
+            } ?? []
+            for (index, patch) in patches.enumerated() {
+                let data: Data
+                do {
+                    data = try await connection.request(OpenClawChatGatewayRequests.sessionMenu(
+                        "sessions.patch", session: row, fields: patch))
+                } catch where index > 0 {
+                    guard connection.isCurrent() else { throw CancellationError() }
+                    self.batch
+                        .notices =
+                        [String(localized: "Group change saved. Could not confirm the unpin.") + " " + error
+                            .localizedDescription]
+                    return // Reconcile both owners, including a response lost after commit.
+                }
                 var receipt = try JSONDecoder().decode(OpenClawChatSessionPatchReceipt.self, from: data)
                 receipt.agentID = OpenClawChatSessionKey.agentID(from: row.key) ?? row.agentId
-                // Pin state is already committed even if persisting its subsequent placement fails.
                 let fields = [OpenClawChatSessionSidebarData.Field.category, .pinned]
                     .filter { patch[$0.rawValue] != nil }
                 owner?.confirmFields(receipt, target: row, fields: fields)
             }
-            if section == "pinned" {
+            // A failed placement leaves the committed pin last, with the move error visible.
+            if section == "pinned", patch == nil || insert != nil {
                 try await self.batch.movePin(
-                    keys: keys,
-                    key: row.key,
-                    target: pinTarget?.key,
+                    key: insert?.key ?? row.key,
+                    target: insert?.target ?? pinTarget?.key,
                     after: after,
                     connection: connection)
             }
@@ -351,7 +382,7 @@ struct ChatSidebarSectionInteraction: ViewModifier {
     @State private var height: CGFloat = 0
 
     func body(content: Content) -> some View {
-        if self.section.isEmpty {
+        if self.section.isEmpty || (self.section == "pinned" && !self.sidebar.menuActions.canDropPins) {
             content
         } else {
             Group {

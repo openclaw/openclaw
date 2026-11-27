@@ -376,6 +376,8 @@ export function createNativeMcpClientBridge(params: {
           const validateResult = params.validatorForCall(input.name);
           return flow("tools/call", input, CallToolResultSchema, options, validateResult);
         }
+        // Validators compile on first use; an uncompilable outputSchema must fail before the request.
+        params.validatorForCall(input.name);
         // The SDK lacks a manual-result callTool overload; HTTP retains its header mirroring.
         return {
           kind: "complete",

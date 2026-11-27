@@ -5,10 +5,7 @@ import {
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { getSubagentChildControllerSessionKey } from "../agents/subagents/registry/subagent-registry-read.js";
-import {
-  RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
-  shouldKeepSubagentRunChildLink,
-} from "../agents/subagents/registry/subagent-run-liveness.js";
+import { RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS } from "../agents/subagents/registry/subagent-run-liveness.js";
 import { isTerminalSessionStatus, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
@@ -174,12 +171,8 @@ export function sessionChildLinkExpiresAt(
   ) {
     return Infinity;
   }
-  const run = subagentRuns.getDisplaySubagentRun(key);
-  const expires = run
-    ? typeof run.execution.endedAt === "number" && Number.isFinite(run.execution.endedAt)
-      ? run.execution.endedAt + RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS
-      : Infinity
-    : storeOnlyChildLinkExpiresAt(entry);
+  const run = subagentRuns.getSessionDisplayFacts(key, now);
+  const expires = run ? run.childLinkExpiresAt : storeOnlyChildLinkExpiresAt(entry);
   return expires >= now ? expires : Infinity;
 }
 
@@ -248,12 +241,9 @@ export function resolveSessionChildOwners(params: {
     // retain the bounded fallback rather than acquiring permanent authority.
     let keep = native || params.hasActiveRun;
     if (!keep) {
-      const latest = subagentRuns.getDisplaySubagentRun(key);
+      const latest = subagentRuns.getSessionDisplayFacts(key, now);
       keep = latest
-        ? shouldKeepSubagentRunChildLink(latest, {
-            activeDescendants: subagentRuns.countActiveDescendantRuns(key),
-            now,
-          })
+        ? latest.retainChildLink || subagentRuns.countActiveDescendantRuns(key) > 0
         : shouldKeepStoreOnlyChildLink(entry, now);
     }
     const explicitParent =

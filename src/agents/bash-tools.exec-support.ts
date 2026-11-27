@@ -1,12 +1,16 @@
+import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
+import { listActiveProcessSessionReferences } from "./bash-process-references.js";
 import {
+  buildBackgroundExecFollowUp,
   type ExecDroppedOutputFacts,
   type ExecProcessOutcome,
   renderExecDroppedOutputNote,
   renderExecOutputText,
 } from "./bash-tools.exec-output.js";
 import type { ExecToolApprovalReview, ExecToolDetails } from "./bash-tools.exec-result.types.js";
+import type { ExecProcessHandle } from "./bash-tools.exec-runtime.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { textResult } from "./tools/tool-results.js";
@@ -20,6 +24,41 @@ export function attachExecApprovalReview(
     result.details.approvalReviewOutcome = review.status === "approved" ? "approved" : "denied";
   }
   return result;
+}
+
+/** Report process ownership only when the foreground wait actually yielded. */
+export function buildExecRunningResult(
+  run: Pick<ExecProcessHandle, "session" | "startedAt">,
+  yieldMs: number | undefined,
+  warnings: readonly string[],
+): AgentToolResult<ExecToolDetails> {
+  const { session, startedAt } = run;
+  // A waiter started during this turn is absent from the turn-start snapshot.
+  const otherRunning = listActiveProcessSessionReferences({
+    scopeKey: session.scopeKey,
+    exclude: session,
+  }).map((other) => `${other.sessionId} (${other.name})`);
+  const followUp = buildBackgroundExecFollowUp(session, yieldMs, otherRunning);
+  const deadlineAtMs = session.processActivity?.deadlineAtMs;
+  const deadline =
+    deadlineAtMs === undefined
+      ? ""
+      : `, times out in ${formatDurationCompact(Math.max(1_000, deadlineAtMs - Date.now()))}`;
+  const warningText = warnings.join("\n");
+  return textResult(
+    `${warnings.length ? warningText + "\n\n" : ""}Command still running (session ${session.id}, pid ${session.pid ?? "n/a"})${deadline}. ${followUp}`,
+    {
+      status: "running",
+      sessionId: session.id,
+      pid: session.pid ?? undefined,
+      startedAt,
+      ...(deadlineAtMs === undefined ? {} : { deadlineAtMs }),
+      cwd: session.cwd,
+      tail: session.tail,
+      ...(warnings.length ? { warningText } : {}),
+      followUp,
+    },
+  );
 }
 
 export function buildExecForegroundResult(params: {

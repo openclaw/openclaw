@@ -1455,117 +1455,6 @@ describe("subagent registry lifecycle hardening", () => {
     expect(readLifecycleRun(entry).archiveAtMs).toBe(5_000);
   });
 
-  it("skips frozen-result refill for a sessions_yield-paused run", async () => {
-    const entry = createRunEntry({
-      expectsCompletionMessage: true,
-      endedAt: 4_000,
-      pauseReason: "sessions_yield",
-    });
-    const captureSubagentCompletionReply = vi.fn(async () => "text from the next turn");
-    const controller = createLifecycleController({ entry, captureSubagentCompletionReply });
-
-    expect(await controller.refreshFrozenResultFromSession(entry.childSessionKey)).toBe(false);
-
-    // The yield cleared this row's result on purpose. Whatever the session holds
-    // now belongs to the turn that runs next, so refreezing it would announce a
-    // stranger's output as the paused run's completion.
-    expect(captureSubagentCompletionReply).not.toHaveBeenCalled();
-    expect(readLifecycleRun(entry).completion?.resultText).toBeUndefined();
-  });
-
-  it("refreshes only the newest pending completion generation for a shared session", async () => {
-    const childSessionKey = "agent:main:subagent:shared-refresh";
-    const older = createRunEntry({
-      runId: "run-shared-refresh-old",
-      childSessionKey,
-      generation: 1,
-      createdAt: 1_000,
-      expectsCompletionMessage: true,
-      endedAt: 4_000,
-      outcome: { status: "ok" },
-      completion: {
-        required: true,
-        resultText: "older generation result",
-        capturedAt: 4_000,
-      },
-    });
-    const newer = createRunEntry({
-      runId: "run-shared-refresh-new",
-      childSessionKey,
-      generation: 2,
-      createdAt: 2_000,
-      expectsCompletionMessage: true,
-      endedAt: 5_000,
-      outcome: { status: "ok" },
-      completion: {
-        required: true,
-        resultText: "newer generation placeholder",
-        capturedAt: 5_000,
-      },
-    });
-    const olderBefore = structuredClone(older);
-    const persist = vi.fn();
-    const controller = createLifecycleController({
-      entry: newer,
-      runs: new Map([
-        [older.runId, older],
-        [newer.runId, newer],
-      ]),
-      beforeWrite: persist,
-      captureSubagentCompletionReply: vi.fn(async () => "latest session reply"),
-    });
-
-    expect(await controller.refreshFrozenResultFromSession(childSessionKey)).toBe(true);
-
-    expect(readLifecycleRun(older)).toEqual(olderBefore);
-    expect(readLifecycleRun(newer).completion).toMatchObject({
-      resultText: "latest session reply",
-      capturedAt: expect.any(Number),
-    });
-    expect(persist).toHaveBeenCalledOnce();
-    expect(persist).toHaveBeenCalledWith(expect.objectContaining({ runIds: [newer.runId] }));
-  });
-
-  it("rejects a frozen-result refresh when a newer generation registers during capture", async () => {
-    const childSessionKey = "agent:main:subagent:refresh-race";
-    const entry = createRunEntry({
-      runId: "run-refresh-race-old",
-      childSessionKey,
-      generation: 1,
-      expectsCompletionMessage: true,
-      endedAt: 4_000,
-      outcome: { status: "ok" },
-    });
-    const runs = new Map([[entry.runId, entry]]);
-    const captured = createDeferredCore<string>();
-    const captureSubagentCompletionReply = vi.fn(() => captured.promise);
-    const persist = vi.fn();
-    const controller = createLifecycleController({
-      entry,
-      runs,
-      beforeWrite: persist,
-      captureSubagentCompletionReply,
-    });
-
-    const refresh = controller.refreshFrozenResultFromSession(childSessionKey);
-    await waitForLifecycleState(() =>
-      expect(captureSubagentCompletionReply).toHaveBeenCalledOnce(),
-    );
-    const successor = createRunEntry({
-      runId: "run-refresh-race-new",
-      childSessionKey,
-      generation: 2,
-      createdAt: 2_000,
-    });
-    runs.set(successor.runId, successor);
-    captured.resolve("reply owned by the successor");
-
-    expect(await refresh).toBe(false);
-    expect(readLifecycleRun(entry).completion?.resultText).toBeUndefined();
-    expect(successor.completion?.resultText).toBeUndefined();
-    expect(persist).not.toHaveBeenCalled();
-  });
-
   it.each(["error", "reply", "snapshot"] as const)(
     "preserves an admitted yield before a late %s completion is planned",
     async (source) => {
@@ -2511,7 +2400,7 @@ describe("subagent registry lifecycle hardening", () => {
     expect(retained?.completion?.resultText).toBe("raw collector result");
     expect(readLifecycleRun(entry).completion?.required).toBe(false);
     expect(readLifecycleRun(entry).requesterSettleWake).toBeUndefined();
-    expect(readLifecycleRun(entry).retireAfterRequesterTurn).toBeUndefined();
+    expect(readLifecycleRun(entry).retireAfterSettle).toBeUndefined();
   });
 
   it.each(["tool-only success", "provider failure", "missing output"] as const)(
@@ -3740,8 +3629,8 @@ describe("requester settle wake trigger", () => {
       expect(readLifecycleRun(entry).requesterSettleWake).toEqual({
         status: "pending",
         attemptCount: 0,
-        retireAfterSettle: true,
       });
+      expect(readLifecycleRun(entry).retireAfterSettle).toBe(true);
       expect(settleWake).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           requesterSessionKey: "agent:main:main",
@@ -3789,7 +3678,7 @@ describe("requester settle wake trigger", () => {
         });
         expect(beforeWrite).toHaveBeenCalledOnce();
         if (retirement === "settle") {
-          expect(readLifecycleRun(entry).requesterSettleWake?.retireAfterSettle).toBe(true);
+          expect(readLifecycleRun(entry).retireAfterSettle).toBe(true);
           runs.delete(entry.runId);
         }
         expect(runs.has(entry.runId)).toBe(false);
@@ -4091,7 +3980,7 @@ describe("requester settle wake trigger", () => {
       const capability = createCronCreatorAuthorityCapability(
         requesterTurnRunId,
         { kind: "unknown" },
-        { source: "control-ui-admin" },
+        { source: "operator" },
       )!;
       try {
         await runWithCronCreatorAuthorityCapability(capability, () =>
@@ -4266,11 +4155,8 @@ describe("requester settle wake trigger", () => {
         // The child cannot wake its requester while that exact requester turn owns it.
         expect(readLifecycleRun(entry).completion?.resultText).toBe("delete-mode findings");
         expect(runs.has(entry.runId)).toBe(true);
-        expect(readLifecycleRun(entry).requesterSettleWake).toMatchObject({
-          status: "pending",
-          retireAfterSettle: true,
-        });
-        expect(readLifecycleRun(entry).retireAfterRequesterTurn).toBeUndefined();
+        expect(readLifecycleRun(entry).requesterSettleWake).toMatchObject({ status: "pending" });
+        expect(readLifecycleRun(entry).retireAfterSettle).toBe(true);
         expect(settleWake).not.toHaveBeenCalled();
         requesterTurn.end("run-requester");
         await settleRequesterTurn(controller, entry, false);

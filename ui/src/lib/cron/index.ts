@@ -379,11 +379,17 @@ async function updateCronJobDefinition(
       const latestJob = await client.request<CronJob>("cron.get", { id: job.id });
       if (isCurrent() && ownsEditor()) {
         startCronEdit(state, latestJob);
-        state.cronError = t("cron.changedOnGateway");
+        state.cronError = t(
+          operation === "save" ? "cron.saveConflictReloaded" : "cron.changedOnGateway",
+        );
       }
     } catch {
       if (isCurrent() && ownsEditor()) {
-        state.cronError = t("cron.changedOnGatewayLoadFailed");
+        state.cronError = t(
+          operation === "save"
+            ? "cron.saveConflictReloadFailed"
+            : "cron.changedOnGatewayLoadFailed",
+        );
       }
     }
     return false;

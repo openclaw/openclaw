@@ -40,12 +40,6 @@ function fixture() {
     releaseTag,
     channel: "beta",
     candidateSha: target,
-    reference: {
-      releaseTag: "v2026.11.8",
-      targetSha: sha,
-      validationEvidenceDigest: `sha256:${sha}000000000000000000000000`,
-    },
-    delta: { commits: 1, added: 1, deleted: 0 },
     artifacts: [{ name: "publication-artifacts", digest: `sha256:${"c".repeat(64)}` }],
     publicationScope: [`publication:sha256:${"d".repeat(64)}`],
     run: { id: "2", attempt: "1" },
@@ -55,8 +49,6 @@ function fixture() {
   const packet = {
     request,
     digest: fastTrackRequestDigest(request),
-    referenceRunId: "1",
-    referenceRunAttempt: "1",
   };
   const env = {
     GITHUB_REPOSITORY: "openclaw/openclaw",

@@ -1075,6 +1075,7 @@ it.each([false, true])(
       for (const id of [
         "normal_ci",
         "prepare_npm_package",
+        "npm_preflight_first",
         "prepare_docker_release",
         "candidate_acquisition",
         "performance",
@@ -1089,12 +1090,13 @@ it.each([false, true])(
         expect(
           runInNewContext(job.if.replace(/^\s*\$\{\{|\}\}\s*$/gu, "").trim(), {
             always: () => true,
+            cancelled: () => false,
             fromJSON: JSON.parse,
             contains: (values: unknown[], value: unknown) => values.includes(value),
             inputs: { rerun_group: "all" },
             github: { run_attempt: 1 },
             needs: {
-              resolve_target: { result: "success" },
+              resolve_target: { result: "success", outputs: { preflight_first: "false" } },
               plugin_compatibility_readiness: { result: "success" },
               evidence_reuse: { result: "failure" },
             },

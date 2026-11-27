@@ -8,7 +8,7 @@ import ai.openclaw.app.accessibility.MobileUiAction
 import ai.openclaw.app.accessibility.MobileUiSnapshot
 import ai.openclaw.app.accessibility.OpenClawAccessibilityService
 import ai.openclaw.app.accessibility.ScrollDirection
-import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.InvokeResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
@@ -43,10 +43,10 @@ class MobileUiHandler {
 
   suspend fun handleObserve(
     @Suppress("UNUSED_PARAMETER") paramsJson: String?,
-  ): GatewaySession.InvokeResult =
+  ): InvokeResult =
     invokeMutex.withLock {
       try {
-        GatewaySession.InvokeResult.ok(mobileUiSnapshotJson(executor.observe()))
+        InvokeResult.ok(mobileUiSnapshotJson(executor.observe()))
       } catch (error: AccessibilityServiceDisabledException) {
         nodeInvokeError("SERVICE_DISABLED", error.message ?: "accessibility service is disabled")
       } catch (error: CancellationException) {
@@ -56,13 +56,13 @@ class MobileUiHandler {
       }
     }
 
-  suspend fun handleAct(paramsJson: String?): GatewaySession.InvokeResult =
+  suspend fun handleAct(paramsJson: String?): InvokeResult =
     invokeMutex.withLock {
       val request =
         parseMobileUiActRequest(paramsJson)
           ?: return@withLock nodeInvokeError("INVALID_REQUEST", "expected {snapshotId,action:{type,...}}")
       try {
-        GatewaySession.InvokeResult.ok(actionResultJson(executor.act(request.snapshotId, request.action)))
+        InvokeResult.ok(actionResultJson(executor.act(request.snapshotId, request.action)))
       } catch (error: CancellationException) {
         throw error
       } catch (error: Throwable) {

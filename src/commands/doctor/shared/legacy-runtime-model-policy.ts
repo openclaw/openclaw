@@ -8,6 +8,7 @@ import {
 } from "../../../config/model-policy-allowlist-migration.js";
 import { parseModelPolicyWildcardRef } from "../../../config/model-policy-ref.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { DoctorMaintenancePending } from "../../doctor-maintenance-pending.js";
 import type { DoctorPrompter } from "../../doctor-prompter.js";
 import { isRecord } from "./legacy-config-record-shared.js";
 
@@ -142,16 +143,31 @@ function applyModelAllowlistWildcardOffers(
  * Offer provider wildcards for a copied exact-ref allowlist. A handcrafted list can match the
  * copied shape, so only an operator at a terminal may accept; the default keeps the list.
  */
+/** The offer needs an operator answer, so runs that cannot prompt have none. */
+function collectPromptableModelAllowlistWildcardOffers(params: {
+  cfg: OpenClawConfig;
+  prompter: Pick<DoctorPrompter, "repairMode">;
+}) {
+  const { repairMode } = params.prompter;
+  return !repairMode.canPrompt || repairMode.updateInProgress
+    ? []
+    : collectModelAllowlistWildcardOffers(params.cfg);
+}
+
+/** Read-only: whether `maybeOfferModelAllowlistWildcards` would offer a config change. */
+export function checkModelAllowlistWildcardsPending(params: {
+  cfg: OpenClawConfig;
+  prompter: Pick<DoctorPrompter, "repairMode">;
+}): DoctorMaintenancePending {
+  return collectPromptableModelAllowlistWildcardOffers(params).length > 0 ? "work" : "none";
+}
+
 export async function maybeOfferModelAllowlistWildcards(params: {
   cfg: OpenClawConfig;
   prompter: DoctorPrompter;
 }): Promise<{ config: OpenClawConfig; changes: string[] }> {
   const unchanged = { config: params.cfg, changes: [] };
-  const { repairMode } = params.prompter;
-  if (!repairMode.canPrompt || repairMode.updateInProgress) {
-    return unchanged;
-  }
-  const offers = collectModelAllowlistWildcardOffers(params.cfg);
+  const offers = collectPromptableModelAllowlistWildcardOffers(params);
   if (offers.length === 0) {
     return unchanged;
   }

@@ -19,7 +19,8 @@ Pass exception evidence with `--fast-track-request <packet.json>` to
 `pnpm release:publish-preflight`, forwarded as `fast_track_request`. Preserve
 original FRV results and sealed bytes. Bounded policy: 20 commits AND 15,000
 added/deleted lines, excluding enumerated package manifests/lockfiles from LOC
-only. Partial-FRV retains a complete outstanding-check snapshot without a delta
+only; beta prereleases have no ceiling or reference release, and their stable
+promotion still needs a passing stable FRV. Partial-FRV retains a complete outstanding-check snapshot without a delta
 ceiling. Neither establishes a fully validated baseline. Post-expiry recovery
 uses the original packet-bound GitHub publication receipt and verified job start
 time. See the [release skill](../release-openclaw-maintainer/SKILL.md#fast-track-publication-uses-github-approval).
@@ -265,12 +266,13 @@ An `all` run without soak for an actual beta package on its matching canonical r
 
 ## Preflight
 
-Run in approved isolation, outside trusted admission/dispatch tooling:
+Run checks that execute candidate code in approved isolation, outside trusted admission/dispatch tooling.
 
 **Before dispatch**
 
-- Run `pnpm check:test-mock-exports --base <frozen-sha>` in exact candidate checkout with frozen dependencies.
-- Failure blocks dispatch; rerun after any candidate change. FRV repeats before child fanout. Keep candidate execution outside trusted admission.
+- Fresh validation through `pnpm ci:full-release` scans committed mock exports with trusted local tooling. Failure blocks dispatch for that candidate SHA. The helper does not run candidate code.
+- When dispatching directly without the helper, run `pnpm check:test-mock-exports --base <frozen-sha>` in an approved isolated exact-candidate checkout with frozen dependencies. FRV repeats the guard before child fanout.
+- `--skip-local-mock-preflight` logs the candidate SHA and defers only the local check to the hosted workflow. Build-only and retained requests are unchanged.
 
 **Before full matrix dispatch**
 

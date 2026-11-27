@@ -63,35 +63,14 @@ network alone does not share the PID namespace. Stopping or recreating the
 Gateway container also ends any running `openclaw-cli` container.
 You can also run the TUI inside the Gateway container with
 `docker compose exec openclaw-gateway openclaw tui`. A different PID namespace
-now refuses unverifiable ownership instead of reclaiming the running Gateway's
-lock. `tui --local` starts an embedded agent and is not a PID-namespace workaround
-for shared state. Missing or unreadable namespace identity also keeps ownership
-protected. A replacement container cannot verify that the previous owner died,
-even when its heartbeat is old; elapsed time never authorizes takeover.
+cannot inspect the original Gateway's processes. `tui --local` starts an embedded
+agent and is not a PID-namespace workaround for shared state.
 
-For a genuinely stopped or crashed foreign owner, stop the Gateway service and
-inspect its recorded holder using the same image and state mount:
-
-```bash
-docker compose stop openclaw-gateway
-docker compose run --rm --no-deps openclaw-gateway node openclaw.mjs gateway recover-lock
-```
-
-After confirming that the recorded holder has stopped, run the printed
-`gateway recover-lock --confirm <fingerprint>` command through the same one-off
-Gateway service:
-
-```bash
-docker compose run --rm --no-deps openclaw-gateway node openclaw.mjs gateway recover-lock --confirm <fingerprint>
-docker compose up -d openclaw-gateway
-```
-
-The one-off Gateway service has its own PID namespace and does not depend on the
-stopped service's network or PID namespace. Recovery removes only the unchanged
-lock records and matching SQLite owner lease from the inspection. A renewed
-heartbeat, replaced record, or locally verified live holder causes refusal.
-Same-namespace restarts still recover verified-dead processes automatically.
-See [Gateway lock recovery](/gateway/gateway-lock#recover-a-crashed-foreign-owner).
+A new Gateway container on the same state volume waits while the previous
+Gateway's heartbeat is fresh. If the previous owner crashed, the replacement
+automatically takes over once the heartbeat is more than 90 seconds old. A
+restart of the same container with its default hostname can take over
+immediately. See [Container restarts and replacements](/gateway/gateway-lock#container-restarts-and-replacements).
 
 Token setup belongs to the [Docker setup flow](/install/docker#containerized-gateway).
 If you need the Control UI token, read `OPENCLAW_GATEWAY_TOKEN` privately from the

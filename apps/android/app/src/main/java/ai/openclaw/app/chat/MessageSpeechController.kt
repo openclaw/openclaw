@@ -1,6 +1,6 @@
 package ai.openclaw.app.chat
 
-import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.RpcResult
 import ai.openclaw.app.voice.LocalSpeechSpeaking
 import ai.openclaw.app.voice.TalkAudioPlaying
 import ai.openclaw.app.voice.TalkSpeakAudio
@@ -42,7 +42,7 @@ internal fun interface MessageSpeechSynthesizing {
 
 /** Gateway tts.speak client using the general configured TTS provider chain. */
 internal class MessageSpeechClient(
-  private val requestDetailed: suspend (String, String, Long) -> GatewaySession.RpcResult,
+  private val requestDetailed: suspend (String, String, Long) -> RpcResult,
   private val json: Json = Json { ignoreUnknownKeys = true },
 ) : MessageSpeechSynthesizing {
   override suspend fun synthesize(text: String): TalkSpeakAudio? {

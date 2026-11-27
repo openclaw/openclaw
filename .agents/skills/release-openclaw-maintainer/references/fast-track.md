@@ -36,7 +36,7 @@ human chat decision. Publication still waits for the GitHub environment approval
 
 The contract in `scripts/lib/release-fast-track-contract.mts` binds repository,
 release tag/channel, candidate commit, published reference release/commit and
-validation-evidence digest, complete delta, policy, exact artifact digests,
+complete delta (both omitted for beta prereleases), policy, exact artifact digests,
 publication scope, run/attempt, lowercase UUIDv4 request ID, expiry and explicit
 action. Canonical serialization sorts artifacts and scope before hashing.
 Persist the exact packet with release evidence; a digest alone is not approval.
@@ -44,7 +44,11 @@ Persist the exact packet with release evidence; a digest alone is not approval.
 ## Publication policies
 
 - `approved-fast-track-v1`: **at most 20 commits AND 15,000 total added/deleted
-  lines** since a published, fully validated ancestor. Exclude only files named
+  lines** since a published ancestor release that was not itself fast-tracked.
+  The publisher checks only that the reference GitHub release is published, not
+  a draft, targets the reference commit and carries no fast-track assets. It does
+  not replay the reference's historical validation evidence: shipping already
+  passed that release's own publication gates. Exclude only files named
   `package.json`, `package-lock.json`, `npm-shrinkwrap.json`, `pnpm-lock.yaml`,
   `yarn.lock`, `bun.lock` or `bun.lockb` at any depth from LOC. All commits still
   count, including dependency-only commits. Count other generated files. Blob
@@ -52,6 +56,18 @@ Persist the exact packet with release evidence; a digest alone is not approval.
   changes or shallow history. A previous fast-track cannot reset the baseline.
   The Git-backed helper recomputes the delta; a typed reference assertion is not
   authenticated evidence.
+
+  **Beta prereleases** (`vYYYY.M.P-beta.N`) have no commit/LOC ceiling and need
+  no preceding non-fast-tracked beta or other reference release. Omit
+  `reference` and `delta`; the contract rejects them for betas. A final version
+  published to the `beta` dist-tag is not a beta prerelease and keeps the
+  ceiling. A fast-tracked beta never qualifies its stable promotion: the final
+  needs a passing `release_profile=stable` FRV (`rerun_group=all`, soak,
+  blocking performance), either fresh or reused from a beta FRV that itself
+  passed. Build-only or failed beta evidence is not reusable. A stable
+  fast-track remains its own exception, measured from a non-fast-tracked
+  release; a fast-tracked beta cannot be its reference.
+
 - `approved-partial-frv-v1`: separate explicit action **Approve publication with
   incomplete validation**, with no delta ceiling. Bind the reason, original FRV
   run/attempt and candidate, durable snapshot URL/digest, result summary and every
@@ -128,10 +144,6 @@ The packet contains:
 
 - `request`: the immutable `FastTrackRequest` describing this validation exception.
 - `digest`: `fastTrackRequestDigest(request)`, including its `sha256:` prefix.
-- `referenceRunId` and `referenceRunAttempt`: required for
-  `approved-fast-track-v1`, identifying the strictly successful validation of
-  the published, fully validated reference. A previous fast-track is ineligible.
-  The partial-FRV policy does not require these baseline-run fields.
 
 Publishers compare the request with independently authenticated candidate,
 original FRV attempt, admitted publication selection and sealed artifacts:

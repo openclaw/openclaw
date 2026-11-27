@@ -31,6 +31,7 @@ import type { GatewayWsClient } from "../../src/gateway/server/ws-types.js";
 import { createSessionRowProjection } from "../../src/gateway/session-row-projection.js";
 import { createTestGatewayScheduler } from "../../src/test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -195,12 +196,7 @@ await withOpenClawTestState({ scenario: "minimal" }, async () => {
           global.gc?.();
           const inspector = new Session();
           if (values.allocations) {
-            inspector.connect();
-            await inspector.post("HeapProfiler.startSampling", {
-              samplingInterval: 16384,
-              includeObjectsCollectedByMajorGC: true,
-              includeObjectsCollectedByMinorGC: true,
-            });
+            await startCollectedHeapSampling(inspector, 16384);
           }
           const hostLoad = loadavg();
           const durations = new Float64Array(events);

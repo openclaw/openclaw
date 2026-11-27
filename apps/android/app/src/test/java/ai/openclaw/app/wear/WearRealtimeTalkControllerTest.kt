@@ -1,7 +1,7 @@
 package ai.openclaw.app.wear
 
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayRequestRejected
-import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.wear.shared.WearProtocol
 import ai.openclaw.wear.shared.WearRealtimeAudioFrameType
 import ai.openclaw.wear.shared.WearRealtimeTalkSnapshot
@@ -535,7 +535,7 @@ class WearRealtimeTalkControllerTest {
               createParams += params
               if (createParams.size == 1) {
                 throw GatewayRequestRejected(
-                  GatewaySession.ErrorShape(
+                  ErrorShape(
                     code = "INVALID_REQUEST",
                     message =
                       "invalid talk.session.create params: at root: unexpected property 'language'",
@@ -569,7 +569,7 @@ class WearRealtimeTalkControllerTest {
             if (method == "talk.session.create") {
               createAttempts += 1
               throw GatewayRequestRejected(
-                GatewaySession.ErrorShape(
+                ErrorShape(
                   code = "INVALID_REQUEST",
                   message = "invalid talk.session.appendAudio params",
                 ),

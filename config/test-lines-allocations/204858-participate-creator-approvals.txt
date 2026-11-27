@@ -1,0 +1,18 @@
+334
+# Participate split, part 3 of 6 (creator-routed exec approvals): measured with
+# check-test-lines-ratchet against the P2 branch tip; 734 net lines minus the
+# ordinary 400-line allowance. Reuses the existing approval, session-event and
+# progress-snapshot fixtures. The new cases cover independent boundaries: each
+# approval method refuses everyone but the bound creator or an admin for a
+# participant run, by canonical ID and by compact transport reference, while
+# ordinary approvals are unchanged; direct and child participant runs
+# bind to the original creator through host authority; a merged participant
+# cannot self-approve; participant approvals skip forwarders and push routes that
+# cannot resolve them; participant approval events replay only to their recipient,
+# selected per session before the replay limit; a participant allowlist denial
+# explains that no approval can be requested;
+# the auto-reviewer is told a participant cannot grant creator authority;
+# reconnect snapshots keep approval lifecycle entries; and the gateway exec host
+# enforces part 2's retained allowlist-miss denial instead of reopening it
+# through host on-miss/always approval. No assertion, timer, file cap or global
+# budget is relaxed.
