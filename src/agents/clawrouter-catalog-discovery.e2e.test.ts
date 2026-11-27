@@ -48,8 +48,9 @@ describe("ClawRouter cold prepared catalog", () => {
 
   // Publishes the real ClawRouter catalog through the prepared catalog worker.
   async function publishCatalog(params: {
-    sibling: boolean;
-    refreshedAuth: boolean;
+    sibling?: boolean;
+    refreshedAuth?: boolean;
+    expireCapability?: boolean;
     catalogProviders: unknown[];
   }) {
     const { sibling, refreshedAuth } = params;
@@ -63,12 +64,25 @@ describe("ClawRouter cold prepared catalog", () => {
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
       },
     });
-    const requests: Array<{ url: string | undefined; authorization: string | undefined }> = [];
+    const requests: Array<
+      | "capability closed"
+      | { url: string | undefined; authorized: boolean; client: string | string[] | undefined }
+    > = [];
     server = await reserveTestPortListener({
       offsets: [0],
       createListener: () =>
         createServer((request, response) => {
-          requests.push({ url: request.url, authorization: request.headers.authorization });
+          const client = request.headers["x-clawrouter-client"];
+          requests.push({
+            url: request.url,
+            authorized: request.headers.authorization === "Bearer catalog-test-key",
+            client,
+          });
+          if (params.expireCapability && client === "openclaw") {
+            // Let the real client deadline close the pending response.
+            response.once("close", () => requests.push("capability closed"));
+            return;
+          }
           response.setHeader("content-type", "application/json");
           response.end(JSON.stringify({ providers: params.catalogProviders }));
         }),
@@ -180,33 +194,26 @@ describe("ClawRouter cold prepared catalog", () => {
     if (result.status !== "ok" || result.kind !== "catalog") {
       throw new Error("catalog worker did not publish a catalog");
     }
-    // Cold chat discovery and the fresh capability check use the same selected credential.
+    const expected = { url: "/private/v1/catalog", authorized: true };
     expect(requests).toEqual([
-      { url: "/private/v1/catalog", authorization: "Bearer catalog-test-key" },
+      { ...expected, client: "openclaw" },
+      ...(params.expireCapability ? ["capability closed", { ...expected, client: undefined }] : []),
     ]);
     return { agentId, baseUrl, config, pluginMetadataSnapshot, result };
   }
 
   it.each([
-    {
-      label: "publishes metadata with a sibling catalog=false",
-      sibling: false,
-      refreshedAuth: false,
-    },
-    {
-      label: "publishes metadata with a sibling catalog=true",
-      sibling: true,
-      refreshedAuth: false,
-    },
+    { label: "publishes metadata with a sibling catalog=false" },
+    { label: "publishes metadata with a sibling catalog=true", sibling: true },
     {
       label: "discovers a provider introduced by refreshed auth",
       sibling: true,
       refreshedAuth: true,
     },
-  ])("$label", async ({ sibling, refreshedAuth }) => {
+    { label: "recovers chat after a capability timeout", expireCapability: true },
+  ])("$label", async (scenario) => {
     const { agentId, baseUrl, config, pluginMetadataSnapshot, result } = await publishCatalog({
-      sibling,
-      refreshedAuth,
+      ...scenario,
       catalogProviders: [
         {
           id: "private",
@@ -250,7 +257,7 @@ describe("ClawRouter cold prepared catalog", () => {
         context: { getRuntimeConfig: () => config } as GatewayRequestContext,
       },
       agentId,
-      params: { view: refreshedAuth ? "all" : "configured", preparedOnly: true },
+      params: { view: scenario.refreshedAuth ? "all" : "configured", preparedOnly: true },
       preloadedCatalog: { agentId, config, snapshot: result.snapshot },
       preloadedOnly: true,
       catalogProjector: projector,
@@ -268,8 +275,6 @@ describe("ClawRouter cold prepared catalog", () => {
 
   it("publishes native Code Mode and sampling facts on routed rows without enabling those plugins", async () => {
     const { agentId, config, pluginMetadataSnapshot, result } = await publishCatalog({
-      sibling: false,
-      refreshedAuth: false,
       catalogProviders: [
         catalogProvider("openai", ["gpt-6.1-sol", "gpt-6-unknown"], ["llm.responses"]),
         catalogProvider("anthropic", ["claude-opus-5-5", "claude-haiku-4-5"], ["llm.messages"]),

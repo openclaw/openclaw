@@ -88,7 +88,9 @@ it("prepares granted Luna chat and Decisions without leaking grants across crede
           return nativeFetch(server.baseUrl + "/responses", init);
         }
         expect(url).toBe(baseUrl + "/catalog");
-        const credential = new Headers(init?.headers).get("authorization") ?? "";
+        const headers = new Headers(init?.headers);
+        expect(headers.get("x-clawrouter-client")).toBe("openclaw");
+        const credential = headers.get("authorization") ?? "";
         fetched.push(credential);
         const granted = credential === "Bearer synthetic-granted";
         return Response.json({
@@ -355,14 +357,10 @@ it("prepares granted Luna chat and Decisions without leaking grants across crede
         },
       ]);
       expect(await readFile(state.configPath, "utf8")).toBe(settingsBefore);
-      // Each credential has one chat-cache miss plus a fresh capability check;
-      // later granted-key acquisitions reuse chat rows but still refresh capabilities.
+      // Each acquisition refreshes its selected credential, including warm chat rows.
       expect(fetched).toEqual([
         "Bearer synthetic-granted",
-        "Bearer synthetic-granted",
         "Bearer synthetic-decisions-only",
-        "Bearer synthetic-decisions-only",
-        "Bearer synthetic-incompatible",
         "Bearer synthetic-incompatible",
         "Bearer synthetic-granted",
         "Bearer synthetic-granted",
