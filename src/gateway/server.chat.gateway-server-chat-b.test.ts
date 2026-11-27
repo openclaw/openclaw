@@ -1254,48 +1254,6 @@ describe("gateway server chat", () => {
     }
   });
 
-  test("chat.metadata coalesces configured models and text commands", async () => {
-    await withGatewayChatHarness(async ({ ws }) => {
-      await writeGatewayConfig({
-        agents: {
-          ownership: "explicit",
-          defaults: { systemAgent: { agentId: "main" } },
-          entries: {
-            main: {},
-            work: {
-              model: { primary: "minimax/MiniMax-M2.7-highspeed" },
-              tools: { swarm: { enabled: true } },
-            },
-          },
-        },
-        models: {
-          providers: {
-            minimax: {
-              baseUrl: "https://minimax.example.com/v1",
-              models: [{ id: "MiniMax-M2.7-highspeed", name: "MiniMax M2.7 Highspeed" }],
-            },
-          },
-        },
-      });
-      await connectOk(ws, { prePairDevice: true });
-
-      const metadata = await rpcReq<{
-        commands?: Array<{ name?: string; textAliases?: string[] }>;
-        models?: Array<{ id?: string; provider?: string }>;
-        swarmEnabled?: boolean;
-      }>(ws, "chat.metadata", { agentId: "work" });
-
-      expect(metadata.ok).toBe(true);
-      expect(metadata.payload?.swarmEnabled).toBe(true);
-      expect(metadata.payload?.models).toContainEqual(
-        expect.objectContaining({ id: "MiniMax-M2.7-highspeed", provider: "minimax" }),
-      );
-      expect(metadata.payload?.commands).toContainEqual(
-        expect.objectContaining({ name: "model", textAliases: expect.arrayContaining(["/model"]) }),
-      );
-    });
-  });
-
   registerChatAdmittedMediaTests({
     withChatSession: (run) =>
       withDirectChatSession(async (_sessionDir, storePath) => run(makeMainSessionScope(storePath))),

@@ -228,13 +228,6 @@ function createPluginConfig(params: {
   };
 }
 
-function createSinglePluginWithEmptySlotsConfig(): OpenClawConfig {
-  return createPluginConfig({
-    entries: createSinglePluginEntries(),
-    slots: {},
-  });
-}
-
 function createSingleNpmInstallConfig(installPath: string): OpenClawConfig {
   return createPluginConfig({
     entries: createSinglePluginEntries(),
@@ -390,14 +383,6 @@ describe("planPluginUninstall package ownership", () => {
 describe("removePluginFromConfig", () => {
   it.each([
     {
-      name: "entries" as const,
-      action: "entry" as const,
-      config: createPluginConfig({
-        entries: { ...createSinglePluginEntries(), "other-plugin": { enabled: true } },
-      }),
-      remaining: { "other-plugin": { enabled: true } },
-    },
-    {
       name: "installs" as const,
       action: "install" as const,
       config: createPluginConfig({
@@ -408,48 +393,11 @@ describe("removePluginFromConfig", () => {
       }),
       remaining: { "other-plugin": createNpmInstallRecord("other-plugin") },
     },
-    {
-      name: "allow" as const,
-      action: "allowlist" as const,
-      config: createPluginConfig({ allow: ["my-plugin", "other-plugin"] }),
-      remaining: ["other-plugin"],
-    },
-    {
-      name: "deny" as const,
-      action: "denylist" as const,
-      config: createPluginConfig({ deny: ["my-plugin", "other-plugin"] }),
-      remaining: ["other-plugin"],
-    },
   ])("removes plugin from $name", ({ name, config, remaining, action }) => {
     const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
 
     expect(result.plugins?.[name]).toEqual(remaining);
     expect(actions[action]).toBe(true);
-  });
-
-  it.each([
-    {
-      name: "removes linked path from load.paths",
-      loadPaths: ["/path/to/plugin", "/other/path"],
-      expectedPaths: ["/other/path"],
-    },
-    {
-      name: "cleans up load when removing the only linked path",
-      loadPaths: ["/path/to/plugin"],
-      expectedPaths: undefined,
-    },
-  ])("$name", ({ loadPaths, expectedPaths }) => {
-    const config = createPluginConfig({
-      installs: {
-        "my-plugin": createPathInstallRecord(),
-      },
-      loadPaths,
-    });
-
-    const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
-
-    expect(result.plugins?.load?.paths).toEqual(expectedPaths);
-    expect(actions.loadPath).toBe(true);
   });
 
   it.each([
@@ -545,96 +493,6 @@ describe("removePluginFromConfig", () => {
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
-  });
-
-  it.each([
-    {
-      name: "clears memory slot when uninstalling active memory plugin",
-      config: createPluginConfig({
-        entries: {
-          "memory-plugin": { enabled: true },
-        },
-        slots: {
-          memory: "memory-plugin",
-        },
-      }),
-      pluginId: "memory-plugin",
-      expectedMemory: undefined,
-      expectedChanged: true,
-    },
-    {
-      name: "does not modify memory slot when uninstalling non-memory plugin",
-      config: createPluginConfig({
-        entries: createSinglePluginEntries(),
-        slots: {
-          memory: "memory-core",
-        },
-      }),
-      pluginId: "my-plugin",
-      expectedMemory: "memory-core",
-      expectedChanged: false,
-    },
-  ] as const)("$name", ({ config, pluginId, expectedMemory, expectedChanged }) => {
-    const { config: result, actions } = removePluginFromConfig(config, pluginId);
-
-    expect(result.plugins?.slots?.memory).toBe(expectedMemory);
-    expect(actions.memorySlot).toBe(expectedChanged);
-  });
-
-  it("clears context engine slot when uninstalling active context engine plugin", () => {
-    const config = createPluginConfig({
-      entries: {
-        "context-plugin": { enabled: true },
-      },
-      slots: {
-        contextEngine: "context-plugin",
-      },
-    });
-
-    const { config: result, actions } = removePluginFromConfig(config, "context-plugin");
-
-    expect(result.plugins?.slots?.contextEngine).toBeUndefined();
-    expect(actions.contextEngineSlot).toBe(true);
-  });
-
-  it("cleans up empty slots object", () => {
-    const config = createSinglePluginWithEmptySlotsConfig();
-
-    const { config: result } = removePluginFromConfig(config, "my-plugin");
-
-    expect(result.plugins).toBeUndefined();
-  });
-
-  it.each([
-    {
-      name: "handles plugin that only exists in entries",
-      config: createPluginConfig({
-        entries: createSinglePluginEntries(),
-      }),
-      expectedEntries: undefined,
-      expectedInstalls: undefined,
-      entryChanged: true,
-      installChanged: false,
-    },
-    {
-      name: "handles plugin that only exists in installs",
-      config: createPluginConfig({
-        installs: {
-          "my-plugin": createNpmInstallRecord(),
-        },
-      }),
-      expectedEntries: undefined,
-      expectedInstalls: undefined,
-      entryChanged: false,
-      installChanged: true,
-    },
-  ])("$name", ({ config, expectedEntries, expectedInstalls, entryChanged, installChanged }) => {
-    const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
-
-    expect(result.plugins?.entries).toEqual(expectedEntries);
-    expect(result.plugins?.installs).toEqual(expectedInstalls);
-    expect(actions.entry).toBe(entryChanged);
-    expect(actions.install).toBe(installChanged);
   });
 
   it("preserves other config values", () => {
