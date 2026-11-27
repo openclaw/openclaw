@@ -120,10 +120,8 @@ suite.define(() => {
           await page.goto(`${suite.server.baseUrl}settings/talk`);
           const policy = page.getByRole("group", { name: "Punctuation policy" });
           const mode = policy.getByLabel("Mode", { exact: true });
-          await mode.focus();
-          await page.keyboard.press("Home");
-          await page.keyboard.press("ArrowDown");
-          await page.keyboard.press("ArrowDown");
+          // Arrow keys open a closed select on some platforms instead of changing it.
+          await mode.selectOption("automatic");
           await expect.poll(() => mode.inputValue()).toBe("automatic");
           await policy.getByLabel("Punctuation language", { exact: true }).selectOption("en-US");
           await page.goto(`${suite.server.baseUrl}new`);
