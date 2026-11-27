@@ -27,7 +27,12 @@ export function listTrackedTestFiles(rootDir: string, suffix?: string): string[]
       : file.endsWith(".test.ts") ||
         (file.endsWith(".test.tsx") &&
           /(?:^|\/)(?:ui\/src\/|extensions\/[^/]+\/browser\/)/u.test(file));
-  const result = spawnSync("git", ["ls-files", "--", rootDir], {
+  // Let Git omit unrelated paths for the common whole-repository test inventory.
+  const pathspec =
+    !suffix && rootDir === "." && !process.env.GIT_LITERAL_PATHSPECS
+      ? ":(glob)**/*.test.*"
+      : rootDir;
+  const result = spawnSync("git", ["ls-files", "--", pathspec], {
     encoding: "utf8",
     maxBuffer: GIT_LS_FILES_MAX_BUFFER_BYTES,
     stdio: ["ignore", "pipe", "ignore"],

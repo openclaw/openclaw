@@ -86,9 +86,13 @@ it("keeps large tracked test inventories instead of scanning generated files", (
     `import { createHash } from 'node:crypto';
      import { listTrackedTestFiles } from ${JSON.stringify(owner)};
      const files = listTrackedTestFiles('.');
+     process.env.GIT_LITERAL_PATHSPECS = '1';
+     const literalFiles = listTrackedTestFiles('.');
      console.log(JSON.stringify({
        count: files.length,
        digest: createHash('sha256').update(files.join('\\n')).digest('hex'),
+       literalCount: literalFiles.length,
+       literalDigest: createHash('sha256').update(literalFiles.join('\\n')).digest('hex'),
      }));`,
     { cwd },
   );
@@ -96,5 +100,7 @@ it("keeps large tracked test inventories instead of scanning generated files", (
   expect(JSON.parse(result.stdout)).toEqual({
     count: tracked.length,
     digest: createHash("sha256").update(tracked.join("\n")).digest("hex"),
+    literalCount: tracked.length,
+    literalDigest: createHash("sha256").update(tracked.join("\n")).digest("hex"),
   });
 });
