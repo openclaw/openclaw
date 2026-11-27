@@ -9,17 +9,15 @@ import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispa
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 
 const startTurn = vi.hoisted(() => vi.fn());
-const waitForTurn = vi.hoisted(() => vi.fn());
 
 // mock-isolation: Keep real dispatch/caller owners; control only turn acceptance and settlement.
 vi.mock("./agent-turn/agent-turn-service.js", () => ({
-  createAgentTurnService: () => ({ startTurn, waitForTurn }),
+  createAgentTurnService: () => ({ startTurn }),
 }));
 
 describe("in-process agent caller lifetime", () => {
   beforeEach(() => {
     startTurn.mockReset();
-    waitForTurn.mockReset();
   });
 
   it.each(["host", "admission"] as const)(

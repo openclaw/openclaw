@@ -136,8 +136,6 @@ describe("local gateway request context", () => {
       const payload = { runId: "local-turn", status: "accepted" };
       createAgentTurnService.mockReturnValue({
         startTurn: async ({ io }) => io.emitAcceptance([true, payload, undefined]),
-        prepareWaitForTurn: vi.fn(),
-        waitForTurn: vi.fn(),
       });
 
       await expect(
