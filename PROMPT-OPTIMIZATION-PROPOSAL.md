@@ -58,7 +58,7 @@ Our goal is a capable OpenClaw agent running on consumer hardware, with the foll
 - **32,768-token context window:** remain useful within this budget, rather than relying on ever-larger windows.
 - **Under 100 tokens of average net prompt growth per ordinary short chat exchange:** preserve genuine conversation, not repeated bookkeeping.
 - **Under 500 fresh input tokens per typical warm short-chat request:** reuse stable context and minimize unnecessary prefill.
-- **Under 4,096 tokens of fixed system/bootstrap context for a lightweight conversational agent:** retain applicable instructions and security boundaries.
+- **Remove the fluff from bootstraps:** omit redundant or irrelevant instructions and metadata when they are not needed, while preserving useful capabilities and security boundaries.
 - **Long-term memory:** retrieve relevant facts and past interactions on demand rather than replaying the entire conversation.
 - **Human-level conversational judgment:** remember relevant details, distinguish speakers, and know when to speak or stay silent.
 
