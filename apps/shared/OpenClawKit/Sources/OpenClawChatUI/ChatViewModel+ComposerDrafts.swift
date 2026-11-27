@@ -28,6 +28,28 @@ extension OpenClawChatViewModel {
         self.composerDraftKey ?? self.composerSessionKey(for: self.sessionKey)
     }
 
+    /// Before routing resolves, the visible draft can have a provisional key.
+    var provisionalComposerKey: String? {
+        guard self.composerDraftKey == nil, self.durableComposerDraftKey == nil else { return nil }
+        return self.visibleComposerKey
+    }
+
+    /// Carries unresolved video rejections across models for the same Gateway authority.
+    public func inheritComposerDraftState(from previous: OpenClawChatViewModel, preservingVisibleInput: Bool) {
+        self.rejectedVideosBySession = previous.rejectedVideosBySession
+        guard preservingVisibleInput else { return }
+        self.input = previous.input
+        self.rekeyRejectedVideos(from: previous.visibleComposerKey)
+    }
+
+    func rekeyRejectedVideos(from previousKey: String?) {
+        let key = self.visibleComposerKey
+        guard let previousKey, key != previousKey,
+              let rejections = self.rejectedVideosBySession.removeValue(forKey: previousKey)
+        else { return }
+        self.rejectedVideosBySession[key, default: []].append(contentsOf: rejections)
+    }
+
     /// Tail of the installation-wide draft write chain.
     var composerDraftWrites: Task<Void, Never>? {
         self.composerDraftStore?.databases.composerDraftWrites.tail

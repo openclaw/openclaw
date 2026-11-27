@@ -9,9 +9,30 @@ private enum ChatAttachmentReadError: Error {
     case unreadable
 }
 
+private struct ChatAttachmentSizeRejection: Error {
+    let byteCount: Int?
+}
+
+struct OpenClawRejectedVideo: Identifiable {
+    let id = UUID()
+    let fileName: String
+    let byteCount: Int?
+    let maximumBytes: Int
+}
+
 extension OpenClawChatViewModel {
     /// Bound memory for resize input independently of the encoded upload budget.
     private static let maxImageSourceBytes = 64 * 1024 * 1024
+
+    var rejectedVideos: [OpenClawRejectedVideo] {
+        self.rejectedVideosBySession[self.visibleComposerKey] ?? []
+    }
+
+    func removeRejectedVideo(_ id: OpenClawRejectedVideo.ID) {
+        let key = self.visibleComposerKey
+        let remaining = self.rejectedVideos.filter { $0.id != id }
+        self.rejectedVideosBySession[key] = remaining.isEmpty ? nil : remaining
+    }
 
     public func addAttachments(urls: [URL]) {
         self.addAttachments(urls: urls, for: nil)
@@ -69,17 +90,25 @@ extension OpenClawChatViewModel {
         _ candidates: [OpenClawPendingAttachment],
         limits: GatewayAttachmentLimits) -> Bool
     {
+        guard let rejected = Self.attachmentBudget(candidates, limits: limits).rejected else { return true }
+        self.errorText = String(format: String(localized: "Too large to send: %@"), rejected.fileName)
+        return false
+    }
+
+    private static func attachmentBudget(
+        _ candidates: [OpenClawPendingAttachment],
+        limits: GatewayAttachmentLimits) -> (remainingBytes: Int, rejected: OpenClawPendingAttachment?)
+    {
         // Every attachment shares one base64-encoded chat.send frame. Subtract
         // from the decoded budget to include prior selections without sum overflow.
         var remaining = limits.maxBytes
         for attachment in candidates {
             guard attachment.data.count <= remaining else {
-                self.errorText = String(format: String(localized: "Too large to send: %@"), attachment.fileName)
-                return false
+                return (0, attachment)
             }
             remaining -= attachment.data.count
         }
-        return true
+        return (remaining, nil)
     }
 
     @discardableResult
@@ -201,7 +230,7 @@ extension OpenClawChatViewModel {
                     mimeType: Self.mimeType(for: url) ?? "application/octet-stream",
                     advertisedLimits: advertisedLimits,
                     expectedSession: expectedSession)
-            } catch ChatAttachmentReadError.tooLarge {
+            } catch ChatAttachmentReadError.tooLarge, is ChatAttachmentSizeRejection {
                 oversized.append(url.lastPathComponent)
             } catch {
                 unreadable.append(url.lastPathComponent)
@@ -302,6 +331,7 @@ extension OpenClawChatViewModel {
         url: URL,
         fileName: String,
         mimeType: String,
+        sourceFileName: String? = nil,
         expectedSession: SessionSnapshot? = nil) async
     {
         guard self.ownsAttachmentSession(expectedSession) else { return }
@@ -313,11 +343,13 @@ extension OpenClawChatViewModel {
                 mimeType: mimeType,
                 advertisedLimits: advertisedLimits,
                 expectedSession: expectedSession)
-        } catch ChatAttachmentReadError.tooLarge {
+        } catch let rejection as ChatAttachmentSizeRejection {
             guard self.ownsAttachmentSession(expectedSession) else { return }
-            self.errorText = String(
-                format: String(localized: "Too large to send: %@"),
-                fileName)
+            let budget = Self.attachmentBudget(self.attachments, limits: advertisedLimits ?? .legacyClientFallback)
+            self.rejectedVideosBySession[self.visibleComposerKey, default: []].append(OpenClawRejectedVideo(
+                fileName: sourceFileName ?? fileName,
+                byteCount: rejection.byteCount,
+                maximumBytes: budget.remainingBytes))
         } catch {
             guard self.ownsAttachmentSession(expectedSession) else { return }
             self.errorText = String(format: String(localized: "Could not attach: %@"), fileName)
@@ -360,13 +392,16 @@ extension OpenClawChatViewModel {
             thumbnailData = await Self.videoThumbnailData(data: data, fileExtension: url.pathExtension)
         }
         guard self.ownsAttachmentSession(expectedSession) else { return }
-        guard self.stageAttachment(OpenClawPendingAttachment(
+        let attachment = OpenClawPendingAttachment(
             url: nil,
             data: data,
             fileName: fileName,
             mimeType: mimeType,
-            preview: thumbnailData.flatMap(OpenClawPlatformImage.init(data:))), limits: limits)
-        else { throw ChatAttachmentReadError.tooLarge }
+            preview: thumbnailData.flatMap(OpenClawPlatformImage.init(data:)))
+        if Self.attachmentBudget(self.attachments + [attachment], limits: limits).rejected != nil {
+            throw ChatAttachmentSizeRejection(byteCount: data.count)
+        }
+        self.attachments.append(attachment)
     }
 
     private func ownsAttachmentSession(_ expectedSession: SessionSnapshot?) -> Bool {
@@ -379,7 +414,7 @@ extension OpenClawChatViewModel {
             let values = try url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
             guard values.isRegularFile == true else { throw ChatAttachmentReadError.unreadable }
             if let fileSize = values.fileSize, fileSize > maximumBytes {
-                throw ChatAttachmentReadError.tooLarge
+                throw ChatAttachmentSizeRejection(byteCount: fileSize)
             }
             let handle = try FileHandle(forReadingFrom: url)
             defer { try? handle.close() }
@@ -387,7 +422,8 @@ extension OpenClawChatViewModel {
             // budget on the bytes actually read, before resizing or encoding.
             let data = try handle.read(upToCount: maximumBytes + 1) ?? Data()
             if data.count > maximumBytes {
-                throw ChatAttachmentReadError.tooLarge
+                let fileSize = (try? handle.seekToEnd()).flatMap { Int(exactly: $0) }
+                throw ChatAttachmentSizeRejection(byteCount: fileSize)
             }
             guard !data.isEmpty else { throw ChatAttachmentReadError.unreadable }
             return data

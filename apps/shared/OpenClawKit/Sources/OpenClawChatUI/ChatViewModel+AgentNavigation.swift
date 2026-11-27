@@ -62,7 +62,12 @@ extension OpenClawChatViewModel {
                 guard let self, generation == self.agentCatalogGeneration,
                       !self.isTransportDetached, !Task.isCancelled
                 else { return }
+                let previousDraftKey = self.provisionalComposerKey
+                let previousDefault = self.agentCatalog?.defaultId
                 self.agentCatalog = catalog
+                if self.activeAgentId != nil || previousDefault == nil || previousDefault == catalog?.defaultId {
+                    self.rekeyRejectedVideos(from: previousDraftKey)
+                }
                 self.isLoadingAgents = false
                 self.syncComposerDraftKey()
             }

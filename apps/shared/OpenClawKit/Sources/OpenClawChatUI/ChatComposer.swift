@@ -21,6 +21,7 @@ private struct OpenClawSendableCameraImage: @unchecked Sendable {
 
 private struct OpenClawVideoTransfer: Sendable, Transferable {
     let url: URL
+    let sourceFileName: String
 
     static var transferRepresentation: some TransferRepresentation {
         FileRepresentation(contentType: .movie) { video in
@@ -31,7 +32,7 @@ private struct OpenClawVideoTransfer: Sendable, Transferable {
                 .appendingPathComponent("openclaw-picker-video-\(UUID().uuidString)")
                 .appendingPathExtension(fileExtension.isEmpty ? "mov" : fileExtension)
             try FileManager.default.copyItem(at: received.file, to: destination)
-            return OpenClawVideoTransfer(url: destination)
+            return OpenClawVideoTransfer(url: destination, sourceFileName: received.file.lastPathComponent)
         }
     }
 }
@@ -449,13 +450,7 @@ struct OpenClawChatComposer: View {
         }
 
         #if os(iOS)
-        if self.viewModel.attachmentStagingCount > 0 {
-            ChatAttachmentActivityRow(title: "Preparing attachments…")
-        } else if self.viewModel.isSendingAttachmentDraft {
-            ChatAttachmentActivityRow(title: "Sending attachments…")
-        } else if self.viewModel.isSubmittingDraft, !self.viewModel.attachments.isEmpty {
-            ChatAttachmentActivityRow(title: "Preparing message…")
-        }
+        ChatAttachmentContextRows(viewModel: self.viewModel)
         #endif
 
         if self.composerChrome == .clean {
@@ -1629,6 +1624,7 @@ extension OpenClawChatComposer {
                         url: transfer.url,
                         fileName: name,
                         mimeType: metadata.mimeType,
+                        sourceFileName: transfer.sourceFileName,
                         expectedSession: owner.session)
                 } else {
                     guard let data = try await item.loadTransferable(type: Data.self)
