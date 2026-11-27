@@ -11,6 +11,7 @@ import { createSkillLibraryTool } from "../agents/tools/skill-library-tool.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { resolveReplySessionInitializationOptions } from "../auto-reply/reply/session-initialization-admission.js";
 import { initSessionState } from "../auto-reply/reply/session.js";
+import { admitCanonicalSessionEntry } from "../config/sessions/session-entry-json.js";
 import { projectPublicSessionEntry } from "../config/sessions/session-entry-projection.js";
 import { readSessionEntryInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { applySessionEntryWritePolicy } from "../config/sessions/session-entry-write-policy.js";
@@ -163,9 +164,8 @@ describe("human personal namespace authority", () => {
       const resolve = createStableSkillAuthoring();
       const recovered = resolve(sessionKey, undefined, saved);
       expect(recovered).toMatchObject({ defaultTarget: "personal", expired: true });
-      expect(
-        resolve(sessionKey, undefined, { ...entry, lifecycleRevision: "reset" }),
-      ).toBeUndefined();
+      const reset = admitCanonicalSessionEntry({ ...entry, lifecycleRevision: "reset" });
+      expect(resolve(sessionKey, undefined, reset)).toBeUndefined();
       const tool = createSkillLibraryTool(recovered!);
       expect(tool.description).toBe(createSkillLibraryTool(skillLibraryAuthoring).description);
       await expect(tool.execute("recovered-list", { action: "list" })).rejects.toMatchObject({

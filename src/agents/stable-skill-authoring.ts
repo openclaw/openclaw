@@ -49,14 +49,8 @@ export function createStableSkillAuthoring() {
       }
       return authoring;
     }
-    // The session owns the last human presentation. Never revive a grant from it.
-    const stored = session?.skillLibraryAuthoringPresentation;
-    const shape =
-      stored &&
-      stored.sessionId === session.sessionId &&
-      stored.lifecycleRevision === (session.lifecycleRevision ?? null)
-        ? stored
-        : shapes.get(key);
+    // The session store only admits a presentation for the current incarnation.
+    const shape = session?.skillLibraryAuthoringPresentation ?? shapes.get(key);
     if (!shape) {
       return authoring;
     }
