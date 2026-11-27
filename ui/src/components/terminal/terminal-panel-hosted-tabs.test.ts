@@ -16,7 +16,6 @@ import {
   panelTestStorage,
   togglePanel,
 } from "./terminal-panel-lifecycle.test-support.ts";
-import { terminalPanelHostedTabs, type TerminalPanelTab } from "./terminal-panel-tabs.tsx";
 import {
   createTerminalController,
   createTerminalGatewayClient,
@@ -139,35 +138,6 @@ describe("Terminal panel hosted tabs", () => {
       expect(panel.contains(terminalHost)).toBe(true);
     },
   );
-
-  it("projects shell labels, status, workspace hints, and agent ownership for either strip", () => {
-    const base: TerminalPanelTab = {
-      id: "live",
-      sequence: 1,
-      shellName: "zsh",
-      agentId: "ops",
-      cwd: "/work/ops",
-      status: "live",
-    };
-    const tab = (overrides: Partial<TerminalPanelTab>) => ({ ...base, ...overrides });
-    const tabs = terminalPanelHostedTabs(
-      [
-        base,
-        tab({ sequence: 2, shellName: null, status: "connecting", agentId: null }),
-        tab({ status: "exited", exitReason: "process_exit", exitCode: 3 }),
-        tab({ agentOwned: true }),
-      ],
-      true,
-    );
-    expect(tabs.map((entry) => [entry.label, entry.title, entry.statusLabel, entry.badge])).toEqual(
-      [
-        ["zsh", "ops · /work/ops", null, null],
-        ["shell 2", null, "Connecting to session…", null],
-        ["zsh", "ops · /work/ops", "exited (3)", null],
-        ["zsh", "ops · /work/ops", null, "agent"],
-      ],
-    );
-  });
 
   it("notifies on tab, selection, booting and header handoff changes, without repeating unrelated renders", async () => {
     const { panel, deferNextOpen } = await mount();

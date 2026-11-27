@@ -198,6 +198,8 @@ The shared operator flow uses the following commands:
 
     With the Gateway stopped, login keeps its local loopback flow: it starts a callback listener and waits for the browser to return. Offline login resolves configured `mcp.servers`; the running Gateway can also resolve plugin-declared servers.
 
+    If the OAuth server rejects dynamic client registration, offline login reports the HTTP status and any recognized OAuth error code instead of printing a sign-in URL. Check the provider's client registration settings before retrying.
+
     Providers may register an HTTP loopback callback without a port, as allowed by RFC 8252. OpenClaw retains that registration for the same `127.0.0.1`, `[::1]`, or `localhost` callback while sending the listener's port in authorization and token requests. Other callback components must match; non-loopback callbacks still require an exact match.
 
   </Step>

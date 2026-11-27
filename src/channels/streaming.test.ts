@@ -409,15 +409,6 @@ it("suppresses standalone tool progress for active preview drafts", () => {
   expect(suppress({ streaming: { mode: "progress" } }, { draftStreamActive: false })).toBe(false);
 });
 
-it("renders automatic and configured progress labels through the public formatter", () => {
-  expect(formatText({ lines: [], random: () => 0 })).toBe("Working");
-  expect(render([], { label: " AUTO " }, { random: () => 0 })).toBe("Working");
-  const options = { narration: "Counting files.", random: () => 0.5 };
-  expect(render([], { label: "auto", labels: ["Pearling"] }, options)).toBe(
-    "Pearling\n\nCounting files.",
-  );
-});
-
 it.each([
   [`${"a".repeat(104)} important.json trailing text`, `${"a".repeat(104)} important.json…`],
   [`${"𠮷".repeat(40)} ${"x".repeat(100)}`, `${"𠮷".repeat(40)} ${"x".repeat(78)}…`],

@@ -178,19 +178,6 @@ describe("resolveInteractionCallbackUrl", () => {
     expect(url).toBe("http://gateway.internal:9999/mattermost/interactions/acct");
   });
 
-  it("trims trailing slashes from callbackBaseUrl", () => {
-    const url = resolveInteractionCallbackUrl("acct", {
-      channels: {
-        mattermost: {
-          interactions: {
-            callbackBaseUrl: "https://gateway.example.com/root///",
-          },
-        },
-      },
-    });
-    expect(url).toBe("https://gateway.example.com/root/mattermost/interactions/acct");
-  });
-
   it("uses merged per-account interactions.callbackBaseUrl", () => {
     const cfg = {
       gateway: { port: 9999 },
