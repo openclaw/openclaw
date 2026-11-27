@@ -26,17 +26,17 @@ const enProfile = {
       title: "OpenClaw ID",
       notLinked: "Not linked",
       notLinkedHelp:
-        "Check link confirms an existing link. An admin links it by inviting this OpenClaw ID to your profile and approving the request in People.",
-      unavailable: "Check your link over a personal sign-in, such as Tailscale",
+        "Link connects your OpenClaw ID when it uses the same verified email as this sign-in. Otherwise an owner invites it to your profile.",
+      unavailable: "Link over a personal sign-in, such as Tailscale",
       loadFailed: "Couldn’t load your OpenClaw ID link.",
-      link: "Check OpenClaw ID link",
-      linkShort: "Check link",
+      link: "Link OpenClaw ID",
+      linkShort: "Link",
       unlink: "Unlink",
       ownerOf: "{email} · Owner of {claw}",
       linkedElsewhere:
         "This OpenClaw ID is already linked to another profile. Unlink it from that profile first. If both profiles belong to you, an admin can merge them instead.",
       approvalRequired:
-        "This OpenClaw ID isn’t linked to your profile. An admin links it by inviting this OpenClaw ID to your profile and approving the request in People.",
+        "This OpenClaw ID’s verified email isn’t the email you signed in with, so it can’t be linked here. An owner links it by inviting this OpenClaw ID to your profile and approving the request in People.",
       profileLinked:
         "This profile is already linked to an OpenClaw ID. Unlink it first to link another.",
       failed: "Couldn’t update the OpenClaw ID link. Try again.",

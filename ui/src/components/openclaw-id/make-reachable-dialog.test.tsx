@@ -44,7 +44,7 @@ vi.mock("../../lib/openclaw-id/link.ts", () => ({
   }),
 }));
 
-// The device sign-in behind Check your link; it has its own dialog and tests.
+// The device sign-in behind Link your profile; it has its own dialog and tests.
 const showDeviceSignInDialog = vi.hoisted(() => vi.fn());
 // mock-isolation: the device sign-in dialog is replaced so the setup dialog's outcome handling runs alone.
 vi.mock("./device-sign-in-dialog.tsx", () => ({ showDeviceSignInDialog }));
@@ -229,7 +229,7 @@ describe("Make reachable over a personal sign-in", () => {
     {
       linkProfile: true,
       profileLink: "sign_in_not_held",
-      expected: "Sign in again to check the link",
+      expected: "Sign in again to link it",
       canLink: true,
     },
     {
@@ -241,7 +241,7 @@ describe("Make reachable over a personal sign-in", () => {
     {
       linkProfile: true,
       profileLink: "link_approval_required",
-      expected: "Set Role to the role you have now",
+      expected: "Open that invite link and sign in with this OpenClaw ID",
       canLink: false,
     },
     {
@@ -282,7 +282,7 @@ describe("Make reachable over a personal sign-in", () => {
         expect(notice()).toBeNull();
       }
       const action = [...document.querySelectorAll("button")].find(
-        (button) => button.textContent?.trim() === "Check your link",
+        (button) => button.textContent?.trim() === "Link your profile",
       );
       expect(Boolean(action)).toBe(canLink);
       await click(expected ? "Close" : "Done");
@@ -294,10 +294,13 @@ describe("Make reachable over a personal sign-in", () => {
   it.each([
     { outcome: "linked", expected: null },
     { outcome: "linked_elsewhere", expected: "already linked to another profile" },
-    { outcome: "link_approval_required", expected: "Set Role to the role you have now" },
-    { outcome: null, expected: "Sign in again to check the link" },
+    {
+      outcome: "link_approval_required",
+      expected: "Open that invite link and sign in with this OpenClaw ID",
+    },
+    { outcome: null, expected: "Sign in again to link it" },
   ])(
-    "checks the link with a fresh sign-in after sign_in_not_held (outcome $outcome)",
+    "links the profile with a fresh sign-in after sign_in_not_held (outcome $outcome)",
     async ({ outcome, expected }) => {
       const linking = Promise.withResolvers<{ signedIn: unknown; link: string } | null>();
       showDeviceSignInDialog.mockReturnValueOnce(linking.promise);
@@ -310,13 +313,13 @@ describe("Make reachable over a personal sign-in", () => {
         linkProfile: true,
       });
       await completeSetup();
-      await click("Check your link");
+      await click("Link your profile");
       await vi.waitFor(() => expect(showDeviceSignInDialog).toHaveBeenCalledOnce());
       expect(showDeviceSignInDialog).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ client: { request }, link: true }),
       );
       const action = [...document.querySelectorAll("button")].find(
-        (button) => button.textContent?.trim() === "Check your link",
+        (button) => button.textContent?.trim() === "Link your profile",
       );
       expect(action?.disabled).toBe(true);
       // A closed sign-in dialog resolves null and keeps the note.
@@ -344,7 +347,7 @@ describe("Make reachable over a personal sign-in", () => {
       linkProfile: true,
     });
     await completeSetup();
-    await click("Check your link");
+    await click("Link your profile");
     await vi.waitFor(() => expect(showDeviceSignInDialog).toHaveBeenCalledOnce());
     await click("Close");
     expect(await done).toBe(true);
@@ -364,10 +367,10 @@ describe("Make reachable over a personal sign-in", () => {
       linkProfile: true,
     });
     await completeSetup();
-    await click("Check your link");
+    await click("Link your profile");
     // The sign-in failure replaces the note, mapped like any other sign-in error.
     await vi.waitFor(() => expect(notice()?.textContent).toContain("Start sign-in again"));
-    await click("Check your link");
+    await click("Link your profile");
     await vi.waitFor(() => expect(showDeviceSignInDialog).toHaveBeenCalledTimes(2));
     close();
     expect(await done).toBe(true);

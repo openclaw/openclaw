@@ -54,26 +54,23 @@ it("shows the linked account with its claw role and unlinks it", async () => {
   view.getByText("Unlink").click();
   await waitForSolid(() => expect(view.container.textContent).toContain("Not linked"));
   expect(request).toHaveBeenCalledWith("openclawId.account", { action: "unlink" });
-  expect(view.getByText("Check link")).toBeDefined();
+  expect(view.getByText("Link")).toBeDefined();
 });
 
 it.each([
   ["the claw's own computer (popup sign-in)", status("popup")],
   ["a connection without a personal sign-in", status(null)],
-])(
-  "says where the link can be checked on %s, without a Check link action",
-  async (_name, current) => {
-    const request = vi.fn(async (method: string) =>
-      method === "openclawId.status" ? current : { linked: [] },
-    ) as unknown as GatewayBrowserClient["request"];
-    const view = mount(request);
-    await waitForSolid(() =>
-      expect(view.container.textContent).toContain("Check your link over a personal sign-in"),
-    );
-    expect(view.queryByText("Check link")).toBeNull();
-    expect(request).not.toHaveBeenCalledWith("openclawId.account", expect.anything());
-  },
-);
+])("says where linking works on %s, without a Link action", async (_name, current) => {
+  const request = vi.fn(async (method: string) =>
+    method === "openclawId.status" ? current : { linked: [] },
+  ) as unknown as GatewayBrowserClient["request"];
+  const view = mount(request);
+  await waitForSolid(() =>
+    expect(view.container.textContent).toContain("Link over a personal sign-in"),
+  );
+  expect(view.queryByText("Link")).toBeNull();
+  expect(request).not.toHaveBeenCalledWith("openclawId.account", expect.anything());
+});
 
 it("is absent while the Labs switch is off", async () => {
   const request = vi.fn(async (method: string) =>
@@ -119,7 +116,7 @@ it("holds the row's place while loading and retries a failed load", async () => 
   failStatus = false;
   view.getByText("Retry").click();
   await waitForSolid(() => expect(view.container.textContent).toContain("Not linked"));
-  expect(view.getByText("Check link")).toBeDefined();
+  expect(view.getByText("Link")).toBeDefined();
 });
 
 it("offers supported conflict recovery without merging profiles and clears the error after a later link", async () => {
@@ -147,15 +144,13 @@ it("offers supported conflict recovery without merging profiles and clears the e
   const client = createTestGatewayClient(request);
   const view = mount(client.request.bind(client));
   await waitForSolid(() => expect(view.container.textContent).toContain("Not linked"));
-  view.getByText("Check link").click();
+  view.getByText("Link").click();
   await waitForSolid(() => expect(view.container.querySelector('[role="alert"]')).not.toBeNull());
   const error = view.container.querySelector('[role="alert"]')?.textContent;
   expect.soft(error).toContain("Unlink it from that profile first.");
   expect.soft(error).toContain("If both profiles belong to you, an admin can merge them instead.");
-  await waitForSolid(() =>
-    expect(view.getByText("Check link").hasAttribute("disabled")).toBe(false),
-  );
-  view.getByText("Check link").click();
+  await waitForSolid(() => expect(view.getByText("Link").hasAttribute("disabled")).toBe(false));
+  view.getByText("Link").click();
   await waitForSolid(() => expect(view.queryByText("Unlink")).not.toBeNull());
   expect(view.container.querySelector('[role="alert"]')).toBeNull();
   expect(request).toHaveBeenCalledWith("openclawId.account", {
@@ -188,17 +183,17 @@ it("says an admin links an unlinked account, and confirms an existing link", asy
   const client = createTestGatewayClient(request);
   const view = mount(client.request.bind(client));
   await waitForSolid(() => expect(view.container.textContent).toContain("Not linked"));
-  // The control promises a check, and the row says how a first link is made.
-  expect(view.getByRole("button", { name: "Check OpenClaw ID link" })).toBeDefined();
-  expect(view.container.textContent).toContain("Check link confirms an existing link.");
-  view.getByText("Check link").click();
+  // The row says when Link links and how a first link is made otherwise.
+  expect(view.getByRole("button", { name: "Link OpenClaw ID" })).toBeDefined();
+  expect(view.container.textContent).toContain("same verified email as this sign-in");
+  view.getByText("Link").click();
   await waitForSolid(() => expect(view.container.querySelector('[role="alert"]')).not.toBeNull());
   const error = view.container.querySelector('[role="alert"]')?.textContent;
-  expect.soft(error).toContain("This OpenClaw ID isn’t linked to your profile.");
+  expect.soft(error).toContain("verified email isn’t the email you signed in with");
   expect
     .soft(error)
     .toContain(
-      "An admin links it by inviting this OpenClaw ID to your profile and approving the request in People.",
+      "An owner links it by inviting this OpenClaw ID to your profile and approving the request in People.",
     );
   expect(view.queryByText("Unlink")).toBeNull();
 });

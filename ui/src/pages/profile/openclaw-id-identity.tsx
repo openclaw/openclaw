@@ -1,8 +1,9 @@
 // Settings → Profile → Identity: this profile's OpenClaw ID link (OCF-510). Shown while the
-// OpenClaw ID Labs switch is on; Check link runs only on a connection with a verified personal
-// sign-in. Anyone holding a device code can approve it, so the sign-in only confirms an
-// existing link; an admin creates the first one by inviting the account to this profile and
-// approving it in People. Owner devices of a linked account then arrive as this person.
+// OpenClaw ID Labs switch is on; Link runs only on a connection with a verified personal
+// sign-in. Anyone holding a device code can approve it, so the Gateway links a first account
+// only when its verified email is this sign-in's own email; otherwise an owner invites the
+// account to this profile and approves it in People. Owner devices of a linked account then
+// arrive as this person.
 // Linking grants nothing; owner authority still comes from each device's certificate.
 import { createSignal, For, Match, onSettled, Show, Switch } from "solid-js";
 import { clawNameFromHostname } from "../../components/openclaw-id/claw-name.ts";
