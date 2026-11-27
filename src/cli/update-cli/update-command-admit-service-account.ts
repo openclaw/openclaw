@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
+import { isBunRuntime, isNodeRuntime } from "../../daemon/runtime-binary.js";
 import {
   findSystemdServiceAccountMismatch,
   type SystemdServiceAccountMismatch,
@@ -11,6 +12,8 @@ import { readSystemdServiceExecStart } from "../../daemon/systemd-service-files.
 import { readSystemdAccountHome } from "../../daemon/systemd-state-identity.js";
 import type { UpdateAdmissionContext } from "../../infra/update-admission-contract.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
+import { buildParseArgv } from "../argv.js";
+import { applyCliProfileEnv, parseCliProfileArgs } from "../profile.js";
 import { quoteCliArg } from "../quote-cli-arg.js";
 
 const SYSTEM_SERVICE_UPDATE_DOCS =
@@ -35,36 +38,43 @@ export async function inspectSystemServiceAccountForAdmission(params: {
   if (process.platform !== "linux") {
     return undefined;
   }
-  let mismatch: SystemdServiceAccountMismatch | undefined;
+  // A custom-named unit is skipped by discovery when it runs as another account;
+  // discovery reports it so the same observation can refuse here.
+  const skipped: SystemdServiceAccountMismatch[] = [];
+  const candidates: SystemdServiceAccountMismatch[] = [];
   try {
     const target = await findInstalledSystemdGatewayScope(params.env, {
       timeoutMs: INSPECTION_TIMEOUT_MS,
+      onAccountMismatch: (mismatch) => skipped.push(mismatch),
     });
-    if (target?.scope !== "system") {
-      return undefined;
+    if (target?.scope === "system") {
+      await readSystemdServiceExecStart(params.env, {
+        systemdReadTarget: target,
+        requireEffective: true,
+        timeoutMs: INSPECTION_TIMEOUT_MS,
+      });
+    } else if (!target) {
+      candidates.push(...skipped);
     }
-    await readSystemdServiceExecStart(params.env, {
-      systemdReadTarget: target,
-      requireEffective: true,
-      timeoutMs: INSPECTION_TIMEOUT_MS,
-    });
-    return undefined;
   } catch (error) {
     if (hasCommandProcessCleanupError(error)) {
       throw error;
     }
-    mismatch = findSystemdServiceAccountMismatch(error);
+    const mismatch = findSystemdServiceAccountMismatch(error);
+    if (mismatch) {
+      candidates.push(mismatch);
+    }
   }
-  if (
-    !mismatch ||
-    (await gatewayServiceCommandMatchesRoot(params.root, {
+  for (const mismatch of candidates) {
+    const runsThisInstallation = await gatewayServiceCommandMatchesRoot(params.root, {
       programArguments: mismatch.programArguments,
       workingDirectory: mismatch.workingDirectory,
-    })) !== true
-  ) {
-    return undefined;
+    });
+    if (runsThisInstallation === true) {
+      return await formatRefusal(mismatch, params);
+    }
   }
-  return await formatRefusal(mismatch, params);
+  return undefined;
 }
 
 async function formatRefusal(
@@ -79,9 +89,18 @@ async function formatRefusal(
   const sudoUser =
     serviceUser === "" ? "root" : numeric ? `'#${serviceUser}'` : quoteCliArg(serviceUser);
   const home = mismatch.selectors.HOME ?? (await readSystemdAccountHome(serviceUser));
-  const unitEnv = { ...mismatch.selectors, ...(home ? { HOME: home } : {}) };
-  const unitState =
-    !mismatch.selectorsIncomplete && home ? resolveStateDir(unitEnv, () => home) : undefined;
+  const unitEnv: NodeJS.ProcessEnv = { ...mismatch.selectors, ...(home ? { HOME: home } : {}) };
+  // A --profile in ExecStart selects the state as discovery does for readable units.
+  const executable = mismatch.programArguments[0] ?? "";
+  const runtime = isNodeRuntime(executable) || isBunRuntime(executable);
+  const profile = parseCliProfileArgs(
+    buildParseArgv(mismatch.programArguments, runtime ? "openclaw" : executable),
+  );
+  if (profile.ok && profile.profile && home) {
+    applyCliProfileEnv({ profile: profile.profile, env: unitEnv, homedir: () => home });
+  }
+  const selectorsIncomplete = mismatch.selectorsIncomplete || !profile.ok;
+  const unitState = !selectorsIncomplete && home ? resolveStateDir(unitEnv, () => home) : undefined;
   const callerState = resolveStateDir(params.env);
   const sameState =
     unitState !== undefined && path.resolve(unitState) === path.resolve(callerState);
@@ -100,9 +119,11 @@ async function formatRefusal(
     const cut = value.lastIndexOf("/", at + callerState.length - 1) + 1;
     return `${quoteCliArg(value.slice(0, cut))}'${value.slice(cut).replaceAll("'", "'\\''")}'`;
   };
-  const selectors = Object.entries(unitEnv).map(([key, value]) => `${key}=${shellPath(value)}`);
+  const selectors = Object.entries(unitEnv).flatMap(([key, value]) =>
+    value === undefined ? [] : [`${key}=${shellPath(value)}`],
+  );
   const backup =
-    mismatch.selectorsIncomplete || !home
+    selectorsIncomplete || !home
       ? `sudo -u ${sudoUser} env <the unit's HOME, OPENCLAW_HOME, OPENCLAW_STATE_DIR, OPENCLAW_CONFIG_PATH and OPENCLAW_PROFILE> openclaw backup create --verify --output <directory>`
       : `sudo -u ${sudoUser} env ${selectors.join(" ")} openclaw backup create --verify --output ${shellPath(home)}`;
   const spec = quoteCliArg(`openclaw@${params.candidateVersion}`);

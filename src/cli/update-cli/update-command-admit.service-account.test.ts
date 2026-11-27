@@ -26,7 +26,13 @@ import { snapshotUpdateFixtureFiles } from "./update-command-filesystem-snapshot
 // Unit selection and the bus read have their own owner tests; these tests feed
 // their observed results to admission and check the verdict a driver receives.
 const systemd = vi.hoisted(() => ({
-  findScope: vi.fn<(env: NodeJS.ProcessEnv) => Promise<SystemdServiceReadTarget | null>>(),
+  findScope:
+    vi.fn<
+      (
+        env: NodeJS.ProcessEnv,
+        options?: { onAccountMismatch?: (mismatch: SystemdServiceAccountMismatch) => void },
+      ) => Promise<SystemdServiceReadTarget | null>
+    >(),
   readCommand: vi.fn<(env: NodeJS.ProcessEnv) => Promise<unknown>>(),
 }));
 vi.mock("../../daemon/systemd-scope.js", async (importOriginal) => ({
@@ -251,6 +257,56 @@ describe("candidate admission for a system unit run by another account", () => {
     );
   });
 
+  it("refuses for a custom-named unit that discovery skipped for its account", async () => {
+    const custom = mismatch({
+      unitName: "company-gateway.service",
+      unitPath: "/etc/systemd/system/company-gateway.service",
+    }).mismatch;
+    systemd.findScope.mockImplementation(async (_env, options) => {
+      options?.onAccountMismatch?.(custom);
+      return null;
+    });
+
+    const verdict = await admit();
+
+    expect(process.exitCode).toBe(3);
+    expect(verdict.reasons[0]?.message).toContain(
+      "Gateway service company-gateway.service runs as openclaw, but this update runs as root",
+    );
+    expect(verdict.reasons[0]?.nextAction).toContain(
+      "sudo systemctl restart company-gateway.service.",
+    );
+    expect(systemd.readCommand).not.toHaveBeenCalled();
+  });
+
+  it("derives the backup selectors from a --profile in ExecStart", async () => {
+    systemd.readCommand.mockRejectedValue(
+      mismatch({
+        programArguments: [
+          "/usr/bin/node",
+          path.join(root, "dist", "index.js"),
+          "--profile",
+          "prod",
+          "gateway",
+        ],
+        selectors: { HOME: "/var/lib/openclaw" },
+      }),
+    );
+
+    const verdict = await admit();
+
+    const backup = /: sudo -u openclaw env (.*) openclaw backup create/u.exec(
+      verdict.reasons[0]?.nextAction ?? "",
+    )?.[1];
+    expect(backup?.split(" ")).toEqual(
+      expect.arrayContaining([
+        "HOME=/var/lib/openclaw",
+        "OPENCLAW_PROFILE=prod",
+        "OPENCLAW_STATE_DIR=/var/lib/openclaw/.openclaw-prod",
+      ]),
+    );
+  });
+
   it.each([
     {
       name: "the unit runs another installation",
@@ -262,6 +318,17 @@ describe("candidate admission for a system unit run by another account", () => {
     {
       name: "the unit runs as this account",
       setup: () => systemd.readCommand.mockResolvedValue({ programArguments: [] }),
+    },
+    {
+      name: "a skipped custom unit runs another installation",
+      setup: () =>
+        systemd.findScope.mockImplementation(async (_env, options) => {
+          options?.onAccountMismatch?.(
+            mismatch({ programArguments: ["/usr/bin/node", "/opt/other/openclaw/dist/index.js"] })
+              .mismatch,
+          );
+          return null;
+        }),
     },
     {
       name: "the unit could not be inspected",

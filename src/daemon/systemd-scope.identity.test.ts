@@ -1,12 +1,30 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import {
+  ServiceOwnershipRefusalError,
+  SystemdServiceAccountRefusalError,
+  type SystemdServiceAccountMismatch,
+} from "./service-inspection-error.js";
 import { findInstalledSystemdGatewayScope, isNonFatalSystemdInstallProbeError } from "./systemd.js";
 
 const findServices = vi.hoisted(() =>
   vi.fn<typeof import("./inspect.js").findSystemGatewayServices>(async () => []),
 );
 vi.mock("./inspect.js", () => ({ findSystemGatewayServices: () => findServices() }));
+const readCommand = vi.hoisted(() => ({ refusal: undefined as Error | undefined }));
+vi.mock("./systemd-service-files.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./systemd-service-files.js")>();
+  return {
+    ...original,
+    readSystemdServiceExecStart: (
+      ...args: Parameters<typeof original.readSystemdServiceExecStart>
+    ) =>
+      readCommand.refusal
+        ? Promise.reject(readCommand.refusal)
+        : original.readSystemdServiceExecStart(...args),
+  };
+});
 const HOME = "/tmp/openclaw-test-home";
 const systemPath = (name: string) => `/etc/systemd/system/${name}.service`;
 const userPath = (name: string) => `${HOME}/.config/systemd/user/${name}.service`;
@@ -32,6 +50,7 @@ function marker(name: string) {
 }
 
 beforeEach(() => {
+  readCommand.refusal = undefined;
   files = [];
   findServices.mockReset().mockResolvedValue([]);
   vi.spyOn(fs, "access").mockImplementation(async (file) => {
@@ -111,6 +130,45 @@ it.each(selectionCases)(
     await expect(findScope(profile, override)).resolves.toEqual(found !== false ? selected : null);
   },
 );
+
+it("reports a custom unit skipped because it runs as another account", async () => {
+  const observed: SystemdServiceAccountMismatch = {
+    unitName: "company-gateway.service",
+    unitPath: systemPath("company-gateway"),
+    serviceUser: "openclaw",
+    programArguments: ["/usr/bin/node", "/usr/lib/node_modules/openclaw/dist/index.js", "gateway"],
+    workingDirectory: "",
+    selectors: { HOME: "/var/lib/openclaw" },
+    selectorsIncomplete: false,
+  };
+  readCommand.refusal = new SystemdServiceAccountRefusalError(observed);
+  marker("company-gateway");
+  const reported: SystemdServiceAccountMismatch[] = [];
+
+  // Selection is unchanged for every caller; only the observation is reported.
+  await expect(
+    // Custom names are considered only for the default installation of this account.
+    findInstalledSystemdGatewayScope(
+      { HOME: os.userInfo().homedir },
+      { onAccountMismatch: (mismatch) => reported.push(mismatch) },
+    ),
+  ).resolves.toBeNull();
+  expect(reported).toEqual([observed]);
+});
+
+it("does not report an account refusal that carries no observation", async () => {
+  readCommand.refusal = new ServiceOwnershipRefusalError("systemd-account-refused");
+  marker("company-gateway");
+  const reported: SystemdServiceAccountMismatch[] = [];
+
+  await expect(
+    findInstalledSystemdGatewayScope(
+      { HOME: os.userInfo().homedir },
+      { onAccountMismatch: (mismatch) => reported.push(mismatch) },
+    ),
+  ).resolves.toBeNull();
+  expect(reported).toEqual([]);
+});
 
 it("accepts legacy command-failure install probes", () => {
   expect(
