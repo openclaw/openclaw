@@ -66,9 +66,10 @@ function isStrictRejection(error: Record<string, unknown>): boolean {
 }
 
 /**
- * True when a request refused before any output is a strict-tool rejection worth one retry
- * without strict tools: a 400 or 422 whose error names strict or the tool schema, on an
- * undeclared route whose request carried a strict tool.
+ * True when a request refused before any output is a strict rejection worth one retry
+ * without the strict field: a 400 or 422 whose error names strict or the tool schema, on an
+ * undeclared route whose request carried the field (true or false; some endpoints reject the
+ * field itself). The retry omits it.
  */
 export function isStrictToolRetryCandidate(
   model: Model,
@@ -83,7 +84,8 @@ export function isStrictToolRetryCandidate(
     (tools ?? []).some(
       (tool) =>
         isRecord(tool) &&
-        (tool.strict === true || (isRecord(tool.function) && tool.function.strict === true)),
+        (typeof tool.strict === "boolean" ||
+          (isRecord(tool.function) && typeof tool.function.strict === "boolean")),
     )
   );
 }

@@ -21,7 +21,12 @@ const context = {
     {
       name: "lookup",
       description: "Look up",
-      parameters: { type: "object", properties: { q: { type: "string" } }, required: ["q"] },
+      parameters: {
+        type: "object",
+        properties: { q: { type: "string" } },
+        required: ["q"],
+        additionalProperties: false,
+      },
     },
   ],
 } satisfies Context;
@@ -58,10 +63,16 @@ const rateAs400 = {
   code: "rate_limit_exceeded",
 };
 const genericBadRequest = { message: "Bad request", type: "invalid_request_error" };
+// An endpoint that does not know the field at all rejects even strict: false.
+const fieldRefusal = {
+  message: "Unrecognized request argument supplied: strict",
+  type: "invalid_request_error",
+};
 
-/** Refuses the first request with `firstError` (400); answers every later request. */
+/** Refuses with `firstError` (400): a strict or field refusal repeats, other errors happen once. */
 function install(firstError: Record<string, string>) {
   const sentStrict: boolean[] = [];
+  const sentField: boolean[] = [];
   const recorded: OpenAIStrictToolRoute[] = [];
   const learned = new Set<string>();
   const key = (route: OpenAIStrictToolRoute) => JSON.stringify(route);
@@ -71,9 +82,15 @@ function install(firstError: Record<string, string>) {
         tools?: Array<{ function: { strict?: boolean } }>;
       };
       const strict = body.tools?.some((tool) => tool.function.strict === true) ?? false;
+      const field = body.tools?.some((tool) => "strict" in tool.function) ?? false;
       sentStrict.push(strict);
-      // A strict refusal repeats for every strict request; other errors happen once.
-      const refuse = firstError === strictRefusal ? strict : sentStrict.length === 1;
+      sentField.push(field);
+      const refuse =
+        firstError === strictRefusal
+          ? strict
+          : firstError === fieldRefusal
+            ? field
+            : sentStrict.length === 1;
       return refuse
         ? Response.json({ error: firstError }, { status: 400 })
         : new Response(reply, { status: 200, headers: { "content-type": "text/event-stream" } });
@@ -88,7 +105,7 @@ function install(firstError: Record<string, string>) {
       },
     },
   });
-  return { sentStrict, recorded };
+  return { sentStrict, sentField, recorded };
 }
 
 const streamFn = createOpenAICompletionsTransportStreamFn();
@@ -150,4 +167,26 @@ it("never retries a route that declares strict support", async () => {
   expect((await run(declared)).stopReason).toBe("error");
   expect(endpoint.sentStrict).toEqual([true]);
   expect(endpoint.recorded).toEqual([]);
+});
+
+// A route that rejects the field itself also refuses strict: false, sent for a tool that is
+// not strict as written; the retry omits the field and the route is learned.
+it("recovers a route that rejects the strict field on a request with no strict tool", async () => {
+  const endpoint = install(fieldRefusal);
+  const optionalOnly = {
+    ...context,
+    tools: [
+      {
+        name: "lookup",
+        description: "Look up",
+        parameters: { type: "object", properties: { q: { type: "string" } }, required: [] },
+      },
+    ],
+  } satisfies Context;
+
+  expect(
+    (await (await streamFn(proxyModel, optionalOnly, { apiKey: "k" })).result()).stopReason,
+  ).toBe("stop");
+  expect(endpoint.sentField).toEqual([true, false]);
+  expect(endpoint.recorded).toHaveLength(1);
 });

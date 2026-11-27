@@ -157,10 +157,9 @@
               },
               "required": [
                 "query"
-              ],
-              "additionalProperties": false
+              ]
             },
-            "strict": true
+            "strict": false
           }
         }
       ],

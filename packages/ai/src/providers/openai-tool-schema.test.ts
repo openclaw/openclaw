@@ -127,4 +127,11 @@ describe("OpenAI strict tool schema normalization", () => {
       true,
     );
   });
+
+  // Strict normalization would close an open root and drop the extra arguments it allows.
+  it("keeps a tool with an open root non-strict", () => {
+    const open = { type: "object", properties: { q: { type: "string" } }, required: ["q"] };
+    expect(resolveOpenAIToolStrictFlag(open, true)).toBe(false);
+    expect(resolveOpenAIToolStrictFlag({ ...open, additionalProperties: false }, true)).toBe(true);
+  });
 });
