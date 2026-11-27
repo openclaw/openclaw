@@ -30,6 +30,9 @@ const EXCLUDE = [
   "**/*test-support*",
   "**/*test-harness*",
   "**/*test-helpers*",
+  "**/test-support/**",
+  "**/test-harness/**",
+  "**/test-helpers/**",
   "**/*.generated.ts",
   // Provider identity is these owners' subject, not request shaping: CLI backend adapters,
   // per-provider credentials and model selection.

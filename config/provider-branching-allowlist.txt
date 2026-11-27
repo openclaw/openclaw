@@ -205,11 +205,6 @@ src/agents/sessions/session-stream.ts	4
 src/agents/simple-completion-credential-model.ts	1
 src/agents/simple-completion-runtime.ts	2
 src/agents/subagents/registry/subagent-registry-lifecycle-delivery.ts	1
-src/agents/test-helpers/embedded-agent-runner-e2e-mocks.ts	1
-src/agents/test-helpers/live-cache-regression-runner.ts	4
-src/agents/test-helpers/live-model-dynamic-candidates.ts	14
-src/agents/test-helpers/live-model-turn-probes.ts	1
-src/agents/test-helpers/live-target-matcher.ts	1
 src/agents/tool-surface-plan.ts	2
 src/agents/tools/image-tool.ts	2
 src/agents/tools/manifest-capability-availability.ts	1

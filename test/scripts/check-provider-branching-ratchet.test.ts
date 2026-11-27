@@ -43,6 +43,8 @@ it("passes at the allowlisted count and fails when a file adds a branch", () => 
   const sourcePath = "src/agents/example.ts";
   const lean = 'export const lean = (provider: string) => provider === "ollama";\n';
   write(sourcePath, lean);
+  // Test helpers are out of scope, including files inside a test-helpers directory.
+  write("src/agents/test-helpers/live-candidates.ts", lean);
   write("config/provider-branching-allowlist.txt", `${sourcePath}\t1\n`);
   for (const args of [["init"], ["add", "."], ["commit", "-m", "fixture"]]) {
     execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], {
