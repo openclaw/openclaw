@@ -205,7 +205,6 @@ async function sendSubagentAnnounceDirectlyBound(
         cfg,
         requesterSessionKey: canonicalRequesterSessionKey,
         requesterSessionId,
-        requesterLifecycleRevision,
         requesterAgentId: params.requesterAgentId,
         directIdempotencyKey: params.directIdempotencyKey,
         deliveryTarget,

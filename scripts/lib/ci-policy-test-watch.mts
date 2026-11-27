@@ -202,6 +202,11 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     testFile: "src/gateway/server.config-patch.test.ts",
     watchGlobs: ["src/gateway/config-reload.ts"],
   },
+  {
+    // sessions.create reaches fork normalization through four imports, beyond the PR walk.
+    testFile: "src/gateway/server.sessions.create.reset-fork.test.ts",
+    watchGlobs: ["src/config/sessions/session-accessor.sqlite-parent-fork.ts"],
+  },
   // server.close() reaches these owners through the kernel's lazy shutdown
   // runtime, four or five import hops away; aggressive selection walks two.
   ...[
