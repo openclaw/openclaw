@@ -291,11 +291,17 @@ export function completeEmbeddedAttemptResult(
       input.prepared.toolCatalog.toolSearchRunPlan;
     // Deferred names need native correction too; detection never executes text.
     const allowedToolNames = new Set([...liveAllowedToolNames, ...capabilityToolNames]);
+    const hasToolName = (name: string) =>
+      Boolean(resolveToolCallName(name, allowedToolNames, undefined, true));
+    const sourceText = extractAssistantTranscriptSourceText(assistant) ?? "";
+    const renderedText =
+      assistant === terminalAssistant
+        ? closingReply.text
+        : prepareTerminalAssistantReply(assistant).text;
     textToolCallAttempt =
       allowedToolNames.size > 0 &&
-      isPlainTextToolCallAttempt(extractAssistantTranscriptSourceText(assistant) ?? "", (name) =>
-        Boolean(resolveToolCallName(name, allowedToolNames, undefined, true)),
-      );
+      (isPlainTextToolCallAttempt(sourceText, hasToolName) ||
+        (renderedText !== sourceText && isPlainTextToolCallAttempt(renderedText, hasToolName)));
   }
   const accessProgram = asOptionalRecord(
     sessionRuntime.transport.effectiveExtraParams.accessPrograms,

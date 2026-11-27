@@ -232,6 +232,28 @@ describe("attempt result projection", () => {
     ).toBe(available ? true : undefined);
   });
 
+  it("detects a rendered tool call without rewriting its source", () => {
+    const call = '{"name":"write","arguments":{"path":"proof.txt","content":"OK"}}';
+    const text = `</think>\n\n${call}\n</tool_call>`;
+    const assistant = textAssistant(text);
+    const result = completeResult({
+      currentAttemptCompletedAssistant: assistant,
+      allowedToolNames: ["read", "write"],
+      toolMetas: [{ toolName: "read", replaySafe: true, isError: false }],
+    });
+
+    expect(result.textToolCallAttempt).toBe(true);
+    expect(assistant.content).toEqual([{ type: "text", text }]);
+    expect(
+      completeResult({
+        currentAttemptCompletedAssistant: textAssistant(
+          `Here is an example:\n\`\`\`xml\n${text}\n\`\`\``,
+        ),
+        allowedToolNames: ["write"],
+      }).textToolCallAttempt,
+    ).toBeUndefined();
+  });
+
   it("keeps the settled result snapshot when an output hook replaces live state", () => {
     const assistant = makeAssistantMessageFixture({ content: [{ type: "text", text: "settled" }] });
     const fixture = createResultFixture({
