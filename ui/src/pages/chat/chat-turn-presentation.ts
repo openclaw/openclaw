@@ -7,7 +7,6 @@ import { messageSubagentCompletions } from "../../../../src/shared/subagent-comp
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ChatItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import { userTurnRunId } from "../../lib/chat/history-message-identity.ts";
-import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import {
   normalizeMessage,
   normalizeRoleForGrouping,
@@ -147,23 +146,15 @@ function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
     return false;
   }
   const role = item.role.toLowerCase();
+  // Only text the model labels as commentary is hideable progress. Unlabeled
+  // text, such as Chat Completions text before a tool call, stays visible.
   return (
     role === "tool" ||
     (role === "assistant" &&
       !assistantGroupIsIndependentBoundary(item) &&
       assistantMessageKind(item.messages[0]?.message, item.visibleContent) !== "final_answer" &&
       (item.visibleContent !== "text" ||
-        item.messages.every(({ message }) => isStatusText(message))))
-  );
-}
-
-// Explicit commentary was written as hideable progress. Unlabeled text before a
-// tool call folds only as a short status line ("Let me check the config."); a
-// longer explanation stays visible, since the user already read it as it streamed.
-function isStatusText(message: unknown): boolean {
-  return (
-    resolveAssistantReplyPhase(message) === "commentary" ||
-    (extractTextCached(message)?.trim().length ?? 0) <= 200
+        item.messages.every(({ message }) => resolveAssistantReplyPhase(message) === "commentary")))
   );
 }
 
