@@ -178,6 +178,21 @@ struct DashboardGatewayCatalogTests {
 
 @MainActor
 struct DashboardGatewaysBridgeTests {
+    @Test func `primary alerts preserve the name, explanation, and action order`() {
+        let promotion = DashboardWindowController.makeSetPrimaryAlert(gatewayName: "Studio 100%")
+        #expect(promotion.messageText == "Set Studio 100% as primary?")
+        #expect(promotion.informativeText ==
+            "This changes the Mac app's primary Gateway and resets its Talk Mode, canvas, " +
+            "and native chat connection. Other saved Gateway windows stay open.")
+        #expect(promotion.buttons.map(\.title) == ["Set as Primary", "Cancel"])
+
+        let setup = DashboardWindowController.makeGatewaySetupAlert(title: "Setup title", message: "Setup message")
+        #expect(setup.messageText == "Setup title")
+        #expect(setup.informativeText == "Setup message")
+        #expect(setup.buttons.map(\.title) == ["Change Gateway", "Cancel"])
+        #expect(setup.alertStyle == .warning)
+    }
+
     @Test func `gateway script publishes metadata and emits its change event`() throws {
         let snapshot = DashboardGatewaySnapshot(
             gateways: [.init(
