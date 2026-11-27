@@ -1,6 +1,12 @@
 import { once as emitted } from "node:events";
 import path from "node:path";
-import { ClientEvent, type MatrixClient as MatrixJsClient } from "matrix-js-sdk/lib/matrix.js";
+import {
+  ClientEvent,
+  MatrixError,
+  MatrixEvent,
+  type MatrixClient as MatrixJsClient,
+} from "matrix-js-sdk/lib/matrix.js";
+import { EventStatus } from "matrix-js-sdk/lib/models/event-status.js";
 import { Room } from "matrix-js-sdk/lib/models/room.js";
 import { SyncState } from "matrix-js-sdk/lib/sync.js";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
@@ -141,6 +147,60 @@ describe("Matrix live encrypted room ownership", () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
+
+  it("preserves persisted encryption settings when the homeserver no longer exposes room state", async () => {
+    vi.mocked(fixture.room!).hasEncryptionStateEvent.mockReturnValue(false);
+    const state = vi
+      .spyOn(sdk, "getStateEvent")
+      .mockRejectedValue(
+        new MatrixError({ errcode: "M_NOT_FOUND", error: "State event not found" }, 404),
+      );
+    vi.spyOn(sdk, "sendMessage").mockResolvedValue({ event_id: "$sent" });
+    await expect(client.getMessageWireEventType(roomId)).resolves.toBe("m.room.encrypted");
+    vi.mocked(fixture.room!).hasEncryptionStateEvent.mockReturnValue(true);
+    liveSync();
+    await expect(client.sendMessage(roomId, { msgtype: "m.text", body: "secret" })).resolves.toBe(
+      "$sent",
+    );
+    expect(state).not.toHaveBeenCalled();
+  });
+
+  it.each(["message", "event", "resend"] as const)(
+    "holds the first encrypted send after a cached restart until live sync (%s)",
+    async (kind) => {
+      const message = vi.spyOn(sdk, "sendMessage").mockResolvedValue({ event_id: "$sent" });
+      const custom = vi.spyOn(sdk, "sendEvent").mockResolvedValue({ event_id: "$sent-event" });
+      const resend = vi.spyOn(sdk, "resendEvent").mockResolvedValue({ event_id: "$resent" });
+      const content = { msgtype: "m.text" as const, body: "secret" };
+      if (kind === "resend") {
+        const event = new MatrixEvent({ event_id: "~pending", type: "m.room.message", content });
+        event.setStatus(EventStatus.NOT_SENT);
+        vi.spyOn(fixture.room!, "getEventForTxnId").mockReturnValue(event);
+      }
+      const sent =
+        kind === "event"
+          ? client.sendEvent(roomId, "m.poll.start", { "m.text": "Lunch?" })
+          : client.sendMessage(roomId, content, kind === "resend" ? "oc_retry" : undefined);
+      pending.push(Promise.allSettled([sent]));
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        expect(message).not.toHaveBeenCalled();
+        expect(custom).not.toHaveBeenCalled();
+        expect(resend).not.toHaveBeenCalled();
+        sdk.emit(ClientEvent.Sync, SyncState.Catchup, SyncState.Prepared);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(message).not.toHaveBeenCalled();
+        expect(custom).not.toHaveBeenCalled();
+        expect(resend).not.toHaveBeenCalled();
+      } finally {
+        liveSync();
+        await sent;
+      }
+      await expect(sent).resolves.toBe(
+        kind === "event" ? "$sent-event" : kind === "resend" ? "$resent" : "$sent",
+      );
+    },
+  );
 
   it.each(["room replacement", "missing room", "membership", "encryption", "offline"])(
     "revalidates %s after a held crypto probe",
