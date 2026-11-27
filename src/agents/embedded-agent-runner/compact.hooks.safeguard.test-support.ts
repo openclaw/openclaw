@@ -54,7 +54,7 @@ export function registerCompactionSafeguardTests({
     await writeFile(join(workspaceDir, "AGENTS.md"), "a".repeat(12_000));
     await compact({
       workspaceDir,
-      config: { agents: { defaults: { agentProfileId: "openclaw/small" } } },
+      config: { agents: { defaults: { agentProfileId: "openclaw/compact" } } },
     });
     const resolved = await resolveBootstrapContextForRunMock.mock.results[0]?.value;
     const agents = resolved?.contextFiles.find((file: { path: string }) =>
