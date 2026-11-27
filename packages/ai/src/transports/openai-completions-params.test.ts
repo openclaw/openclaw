@@ -828,11 +828,6 @@ describe("OpenAI completions compatibility and tools", () => {
         { max_tokens: 2048, random_seed: 12345 },
         ["max_completion_tokens", "store", "reasoning_effort", "seed"],
       ],
-      [
-        request({ id: "glm-5", provider: "zai", baseUrl: "" }, undefined, toolContext()),
-        { "tools.0.function": expect.any(Object) },
-        ["tools.0.function.strict"],
-      ],
     ] as const;
     for (const [params, expected, absent] of cases) {
       for (const [path, value] of Object.entries(expected)) {

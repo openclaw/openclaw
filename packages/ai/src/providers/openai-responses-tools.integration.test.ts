@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it } from "vitest";
-import { configureAiTransportHost, getAiTransportHost } from "../host.js";
+import { configureAiTransportHost } from "../host.js";
 import { createLlmRuntime } from "../stream.js";
 import { createOpenAIResponsesTransportStreamFn } from "../transports/openai-responses-client.js";
 import {

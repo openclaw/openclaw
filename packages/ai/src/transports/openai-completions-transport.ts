@@ -482,17 +482,15 @@ export function streamOpenAICompletionsRequest(
           return { ok: false as const, error, tools: params.tools };
         }
       };
-      if (mode === "managed") {
-        model = await resolveStrictToolModel(model);
-      }
-      let sent = await send(model);
+      const toolModel = mode === "managed" ? await resolveStrictToolModel(model) : model;
+      let sent = await send(toolModel);
       if (
         !sent.ok &&
         mode === "managed" &&
-        isStrictToolRetryCandidate(model, sent.tools, sent.error)
+        isStrictToolRetryCandidate(toolModel, sent.tools, sent.error)
       ) {
         // One retry without strict tools; only an accepted retry teaches the route.
-        sent = await send(withoutStrictTools(model));
+        sent = await send(withoutStrictTools(toolModel));
         if (sent.ok) {
           await recordStrictToolRejection(model);
         }

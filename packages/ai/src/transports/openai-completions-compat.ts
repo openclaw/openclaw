@@ -277,8 +277,9 @@ export function detectOpenAICompletionsCompat(
               ? "openrouter"
               : "openai",
     visibleReasoningDetailTypes: isOpenRouterLike ? ["response.output_text", "response.text"] : [],
-    // Undeclared routes default to strict tools (W3 decision 13:49); Z.ai is a known rejecter.
-    supportsStrictMode: !isZai,
+    // Strict tools are on unless the route declares otherwise; a route that refuses them is
+    // learned by the transports' one retry, never by provider name or URL.
+    supportsStrictMode: true,
     requiresTypedUnionBranches: isMoonshot,
     supportsJsonSchemaResponseFormat:
       (endpointClass === "openai-public" ||
