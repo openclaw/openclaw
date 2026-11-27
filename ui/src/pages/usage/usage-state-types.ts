@@ -1,4 +1,3 @@
-import type { SessionLogEntry } from "../../../../src/infra/session-cost-usage.types.js";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status-state.ts";
 import type { PageReadResult } from "../../lib/page-request.ts";
@@ -37,7 +36,6 @@ export type UsageJsonExport = {
     creatorKey: string | null;
     query: string | null;
     selectedDays: string[];
-    selectedHours: number[];
     selectedSessions: string[];
   };
   totals: UsageTotals | null;
@@ -69,7 +67,6 @@ export type UsageFilterState = {
   scope: "instance" | "family";
   selectedSessions: string[];
   selectedDays: string[];
-  selectedHours: number[];
   creatorKey: string | null;
   query: string;
   queryDraft: string;
@@ -81,8 +78,6 @@ export type UsageDisplayState = {
   dailyChartMode: "total" | "by-type" | "by-provider";
   sessionSort: "tokens" | "cost" | "recent" | "messages" | "errors";
   sessionSortDir: "asc" | "desc";
-  recentSessions: string[];
-  sessionsTab: "all" | "recent";
   contextExpanded: boolean;
   headerPinned: boolean;
 };
@@ -92,18 +87,9 @@ export type UsageDetailPresentation = {
   timeSeriesBreakdownMode: "total" | "by-type";
   timeSeriesCursorStart: number | null; // Start of selected range (null = no selection)
   timeSeriesCursorEnd: number | null; // End of selected range (null = no selection)
-  sessionLogsExpanded: boolean;
-  logFilters: {
-    roles: SessionLogRole[];
-    tools: string[];
-    hasTools: boolean;
-    query: string;
-  };
 };
 
 export type { SessionLogEntry } from "../../../../src/infra/session-cost-usage.types.js";
-
-export type SessionLogRole = SessionLogEntry["role"];
 
 export type UsagePresentation = {
   display: Pick<

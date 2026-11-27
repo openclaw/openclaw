@@ -9,6 +9,8 @@
  * For frozen transcript reuse: --messages 40 (or 150) --frozen [--hook]
  * adds 8-KiB tool arguments/results and the production transport transform. --hook
  * includes mutable input preparation required by the agent's payload callback.
+ * --provider-arguments builds tool blocks from noncanonical provider JSON; compare
+ * exact-byte replay costs separately (wire hashes intentionally change after the fix).
  * --conversion-only omits post-conversion image sanitation; default measures both.
  * --context-usage --messages 600 measures admission followed by the managed OpenAI
  * request builder, including the saved compaction/usage prefix. Verify identical
@@ -41,6 +43,7 @@ import {
 } from "../../packages/ai/src/transports/openai-responses-compaction-replay.js";
 import { recordResponsesContextUsage } from "../../packages/ai/src/transports/openai-responses-context-usage.js";
 import { cloneResponsesInputForPayloadHook } from "../../packages/ai/src/transports/openai-responses-replay-messages-internal.js";
+import { resolveCompletedResponsesToolCall } from "../../packages/ai/src/transports/openai-responses-stream-terminal-internal.js";
 import { sanitizeResponsesImagePayload } from "../../packages/ai/src/transports/responses-image-payload-sanitizer.js";
 import { createAssistantMessageEventStream } from "../../packages/ai/src/utils/event-stream.js";
 import type { Context, Model } from "../../packages/llm-core/src/types.js";
@@ -48,6 +51,7 @@ import { resolveProjectedRequestPressure } from "../../src/agents/embedded-agent
 import { transformTransportMessages } from "../../src/agents/transport-message-transform.js";
 import { createOpenAIResponsesContextManagementWrapper } from "../../src/llm/providers/stream-wrappers/openai.js";
 import { freezeJsonSnapshot, isDeeplyFrozenPlainData } from "../../src/shared/immutable-data.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 
 const iterations = Number(process.argv[process.argv.indexOf("--iterations") + 1]) || 2000;
@@ -56,6 +60,7 @@ const messageCount = Number(process.argv[process.argv.indexOf("--messages") + 1]
 const frozen = process.argv.includes("--frozen");
 const hook = process.argv.includes("--hook");
 const conversionOnly = process.argv.includes("--conversion-only");
+const providerArguments = process.argv.includes("--provider-arguments");
 const contextUsage = process.argv.includes("--context-usage");
 const histories = Number(process.argv[process.argv.indexOf("--histories") + 1]) || 1;
 assert(Number.isSafeInteger(histories) && histories > 0 && (!contextUsage || histories === 1));
@@ -221,6 +226,17 @@ for (let turn = 0; turn < Math.max(200, Math.ceil((messageCount ?? 0) / 2)); tur
     ],
   });
   const call = turn % 5 === 0;
+  const toolArguments = { query: messageCount ? `q${turn}`.padEnd(8192, "q") : `q${turn}` };
+  const completedCall =
+    providerArguments && call
+      ? resolveCompletedResponsesToolCall({
+          type: "function_call",
+          id: `fc_${turn}`,
+          call_id: `call_${turn}`,
+          name: "lookup",
+          arguments: JSON.stringify(toolArguments, null, 2),
+        })
+      : { name: "lookup", arguments: toolArguments };
   messages.push({
     role: "assistant",
     provider: model.provider,
@@ -253,8 +269,7 @@ for (let turn = 0; turn < Math.max(200, Math.ceil((messageCount ?? 0) / 2)); tur
             {
               type: "toolCall" as const,
               id: `call_${turn}|fc_${turn}`,
-              name: "lookup",
-              arguments: { query: messageCount ? `q${turn}`.padEnd(8192, "q") : `q${turn}` },
+              ...completedCall,
             },
           ]
         : []),
@@ -292,6 +307,7 @@ if (contextUsage) {
   }, undefined)(model, context, { ...initialOptions, ...identity });
   const assistant = messages.find((message) => message.role === "assistant");
   assert(assistant?.role === "assistant");
+  assert(assistant.usage.cost, "Synthetic live fixture has recorded cost");
   const checkpoint = { ...assistant, content: [] };
   captureOpenAIResponsesCompaction(
     checkpoint,
@@ -307,6 +323,7 @@ if (contextUsage) {
     content: [{ type: "text" as const, text: "Completed inspection" }],
     usage: {
       ...assistant.usage,
+      cost: assistant.usage.cost,
       contextUsage: { state: "available" as const, promptTokens: 100_000, totalTokens: 100_100 },
     },
   };
@@ -366,12 +383,7 @@ const observer = new PerformanceObserver((list) =>
 observer.observe({ entryTypes: ["gc"] });
 const inspector = new Session();
 if (allocation) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 8192,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 8192);
 }
 const hostLoadBefore = loadavg();
 const cpu = process.cpuUsage();
@@ -416,6 +428,7 @@ console.log(
     frozen,
     hook,
     conversionOnly,
+    providerArguments,
     contextUsage,
     conversionsPerRequest: conversions / iterations,
     plainDataChecksPerRequest: plainDataChecks / iterations,

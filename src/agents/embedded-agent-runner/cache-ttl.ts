@@ -2,12 +2,13 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { isAnthropicFamilyCacheTtlEligible } from "../../llm/providers/stream-wrappers/anthropic-family-cache-semantics.js";
 import { resolveProviderCacheTtlEligibility } from "../../plugins/provider-runtime.js";
 import type { ProviderCacheTtlEligibilityContext } from "../../plugins/provider-transport.types.js";
 import { isGooglePromptCacheEligible } from "./prompt-cache-retention.js";
 
-type CustomEntryLike = { type?: unknown; customType?: unknown; data?: unknown };
+type CustomEntryLike = { id?: unknown; type?: unknown; customType?: unknown; data?: unknown };
 
 const CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
 
@@ -57,31 +58,50 @@ export function isCacheTtlEligibleProvider(
   );
 }
 
+function matchesCacheTtlContext(
+  data: Partial<CacheTtlContext> | undefined,
+  context: CacheTtlContext | undefined,
+): boolean {
+  return (
+    !context ||
+    (["provider", "modelId"] as const).every((key) => {
+      const expected = normalizeOptionalLowercaseString(context[key]);
+      return !expected || normalizeOptionalLowercaseString(data?.[key]) === expected;
+    })
+  );
+}
+
+/**
+ * Last cache touch of this session on the route: the transcript marker, moved forward by the
+ * session's recorded prewarm (`SessionEntry.promptCacheKeepWarm`) when the reply it warmed is
+ * in this transcript and the route matches. No marker means no clock, as before.
+ */
 export function readLastCacheTtlTimestamp(
   sessionManager: unknown,
   context?: CacheTtlContext,
+  keepWarm?: SessionEntry["promptCacheKeepWarm"],
 ): number | null {
   try {
     const sm = sessionManager as { getEntries?: () => CustomEntryLike[] };
     const entries = sm?.getEntries ? sm.getEntries() : [];
+    const touchedAt =
+      keepWarm &&
+      matchesCacheTtlContext({ provider: keepWarm.provider, modelId: keepWarm.model }, context) &&
+      entries.some((entry) => entry?.id === keepWarm.anchorEntryId)
+        ? keepWarm.lastPingAt
+        : 0;
     for (let i = entries.length - 1; i >= 0; i--) {
       const entry = entries[i];
       if (entry?.type !== "custom" || entry?.customType !== CACHE_TTL_CUSTOM_TYPE) {
         continue;
       }
       const data = entry?.data as Partial<CacheTtlEntryData> | undefined;
-      if (
-        context &&
-        !(["provider", "modelId"] as const).every((key) => {
-          const expected = normalizeOptionalLowercaseString(context[key]);
-          return !expected || normalizeOptionalLowercaseString(data?.[key]) === expected;
-        })
-      ) {
+      if (!matchesCacheTtlContext(data, context)) {
         continue;
       }
       const ts = typeof data?.timestamp === "number" ? data.timestamp : null;
       if (ts && Number.isFinite(ts)) {
-        return ts;
+        return Math.max(ts, touchedAt);
       }
     }
     return null;

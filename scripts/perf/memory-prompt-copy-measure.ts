@@ -17,6 +17,7 @@ import { Session } from "node:inspector/promises";
 import { registerHooks, stripTypeScriptTypes } from "node:module";
 import { loadavg } from "node:os";
 import { parseArgs } from "node:util";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -89,12 +90,7 @@ let copies = 0;
 let copiedElements = 0;
 const originalSort = Array.prototype.toSorted;
 if (values.mode === "allocation") {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 4096,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 4096);
 }
 try {
   if (values.mode === "counts") {

@@ -8,6 +8,18 @@ export {
   unlinkCanonicalOpenClawIdUserProfile,
 } from "./user-profile-writes.js";
 
+/** Personal, unmerged profiles without an OCID identity; selection never grants access. */
+export async function readOpenClawIdInviteProfiles(
+  options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> = {},
+): Promise<Array<{ id: string; displayName: string | null }>> {
+  const reply = await executeExistingOpenClawStateRead(
+    options,
+    { type: "userProfiles.openClawId.inviteCandidates", input: {} },
+    { current: true },
+  );
+  return reply?.profiles ?? [];
+}
+
 /** Reads display metadata and canonical references only; callers retain all access decisions. */
 export async function readOpenClawIdUserProfiles(
   accountIds: readonly string[],

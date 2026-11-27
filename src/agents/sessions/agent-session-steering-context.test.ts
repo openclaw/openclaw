@@ -5,19 +5,27 @@ import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { readRuntimePromptMediaFacts } from "../../media/media-facts.js";
 import {
   annotateInterSessionPromptText,
   buildInterSessionPromptContext,
 } from "../../sessions/input-provenance.js";
-import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import {
+  createUserTurnTranscriptRecorder,
+  type UserTurnTranscriptRecorder,
+} from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   sanitizeSessionHistory,
   validateReplayTurns,
 } from "../embedded-agent-runner/replay-history.js";
-import { normalizeMessagesForLlmBoundary } from "../embedded-agent-runner/run/attempt-llm-boundary.js";
+import {
+  installModelPromptProjection,
+  normalizeMessagesForLlmBoundary,
+} from "../embedded-agent-runner/run/attempt-llm-boundary.js";
 import { installAttemptPermissionPrompt } from "../embedded-agent-runner/run/attempt-permission-prompt.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "../embedded-agent-runner/run/attempt-queue-message.js";
 import { createUserTranscriptContextRegistry } from "../embedded-agent-runner/run/attempt-user-transcript-context-registry.js";
@@ -42,6 +50,7 @@ import {
 } from "./agent-session-loop-correctness.test-support.js";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
 import { agentSessionQueuePromptContext } from "./agent-session-prompting.js";
+import { SessionManager } from "./session-manager.js";
 
 registerAgentSessionLoopTestLifecycle();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -63,14 +72,19 @@ function installBoundary(session: Session, options: () => BoundaryOptions) {
 
 function installTranscriptBoundary(session: Session, options: BoundaryOptions) {
   const registry = createUserTranscriptContextRegistry();
+  let recorder: UserTurnTranscriptRecorder | undefined;
   guardSessionManager(session.sessionManager, {
+    onUserMessagePreparingForPersistence: (_runtime, current) => {
+      recorder = current;
+    },
     onUserMessagePersisted: (persisted, runtime) => {
       if (runtime) {
-        registry.record(runtime, persisted);
+        registry.record(runtime, persisted, recorder);
       }
     },
   });
   installBoundary(session, () => ({ ...options, userTranscriptContexts: registry.list() }));
+  return registry;
 }
 
 function installPermissionPrompt(session: Session, api: Model["api"] = "anthropic-messages") {
@@ -458,6 +472,62 @@ it.each(["sessions_send", "subagent_settle"] as const)(
     expect(JSON.stringify(before)).toContain(`sourceTool=${sourceTool}`);
   },
 );
+
+it("replays a steered document attachment with the bytes the model first saw", async () => {
+  await withOpenClawTestState({ label: "steered-document-projection" }, async (state) => {
+    const target = {
+      agentId: "main",
+      sessionId: "steered-document",
+      sessionKey: "agent:main:steered-document",
+      storePath: join(state.agentDir("main"), "openclaw-agent.sqlite"),
+    };
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    // The model gets expanded attachment context; the display row keeps the user's own text.
+    const shown = "Summarize the attached notes.";
+    const steered = `[media attached: notes.txt (text/plain)]\n\n${shown}\n\n<file name="notes.txt">steered document body</file>`;
+    const held = holdInitialRequest("Summary sent");
+    const { session } = await createTestSession({
+      sessionManager: await SessionManager.openAsync(target, state.workspaceDir),
+    });
+    const boundaryOptions = { appendOnlyRuntimeContext: true, sessionVersion: 4, timezone: "UTC" };
+    const contexts = installTranscriptBoundary(session, boundaryOptions);
+    installModelPromptProjection({
+      session,
+      transcriptPrompt: "",
+      shouldCapturePrompt: () => true,
+      getUserTranscriptContexts: () => contexts.list(),
+    });
+    await withHeldPrompt(session, held, async (queue) => {
+      await queue(steered, {
+        waitForTranscriptCommit: true,
+        userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
+          input: {
+            text: shown,
+            idempotencyKey: "steer-document:user",
+            timestamp: 1_700_000_000_000,
+          },
+          target: { ...target, sessionEntry: { sessionId: target.sessionId, updatedAt: 1 } },
+        }),
+      });
+    });
+    expect(session.getLastAssistantText()).toBe("Summary sent");
+    expect(held.requests).toHaveLength(2);
+    const first = held.requests[1]!;
+    session.dispose();
+
+    const replayRequests = captureResponses();
+    const { session: reopened } = await createTestSession({
+      sessionManager: await SessionManager.openAsync(target, state.workspaceDir),
+    });
+    installBoundary(reopened, () => boundaryOptions);
+    await reopened.prompt("Continue.");
+    expect(replayRequests).toHaveLength(1);
+    const firstMessages = JSON.stringify(first.messages);
+    expect(firstMessages).toContain("steered document body");
+    const replayed = JSON.stringify(replayRequests[0]!.messages);
+    expect(replayed.slice(0, firstMessages.length - 1)).toBe(firstMessages.slice(0, -1));
+  });
+});
 
 it.each(
   [3, 4].flatMap((sessionVersion) =>

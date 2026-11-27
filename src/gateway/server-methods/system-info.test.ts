@@ -19,6 +19,12 @@ const mocks = vi.hoisted(() => ({
   resolveAdvertisedLanHostCore: vi.fn(async () => "192.168.1.20"),
   runCommandWithTimeout: vi.fn(),
   statfs: vi.fn(),
+  hostFreeMemoryBytes: vi.fn(() => 4096),
+}));
+
+vi.mock("../../infra/host-memory.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/host-memory.js")>()),
+  readHostFreeMemoryBytes: mocks.hostFreeMemoryBytes,
 }));
 
 vi.mock("../../process/exec.js", async (importOriginal) => ({
@@ -116,7 +122,7 @@ describe("system.info", () => {
       },
     };
     const getEventLoopHealth = vi.fn(() => ({ ...eventLoop }));
-    vi.spyOn(process, "availableMemory").mockReturnValue(4096);
+    mocks.hostFreeMemoryBytes.mockReturnValue(4096);
 
     const request = () =>
       requestSystemInfo(respond, {
@@ -246,8 +252,7 @@ describe("system.info", () => {
       vi.stubEnv("OPENCLAW_STATE_DIR", "/system-info-first");
       vi.spyOn(process, "uptime").mockReturnValue(123);
       vi.spyOn(process, "memoryUsage").mockReturnValue(process.memoryUsage());
-      const freemem = vi.spyOn(os, "freemem").mockReturnValue(1024);
-      const availableMemory = vi.spyOn(process, "availableMemory").mockReturnValue(1024);
+      mocks.hostFreeMemoryBytes.mockReturnValue(1024);
       const loadavg = vi.spyOn(os, "loadavg").mockReturnValue([1, 2, 3]);
       const readDisk = vi
         .spyOn(diskSpace, "tryReadDiskSpace")
@@ -260,8 +265,7 @@ describe("system.info", () => {
       const request = () => requestSystemInfo(respond);
       await request();
       const initial = respond.mock.calls[0]?.[1];
-      freemem.mockReturnValue(512);
-      availableMemory.mockReturnValue(512);
+      mocks.hostFreeMemoryBytes.mockReturnValue(512);
       loadavg.mockReturnValue([4, 5, 6]);
       readDisk.mockImplementation((targetPath) => ({
         targetPath,
@@ -292,24 +296,6 @@ describe("system.info", () => {
       expect(respond.mock.calls[3]?.[1]).toMatchObject({ diskPath: "/system-info-second" });
     },
   );
-
-  it.each(["linux"] as const)("keeps host-wide memory readings on %s", async (platform) => {
-    vi.spyOn(process, "platform", "get").mockReturnValue(platform);
-    vi.spyOn(os, "platform").mockReturnValue(platform);
-    vi.spyOn(os, "freemem").mockReturnValue(8192);
-    const availableMemory = vi.spyOn(process, "availableMemory").mockReturnValue(4096);
-
-    const respond = vi.fn();
-    await requestSystemInfo(respond);
-
-    const [ok, payload] = respond.mock.calls[0] ?? [];
-    expect(ok).toBe(true);
-    if (!validateSystemInfoResult(payload)) {
-      throw new Error("system.info returned an invalid payload");
-    }
-    expect(payload.memoryFreeBytes).toBe(8192);
-    expect(availableMemory).not.toHaveBeenCalled();
-  });
 
   it.each(["throw", "empty"])(
     "preserves the state-directory snapshot only when discovery is unavailable (%s)",

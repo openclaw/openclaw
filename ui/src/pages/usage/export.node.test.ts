@@ -51,7 +51,6 @@ function createExportScenario(
     scope: "instance" as const,
     timeZone: "utc" as "utc" | "local",
     selectedDays: [] as string[],
-    selectedHours: [] as number[],
     selectedSessions: [selected.key],
     query: "",
   };
@@ -179,7 +178,6 @@ it("records the effective request even when the selection changes while exportin
   query.timeZone = "local";
   query.startDate = "2026-09-28";
   query.selectedDays.push(date);
-  query.selectedHours.push(8);
   let resolveRequest!: (value: SessionsUsageResult) => void;
   request.mockImplementationOnce(
     () =>
@@ -191,7 +189,6 @@ it("records the effective request even when the selection changes while exportin
   const running = exporter.run("json");
   query.selectedSessions.splice(0, 1, excluded.key);
   query.selectedDays.push("2026-10-02");
-  query.selectedHours.push(9);
   query.startDate = date;
   resolveRequest(result);
   await running;
@@ -203,7 +200,6 @@ it("records the effective request even when the selection changes while exportin
     endDate: date,
     groupBy: "instance",
     selectedDays: [date],
-    selectedHours: [8],
     selectedSessions: [selected.key],
     mode: exported.context.timeZone.mode,
     timeZone: exported.context.timeZone.timeZone,
@@ -225,7 +221,6 @@ it("records the effective request even when the selection changes while exportin
     creatorKey: null,
     query: null,
     selectedDays: [date],
-    selectedHours: [8],
     selectedSessions: [selected.key],
   });
   expect(new Date(exported.context.generatedAt).toISOString()).toBe(exported.context.generatedAt);

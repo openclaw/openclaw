@@ -49,6 +49,7 @@ async function removalHarness(apiKey: unknown = "__OPENCLAW_REDACTED__", withAcc
             provider: "openai",
             authProvider: "openai",
             apiKey: { source: "config" },
+            oauthAccountActions: { disconnect: { label: "Disconnect OpenAI Account" } },
             profiles:
               withAccount && !removedAccount
                 ? [
@@ -110,6 +111,30 @@ async function removalHarness(apiKey: unknown = "__OPENCLAW_REDACTED__", withAcc
   };
 }
 
+it("reloads a conflicting config without replaying the confirmed deletion", async () => {
+  const h = await removalHarness();
+  const original = h.request.getMockImplementation()!;
+  let changed = false;
+  h.request.mockImplementation(async (method) => {
+    if (method === "config.patch") {
+      changed = true;
+      throw new Error("config changed since last load; re-run config.get and retry");
+    }
+    if (method === "config.get" && changed) {
+      return { config: { models: { providers: { replacement: {} } } }, valid: true, hash: "newer" };
+    }
+    return original(method);
+  });
+  const selector = 'button[aria-label="Remove provider: OpenAI"]';
+  h.row.querySelector<HTMLButtonElement>(selector)!.click();
+  const { modal } = await getRenderedModalDialog(document.body);
+  modal.querySelector<HTMLButtonElement>("button.danger")!.click();
+  await waitForSolid(() => expect(h.runtimeConfig.state.configSnapshot?.hash).toBe("newer"));
+  await waitForSolid(() => expect(h.page.querySelector(selector)).toBeNull());
+  expect(requestCount(h.request, "config.patch")).toBe(1);
+  expect(requestCount(h.request, "models.authLogout")).toBe(0);
+});
+
 it.each(["agent", "reconnect", "access"] as const)(
   "does not send another removal after %s changes during the first command",
   async (change) => {
@@ -141,6 +166,34 @@ it.each(["agent", "reconnect", "access"] as const)(
     expect(h.toast.toasts[0]?.options.message ?? "").not.toContain("Signed out");
   },
 );
+
+it("retries a refused disconnect only for the agent that asked for it", async () => {
+  const h = await removalHarness();
+  h.logout.mockRejectedValueOnce(new Error("OpenAI could not revoke access."));
+  h.row
+    .querySelector<HTMLButtonElement>(
+      '[aria-label="Disconnect OpenAI Account: work@example.invalid"]',
+    )!
+    .click();
+  const { modal } = await getRenderedModalDialog(document.body);
+  modal.querySelector<HTMLButtonElement>("button.danger")!.click();
+  await waitForSolid(() =>
+    expect(h.toast.toasts[0]?.options.message).toBe("Couldn’t disconnect work@example.invalid"),
+  );
+  expect(h.request).toHaveBeenCalledWith("models.authLogout", {
+    provider: "openai",
+    profileIds: ["openai:work"],
+    revoke: true,
+    agentId: "writer",
+  });
+  h.settingsAgentSelection.state.selectedId = "main";
+  h.settingsAgentSelection.state.scopeId = "main";
+  h.notifySelection();
+  await h.page.updateComplete;
+  h.toast.toasts[0]!.options.onAction!();
+  await h.page.updateComplete;
+  expect(requestCount(h.request, "models.authLogout")).toBe(1);
+});
 
 it.each([true, false])(
   "explains the removal scope and completes every authorized step (saved account: %s)",

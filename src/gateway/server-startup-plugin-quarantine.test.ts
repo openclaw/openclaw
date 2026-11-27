@@ -4,7 +4,7 @@ import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
-import { create as createTar } from "tar";
+import { create as createTar } from "tar/raw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { refreshStartupPluginQuarantine } from "../commands/doctor-config-preflight-plugin-verification.js";

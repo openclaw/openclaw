@@ -2,8 +2,8 @@ import AppKit
 import OpenClawChatUI
 
 @MainActor
-enum QuickChatModelMenuPresenter {
-    static func present(model: QuickChatModel, panel: NSPanel, contentView: NSView) {
+enum QuickChatModelMenu {
+    static func make(model: QuickChatModel) -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
         let selectedModelSelectionID = model.displayedModelSelectionID
@@ -48,8 +48,6 @@ enum QuickChatModelMenuPresenter {
             menu.addItem(providerItem)
         }
 
-        let windowPoint = panel.convertPoint(fromScreen: NSEvent.mouseLocation)
-        let contentPoint = contentView.convert(windowPoint, from: nil)
-        _ = menu.popUp(positioning: nil, at: contentPoint, in: contentView)
+        return menu
     }
 }

@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
+import { coerceErrorMessage, extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "../app-server/config.js";
 import { isDirectory, readJsonObject } from "./helpers.js";
@@ -55,6 +55,7 @@ export type CodexMemorySource = {
   id: string;
   label: string;
   path: string;
+  probeError?: string;
 };
 
 async function discoverSourceDirs<T>(
@@ -124,21 +125,22 @@ export async function discoverPluginDirs(codexHome: string): Promise<CodexPlugin
 async function discoverCodexMemoryFile(
   candidate: CodexMemorySource,
 ): Promise<CodexMemorySource | undefined> {
+  let stat: Awaited<ReturnType<typeof fs.lstat>>;
   try {
-    const stat = await fs.lstat(candidate.path);
-    if (stat.isSymbolicLink()) {
-      throw new Error(`Codex memory source must not be a symbolic link: ${candidate.path}`);
-    }
-    if (!stat.isFile()) {
-      throw new Error(`Codex memory source must be a regular file: ${candidate.path}`);
-    }
-    return candidate;
+    stat = await fs.lstat(candidate.path);
   } catch (error) {
     if (extractErrorCode(error) === "ENOENT") {
       return undefined;
     }
-    throw error;
+    return { ...candidate, probeError: coerceErrorMessage(error) };
   }
+  if (stat.isSymbolicLink()) {
+    throw new Error(`Codex memory source must not be a symbolic link: ${candidate.path}`);
+  }
+  if (!stat.isFile()) {
+    throw new Error(`Codex memory source must be a regular file: ${candidate.path}`);
+  }
+  return candidate;
 }
 
 export async function discoverCodexMemorySources(codexHome: string): Promise<CodexMemorySource[]> {

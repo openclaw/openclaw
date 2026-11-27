@@ -35,6 +35,7 @@ import {
 } from "../../src/plugins/candidate-install-owner.js";
 import { PluginDashboardDeclarationError } from "../../src/plugins/dashboard-capabilities.js";
 import { shouldRejectHardlinkedPluginFiles } from "../../src/plugins/hardlink-policy.js";
+import { isMemoryBackendRequested } from "../../src/plugins/memory-backend.js";
 import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "../../src/plugins/package-entrypoints.js";
 import {
   isPathInside,
@@ -42,11 +43,12 @@ import {
   safeRealpathSync,
 } from "../../src/plugins/path-safety.js";
 import { createPluginCacheSdk, getPluginSdkHostFacts } from "../../src/plugins/plugin-cache-sdk.js";
+import { cleanupTempDirs } from "../helpers/temp-dir.js";
 
 const temporaryRoots: string[] = [];
 afterEach(() => {
   vi.unstubAllGlobals();
-  temporaryRoots.splice(0).forEach((root) => fs.rmSync(root, { recursive: true, force: true }));
+  cleanupTempDirs(temporaryRoots);
 });
 
 const parse = createStandaloneSourceParser();
@@ -980,6 +982,7 @@ describe("standalone image metadata", () => {
     Object.assign(context, {
       performance,
       PluginDashboardDeclarationError,
+      isMemoryBackendRequested,
       resolveImmutableInstallIdentity,
       resolvePluginCandidateInstallOwner,
       openRootFileSync: open,

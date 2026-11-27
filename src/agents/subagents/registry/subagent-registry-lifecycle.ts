@@ -18,11 +18,6 @@ import {
   type PreparedRequesterCronAuthority,
 } from "../requester-cron-authority.js";
 import {
-  ensureCompletionState,
-  ensureDeliveryState,
-  getDeliveryLastError,
-} from "./subagent-delivery-state.js";
-import {
   resumeAncestorCleanup,
   startSubagentAnnounceCleanupFlow,
 } from "./subagent-registry-lifecycle-announce-cleanup.js";
@@ -38,7 +33,6 @@ import type {
 import { refreshFrozenResultFromSession } from "./subagent-registry-lifecycle-delivery.js";
 import {
   finalizeResumedAnnounceGiveUp,
-  finalizeResumedAnnounceGiveUpInBackground,
   resumeSubagentAfterDrain,
 } from "./subagent-registry-lifecycle-finalize-cleanup.js";
 import {
@@ -65,6 +59,7 @@ import type {
   SubagentRunRecord,
   SubagentSessionEffects,
 } from "./subagent-registry.types.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import {
   compareSubagentRunGeneration,
   getSubagentRunRuntimeKey,
@@ -86,7 +81,7 @@ const COMPLETION_SETTLING_ERROR = "Subagent completion is still settling; retry 
 /** Terminal rows still carrying session effects must revoke them before a reset. */
 const ownsSessionEffects = (entry: SubagentRunRecord): boolean =>
   entry.execution.status === "terminal" &&
-  entry.pauseReason !== "sessions_yield" &&
+  !isSubagentPausedByYield(entry) &&
   entry.execution.suppressSessionEffects !== true;
 
 export class SubagentLifecycleController {
@@ -342,7 +337,7 @@ export class SubagentLifecycleController {
     const current = getCurrentSubagentRunOwner(this.options.runs, entry);
     return (
       current !== undefined &&
-      current.pauseReason !== "sessions_yield" &&
+      !isSubagentPausedByYield(current) &&
       this.isCleanupGeneration(entry, generation)
     );
   };
@@ -362,7 +357,7 @@ export class SubagentLifecycleController {
     const current = this.liveRow(entry);
     return (
       (current === undefined || isSameSubagentRunOwner(current, entry)) &&
-      (current ?? entry).pauseReason !== "sessions_yield"
+      !isSubagentPausedByYield(current ?? entry)
     );
   };
   isEndedHookOwnerCurrent = (entry: SubagentRunRecord): boolean =>
@@ -374,7 +369,7 @@ export class SubagentLifecycleController {
     return (
       current !== undefined &&
       current.execution.status === "terminal" &&
-      current.pauseReason !== "sessions_yield" &&
+      !isSubagentPausedByYield(current) &&
       !current.killIntent &&
       current.endedReason === entry.endedReason &&
       current.execution.outcome?.status === entry.execution.outcome?.status &&
@@ -464,43 +459,8 @@ export class SubagentLifecycleController {
   resumeAncestorCleanup = (settledEntry: SubagentRunRecord): void =>
     resumeAncestorCleanup(this, settledEntry);
 
-  static discardTerminalDelivery(this: void, entry: SubagentRunRecord, completedAt: number): void {
-    const delivery = ensureDeliveryState(entry);
-    const payload = delivery.payload;
-    delivery.discardedAt = completedAt;
-    delivery.discardReason = "expired";
-    delivery.discardedPayloadSummary = {
-      requesterSessionKey: payload?.requesterSessionKey ?? entry.requesterSessionKey,
-      childSessionKey: payload?.childSessionKey ?? entry.childSessionKey,
-      childRunId: payload?.childRunId ?? entry.runId,
-      endedAt: payload?.endedAt ?? entry.execution.endedAt,
-      status: payload?.outcome?.status ?? entry.execution.outcome?.status,
-      lastError: getDeliveryLastError(entry) ?? null,
-    };
-    Object.assign(delivery, {
-      status: "discarded",
-      queueId: undefined,
-      payload: undefined,
-      createdAt: undefined,
-      lastError: undefined,
-      announcedAt: undefined,
-      suspendedAt: undefined,
-      suspendedReason: undefined,
-    });
-    Object.assign(entry, { wakeOnDescendantSettle: undefined, cleanupHandled: true });
-    const completion = ensureCompletionState(entry);
-    Object.assign(completion, { fallbackResultText: undefined, fallbackCapturedAt: undefined });
-    entry.cleanupCompletedAt = completedAt;
-  }
-
   finalizeResumedAnnounceGiveUp = (params: Parameters<typeof finalizeResumedAnnounceGiveUp>[1]) =>
     finalizeResumedAnnounceGiveUp(this, params);
-
-  finalizeResumedAnnounceGiveUpInBackground = (
-    runId: string,
-    entry: SubagentRunRecord,
-    reason: "expiry" | "permanent_failure",
-  ) => finalizeResumedAnnounceGiveUpInBackground(this, runId, entry, reason);
 
   resumeAfterDrain = (
     runId: string,

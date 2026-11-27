@@ -267,7 +267,7 @@ export const contract = defineFeatureContract({
     annotate: {
       kind: "action",
       description:
-        "Revision-fenced, evidence-backed metadata annotation without changing assertion text or lifecycle. Set source-page association, identity uncertainty/candidates, speaker-attribution confidence, continuity links, or explicit fixture classification; replace a claim's linked entity pages (entities); append retained evidence to an unchanged assertion. Omitted fields are preserved; supplied arrays replace. Only fixture classification may change historical records. Similarity is not supersession, candidate identity is not a merge, and source grouping is not an ingestion batch. Inspect the target and evidence first; a reason and exact revision/hash are required.",
+        "Revision-fenced, evidence-backed metadata annotation without changing assertion text or lifecycle. Set source-page association, identity uncertainty/candidates, speaker-attribution confidence, continuity links, or explicit fixture classification; replace a claim's linked entity pages (entities); append retained evidence to an unchanged assertion. entities and addEvidence are top-level siblings beside annotations, not inside it; omit annotations for entity-only or evidence-only changes. Omitted fields are preserved; supplied arrays replace. Only fixture classification may change historical records. Similarity is not supersession, candidate identity is not a merge, and source grouping is not an ingestion batch. Inspect the target and evidence first; a reason and exact revision/hash are required.",
       input: AnnotateInput,
       output: receipt,
       tool: { name: "knowledge_annotate", label: "Annotate knowledge context" },
@@ -340,7 +340,7 @@ export const contract = defineFeatureContract({
     remember: {
       kind: "action",
       description:
-        "Cheapest durable save: 1–20 claims (decision, preference, commitment, fact, event, belief) in one call, no search or readback needed. Give short attribution and the supporting conversation excerpt; it is retained as their evidence. Optional subject (exact page ID, title or alias) links each claim to a uniquely matching page; otherwise it is saved unlinked and reported. Never creates pages. Exact repeats return duplicate with the saved claim. One claim per item; never agent inference. Commitments are not scheduled. Use knowledge-capture to revise page prose.",
+        "Cheapest durable save: 1–20 claims (decision, preference, commitment, fact, event, belief) in one call, no search or readback needed. Give short attribution and the supporting conversation excerpt; it is retained as their evidence. Optional subject (exact page ID, title or alias) links each claim to a uniquely matching page; otherwise it is saved unlinked and reported. Never creates pages. Exact repeats return duplicate with the saved claim. One claim per item; never agent inference. Save outcomes, not progress toward them, and prefer the user's words over your observations. Commitments are not scheduled. Use knowledge-capture to revise page prose.",
       input: RememberInput,
       output: Type.Union([LeanRememberOutput, RememberOutput]),
       tool: { name: "knowledge_remember", label: "Remember knowledge" },

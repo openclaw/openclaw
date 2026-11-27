@@ -128,6 +128,7 @@ public actor GatewayNodeSession {
         let continuation: AsyncStream<EventFrame>.Continuation
         /// Filters before buffering so unrelated traffic cannot evict awaited events.
         let matches: @Sendable (EventFrame) -> Bool
+        var droppedCount = 0
     }
 
     private var serverEventSubscribers: [UUID: ServerEventSubscriber] = [:]
@@ -1214,8 +1215,10 @@ extension GatewayNodeSession {
     }
 
     // periphery:ignore - package tests verify event stream filtering without a live gateway.
-    func _test_broadcastServerEvent(_ event: EventFrame) {
+    @discardableResult
+    func _test_broadcastServerEvent(_ event: EventFrame) -> [Int] {
         self.broadcastServerEvent(event)
+        return self.serverEventSubscribers.values.map(\.droppedCount).sorted()
     }
 
     #endif
@@ -1538,13 +1541,30 @@ extension GatewayNodeSession {
 
     private func broadcastServerEvent(_ evt: EventFrame) {
         for (id, subscriber) in self.serverEventSubscribers where subscriber.matches(evt) {
-            if case .terminated = subscriber.continuation.yield(evt) {
-                self.serverEventSubscribers.removeValue(forKey: id)
+            switch subscriber.continuation.yield(evt) {
+            case .dropped:
+                // Only overflow mutates diagnostics; ordinary delivery does no logging work.
+                if subscriber.droppedCount < Int.max {
+                    self.serverEventSubscribers[id]?.droppedCount += 1
+                }
+                if subscriber.droppedCount == 0 {
+                    self.logger.warning(
+                        "server event subscriber buffer overflow; further drops counted until termination")
+                }
+            case .terminated:
+                self.removeServerEventSubscriber(id)
+            case .enqueued:
+                break
+            @unknown default:
+                break
             }
         }
     }
 
     private func removeServerEventSubscriber(_ id: UUID) {
-        self.serverEventSubscribers.removeValue(forKey: id)
+        guard let subscriber = self.serverEventSubscribers.removeValue(forKey: id),
+              subscriber.droppedCount > 0 else { return }
+        // At most two content-free records per subscriber: first drop and lifetime total.
+        self.logger.warning("server event subscriber ended; dropped=\(subscriber.droppedCount, privacy: .public)")
     }
 }

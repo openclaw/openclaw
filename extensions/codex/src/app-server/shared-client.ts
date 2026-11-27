@@ -4,6 +4,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-registration";
 import type { AgentHarnessRuntimeArtifactBinding } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import type { AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 import { codexBuildSymbol } from "../build-state.js";
 import { observeCodexCatalogClient } from "../session-catalog-events.js";
@@ -15,7 +16,6 @@ import {
 } from "./attempt-timeouts.js";
 import {
   applyCodexAppServerAuthProfile,
-  bridgeCodexAppServerStartOptions,
   resolveCodexAppServerPreparedAuthProfileSnapshot,
 } from "./auth-bridge.js";
 import {
@@ -95,12 +95,6 @@ export {
   retireSharedCodexAppServerClientIfCurrent,
   retainSharedCodexAppServerClientByInstanceId,
 } from "./shared-client-lifecycle.js";
-// Keep disposal preloaded and build-scoped: shutdown must close the old clients
-// even if another module copy has loaded replacement code.
-const SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER = codexBuildSymbol(
-  "openclaw.codexAppServerClientDisposer",
-);
-
 type CodexAppServerClientStartupOptions = Omit<
   Awaited<ReturnType<typeof resolveCodexAppServerClientStartContext>>,
   "usesNativeAuth" | "authProfileId"
@@ -324,7 +318,7 @@ async function resolveCodexAppServerClientStartContext(
   });
   // Preserve ordinary profile environment policy; only explicitly prepared
   // handoffs clear all inherited auth variables before spawning.
-  const startOptions = await bridgeCodexAppServerStartOptions({
+  const startOptions = await codexStartup.prepareClientStartOptions({
     startOptions: managedStartOptions,
     agentId: options?.agentId,
     agentDir,
@@ -1072,10 +1066,12 @@ export async function clearSharedCodexAppServerClientAndWait(
   }
 }
 
-(
-  globalThis as typeof globalThis & {
-    [SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER]?: () => Promise<void>;
-  }
-)[SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER] = clearSharedCodexAppServerClientAndWait;
+// Keep the harness retirement callback build-scoped, and let Gateway shutdown
+// drain clients even when no Codex harness was registered.
+resolveGlobalSingleton(
+  codexBuildSymbol("openclaw.codexAppServerClientDisposer"),
+  () => clearSharedCodexAppServerClientAndWait,
+  (dispose) => dispose(),
+);
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

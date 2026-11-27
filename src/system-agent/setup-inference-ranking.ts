@@ -24,12 +24,14 @@ function candidateRank(candidate: SetupInferenceCandidate): number | undefined {
   }
   if (candidate.kind.startsWith("provider-auto:")) {
     switch (candidate.modelRef.split("/", 1)[0]) {
-      case "ollama":
+      case "llama-app":
         return 6;
-      case "lmstudio":
+      case "ollama":
         return 7;
-      case "llama-cpp":
+      case "lmstudio":
         return 8;
+      case "llama-cpp":
+        return 9;
       default:
         return undefined;
     }

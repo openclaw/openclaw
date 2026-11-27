@@ -30,6 +30,7 @@ import type {
   HeaderSessionOperation,
 } from "./chat-pane-session-menu-contract.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
+import { showMoveToProjectDialog } from "./components/move-to-project-dialog.tsx";
 
 export async function openHeaderSessionGroup(
   owner: Pick<ReturnType<ChatHeaderSessionActionSource["readOwner"]>, "context" | "state">,
@@ -53,6 +54,27 @@ export async function openHeaderSessionGroup(
           : (owner.state?.chatError ?? t("sessionsView.newGroupFailed"));
     },
   });
+}
+
+async function moveHeaderSessionToProject(
+  owner: ReturnType<ChatHeaderSessionActionSource["readOwner"]>,
+  row: GatewaySessionRow,
+): Promise<void> {
+  const client = owner.context.gateway.snapshot.client;
+  if (!client) {
+    return;
+  }
+  const outcomeOwner = owner.headerOutcomeOwner;
+  try {
+    await showMoveToProjectDialog({
+      client,
+      key: row.key,
+      ...(row.agentId ? { agentId: row.agentId } : {}),
+      signal: owner.headerSessionDraftAbortController.signal,
+    });
+  } catch (error) {
+    owner.publishHeaderError(error, outcomeOwner);
+  }
 }
 
 export async function revealHeaderWorkspace(
@@ -221,6 +243,9 @@ export async function runChatHeaderSessionAction(
   if (action.kind === "continue-in-terminal") {
     owner.openContinueInTerminalDialog(row);
     return;
+  }
+  if (action.kind === "move-to-project") {
+    return moveHeaderSessionToProject(owner, row);
   }
   if (action.kind === "toggle-pin") {
     const current = owner.state ? selectedChatSessionRow(owner.state) : undefined;

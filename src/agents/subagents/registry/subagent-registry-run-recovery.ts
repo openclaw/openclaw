@@ -18,6 +18,7 @@ import {
   matchesSubagentChildSessionOwner,
   resolveSubagentChildAuthority,
 } from "./subagent-child-owner-match.js";
+import { assertRequiredCompletionCustody } from "./subagent-completion-batch-authority.js";
 import { retireSubagentControllerInputs } from "./subagent-controller-inputs.js";
 import {
   clearDeliveryState,
@@ -44,6 +45,7 @@ import type {
   SubagentSessionEffects,
 } from "./subagent-registry.types.js";
 import { hasRequesterCompletionCohort } from "./subagent-requester-settle-identity.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import {
   compareSubagentRunGeneration,
   getSubagentRunRuntimeKey,
@@ -216,11 +218,18 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     const paused = getLatestSubagentRunByChildSessionKeyFromRuns(
       this.options.getRunsForChildSession(childSessionKey, childAgentId),
       childSessionKey,
-      (entry) => entry.pauseReason === "sessions_yield",
+      (entry) => isSubagentPausedByYield(entry),
       childAgentId,
     );
     if (!paused || (params.expected && !isSameSubagentRunOwner(paused, params.expected))) {
       return false;
+    }
+    let refreshCompletionAuthority: true | undefined;
+    try {
+      // A surviving requester owns the whole cohort, including this successor.
+      subagentRuns.runWithCompletionAuthority(paused, () => undefined);
+    } catch {
+      refreshCompletionAuthority = true;
     }
     return this.replaceSubagentRunAfterSteer({
       assertCurrent: params.assertCurrent,
@@ -233,7 +242,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
       // A paused row is terminal by construction; adoption is exactly the case the
       // ended-source gate exists to keep out of unrelated replacement callers.
       allowEndedSource: true,
-      refreshCompletionAuthority: true,
+      refreshCompletionAuthority,
       // The original requester is idle behind its own yield, so its wake credential
       // is the only path back to it once this follow-up settles.
       preserveRequesterSettleWake: true,
@@ -262,7 +271,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     const paused = getLatestSubagentRunByChildSessionKeyFromRuns(
       runs,
       childSessionKey,
-      (entry) => entry.pauseReason === "sessions_yield",
+      (entry) => isSubagentPausedByYield(entry),
       childAgentId,
     );
     if (!paused) {
@@ -358,7 +367,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     const refreshCompletionAuthority =
       preserveCompletedRun || replaceParams.refreshCompletionAuthority === true;
     const authority = refreshCompletionAuthority
-      ? await captureOperatorToolGatewayContinuationContext()
+      ? await captureOperatorToolGatewayContinuationContext(undefined, { retainRequester: true })
       : undefined;
     let custodyTransferred = false;
     const runIds = new Set([
@@ -373,6 +382,9 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     let replacement: { source: SubagentRunRecord; next: SubagentRunRecord } | undefined;
     let publishedNext: SubagentRunRecord | undefined;
     try {
+      if (refreshCompletionAuthority) {
+        assertRequiredCompletionCustody(selected, authority);
+      }
       replacement = await mutateSubagentRuns(
         [...runIds],
         (rows) => {
@@ -382,7 +394,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
             !isSameSubagentRunOwner(source, selected) ||
             (preserveCompletedRun &&
               (source.execution.status !== "terminal" ||
-                source.pauseReason === "sessions_yield" ||
+                isSubagentPausedByYield(source) ||
                 previousRunId === nextRunId)) ||
             (replaceParams.expected && !isSameSubagentRunOwner(source, replaceParams.expected)) ||
             (replaceParams.expected &&
@@ -396,7 +408,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
           const absorbed = replaceParams.successor ? rows.get(nextRunId) : undefined;
           if (replaceParams.successor) {
             if (
-              source.pauseReason !== "sessions_yield" ||
+              !isSubagentPausedByYield(source) ||
               !absorbed ||
               !isSameSubagentRunOwner(absorbed, replaceParams.successor) ||
               compareSubagentRunGeneration(absorbed, source) <= 0 ||
@@ -480,9 +492,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
             taskRunId: preserveCompletedRun ? nextRunId : (source.taskRunId ?? source.runId),
             requesterTurnRunId: preserveCompletedRun ? undefined : source.requesterTurnRunId,
             requesterTurnYielded: preserveCompletedRun ? undefined : source.requesterTurnYielded,
-            retireAfterRequesterTurn: preserveCompletedRun
-              ? undefined
-              : source.retireAfterRequesterTurn,
+            retireAfterSettle: preserveCompletedRun ? undefined : source.retireAfterSettle,
             task: nextTask,
             generation,
             createdAt: now,
@@ -560,7 +570,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
           } else if (previousRunId !== nextRunId) {
             postimages.set(previousRunId, null);
           }
-          return { value: { source, next }, postimages };
+          return { value: { source, next }, postimages, removalReason: "superseded" };
         },
         {
           runs: this.options.runs,

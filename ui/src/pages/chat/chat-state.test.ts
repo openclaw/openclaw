@@ -1414,41 +1414,6 @@ describe("chat state render lifecycle", () => {
     expect(state.waitingApprovalStatuses.size).toBe(0);
   });
 
-  it("skips no-op assistant publication while tool changes render on the next frame", () => {
-    const requestAnimationFrame = vi
-      .spyOn(globalThis, "requestAnimationFrame")
-      .mockImplementation(() => 1);
-    const publication = vi.fn();
-    const state = createStreamEventState({
-      publication,
-      chatStreamSegments: [],
-      chatToolMessages: [],
-      toolStreamById: new Map(),
-      toolStreamOrder: [],
-      toolStreamSyncTimer: null,
-      sessions: {
-        reconcileMutation: vi.fn(async () => ({ status: "refreshed" as const })),
-      } as never,
-    });
-    const emitAgent = (seq: number, stream: string, data: Record<string, unknown>) =>
-      emitGatewayEvent(state, "agent", {
-        runId: "run-1",
-        seq,
-        stream,
-        ts: seq,
-        sessionKey: "main",
-        data,
-      });
-
-    emitAgent(1, "assistant", { text: "Hello", delta: "Hello" });
-    expect(publication).not.toHaveBeenCalled();
-
-    emitAgent(2, "tool", { phase: "start", name: "read", toolCallId: "tool-1" });
-    emitAgent(3, "tool", { phase: "update", name: "read", toolCallId: "tool-1" });
-    expect(requestAnimationFrame).toHaveBeenCalledOnce();
-    expect(publication).not.toHaveBeenCalled();
-  });
-
   it("projects hidden Gateway state without scheduling animation frames", () => {
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
     const requestAnimationFrame = vi

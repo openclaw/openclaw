@@ -99,7 +99,7 @@ export function ChatToolOutput(props: Props) {
               <pre>{card()!.inputText}</pre>
             </details>
           </Show>
-          <Show when={view.result.state !== "loading"}>
+          <Show when={view.result.state !== "loading" && text().length > 0}>
             <div class="chat-tool-output__actions">
               <CopyButton text={text()} idleLabel={t("chat.toolCards.copyOutput")} />
               <button class="btn btn--sm" type="button" onClick={() => downloadOutput(card()!)}>
@@ -150,7 +150,7 @@ export function ChatToolOutput(props: Props) {
             )
           : [];
       const loadedCard = matches.length === 1 ? matches[0] : undefined;
-      if (!loadedCard || loadedCard.outputText === undefined) {
+      if (!loadedCard) {
         return { state: "unavailable", card: null };
       }
       return {

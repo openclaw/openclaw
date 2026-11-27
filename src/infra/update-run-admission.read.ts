@@ -1,32 +1,27 @@
-import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { EngineConnection } from "./sql-connection.js";
 import { runSqliteReadSnapshotSync } from "./sqlite-transaction.js";
 import type { UpdateRunAdmissionReadCommand } from "./update-run-admission.types.js";
-import { readUpdateRunRecord } from "./update-run-read.kernel.js";
-import {
-  inspectUpdateRunReconciliation,
-  readUpdateRunReconciliationCandidates,
-} from "./update-run-reconciliation.read.js";
-import { readUpdateRecoveryAdmissionFacts } from "./update-run-recovery-store.js";
 
-export function readUpdateRunAdmissionCommand(
-  db: EngineConnection,
-  command: UpdateRunAdmissionReadCommand,
-) {
+/** Load only the selected policy before admission. No SQLite handle spans the module await. */
+export async function prepareUpdateRunAdmissionRead(command: UpdateRunAdmissionReadCommand) {
+  if (command.type === "updateRuns.recoveryAdmission") {
+    const { readUpdateRecoveryAdmissionFacts } = await import("./update-run-recovery-store.js");
+    return (db: EngineConnection) =>
+      runSqliteReadSnapshotSync(db, () => ({
+        type: command.type,
+        facts: readUpdateRecoveryAdmissionFacts(db),
+      }));
+  }
+  const { readUpdateRunReconciliationCandidate, readUpdateRunReconciliationCandidates } =
+    await import("./update-run-reconciliation.read.js");
   if (command.type === "updateRuns.reconciliationCandidates") {
-    return {
+    return (db: EngineConnection) => ({
       type: command.type,
       candidates: readUpdateRunReconciliationCandidates(db, command.input),
-    };
+    });
   }
-  return runSqliteReadSnapshotSync(db, () => {
-    if (command.type === "updateRuns.recoveryAdmission") {
-      return { type: command.type, facts: readUpdateRecoveryAdmissionFacts(db) };
-    }
-    const run = tableExists(db, "update_runs") ? readUpdateRunRecord(db, command.runId) : undefined;
-    return {
-      type: command.type,
-      candidate: run ? inspectUpdateRunReconciliation(db, run, {}) : undefined,
-    };
+  return (db: EngineConnection) => ({
+    type: command.type,
+    candidate: readUpdateRunReconciliationCandidate(db, command.runId),
   });
 }

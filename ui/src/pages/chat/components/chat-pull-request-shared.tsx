@@ -10,12 +10,13 @@ import { registerGitHubEnglish } from "../../../i18n/locales/en-github.ts";
 import "../../../components/tooltip.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import type { SessionDisplayPullRequest } from "../../../lib/session-pull-request-presentation.ts";
 import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-owner.ts";
 import type { createPullRequestCopy } from "./chat-pull-request-copy.ts";
 registerGitHubEnglish();
 
 export type ChatPullRequestsProps = {
-  pullRequests: ControlUiSessionPullRequest[];
+  pullRequests: readonly SessionDisplayPullRequest[];
   gateway?: ApplicationGateway;
   sessionKey?: string;
   sessionId?: string;
@@ -25,7 +26,7 @@ export type ChatPullRequestsProps = {
   /** Hides the branch row and its idle publish offer; retained publication outcomes stay visible. */
   branchDismissed?: boolean;
   status: ControlUiSessionPullRequestSnapshot["status"];
-  onDismiss: (pullRequest: ControlUiSessionPullRequest) => void;
+  onDismiss: (pullRequest: Pick<ControlUiSessionPullRequest, "owner" | "repo" | "number">) => void;
   onDismissBranch?: (branch: ControlUiSessionBranch) => void;
   onOpenSessionDiff?: () => void;
   publication?: GitHubPublicationView;

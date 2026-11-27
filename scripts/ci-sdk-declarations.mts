@@ -72,7 +72,7 @@ function currentSdk(root: string, onMismatch?: (reason: string) => void) {
     path.join(root, unit.outDir),
     onMismatch,
   )
-    ? record
+    ? { record, snapshot }
     : undefined;
 }
 
@@ -122,12 +122,12 @@ function cacheIdentity(root: string) {
 }
 
 function pack(root: string) {
-  const record = currentSdk(root);
-  if (!record) {
+  const current = currentSdk(root);
+  if (!current) {
     throw new Error("Only a current full SDK receipt can be published");
   }
   const boundary = createDeclarationInputBoundary(root);
-  const names = [...Object.keys(record.outputs), recordName].toSorted();
+  const names = [...Object.keys(current.record.outputs), recordName].toSorted();
   const files = names.map((file) => {
     if (!declarationPath(file)) {
       throw new Error("SDK receipt contains a non-declaration transport path");
@@ -136,7 +136,8 @@ function pack(root: string) {
     if (!fs.statSync(target).isFile()) {
       throw new Error("SDK transport requires regular declaration files");
     }
-    return [file, fs.readFileSync(target, "utf8")];
+    // Transport the same output bytes whose digests passed receipt validation.
+    return [file, current.snapshot.readText(target)];
   });
   const key = cacheIdentity(root).key;
   const bytes = Buffer.from(JSON.stringify({ version: 1, key, files }));

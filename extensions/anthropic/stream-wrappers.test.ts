@@ -182,7 +182,7 @@ describe("anthropic stream wrappers", () => {
           edits: [
             {
               type: "compact_20260112",
-              trigger: { type: "input_tokens", value: anthropicCompactThreshold ?? 140_000 },
+              trigger: { type: "input_tokens", value: anthropicCompactThreshold ?? 170_000 },
             },
           ],
         });

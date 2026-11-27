@@ -1,9 +1,13 @@
 import { resolveSubagentLabel } from "../../../auto-reply/reply/subagents-utils.js";
-import { prepareSessionGenerationFacts } from "../../../config/sessions/session-delivery-generation.js";
+import {
+  acquireTranscriptLease,
+  type TranscriptLease,
+} from "../../../config/sessions/transcript-lease.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { getActiveAgentRunDelegatedAuthority } from "../../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
+import { chatRef } from "../../../sessions/chat-ref.js";
 import type { SessionControllerStopCapture } from "../../../sessions/session-controller.stop.js";
 import { retireAcceptedSessionSpawnCompletionForRun } from "../../accepted-session-spawn.js";
 import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
@@ -85,9 +89,6 @@ async function settleSubagentKill(
     ) {
       settlement = await settleSubagentKillSources({ cleanup, execution });
     }
-  }
-  if (!stopAcceptance.accepted) {
-    params.cancellationControl.assertCurrent();
   }
   if (captured) {
     assertCapturedSubagentExecutionCurrent(captured, params.entry);
@@ -200,15 +201,14 @@ async function killLatestSubagentRun(params: {
     params.onCancelled?.(entry);
   }
   if (commands && !result.superseded && !result.declined && !result.error) {
+    // The admitted kill finishes its own commands; only the selected row stays checked.
     for (
       let pending = cancellationControl.prepareRead();
       pending;
       pending = cancellationControl.prepareRead()
     ) {
       await pending;
-      cancellationControl.assertCurrent();
     }
-    cancellationControl.assertCurrent();
     if (!tree.canTraverse() || !matchesExpected(tree.entry)) {
       return { entry: tree.entry, session, result: { ...result, superseded: true } };
     }
@@ -216,7 +216,6 @@ async function killLatestSubagentRun(params: {
     // is gone. Drain that exact request without replacing the completed task receipt.
     commands.observe(tree.entry);
     commands.cancel(() => {
-      cancellationControl.assertCurrent();
       if (!tree.canTraverse() || !matchesExpected(tree.entry)) {
         throw new Error("Subagent ownership changed during command cancellation.");
       }
@@ -480,7 +479,7 @@ export async function killAllControlledSubagentRuns(params: {
   if (!params.requestSelection?.sessionGeneration && !params.requestSelection?.prepare) {
     return killSelectedSubagentRuns(selection);
   }
-  let generation: Awaited<ReturnType<typeof prepareSessionGenerationFacts>> | undefined;
+  let generation: TranscriptLease | undefined;
   const assertCurrent = () => {
     params.assertCurrent?.();
     generation?.assertCurrent();
@@ -497,7 +496,7 @@ export async function killAllControlledSubagentRuns(params: {
       }
       const origin = params.requestSelection?.sessionGeneration;
       if (origin) {
-        generation = await prepareSessionGenerationFacts(origin);
+        generation = await acquireTranscriptLease(chatRef(origin), origin);
       }
       prepared = true;
     })());

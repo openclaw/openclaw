@@ -135,6 +135,7 @@ export function runGatewayStateOwnerHeartbeat(
       forget(lockPath);
     }
     data.events.close();
+    parent?.postMessage("closed", []);
     parent?.close();
   };
   let parentLost = false;

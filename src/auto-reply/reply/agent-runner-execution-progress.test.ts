@@ -461,6 +461,38 @@ describe("executeAgentTurn: lifecycle progress", () => {
     expect(JSON.stringify(lifecycleEvent)).not.toContain("Rendered payload diagnostic.");
   });
 
+  it("reports the recovery failure instead of the precheck's tentative overflow", async () => {
+    const recoveryText =
+      "Auto-compaction could not reach the model provider before the next model request. Try again or run /compact.";
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await sendEvents(params, [
+        lifecycle({ phase: "start" }),
+        lifecycle({
+          phase: "finishing",
+          error:
+            "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.",
+        }),
+      ]);
+      return {
+        payloads: [{ text: recoveryText, isError: true }],
+        meta: {
+          finalAssistantVisibleText: recoveryText,
+          error: { kind: "compaction_failure", message: "Auto-compaction failed: 502" },
+        },
+      };
+    });
+
+    await executeTestTurn({ opts: { runId: "run-compaction-recovery-failure" } });
+
+    const terminalEvents = terminalEventsForRun("run-compaction-recovery-failure");
+    expect(terminalEvents).toHaveLength(1);
+    expectRecordFields(expectDefined(terminalEvents[0], "terminal lifecycle event").data, {
+      phase: "error",
+      error: recoveryText,
+      errorNotice: recoveryText,
+    });
+  });
+
   it("does not turn a tool error into terminal failure for a successful run", async () => {
     const stopReason = "completed";
     const aborted = false;

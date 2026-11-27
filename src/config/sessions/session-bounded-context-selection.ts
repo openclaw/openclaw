@@ -59,23 +59,28 @@ export function selectBoundedContextRows<T extends { serialized_bytes: number }>
 /** Shared cut policy; cold readers measure payloads lazily from newest to oldest. */
 export function selectBoundedContextStart(
   messages: readonly AgentMessage[],
-  maxBytes: number,
+  maxBytes: number | undefined,
   tokenBudget: number | undefined,
   measure: (index: number) => { bytes: number; tokens: number },
 ): number {
   let bytes = 2;
   let tokens = 0;
   let cut = messages.length;
-  let exceedsByteBudget = false;
+  let exceedsLimit = false;
   for (let index = messages.length - 1; index >= 0; index--) {
     const size = measure(index);
     bytes += size.bytes + 1;
     tokens += size.tokens;
-    if (bytes > maxBytes) {
-      exceedsByteBudget = true;
+    if (maxBytes !== undefined && bytes > maxBytes) {
+      exceedsLimit = true;
       break;
     }
     if (tokenBudget !== undefined && tokens > tokenBudget) {
+      // A token-only selection is for disposable history at a hard request boundary.
+      if (maxBytes === undefined) {
+        exceedsLimit = true;
+        break;
+      }
       continue;
     }
     if (index === 0 || messages[index]!.role === "user") {
@@ -83,7 +88,7 @@ export function selectBoundedContextStart(
     }
   }
   // Ordinary token pressure still belongs to semantic compaction.
-  if (!exceedsByteBudget) {
+  if (!exceedsLimit) {
     return 0;
   }
   // Pairing uses the complete navigation, including calls outside the measured suffix.

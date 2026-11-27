@@ -5,16 +5,20 @@ import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NodeApp
 import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.NodeRuntimeMode
+import ai.openclaw.app.PersonalSessionPinAccess
 import ai.openclaw.app.SecurePrefs
+import ai.openclaw.app.chat.ChatCacheScope
 import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.closeNodeRuntimeTestFixture
 import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.gateway.GatewaySession
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
 import android.graphics.Rect
 import android.provider.Settings
 import android.view.View
+import android.view.inputmethod.InputMethodManager
 import androidx.activity.BackEventCompat
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedDispatcher
@@ -116,6 +120,7 @@ import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.util.ReflectionHelpers
@@ -187,6 +192,26 @@ class RootScreenFoldTest {
       composeRule.onNodeWithContentDescription("Search settings").assertIsDisplayed()
       sidebar.assertIsDisplayed()
       composeRule.onNodeWithTag("sidebar-open-settings").assertDoesNotExist()
+    }
+  }
+
+  @Test
+  fun backClosesAnOpenKeyboardBeforeLeavingChat() {
+    withRoot(completed = true, destination = HomeDestination.Chat) {
+      val imm = shadowOf(view.context.getSystemService(InputMethodManager::class.java))
+      val editor = composeRule.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag("chat-composer-surface")))
+      editor.performClick().performTextReplacement("Keep this draft")
+      keyboard(320)
+      assertTrue("The composer must have opened the keyboard", imm.isSoftInputVisible)
+      // Robolectric has no keyboard Back callback, so this reaches the app first, as on a device
+      // whose navigation callback outranks the keyboard's.
+      composeRule.runOnIdle { backDispatcher.onBackPressed() }
+      composeRule.waitForIdle()
+      assertFalse("Back must close the open keyboard", imm.isSoftInputVisible)
+      editor.assertIsDisplayed().assertTextEquals("Keep this draft")
+      keyboard(0)
+      composeRule.runOnIdle { backDispatcher.onBackPressed() }
+      composeRule.onNodeWithTag("chat-composer-surface").assertDoesNotExist()
     }
   }
 
@@ -470,7 +495,24 @@ class RootScreenFoldTest {
             }
             original(method, params)
           }
-          restoreRequest = { requestField.set(controller, original) }
+          // Drag-to-pin writes a personal pin, so it needs a personal-pin connection and its request lease.
+          ReflectionHelpers.getField<MutableStateFlow<PersonalSessionPinAccess>>(runtime, "personalSessionPinAccessState").value =
+            PersonalSessionPinAccess.Verified(ownSessionsOnly = false)
+          val leaseField = ChatController::class.java.getDeclaredField("captureRequestLease").apply { isAccessible = true }
+          val originalLease = leaseField.get(controller)
+          leaseField.set(
+            controller,
+            { _: ChatCacheScope? ->
+              GatewaySession.RequestLease("fixture", advertisedCapabilities = setOf("personal-session-pins")) { method, params, _, enqueue ->
+                enqueue {}
+                request(method, params)
+              }
+            },
+          )
+          restoreRequest = {
+            requestField.set(controller, original)
+            leaseField.set(controller, originalLease)
+          }
           requestField.set(controller, request)
         },
       ) { model ->

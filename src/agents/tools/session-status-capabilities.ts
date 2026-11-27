@@ -32,7 +32,14 @@ function summarizeSessionCapabilities(
     if (available.has(tool.id)) {
       continue;
     }
-    const reason = tool.reasons.map((entry) => entry.label).join("; ") || "Not loaded";
+    // Profile labels omit their config path; deny and allowlist labels already name it.
+    const reasons = tool.reasons.map((entry) =>
+      entry.kind === "profile" && entry.source ? `${entry.label} (${entry.source})` : entry.label,
+    );
+    if (tool.alsoAllowPath) {
+      reasons.push(`to allow one, add it to ${tool.alsoAllowPath}`);
+    }
+    const reason = reasons.join("; ") || "Not loaded";
     byReason.set(reason, [...(byReason.get(reason) ?? []), tool.id]);
   }
   const notices = inventory.notices?.map((notice) => notice.message);

@@ -60,15 +60,19 @@ const runtimeOnlyUnitFiles = new Set([
   "src/flows/doctor-health.update-schema.test.ts",
   "src/gateway/client-callsites.guard.test.ts",
   "src/gateway/server-methods/session-catalog-privacy.test.ts",
+  "src/gateway/server-methods/sessions-github-read.target.test.ts",
   "src/gateway/server-methods/sessions-lifecycle-dormant.test.ts",
   "src/gateway/server.beam-owned-view.test.ts",
   "src/gateway/server.plugin-reload-send-continuation.product.test.ts",
   "src/gateway/server.plugin-reload-send-revocation.product.test.ts",
+  "src/gateway/server.sessions.fixture-lifecycle.test.ts",
+  "src/gateway/server.startup-fixture-lifetime.test.ts",
   "src/gateway/server.subagent-transcript-conflict.test.ts",
   "src/gateway/session-row-projection.subagent-index.test.ts",
   "src/gateway/session-subagent-resume.test.ts",
   "src/gateway/session-utils.queued-collector-narrow-abort.test.ts",
   "src/gateway/talk/client-permission-parity.test.ts",
+  "src/gateway/test-helpers.acquisition.test.ts",
   "src/gateway/tool-resolution.swarm-collector.test.ts",
   "src/plugins/doctor-repair-setup.test.ts",
   "src/plugins/loader.runtime-registry.test.ts",
@@ -87,11 +91,15 @@ const runtimeOnlyUnitFiles = new Set([
   "test/plugins/codex-native-search.gateway.test.ts",
   "test/plugins/deep-research-routing.gateway.test.ts",
   "test/runtime-agent.codex-initialization.integration.test.ts",
+  "test/scripts/ci-git-prerequisites.test.ts",
+  "test/scripts/ci-node-test-plan.selection-capacity.test.ts",
+  "test/scripts/ci-node-test-volume.test.ts",
   "test/scripts/ci-test-timings-tooling.test.ts",
   "test/scripts/eager-import-closure.test.ts",
   "test/scripts/lint-suppressions.test.ts",
   "test/scripts/plugin-sdk-surface-report.test.ts",
   "test/scripts/pr-wrapper-source-closure.test.ts",
+  "test/scripts/runtime-process-build-graph.test.ts",
   "test/scripts/type-suppression-inventory.test.ts",
   "test/skill-usage.codex.integration.test.ts",
   "test/slack-outbound-permanent-rejection-loopback.test.ts",
@@ -125,6 +133,7 @@ const toolingOnlyUnitFiles = new Set([
   "test/scripts/eager-import-closure.test.ts",
   "test/scripts/personal-credential-writer-guard.test.ts",
   "test/scripts/pr-wrapper-source-closure.test.ts",
+  "test/scripts/runtime-process-build-graph.test.ts",
   "test/scripts/update-restart-module-outcome.test.ts",
   "test/scripts/vitest-isolated.test.ts",
   "test/scripts/vitest-runtime-worker-selection.test.ts",
@@ -266,6 +275,7 @@ export function shouldUseRuntimeOnlyVitestWorkers(
       config === "test/vitest/vitest.unit-fast.config.ts" ||
       config === "test/vitest/vitest.unit-fast-isolated.config.ts" ||
       config === "test/vitest/vitest.gateway-client.config.ts" ||
+      config === "test/vitest/vitest.gateway.config.ts" ||
       config === "test/vitest/vitest.gateway-database-workers.config.ts" ||
       config === "test/vitest/vitest.gateway-methods.config.ts" ||
       config === "test/vitest/vitest.gateway-server.config.ts") &&
@@ -318,6 +328,9 @@ export function shouldPrepareVitestCoreWorkers(
   }
   const configs = [config];
   const workers = [
+    ...(includesRuntimeConfig(configs, "test/vitest/vitest.tooling.config.ts")
+      ? ["test/scripts/runtime-process-build-graph.test.ts"]
+      : []),
     ...(includesRuntimeConfig(configs, "test/vitest/vitest.unit-fast.config.ts")
       ? ["src/agents/sessions/windows-git-bash-path.test.ts"]
       : []),
@@ -331,10 +344,7 @@ export function shouldPrepareVitestCoreWorkers(
       ? ["test/e2e/gateway-transcripts-discord-capture.e2e.test.ts"]
       : []),
   ];
-  const gatewayStartupWorkers = [
-    "src/gateway/server-runtime-subscriptions.test.ts",
-    "src/gateway/server-runtime-config.test.ts",
-  ];
+  const gatewayStartupWorkers = ["src/gateway/server-runtime-config.test.ts"];
   const codeModeWorker = "src/agents/code-mode.import-boundary.test.ts";
   return (
     workers.some((file) =>

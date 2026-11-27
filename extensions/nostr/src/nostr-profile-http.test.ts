@@ -261,16 +261,6 @@ describe("nostr-profile-http", () => {
 
       expect(result).toBe(false);
     });
-
-    it("handles /api/channels/nostr/:accountId/profile", async () => {
-      const { run } = createProfileHttpHarness("GET", "/api/channels/nostr/default/profile");
-
-      vi.mocked(getNostrProfileState).mockResolvedValue(null);
-
-      const result = await run();
-
-      expect(result).toBe(true);
-    });
   });
 
   describe("GET /api/channels/nostr/:accountId/profile", () => {

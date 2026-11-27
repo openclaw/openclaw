@@ -26,7 +26,7 @@ import type {
   TranscriptReadWindow,
   TranscriptReadWindowOptions,
 } from "../../sessions/transcript-read-window.js";
-import { isVisibleTranscriptRecord } from "../../sessions/transcript-visible-record.js";
+import { isVisibleTranscriptRecord } from "../../sessions/transcript-record-visibility.js";
 import type {
   SessionTranscriptRawDeltaLimits,
   SessionTranscriptRawDeltaResult,

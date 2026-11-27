@@ -1,0 +1,24 @@
+5541
+# Participate split, part 4 of 6 (invited admission): measured with
+# check-test-lines-ratchet against the merge base with main; 5,941 net lines minus
+# the ordinary 400-line allowance. This part is the opt-in switch, so it carries
+# the Gateway suites that prove the lower parts' participant limits through the
+# real admission path; before it, nothing can admit a participant run. Reuses the
+# synthetic identity/Gateway/provider fixture and the existing sharing, mention,
+# suggestion, typing and pending-input fixtures. Independent boundaries: member
+# access levels and their management denials; read/suggest members refused for
+# chat.send, typing and suggestions; mention invitations at a chosen level;
+# invited reads bounded to the creator's sandbox and workspace; exact-run Stop;
+# own revoked pending inputs; sessions.patch narrowing; chat.send admission and
+# tool-ceiling serialization; native spawn, child, descendant restart, restart
+# control and SQLite root plus queued-input recovery under a retained ceiling;
+# creator-routed approval delivery; and configured participant tools. Helper-only
+# authority tests cannot prove the admitted run's model/tool dispatch boundary.
+# Also restores the participant-source, same-role recovery narrowing, literal
+# command restore and foreign scope-child refusal cases that part 2 deferred here
+# because they need real admission. Talk handler fixture clients carry the
+# connection scopes that session access resolution reads, and the approval
+# delivery replay fixture selects records the way the session runtime does.
+# One upgrade-compatibility case proves released role settings and unlevelled
+# member rows keep main's sharing projection under this part.
+# No assertion, timeout, file cap or global budget is relaxed.

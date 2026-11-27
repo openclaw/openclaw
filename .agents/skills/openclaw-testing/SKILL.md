@@ -15,9 +15,9 @@ description: Choose proportional OpenClaw tests/checks, diagnose failures, route
   to exact-head CI. Require its success before marking ready or merging. This
   changes proof timing only, not publication authority, source trust, credentials,
   owner approval, or merge gates.
-  Automatic CI skips drafts. For a trusted canonical branch, use the existing
-  `ci.yml` manual dispatch with `target_ref` set to the full pushed head SHA
-  (`ghx workflow run ci.yml --repo openclaw/openclaw --ref main -f target_ref=<sha>`).
+  Automatic CI skips drafts. For a trusted canonical PR targeting `main`, use
+  `scripts/pr ci-dispatch <PR>`. This maintainer-only route binds the pushed head
+  and selects PR-shaped CI through the existing workflow qualification.
   Verify the selected checkout SHA and successful `build-artifacts` job cover the
   required build. CI's `build:ci-artifacts` omits full declaration emission. Keep
   uncovered proof pending. A skipped job or workflow-ref SHA is not build proof.

@@ -46,6 +46,7 @@ it("combines cross-turn changes in a fixed window while authoritative reads stay
     { presence: expect.arrayContaining([latest]) },
     { dropIfSlow: true, stateVersion: { presence: 2, health: 1 } },
   );
+  await advance(400, 1);
   upsertPresence("coalesced-person", { reason: "disconnect", watchedSessions: undefined });
   publisher.publish();
   await advance(200, 2);

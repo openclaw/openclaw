@@ -9,17 +9,6 @@ export type DeliveryParams = Omit<
   replies: ReplyPayload[];
 };
 
-export function createSlackPlatformError(
-  error: string,
-  details?: { needed?: string; provided?: string },
-) {
-  // Mirrors @slack/web-api 7.18.0 platformErrorFromResult: message plus structured result data.
-  return Object.assign(new Error(`An API error occurred: ${error}`), {
-    code: "slack_webapi_platform_error",
-    data: { ok: false, error, ...details },
-  });
-}
-
 export const requireRecord = createRequireRecord("object", "label-not-object");
 
 function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {

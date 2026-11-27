@@ -503,7 +503,7 @@ async function emitPreparedGatewayRestartUnderAdmission(
     !scheduledRequest?.isCurrent() &&
     !pendingRestartRequest?.isCurrent()
   ) {
-    restartLog.warn("scheduled restart cancelled: requester authority changed");
+    restartLog.warn("scheduled restart cancelled: the requester may no longer restart the Gateway");
     clearPendingScheduledRestart();
     await rejectPreparedRestartHooks(preparedHooksList);
     return { status: "failed" };

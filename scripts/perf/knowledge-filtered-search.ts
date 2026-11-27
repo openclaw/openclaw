@@ -2,13 +2,14 @@
  * Knowledge filtered-search owner benchmark, synthetic records and real SQLite.
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/knowledge-filtered-search.ts
  *   [--records 5000] [--selected 100] [--iterations 100] [--sample]
- *   [--source .local/retrieval-baseline.ts]
+ *   [--source .local/retrieval-baseline.ts] [--body-repeats 400] [--writer-probe]
+ *   [--journal DELETE|WAL]
  *
  * Alternate baseline/candidate processes, five timing arms each; sample allocation
  * separately (--sample includes collected objects). The fixture assumes 5,000
  * valid pages with ~1 KiB bodies; slow-call counts do not establish store size.
  * Setup and the initial index build are excluded. No Gateway or production state.
- * Result digests exclude only query/index timestamps. Native SQLite allocations
+ * A fixed Date clock makes complete result digests comparable, including freshness. Native SQLite allocations
  * are outside the JS sampler. Database files live under .local and are removed.
  */
 import assert from "node:assert/strict";
@@ -20,8 +21,10 @@ import { loadavg } from "node:os";
 import path from "node:path";
 import { PerformanceObserver } from "node:perf_hooks";
 import { DatabaseSync } from "node:sqlite";
+import { mock } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { Worker } from "node:worker_threads";
 import type { LoadedRecord } from "../../extensions/knowledge/src/model.js";
 import type { SearchInput } from "../../extensions/knowledge/src/retrieval-contract.js";
 import type { ScanResult } from "../../extensions/knowledge/src/scan-result.js";
@@ -35,10 +38,19 @@ const { values } = parseArgs({
     iterations: { type: "string", default: "100" },
     source: { type: "string" },
     sample: { type: "boolean", default: false },
+    "body-repeats": { type: "string", default: "20" },
+    "writer-probe": { type: "boolean", default: false },
+    journal: { type: "string", default: "WAL" },
   },
 });
 const integer = (name: "records" | "selected" | "iterations") =>
   parseStrictIntegerOption({ raw: values[name], label: `--${name}`, min: 1, fallback: 1 });
+const bodyRepeats = parseStrictIntegerOption({
+  raw: values["body-repeats"],
+  label: "--body-repeats",
+  min: 1,
+  fallback: 20,
+});
 const count = integer("records"),
   selected = integer("selected"),
   iterations = integer("iterations");
@@ -66,10 +78,13 @@ const { keywordSearch } = (await import(
 )) as typeof import("../../extensions/knowledge/src/retrieval.js");
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const at = "2026-01-01T00:00:00.000Z";
+mock.timers.enable({ apis: ["Date"], now: new Date(at) });
+assert(values.journal === "DELETE" || values.journal === "WAL");
 const records = Array.from({ length: count }, (_, n): LoadedRecord => {
   const id = `record_${String(n).padStart(6, "0")}`;
+  const lifecycle = n % 20 === 0 && n + 1 < count ? "superseded" : "active";
   const title = n % 3 === 0 ? `Orchid ${n}` : `Record ${n}`;
-  const body = `${"Synthetic knowledge about botany and gardening. ".repeat(20)}\n${n % 2 ? "orchid flower" : "violet flower"} ${n}`;
+  const body = `${"Synthetic knowledge about botany and gardening. ".repeat(bodyRepeats)}\n${n % 2 ? "orchid flower" : "violet flower"} ${n} ${lifecycle === "superseded" ? "ancestorword" : ""}`;
   const metadata: LoadedRecord["metadata"] = {
     format: "knowledge-record-v1",
     id,
@@ -80,7 +95,10 @@ const records = Array.from({ length: count }, (_, n): LoadedRecord => {
     scope: { visibility: "private" },
     recorded_at: at,
     updated_at: at,
-    lifecycle: "active",
+    lifecycle,
+    ...(lifecycle === "superseded"
+      ? { superseded_by: `record_${String(n + 1).padStart(6, "0")}` }
+      : {}),
     aliases: [`Flower ${n}`, `Café ${n}`],
     tags: n < selected ? ["selected"] : ["outside"],
   };
@@ -91,7 +109,7 @@ const records = Array.from({ length: count }, (_, n): LoadedRecord => {
     kind: "page",
     type: "note",
     revision: 1,
-    lifecycle: "active",
+    lifecycle,
     valid: true,
     path: `notes/${id}.md`,
     metadata,
@@ -113,26 +131,77 @@ const queries: SearchInput[] = [
   { query: "flower", tag: "selected", offset: 20, limit: 10 },
   { query: "orchid flower", tag: "selected", mode: "phrase" },
   { query: "cafe violet", tag: "selected", mode: "any" },
+  { query: "ancestorword", tag: "selected", offset: 20, limit: 10 },
   { query: "missing", tag: "selected" },
 ];
 fs.mkdirSync(path.join(repo, ".local"), { recursive: true });
 const scratch = fs.mkdtempSync(path.join(repo, ".local/knowledge-filtered-"));
-const db = new DatabaseSync(path.join(scratch, "state.sqlite"));
+const filename = path.join(scratch, "state.sqlite");
+const db = new DatabaseSync(filename);
+const signal = new Int32Array(new SharedArrayBuffer(16));
+const writer = values["writer-probe"]
+  ? new Worker(
+      `
+  const { workerData } = require("node:worker_threads");
+  const { DatabaseSync } = require("node:sqlite");
+  const signal = new Int32Array(workerData.signal);
+  const db = new DatabaseSync(workerData.filename);
+  db.exec("PRAGMA busy_timeout=30000");
+  Atomics.store(signal, 0, 1); Atomics.notify(signal, 0);
+  while (true) {
+    Atomics.wait(signal, 0, 1);
+    const start = performance.now();
+    Atomics.store(signal, 0, 3); Atomics.notify(signal, 0);
+    try {
+      db.exec("BEGIN IMMEDIATE; INSERT INTO concurrent_writes DEFAULT VALUES; COMMIT");
+      Atomics.store(signal, 1, Math.round((performance.now() - start) * 1000));
+    } catch { Atomics.store(signal, 1, -1); }
+    Atomics.store(signal, 2, 1); Atomics.notify(signal, 2);
+    Atomics.store(signal, 0, 1); Atomics.notify(signal, 0);
+  }
+`,
+      { eval: true, workerData: { filename, signal: signal.buffer } },
+    )
+  : undefined;
+const writerWaitMs: number[] = [];
+const holds: number[] = [];
+let measuring = false,
+  probe = false,
+  began: number | undefined;
+const exec = db.exec.bind(db);
+db.exec = (sql) => {
+  exec(sql);
+  if (!measuring) {
+    return;
+  }
+  if (sql === "BEGIN IMMEDIATE") {
+    began = performance.now();
+  }
+  if (began !== undefined && (sql === "COMMIT" || sql === "ROLLBACK")) {
+    holds.push(performance.now() - began);
+    began = undefined;
+  }
+  if (writer && !probe && sql.startsWith("CREATE VIRTUAL TABLE temp.")) {
+    probe = true;
+    while (Atomics.load(signal, 0) !== 1) {
+      Atomics.wait(signal, 0, Atomics.load(signal, 0), 30000);
+    }
+    Atomics.store(signal, 2, 0);
+    Atomics.store(signal, 0, 2);
+    Atomics.notify(signal, 0);
+    Atomics.wait(signal, 0, 2, 30000);
+  }
+};
 try {
   db.exec(
-    "PRAGMA journal_mode=WAL; CREATE TABLE keyword_state_v1(binding TEXT PRIMARY KEY,snapshot TEXT NOT NULL,indexed_at TEXT NOT NULL) STRICT",
+    `PRAGMA journal_mode=${values.journal}; CREATE TABLE concurrent_writes(id INTEGER PRIMARY KEY); CREATE TABLE keyword_state_v1(binding TEXT PRIMARY KEY,snapshot TEXT NOT NULL,indexed_at TEXT NOT NULL) STRICT`,
   );
   const search = (input: SearchInput) => {
     const result = keywordSearch(db, data, input, "synthetic", "generation");
     assert.equal(result.index.state, "ready");
     return result;
   };
-  const digest = () =>
-    hash(
-      JSON.stringify(queries.map(search), (key, value: unknown) =>
-        key === "queriedAt" || key === "indexedAt" ? undefined : value,
-      ),
-    );
+  const digest = () => hash(JSON.stringify(queries.map(search)));
   const resultDigest = digest();
   for (let n = 0; n < 5; n++) {
     search(queries[n % queries.length]!);
@@ -165,11 +234,23 @@ try {
   const latencies: number[] = [];
   const cpuStart = process.cpuUsage(),
     start = performance.now();
+  measuring = true;
   for (let n = 0; n < iterations; n++) {
+    probe = false;
     const begin = performance.now();
     search(queries[n % queries.length]!);
     latencies.push(performance.now() - begin);
+    if (writer) {
+      assert(probe, "filtered search must exercise a temporary corpus");
+      if (!Atomics.load(signal, 2)) {
+        Atomics.wait(signal, 2, 0, 30000);
+      }
+      assert.equal(Atomics.load(signal, 2), 1, "writer did not finish");
+      assert(Atomics.load(signal, 1) >= 0, "concurrent writer failed");
+      writerWaitMs.push(Atomics.load(signal, 1) / 1000);
+    }
   }
+  measuring = false;
   const wallMs = performance.now() - start,
     cpu = process.cpuUsage(cpuStart);
   const memoryAfter = process.memoryUsage();
@@ -191,6 +272,11 @@ try {
     JSON.stringify({
       mode: values.sample ? "allocation" : "timing",
       records: count,
+      bodyRepeats,
+      journal: values.journal,
+      corpusBytes: records.reduce((sum, record) => sum + Buffer.byteLength(record.raw), 0),
+      writerWaitMs,
+      writerHoldMs: holds,
       selected,
       iterations,
       resultDigest,
@@ -224,6 +310,8 @@ try {
     }),
   );
 } finally {
+  await writer?.terminate();
   db.close();
+  mock.timers.reset();
   fs.rmSync(scratch, { recursive: true, force: true });
 }

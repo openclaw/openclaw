@@ -11,7 +11,6 @@ import {
   withGatewayToolCallerIdentity,
 } from "../../agents/tools/gateway-caller-context.js";
 import * as gatewayModule from "../../agents/tools/gateway.js";
-import { isConfiguredCommandOwner } from "../../auto-reply/command-auth.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveCronRunAdmissionSource,
@@ -19,7 +18,7 @@ import {
 } from "../../cron/run-authority.js";
 import { createCronStoreHarness } from "../../cron/service.test-harness.js";
 import { loadCronStore, saveCronStore } from "../../cron/store.js";
-import type { CronJob, CronJobCreate, CronStoredJob } from "../../cron/types.js";
+import type { CronJob, CronJobCreate, CronJobPatch, CronStoredJob } from "../../cron/types.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
@@ -131,9 +130,8 @@ const OPS: Record<string, Record<string, unknown>> = {
   cap: { payload: { kind: "agentTurn", message: "p3", toolsAllow: ["read"] } },
 };
 
-// "revoked" is a channel-owner manager whose ownership is removed after admission, before the write.
-type Caller = "scoped" | "creator" | "manager" | "revoked";
-const CALLERS: Caller[] = ["scoped", "creator", "manager", "revoked"];
+type Caller = "scoped" | "creator" | "manager";
+const CALLERS: Caller[] = ["scoped", "creator", "manager"];
 
 const OWNER_CONFIG = {
   agents: { entries: { ops: {} } },
@@ -156,10 +154,7 @@ function expectAllowed(caller: Caller, shape: Partial<CronJob>): boolean {
   }
   // These jobs hold no app authority, so a manager's own-session cap needs no fresh capture
   // (app-authority jobs: cron.scheduled-policy-adoption.integration.test.ts).
-  return (
-    caller === "manager" &&
-    !(shape.scheduledToolPolicy?.mode === "trusted" && !shape.owner?.sessionKey)
-  );
+  return caller === "manager";
 }
 
 async function updateAs(
@@ -176,19 +171,15 @@ async function updateAs(
   const authority = claimAgentRunDelegatedAuthority(identity.operationalRunInstance);
   identity.delegatedAuthority = { kind: "local", ...authority };
   context.validateAgentRuntimeApprovalAuthority = () => true;
-  const isOwner = () =>
-    isConfiguredCommandOwner(getRuntimeConfig(), { channel: "telegram", senderId: "owner-1" });
   const scope = createCronCreatorAuthorityRunScope(
     identity.operationalRunInstance.runId,
     { kind: "external", channel: "telegram" },
-    caller === "manager" || caller === "revoked"
-      ? { source: "channel-owner", isCurrent: isOwner }
-      : undefined,
+    caller === "manager" ? { source: "channel-owner" } : undefined,
   );
   try {
     return await runWithCronCreatorAuthorityCapability(scope, () =>
       withGatewayToolCallerIdentity({ ...identity, approvalAuthority: authority }, async () => {
-        if (caller === "manager" || caller === "revoked") {
+        if (caller === "manager") {
           identity.cronManagementGrant = bindCronManagementGrant(scope.runId)!.mint("cron.update");
         } else {
           identity.cronToolsAllowCapture = "final-executable-surface";
@@ -215,19 +206,44 @@ describe("cron ownership access matrix", () => {
   });
   afterEach(() => resetPluginRuntimeStateForTest());
 
-  it("refuses an ownerless trusted job's what-runs edit from an unknown-origin owner chat", async () => {
+  it.each([
+    "model",
+    "model-local",
+    "prompt-cap",
+    "metadata-local",
+    "legacy-cap",
+    "requester-unknown-cap",
+    "requester-external-cap",
+  ] as const)("preserves the saved execution class during admin edits: %s", async (scenario) => {
     const { storePath } = await makeStorePath();
     await withCronManagementCaller("owner-chat-edit", async (identity) => {
       const sessionKey = identity.sessionKey;
+      const localCapture = scenario === "model-local" || scenario === "metadata-local";
+      const requester = scenario.startsWith("requester-");
       const seeded: CronStoredJob = {
         ...createCronJob({
           agentId: identity.agentId,
           sessionKey,
           sessionTarget: `session:${sessionKey}`,
           ownerProfileId: "gateway-owner",
-          scheduledToolPolicy: { version: 1, mode: "trusted" },
+          ...(scenario !== "legacy-cap"
+            ? { scheduledToolPolicy: { version: 1, mode: "trusted" } }
+            : {}),
         }),
         createdActor: { type: "human", source: "profile", id: "gateway-owner" },
+        ...(localCapture || requester
+          ? {
+              toolsAllowProvenance: {
+                version: 1 as const,
+                source: "final-executable-surface" as const,
+                callerOrigin: localCapture
+                  ? { kind: "local" as const }
+                  : scenario === "requester-external-cap"
+                    ? { kind: "external" as const, channel: "discord" }
+                    : { kind: "unknown" as const },
+              },
+            }
+          : {}),
       };
       await saveCronStore(storePath, { version: 1, jobs: [seeded] });
       const cron = createReadService({
@@ -245,8 +261,8 @@ describe("cron ownership access matrix", () => {
       context.cron.updateWithPrecondition.mockImplementation((...args) =>
         cron.updateWithPrecondition(...args),
       );
-      // Replace only the transport: the tool mints its real management grant and the
-      // Gateway handler commits through the real SQLite service, as a nested tool does.
+      // Replace only transport; the tool issues its real management grant and
+      // the Gateway commits through the real SQLite service.
       using _ = vi
         .spyOn(gatewayModule, "callGatewayTool")
         .mockImplementation(async (method, _opts, params) => {
@@ -278,40 +294,48 @@ describe("cron ownership access matrix", () => {
           value: { version: 1, source: "final-executable-surface" },
         },
       });
+      const patch: CronJobPatch =
+        scenario === "metadata-local"
+          ? { displayName: "Operator job" }
+          : scenario.startsWith("model")
+            ? {
+                payload: {
+                  kind: "agentTurn",
+                  model: "provider/model-b",
+                  fallbacks: ["provider/model-c"],
+                },
+              }
+            : {
+                payload: {
+                  kind: "agentTurn",
+                  message: "edited prompt",
+                  toolsAllow: scenario === "prompt-cap" ? ["*"] : ["read"],
+                },
+              };
       await tool.execute("get", { action: "get", jobId: seeded.id });
-      const errors: string[] = [];
-      for (const message of ["edited prompt", "edited again"]) {
-        try {
-          await tool.execute("update", {
-            action: "update",
-            jobId: seeded.id,
-            job: { payload: { ...seeded.payload, message } },
-          });
-        } catch (error) {
-          errors.push(String(error));
-        }
-      }
+      await tool.execute("update", { action: "update", jobId: seeded.id, job: patch });
       const stored = (await loadCronStore(storePath)).jobs[0]!;
       const admissionSource = resolveCronRunAdmissionSource(stored);
-      expect.soft(admissionSource).toBe("operator-schedule");
-      expect
-        .soft(
-          resolveCronSessionWorkspaceOwnershipError({
-            cfg: {},
-            agentId: identity.agentId,
-            sessionKey,
-            ownerSessionKey: stored.owner?.sessionKey,
-            hasWorkspaceBinding: true,
-            admissionSource,
-          }),
-        )
-        .toBeUndefined();
-      expect.soft(stored.toolsAllowProvenance).toBeUndefined();
-      expect.soft(definition(stored)).toEqual(definition(seeded));
-      expect(errors).toHaveLength(2);
-      expect(
-        errors.every((error) => error.includes("only pause, resume, reschedule or remove it")),
-      ).toBe(true);
+      expect(admissionSource).toBe(requester ? "requester-schedule" : "operator-schedule");
+      const workspaceError = resolveCronSessionWorkspaceOwnershipError({
+        cfg: {},
+        agentId: identity.agentId,
+        sessionKey,
+        ownerSessionKey: stored.owner?.sessionKey,
+        hasWorkspaceBinding: true,
+        admissionSource,
+      });
+      if (requester) {
+        expect(workspaceError).toContain("owning conversation");
+      } else {
+        expect(workspaceError).toBeUndefined();
+      }
+      expect(stored.payload).toEqual({ ...seeded.payload, ...patch.payload });
+      expect(stored.owner).toBeUndefined();
+      expect(stored.ownerProfileId).toBe(seeded.ownerProfileId);
+      expect(stored.createdActor).toEqual(seeded.createdActor);
+      expect(stored.sessionTarget).toBe(seeded.sessionTarget);
+      expect(stored.scheduledToolPolicy).toEqual(seeded.scheduledToolPolicy);
     });
   });
 
@@ -420,12 +444,9 @@ describe("cron ownership access matrix", () => {
           context.cron.getJob.mockImplementation((id) => cron.getJob(id));
           context.cron.getDefaultAgentId.mockImplementation(() => "ops");
           getRuntimeConfig.mockReturnValue(OWNER_CONFIG);
-          context.cron.updateWithPrecondition.mockImplementation((...args) => {
-            if (caller === "revoked") {
-              getRuntimeConfig.mockReturnValue({ ...OWNER_CONFIG, commands: {} });
-            }
-            return cron.updateWithPrecondition(...args);
-          });
+          context.cron.updateWithPrecondition.mockImplementation((...args) =>
+            cron.updateWithPrecondition(...args),
+          );
           let ok = false;
           let message = "";
           try {

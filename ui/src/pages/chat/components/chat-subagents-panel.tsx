@@ -276,6 +276,7 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
       return {
         key: row.session.key,
         title,
+        modelLabel: row.modelLabel,
         status,
         statusLabel,
         elapsed: renderElapsed(row),

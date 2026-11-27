@@ -98,7 +98,7 @@ describe("ensureSandboxContainer recreation and managed mounts", () => {
     const [first, second] = await Promise.all([ensure(params), ensure(params)]);
 
     expect(first).toMatchObject(allocatedContainer());
-    expect(second).toEqual(first);
+    expect(second).toMatchObject(allocatedContainer());
     expect(calls("create")).toHaveLength(1);
     expect(calls("start")).toHaveLength(1);
     expect(calls("inspect")).toHaveLength(2);
@@ -117,6 +117,7 @@ describe("ensureSandboxContainer recreation and managed mounts", () => {
       prepareCreation(true);
       const params = { ...containerParams(), sessionKey: "shared" };
       const first = await createSandboxBackend(params);
+      expect(calls("image")).toHaveLength(0);
       expect(calls("info")).toHaveLength(backendId === "podman" ? 1 : 0);
       expect(registryMocks.updateRegistry).toHaveBeenCalledTimes(1);
       const published = registryMocks.updateRegistry.mock.calls[0]?.[0];
@@ -130,6 +131,7 @@ describe("ensureSandboxContainer recreation and managed mounts", () => {
       });
       registryMocks.readRegistryEntry.mockResolvedValue(published);
       const second = await createSandboxBackend(params);
+      expect(calls("inspect")).toHaveLength(3);
       expect(calls("info")).toHaveLength(backendId === "podman" ? 1 : 0);
       expect(second.runtimeId).toBe(first.runtimeId);
       expect(registryMocks.updateRegistry).toHaveBeenCalledTimes(2);
@@ -149,11 +151,20 @@ describe("ensureSandboxContainer recreation and managed mounts", () => {
       expect(resumedEntry).toMatchObject({ workspaceDir });
       expect(resumedEntry.idleStoppedAtLastUsedMs).toBeUndefined();
 
+      // Replacing an immutable generation cannot reuse its configured mount snapshot.
+      spawnState.inspectRunning = false;
+      cfg.docker.image = "fixture:replacement";
+      const inspections = calls("inspect").length;
+      const replaced = await createSandboxBackend(params);
+      expect(replaced.configLabel).toBe("fixture:replacement");
+      expect(calls("create")).toHaveLength(2);
+      expect(calls("inspect")).toHaveLength(inspections + 2);
+
       // An override of a built-in ID still relies on the generic publisher.
       using overrides = new DisposableStack();
       overrides.defer(registerSandboxBackend(backendId, async () => first));
       await createSandboxBackend(params);
-      expect(registryMocks.updateRegistry).toHaveBeenCalledTimes(4);
+      expect(registryMocks.updateRegistry).toHaveBeenCalledTimes(5);
     },
   );
 
@@ -342,6 +353,7 @@ describe("ensureSandboxContainer recreation and managed mounts", () => {
     ).toBe(false);
     expect(registryMocks.updateRegistry).toHaveBeenCalledWith(
       expect.objectContaining({ runtimeState: "pending" }),
+      undefined,
     );
     expect(registryMocks.completeSandboxRegistryReservation).not.toHaveBeenCalled();
     expect(registryMocks.removeRegistryEntry).not.toHaveBeenCalled();
@@ -474,7 +486,11 @@ describe("ensureSandboxContainer recreation and managed mounts", () => {
       });
       if (state === "missing") {
         await expect(operation).resolves.toMatchObject(allocatedContainer(containerName));
-        expect(registryMocks.removeRegistryEntry).toHaveBeenCalledWith(containerName);
+        expect(registryMocks.removeRegistryEntry).toHaveBeenCalledWith(
+          containerName,
+          {},
+          undefined,
+        );
         expect(spawnState.calls).toContainEqual(createCall);
       } else {
         await expect(operation).rejects.toThrow(

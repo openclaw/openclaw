@@ -220,17 +220,13 @@ export function createCronRunDiagnosticsFromAgentResult(
   opts?: { nowMs?: () => number; finalStatus?: "ok" | "error" | "skipped" },
 ): CronRunDiagnostics | undefined {
   const record = asOptionalObjectRecord(result) ?? {};
-  const meta =
-    record.meta && typeof record.meta === "object" ? (record.meta as Record<string, unknown>) : {};
+  const meta = asOptionalObjectRecord(record.meta) ?? {};
   const diagnostics: Array<CronRunDiagnostics | undefined> = [];
   const payloads = Array.isArray(record.payloads) ? record.payloads : [];
   for (const payload of payloads) {
     diagnostics.push(createCronRunDiagnosticsFromToolPayload(payload, opts));
   }
-  const metaError =
-    meta.error && typeof meta.error === "object"
-      ? (meta.error as { message?: unknown })
-      : undefined;
+  const metaError = asOptionalObjectRecord(meta.error);
   if (typeof metaError?.message === "string") {
     diagnostics.push(createCronRunDiagnosticsFromError("agent-run", metaError.message, opts));
   }
@@ -244,10 +240,7 @@ export function createCronRunDiagnosticsFromAgentResult(
       }),
     );
   }
-  const failureSignal =
-    meta.failureSignal && typeof meta.failureSignal === "object"
-      ? (meta.failureSignal as { message?: unknown; toolName?: unknown })
-      : undefined;
+  const failureSignal = asOptionalObjectRecord(meta.failureSignal);
   if (typeof failureSignal?.message === "string") {
     diagnostics.push(createCronRunDiagnosticsFromError("tool", failureSignal.message, opts));
   }

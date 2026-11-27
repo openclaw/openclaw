@@ -5,7 +5,6 @@ import type {
   WorkboardDiagnostic,
   WorkboardExecution,
   WorkboardExecutionStatus,
-  WorkboardObservationOutcome,
   WorkboardLaunchState,
   WorkboardMetadata,
   WorkboardStaleState,
@@ -30,7 +29,6 @@ import {
   shouldSyncWorkboardLifecycleStatus,
 } from "./store-card-helpers.js";
 import { isWorkboardClaimReclaimable, secondsToDurationMs } from "./store-constants.js";
-import { appendEvidence, buildLifecycleObservation } from "./store-evidence.js";
 import type {
   WorkboardBulkInput,
   WorkboardDiagnosticsResult,
@@ -269,8 +267,6 @@ export class WorkboardStore extends WorkboardNotificationStore {
       stale: WorkboardStaleState | undefined;
       now: number;
       association?: WorkboardLifecycleAssociation;
-      /** Terminal run outcome the session lifecycle reported; recorded as an observation. */
-      observedOutcome?: WorkboardObservationOutcome;
     },
   ): Promise<boolean> {
     return await this.enqueueMutation(async () => {
@@ -316,29 +312,17 @@ export class WorkboardStore extends WorkboardNotificationStore {
         if (!associationIsCurrent) {
           return undefined;
         }
-        const observation =
-          // Reports without a run ID cannot be tied to one run, so they record nothing.
-          input.observedOutcome && input.association?.runId
-            ? buildLifecycleObservation(
-                card,
-                {
-                  outcome: input.observedOutcome,
-                  sessionKey: input.association.sessionKey,
-                  runId: input.association.runId,
-                  observedAt: input.sourceUpdatedAt ?? input.now,
-                },
-                input.now,
-              )
-            : undefined;
-        if (observation) {
-          patch.ownedEvidence = appendEvidence(card.metadata?.automation?.evidence, [observation]);
-        }
         if (
           input.sourceUpdatedAt !== undefined &&
           shouldSyncWorkboardLifecycleStatus(card, input.targetStatus)
         ) {
           patch.status = input.targetStatus;
-          metadata = { lifecycleStatusSourceUpdatedAt: input.sourceUpdatedAt };
+          metadata = {
+            lifecycleStatusSourceUpdatedAt: input.sourceUpdatedAt,
+            // A failed worker can no longer heartbeat or release its claim. Release it with
+            // the run, or the card and its owner's slot stay held until the claim expires.
+            ...(input.targetStatus === "blocked" ? { claim: null } : {}),
+          };
         }
         const acceptedLaunch = input.association
           ? acceptedLaunchForAssociation(card, input.association)

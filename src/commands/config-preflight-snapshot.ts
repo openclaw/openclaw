@@ -1,6 +1,8 @@
+import { isDeepStrictEqual } from "node:util";
 import { listAgentIds } from "../agents/agent-scope-config.js";
+import { getGatewayStartGuardErrors } from "../cli/gateway-cli/pre-bootstrap.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
-import { createConfigIO } from "../config/io.factory.js";
+import { createConfigIO, readConfigSnapshotBeforeEngineSelection } from "../config/io.factory.js";
 import { createConfigReadError, isConfigReadFailure } from "../config/io.invalid-config.js";
 import {
   readConfigFileSnapshot,
@@ -9,10 +11,13 @@ import {
   type ConfigSnapshotReadOptions,
 } from "../config/io.js";
 import type { PreparedConfigRecovery } from "../config/io.types.js";
-import { resolveConfigPath } from "../config/paths.js";
+import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import { isExistingLegacySessionStore } from "../config/sessions/legacy-store-source.js";
+import { describeConfigSnapshotInputChange } from "../config/snapshot-inputs.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { validateConfigObjectWithPlugins } from "../config/validation.js";
+import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import { resolveDatabaseEngineSelection } from "../infra/database-engine/config.js";
 import {
   getDatabaseEngineSelection,
@@ -28,11 +33,15 @@ import {
   withPluginCache,
   type PluginCache,
 } from "../plugins/plugin-cache.js";
-import { completePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import {
+  completePluginMetadataSnapshot,
+  loadPluginMetadataSnapshot,
+} from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import {
+  isStartupConfigStateRead,
   withArtifactPreservingStateReads,
   withLiveStateReads,
 } from "../state/artifact-preserving-state-reads.js";
@@ -137,7 +146,106 @@ async function readConfigPreflightSnapshot(
       deferred?.map((entry) => entry.pluginId) ?? [],
       async () => {
         if (params.includePluginMetadata && !params.skipPluginValidation) {
-          const result = await readConfigFileSnapshotWithPluginMetadata(readOptions);
+          let result = await readConfigFileSnapshotWithPluginMetadata(readOptions);
+          // Optional repair imports keep ordinary config reads outside Doctor's module graph.
+          const automaticRepair =
+            params.purpose === "startup" &&
+            isStartupConfigStateRead() &&
+            !isConfigReadFailure(result.snapshot)
+              ? await import("./doctor/shared/automatic-config-repair.js")
+              : undefined;
+          if (
+            automaticRepair &&
+            (!result.snapshot.valid ||
+              automaticRepair.canPlanAutomaticConfigRepair(result.snapshot))
+          ) {
+            const [
+              { normalizeHeartbeatRepairSource },
+              { tryProjectRetiredHeartbeatConfig },
+              { planLegacyConfigForUpdateChannel },
+            ] = await Promise.all([
+              import("./doctor-automatic-heartbeat-repair.js"),
+              import("./doctor-heartbeat-legacy.js"),
+              import("./doctor/legacy-config-repair.js"),
+            ]);
+            const env = cloneEnvWithPlatformSemantics(process.env);
+            const captured = await createConfigIO({
+              configPath: result.snapshot.path,
+              observe: false,
+              env,
+              pluginValidation: "core-only",
+            }).readConfigFileSnapshotForWrite();
+            const change = describeConfigSnapshotInputChange(result.snapshot, captured.snapshot);
+            if (change) {
+              throw new ConfigMutationConflictError(
+                `Startup config repair source changed (${change}); retry startup.`,
+                { retryable: false },
+              );
+            }
+            const heartbeat = normalizeHeartbeatRepairSource(captured.snapshot);
+            const projectedHeartbeat = tryProjectRetiredHeartbeatConfig(heartbeat.sourceConfig);
+            const heartbeatMigration =
+              projectedHeartbeat && !isDeepStrictEqual(projectedHeartbeat, heartbeat.sourceConfig)
+                ? {
+                    config: projectedHeartbeat,
+                    changes: heartbeat.changes,
+                    pendingStateMigration: true as const,
+                  }
+                : undefined;
+            const repair = await automaticRepair.planAutomaticConfigRepair(
+              captured.snapshot,
+              heartbeatMigration,
+            );
+            const includeRepair =
+              !repair && !heartbeatMigration && captured.snapshot.includedPaths?.length
+                ? planLegacyConfigForUpdateChannel(captured.snapshot, captured.writeOptions)
+                : undefined;
+            const projected =
+              repair?.snapshot ??
+              (includeRepair?.changes.length
+                ? {
+                    ...captured.snapshot,
+                    sourceConfig: includeRepair.config,
+                    resolved: includeRepair.config,
+                    config: includeRepair.config,
+                    runtimeConfig: includeRepair.config,
+                    valid: true,
+                    issues: [],
+                    legacyIssues: [],
+                  }
+                : undefined);
+            if (projected) {
+              const pluginMetadataSnapshot = withEngineStoreAdmission(() =>
+                completePluginMetadataSnapshot({
+                  snapshot: loadPluginMetadataSnapshot({
+                    config: projected.config,
+                    env,
+                    allowCurrent: false,
+                  }),
+                  config: projected.config,
+                  env,
+                }),
+              );
+              const validation = validateConfigObjectWithPlugins(projected.sourceConfig, {
+                env,
+                pluginMetadataSnapshot,
+                deferredPluginMigrations: deferred,
+              });
+              const config = validation.ok ? validation.config : projected.config;
+              result = {
+                ...result,
+                snapshot: {
+                  ...projected,
+                  runtimeConfig: config,
+                  config,
+                  valid: validation.ok,
+                  issues: validation.ok ? [] : validation.issues,
+                  warnings: validation.warnings,
+                },
+                pluginMetadataSnapshot,
+              };
+            }
+          }
           const pluginMetadataSnapshot = await measureDoctorConfigPreflightStep(
             "admission.plugin-metadata-completion",
             () =>
@@ -177,26 +285,6 @@ async function readConfigPreflightSnapshot(
   });
 }
 
-/** Resolve the final config target without observing or opening its storage. */
-export async function readConfigSnapshotBeforeEngineSelection(
-  env: NodeJS.ProcessEnv = process.env,
-  options: Pick<ConfigSnapshotReadOptions, "isolateEnv" | "onSourceEnvApplied"> = {},
-): Promise<ConfigFileSnapshot> {
-  const readEnv = options.isolateEnv === false ? env : cloneEnvWithPlatformSemantics(env);
-  const read = () =>
-    createConfigIO({
-      env: readEnv,
-      observe: false,
-      pluginValidation: "core-only",
-    }).readConfigFileSnapshot({ onSourceEnvApplied: options.onSourceEnvApplied });
-  let snapshot = await read();
-  // One-shot config env may select another target before storage becomes process-stable.
-  while (snapshot.path !== resolveConfigPath(readEnv)) {
-    snapshot = await read();
-  }
-  return snapshot;
-}
-
 /** Select storage and retain its routed environment for subsequent config and state reads. */
 export async function readConfigSnapshotForEngineSelection(
   env: NodeJS.ProcessEnv = process.env,
@@ -230,11 +318,12 @@ export async function readAdmittedConfigSnapshot(params: {
   /** Startup alone migrates credentials after read admission releases its snapshot. */
   prepareClientCredentials?: (snapshot: ConfigFileSnapshot) => Promise<void>;
 }): Promise<ConfigPreflightSnapshotRead & { recovery?: PreparedConfigRecovery }> {
+  let env = params.env;
   const readIdentity = () =>
     measureDoctorConfigPreflightStep("admission.device-identity", async () => {
       const { loadDeviceIdentityIfPresentAsync } =
         await import("../infra/device-identity-async.js");
-      await loadDeviceIdentityIfPresentAsync({ env: params.env });
+      await loadDeviceIdentityIfPresentAsync({ env });
     });
   const admitted = await withLiveStateReads(() =>
     withArtifactPreservingStateReads(async () => {
@@ -264,6 +353,8 @@ export async function readAdmittedConfigSnapshot(params: {
           getDatabaseEngineSelection() ??
           (await resolveDatabaseEngineSelection(selected.config, params.env));
         installDatabaseEngineSelection(selection);
+        // Later config discovery cannot redirect the admitted state preparation.
+        env = cloneEnvWithPlatformSemantics(params.env);
         const admittedRead = await measureDoctorConfigPreflightStep(
           "admission.state-snapshot",
           () =>
@@ -287,46 +378,33 @@ export async function readAdmittedConfigSnapshot(params: {
                   restoreSelectedSourceEnv?.();
                 }
                 const candidate = coreRecovery?.snapshot ?? selected;
-                // Both readers use the admitted database. Pin schema selection before the
-                // full config read applies env defaults, and join both before releasing it.
+                if (candidate.valid) {
+                  await params.validateConfig?.(candidate);
+                }
                 let metadataMetrics: Readonly<Record<string, number>> = {};
-                const [readiness, configRead] = await Promise.allSettled([
-                  (async () => {
-                    await assertStartupStateReady({
-                      cfg: candidate.sourceConfig ?? candidate.config,
-                      env: cloneEnvWithPlatformSemantics(params.env),
-                    });
-                    if (candidate.valid) {
-                      await params.validateConfig?.(candidate);
-                    }
-                  })(),
-                  measureDoctorConfigPreflightStep(
-                    "admission.plugin-config",
-                    async () => {
-                      const read = await params.readSnapshot(
-                        coreRecovery ? { isolateEnv: true } : undefined,
-                      );
-                      metadataMetrics = read.pluginMetadataSnapshot?.metrics ?? {};
-                      return read;
-                    },
-                    undefined,
-                    () => metadataMetrics,
-                  ),
-                ]);
-                if (readiness.status === "rejected") {
-                  throw readiness.reason;
-                }
-                if (configRead.status === "rejected") {
-                  throw configRead.reason;
-                }
-                let read = configRead.value;
+                let read = await measureDoctorConfigPreflightStep(
+                  "admission.plugin-config",
+                  async () => {
+                    const result = await withLiveStateReads(
+                      () => params.readSnapshot(coreRecovery ? { isolateEnv: true } : undefined),
+                      { startupConfig: true },
+                    );
+                    metadataMetrics = result.pluginMetadataSnapshot?.metrics ?? {};
+                    return result;
+                  },
+                  undefined,
+                  () => metadataMetrics,
+                );
                 if (isConfigReadFailure(read.snapshot)) {
                   throw createConfigReadError(read.snapshot);
                 }
-                const recovery = await measureDoctorConfigPreflightStep(
-                  "admission.config-recovery",
-                  () => createConfigIO(recoveryOptions).prepareConfigRecovery(read.snapshot),
-                );
+                // A repair projection is not an already-authored recovery candidate.
+                const recovery =
+                  !candidate.valid && read.snapshot.valid
+                    ? null
+                    : await measureDoctorConfigPreflightStep("admission.config-recovery", () =>
+                        createConfigIO(recoveryOptions).prepareConfigRecovery(read.snapshot),
+                      );
                 if (recovery) {
                   read = {
                     snapshot: recovery.snapshot,
@@ -335,9 +413,6 @@ export async function readAdmittedConfigSnapshot(params: {
                 }
                 if (read.snapshot.valid) {
                   await params.validateConfig?.(read.snapshot);
-                  if (!params.prepareClientCredentials) {
-                    await readIdentity();
-                  }
                 }
                 if (
                   params.beforeStatePreparation &&
@@ -370,10 +445,33 @@ export async function readAdmittedConfigSnapshot(params: {
       }
     }),
   );
-  if (admitted.snapshot.valid && params.prepareClientCredentials) {
+  if (admitted.snapshot.valid) {
     try {
-      await params.prepareClientCredentials(admitted.snapshot);
-      await withLiveStateReads(() => withArtifactPreservingStateReads(readIdentity));
+      await withLiveStateReads(async () => {
+        // Recovery has not authored its selected config yet. Migrating the live
+        // clobbered source under the recovered config's guard would mutate the
+        // wrong owners before readiness can refuse. The recovery owner applies
+        // that candidate only after the unchanged readiness checks below admit it.
+        if (!("recovery" in admitted && admitted.recovery)) {
+          // Schema maintenance must not load Doctor migrations for ordinary config reads.
+          const { upgradeStateOnGatewayStart } = await import("../state/state-upgrade-startup.js");
+          await upgradeStateOnGatewayStart(
+            env,
+            () =>
+              getGatewayStartGuardErrors({
+                configExists: admitted.snapshot.exists,
+                mode: admitted.snapshot.config.gateway?.mode,
+              }).length === 0,
+          );
+          // Only completed maintenance shortens the launcher's preparation trial.
+          if (env.OPENCLAW_LAUNCHER_IPC === "1" && process.connected && process.send) {
+            process.send({ type: "openclaw.trial", phase: "trial" }, () => {});
+          }
+        }
+        await assertStartupStateReady({ cfg: admitted.snapshot.sourceConfig, env });
+        await params.prepareClientCredentials?.(admitted.snapshot);
+        await withArtifactPreservingStateReads(readIdentity);
+      });
     } catch (error) {
       return rethrowStartupConfigFailure(error);
     }

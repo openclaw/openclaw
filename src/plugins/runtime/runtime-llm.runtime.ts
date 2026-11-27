@@ -1,7 +1,8 @@
 import { asFiniteNumber } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
-import { normalizeModelRef, type ModelRef } from "../../agents/model-ref-shared.js";
+import type { ModelRef } from "../../agents/model-ref-shared.js";
+import { normalizeModelRef } from "../../agents/model-selection-normalize.js";
 import { makeZeroUsageSnapshot } from "../../agents/usage.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Api, Message } from "../../llm/types.js";

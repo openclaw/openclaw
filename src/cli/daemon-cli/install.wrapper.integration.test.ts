@@ -86,46 +86,65 @@ function expectExit(operation: () => Promise<unknown>) {
   return expect(operation()).rejects.toBe(exit);
 }
 
-it("uses the running Bun on first install when Node is unavailable", async () => {
-  const execPath = Object.getOwnPropertyDescriptor(process, "execPath")!;
-  const bunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
-  const bunPath = "/opt/app/runtime/bun";
-  Object.defineProperty(process, "execPath", { configurable: true, value: bunPath });
-  Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.3" });
-  vi.spyOn(runtimePaths, "resolvePreferredNodePath").mockResolvedValue(undefined);
-  vi.spyOn(runtimePaths, "resolveSystemNodeInfo").mockResolvedValue(null);
-  const probe = vi.spyOn(runtimePaths, "resolveBunRuntimeInfo").mockResolvedValue({
-    status: "supported" as const,
-    version: "1.4.3",
-    ...sqliteCapabilities,
-  });
-  try {
-    await parseInstall(["--force", "--port", "29453", "--json"]);
-    expect(runtimeErrors).toEqual([]);
-    expect(service.install).toHaveBeenCalledOnce();
-    const [installed] = service.install.mock.calls[0]!;
-    expect(installed.runtimePinUpdate?.pin).toBeUndefined();
-    expect(installed.programArguments).toEqual([
-      bunPath,
-      "--no-install",
-      entrypoint,
-      "gateway",
-      "--port",
-      "29453",
-    ]);
-    expect(probe).toHaveBeenCalledWith(bunPath, expect.any(Object));
-    expect(JSON.parse(runtimeLogs.at(-1)!).warnings).toEqual([
-      "No supported Node runtime was found; using the running Bun for the service.",
-    ]);
-  } finally {
-    Object.defineProperty(process, "execPath", execPath);
-    if (bunVersion) {
-      Object.defineProperty(process.versions, "bun", bunVersion);
-    } else {
-      delete process.versions.bun;
+it.each([true, false])(
+  "uses the running Bun on first install when Node is unavailable (verified package=%s)",
+  async (verifiedPackage) => {
+    const root = path.dirname(path.dirname(entrypoint));
+    if (!verifiedPackage) {
+      await fs.unlink(path.join(root, "package.json"));
     }
-  }
-});
+    const execPath = Object.getOwnPropertyDescriptor(process, "execPath")!;
+    const bunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
+    const bunPath = "/opt/app/runtime/bun";
+    Object.defineProperty(process, "execPath", { configurable: true, value: bunPath });
+    Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.3" });
+    vi.spyOn(runtimePaths, "resolvePreferredNodePath").mockResolvedValue(undefined);
+    vi.spyOn(runtimePaths, "resolveSystemNodeInfo").mockResolvedValue(null);
+    const probe = vi.spyOn(runtimePaths, "resolveBunRuntimeInfo").mockResolvedValue({
+      status: "supported" as const,
+      version: "1.4.3",
+      ...sqliteCapabilities,
+    });
+    try {
+      await parseInstall(["--force", "--port", "29453", "--json"]);
+      expect(runtimeErrors).toEqual([]);
+      expect(service.install).toHaveBeenCalledOnce();
+      const [installed] = service.install.mock.calls[0]!;
+      expect(installed.runtimePinUpdate?.pin).toBeUndefined();
+      expect(installed.programArguments).toEqual([
+        bunPath,
+        "--no-install",
+        entrypoint,
+        "gateway",
+        "--port",
+        "29453",
+      ]);
+      expect(probe).toHaveBeenCalledWith(bunPath, expect.any(Object));
+      expect(JSON.parse(runtimeLogs.at(-1)!).warnings).toEqual([
+        "No supported Node runtime was found; using the running Bun for the service.",
+        ...(!verifiedPackage
+          ? [
+              "Terminal CLI setup skipped: the installed Gateway command has no reusable CLI entrypoint.",
+            ]
+          : []),
+      ]);
+      const launcher = path.join(root, ".openclaw-wrapper-test/bin/openclaw");
+      if (verifiedPackage) {
+        expect((await fs.stat(launcher)).mode & 0o111).not.toBe(0);
+        expect(await fs.readlink(path.join(root, ".openclaw/bin/openclaw"))).toBe(launcher);
+      } else {
+        await expect(fs.lstat(launcher)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+    } finally {
+      Object.defineProperty(process, "execPath", execPath);
+      if (bunVersion) {
+        Object.defineProperty(process.versions, "bun", bunVersion);
+      } else {
+        delete process.versions.bun;
+      }
+    }
+  },
+);
 
 beforeEach(async () => {
   originalArgv = process.argv;
@@ -137,6 +156,10 @@ beforeEach(async () => {
   const state = path.join(home, ".openclaw-wrapper-test");
   for (const [key, value] of Object.entries({
     HOME: home,
+    PATH: "/usr/bin:/bin",
+    SHELL: "/bin/bash",
+    ZDOTDIR: undefined,
+    XDG_CONFIG_HOME: undefined,
     OPENCLAW_HOME: "",
     OPENCLAW_PROFILE: "wrapper-test",
     OPENCLAW_STATE_DIR: state,
@@ -161,8 +184,10 @@ beforeEach(async () => {
   service.readCommand.mockReset().mockResolvedValue(null);
   await fs.writeFile(
     path.join(state, "openclaw.json"),
-    JSON.stringify({ gateway: { mode: "local", auth: { mode: "none" } } }),
+    JSON.stringify({ gateway: { mode: "local", bind: "loopback", auth: { mode: "none" } } }),
   );
+  // Model an installed package, not an unowned dist-like path.
+  await fs.writeFile(path.join(home, "package.json"), JSON.stringify({ name: "openclaw" }));
   entrypoint = path.join(home, "dist", "index.js");
   await fs.mkdir(path.dirname(entrypoint));
   await fs.writeFile(entrypoint, "");
@@ -207,6 +232,17 @@ it.each([false, true])("retains a pre-write install refusal (rebind=%s)", async 
   });
   expect(runtimeErrors).toEqual([]);
   expect(service.install).not.toHaveBeenCalled();
+});
+
+it("runs the delegated install when legacy history cannot be prepared", async () => {
+  supplyExecutorInput();
+  const history = await import("../../update/legacy-trial.js");
+  vi.spyOn(history, "prepareLegacyTrialRun").mockRejectedValueOnce(
+    new Error("history unavailable"),
+  );
+  const install = vi.fn(async () => {});
+  await runGatewayServiceUpdateCommand("run", "install", install);
+  expect(install).toHaveBeenCalledOnce();
 });
 
 it.each([

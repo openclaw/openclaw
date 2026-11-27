@@ -1,10 +1,13 @@
 /** Builds web-tool secret metadata from config, plugins, and provider contracts. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
-import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-records.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
+import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { sortPluginEntriesForAutoDetect } from "../plugins/plugin-entry-order.js";
+import { readPluginStateMigrationReadinessAsync } from "../plugins/plugin-state-migration-readiness.js";
 import type {
   PluginWebFetchProviderEntry,
   PluginWebSearchProviderEntry,
@@ -265,9 +268,9 @@ async function hasCustomWebProviderPluginRisk(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   manifestRecords?: readonly PluginManifestRecord[];
+  installRecords: Record<string, PluginInstallRecord>;
 }): Promise<boolean> {
-  const installRecords = loadInstalledPluginIndexInstallRecordsSync({ env: params.env });
-  if (Object.keys(installRecords).length > 0) {
+  if (Object.keys(params.installRecords).length > 0) {
     return true;
   }
 
@@ -319,6 +322,8 @@ async function resolveBundledWebProviders(params: {
   context: ResolverContext;
   configuredBundledPluginId?: string;
   hasCustomPluginRisk: boolean;
+  installRecords: Record<string, PluginInstallRecord>;
+  loadMigrationReadiness: () => ReturnType<typeof readPluginStateMigrationReadinessAsync>;
 }): Promise<Array<PluginWebSearchProviderEntry | PluginWebFetchProviderEntry>> {
   const env = { ...process.env, ...params.context.env };
   const onlyPluginIds =
@@ -369,6 +374,8 @@ async function resolveBundledWebProviders(params: {
     // Fetch credential resolution admits only bundled or verified official providers.
     ...(origin ? { origin } : params.kind === "fetch" ? { sandboxed: true } : {}),
     manifestRecords: params.context.manifestRegistry?.plugins,
+    installRecords: params.installRecords,
+    pendingStateMigrations: await params.loadMigrationReadiness(),
   });
 }
 
@@ -392,16 +399,6 @@ export async function resolveRuntimeWebTools(params: {
 
   const sourceTools = isRecord(params.sourceConfig.tools) ? params.sourceConfig.tools : undefined;
   const sourceWeb = isRecord(sourceTools?.web) ? sourceTools.web : undefined;
-  const customWebProviderRisks: Partial<Record<WebProviderContract, Promise<boolean>>> = {};
-  const getHasCustomWebProviderRisk = (contract: WebProviderContract): Promise<boolean> => {
-    customWebProviderRisks[contract] ??= hasCustomWebProviderPluginRisk({
-      contract,
-      config: params.sourceConfig,
-      env,
-      manifestRecords: params.context.manifestRegistry?.plugins,
-    });
-    return customWebProviderRisks[contract];
-  };
   const hasPluginWebSearchConfig = hasPluginScopedWebToolConfig(params.sourceConfig, "webSearch");
   const hasPluginWebFetchConfig = hasPluginScopedWebToolConfig(params.sourceConfig, "webFetch");
   const search = isRecord(sourceWeb?.search) ? sourceWeb.search : undefined;
@@ -415,16 +412,40 @@ export async function resolveRuntimeWebTools(params: {
   if (!search && !fetch && !hasPluginWebSearchConfig && !hasPluginWebFetchConfig) {
     return result;
   }
+  let installRecords: Record<string, PluginInstallRecord> | undefined;
+  let migrationReadiness: ReturnType<typeof readPluginStateMigrationReadinessAsync> | undefined;
+  const loadMigrationReadiness = () =>
+    (migrationReadiness ??= readPluginStateMigrationReadinessAsync({ env }));
   for (const kind of ["search", "fetch"] as const) {
     const toolConfig = kind === "search" ? search : fetch;
     const rawProvider = normalizeLowercaseStringOrEmpty(toolConfig?.provider);
     const contract = kind === "search" ? "webSearchProviders" : "webFetchProviders";
+    const discoverProviders =
+      kind === "search"
+        ? search || hasPluginWebSearchConfig
+        : needsRuntimeWebFetchProviderDiscovery({
+            fetch,
+            rawProvider,
+            hasPluginWebFetchConfig,
+            defaults,
+          });
+    if (!discoverProviders) {
+      continue;
+    }
+    if (!installRecords) {
+      const activateDiscovery = await preparePluginMetadataMachineStateAsync({ env });
+      installRecords = await loadInstalledPluginIndexInstallRecords({ env });
+      activateDiscovery();
+    }
+    const hasCustomPluginRisk = await hasCustomWebProviderPluginRisk({
+      contract,
+      config: params.sourceConfig,
+      env,
+      manifestRecords: params.context.manifestRegistry?.plugins,
+      installRecords,
+    });
     let configuredBundledPluginIdHint: string | undefined;
-    if (
-      kind === "search" &&
-      hasPluginWebSearchConfig &&
-      !(await getHasCustomWebProviderRisk(contract))
-    ) {
+    if (kind === "search" && hasPluginWebSearchConfig && !hasCustomPluginRisk) {
       if (rawProvider) {
         const entry = params.sourceConfig.plugins?.entries?.[rawProvider];
         if (isRecord(entry) && entry.enabled !== false) {
@@ -438,18 +459,6 @@ export async function resolveRuntimeWebTools(params: {
         params.sourceConfig,
         "webSearch",
       );
-    }
-    const discoverProviders =
-      kind === "search"
-        ? search || hasPluginWebSearchConfig
-        : needsRuntimeWebFetchProviderDiscovery({
-            fetch,
-            rawProvider,
-            hasPluginWebFetchConfig,
-            defaults,
-          });
-    if (!discoverProviders) {
-      continue;
     }
     const metadata = webTools[kind];
     const isSearch = kind === "search";
@@ -465,6 +474,7 @@ export async function resolveRuntimeWebTools(params: {
         manifestRecords: params.context.manifestRegistry?.plugins,
       });
     };
+    const providerInstallRecords = installRecords;
     const resolveProviders = async () =>
       sortPluginEntriesForAutoDetect(
         await resolveBundledWebProviders({
@@ -472,7 +482,9 @@ export async function resolveRuntimeWebTools(params: {
           sourceConfig: params.sourceConfig,
           context: params.context,
           configuredBundledPluginId,
-          hasCustomPluginRisk: await getHasCustomWebProviderRisk(contract),
+          hasCustomPluginRisk,
+          installRecords: providerInstallRecords,
+          loadMigrationReadiness,
         }),
       );
     if (!configuredBundledPluginId && rawProvider) {

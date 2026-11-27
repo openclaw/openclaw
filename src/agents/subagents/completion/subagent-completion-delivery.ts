@@ -24,7 +24,7 @@ import {
 import { isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
 import {
   admitSubagentCompletionDelivery,
-  blockSubagentCompletionDelivery,
+  settleSubagentCompletionInHistory,
   settleSubagentCompletionDelivery,
   SubagentCompletionSourceChangedError,
 } from "./subagent-completion-admission.store.js";
@@ -177,12 +177,8 @@ export async function settleCorrelatedSubagentDelivery(
     return latest;
   };
   if (outcome !== "recovered") {
-    await blockSubagentCompletionDelivery({
-      context: queueContext,
-      subagent: current,
-      reason: queued.lastError ?? "completion delivery failed",
-      suspendedReason: "permanent_failure",
-    });
+    // The produced files missed the chat; the child's status still reaches requester history.
+    await settleSubagentCompletionInHistory({ context: queueContext, subagent: current });
     return;
   }
   await settleSubagentCompletionDelivery({

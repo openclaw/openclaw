@@ -101,7 +101,9 @@ function renderMarkdownRichListSource(
       blocks: blocks.length > 0 ? blocks : [{ type: "paragraph", text: "" }],
       ...(item.task ? { has_checkbox: true as const } : {}),
       ...(item.checked ? { is_checked: true as const } : {}),
-      ...(item.value !== undefined ? { value: item.value } : {}),
+      // Bot API rich lists carry no ordered flag; Telegram draws a bullet unless
+      // the item names its label type, so a numbered item needs `type: "1"`.
+      ...(item.value !== undefined ? { value: item.value, type: "1" as const } : {}),
     };
   });
   return { type: "list", items };
@@ -323,14 +325,24 @@ function irRangeToRichText(
     stack.length = shared;
     for (const item of active.slice(shared)) {
       const container: RichText[] = [];
-      const node: RichText =
-        item.kind === "html"
-          ? item.wrap(container)
-          : item.kind === "link"
-            ? item.target.kind === "url"
+      let node: RichText;
+      switch (item.kind) {
+        case "html":
+          node = item.wrap(container);
+          break;
+        case "link":
+          node =
+            item.target.kind === "url"
               ? richTextLink(container, item.target.href)
-              : { type: "anchor_link", text: container, anchor_name: item.target.name }
-            : { type: item.kind === "annotation" ? "code" : item.style, text: container };
+              : { type: "anchor_link", text: container, anchor_name: item.target.name };
+          break;
+        case "annotation":
+          node = { type: "code", text: container };
+          break;
+        case "style":
+          node = { type: item.style, text: container };
+          break;
+      }
       currentText().push(node);
       stack.push({ span: item, text: container });
     }
@@ -565,7 +577,9 @@ export function markdownToTelegramRichBlocks(
       return [
         {
           type: "paragraph",
-          text: htmlNodes.length ? nodeText(htmlNodes, true) : ir.text.slice(rangeStart, rangeEnd),
+          text: htmlNodes.length
+            ? nodeText(htmlNodes, { preserveMediaSources: true })
+            : ir.text.slice(rangeStart, rangeEnd),
         },
       ];
     }

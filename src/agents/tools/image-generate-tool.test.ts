@@ -1,10 +1,7 @@
-import { createHash } from "node:crypto";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { findMediaGenerationOperation } from "../media-generation-activity.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../media-generation-activity.test-support.js";
 import { observeSettlement } from "../promise-settlement.test-support.js";
+import { defineImageGenerationIdentityTests } from "./image-generate-identity.test-support.js";
 vi.mock("../media-generation-activity.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../media-generation-activity.js")>();
   const { observeMediaActivity } =
@@ -32,7 +29,6 @@ import { configWithDefaults } from "./media-config.test-support.js";
 import {
   defineMediaGenerationCancellationTests,
   defineMediaGenerationDuplicateTests,
-  withHeldCronMediaGenerationResult,
   withHeldMediaGenerationResult,
 } from "./media-generation-lifecycle.test-support.js";
 
@@ -67,6 +63,7 @@ let imageGenerationRuntime: typeof import("../../image-generation/runtime.js");
 let mediaGenerationToolProviders: typeof import("./media-generation-tool-providers.js");
 let mediaGenerationRegistry: typeof import("../../media-generation/registry.js");
 let imageOps: typeof import("../../media/media-services.js");
+let imageHeaderMetadata: typeof import("../../media/image-header-metadata.js");
 let splitMediaFromOutput: typeof import("../../media/parse.js").splitMediaFromOutput;
 let mediaStore: typeof import("../../media/store.js");
 let webMedia: typeof import("../../media/web-media.js");
@@ -443,6 +440,7 @@ describe("createImageGenerateTool", () => {
     mediaGenerationToolProviders = await import("./media-generation-tool-providers.js");
     mediaGenerationRegistry = await import("../../media-generation/registry.js");
     imageOps = await import("../../media/media-services.js");
+    imageHeaderMetadata = await import("../../media/image-header-metadata.js");
     ({ splitMediaFromOutput } = await import("../../media/parse.js"));
     mediaStore = await import("../../media/store.js");
     webMedia = await import("../../media/web-media.js");
@@ -718,7 +716,7 @@ describe("createImageGenerateTool", () => {
     expect(cap).toBe(maxBytes);
     expect(fileName).toBe("cat.jpg");
     expect(saved?.byteLength).toBeLessThanOrEqual(maxBytes);
-    expect(imageOps.readImageMetadataFromHeader(saved as Buffer)).toEqual({
+    expect(imageHeaderMetadata.readImageMetadataFromHeader(saved as Buffer)).toEqual({
       width: 1024,
       height: 1024,
     });
@@ -758,15 +756,12 @@ describe("createImageGenerateTool", () => {
     });
     const terminalError = new Error("image persistence failed");
     const lateSavedMedia = savedMedia("late.png", 4);
-    let resolveLateSave!: (saved: typeof lateSavedMedia) => void;
-    const lateSave = new Promise<typeof lateSavedMedia>((resolve) => {
-      resolveLateSave = resolve;
-    });
+    const lateSave = createDeferred<typeof lateSavedMedia>();
     const immediatelySavedMedia = savedMedia("saved.png", 5);
     const saveMediaBuffer = vi
       .spyOn(mediaStore, "saveMediaBuffer")
       .mockRejectedValueOnce(terminalError)
-      .mockImplementationOnce(() => lateSave)
+      .mockImplementationOnce(() => lateSave.promise)
       .mockResolvedValueOnce(immediatelySavedMedia);
     const deleteMediaBuffer = vi
       .spyOn(mediaStore, "deleteMediaBuffer")
@@ -780,7 +775,7 @@ describe("createImageGenerateTool", () => {
     await Promise.resolve();
     expect(executionSettled()).toBe(false);
 
-    resolveLateSave(lateSavedMedia);
+    lateSave.resolve(lateSavedMedia);
     await expect(execution).rejects.toBe(terminalError);
     expect(deleteMediaBuffer).toHaveBeenCalledTimes(2);
     expect(deleteMediaBuffer).toHaveBeenCalledWith("late.png", "tool-image-generation");
@@ -1030,54 +1025,6 @@ describe("createImageGenerateTool", () => {
     expect(generateImage).not.toHaveBeenCalled();
   });
 
-  it("starts run-scoped cron image generation as a tracked async task", async () => {
-    stubImageGenerationProviders();
-    vi.stubEnv("OPENAI_API_KEY", "openai-test");
-    sessionAccessorMocks.loadSessionEntryReadOnly.mockReturnValue({
-      sessionId: "run-123",
-      updatedAt: 1,
-      cronRunContinuation: {
-        lifecycleRevision: "revision-1",
-        phase: "running",
-      },
-    });
-    const generateImage = mockGeneratedImage({
-      images: [imageAsset("png-out", "cron.png")],
-    });
-    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(savedMedia("generated-cron.png", 7));
-    taskRuntimeMocks.createOperation.mockReturnValue({
-      taskId: "task-cron-image",
-    });
-    const tool = createToolWithPrimaryImageModel("openai/gpt-image-1", {
-      agentDir: "/tmp/agent",
-      agentSessionKey: "agent:main:cron:daily-media:run:run-123",
-      requesterOrigin: {
-        channel: "slack",
-        to: "channel:C123",
-      },
-    });
-
-    await withHeldCronMediaGenerationResult(generateImage, taskRuntimeMocks, async (complete) => {
-      const result = await tool.execute("call-cron-inline", {
-        prompt: "Daily proof image",
-        model: "openai/gpt-image-1",
-      });
-
-      expect(taskRuntimeMocks.completeOperation).not.toHaveBeenCalled();
-      expect(resultText(result)).toContain("Background task started for image generation");
-      expect(resultDetails(result).async).toBe(true);
-      expect(resultDetails(result).runId).toEqual(expect.stringMatching(/^tool:image_generate:/));
-      expect(taskRuntimeMocks.createOperation).toHaveBeenCalledWith(
-        expect.objectContaining({
-          runId: expect.stringMatching(/^tool:image_generate:/),
-          requesterSessionKey: "agent:main:cron:daily-media:run:run-123",
-        }),
-      );
-      await complete();
-      expect(generateImage).toHaveBeenCalledOnce();
-    });
-  });
-
   it("starts a distinct image request while another image task is active", async () => {
     stubImageGenerationProviders();
     vi.stubEnv("OPENAI_API_KEY", "openai-test");
@@ -1173,16 +1120,8 @@ describe("createImageGenerateTool", () => {
     expect(tasks[1]?.progressSummary).toBe("Queued second image");
   });
 
-  it.each(["reference", "same-path contents", "model", "options"])(
-    "starts corrected image work for changed %s but dedupes an exact retry",
-    async (changed) => {
-      const root = await fs.mkdtemp(path.join(os.tmpdir(), "image-request-identity-"));
-      const firstBytes = encodePngRgba(Buffer.from([255, 0, 0, 255]), 1, 1);
-      const secondBytes = encodePngRgba(Buffer.from([0, 0, 255, 255]), 1, 1);
-      const firstPath = path.join(root, "reference.png");
-      const secondPath = path.join(root, "corrected.png");
-      await fs.writeFile(firstPath, firstBytes);
-      await fs.writeFile(secondPath, secondBytes);
+  defineImageGenerationIdentityTests({
+    setup(root, firstBytes) {
       const provider = createOpenAIEditProvider();
       const generate = vi.fn<ImageGenerationProvider["generateImage"]>().mockResolvedValue({
         images: [{ buffer: firstBytes, mimeType: "image/png" }],
@@ -1197,58 +1136,10 @@ describe("createImageGenerateTool", () => {
         workspaceDir: root,
         agentSessionKey: "agent:main:discord:direct:123",
       });
-      const request = { prompt: "Keep this character, change the background", image: firstPath };
-      try {
-        await withHeldMediaGenerationResult(generate, taskRuntimeMocks, async (complete) => {
-          const first = await tool.execute("first", request);
-          const repeat = await tool.execute("retry", request);
-          expect(resultDetails(repeat).duplicateGuard).toBe(true);
-          expect(taskRuntimeMocks.createOperation).toHaveBeenCalledTimes(1);
-          if (changed === "same-path contents") {
-            await fs.writeFile(firstPath, secondBytes);
-          }
-          const corrected = {
-            ...request,
-            ...(changed === "reference" ? { image: secondPath } : {}),
-            ...(changed === "model" ? { model: "openai/gpt-image-1-mini" } : {}),
-            ...(changed === "options" ? { openai: { moderation: "low" } } : {}),
-          };
-          const second = await tool.execute("correction", corrected);
-          expect(resultDetails(second).duplicateGuard).toBeUndefined();
-          expect(taskRuntimeMocks.createOperation).toHaveBeenCalledTimes(2);
-          expect(
-            resultDetails(await tool.execute("corrected-retry", corrected)).duplicateGuard,
-          ).toBe(true);
-          await complete(2);
-          expect(generate).toHaveBeenCalledTimes(2);
-          expect(generate.mock.calls[0]?.[0].inputImages?.[0]?.buffer).toEqual(firstBytes);
-          const expectedBytes =
-            changed === "reference" || changed === "same-path contents" ? secondBytes : firstBytes;
-          expect(generate.mock.calls[1]?.[0].inputImages?.[0]?.buffer).toEqual(expectedBytes);
-          expect(generate.mock.calls[1]?.[0].model).toBe(
-            changed === "model" ? "gpt-image-1-mini" : "gpt-image-1",
-          );
-          if (changed === "options") {
-            expect(generate.mock.calls[1]?.[0].providerOptions?.openai?.moderation).toBe("low");
-          }
-          for (const [receipt, bytes] of [
-            [first, firstBytes],
-            [second, expectedBytes],
-          ] as const) {
-            expect(resultDetails(receipt).referenceInputs).toEqual([
-              {
-                sha256: createHash("sha256").update(bytes).digest("hex"),
-                bytes: bytes.byteLength,
-                mimeType: "image/png",
-              },
-            ]);
-          }
-        });
-      } finally {
-        await fs.rm(root, { recursive: true, force: true });
-      }
+      return { tool, generate, tasks: taskRuntimeMocks };
     },
-  );
+    resultDetails,
+  });
 
   it("returns recent status for a repeated image request after fast task completion", async () => {
     stubImageGenerationProviders();

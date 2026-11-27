@@ -1,4 +1,3 @@
-import type { ReadFileSyncOptions } from "node:fs";
 import path from "node:path";
 import {
   clearActiveEmbeddedRun,
@@ -78,29 +77,9 @@ const configLayerPolicyMocks = vi.hoisted(() => ({
   >(async () => ({ config: {}, origins: {}, layers: [] })),
 }));
 
-vi.mock("node:fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs")>();
-  return {
-    ...actual,
-    readFileSync(
-      filePath: string | URL | number,
-      options?: BufferEncoding | ReadFileSyncOptions | null,
-    ) {
-      if (filePath === "/etc/codex/requirements.toml") {
-        const content = codexRequirementsTomlMock();
-        if (content !== undefined) {
-          return content;
-        }
-        throw Object.assign(new Error("Synthetic Codex requirements file is absent"), {
-          code: "ENOENT",
-        });
-      }
-      return actual.readFileSync(
-        filePath,
-        typeof options === "string" ? { encoding: options } : (options ?? {}),
-      );
-    },
-  };
+vi.mock("node:fs", async () => {
+  const { mockRequirementsFs } = await import("./conversation-binding-filesystem.test-support.js");
+  return mockRequirementsFs(codexRequirementsTomlMock);
 });
 
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {

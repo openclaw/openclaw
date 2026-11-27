@@ -53,7 +53,7 @@ describe("session transcript reader facade", () => {
     usage: { input, output, cost: { total: 0.001 } },
   });
   const expectHistoryOverflow = (read: Promise<unknown>) =>
-    expect(read).rejects.toThrow("Transcript history message exceeds the 8388608-byte page limit");
+    expect(read).rejects.toThrow("Chat history message exceeds the 8388608-byte page limit");
 
   test("prepares byte, usage and taint facts without host transcript SQL", async () => {
     const events = [
@@ -236,7 +236,7 @@ describe("session transcript reader facade", () => {
     ]);
     expect(await readCount(scope)).toBe(1);
     await expect(readSource(scope, { mode: "page" })).rejects.toThrow(
-      "Transcript source message exceeds the 8388608-byte page limit",
+      "Chat history message exceeds the 8388608-byte page limit",
     );
     await expectHistoryOverflow(readPage(scope, { offset: 0, maxMessages: 1 }));
     await expectHistoryOverflow(readRecent(scope, { maxMessages: 1 }));

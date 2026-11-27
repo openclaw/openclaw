@@ -25,8 +25,6 @@ export function assertBoundGatewayAccessDecision(
     return assertCurrent();
   }
   const scope = pluginInvocationContext.getStore();
-  // enter() performs this lookup even for an active call: closed scopes must refuse.
-  scope?.lookup(instance);
   assertOperatorAccessDecision(decision, assertCurrent, scope, pluginInstanceInvocation.getStore());
 }
 

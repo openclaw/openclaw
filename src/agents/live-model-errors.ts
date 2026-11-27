@@ -1,3 +1,18 @@
+// Bodies that OpenAI and Google return when a model they list cannot serve a chat request.
+const LISTED_MODEL_CHAT_REJECTION_RE =
+  /\bmodel\b[^\r\n,;]{0,120}\bdoes not exist\b|not supported with the Responses API|not supported for generateContent|response modalities|bidiGenerateContent|not allowed to sample/i;
+
+/**
+ * A deterministic 400, 403 or 404 that says the model cannot serve this chat request. Only
+ * meaningful for a model in the credential's current listing; otherwise the model is missing.
+ */
+export function isListedModelChatRejection(status: number | undefined, message: string): boolean {
+  return (
+    (status === 400 || status === 403 || status === 404) &&
+    LISTED_MODEL_CHAT_REJECTION_RE.test(message)
+  );
+}
+
 /**
  * Probe and fallback code uses these string checks to distinguish missing or
  * deprecated model ids from generic provider/runtime failures.

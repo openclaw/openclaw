@@ -54,6 +54,7 @@ afterEach(() => {
 const replySessionKey = "agent:main:slack:room:1";
 function clearArchived(keys = [replySessionKey, "old-session"]) {
   clearSessionResetRuntimeState(keys, {
+    cause: "reset",
     agentId: "main",
     sessionKey: replySessionKey,
     activeReplySessionId: "old-session",
@@ -90,6 +91,7 @@ describe("clearSessionResetRuntimeState", () => {
       await writeSettings(35_000);
 
       clearSessionResetRuntimeState([archivedSessionId], {
+        cause: "reset",
         agentId: "main",
         sessionKey: "agent:main:settings-reset",
         activeReplySessionId: archivedSessionId,
@@ -138,6 +140,7 @@ describe("clearSessionResetRuntimeState", () => {
     enqueueSystemEvent("fresh gamma", withSystemEventOwner({ sessionKey: "gamma" }, "main"));
 
     clearSessionResetRuntimeState([" alpha ", undefined, " ", "alpha", "beta"], {
+      cause: "reset",
       agentId: "main",
       sessionKey: "alpha",
       assertCurrent: () => {},
@@ -154,6 +157,7 @@ describe("clearSessionResetRuntimeState", () => {
     enqueueSystemEvent("beta", withSystemEventOwner({ sessionKey: "global" }, "beta"));
 
     clearSessionResetRuntimeState(["global", "agent:beta:global"], {
+      cause: "reset",
       agentId: " Alpha ",
       sessionKey: "global",
       assertCurrent: () => {},
@@ -299,6 +303,7 @@ it("keeps reset cleanup current through metadata writes and refuses a replacemen
       enqueueSystemEvent("replacement work", withSystemEventOwner({ sessionKey }, agentId));
       expect(() =>
         clearSessionResetRuntimeState([sessionKey, entry.sessionId], {
+          cause: "reset",
           agentId,
           sessionKey,
           activeReplySessionId: entry.sessionId,

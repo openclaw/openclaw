@@ -15,7 +15,9 @@ enum ShareContentExtractor {
         var attributedContentText: String?
         var providers: [NSItemProvider] = []
         for item in items {
-            if title == nil { title = item.attributedTitle?.string }
+            if title == nil, let candidate = item.attributedTitle?.string, candidate.trimmedNonEmpty != nil {
+                title = candidate
+            }
             if attributedContentText == nil { attributedContentText = item.attributedContentText?.string }
             providers.append(contentsOf: item.attachments ?? [])
         }

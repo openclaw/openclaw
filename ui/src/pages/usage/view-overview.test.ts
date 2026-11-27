@@ -4,7 +4,6 @@ import { i18n } from "../../i18n/index.ts";
 import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import { UsageMosaic } from "./metrics-view.tsx";
 import type { UsageAggregates, UsageProps, UsageSessionEntry, UsageTotals } from "./types.ts";
 import { totals, dailyEntry } from "./usage-chart.test-support.ts";
 import { CostWindowComparison, renderFilterChips, UsageInsights } from "./view-overview.tsx";
@@ -14,6 +13,7 @@ import {
   buildAggregatesFromSessions,
   createUsageOverview,
   usageFixture,
+  usageTotals,
 } from "./view.test-support.ts";
 
 const aggregates = buildAggregatesFromSessions([]);
@@ -38,6 +38,26 @@ function mountInsights(currentTotals: () => UsageTotals, currentAggregates: () =
 }
 
 describe("UsageInsights", () => {
+  it("keeps an unmeasured cache rate neutral and rates measured results", () => {
+    const [current, setCurrent] = createSignal(usageTotals(0, 0));
+    const { container } = mountInsights(current, () => aggregates);
+    for (const [input, cacheRead, label, tone] of [
+      [0, 0, "—", undefined],
+      [100, 0, "0.0%", "bad"],
+      [50, 50, "50.0%", "warn"],
+      [25, 75, "75.0%", "good"],
+    ] as const) {
+      setCurrent(usageTotals(input, 0, { cacheRead, totalTokens: input + cacheRead }));
+      flush();
+      const card = container
+        .querySelector("#usage-summary-hint-cache-hit-rate")!
+        .closest(".usage-summary-card")!;
+      expect(text(card, ".usage-summary-value")).toBe(label);
+      for (const value of ["bad", "warn", "good"]) {
+        expect(card.classList.contains("usage-summary-card--" + value)).toBe(value === tone);
+      }
+    }
+  });
   it("renders overview hints as focusable tooltip anchors and identifies agents in the breakdown", async () => {
     const [currentTotals, setCurrentTotals] = createSignal(totals);
     const [currentAggregates, setCurrentAggregates] = createSignal({
@@ -148,53 +168,17 @@ describe("UsageInsights", () => {
   });
 });
 
-it("retains weekday rows while replacing the hour-selection callback", () => {
-  const first = vi.fn();
-  const replacement = vi.fn();
-  const [handlers, setHandlers] = createSignal({ onSelectHour: first });
-  const overview = createUsageOverview({
-    hasTimelineData: true,
-    hourTokens: Array.from({ length: 24 }, (_, hour) => (hour === 8 ? 120 : 0)),
-    weekdayTokens: [0, 120, 0, 0, 0, 0, 0],
-  });
-  const selectedHours = [8];
-  const { container } = mountSolid(() =>
-    UsageMosaic({
-      overview,
-      timeZone: "utc",
-      selectedHours,
-      get onSelectHour() {
-        return handlers().onSelectHour;
-      },
-    }),
-  );
-  flush();
-  const weekday = container.querySelector(".usage-weekday");
-  expect(weekday).not.toBeNull();
-
-  setHandlers({ onSelectHour: replacement });
-  flush();
-  expect(container.querySelector(".usage-weekday")).toBe(weekday);
-  container
-    .querySelectorAll<HTMLButtonElement>(".usage-hour-cell")[8]!
-    .dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
-  expect(replacement).toHaveBeenCalledExactlyOnceWith(8, true);
-  expect(first).not.toHaveBeenCalled();
-});
-
 it("preserves filter-chip order, session-only title, labels, and clear callbacks", () => {
   const onClearDays = vi.fn();
-  const onClearHours = vi.fn();
   const onClearSessions = vi.fn();
   const props = usageFixture(
     {},
     {
       selectedDays: ["2026-08-01"],
-      selectedHours: [8],
       selectedSessions: ["agent:main:usage"],
     },
   );
-  Object.assign(props.callbacks.filters, { onClearDays, onClearHours, onClearSessions });
+  Object.assign(props.callbacks.filters, { onClearDays, onClearSessions });
   const { container } = mountView(() =>
     renderFilterChips(
       [{ key: "agent:main:usage", label: "Usage thread" } as UsageSessionEntry],
@@ -205,13 +189,11 @@ it("preserves filter-chip order, session-only title, labels, and clear callbacks
   const chips = [...container.querySelectorAll<HTMLElement>(".filter-chip")];
   expect(chips.map((chip) => chip.querySelector("button")?.getAttribute("aria-label"))).toEqual([
     "Remove days filter",
-    "Remove hours filter",
     "Remove session filter",
   ]);
-  expect(chips.map((chip) => chip.getAttribute("title"))).toEqual([null, null, "Usage thread"]);
+  expect(chips.map((chip) => chip.getAttribute("title"))).toEqual([null, "Usage thread"]);
   chips.forEach((chip) => chip.querySelector<HTMLButtonElement>("button")?.click());
   expect(onClearDays).toHaveBeenCalledOnce();
-  expect(onClearHours).toHaveBeenCalledOnce();
   expect(onClearSessions).toHaveBeenCalledOnce();
 });
 
@@ -272,28 +254,6 @@ describe("SessionsCard", () => {
         overview,
       }),
     );
-
-  it("exposes the selected session view to assistive technology", () => {
-    const { usage, onChange } = usageState();
-    const view = mountSessions(() => [], usage, 0);
-
-    const all = view.getByRole<HTMLButtonElement>("button", { name: "All", pressed: true });
-    const recent = view.getByRole<HTMLButtonElement>("button", {
-      name: "Recently viewed",
-      pressed: false,
-    });
-    recent.click();
-    flush();
-    expect(onChange).toHaveBeenLastCalledWith({ sessionsTab: "recent" });
-    expect(view.getByRole("button", { name: "Recently viewed", pressed: true })).toBe(recent);
-    expect(view.getByRole("button", { name: "All", pressed: false })).toBe(all);
-
-    all.click();
-    flush();
-    expect(onChange).toHaveBeenLastCalledWith({ sessionsTab: "all" });
-    expect(view.getByRole("button", { name: "All", pressed: true })).toBe(all);
-    expect(view.getByRole("button", { name: "Recently viewed", pressed: false })).toBe(recent);
-  });
 
   it("preserves sort focus while waiting for the server to reorder rows", () => {
     const { usage, onChange } = usageState();
@@ -409,20 +369,13 @@ describe("SessionsCard", () => {
     }
   });
 
-  it("renders the server recent roster without changing its all-roster average", () => {
+  it("renders a server page without changing its full-roster average", () => {
     const overview = createUsageOverview({
       total: 2,
       tableSessionCount: 100,
       tableTotals: { tokens: 50000, cost: 100, errors: 7 },
     });
-    const usage = usageFixture(
-      { overview },
-      {},
-      {
-        sessionsTab: "recent",
-        recentSessions: ["A", "missing"],
-      },
-    );
+    const usage = usageFixture({ overview });
     const { container } = mountView(() =>
       SessionsCard({
         sessions: [session("B"), session("A")],

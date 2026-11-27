@@ -60,6 +60,7 @@ export function deleteSessionEntryRows(
     deliveryCleanupKeys?: readonly string[];
     validatedEntry?: SessionEntry;
     postimages?: SessionEntryWritePostimages;
+    preparedReferenceOwners?: () => Map<string, string> | undefined;
   } = {},
 ): boolean {
   // Lifecycle deletion reuses its transaction snapshot; Doctor also supplies validated legacy rows.
@@ -75,11 +76,13 @@ export function deleteSessionEntryRows(
   ).rows;
   // Project references once for all retained windows; only winning successors need
   // their full entry for publication. Unrelated payloads stay out of the writer.
-  const survivingOwners = readSessionReferenceOwners(
-    database,
-    new Set([sessionKey]),
-    windows.map((window) => window.session_id),
-  );
+  const survivingOwners =
+    options.preparedReferenceOwners?.() ??
+    readSessionReferenceOwners(
+      database,
+      new Set([sessionKey]),
+      windows.map((window) => window.session_id),
+    );
   const survivingNodes = new Map(
     [...new Set(survivingOwners.values())].map((key) => [
       key,
@@ -188,12 +191,14 @@ export function deleteLifecycleTargetRows(
   database: OpenClawAgentDatabase,
   target: { canonicalKey: string; storeKeys: string[] },
   snapshot: SqliteLifecycleTargetSnapshot,
+  preparedReferenceOwners?: (sessionKey: string) => Map<string, string> | undefined,
 ): boolean {
   let transcriptInventoryUnchanged = true;
   for (const sessionKey of uniqueStrings([target.canonicalKey, ...target.storeKeys])) {
     const trimmed = sessionKey.trim();
     if (trimmed) {
       const unchanged = deleteSessionEntryRows(database, trimmed, {
+        preparedReferenceOwners: () => preparedReferenceOwners?.(trimmed),
         validatedEntry: snapshot.find((row) => row.sessionKey === trimmed)?.entry,
       });
       transcriptInventoryUnchanged &&= unchanged;

@@ -12,6 +12,7 @@ import { requireNodeSqlite } from "./node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
 import { cleanupSnapshotOperations } from "./sqlite-readonly-location-cleanup.js";
 import {
+  closeSqliteReadOnlyWorkersForBroker,
   createSqliteReadOnlyWorkerScope,
   runSqliteReadOnlyWorker,
 } from "./sqlite-readonly-worker.js";
@@ -84,6 +85,24 @@ if (broker) {
   };
 }
 
+async function readWithRetiredBroker() {
+  const retired = createSpawnBrokerHost();
+  try {
+    await retired.ready();
+    assert.deepEqual(
+      await runWithSpawnBroker(retired, () => runSqliteReadOnlyWorker(source, readOptions)),
+      expected,
+    );
+  } finally {
+    try {
+      await closeSqliteReadOnlyWorkersForBroker(retired);
+    } finally {
+      await retired.close();
+    }
+  }
+  return new WeakRef(retired);
+}
+
 async function completedRead(label: string) {
   const caller = { label, prompt: Buffer.alloc(1024 * 1024, label) };
   const references = [
@@ -121,12 +140,15 @@ try {
   assert.ok(worker, "The first read must create the real scoped worker");
   const second = await completedRead("second");
   assert.equal(children.length, 1, "Unrelated requests must reuse the same worker");
+  const retiredBroker = broker ? await readWithRetiredBroker() : undefined;
   const control = new WeakRef({ unowned: true });
   for (let pass = 0; pass < 8; pass += 1) {
     await setImmediate();
     gc();
   }
   assert.equal(control.deref(), undefined, "Unowned control must collect");
+  const retiredBrokersCollected = Number(retiredBroker !== undefined && !retiredBroker.deref());
+  assert.equal(retiredBrokersCollected, broker ? 1 : 0, "Retired broker is still reachable");
   const retained = [...first, ...second]
     .filter(({ reference }) => reference.deref())
     .map(({ label }) => label);
@@ -172,7 +194,12 @@ try {
     await active;
   }
   process.stdout.write(
-    JSON.stringify({ transport, collected: first.length + second.length, reused: true }),
+    JSON.stringify({
+      transport,
+      collected: first.length + second.length,
+      retiredBrokersCollected,
+      reused: true,
+    }),
   );
 } finally {
   try {
