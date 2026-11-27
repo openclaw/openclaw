@@ -11,7 +11,7 @@ import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { AgentToolResultMiddlewareEvent } from "../../src/plugins/agent-tool-result-middleware-types.js";
-import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
+import { startCollectedHeapSampling, sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -62,7 +62,7 @@ const tokenjuiceUrl = pathToFileURL(require.resolve("tokenjuice")).href;
 const { clearRuleCache }: { clearRuleCache?: () => void } = values["first-capacity"]
   ? {}
   : await import(tokenjuiceUrl);
-const middleware = createTokenjuiceAgentToolResultMiddleware();
+const middleware = createTokenjuiceAgentToolResultMiddleware({ warn: console.warn });
 const event = (index: number): AgentToolResultMiddlewareEvent => ({
   toolCallId: "synthetic-rule-cache",
   toolName: "exec",
@@ -111,7 +111,7 @@ const cpu = process.cpuUsage(cpuBefore);
 let allocatedBytes: number | undefined;
 if (values.allocation) {
   const { profile } = await inspector.post("HeapProfiler.stopSampling");
-  allocatedBytes = profile.samples.reduce((total, sample) => total + sample.size, 0);
+  allocatedBytes = sumSampledHeapBytes(profile.head);
   if (values.output) {
     await writeFile(values.output, JSON.stringify(profile));
   }
