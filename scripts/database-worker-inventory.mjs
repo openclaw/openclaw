@@ -3068,21 +3068,6 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/infra/update-failure-report-receipt-store.ts",
-    [
-      {
-        tier: "W",
-        operations: [
-          "replaceReceiptAtRevision",
-          "reserveUpdateFailureReportReceiptRowSync",
-          "completeUpdateFailureReportReceiptCleanupRowSync",
-        ],
-        evidence:
-          "Receipt mutations and authoritative revision rereads are called only by restart-sentinel.worker.ts; report submission and artifact sweep await that physical shared-state owner.",
-      },
-    ],
-  ],
-  [
     "src/infra/session-sqlite-transcript-verification.ts",
     [
       {

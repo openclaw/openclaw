@@ -186,18 +186,14 @@ describe("statusAllCommand diagnosis", () => {
     {
       status: "error",
       reason: "managed-service-handoff-failed",
-      headline: "⚠️ OpenClaw couldn't finish updating.",
-      hint: "openclaw triage",
     },
     {
       status: "skipped",
       reason: "restart-health-pending",
-      headline: "⬆️ OpenClaw update in progress: restarting.",
-      hint: "openclaw update status",
     },
   ] as const)(
-    "includes the shared update report for $status sentinels",
-    async ({ status, reason, headline, hint }) => {
+    "shows recorded facts for $status sentinels without projecting a run",
+    async ({ status, reason }) => {
       mocks.readRestartSentinelReadOnly.mockResolvedValueOnce({
         payload: {
           kind: "update",
@@ -207,10 +203,11 @@ describe("statusAllCommand diagnosis", () => {
         },
       });
       const output = await reportText();
-      expectReport(output, [`Update restart: ${headline}`, hint], ["run openclaw gateway restart"]);
-      if (status === "error") {
-        expect(output).toContain("(managed-service-handoff-failed)");
-      }
+      expectReport(
+        output,
+        [`Update restart: Gateway restart update ${status} (npm)`, `Reason: ${reason}`],
+        ["run openclaw gateway restart"],
+      );
     },
   );
 
