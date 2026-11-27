@@ -166,7 +166,7 @@ it("cannot retire a successor from a released native delivery attempt", async ()
   result.resolve(direct());
   await pending;
   expect(retire).not.toHaveBeenCalled();
-  expect(() => owner.complete("successor result")).toThrow("no longer active");
+  expect(() => owner.complete("successor result")).toThrow("registration is closed");
 });
 
 it("retires a duplicate observer after the shared delivery is abandoned", async () => {

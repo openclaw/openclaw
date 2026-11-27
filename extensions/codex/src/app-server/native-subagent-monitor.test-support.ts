@@ -3,8 +3,8 @@ import type {
   captureAgentHarnessCompletionCustody,
   createAgentHarnessCompletionEventSink,
 } from "openclaw/plugin-sdk/agent-harness-completion";
+import { createAgentHarnessCompletionScopeForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { onTestFinished, vi } from "vitest";
-import { createAgentHarnessCompletionScope } from "../../../../src/agents/agent-harness-completion-scope.js";
 import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
 import { CodexNativeSubagentCompletionDelivery } from "./native-subagent-completion-delivery.js";
 import {
@@ -257,7 +257,10 @@ export function parentRegistration(
 }
 
 export function createCompletionScope(requesterSessionKey = "agent:main:discord:channel:C123") {
-  return createAgentHarnessCompletionScope({ requesterSessionKey, requesterAgentId: "main" });
+  return createAgentHarnessCompletionScopeForTest({
+    requesterSessionKey,
+    requesterAgentId: "main",
+  });
 }
 
 export function nativeHistoryOwner(parentThreadId = "parent-thread") {

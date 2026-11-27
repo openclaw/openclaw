@@ -120,7 +120,7 @@ function registerDetachedCompletion<Completion>(
   const isConsumed = () => shared.obligation.outcome === "delivered";
   const assertActive = () => {
     if (released || !lifecycle.isCurrent()) {
-      throw new Error("Completion registration is no longer active");
+      throw new Error("Completion registration is closed");
     }
   };
   const claim = () => {
