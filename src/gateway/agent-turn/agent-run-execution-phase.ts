@@ -10,6 +10,7 @@ import {
   withPreparedModelRuntimePluginGenerationScope,
 } from "../../agents/prepared-model-runtime-generation-scope.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
+import { observeAgentRpcYieldExecution } from "../../agents/subagents/completion/agent-rpc-yield-reply.js";
 import { runWithAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import {
   resolveReplySourceTurnId,
@@ -82,9 +83,19 @@ async function executeAgentRun(
   acknowledgeCleanup: () => void,
 ): Promise<void> {
   const { prepared } = params;
+  const yieldReply = observeAgentRpcYieldExecution({
+    runId: params.runId,
+    sessionId: params.resolvedSessionId,
+    sessionKey: params.resolvedSessionKey,
+    yieldReply: params.io.yieldReply,
+  });
   let deliverFinal: (() => void) | undefined;
   const deferFinal = (...args: Parameters<typeof params.io.emitFinal>) => {
-    deliverFinal = () => params.io.emitFinal(...args);
+    deliverFinal = () => {
+      if (!yieldReply?.finish(args[0])) {
+        params.io.emitFinal(...args);
+      }
+    };
   };
   const diagnostics = createAgentRunDiagnostics(
     params.resolvedSessionKey,
@@ -584,6 +595,7 @@ async function executeAgentRun(
       prepared.releaseCallerAuthority?.();
       releaseGatewayRootContinuation?.();
     } finally {
+      yieldReply?.release();
       if (!dispatched) {
         prepared.followupCompletion?.finishExecution(params.runId);
       }

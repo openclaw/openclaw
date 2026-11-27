@@ -16,6 +16,12 @@ export type AgentTurnFrame = readonly [
 ];
 
 export type AgentTurnIo = {
+  /** The original external RPC observes a committed subagent-yield continuation. */
+  yieldReply?: {
+    deadline: number;
+    signal: AbortSignal;
+    publish(frame: AgentTurnFrame, runId: string): void;
+  };
   emitAcceptance: (acceptance: AgentTurnFrame, meta?: Parameters<RespondFn>[3]) => void;
   /** Publishes the exact controller before asynchronous runtime preparation. */
   emitStartOwner?: (runId: string, entry: RpcSourceRef) => void;

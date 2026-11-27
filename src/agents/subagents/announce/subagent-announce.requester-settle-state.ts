@@ -46,6 +46,7 @@ export function createRequesterSettleBatchCompletion(params: {
     state: RequesterSettleWakeState,
     delivery?: SubagentAnnounceDeliveryResult,
     requesterSessionId?: string,
+    onCommitted?: () => void,
   ): Promise<void> => {
     await params.completeBatch(batch, state.rearmGeneration, delivery, async () => {
       finalizeRequesterFinalAttachment({
@@ -62,6 +63,7 @@ export function createRequesterSettleBatchCompletion(params: {
       if (!params.pause) {
         await finishGoalContinuationSettlement(batch, delivery?.delivered === true);
       }
+      onCommitted?.();
     });
   };
 }

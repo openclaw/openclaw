@@ -78,7 +78,7 @@ async function startModelServer(childReply: string) {
   };
 }
 
-async function relayChildAnswer(childReply: string) {
+async function relayChildAnswer(childReply: string, source: "chat" | "agent" = "chat") {
   const model = await startModelServer(childReply);
   const state = await createOpenClawTestState({ label: "subagent-result-verbatim" });
   const gateway = await startGatewayWithClient({
@@ -95,15 +95,22 @@ async function relayChildAnswer(childReply: string) {
   });
   try {
     await gateway.server.startupSettled;
-    const accepted = await gateway.client.request<{ runId: string }>("chat.send", {
+    const input = {
       sessionKey: "main",
       message: parentPrompt,
       idempotencyKey: `verbatim-result-${randomUUID()}`,
       deliver: false,
-    });
-    await expect(
-      gateway.client.request("agent.wait", { runId: accepted.runId, timeoutMs: 30_000 }),
-    ).resolves.toMatchObject({ status: "ok" });
+    };
+    const final =
+      source === "agent"
+        ? await gateway.client.request("agent", input, { expectFinal: true, timeoutMs: 30_000 })
+        : undefined;
+    if (source === "chat") {
+      const accepted = await gateway.client.request<{ runId: string }>("chat.send", input);
+      await expect(
+        gateway.client.request("agent.wait", { runId: accepted.runId, timeoutMs: 30_000 }),
+      ).resolves.toMatchObject({ status: "ok" });
+    }
     const prompt = await model.completionPrompt;
     let relayed: string | undefined;
     await vi.waitUntil(
@@ -119,7 +126,7 @@ async function relayChildAnswer(childReply: string) {
       },
       { interval: 50, timeout: 10_000 },
     );
-    return { prompt, relayed };
+    return { prompt, relayed, final };
   } finally {
     await disconnectGatewayClient(gateway.client);
     await gateway.server.close({ reason: "subagent result verbatim proof complete" });
@@ -129,6 +136,15 @@ async function relayChildAnswer(childReply: string) {
 }
 
 afterEach(() => resetSubagentRegistryForTests({ persist: false }));
+
+it("returns the parent continuation to the original Gateway agent request after yield", async () => {
+  const { final, relayed } = await relayChildAnswer(childAnswer, "agent");
+  expect(relayed).toBe(childAnswer);
+  expect(final).toMatchObject({
+    status: "ok",
+    result: { payloads: [{ text: childAnswer }] },
+  });
+});
 
 it("relays a child's completion result to its requester with the original characters", async () => {
   const { prompt, relayed } = await relayChildAnswer(childAnswer);

@@ -12,6 +12,10 @@ import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared
 import { isAgentRunRestartAbortReason } from "../../run-termination.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import {
+  finishUnstartedAgentRpcYieldSuccessor,
+  withAgentRpcYieldSuccessor,
+} from "../completion/agent-rpc-yield-reply.js";
+import {
   getFollowupForCohort,
   withFollowupSuccessor,
 } from "../completion/session-followup-completion.js";
@@ -615,19 +619,25 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
               dispatchPrepared = true;
             },
           });
-        return withGoalContinuationSettlement(
-          settledBatch,
-          directIdempotencyKey,
-          () => !pauseNotice && isSourceSessionEffectsAllowed(),
-          () => {
-            if (!isSourceSessionEffectsAllowed()) {
-              throw new Error("Requester completion source changed before continuation admission.");
-            }
-            return subagentRuns.runWithCompletionBatchAuthority(settledBatch, (authority) =>
-              authority?.requesterOrigin ? authority.runWithRequester(deliver) : deliver(),
-            );
-          },
-        );
+        const settle = () =>
+          withGoalContinuationSettlement(
+            settledBatch,
+            directIdempotencyKey,
+            () => !pauseNotice && isSourceSessionEffectsAllowed(),
+            () => {
+              if (!isSourceSessionEffectsAllowed()) {
+                throw new Error(
+                  "Requester completion source changed before continuation admission.",
+                );
+              }
+              return subagentRuns.runWithCompletionBatchAuthority(settledBatch, (authority) =>
+                authority?.requesterOrigin ? authority.runWithRequester(deliver) : deliver(),
+              );
+            },
+          );
+        return !pauseNotice && pendingMembers.length === 0
+          ? withAgentRpcYieldSuccessor(settledBatch, directIdempotencyKey, settle)
+          : settle();
       };
       try {
         delivery = await withSubagentProgressDraft(settledBatch, directIdempotencyKey, () =>
@@ -661,8 +671,14 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     // Results committed to the requester transcript are never replayed: settle what the turn did.
     const currentBatch = readCurrentBatch() ?? settledBatch;
     const settledDelivery = resolveRequesterDeliveryOutcome(currentBatch, delivery)!;
+    const completeDispatch = () =>
+      completeBatch(settledBatch, state, delivery, requesterEntry.sessionId, () => {
+        if (!pauseNotice && pendingMembers.length === 0 && !settledDelivery.delivered) {
+          finishUnstartedAgentRpcYieldSuccessor(settledBatch);
+        }
+      });
     if (settledDelivery.delivered || currentBatch.every(hasConsumedRequesterInput)) {
-      await completeBatch(settledBatch, state, delivery, requesterEntry.sessionId);
+      await completeDispatch();
       return settledDelivery.delivered;
     }
     // The controller mailbox owns a queued handoff and settles it itself.
@@ -670,7 +686,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       return false;
     }
     // A wake that missed its turn settles the batch into requester history; nothing retries it.
-    await completeBatch(settledBatch, state, delivery, requesterEntry.sessionId);
+    await completeDispatch();
     return false;
   } finally {
     if (controllerInput) {
