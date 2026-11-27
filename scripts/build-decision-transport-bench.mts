@@ -5,7 +5,7 @@ import path from "node:path";
 import { build } from "tsdown";
 import { listDirectoryTreeStrictSync } from "../src/infra/directory-walk.ts";
 import { runBenchmarkEntrypoint } from "./lib/benchmark-harness.mts";
-import { createSqliteSchemaAssetsPlugin } from "./lib/sqlite-schema-assets.mts";
+import { createDatabaseSchemaAssetsPlugin } from "./lib/database-schema-assets.mts";
 import { createStateSchemaInlinePlugin } from "./lib/state-schema-inline-plugin.mts";
 
 await runBenchmarkEntrypoint("build-decision-transport-bench", async () => {
@@ -81,7 +81,7 @@ await runBenchmarkEntrypoint("build-decision-transport-bench", async () => {
     outExtensions: () => ({ js: ".mjs" }),
     outputOptions: { codeSplitting: true },
     // Match native builds so imports retain canonical schemas and lazy catalogs.
-    plugins: [createStateSchemaInlinePlugin(root), createSqliteSchemaAssetsPlugin(root)],
+    plugins: [createStateSchemaInlinePlugin(root), createDatabaseSchemaAssetsPlugin(root)],
     deps: {
       // Match native runtime builds: workspace source is bundled; native package
       // bindings stay with the frozen installation for this exact revision.

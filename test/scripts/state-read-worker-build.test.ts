@@ -119,6 +119,25 @@ it.each([
         return { modules, dynamicImports };
       };
       const startup = staticClosure(`${entryName}${extension}`);
+      const assetDirectory = path.join(
+        outDir,
+        entryName.startsWith("worker/") ? "worker" : "assets/postgres-schema",
+      );
+      const postgresAssets = fs
+        .readdirSync(assetDirectory)
+        .filter((name) => /^(?:worker-chunk-)?postgres-.*\.mjs$/u.test(name))
+        .map((name) => path.join(assetDirectory, name));
+      expect(postgresAssets).toHaveLength(12);
+      expect(
+        hasModule(
+          startup.modules,
+          ...postgresAssets.map((file) => path.basename(file).replace(/\.mjs$/u, ".ts")),
+        ),
+      ).toBe(false);
+      // Real SQLite operations below must remain usable with PostgreSQL payloads absent.
+      for (const asset of postgresAssets) {
+        fs.renameSync(asset, `${asset}.held`);
+      }
       expect(hasModule(startup.modules, handlersModule, mixedStoreModule, ...streamModules)).toBe(
         false,
       );

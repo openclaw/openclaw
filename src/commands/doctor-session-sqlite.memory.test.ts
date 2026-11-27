@@ -6,11 +6,11 @@ import { promisify } from "node:util";
 import { build } from "tsdown";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import packageJson from "../../package.json" with { type: "json" };
+import { createDatabaseSchemaAssetsPlugin } from "../../scripts/lib/database-schema-assets.mts";
 import {
   createRuntimeProcessBuildEntries,
   runtimeProcessCoreEntrypoints,
 } from "../../scripts/lib/runtime-process-core-build-entries.mts";
-import { createSqliteSchemaAssetsPlugin } from "../../scripts/lib/sqlite-schema-assets.mts";
 import { createStateSchemaInlinePlugin } from "../../scripts/lib/state-schema-inline-plugin.mts";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -52,7 +52,7 @@ beforeAll(async () => {
         .filter(([, version]) => !version.startsWith("workspace:"))
         .map(([name]) => name),
     },
-    plugins: [createStateSchemaInlinePlugin(), createSqliteSchemaAssetsPlugin()],
+    plugins: [createStateSchemaInlinePlugin(), createDatabaseSchemaAssetsPlugin()],
     platform: "node",
     target: "node22",
     logLevel: "error",
