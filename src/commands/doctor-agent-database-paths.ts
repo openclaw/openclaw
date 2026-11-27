@@ -1,5 +1,7 @@
+import { existsSync } from "node:fs";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { readOnlyOpenWouldCreateSqliteSidecars } from "../infra/sqlite-files.js";
 import {
   planOpenClawAgentDatabasePathRepairs,
   repairOpenClawAgentDatabasePaths,
@@ -8,6 +10,7 @@ import { invalidateRegisteredAgentDatabasesMemo } from "../state/openclaw-agent-
 import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { isUpdateDoctorLintPass } from "./doctor/shared/update-phase.js";
 
 /** Repair the inventory only before an updater captures its exact-path baseline. */
@@ -57,10 +60,18 @@ function countOpenClawAgentDatabasePathRepairs(env: NodeJS.ProcessEnv): number {
   );
 }
 
-/** Read first: a clean registry needs no write transaction on the shared state database. */
+/**
+ * Read first: a clean registry needs no write transaction on the shared state database. A
+ * database no connection holds open goes straight to the write transaction, whose connection
+ * removes the sidecars on close; a read-only open would create them and leave them behind.
+ */
 function agentDatabasePathRepairsMayExist(env: NodeJS.ProcessEnv): boolean {
+  const statePath = resolveOpenClawStateSqlitePath(env);
   try {
-    return countOpenClawAgentDatabasePathRepairs(env) > 0;
+    return (
+      (existsSync(statePath) && readOnlyOpenWouldCreateSqliteSidecars(statePath)) ||
+      countOpenClawAgentDatabasePathRepairs(env) > 0
+    );
   } catch {
     // The write transaction reports an unreadable registry.
     return true;

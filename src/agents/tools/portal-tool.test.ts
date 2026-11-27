@@ -64,7 +64,6 @@ it.each(["host", "worker", "bound"] as const)(
       },
     };
     const selected = createAvailablePortalTools({
-      senderIsOwner: mode !== "bound",
       sessionPortalTarget: mode === "bound" ? target : undefined,
     })[0]!;
     const environment =

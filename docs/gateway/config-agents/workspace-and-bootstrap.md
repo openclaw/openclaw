@@ -98,6 +98,8 @@ Optional default skill allowlist for agents that do not set
 
 Disables automatic creation of workspace bootstrap files (`AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md`), not injection of existing files. For the embedded runtime, use `contextInjection: "never"` to disable injection, unless overridden per agent.
 
+One-shot runs (`openclaw agent --local` and `openclaw agent exec`) do not create these files in the agent workspace, even when this setting is off, because the bootstrap conversation needs a later turn. The first Gateway or chat run creates them. A sandbox with `workspaceAccess: "none"` still seeds its own private copy unless `skipBootstrap` is set.
+
 ```json5
 {
   agents: { defaults: { skipBootstrap: true } },

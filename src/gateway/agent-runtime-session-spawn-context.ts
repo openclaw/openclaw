@@ -17,6 +17,8 @@ export type AgentRuntimeSessionSpawnContext = {
   /** Trusted owner status of the spawning invocation, never synthetic child launch authority. */
   requesterSenderIsOwner?: boolean;
   completionOwnerSessionKey?: string;
+  /** Host-owned sessions_create intent, independent of spawn admission lineage. */
+  createdIndependently?: true;
   resolvedModel?: ProviderModelRef;
   inheritedPermissionMode?: SessionPermissionMode;
   inheritedToolPolicy: {

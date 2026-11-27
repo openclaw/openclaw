@@ -345,13 +345,15 @@ async function processCandidate(
   if (model?.provider !== series.route.provider || model.model !== series.route.model) {
     return undefined;
   }
+  // A prewarm has no caller and runs no tools, so it never holds owner authority.
+  const requester = { ...turn?.requester, senderIsOwner: false };
   const prepared = await prepareSessionFork({
     config: cfg,
     source,
     tools: [],
     model,
     workspaceDir: resolveAgentWorkspaceDir(cfg, candidate.agentId),
-    ...(turn?.requester ? { requester: turn.requester } : {}),
+    requester,
   });
   if (!prepared) {
     return undefined;
@@ -367,7 +369,7 @@ async function processCandidate(
       owner: "core:prompt-cache-keep-warm",
       model,
       workspaceDir: prepared.workspaceDir,
-      ...(turn?.requester ? { requester: turn.requester } : {}),
+      requester,
       timeoutMs: PING_TIMEOUT_MS,
       cachePrewarm: true,
       abortSignal: signal,

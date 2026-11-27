@@ -14,6 +14,7 @@ import {
 } from "@openclaw/worker-runtime/lifecycle";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
+import { getDatabaseProcessRole } from "./database-engine/admission-scope.js";
 import { getDatabaseEngineSelection } from "./database-engine/context.js";
 import { getGatewayResourceProfile } from "./gateway-resource-profile.js";
 import { resolveNodeCompileCacheEnv } from "./node-compile-cache-env.js";
@@ -73,12 +74,16 @@ function hostedKind(url: URL): SharedWorkerHostKind | undefined {
 
 /**
  * Pure and synchronous: whether a new slot for this worker would run inside the shared host.
- * Only the lean profile hosts, only where explicit SQLite close releases native resources,
- * at most one live endpoint per slot key, and never while a failed host is still exiting,
- * so at most one host isolate exists at a time.
+ * Only the lean Gateway profile and one-shot CLI processes host, only where explicit SQLite
+ * close releases native resources, and never while a failed host is still exiting, so at
+ * most one host isolate exists at a time. A one-shot command waits for each core worker
+ * before its first request, so one shared isolate loads their common code once instead of
+ * once per worker. The lean Gateway admits one live endpoint per slot key; a one-shot command
+ * hosts every lane of a kind, since each extra lane would otherwise boot its own isolate.
  */
 export function claimsSharedHostSlot(url: URL, key?: string): boolean {
-  if (getGatewayResourceProfile()?.profile !== "lean") {
+  const oneShot = getDatabaseProcessRole() === "cli-oneshot";
+  if (getGatewayResourceProfile()?.profile !== "lean" && !oneShot) {
     return false;
   }
   const kind = hostedKind(url);
@@ -96,7 +101,7 @@ export function claimsSharedHostSlot(url: URL, key?: string): boolean {
     return false;
   }
   const host = state.host;
-  return !host || (!host.failure && !host.hasEndpoint(key ?? kind));
+  return !host || (!host.failure && (oneShot || !host.hasEndpoint(key ?? kind)));
 }
 
 /** Includes construction and retirement until the native owner joins the physical host. */

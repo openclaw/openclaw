@@ -186,6 +186,76 @@ describe("session list subagent metadata", () => {
       expect((await read(navigation)).childSessions).toBeUndefined();
     }, true));
 
+  // A sessions_yield wake adopts the paused run under a new run id, so between
+  // wakes the run has ended but still owes its parent a result.
+  const pausedChildRun = (
+    childSessionKey: string,
+    requesterSessionKey: string,
+    now: number,
+    overrides: Partial<SubagentRunFixture> = {},
+  ) =>
+    runFixture("paused-run", childSessionKey, now - 10_000, now - 9_000, {
+      requesterSessionKey,
+      controllerSessionKey: requesterSessionKey,
+      expectsCompletionMessage: true,
+      pauseReason: "sessions_yield",
+      endedAt: now - 1_000,
+      outcome: { status: "ok" },
+      ...overrides,
+    });
+
+  test("keeps the parent of a paused child working on the resident row path", () =>
+    withRegistry(async () => {
+      const now = Date.now();
+      setRuntimeConfigSnapshot(cfg, cfg);
+      const parentKey = "agent:main:yield-parent";
+      const childKey = "agent:main:subagent:yield-child";
+      const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
+      await replaceSessionEntry(
+        { storePath, sessionKey: parentKey },
+        { sessionId: "p", updatedAt: now },
+      );
+      await replaceSessionEntry(
+        { storePath, sessionKey: childKey },
+        { sessionId: "c", updatedAt: now, spawnedBy: parentKey },
+      );
+      const run = pausedChildRun(childKey, parentKey, now);
+      saveSubagentRegistryToSqlite(canonicalSubagentRunFixtures(new Map([[run.runId, run]])));
+      const read = async (sessionKey: string) =>
+        expectDefined(await rowReader.row(sessionKey, { now }), "resident row");
+      expect(await read(childKey)).toMatchObject({
+        subagentRunState: "paused",
+        hasActiveSubagentRun: false,
+      });
+      expect(await read(parentKey)).toMatchObject({
+        childSessions: [childKey],
+        hasActiveSubagentRun: true,
+      });
+    }, true));
+
+  test.each([
+    { name: "paused", overrides: {}, parentActive: true },
+    { name: "woken", overrides: { endedAt: undefined, outcome: undefined }, parentActive: true },
+    { name: "killed", overrides: { endedReason: "subagent-killed" }, parentActive: false },
+    { name: "failed", overrides: { outcome: { status: "error" } }, parentActive: false },
+    { name: "timed out", overrides: { outcome: { status: "timeout" } }, parentActive: false },
+  ] satisfies { name: string; overrides: Partial<SubagentRunFixture>; parentActive: boolean }[])(
+    "rolls a $name yielded child up to its parent",
+    async ({ overrides, parentActive }) => {
+      const now = Date.now();
+      const parentKey = "agent:main:yield-parent";
+      const childKey = "agent:main:subagent:yield-child";
+      await addSubagentRunForTests(pausedChildRun(childKey, parentKey, now, overrides));
+      const { sessions } = await listSubagentSessions({
+        [parentKey]: { sessionId: "p", updatedAt: now },
+        [childKey]: childEntry("c", now, { spawnedBy: parentKey }),
+      });
+      const parent = sessions.find((row) => row.key === parentKey);
+      expect(parent?.childSessions).toEqual([childKey]);
+      expect(parent?.hasActiveSubagentRun === true).toBe(parentActive);
+    },
+  );
+
   registerSubagentSessionStatusTests(listSubagentSessions);
 
   test("uses the newest child-session row for stale/current replacement pairs", async () => {

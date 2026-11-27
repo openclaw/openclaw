@@ -515,6 +515,34 @@ describe("dynamic tool execution helpers", () => {
     },
   );
 
+  it("preserves a tool-owned approval wait and completion budget", async () => {
+    vi.useFakeTimers();
+    const call = toolCall("github_publish", {
+      action: "create_comment",
+      issueNumber: 1,
+      body: "Proof",
+    });
+    const completed = textResponse("Comment posted after approval.");
+    const onTimeout = vi.fn();
+    const toolBridge = {
+      availableTools: [createTool("github_publish", { getExecutionTimeoutMs: () => 600_000 })],
+      handleToolCall: () =>
+        new Promise<CodexDynamicToolCallResponse>((resolve) => {
+          setTimeout(() => resolve(completed), 310_000);
+        }),
+    };
+    const response = executeTool({
+      call,
+      toolBridge,
+      timeoutMs: resolveDynamicToolCallTimeoutMs({ call, config: undefined, toolBridge }),
+      onTimeout,
+    });
+    await vi.advanceTimersByTimeAsync(310_000);
+    await expect(response).resolves.toEqual(completed);
+    expect(onTimeout).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("retains the concrete tool owner when timeout wins before a snapshot", async () => {
     const ownerKey = '["memory-lancedb","memory_store"]';
     const observeToolTerminal = vi.fn(uncertainTerminal);

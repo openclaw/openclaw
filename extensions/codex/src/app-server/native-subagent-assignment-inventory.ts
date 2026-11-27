@@ -103,8 +103,8 @@ export class CodexNativeSubagentAssignmentInventory {
     if (
       !assignment ||
       !state.assignmentStore ||
-      child.nativeCompletionDelivered ||
-      child.completionDeliveryAbandoned ||
+      child.completionDelivery?.isConsumed() ||
+      child.completionDelivery?.isRetiring() ||
       child.subscriptionClosed
     ) {
       return;
@@ -136,7 +136,8 @@ export class CodexNativeSubagentAssignmentInventory {
       !assignment ||
       !state.assignmentStore ||
       this.acknowledged.has(child) ||
-      (!child.nativeCompletionDelivered && (!child.subscriptionClosed || child.pendingCompletion))
+      (!child.completionDelivery?.isConsumed() &&
+        (!child.subscriptionClosed || child.pendingCompletion))
     ) {
       return;
     }
@@ -187,7 +188,7 @@ export class CodexNativeSubagentAssignmentInventory {
       assertCurrent();
       assertHistoryOwnerMatchesRegistration(owner, state.historyOwner, owner.parentThreadId, true);
     });
-    child.nativeCompletionDelivered = true;
+    child.completionDelivery?.consume();
     child.pendingCompletion = undefined;
     return true;
   }

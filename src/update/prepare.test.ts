@@ -7,11 +7,9 @@ import * as nodeService from "../daemon/node-service.js";
 import * as runtimePaths from "../daemon/runtime-paths.js";
 import * as gatewayService from "../daemon/service.js";
 import { createMockGatewayService } from "../daemon/service.test-helpers.js";
-import { createDoctorRuntimeProjection } from "../flows/doctor-health-contributions.test-support.js";
 import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
 import { readGatewayLockProcessStartTime } from "../infra/gateway-lock-process.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
-import * as processCensus from "../infra/openclaw-process-census.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
   getUpdateRunAsync,
@@ -34,7 +32,7 @@ import {
 import { VERSION } from "../version.js";
 import { runReleaseUpdateCli } from "./cli.js";
 import * as serviceConversion from "./convert-service.js";
-import { settleRunFromTrial } from "./gateway-trial.js";
+import { announceReady } from "./gateway-trial.js";
 import { preflight } from "./preflight.js";
 import { registerAlreadyCurrentUpdateTests } from "./prepare-current.test-support.js";
 import { prepareGit } from "./prepare-git.js";
@@ -47,7 +45,7 @@ import {
 import { preparePackage } from "./prepare-package.js";
 import { bin, executable, node, repository, root } from "./prepare.test-support.js";
 import { prepareUpdate } from "./run.js";
-import { readTrial, resolvePrefix, switchLink } from "./store.js";
+import { readTrial, resolvePrefix, switchLink, writeTrial } from "./store.js";
 import * as targets from "./target.js";
 import { resolveTarget } from "./target.js";
 
@@ -166,10 +164,7 @@ process.exit(result.status ?? 1);
     const { checkout } = await repository(true, ">=1", true);
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
     vi.stubEnv("GIT_COMMIT", "");
-    // An earlier updater's leftover is reclaimed before the update; the outcome stays the build's.
-    const abandoned = createDoctorRuntimeProjection(path.join(root, "tmp"), checkout, "Gone01");
-    vi.spyOn(processCensus, "inspectOtherOpenClawProcesses").mockReturnValue({ pids: [] });
-    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
     try {
       openOpenClawStateDatabase({ env: process.env });
@@ -192,8 +187,6 @@ process.exit(result.status ?? 1);
       expect(detail?.length).toBeLessThanOrEqual(1024);
       expect(error).toHaveBeenCalledWith(expect.stringContaining("fixture build failed"));
       expect(process.exitCode).toBe(1);
-      await expect(fs.access(abandoned)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(log).toHaveBeenCalledWith(`Removed abandoned updater runtime: ${abandoned}`);
     } finally {
       process.exitCode = undefined;
       await closeOpenClawStateDatabaseAsync();
@@ -837,11 +830,13 @@ if (process.argv[2] !== 'install') {
           expect(result.stdout.trim()).toBe("running");
         }
         expect((await readTrial(prefix))?.phase).toBe("pending");
-        await settleRunFromTrial({
+        vi.stubEnv("OPENCLAW_LAUNCHER_IPC", "");
+        await writeTrial({
           ...(await readTrial(prefix))!,
           phase: "rolled-back",
           outcome: { status: "rolled-back", reason: "new build failed to start", at: Date.now() },
         });
+        await announceReady(null);
         const rolledBack = await getUpdateRunAsync(run.runId);
         expect(rolledBack?.status).toBe("failed");
         expect(rolledBack?.origin.releaseAdmission).toEqual(preparedRun?.origin.releaseAdmission);
@@ -861,57 +856,6 @@ if (process.argv[2] !== 'install') {
 });
 
 registerAlreadyCurrentUpdateTests();
-
-describe("retained updater runtimes", () => {
-  // Updaters before owner records projected the package they replaced into the temp dir.
-  const project = (checkout: string, name: string) =>
-    createDoctorRuntimeProjection(path.join(root, "tmp"), checkout, name);
-
-  it("reclaims an earlier updater's runtime and keeps uncertain ones without failing", async () => {
-    const { checkout, sha } = await repository();
-    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
-    vi.stubEnv("GIT_COMMIT", sha);
-    const abandoned = project(checkout, "Gone01");
-    const held = project(checkout, "Held01");
-    const unseen = project(checkout, "Blind1");
-    // One runtime is still used by another process; for another, processes cannot be listed.
-    vi.spyOn(processCensus, "inspectOtherOpenClawProcesses").mockImplementation(((
-      directory: string,
-    ) =>
-      directory === held
-        ? { pids: [4242] }
-        : directory === unseen
-          ? { error: "Could not inspect OpenClaw processes: census unavailable" }
-          : { pids: [] }) as typeof processCensus.inspectOtherOpenClawProcesses);
-    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-    try {
-      openOpenClawStateDatabase({ env: process.env });
-      await runReleaseUpdateCli({
-        json: false,
-        restart: false,
-        runningRoot: checkout,
-        storedChannel: "dev",
-      });
-      expect(process.exitCode).toBe(0);
-      expect((await getUpdateRunStatusAsync()).lastRun).toMatchObject({
-        status: "skipped",
-        reason: "already-current",
-      });
-      await expect(fs.access(abandoned)).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(fs.access(held)).resolves.toBeUndefined();
-      await expect(fs.access(unseen)).resolves.toBeUndefined();
-      // Kept runtimes are reported by the cleanup owner's log; the command prints removals.
-      expect(log.mock.calls.map(([line]) => String(line))).toEqual([
-        `Removed abandoned updater runtime: ${abandoned}`,
-        expect.stringContaining("already up to date"),
-      ]);
-    } finally {
-      process.exitCode = undefined;
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
-    }
-  });
-});
 
 describe("update preflight", () => {
   it("refuses an incompatible engine before preparation", async () => {

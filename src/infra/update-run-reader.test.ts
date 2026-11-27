@@ -361,6 +361,9 @@ describe("update run history reads", () => {
     expect((await listUpdateRunsAsync({ limit: 2 }, options)).map((run) => run.runId)).toEqual(
       tied.map((run) => run.runId),
     );
+    const selection = { active: true, limit: 1, excludeRunIds: tied.map((run) => run.runId) };
+    expect(listUpdateRuns(selection, options)).toEqual([oldest]);
+    expect(await listUpdateRunsAsync(selection, options)).toEqual([oldest]);
     expect(findActiveUpdateRun(options)).toEqual(tied[0]);
     for (const run of tied) {
       finishUpdateRun(run.runId, { status: "skipped", reason: "dry-run" }, options);

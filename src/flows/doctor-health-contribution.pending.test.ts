@@ -4,6 +4,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { traceDoctorMaintenancePending } from "../commands/doctor-maintenance-pending.js";
+import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
+import { listDirectoryTreeStrictSync } from "../infra/directory-walk.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import {
   createDoctorHealthFlowContext,
@@ -137,9 +140,9 @@ describe("health-check contributions derive pending work from their repairs", ()
         decideDoctorContributionPending(failing, context()),
       ),
     ).resolves.toBe(true);
-    expect(lines.filter((line) => line.includes("doctor.pending."))).toEqual([
-      expect.stringMatching(/pending=undecidable check=owner /u),
-    ]);
+    expect(
+      lines.filter((line) => line.includes("doctor.pending.") && line.includes("pending=")),
+    ).toEqual([expect.stringMatching(/pending=undecidable check=owner /u)]);
   });
 });
 
@@ -199,5 +202,51 @@ describe("systemd linger contribution", () => {
 
     systemd.linger.mockResolvedValue({ user: "alice", linger: "yes" });
     await expect(decideDoctorContributionPending(linger, interactive)).resolves.toBe("none");
+  });
+});
+
+describe("config writer contributions", () => {
+  const listFiles = (dir: string) =>
+    listDirectoryTreeStrictSync(dir).map((entry) => entry.relativePath);
+
+  it("decide from the write their runner would make", async () => {
+    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+      const initial = contribution("doctor:write-config-migrations");
+      const final = contribution("doctor:write-config");
+      const cfg = { gateway: { mode: "local" as const } };
+      const healthy = () =>
+        context({ cfg, cfgForPersistence: structuredClone(cfg), env: state.env });
+      const before = listFiles(state.root);
+
+      // Nothing planned and no cron rows: the final pass's cron read creates nothing.
+      await expect(decideDoctorContributionPending(initial, healthy())).resolves.toBe("none");
+      await expect(decideDoctorContributionPending(final, healthy())).resolves.toBe("none");
+      expect(listFiles(state.root)).toEqual(before);
+
+      // A later contribution edited the config: only the final writer persists it.
+      const edited = context({ cfg: { gateway: { mode: "remote" } }, cfgForPersistence: cfg });
+      await expect(decideDoctorContributionPending(initial, edited)).resolves.toBe("none");
+      await expect(decideDoctorContributionPending(final, edited)).resolves.toBe("work");
+
+      const flowWrite = context({
+        cfg,
+        cfgForPersistence: cfg,
+        configResult: { shouldWriteConfig: true },
+      });
+      await expect(decideDoctorContributionPending(initial, flowWrite)).resolves.toBe("work");
+      flowWrite.configWriteRefusal = "validation";
+      await expect(decideDoctorContributionPending(final, flowWrite)).resolves.toBe("none");
+      flowWrite.configWriteError = new ConfigWritePostCommitError({
+        configPath: flowWrite.configPath,
+        rollbackStatus: "unknown",
+        cause: new Error("post-write publication failed"),
+      });
+      await expect(decideDoctorContributionPending(final, flowWrite)).resolves.toBe("undecidable");
+
+      const phoneCleanup = healthy();
+      phoneCleanup.configResult.retiredPhoneControlStateCleanupPending = true;
+      await expect(decideDoctorContributionPending(initial, phoneCleanup)).resolves.toBe("none");
+      await expect(decideDoctorContributionPending(final, phoneCleanup)).resolves.toBe("work");
+    });
   });
 });

@@ -12,6 +12,12 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import {
+  changedStoreFiles,
+  listSqliteSidecars,
+  snapshotStoreFiles,
+} from "../test-utils/store-snapshot.test-support.js";
 import {
   checkDoctorAgentMemorySchemaPending,
   noteDoctorAgentMemorySchemaHealth,
@@ -66,30 +72,47 @@ afterEach(() => {
   cleanupTempDirs(tempDirs);
 });
 
-it("reports pending schema work read-only until the repair moves the metadata", async () => {
+/** A plain connection that holds a store's WAL sidecars, as a serving Gateway does. */
+function holdStore(pathname: string) {
+  const holder = sqlite.openNodeSqliteDatabase(pathname);
+  holder.prepare("SELECT count(*) FROM sqlite_schema").get();
+  return holder;
+}
+
+it("decides pending schema work only beside held stores, without writing", async () => {
   const { databasePath, env } = createRegisteredAgentDatabase();
-  expect(checkDoctorAgentMemorySchemaPending({ env, shouldRepair: true })).toBe("none");
+  const root = env.OPENCLAW_STATE_DIR;
+  const statePath = resolveOpenClawStateSqlitePath(env);
+  const check = (shouldRepair = true) => checkDoctorAgentMemorySchemaPending({ env, shouldRepair });
   recreateUnreleasedInlineMemoryMetadata(databasePath);
   invalidateRegisteredAgentDatabasesMemo({ env });
-  // A read-only open of a WAL database may leave an empty -wal; a write leaves frames.
-  const family = [databasePath, `${databasePath}-wal`, `${databasePath}.seal`];
-  const snapshot = () =>
-    family.map((pathname) =>
-      fs.existsSync(pathname) && fs.statSync(pathname).size > 0
-        ? [pathname, fs.readFileSync(pathname), fs.statSync(pathname).mtimeMs]
-        : [pathname],
-    );
-  const before = snapshot();
 
-  expect(checkDoctorAgentMemorySchemaPending({ env, shouldRepair: true })).toBe("work");
-  expect(checkDoctorAgentMemorySchemaPending({ env, shouldRepair: false })).toBe("none");
-  expect(snapshot()).toEqual(before);
+  // A stopped install: no connection holds either store, so opening one would create sidecars.
+  expect(listSqliteSidecars(root)).toEqual([]);
+  const stopped = snapshotStoreFiles(root);
+  expect(await check()).toBe("undecidable");
+  expect(changedStoreFiles(stopped, snapshotStoreFiles(root))).toEqual([]);
+
+  let holders = [holdStore(statePath), holdStore(databasePath)];
+  try {
+    const held = snapshotStoreFiles(root);
+    expect(await check()).toBe("work");
+    expect(await check(false)).toBe("none");
+    expect(changedStoreFiles(held, snapshotStoreFiles(root))).toEqual([]);
+  } finally {
+    holders.forEach((holder) => holder.close());
+  }
   expect(readMemoryChunkColumns(databasePath)).toContain("importance");
 
   const report = await repairMemory(env);
   expect(report.repaired).toHaveLength(1);
   expect(readMemoryChunkColumns(databasePath)).not.toContain("importance");
-  expect(checkDoctorAgentMemorySchemaPending({ env, shouldRepair: true })).toBe("none");
+  holders = [holdStore(statePath), holdStore(databasePath)];
+  try {
+    expect(await check()).toBe("none");
+  } finally {
+    holders.forEach((holder) => holder.close());
+  }
 });
 
 it("removes a stale clean-close seal before failed writable repair while inspection preserves it", async () => {

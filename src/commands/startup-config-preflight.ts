@@ -94,10 +94,13 @@ async function prepareStartupConfig(
 ): Promise<StartupConfigPreflightResult> {
   let env = process.env;
   const measure: ConfigSnapshotReadMeasure = options.measure ?? (async (_name, run) => await run());
+  // Gateway startup reads under its migration lease and adopts the verified cache itself.
+  // Other commands read once before their action, so the invocation's cache keeps the
+  // plugin metadata for the plugin registry and the run instead of scanning it again.
   const readSnapshot = (readOptions?: Pick<ConfigSnapshotReadOptions, "isolateEnv">) =>
     snapshots.read({
       purpose: "startup",
-      allowCurrentPluginMetadata: false,
+      allowCurrentPluginMetadata: !options.gateway,
       includePluginMetadata: true,
       isolateEnv: readOptions?.isolateEnv,
       skipPluginValidation: false,
