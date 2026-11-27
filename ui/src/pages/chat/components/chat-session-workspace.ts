@@ -58,11 +58,7 @@ export function refreshSessionWorkspace(state: SessionWorkspaceHost, refreshFile
   if (retired) {
     const next = resolveSessionDiffSidebarContent(state);
     // The same workspace keeps its accepted totals until the replacement read lands.
-    if (
-      next?.kind === "session-diff" &&
-      retired.kind === "session-diff" &&
-      next.owner === retired.owner
-    ) {
+    if (next?.kind === "session-diff" && next.owner === retired.owner) {
       next.uncommitted = retired.uncommitted;
     }
     if (state.sidebarContent === retired) {
