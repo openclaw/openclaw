@@ -44,9 +44,10 @@ Watch background behavior. See [Watch setup and limits](/platforms/ios#standalon
   Explicit `stt-tts` mode is shown as native Talk, not as a realtime failure.
 - **End Talk** stops listening and playback without canceling accepted agent
   work. Its answer can still finish in chat history. To cancel work instead, say
-  "cancel" before ending the call or use the chat run's Stop control. Realtime
-  detachment requires a Gateway that advertises `talk-session-close-disposition`;
-  older Gateways retain their legacy aborting close.
+  "cancel" before ending the call or use the chat run's Stop control. Both phone
+  and Wear OS realtime Talk closes send `disposition: "detach"` when the Gateway
+  advertises `talk-session-close-disposition`; older Gateways retain their legacy
+  aborting close.
 - Native Talk uses the Gateway's `agents.defaults.timeoutSeconds` for agent runs.
   It keeps waiting while the Gateway reports its run in flight, including answers
   that take longer than 30 seconds.

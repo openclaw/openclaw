@@ -15,8 +15,11 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -979,6 +982,29 @@ class WearRealtimeTalkControllerTest {
       assertTrue("talk.session.close" in gatewayMethods)
       assertEquals(listOf("watch-a"), forcedChannelCloses)
     }
+
+  @Test
+  fun `stop sends detach disposition only when Gateway advertises close disposition`() =
+    runTest {
+      for ((advertised, expectedDisposition) in listOf(true to "detach", false to null)) {
+        val closeParams = mutableListOf<String?>()
+        val controller =
+          testTalkController(
+            requestGateway = { method, paramsJson, _ ->
+              if (method == "talk.session.close") closeParams += paramsJson
+              if (method == "talk.session.create") """{"relaySessionId":"relay-1"}""" else """{"ok":true}"""
+            },
+            supportsCloseDisposition = { advertised },
+          )
+
+        assertTrue(controller.start("watch-a", "session-a", "attempt-a", "en"))
+        assertTrue(controller.stop("watch-a", "attempt-a"))
+
+        val payload = Json.parseToJsonElement(closeParams.single()!!).jsonObject
+        assertEquals("relay-1", payload.getValue("sessionId").jsonPrimitive.content)
+        assertEquals(expectedDisposition, payload["disposition"]?.jsonPrimitive?.content)
+      }
+    }
 }
 
 private fun CoroutineScope.testTalkController(
@@ -990,6 +1016,7 @@ private fun CoroutineScope.testTalkController(
   sendWatchFrame: suspend (WearRealtimeAttemptOwner, WearRealtimeAudioFrameType, ByteArray) -> Unit = { _, _, _ -> },
   onSnapshot: (WearRealtimeTalkSnapshot) -> Unit = {},
   onForceCloseWatchChannel: (WearRealtimeAttemptOwner) -> Unit = {},
+  supportsCloseDisposition: () -> Boolean = { false },
 ): WearRealtimeTalkController =
   WearRealtimeTalkController(
     scope = this,
@@ -999,6 +1026,7 @@ private fun CoroutineScope.testTalkController(
     sendWatchFrame = sendWatchFrame,
     onSnapshot = onSnapshot,
     onForceCloseWatchChannel = onForceCloseWatchChannel,
+    supportsCloseDisposition = supportsCloseDisposition,
   )
 
 private suspend fun WearRealtimeTalkController.start(

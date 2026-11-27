@@ -439,7 +439,7 @@ class TalkModeManager internal constructor(
       start()
     } else {
       Log.d(tag, "disabled")
-      stop(TalkSessionCloseDisposition.Abort)
+      stop(TalkSessionCloseDisposition.Detach)
     }
   }
 
@@ -524,7 +524,7 @@ class TalkModeManager internal constructor(
 
   /**
    * Stops continuous, one-shot, or push-to-talk capture regardless of the enabled flag.
-   * Cleanup preserves accepted work; only an explicit user Stop passes Abort.
+   * Cleanup detaches accepted work by default.
    */
   fun stopAllCapture(
     failure: NativeText? = null,

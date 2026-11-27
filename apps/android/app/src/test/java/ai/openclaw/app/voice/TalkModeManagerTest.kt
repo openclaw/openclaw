@@ -1921,14 +1921,15 @@ class TalkModeManagerTest {
 
   @Test
   @Config(shadows = [DeadRealtimeAudioTrack::class])
-  fun relayFailureDetachesAcceptedConsultWhileExplicitStopAbortsIt() =
+  fun talkCloseDetachesAcceptedConsultAcrossFailureAndStopPaths() =
     runBlocking {
       for ((advertised, trigger, disposition) in listOf(
         Triple(true, "failure", "detach"),
-        Triple(true, "stop", "abort"),
+        Triple(true, "stop", "detach"),
         Triple(true, "app stop", "detach"),
         Triple(true, "start failure", "detach"),
         Triple(false, "failure", null),
+        Triple(false, "stop", null),
       )) {
         val closed = CompletableDeferred<JsonObject>()
         val capabilities = if (advertised) ""","capabilities":["talk-session-close-disposition"]""" else ""

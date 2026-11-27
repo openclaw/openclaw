@@ -1,6 +1,7 @@
 package ai.openclaw.app.wear
 
 import ai.openclaw.app.asStringOrNull
+import ai.openclaw.app.gateway.TalkSessionCloseDisposition
 import ai.openclaw.app.node.parseJsonParamsObject
 import ai.openclaw.app.voice.RealtimeAgentCoordinator
 import ai.openclaw.app.voice.RealtimeAgentSession
@@ -95,6 +96,7 @@ internal class WearRealtimeTalkController(
     ) -> Unit,
   private val onSnapshot: (WearRealtimeTalkSnapshot) -> Unit = {},
   private val onForceCloseWatchChannel: (WearRealtimeAttemptOwner) -> Unit = {},
+  private val supportsCloseDisposition: () -> Boolean = { false },
 ) {
   private val lifecycleMutex = Mutex()
   private val lifecycleStateLock = Any()
@@ -775,7 +777,13 @@ internal class WearRealtimeTalkController(
   }
 
   private suspend fun closeGatewaySession(closingSession: String) {
-    val params = buildJsonObject { put("sessionId", JsonPrimitive(closingSession)) }
+    val params =
+      buildJsonObject {
+        put("sessionId", JsonPrimitive(closingSession))
+        if (supportsCloseDisposition()) {
+          put("disposition", JsonPrimitive(TalkSessionCloseDisposition.Detach.wireValue))
+        }
+      }
     requestGateway("talk.session.close", params.toString(), 5_000L)
   }
 
