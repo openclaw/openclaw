@@ -14,7 +14,12 @@ import type {
 } from "@openclaw/llm-core";
 import type { Static, TSchema } from "typebox";
 import type { ToolInterruptions } from "./tool-interruption.js";
-import type { ToolRepeatState, ToolRepeatVerdict } from "./tool-repeat-guard.js";
+import type {
+  SideEffectBudgetState,
+  SideEffectVerdict,
+  ToolRepeatState,
+  ToolRepeatVerdict,
+} from "./tool-repeat-guard.js";
 
 /**
  * Stream function used by the agent loop.
@@ -282,6 +287,12 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
   /** @internal Host diagnostics for each repeat note or stop. */
   onToolRepeat?: (verdict: ToolRepeatVerdict) => void;
 
+  /** @internal Preserves completed side-effect counts across Agent.continue() retries. */
+  sideEffectBudgetState?: SideEffectBudgetState;
+
+  /** @internal Host diagnostics for each completed-effect budget stop. */
+  onSideEffectBudget?: (verdict: SideEffectVerdict) => void;
+
   /**
    * Hydrates an already-authorized tool that was deferred out of the current
    * provider-visible tool set. Return undefined for every other unknown name so
@@ -495,6 +506,16 @@ export interface AgentTool<
    * data, so the declaration crosses the worker wire unchanged.
    */
   repeatable?: ToolRepeatable;
+  /**
+   * Successful completions deliver an external side effect (sending a message,
+   * creating a resource). Opting in enables the completed-effect budget: once
+   * this tool has completed successfully `sideEffect` times for one user input
+   * (default 1), further invocations are refused with `side_effect_budget`,
+   * regardless of arguments or call alternation. Declared failures never spend
+   * the budget, so legitimate retries stay allowed. Plain data, so the
+   * declaration crosses the worker wire unchanged.
+   */
+  sideEffect?: true | number;
 }
 
 export type ToolRepeatable = true | { readonly actions: readonly string[] };

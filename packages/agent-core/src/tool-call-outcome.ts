@@ -16,7 +16,12 @@ import {
   getInternalToolResultContentSource,
 } from "./internal-hooks.js";
 import type { AgentCoreStreamRuntimeDeps } from "./runtime-deps.js";
-import { appendToolRepeatNote, type ToolRepeatVerdict } from "./tool-repeat-guard.js";
+import {
+  appendToolRepeatNote,
+  observeSideEffectCompletion,
+  type SideEffectBudgetState,
+  type ToolRepeatVerdict,
+} from "./tool-repeat-guard.js";
 import type {
   AgentContext,
   AgentLoopConfig,
@@ -34,6 +39,8 @@ type ToolOutcomeContext = {
   isLocalError?: AgentCoreStreamRuntimeDeps["isLocalError"];
   signal: AbortSignal | undefined;
   repeatNotes?: readonly ToolRepeatVerdict[];
+  sideEffectBudgetState?: SideEffectBudgetState;
+  resolved?: Map<AgentToolCall, ResolvedToolCallOutcome>;
 };
 
 export type ResolvedToolCallOutcome =
@@ -195,6 +202,16 @@ export async function finalizeToolCallOutcome(
         isError: true,
       };
     }
+  }
+  if (batch.sideEffectBudgetState && finalized.executionStarted) {
+    const cached = batch.resolved?.get(finalized.toolCall);
+    observeSideEffectCompletion(
+      batch.sideEffectBudgetState,
+      finalized.toolCall.name,
+      cached?.kind === "resolved" ? cached.tool : undefined,
+      { details: outcome.result.details },
+      outcome.isError,
+    );
   }
   const note = batch.repeatNotes?.find((entry) => entry.toolCallId === outcome.toolCall.id);
   return note ? { ...outcome, result: appendToolRepeatNote(outcome.result, note) } : outcome;

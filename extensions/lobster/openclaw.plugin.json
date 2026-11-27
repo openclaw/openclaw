@@ -12,7 +12,8 @@
   },
   "toolMetadata": {
     "lobster": {
-      "optional": true
+      "optional": true,
+      "sideEffecting": true
     }
   },
   "configSchema": {

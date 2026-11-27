@@ -1,8 +1,10 @@
 // Agent Core tests cover the arguments-only tool repeat guard.
+import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { captureAgent, makeCall, makeTool } from "./agent-loop.test-support.js";
 import { setInternalToolRepeatPolicy } from "./internal-hooks.js";
 import {
+  type SideEffectVerdict,
   TOOL_REPEAT_LIMIT_CODE,
   TOOL_REPEAT_NOTE_AT,
   TOOL_REPEAT_STOP_AT,
@@ -210,5 +212,92 @@ describe("repeated identical failures", () => {
       stopReason: "stop",
       content: answer,
     });
+  });
+});
+
+describe("completed-effect budget (side_effect_budget)", () => {
+  function sideEffectTool(name: string, executed: string[], details: unknown = { ok: true }): AgentTool {
+    return {
+      ...makeTool(name, executed),
+      parameters: Type.Object({}, { additionalProperties: true }),
+      sideEffect: true,
+      execute: async () => {
+        executed.push(name);
+        return { content: [{ type: "text", text: `${name} sent` }], details };
+      },
+    };
+  }
+
+  it("blocks the second successful invocation even when signatures alternate", async () => {
+    const executed: string[] = [];
+    const verdicts: SideEffectVerdict[] = [];
+    // Alternating wrapper/dispatch style calls: distinct arguments every time,
+    // so the consecutive streak never reaches its cap — only the completed-effect
+    // budget can stop this loop.
+    const { agent, requests } = captureAgent(
+      [sideEffectTool("lobster", executed)],
+      {},
+      [
+        [makeCall("lobster", { action: "run", pipeline: "a" }, "c1")],
+        [makeCall("lobster", { action: "resume", token: "t1" }, "c2")],
+        answer,
+      ],
+    );
+    setInternalToolRepeatPolicy(agent, { enabled: true });
+    await agent.prompt("start");
+
+    expect(executed).toEqual(["lobster"]);
+    const results = agent.state.messages.filter((message) => message.role === "toolResult");
+    expect(results[1]?.content[0]).toMatchObject({
+      text: expect.stringContaining("already completed successfully"),
+    });
+    expect(requests).toHaveLength(2);
+    // A capped turn ends with a terminal assistant message carrying the stop code.
+    expect(agent.state.messages.at(-1)).toMatchObject({ role: "assistant", errorCode: "side_effect_budget" });
+  });
+
+  it("does not spend the budget on failed or self-reported-failure results", async () => {
+    const executed: string[] = [];
+    const failingThenOk: AgentTool = {
+      ...makeTool("deliver", executed),
+      sideEffect: true,
+      execute: async () => {
+        executed.push("deliver");
+        if (executed.length === 1) {
+          return { content: [{ type: "text", text: "boom" }], details: { ok: false } };
+        }
+        return { content: [{ type: "text", text: "sent" }], details: { ok: true } };
+      },
+    };
+    const { agent } = captureAgent([failingThenOk], {}, [
+      [makeCall("deliver", {}, "d1")],
+      [makeCall("deliver", {}, "d2")],
+      [makeCall("deliver", {}, "d3")],
+      answer,
+    ]);
+    await agent.prompt("start");
+
+    // First (failed) and second (successful) run; the third is blocked.
+    expect(executed).toHaveLength(2);
+  });
+
+  it("honours a per-tool numeric budget", async () => {
+    const executed: string[] = [];
+    const tool: AgentTool = { ...sideEffectTool("send", executed), sideEffect: 2 };
+    const { agent } = captureAgent([tool], {}, [
+      [makeCall("send", { to: "a" }, "s1")],
+      [makeCall("send", { to: "b" }, "s2")],
+      [makeCall("send", { to: "c" }, "s3")],
+      answer,
+    ]);
+    await agent.prompt("start");
+    expect(executed).toHaveLength(2);
+  });
+
+  it("leaves tools without the sideEffect declaration unaffected by the budget", async () => {
+    const executed: string[] = [];
+    const { agent } = captureAgent([makeTool("read", executed)], {}, turns(5, (i) => makeCall("read", {}, `r${i}`)));
+    await agent.prompt("start");
+    expect(executed).toHaveLength(5);
   });
 });

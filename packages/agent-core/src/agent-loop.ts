@@ -56,12 +56,20 @@ import {
 } from "./tool-call-outcome.js";
 import { captureAgentToolInputScope } from "./tool-execution-context.js";
 import {
+  SIDE_EFFECT_BUDGET_CODE,
   TOOL_REPEAT_LIMIT_CODE,
+  createSideEffectBudgetState,
+  createSideEffectBudgetStopResult,
+  formatSideEffectBudgetStopMessage,
   createToolRepeatState,
   createToolRepeatStopResult,
   formatToolRepeatStopMessage,
+  observeSideEffectBudget,
   observeToolRepeat,
+  resetSideEffectBudgetState,
   resetToolRepeatState,
+  type SideEffectBudgetState,
+  type SideEffectVerdict,
   type ToolRepeatState,
   type ToolRepeatVerdict,
 } from "./tool-repeat-guard.js";
@@ -77,6 +85,7 @@ import type {
   AgentLoopTurnUpdate,
   AgentMessage,
   AgentToolCall,
+  AgentToolResult,
   StreamFn,
 } from "./types.js";
 
@@ -95,6 +104,7 @@ export async function runAgentLoop(
 ): Promise<AgentMessage[]> {
   const newMessages: AgentMessage[] = [];
   const repeatState = config.toolRepeatState ?? createToolRepeatState();
+  const budgetState = config.sideEffectBudgetState ?? createSideEffectBudgetState();
   const state = { context: { ...context, messages: [...context.messages] } };
   const promptContext = prompts.filter(isOpenClawSystemUpdateMessage);
   const inputPrompts = prompts.filter((message) => !isOpenClawSystemUpdateMessage(message));
@@ -112,7 +122,7 @@ export async function runAgentLoop(
   return runLoop(
     state,
     newMessages,
-    { ...config, toolRepeatState: repeatState },
+    { ...config, toolRepeatState: repeatState, sideEffectBudgetState: budgetState },
     signal,
     emit,
     streamFn,
@@ -163,6 +173,7 @@ async function runLoop(
   let turnOpen = true;
   let turnTainted = isActiveTurnTainted(state.context.messages);
   const toolRepeatState = initialConfig.toolRepeatState ?? createToolRepeatState();
+  const sideEffectBudgetState = initialConfig.sideEffectBudgetState ?? createSideEffectBudgetState();
   let pendingMessages: AgentMessage[] = [];
   const stopIfAborted = async (): Promise<boolean> => {
     if (!signal?.aborted) {
@@ -203,6 +214,7 @@ async function runLoop(
     return commitInputMessages(messagesToInject, state.context, config, emit, newMessages, () => {
       turnTainted = false;
       resetToolRepeatState(toolRepeatState);
+      resetSideEffectBudgetState(sideEffectBudgetState);
     });
   };
   while (true) {
@@ -296,6 +308,7 @@ async function runLoop(
             executionSignal,
             toolEmit,
             toolRepeatState,
+            sideEffectBudgetState,
             toolPlan,
             toolCalls,
             scheduling,
@@ -326,6 +339,7 @@ async function runLoop(
               signal,
               emit,
               toolRepeatState,
+              sideEffectBudgetState,
               toolPlan,
               remainingToolCalls,
               undefined,
@@ -374,10 +388,13 @@ async function runLoop(
         return newMessages;
       }
       if (executedToolBatch?.repeatStop) {
-        const reason = formatToolRepeatStopMessage(executedToolBatch.repeatStop);
+        const budgetVerdict = "completedCount" in executedToolBatch.repeatStop ? executedToolBatch.repeatStop : undefined;
+        const reason = budgetVerdict
+          ? formatSideEffectBudgetStopMessage(budgetVerdict)
+          : formatToolRepeatStopMessage(executedToolBatch.repeatStop);
         const terminalMessage = {
           ...createFailureMessage(config.model, new Error(reason), false),
-          errorCode: TOOL_REPEAT_LIMIT_CODE,
+          errorCode: budgetVerdict ? SIDE_EFFECT_BUDGET_CODE : TOOL_REPEAT_LIMIT_CODE,
           content: [{ type: "text" as const, text: reason }],
         };
         state.context.messages.push(terminalMessage);
@@ -475,6 +492,7 @@ async function executeToolCalls(
   signal: AbortSignal | undefined,
   emit: AgentEventSink,
   toolRepeatState: ToolRepeatState,
+  sideEffectBudgetState: SideEffectBudgetState,
   toolPlan: ToolPlanState,
   toolCalls = assistantMessage.content.filter((c) => c.type === "toolCall"),
   scheduling?: AsyncToolBatchScheduling,
@@ -494,6 +512,7 @@ async function executeToolCalls(
     signal,
     emit,
     resolved: new Map(),
+    sideEffectBudgetState,
     onParallelStarted: scheduling?.onParallelStarted,
     onTerminalLoop: scheduling?.onTerminalLoop,
     hasUnobservedAsyncToolResults,
@@ -524,6 +543,29 @@ async function executeToolCalls(
       }
     }
   }
+  // Completed-effect budget: refuse an opted-in side-effecting tool that has
+  // already completed successfully this user input. Keyed on tool name only,
+  // so alternating signatures and distinct payloads cannot evade it.
+  for (const toolCall of toolCalls) {
+    if (signal?.aborted) {
+      break;
+    }
+    const resolution = await resolveToolCallTool(batch, toolCall);
+    const budgetVerdict = observeSideEffectBudget(
+      sideEffectBudgetState,
+      toolCall,
+      resolution.kind === "resolved" ? resolution.tool : undefined,
+    );
+    if (budgetVerdict) {
+      config.onSideEffectBudget?.(budgetVerdict);
+      return await completeToolRepeatStopBatch(
+        batch,
+        toolCalls,
+        { ...budgetVerdict, count: budgetVerdict.completedCount },
+        createSideEffectBudgetStopResult(budgetVerdict),
+      );
+    }
+  }
   let hasSequentialToolCall = false;
   if (config.toolExecution !== "sequential") {
     for (const toolCall of toolCalls) {
@@ -548,7 +590,8 @@ async function executeToolCalls(
 async function completeToolRepeatStopBatch(
   batch: ToolBatchContext,
   toolCalls: AgentToolCall[],
-  verdict: ToolRepeatVerdict,
+  verdict: ToolRepeatVerdict | (SideEffectVerdict & { count: number }),
+  stopResult?: AgentToolResult<unknown>,
 ): Promise<ExecutedToolCallBatch> {
   // Stop sampling now; results still publish after earlier streamed work.
   batch.onTerminalLoop?.();
@@ -561,7 +604,7 @@ async function completeToolRepeatStopBatch(
       batch,
       {
         toolCall,
-        result: createToolRepeatStopResult(verdict),
+        result: stopResult ?? createToolRepeatStopResult(verdict),
         isError: true,
         executionStarted: false,
         ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
@@ -588,6 +631,7 @@ export type ToolBatchContext = {
   emit: AgentEventSink;
   resolved: Map<AgentToolCall, ResolvedToolCallOutcome>;
   repeatNotes?: ToolRepeatVerdict[];
+  sideEffectBudgetState?: SideEffectBudgetState;
   onParallelStarted?: () => void;
   onTerminalLoop?: () => void;
   hasUnobservedAsyncToolResults: boolean;

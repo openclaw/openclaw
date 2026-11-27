@@ -10,6 +10,7 @@ type ToolDefinitionSource = Pick<AnyAgentTool, "name" | "description" | "paramet
       | "resultContentSource"
       | "executionMode"
       | "async"
+      | "sideEffect"
       | "repeatable"
     >
   >;
@@ -25,6 +26,7 @@ export function projectAgentToolDefinition(tool: ToolDefinitionSource) {
     parameters: tool.parameters,
     executionMode: tool.executionMode,
     ...(tool.async === false ? { async: false as const } : {}),
+    ...(tool.sideEffect !== undefined ? { sideEffect: tool.sideEffect } : {}),
     ...(tool.repeatable ? { repeatable: tool.repeatable } : {}),
   };
 }
