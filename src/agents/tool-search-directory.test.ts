@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
-import { createAgentHarnessPromptToolPolicy } from "./harness/prompt-tool-policy.js";
 import { filterLocalModelLeanTools } from "./local-model-lean.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 import {
@@ -76,7 +75,7 @@ describe("run-granted tools in the Tool Search directory", () => {
 });
 
 describe("lean Tool Search directory", () => {
-  it("does not spend removed tools' prompt savings on longer descriptions", () => {
+  it("keeps filtered tools out of the names-only directory without growing it", () => {
     const tools = localCatalog();
     const config: OpenClawConfig = {
       agents: { defaults: { experimental: { localModelLean: true } } },
@@ -90,52 +89,14 @@ describe("lean Tool Search directory", () => {
       options,
     );
 
+    const names = lean.split("\n")[0]!.replace("Deferred tools: ", "").split(", ");
     expect(lean.length).toBeLessThanOrEqual(full.length);
+    expect(lean.split("\n")).toHaveLength(2);
     expect(lean).not.toContain("Search the local archive");
     for (const name of optionalNames) {
-      expect(lean).not.toContain(`- ${name} `);
+      expect(names).not.toContain(name);
     }
-    for (const tool of leanTools) {
-      expect(lean).toContain(`- ${tool.name} (core)`);
-      expect(tool.description).toBe("Search the local archive. ".repeat(10));
-    }
-  });
-
-  it("caches directory text separately for lean and non-lean agents", () => {
-    const ref = catalogRef(localCatalog().slice(0, 1));
-    const config: OpenClawConfig = {
-      agents: {
-        defaults: { experimental: { localModelLean: true } },
-        entries: { lean: {}, full: { experimental: { localModelLean: false } } },
-      },
-    };
-    const full = buildToolSchemaDirectoryPrompt({ config, agentId: "full", catalogRef: ref });
-    const lean = buildToolSchemaDirectoryPrompt({ config, agentId: "lean", catalogRef: ref });
-
-    expect(full).toContain("Search the local archive");
-    expect(lean).toContain("- local_tool_00 (core)\n");
-    expect(lean).not.toContain("Search the local archive");
-    expect(buildToolSchemaDirectoryPrompt({ config, agentId: "full", catalogRef: ref })).toBe(full);
-    expect(buildToolSchemaDirectoryPrompt({ config, agentId: "lean", catalogRef: ref })).toBe(lean);
-    expect(
-      buildToolSchemaDirectoryPrompt(
-        { config, agentId: "full", catalogRef: ref },
-        { toolSearchDirectoryLean: true },
-      ),
-    ).toBe(lean);
-    expect(
-      buildToolSchemaDirectoryPrompt(
-        { config, agentId: "lean", catalogRef: ref },
-        { toolSearchDirectoryLean: false },
-      ),
-    ).toBe(full);
-    const policy = createAgentHarnessPromptToolPolicy({
-      tools: [createStubTool("tool_search")],
-      catalogRef: ref,
-      codeModeControlsEnabled: false,
-      catalogPrompt: { config, agentId: "full" },
-    });
-    expect(policy.apply().toolSchemaDirectoryPrompt).toBe(full);
+    expect(names).toEqual(leanTools.map((tool) => tool.name).toSorted());
   });
 });
 
@@ -160,7 +121,7 @@ describe("Tool Search directory omission count", () => {
     // MCP tools follow in their own directory; the native rows and count are unchanged.
     expect(expandedText.startsWith(baselineText)).toBe(true);
     expect(expandedText.includes("external_mcp_")).toBe(count > 1);
-    expect(expandedText).not.toContain("additional tools omitted");
+    expect(expandedText).not.toContain("more found by tool_search");
     expect(expandedText).not.toContain("external_client");
     const runtime = new ToolSearchRuntime({ catalogRef: expanded }, resolveToolSearchConfig());
     expect(await runtime.search("external_client", { limit: 1 })).toMatchObject([
@@ -176,12 +137,11 @@ describe("Tool Search directory omission count", () => {
       { catalogRef: catalogRef(tools) },
       { contextTokenBudget: 7_680 },
     );
-    const renderedRows = directory
-      .split("\n")
-      .filter((line) => line.startsWith("- local_directory_"));
-    expect(renderedRows.length).toBeGreaterThan(0);
-    expect(renderedRows.length).toBeLessThan(tools.length);
-    expect(directory).toContain(`${tools.length - renderedRows.length} additional tools omitted.`);
+    const names = directory.split("\n")[0]!.replace("Deferred tools: ", "").split(", ");
+    expect(names.length).toBeGreaterThan(0);
+    expect(names.length).toBeLessThan(tools.length);
+    expect(directory).toContain(`${tools.length - names.length} more found by tool_search.`);
+    expect(directory.length).toBeLessThanOrEqual(768);
   });
 });
 
@@ -223,19 +183,22 @@ describe("usage-ranked Tool Search directory", () => {
       expect(ranked.length).toBeLessThanOrEqual(1_000);
       if (count === 2) {
         expect(ranked).toBe(baseline);
-        expect(ranked).toContain("Search a synthetic archive.");
-        expect(ranked).not.toContain("additional tools omitted");
+        expect(ranked.split("\n")[0]).toBe(
+          "Deferred tools: ranked_000, ranked_001, read, zz_new, zz_old",
+        );
+        expect(ranked).not.toContain("Search a synthetic archive.");
+        expect(ranked).not.toContain("more found by tool_search");
         return;
       }
-      expect(ranked).toContain("- read (core)\n");
-      expect(ranked).toContain("- ranked_079 (core)\n");
-      expect(ranked).toContain("- zz_new (core)\n");
-      expect(ranked).not.toContain("- zz_old ");
+      const names = ranked.split("\n")[0]!.replace("Deferred tools: ", "").split(", ");
+      expect(names).toContain("read");
+      expect(names).toContain("ranked_079");
+      expect(names).toContain("zz_new");
+      expect(names).not.toContain("zz_old");
       expect(ranked).not.toContain("Search a synthetic archive.");
-      expect(baseline).not.toContain("- zz_new ");
-      const rows = ranked.split("\n").filter((line) => line.startsWith("- "));
-      expect(rows).toEqual(rows.toSorted());
-      expect(ranked).toContain(`${tools.length - rows.length} additional tools omitted.`);
+      expect(baseline).not.toContain("zz_new");
+      expect(names).toEqual(names.toSorted());
+      expect(ranked).toContain(`${tools.length - names.length} more found by tool_search.`);
       const swapped = [...usageRanking.orderedToolIds];
       [swapped[0], swapped[1]] = [swapped[1]!, swapped[0]!];
       expect(

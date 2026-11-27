@@ -220,8 +220,11 @@ describe("AppSidebar hidden catalog discovery", () => {
 
     sidebar.hostElement.remove();
     await settle(sidebar);
-    setStoredSessionCatalogHidden("codex", false);
     provider.append(sidebar.hostElement);
+    await settle(sidebar);
+    expect(sidebar.sessionData.sessionCatalogRefreshStatus.hasLoaded).toBe(true);
+    expect(catalog()).toBeNull();
+    setStoredSessionCatalogHidden("codex", false);
     await settle(sidebar);
     expect(catalog()).not.toBeNull();
   });
