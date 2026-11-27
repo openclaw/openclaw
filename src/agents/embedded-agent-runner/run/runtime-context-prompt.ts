@@ -1,3 +1,4 @@
+import { z } from "zod";
 import {
   escapeRuntimeContextFooter,
   hasRuntimeContextMarker,
@@ -6,18 +7,23 @@ import {
   RUNTIME_CONTEXT_HEADER,
   setRuntimeContextRetention,
   type Context,
+  type UserMessage,
 } from "../../../llm/types.js";
 import {
   memoizeFrozenPlainDataProjection,
   isDeeplyFrozenPlainData,
 } from "../../../shared/immutable-data.js";
+import { PROJECTED_PROMPT_UPDATE } from "../../embedded-agent-helpers/turns.js";
 import {
+  isOpenClawSystemUpdateMessage,
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
+  RUNTIME_CONTEXT_DATA_RANGES,
   STEERING_RUNTIME_CONTEXT,
   SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE,
   RUNTIME_EVENT_USER_PROMPT,
   projectRuntimeContextFragments,
   type CurrentInboundPromptContext,
+  type RuntimeContextDataRange,
   type RuntimeContextFragment,
 } from "../../internal-runtime-context.js";
 import type { AgentMessage } from "../../runtime/index.js";
@@ -50,6 +56,7 @@ export type RuntimeContextCustomMessage = {
         turnScoped: boolean;
         replay?: "append";
         fragments?: never;
+        dataRanges?: RuntimeContextDataRange[];
       };
   timestamp: number;
 };
@@ -211,9 +218,11 @@ export function buildRuntimeContextCustomMessage(
   }
   if (inHistorySystemUpdates) {
     return buildSystemUpdateMessage(
-      fragments?.length ? projectRuntimeContextFragments(fragments) : trimmedRuntimeContext,
+      trimmedRuntimeContext,
       "runtime-context",
       true,
+      undefined,
+      fragments,
     );
   }
   return buildContextCustomMessage(trimmedRuntimeContext, OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE, {
@@ -228,12 +237,66 @@ export function buildSystemUpdateMessage(
   kind: "prompt-update" | "runtime-context",
   turnScoped: boolean,
   replay?: "append",
+  fragments?: RuntimeContextFragment[],
 ): RuntimeContextCustomMessage {
-  return buildContextCustomMessage(content, SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE, {
+  const dataRanges: RuntimeContextDataRange[] = [];
+  const rendered =
+    kind === "runtime-context" && fragments?.length
+      ? projectRuntimeContextFragments(fragments, dataRanges)
+      : content;
+  return buildContextCustomMessage(rendered, SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE, {
     kind,
     turnScoped,
     ...(replay ? { replay } : {}),
+    ...(dataRanges.length ? { dataRanges } : {}),
   });
+}
+
+const systemUpdateDetailsSchema = z.object({
+  kind: z.enum(["prompt-update", "runtime-context"]),
+  turnScoped: z.boolean(),
+  dataRanges: z
+    .array(z.object({ start: z.int().nonnegative(), end: z.int().positive() }))
+    .optional(),
+});
+
+/** Preserve runtime context when a route cannot send native system updates. */
+export function projectSystemUpdateMessage(
+  message: AgentMessage,
+  inHistorySystemUpdates: boolean,
+): AgentMessage | undefined {
+  if (message.role !== "custom" || !isOpenClawSystemUpdateMessage(message)) {
+    return undefined;
+  }
+  const details = systemUpdateDetailsSchema.safeParse(message.details);
+  if (!details.success) {
+    return undefined;
+  }
+  const { kind, turnScoped, dataRanges } = details.data;
+  if (!inHistorySystemUpdates && kind === "runtime-context") {
+    return {
+      ...message,
+      customType: OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
+      details: { source: "openclaw-runtime-context", runtimeContextCarrier: true },
+    };
+  }
+  const projected: UserMessage & {
+    [PROJECTED_PROMPT_UPDATE]?: true;
+    [RUNTIME_CONTEXT_DATA_RANGES]?: RuntimeContextDataRange[];
+  } = {
+    role: "user",
+    content: message.content,
+    timestamp: message.timestamp,
+  };
+  if (inHistorySystemUpdates) {
+    projected.operatorMessage = { turnScoped };
+    if (kind === "runtime-context" && dataRanges?.length) {
+      projected[RUNTIME_CONTEXT_DATA_RANGES] = dataRanges;
+    }
+  } else {
+    projected[PROJECTED_PROMPT_UPDATE] = true;
+  }
+  return projected;
 }
 
 function buildContextCustomMessage(
