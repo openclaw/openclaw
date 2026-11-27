@@ -1,5 +1,10 @@
-/** Local-only punctuation. Offsets are half-open UTF-16 ranges in the raw revision. */
+/** Local-only punctuation. Offsets refer to the processor's current UTF-16 input. */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type {
+  ProtectedSpan,
+  RefinementCandidate,
+  RefinementProcessor,
+} from "../../../src/shared/dictation-refinement/types.js";
 
 export type DictationPunctuationMode = "verbatim" | "automatic" | "explicit";
 
@@ -10,15 +15,11 @@ export type DictationPunctuationPolicy = Readonly<{
   fragment?: boolean;
 }>;
 
-type DictationProtectedSpan = Readonly<{ start: number; end: number }>;
+type DictationProtectedSpan = Pick<ProtectedSpan, "start" | "end">;
 
-export type DictationRefinementRequest = Readonly<{
-  schemaVersion: 1;
-  captureId: string;
-  generation: number;
-  transcriptRevision: number;
+/** Pure grammar input for local processing, benchmark and independent proposal checks. */
+export type PunctuationInput = Readonly<{
   rawTranscript: string;
-  isFinal: boolean;
   policy: DictationPunctuationPolicy;
   /** Only a caller-authorized, bounded snapshot; absence is not an empty field. */
   context?: Readonly<{ left: string; right: string }>;
@@ -40,40 +41,22 @@ export type DictationRefinementReason =
   | "context-unavailable"
   | "explicit-disabled"
   | "ambiguous-command"
-  | "unsupported-version"
   | "invalid-request"
-  | "incomplete-transcript"
   | "input-too-large"
   | "invalid-candidate"
-  | "revision-mismatch"
   | "invalid-edit-map"
   | "protected-text"
   | "lexical-change"
   | "unapproved-edit"
   | "output-too-large";
 
-export type DictationRefinementResult = Readonly<{
-  schemaVersion: 1;
-  captureId: string;
-  generation: number;
-  transcriptRevision: number;
-  text: string;
-  status: "refined" | "raw-fallback" | "needs-review" | "unavailable";
+export type PunctuationDetail = Readonly<{
   edits: readonly DictationSourceEdit[];
   reasons: readonly DictationRefinementReason[];
   effectiveLocale: string | null;
-  policyVersion: 1;
 }>;
 
-type Candidate = {
-  schemaVersion: 1;
-  policyVersion: 1;
-  captureId: string;
-  generation: number;
-  transcriptRevision: number;
-  text: string;
-  edits: DictationSourceEdit[];
-};
+type PunctuationProposal = PunctuationDetail & Readonly<{ text: string }>;
 
 const MAX_TRANSCRIPT_BYTES = 32 * 1024;
 const MAX_CONTEXT_BYTES = 8 * 1024;
@@ -92,8 +75,7 @@ function graphemeBoundaries(text: string): Set<number> {
   return boundaries;
 }
 
-function effectiveLocale(request: DictationRefinementRequest): string | null {
-  const locale = request.policy?.locale;
+function effectiveLocale(locale: string | undefined): string | null {
   if (typeof locale !== "string" || locale.length > 64) {
     return null;
   }
@@ -105,21 +87,14 @@ function effectiveLocale(request: DictationRefinementRequest): string | null {
 }
 
 function rawResult(
-  request: DictationRefinementRequest,
+  request: PunctuationInput,
   reason: DictationRefinementReason,
-  status: DictationRefinementResult["status"] = "raw-fallback",
-): DictationRefinementResult {
+): PunctuationProposal {
   return {
-    schemaVersion: 1,
-    policyVersion: 1,
-    captureId: request.captureId,
-    generation: request.generation,
-    transcriptRevision: request.transcriptRevision,
     text: request.rawTranscript,
-    status,
     edits: [],
     reasons: [reason],
-    effectiveLocale: effectiveLocale(request),
+    effectiveLocale: effectiveLocale(request.policy?.locale),
   };
 }
 
@@ -127,22 +102,9 @@ function withinBytes(text: string, limit: number): boolean {
   return text.length <= limit && encoder.encode(text).byteLength <= limit;
 }
 
-function requestProblem(
-  request: DictationRefinementRequest,
-): DictationRefinementReason | undefined {
-  if (request.schemaVersion !== 1) {
-    return "unsupported-version";
-  }
+function requestProblem(request: PunctuationInput): DictationRefinementReason | undefined {
   if (
-    typeof request.captureId !== "string" ||
-    !request.captureId ||
-    request.captureId.length > 128 ||
-    !Number.isSafeInteger(request.generation) ||
-    request.generation < 0 ||
-    !Number.isSafeInteger(request.transcriptRevision) ||
-    request.transcriptRevision < 0 ||
     typeof request.rawTranscript !== "string" ||
-    typeof request.isFinal !== "boolean" ||
     !isRecord(request.policy) ||
     !["verbatim", "automatic", "explicit"].includes(request.policy.mode) ||
     typeof request.policy.explicitEnabled !== "boolean" ||
@@ -151,9 +113,6 @@ function requestProblem(
     (request.mixedLocale !== undefined && typeof request.mixedLocale !== "boolean")
   ) {
     return "invalid-request";
-  }
-  if (!request.isFinal) {
-    return "incomplete-transcript";
   }
   if (!withinBytes(request.rawTranscript, MAX_TRANSCRIPT_BYTES)) {
     return "input-too-large";
@@ -168,7 +127,8 @@ function requestProblem(
   }
   if (
     request.context &&
-    !withinBytes(request.context.left + request.context.right, MAX_CONTEXT_BYTES)
+    (request.context.left.length + request.context.right.length > MAX_CONTEXT_BYTES ||
+      !withinBytes(request.context.left + request.context.right, MAX_CONTEXT_BYTES))
   ) {
     return "input-too-large";
   }
@@ -209,8 +169,13 @@ function touchesProtected(
 
 type Protection = { spans: DictationProtectedSpan[]; openLiteral: boolean };
 
-function protectedRanges(text: string, boundaries: Set<number>): Protection {
-  const spans: DictationProtectedSpan[] = [];
+function protectedRanges(
+  text: string,
+  boundaries: Set<number>,
+  coreSpans: readonly ProtectedSpan[],
+): Protection {
+  // Already validated and remapped by the coordinator to this exact input text.
+  const spans: DictationProtectedSpan[] = [...coreSpans];
   const protect = (start: number, end: number) => {
     let protectedStart = start;
     let protectedEnd = end;
@@ -337,12 +302,15 @@ function explicitEdits(
     const next = commands[index + 1];
     const before = source.slice(0, match.index);
     const after = source.slice(match.index + match[0].length);
-    const separator = /[ \t]+$/u.exec(before);
+    // Some recognizers put a pause comma immediately before an intact "insert …".
+    // It belongs to that command, not to the word on its left. Bare names do not claim it.
+    const separator = (introduced ? /,?[ \t]+$/u : /[ \t]+$/u).exec(before);
     const terminal = mark === "." || mark === "?" || mark === "!";
     if (
       !mark ||
       !separator ||
       !/\S/u.test(before) ||
+      (separator[0].startsWith(",") && !/[^\s,;:.!?]/u.test(before[separator.index - 1] ?? "")) ||
       (terminal ? !/^[.!?]?[ \t]*$/u.test(after) : !/^[,;:]?[ \t]+[\p{L}\p{N}]/u.test(after)) ||
       (next && /^\s*$/u.test(source.slice(match.index + match[0].length, next.index)))
     ) {
@@ -355,7 +323,7 @@ function explicitEdits(
       return undefined;
     }
     edits.push({
-      start: match.index - separator[0].length,
+      start: separator.index,
       end: match.index + match[0].length,
       text: existing ? "" : mark,
       reason: "explicit-punctuation",
@@ -370,16 +338,18 @@ type Plan = {
   edits: DictationSourceEdit[];
 };
 
-function prepare(request: DictationRefinementRequest): Plan | DictationRefinementReason {
+function prepare(
+  request: PunctuationInput,
+  coreSpans: readonly ProtectedSpan[],
+): Plan | DictationRefinementReason {
   const invalid = requestProblem(request);
   if (invalid) {
     return invalid;
   }
-  const boundaries = graphemeBoundaries(request.rawTranscript);
   if (request.policy.mode === "verbatim") {
     return "verbatim";
   }
-  if (effectiveLocale(request) !== "en-US") {
+  if (effectiveLocale(request.policy?.locale) !== "en-US") {
     return "unsupported-locale";
   }
   if (request.mixedLocale || /[^\p{Script=Latin}\p{M}\P{L}]/u.test(request.rawTranscript)) {
@@ -392,7 +362,8 @@ function prepare(request: DictationRefinementRequest): Plan | DictationRefinemen
     return "explicit-disabled";
   }
   const raw = request.rawTranscript;
-  const { spans, openLiteral } = protectedRanges(raw, boundaries);
+  const boundaries = graphemeBoundaries(raw);
+  const { spans, openLiteral } = protectedRanges(raw, boundaries, coreSpans);
   const edits = request.policy.mode === "explicit" ? explicitEdits(raw, spans) : [];
   if (!edits) {
     return "ambiguous-command";
@@ -455,33 +426,19 @@ function lexicalTokens(text: string): string[] {
     .map((segment) => segment.segment.toLocaleLowerCase("en-US"));
 }
 
-function validate(
-  request: DictationRefinementRequest,
-  candidate: unknown,
-  plan: Plan,
-): DictationRefinementResult {
+function validate(request: PunctuationInput, candidate: unknown, plan: Plan): PunctuationProposal {
   if (
     !isRecord(candidate) ||
     typeof candidate.text !== "string" ||
     !Array.isArray(candidate.edits)
   ) {
-    return rawResult(request, "invalid-candidate", "needs-review");
-  }
-  if (candidate.schemaVersion !== 1 || candidate.policyVersion !== 1) {
-    return rawResult(request, "unsupported-version", "needs-review");
-  }
-  if (
-    candidate.captureId !== request.captureId ||
-    candidate.generation !== request.generation ||
-    candidate.transcriptRevision !== request.transcriptRevision
-  ) {
-    return rawResult(request, "revision-mismatch", "needs-review");
+    return rawResult(request, "invalid-candidate");
   }
   if (!withinBytes(candidate.text, MAX_TRANSCRIPT_BYTES + MAX_EDITS)) {
-    return rawResult(request, "output-too-large", "needs-review");
+    return rawResult(request, "output-too-large");
   }
   if (candidate.edits.length > MAX_EDITS) {
-    return rawResult(request, "invalid-edit-map", "needs-review");
+    return rawResult(request, "invalid-edit-map");
   }
   const edits: DictationSourceEdit[] = [];
   let previousEnd = 0;
@@ -501,10 +458,10 @@ function validate(
       typeof edit.text !== "string" ||
       edit.text.length > 32
     ) {
-      return rawResult(request, "invalid-edit-map", "needs-review");
+      return rawResult(request, "invalid-edit-map");
     }
     if (touchesProtected(plan.spans, edit.start, edit.end)) {
-      return rawResult(request, "protected-text", "needs-review");
+      return rawResult(request, "protected-text");
     }
     // A lexical comparison alone permits apostrophe removal or a period before
     // negation. Only the declared locale pack's exact permitted edits can pass.
@@ -516,14 +473,14 @@ function validate(
         allowed.reason === edit.reason,
     );
     if (!permitted) {
-      return rawResult(request, "unapproved-edit", "needs-review");
+      return rawResult(request, "unapproved-edit");
     }
     edits.push(permitted);
     previousStart = edit.start;
     previousEnd = edit.end;
   }
   if (applyEdits(request.rawTranscript, edits) !== candidate.text) {
-    return rawResult(request, "invalid-edit-map", "needs-review");
+    return rawResult(request, "invalid-edit-map");
   }
   // Independently account for the only authorized lexical deletions: recognized
   // mark names. Casing and punctuation must preserve the remaining word stream.
@@ -537,46 +494,70 @@ function validate(
     expected.length !== actual.length ||
     expected.some((token, index) => token !== actual[index])
   ) {
-    return rawResult(request, "lexical-change", "needs-review");
+    return rawResult(request, "lexical-change");
   }
   return {
     ...rawResult(request, "unchanged"),
     text: candidate.text,
-    status: edits.length ? "refined" : "raw-fallback",
     edits,
     reasons: edits.length ? [] : ["unchanged"],
   };
 }
 
-/** Validate an untrusted edit result against the same immutable raw revision. */
+/** Independently check a local grammar proposal; coordinator frames have no reason fields. */
 export function validateDictationEdits(
-  request: DictationRefinementRequest,
+  request: PunctuationInput,
   candidate: unknown,
-): DictationRefinementResult {
-  const plan = prepare(request);
-  return typeof plan === "string"
-    ? rawResult(request, plan, plan === "incomplete-transcript" ? "unavailable" : "raw-fallback")
-    : validate(request, candidate, plan);
+): PunctuationProposal {
+  const plan = prepare(request, []);
+  return typeof plan === "string" ? rawResult(request, plan) : validate(request, candidate, plan);
 }
 
-/** Zero provider requests, no persistence, and no insertion authority. */
-export function refineDictation(request: DictationRefinementRequest): DictationRefinementResult {
-  const plan = prepare(request);
+/** Compute grammar facts only. No capture, revision, finalization, or review authority. */
+export function refineDictation(
+  request: PunctuationInput,
+  coreSpans: readonly ProtectedSpan[] = [],
+): PunctuationProposal {
+  const plan = prepare(request, coreSpans);
   if (typeof plan === "string") {
-    return rawResult(
-      request,
-      plan,
-      plan === "incomplete-transcript" ? "unavailable" : "raw-fallback",
-    );
+    return rawResult(request, plan);
   }
-  const candidate: Candidate = {
-    schemaVersion: 1,
-    policyVersion: 1,
-    captureId: request.captureId,
-    generation: request.generation,
-    transcriptRevision: request.transcriptRevision,
-    text: applyEdits(request.rawTranscript, plan.edits),
-    edits: plan.edits,
-  };
+  const candidate = { text: applyEdits(request.rawTranscript, plan.edits), edits: plan.edits };
   return validate(request, candidate, plan);
+}
+
+/** Register instead of whitespace refinement for an opted-in punctuation capture. */
+export function createPunctuationProcessor(
+  policy: DictationPunctuationPolicy,
+  context: PunctuationInput["context"],
+  observe: (detail: PunctuationDetail) => void,
+): RefinementProcessor {
+  return {
+    id: "punctuation",
+    stage: "deterministic",
+    order: 0,
+    modes: ["dictation"],
+    // Verbatim and explicit abstention apply to every locale. Never inherit an
+    // English default when the frozen punctuation policy didn't select en-US.
+    supportedLocales: ["*"],
+    transform(input, signal) {
+      signal.throwIfAborted();
+      const request = { rawTranscript: input.text, policy, context };
+      const {
+        edits,
+        reasons,
+        effectiveLocale: locale,
+      } = policy.mode !== "verbatim" && effectiveLocale(input.request.locale.tag) !== "en-US"
+        ? rawResult(request, "unsupported-locale")
+        : refineDictation(request, input.protectedSpans);
+      observe({ edits, reasons, effectiveLocale: locale });
+      return {
+        schemaVersion: 1,
+        offsetUnit: "utf16",
+        kind: "edits",
+        baseRevision: input.baseRevision,
+        edits: edits.map(({ start, end, text }) => ({ start, end, text })),
+      } satisfies RefinementCandidate;
+    },
+  };
 }

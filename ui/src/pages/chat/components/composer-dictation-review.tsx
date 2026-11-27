@@ -33,7 +33,7 @@ export function ComposerDictationReview(props: {
           </p>
           <label>
             <span>{t("chat.dictation.punctuation.original")}</span>
-            <textarea rows={3} readonly value={current().rawText} />
+            <textarea rows={3} readonly dir="auto" value={current().rawText} />
           </label>
           <label>
             <span>
@@ -43,7 +43,12 @@ export function ComposerDictationReview(props: {
                   : "chat.dictation.punctuation.proposed",
               )}
             </span>
-            <textarea rows={3} readonly value={current().result.text} />
+            <textarea
+              rows={3}
+              readonly
+              dir="auto"
+              value={current().selected === "original" ? current().rawText : current().result.text}
+            />
           </label>
           <details>
             <summary>{t("chat.dictation.punctuation.changePolicy")}</summary>
@@ -57,7 +62,7 @@ export function ComposerDictationReview(props: {
               type="button"
               class="btn"
               disabled={attempted() || !current().canInsert}
-              onClick={() => props.readDictation()?.reprocess(policy())}
+              onClick={() => void props.readDictation()?.reprocess(policy())}
             >
               {t("chat.dictation.punctuation.reprocess")}
             </button>

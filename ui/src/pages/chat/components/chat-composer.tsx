@@ -99,15 +99,13 @@ function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions 
   onSettled(() => {
     let locked = voice.dictation.locksComposer;
     return voice.dictation.subscribe(() => {
-      const wasLocked = locked;
-      locked = voice.dictation.locksComposer;
-      if (locked) {
-        // An admitted review freezes this revision; phase/preview notifications are not edits.
-        if (!wasLocked || !voice.dictation.requiresReview) {
-          state.editRevision += 1;
-        }
+      const nextLocked = voice.dictation.locksComposer;
+      // Captions and review updates are not new editing intents.
+      if (nextLocked && !locked) {
+        state.editRevision += 1;
         currentProps.onDismissRealtimeTalkError?.();
       }
+      locked = nextLocked;
     });
   });
   const dictation = projectOwner(voice.dictation, (owner) => owner);
@@ -164,8 +162,12 @@ function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions 
     );
   });
   createEffect(
-    () => ({ context: context(), predictions: readPredictionSource() }),
-    ({ context: current, predictions }, previous) => {
+    () => ({
+      context: context(),
+      predictions: readPredictionSource(),
+      draftSource: props.draftSource,
+    }),
+    ({ context: current, predictions, draftSource }, previous) => {
       state.mentionMenu.syncDirectory(current.mentionDirectory);
       if (current.clearSlashMenu) {
         state.slashMenu.reset();
@@ -189,6 +191,9 @@ function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions 
         // Submission reads live composer state; run it after this commit.
         queueMicrotask(current.flushQueuedSubmit);
       }
+      // Ordered owner mutations retire edit-then-undo results before a render can
+      // collapse the two changes back into the original draft value.
+      return draftSource?.subscribe(() => voice.dictation.invalidateRefinement());
     },
   );
   onSettled(() => {

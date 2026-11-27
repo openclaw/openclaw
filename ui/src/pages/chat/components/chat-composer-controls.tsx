@@ -171,7 +171,11 @@ export function renderComposerVoiceButtonSolid(props: ComposerVoiceButtonProps) 
     props.readDictation !== undefined && props.onToggleVoice === undefined;
   const label = () =>
     active()
-      ? t("chat.composer.dictationStopAndKeep")
+      ? t(
+          props.readDictation?.()?.requiresReview
+            ? "chat.composer.dictationFinishReview"
+            : "chat.composer.dictationStopAndKeep",
+        )
       : (props.idleLabel ?? t("chat.composer.startVoiceInput"));
   const tooltip = () =>
     props.readDictation && !startsDictationDirectly() && !(active() || finalizing())
@@ -248,6 +252,22 @@ export function renderComposerVoiceButtonSolid(props: ComposerVoiceButtonProps) 
         </button>
       </openclaw-tooltip>
       <ComposerContent>{props.microphonePicker}</ComposerContent>
+      <Show
+        when={
+          props.readDictation?.()?.refinementAvailable &&
+          !props.readDictation?.()?.punctuationEnabled
+        }
+      >
+        <button
+          type="button"
+          class="chat-controls__provider-settings"
+          aria-label={t("chat.composer.dictationTextOptions")}
+          aria-expanded={props.readDictation?.().refinementOptionsOpen ? "true" : "false"}
+          onClick={() => props.readDictation?.().toggleRefinementOptions()}
+        >
+          <Icon name="settings" />
+        </button>
+      </Show>
     </span>
   );
 }
@@ -262,17 +282,22 @@ export function ComposerDictationSendAction(props: {
   onSend: (submissionAction?: Event) => void;
   onPointerDown?: (event: PointerEvent) => void;
 }) {
+  const label = () =>
+    t(
+      props.readDictation().requiresReview
+        ? "chat.composer.dictationFinishReview"
+        : "chat.runControls.send",
+    );
   const finishAndSend = async (event: MouseEvent) => {
     const dictation = props.readDictation();
     const send = props.onSend;
     if (dictation.finalizing) {
       return;
     }
-    // Finishing may retire the capture, so keep its review decision with the
-    // initiating Send action. Disabled dictation preserves its existing Send path.
-    const requiresReview = dictation.requiresReview;
+    // Stop may release the editing lock synchronously. Keep this initiating action's decision.
+    const reviewRequired = dictation.requiresReview;
     await dictation.finishActive();
-    if (requiresReview) {
+    if (reviewRequired || dictation.pendingReview) {
       return;
     }
     // Keep the initiating input action when asynchronous dictation finishes.
@@ -287,14 +312,14 @@ export function ComposerDictationSendAction(props: {
             : t("chat.composer.dictationListening")}
         </span>
       )}
-      <openclaw-tooltip prop:content={t("chat.runControls.send")}>
+      <openclaw-tooltip prop:content={label()}>
         <button
           class="chat-send-btn chat-send-btn--send chat-send-btn--dictation-commit"
           type="button"
           ref={primaryPointerDownRef(() => props.onPointerDown)}
           onClick={(event: MouseEvent) => void finishAndSend(event)}
           aria-disabled={props.readDictation().finalizing ? "true" : "false"}
-          aria-label={t("chat.runControls.send")}
+          aria-label={label()}
         >
           <Icon name="arrowUp" />
         </button>

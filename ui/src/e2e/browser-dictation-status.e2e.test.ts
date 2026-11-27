@@ -129,8 +129,11 @@ suite.define(() => {
           await admit();
           const raw = "i do not authorize the transfer";
           await emit(raw);
-          // Send stops this recording; an opted-in result still requires review.
-          await button(page, "Send", true).click();
+          // Stop and recording-Send share their accessible review label. Exercise Send itself.
+          await page
+            .getByRole("button", { name: "Finish and review text", exact: true })
+            .and(page.locator(".new-session-page__composer .chat-send-btn--dictation-commit"))
+            .click();
           await gateway.waitForRequest("talk.session.close");
           await emit(raw, true);
           await close();
@@ -211,7 +214,10 @@ suite.define(() => {
       await button(page, "Dictate", true).click();
       await admit();
       await emit("version 1.2.3 costs 3.50 iPhone API OpenClaw");
-      await button(page, "Stop and keep text", true).click();
+      await page
+        .getByRole("button", { name: "Finish and review text", exact: true })
+        .and(page.locator(".new-session-page__composer .chat-send-btn--dictating"))
+        .click();
       await gateway.waitForRequest("talk.session.close");
       await textarea.fill("my newer draft");
       await emit("late text must not replace the recovery snapshot", true);

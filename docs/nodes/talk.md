@@ -48,22 +48,26 @@ can also stand alone after the dictated words. The bare greeting shorthand is
 limited to `hello comma <one plain word> period`: for example,
 `hello comma world period` becomes `Hello, world.`. Other bare punctuation words,
 mixed command styles, and ambiguous sequences remain literal. Commands inside
-quoted text or code are protected.
+quoted text or code are protected. A single comma before an intact `insert` command
+is treated as a pause, and a matching mark after the command is kept once:
+`Call me, insert comma, please, insert period.` becomes `Call me, please.`.
 
 ### Review and recovery
 
-Stop ends microphone capture and waits for the existing provider finalization
-barrier. **Review dictation** displays the original, the validated candidate, and
-a text explanation of any fallback. **Use original** retires the prior candidate.
-**Change policy for this result → Reprocess original** prepares a new revision
-from the same raw transcript without another provider request or a saved-setting
-change. **Insert into draft** performs one local edit. Sending during capture
-stops for this review; it does not send a message automatically.
+With punctuation enabled, provisional words stay outside the editable draft.
+Stop releases the microphone immediately. The review waits for the provider to
+close cleanly with final text and no trailing partial. **Review dictation** shows
+the original and the proposed punctuation; neither has been inserted or sent.
+**Use original** selects the recognizer's text. **Reprocess original** runs the
+new policy against that same finalized transcript, without reopening the
+microphone or changing your saved setting. **Insert into draft** performs one
+local edit at the captured selection. Sending during capture stops for this
+review; it does not send a message automatically.
 
 Editing the draft, replacing its destination, starting another capture, or
-canceling revokes the old result's insertion authority. Text recognized before a
-draft change remains available for review; later provider events cannot overwrite
-that recovery snapshot. An incomplete transcript is labeled and cannot be inserted
+canceling revokes the old result's insertion authority. After a manual edit in
+the same draft, bounded text already recognized can remain visible for recovery;
+later provider events cannot replace it. Switching destination or account clears it. An incomplete transcript is labeled and cannot be inserted
 as a final result.
 
 **Undo dictation insertion** is tied to the known local insertion transaction.
@@ -88,7 +92,9 @@ The validator replays the bounded source map and checks lexical coverage;
 unsupported or malformed changes retain the eligible original.
 
 Processing is bounded to 32 KiB of UTF-8 transcript, 8 KiB of authorized context,
-and 128 edits. Inputs over these limits keep the original with a limitation.
+and 128 punctuation edits. A final transcript over the review size limit is not
+clipped into the draft. A complete, eligible transcript within the limit remains
+available for raw review when processing is unavailable.
 Recognition still requires its configured provider; local punctuation does not
 imply offline speech recognition.
 

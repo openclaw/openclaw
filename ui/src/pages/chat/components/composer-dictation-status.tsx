@@ -4,6 +4,8 @@ import type { ComposerDictationOwner } from "../composer-dictation.ts";
 import type { MicrophoneMeterStatus } from "../talk/microphone-meter.ts";
 import { MicrophoneActivity } from "./chat-voice-activity.tsx";
 
+export { DictationRefinementView } from "./composer-dictation-refinement-view.tsx";
+
 // Dictation feedback starts on the click itself: pulsing bars while the microphone
 // opens, then the live input level while listening. The permission hint only
 // appears when opening takes long enough that a browser prompt is the likely cause.
@@ -27,6 +29,9 @@ export function ActiveDictationStatus(props: {
 }) {
   const phase = createMemo((): MicrophoneMeterStatus | null => {
     const dictation = props.readDictation();
+    if (dictation?.refinementEnabled && !dictation.active) {
+      return null;
+    }
     if (!dictation?.active && !dictation?.transcribing) {
       return null;
     }

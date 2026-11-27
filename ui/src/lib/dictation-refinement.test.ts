@@ -1,38 +1,30 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { DictationRefinementCoordinator } from "../../../src/shared/dictation-refinement/coordinator.js";
+import type { RefinementRequest } from "../../../src/shared/dictation-refinement/types.js";
 import {
+  createPunctuationProcessor,
   refineDictation,
   validateDictationEdits,
-  type DictationRefinementRequest,
+  type DictationPunctuationPolicy,
   type DictationSourceEdit,
+  type PunctuationDetail,
+  type PunctuationInput,
 } from "./dictation-refinement.js";
 
 function request(
   rawTranscript: string,
-  overrides: Partial<DictationRefinementRequest> = {},
-): DictationRefinementRequest {
+  overrides: Partial<PunctuationInput> = {},
+): PunctuationInput {
   return {
-    schemaVersion: 1,
-    captureId: "capture-a",
-    generation: 3,
-    transcriptRevision: 7,
     rawTranscript,
-    isFinal: true,
     policy: { mode: "automatic", locale: "en-US", explicitEnabled: false },
     context: { left: "", right: "" },
     ...overrides,
   };
 }
 
-function candidate(input: DictationRefinementRequest, text: string, edits: readonly unknown[]) {
-  return {
-    schemaVersion: 1,
-    policyVersion: 1,
-    captureId: input.captureId,
-    generation: input.generation,
-    transcriptRevision: input.transcriptRevision,
-    text,
-    edits,
-  };
+function candidate(text: string, edits: readonly unknown[]) {
+  return { text, edits };
 }
 
 const explicitPolicy = { mode: "explicit", locale: "en-US", explicitEnabled: true } as const;
@@ -46,7 +38,7 @@ describe("local dictation punctuation policy", () => {
           policy: { mode: "verbatim", explicitEnabled: false },
         }),
       ),
-    ).toMatchObject({ text: raw, edits: [], status: "raw-fallback", reasons: ["verbatim"] });
+    ).toMatchObject({ text: raw, edits: [], reasons: ["verbatim"] });
     expect(refineDictation(request("I do not authorize the transfer")).text).toBe(
       "I do not authorize the transfer.",
     );
@@ -131,7 +123,6 @@ describe("local dictation punctuation policy", () => {
     const refined = refineDictation(request(raw, { policy: explicitPolicy }));
     expect(refined).toMatchObject({
       text: "Hello, world.",
-      status: "refined",
       reasons: [],
       effectiveLocale: "en-US",
       edits: [
@@ -167,6 +158,10 @@ describe("local dictation punctuation policy", () => {
     "hello comma period",
     "hello comma world period extra",
     "hello colon world",
+    "Call me comma, please period.",
+    "Call me, insert, comma, please insert period.",
+    "Call me,, insert comma, please insert period.",
+    "Call me, insert comma; please insert period.",
     "'hello comma world' period",
     '"outer \\"hello comma world\\" tail" period',
   ])("retains ambiguous or literal punctuation words in %s", (raw) => {
@@ -241,25 +236,14 @@ describe("bounded source-map validation", () => {
     { start: 5, end: 5, text: ".", reason: "punctuation-insert" },
   ];
 
-  it("accepts an independently authored map and binds the result to the raw revision", () => {
-    expect(validateDictationEdits(input, candidate(input, "Hello.", edits))).toMatchObject({
-      schemaVersion: 1,
-      policyVersion: 1,
-      captureId: "capture-a",
-      generation: 3,
-      transcriptRevision: 7,
+  it("accepts an independently authored map against the exact source text", () => {
+    expect(validateDictationEdits(input, candidate("Hello.", edits))).toMatchObject({
       text: "Hello.",
-      status: "refined",
       edits,
     });
   });
 
   it.each([
-    [{ captureId: "another-capture" }, "revision-mismatch"],
-    [{ generation: 4 }, "revision-mismatch"],
-    [{ transcriptRevision: 8 }, "revision-mismatch"],
-    [{ policyVersion: 2 }, "unsupported-version"],
-    [{ schemaVersion: 2 }, "unsupported-version"],
     [{ text: "Hello. Extra words" }, "invalid-edit-map"],
     [{ text: "x".repeat(33_000) }, "output-too-large"],
     [{ edits: Array.from({ length: 129 }, () => edits[0]) }, "invalid-edit-map"],
@@ -274,8 +258,12 @@ describe("bounded source-map validation", () => {
     [{ edits: [{ ...edits[0], reason: "punctuation-remove" }] }, "unapproved-edit"],
   ])("rejects unauthorized candidate %#", (patch, reason) => {
     expect(
-      validateDictationEdits(input, { ...candidate(input, "Hello.", edits), ...patch }),
-    ).toMatchObject({ text: "hello", status: "needs-review", edits: [], reasons: [reason] });
+      validateDictationEdits(input, { ...candidate("Hello.", edits), ...patch }),
+    ).toMatchObject({
+      text: "hello",
+      edits: [],
+      reasons: [reason],
+    });
   });
 
   it.each([null, [], {}, { text: "hello", edits: null }].map((value) => ({ value })))(
@@ -283,7 +271,6 @@ describe("bounded source-map validation", () => {
     ({ value }) => {
       expect(validateDictationEdits(input, value)).toMatchObject({
         text: "hello",
-        status: "needs-review",
         reasons: ["invalid-candidate"],
       });
     },
@@ -298,7 +285,7 @@ describe("bounded source-map validation", () => {
     expect(
       validateDictationEdits(
         source,
-        candidate(source, raw, [{ start, end, text, reason: "sentence-case" }]),
+        candidate(raw, [{ start, end, text, reason: "sentence-case" }]),
       ),
     ).toMatchObject({ text: raw, edits: [], reasons: ["invalid-edit-map"] });
   });
@@ -308,7 +295,7 @@ describe("bounded source-map validation", () => {
     expect(
       validateDictationEdits(
         source,
-        candidate(source, "I do. not authorize the transfer", [
+        candidate("I do. not authorize the transfer", [
           { start: 4, end: 4, text: ".", reason: "punctuation-insert" },
         ]),
       ),
@@ -317,14 +304,14 @@ describe("bounded source-map validation", () => {
     expect(
       validateDictationEdits(
         contraction,
-        candidate(contraction, "we cant proceed", [
+        candidate("we cant proceed", [
           { start: 6, end: 7, text: "", reason: "punctuation-remove" },
         ]),
       ),
     ).toMatchObject({ text: contraction.rawTranscript, reasons: ["protected-text"] });
   });
 
-  it("bounds work by UTF-8 bytes and declines incomplete or malformed recognition", () => {
+  it("bounds grammar work by UTF-8 bytes and declines malformed Unicode", () => {
     for (const source of [
       request("x".repeat(32_769)),
       request("é".repeat(16_385)),
@@ -335,14 +322,157 @@ describe("bounded source-map validation", () => {
         reasons: ["input-too-large"],
       });
     }
-    expect(refineDictation(request("still speaking", { isFinal: false }))).toMatchObject({
-      text: "still speaking",
-      status: "unavailable",
-      reasons: ["incomplete-transcript"],
-    });
     expect(refineDictation(request("bad \uD800"))).toMatchObject({
       text: "bad \uD800",
       reasons: ["invalid-request"],
     });
+  });
+});
+
+function runPunctuation(
+  rawTranscript: string,
+  policy: DictationPunctuationPolicy,
+  overrides: Partial<RefinementRequest> = {},
+) {
+  const observe = vi.fn<(detail: PunctuationDetail) => void>();
+  const processor = createPunctuationProcessor(policy, { left: "", right: "" }, observe);
+  const coordinator = new DictationRefinementCoordinator({
+    processors: [processor],
+    now: () => 0,
+    isCurrent: () => true,
+    authorize: () => true,
+  });
+  const result = coordinator.refine({
+    schemaVersion: 1,
+    offsetUnit: "utf16",
+    captureId: "capture-a",
+    generation: 3,
+    transcriptRevision: 7,
+    rawTranscript,
+    isFinal: true,
+    mode: "dictation",
+    locale: { tag: "en-US", source: "user" },
+    target: { id: "draft", revision: 1, draftRevision: 2 },
+    scope: {
+      connectionId: "test",
+      connectionGeneration: 1,
+      accountId: "local",
+      authorizationRevision: 1,
+      policyRevision: 1,
+    },
+    transcriptProvenance: { authorizationRevision: 1, hintSnapshotIds: [] },
+    contextSnapshots: [],
+    vocabularySnapshots: [],
+    protectedSpans: [],
+    authorizedEdits: [],
+    featurePolicy: { enabled: true, processorIds: [processor.id] },
+    providerPolicy: { routeId: null, locality: "strict-local" },
+    deadlineAt: 2500,
+    ...overrides,
+  } satisfies RefinementRequest);
+  return { result, observe };
+}
+
+describe("punctuation through the shared coordinator", () => {
+  it.each([
+    ["Call me, insert comma, please insert period.", 29, 43, "", ""],
+    ["Call me, insert comma, please, insert period.", 29, 44, "", ""],
+    ["Call me, insert comma please, insert period", 28, 43, ",", "."],
+  ] as const)(
+    "proposes one mark per intact command with exact source spans in %s",
+    async (raw, secondStart, secondEnd, comma, period) => {
+      const { result, observe } = runPunctuation(raw, explicitPolicy);
+      expect(await result).toMatchObject({
+        status: "needs-review",
+        rawText: raw,
+        text: raw,
+        candidateText: "Call me, please.",
+      });
+      expect(observe).toHaveBeenCalledWith({
+        edits: [
+          { start: 7, end: 21, text: comma, reason: "explicit-punctuation" },
+          { start: secondStart, end: secondEnd, text: period, reason: "explicit-punctuation" },
+        ],
+        reasons: [],
+        effectiveLocale: "en-US",
+      });
+    },
+  );
+
+  it("uses the prepared text, remapped protection and advanced base, without authorizing insertion", async () => {
+    const raw = "token asks 'insert comma' insert question mark";
+    const reference = "secret insert comma";
+    const literal = " asks 'insert comma'";
+    const prepared = reference + literal;
+    const { result, observe } = runPunctuation(raw, explicitPolicy, {
+      authorizedEdits: [
+        {
+          start: 0,
+          end: 5,
+          text: reference,
+          kind: "reference",
+          intentId: "resolve-recipient",
+          protection: { kind: "reference", identity: "recipient:1" },
+        },
+      ],
+    });
+    expect(await result).toMatchObject({
+      status: "needs-review",
+      text: raw,
+      rawText: raw,
+      candidateText: prepared + "?",
+      warnings: ["meaning-review"],
+      metrics: { providerRequests: 0 },
+    });
+    expect(observe).toHaveBeenCalledWith({
+      edits: [
+        {
+          start: prepared.length,
+          end: prepared.length + " insert question mark".length,
+          text: "?",
+          reason: "explicit-punctuation",
+        },
+      ],
+      reasons: [],
+      effectiveLocale: "en-US",
+    });
+  });
+
+  it("preserves the entire verbatim input and discloses abstention", async () => {
+    const raw = "  keep my words\t\n";
+    const { result, observe } = runPunctuation(raw, { mode: "verbatim", explicitEnabled: false });
+    expect(await result).toMatchObject({ status: "refined", text: raw, rawText: raw });
+    expect(observe).toHaveBeenCalledWith({
+      edits: [],
+      reasons: ["verbatim"],
+      effectiveLocale: null,
+    });
+    const otherLocale = runPunctuation(raw, explicitPolicy, {
+      locale: { tag: "en-US-u-ca-gregory", source: "recognizer" },
+    });
+    expect(await otherLocale.result).toMatchObject({ text: raw });
+    expect(otherLocale.observe).toHaveBeenCalledWith({
+      edits: [],
+      reasons: ["unsupported-locale"],
+      effectiveLocale: "en-US",
+    });
+  });
+
+  it("never observes grammar edits before finality or without opt-in", async () => {
+    const interim = runPunctuation("hello", explicitPolicy, { isFinal: false });
+    expect(await interim.result).toMatchObject({
+      status: "unavailable",
+      warnings: ["incomplete-transcript"],
+    });
+    expect(interim.observe).not.toHaveBeenCalled();
+    const off = runPunctuation("hello", explicitPolicy, {
+      featurePolicy: { enabled: false, processorIds: ["punctuation"] },
+    });
+    expect(await off.result).toMatchObject({
+      status: "raw-fallback",
+      text: "hello",
+      warnings: ["disabled"],
+    });
+    expect(off.observe).not.toHaveBeenCalled();
   });
 });

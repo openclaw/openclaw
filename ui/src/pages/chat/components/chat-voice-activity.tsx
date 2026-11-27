@@ -171,9 +171,6 @@ export function ChatVoiceStatus(props: {
 const ActiveDictationStatus = lazy(() => import("./composer-dictation-status.tsx"), {
   export: "ActiveDictationStatus",
 });
-const DictationReview = lazy(() => import("./composer-dictation-review.tsx"), {
-  export: "ComposerDictationReview",
-});
 
 export function ComposerDictationStatus(props: {
   readDictation: () => ComposerDictationOwner | undefined;
@@ -185,11 +182,47 @@ export function ComposerDictationStatus(props: {
           <ActiveDictationStatus readDictation={props.readDictation} />
         </ChatLazyBoundary>
       </Show>
-      <Show when={props.readDictation()?.review}>
-        <ChatLazyBoundary>
-          <DictationReview readDictation={props.readDictation} />
-        </ChatLazyBoundary>
+      {/* Main mounts the review above its input. Direct composers have only this status slot. */}
+      <Show when={!props.readDictation()?.refinementAvailable}>
+        <ComposerDictationReview readDictation={props.readDictation} />
       </Show>
     </>
+  );
+}
+
+const DictationRefinementView = lazy(() => import("./composer-dictation-status.tsx"), {
+  export: "DictationRefinementView",
+});
+
+const PunctuationReview = lazy(() => import("./composer-dictation-review.tsx"), {
+  export: "ComposerDictationReview",
+});
+
+export function ComposerDictationReview(props: {
+  readDictation: () => ComposerDictationOwner | undefined;
+}) {
+  const owner = () => props.readDictation();
+  const showRefinement = () => {
+    const dictation = owner();
+    return dictation?.punctuationEnabled
+      ? dictation.active || dictation.pendingReview || dictation.refinement?.phase === "unavailable"
+      : dictation?.refinementAvailable &&
+          (dictation.refinementOptionsOpen || dictation.refinementEnabled);
+  };
+  return (
+    <Show
+      when={owner()?.review}
+      fallback={
+        <Show when={showRefinement()}>
+          <ChatLazyBoundary>
+            <DictationRefinementView readDictation={props.readDictation} />
+          </ChatLazyBoundary>
+        </Show>
+      }
+    >
+      <ChatLazyBoundary>
+        <PunctuationReview readDictation={props.readDictation} />
+      </ChatLazyBoundary>
+    </Show>
   );
 }

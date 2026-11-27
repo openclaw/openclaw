@@ -727,10 +727,12 @@ describe("dictation preview admission", () => {
       expect(composer.dictation?.requiresReview).toBe(mode !== "off");
       emit({ type: "partial", text: "unfinished dictated words" });
       await waitForSolid(() =>
-        expect(view.textarea().value).toBe(
-          `${before ? `${before} ` : ""}unfinished dictated words`,
-        ),
+        expect(view.textarea().value).toBe(mode === "off" ? "unfinished dictated words" : before),
       );
+      if (mode !== "off") {
+        // The coordinator exposes the received partial outside the editable draft.
+        expect(composer.dictation?.provisionalTranscript).toBe("unfinished dictated words");
+      }
       expect(view.textarea().readOnly).toBe(true);
       view
         .textarea()

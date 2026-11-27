@@ -132,6 +132,8 @@ const catalog = {
       microphoneStopped: "Microphone input stopped. Choose an available input and start again.",
       microphoneFallback: "Microphone {number}",
       microphoneInput: "Microphone input",
+      dictationTextOptions: "Dictation text options",
+      dictationFinishReview: "Finish and review text",
       microphoneAppliesNextSession: "Changes apply when you start your next Talk session.",
       microphoneListUnsupported: "This browser cannot list microphone inputs.",
       noCameras: "No additional cameras found",

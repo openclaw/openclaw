@@ -1,8 +1,8 @@
 // Run: node scripts/bench-dictation-refinement.mts [--samples 1000] [--warmup 100]
 //      [--cold-samples 20] [--lengths 2000,8000,16000]
-// Native Node entrypoint: this import closure uses only erasable TypeScript and built-ins.
+// Native Node entrypoint: the shared processor contract is a type-only import.
 // Required M01 proof: validator p95 <= 25 ms at 2,000 UTF-16 code units on this host.
-// This measures local CPU stages, not microphone/STT/network/review/insertion latency.
+// Local grammar CPU only, not coordinator validation or microphone/STT/network/review/insertion.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -10,7 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
-import type { DictationRefinementRequest } from "../ui/src/lib/dictation-refinement.ts";
+import type { PunctuationInput } from "../ui/src/lib/dictation-refinement.ts";
 
 type Stage = "validator" | "refine";
 type Measurement = { elapsedMs: number; cpuMs?: number };
@@ -45,23 +45,13 @@ function workload(length: number) {
   const sentence =
     "please preserve I do not authorize the transfer version 1.2.3 costs 3.50 iPhone API OpenClaw customer_id ";
   const raw = sentence.repeat(Math.ceil(length / sentence.length)).slice(0, length - 1) + "x";
-  const request: DictationRefinementRequest = {
-    schemaVersion: 1,
-    captureId: "synthetic-m01-benchmark",
-    generation: 1,
-    transcriptRevision: 1,
+  const request: PunctuationInput = {
     rawTranscript: raw,
-    isFinal: true,
     policy: { mode: "automatic", locale: "en-US", explicitEnabled: false },
     context: { left: "", right: "" },
   };
   // Independent expected edits avoid warming the engine before a cold validation.
   const candidate = {
-    schemaVersion: 1,
-    policyVersion: 1,
-    captureId: request.captureId,
-    generation: request.generation,
-    transcriptRevision: request.transcriptRevision,
     text: `P${raw.slice(1)}.`,
     edits: [
       { start: 0, end: 1, text: "P", reason: "sentence-case" },
@@ -108,7 +98,10 @@ async function operations(length: number) {
   const { refineDictation, validateDictationEdits } = await import(engineUrl.href);
   const moduleImportMs = performance.now() - importStart;
   const verify = (result: ReturnType<typeof refineDictation>) => {
-    if (result.status !== "refined" || result.text !== fixture.candidate.text) {
+    if (
+      result.edits.length !== fixture.candidate.edits.length ||
+      result.text !== fixture.candidate.text
+    ) {
       throw new Error(
         `Positive control failed for ${length} characters: ${result.reasons.join(",")}`,
       );
@@ -265,7 +258,8 @@ if (args[0] === "--cold-worker") {
           cold: "One operation in each fresh Node process; module import measured separately",
           warm: `${warmup} untimed calls per stage per length, then ${samples} individually timed calls; alternating stage order`,
           percentiles: "Nearest rank; no timer-baseline subtraction",
-          assertionCost: "Includes status/text positive-control comparison on each measured result",
+          assertionCost:
+            "Includes edit-count/text positive-control comparison on each local grammar proposal",
           target:
             "Proposed 25 ms validator p95 at 2000 UTF-16 code units; qualifies only the measured host/runtime/workload",
           providerRequests: 0,
