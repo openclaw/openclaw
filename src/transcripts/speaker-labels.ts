@@ -1,5 +1,6 @@
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { isTranscriptArtifactText } from "../media-understanding/transcription-text.js";
+import { createTranscriptSpeechOrder } from "../shared/transcript-speech-order.js";
 
 /** Assign readable names in recording order. Keep account IDs local to this transcript. */
 export function createTranscriptSpeakerLabels(onAlias?: () => void) {
@@ -51,4 +52,18 @@ export function presentTranscriptTurn(
 
 export function formatTranscriptTurn(turn: TranscriptDisplayTurn): string {
   return turn.speakerLabel ? `${turn.speakerLabel}: ${turn.text}` : turn.text;
+}
+
+/** Names are already resolved in append order, even when an earlier speaker finishes later. */
+export function presentTranscriptTurns(
+  rows: (TranscriptDisplayTurn & { startedAt?: string | null })[],
+): TranscriptDisplayTurn[] {
+  const speech = createTranscriptSpeechOrder<TranscriptDisplayTurn>();
+  for (const { text, speakerLabel, startedAt } of rows) {
+    const turn = presentTranscriptTurn(text, speakerLabel);
+    if (turn) {
+      speech.add(turn, startedAt);
+    }
+  }
+  return speech.finish();
 }

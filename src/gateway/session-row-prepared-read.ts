@@ -61,7 +61,7 @@ export function projectPreparedSessionRunState(
 }
 
 export function toProjectedSessionSharingTarget(
-  record: records.MaterializedRow,
+  record: records.SelectionRow,
 ): SessionSharingTarget {
   return {
     agentId: record.agentId,

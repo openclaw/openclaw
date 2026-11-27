@@ -10,7 +10,7 @@ export function createClosedChunkStream(chunks: readonly Uint8Array[]) {
   });
 }
 
-export type StreamingResponseFixture = {
+type StreamingResponseFixture = {
   response: Response;
   getReadCount: () => number;
   wasCanceled: () => boolean;

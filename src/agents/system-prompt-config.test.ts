@@ -142,6 +142,7 @@ describe("buildConfiguredAgentSystemPrompt", () => {
         runtimeInfo: { sessionKey: "agent:main:chat" },
         toolNames,
         prepareSessionProjectGuidance: sessionProjectGuidanceSource({
+          workspaceDir: workspace.repoRoot,
           config,
           agentId: "main",
           sessionKey: "agent:main:chat",

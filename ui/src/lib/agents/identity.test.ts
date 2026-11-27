@@ -86,11 +86,12 @@ it("retains settled identity during a blip and retires it for a different client
   snapshot.phase = "connected";
   publish(snapshot);
   expect(capability.get("main")).toEqual(original);
+  const refresh = capability.ensure(["main"]);
   snapshot.client = createTestGatewayClient(request);
   publish(snapshot);
   expect(capability.get("main")).toBeNull();
   refreshed.resolve({ ...original, name: "Old connection" });
-  await capability.ensure([]);
+  await refresh;
   expect(capability.get("main")).toBeNull();
 });
 

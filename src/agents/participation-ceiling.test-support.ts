@@ -11,6 +11,7 @@ import { DEFAULT_PARTICIPATION_TOOLS, type ParticipationCeiling } from "./partic
 export function createParticipationTestAuthority(
   ceiling: ParticipationCeiling,
   scopes: readonly string[] = [],
+  retain?: () => () => void,
 ) {
   const bound = {
     ...ceiling,
@@ -30,6 +31,7 @@ export function createParticipationTestAuthority(
     scopes: [...scopes],
     grant: decideTurnGrant([...scopes]),
     participationCeiling: bound,
+    retain,
     recoverySnapshot: expectDefined(
       normalizeGatewayOperatorRecoverySnapshot({
         version: 2,

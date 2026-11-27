@@ -21,8 +21,7 @@ import type { ChatTranscriptPendingScrollOffset } from "./chat-transcript-sessio
 export class TranscriptOffsetState {
   pendingScrollOffset: ChatTranscriptPendingScrollOffset | null = null;
   scrollCommand:
-    | { behavior: ScrollBehavior; target: "end"; offset?: number }
-    | { behavior: ScrollBehavior; target: "index" }
+    | { behavior: ScrollBehavior; target: "end" | "message-offset"; offset?: number }
     | { behavior: ScrollBehavior; target: "message"; messageId: string }
     | null = null;
   touching = false;
@@ -200,7 +199,10 @@ export function scrollTranscriptOffset(
     command.offset !== undefined &&
     offset < command.offset &&
     offset > before;
-  if (command?.target === "end" && options.behavior !== undefined) {
+  if (
+    (command?.target === "end" || command?.target === "message-offset") &&
+    options.behavior !== undefined
+  ) {
     command.offset = offset;
   }
   elementScroll(
@@ -254,6 +256,32 @@ export function observeTranscriptOffset(
   const publishInput = (event: Event) => {
     publish({ type: "input", event, touching: owner.state.touching });
   };
+  const publishReaderIntent = (towardEnd?: boolean) => {
+    owner.endAnchor.clear();
+    owner.onReaderScroll(towardEnd);
+    // Downward input at the physical end need not emit another offset event.
+    if (towardEnd && owner.canFollowEnd()) {
+      owner.endAnchor.capture(element);
+    }
+  };
+  const settleMessageReveal = () => {
+    const command = owner.state.scrollCommand;
+    if (
+      command?.target !== "message-offset" ||
+      command.offset === undefined ||
+      !element ||
+      element !== owner.getScrollElement()
+    ) {
+      return;
+    }
+    const max = maxTranscriptScrollOffset(element);
+    if (max === null || Math.abs(element.scrollTop - Math.min(command.offset, max)) > 1) {
+      return;
+    }
+    // A revealed message belongs to the reader. Only arrival at the tail resumes following.
+    owner.state.scrollCommand = null;
+    publishReaderIntent(max - element.scrollTop <= CHAT_TRANSCRIPT_END_THRESHOLD_PX);
+  };
   // Reader input starts a gesture; a transcript write ends it. Native motion inside it belongs to
   // the reader even after an early idle (virtual-core's debounce, or WebKit's scrollend firing
   // before a smooth scroll finishes).
@@ -287,6 +315,9 @@ export function observeTranscriptOffset(
       owner.onLayoutCorrection(before, after);
     }
     recordProgrammaticScroll(before, after);
+    if (!maintenance) {
+      settleMessageReveal();
+    }
     // A native no-op has no scroll event to acknowledge an explicit command.
     if (!maintenance && before === after && after !== instance.scrollOffset) {
       publishOffset(after, instance.isScrolling);
@@ -434,14 +465,6 @@ export function observeTranscriptOffset(
     if (!owner.state.touching && owner.state.touchScrolling) {
       owner.state.touchScrolling = false;
       owner.invalidate();
-    }
-  };
-  const publishReaderIntent = (towardEnd?: boolean) => {
-    owner.endAnchor.clear();
-    owner.onReaderScroll(towardEnd);
-    // Downward input at the physical end need not emit another offset event.
-    if (towardEnd && owner.canFollowEnd()) {
-      owner.endAnchor.capture(element);
     }
   };
   const wheelForecastDelta = (event: WheelEvent): number => {
@@ -604,6 +627,7 @@ export function observeTranscriptOffset(
       return;
     }
     publishOffset(offset, scrolling);
+    settleMessageReveal();
     // Pane policy consumes the reconciled maintenance and end-position state.
     if (event?.currentTarget === element) {
       owner.onNativeScroll?.(event);

@@ -6,7 +6,7 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import {
   createTranscriptSpeakerLabels,
   formatTranscriptTurn,
-  presentTranscriptTurn,
+  presentTranscriptTurns,
   type TranscriptDisplayTurn,
 } from "./speaker-labels.js";
 import type {
@@ -50,14 +50,17 @@ export function summarizeTranscripts(
   params: { session: TranscriptSessionDescriptor; utterances: TranscriptUtterance[] },
   speakerLabel = createTranscriptSpeakerLabels(),
 ): TranscriptsSummary {
-  const turns = params.utterances.flatMap(
-    (row) =>
-      presentTranscriptTurn(row.text, speakerLabel(row.speaker?.id, row.speaker?.label)) ?? [],
+  const turns = presentTranscriptTurns(
+    params.utterances.map((row) => ({
+      text: row.text,
+      startedAt: row.startedAt,
+      speakerLabel: speakerLabel(row.speaker?.id, row.speaker?.label),
+    })),
   );
   return summarizeTranscriptTurns(params.session, turns, params.utterances.length);
 }
 
-/** Summarize already-presented turns in recording order. The count includes filtered rows. */
+/** Summarize already-presented turns in speech order. The count includes filtered rows. */
 export function summarizeTranscriptTurns(
   session: TranscriptSessionDescriptor,
   utterances: TranscriptDisplayTurn[],

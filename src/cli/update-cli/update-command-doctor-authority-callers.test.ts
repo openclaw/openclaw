@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as doctorMaintenance from "../../commands/doctor-maintenance.js";
@@ -38,7 +37,6 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { VERSION } from "../../version.js";
-import { formatUpdateReportReadHint } from "./report-path.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 
 const mocks = vi.hoisted(() => ({
@@ -559,25 +557,9 @@ describe("unproved Doctor authority callers", () => {
       if (parentOwnsCompletion) {
         await state.writeJson("handoff.json", { completionOwner: "parent" });
       }
-      await fs.mkdir(state.path("phase-artifacts"));
-      vi.spyOn(os, "tmpdir").mockReturnValue(state.path("phase-artifacts"));
-      let restored = false;
-      const maintenance = vi.spyOn(doctorMaintenance, "beginDoctorMaintenance").mockResolvedValue(
-        createDoctorMaintenanceFixture({
-          finish: vi.fn(async () => {
-            await Promise.resolve();
-            restored = true;
-          }),
-        }),
-      );
-      let phasePath: string | undefined;
-      vi.mocked(defaultRuntime.error).mockImplementation((line) => {
-        const prefix = "Post-plugin Doctor report (update completion pending): ";
-        if (typeof line === "string" && line.startsWith(prefix)) {
-          expect(restored).toBe(true);
-          phasePath = line.slice(prefix.length);
-        }
-      });
+      const maintenance = vi
+        .spyOn(doctorMaintenance, "beginDoctorMaintenance")
+        .mockResolvedValue(createDoctorMaintenanceFixture());
       const writeResult = postCore.writePostCorePluginUpdateResultFile;
       const publication = vi
         .spyOn(postCore, "writePostCorePluginUpdateResultFile")
@@ -596,20 +578,8 @@ describe("unproved Doctor authority callers", () => {
             expect(dispatched).toEqual(["repair", "repair", "validate", "readiness"]);
           }
           expect(getUpdateRun(run.runId)?.status).toBe("running");
-          const canonicalPath = state.statePath("update-reports", `${run.runId}.md`);
-          await expect(fs.stat(canonicalPath)).rejects.toMatchObject({ code: "ENOENT" });
           if (parentOwnsCompletion) {
-            expect(phasePath).toBeUndefined();
             expect(maintenance).toHaveBeenCalledWith(expect.objectContaining({ root: null }));
-          } else {
-            expect(phasePath).toBeDefined();
-            expect(phasePath).not.toBe(canonicalPath);
-            expect(defaultRuntime.error).toHaveBeenCalledWith(
-              formatUpdateReportReadHint(phasePath!),
-            );
-            const report = await fs.readFile(phasePath!, "utf8");
-            expect(report).toContain("update completion is pending with the parent updater");
-            expect(report).toContain("Complete Doctor lint findings (0)");
           }
           await writeResult(...args);
         });

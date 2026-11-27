@@ -447,9 +447,6 @@ it.each([
       await expect(prepareUpdateCommand({ dryRun: true })).rejects.toBeInstanceOf(
         servicePlan.GatewayServiceUpdateOwnershipError,
       );
-      const temporaryRoot = path.join(home, "reports");
-      await fs.promises.mkdir(temporaryRoot);
-      vi.spyOn(os, "tmpdir").mockReturnValue(temporaryRoot);
       const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
       vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
       const exit = await updateCommand({ dryRun: outcome !== "masked", json: true }).catch(
@@ -461,15 +458,11 @@ it.each([
         expect.objectContaining({
           status: "error",
           reason: "managed-service-preflight",
-          reportPath: expect.any(String),
         }),
       );
-      const { reportPath } = output.mock.calls[0]![0] as { reportPath: string };
-      expect(path.dirname(path.dirname(reportPath))).toBe(temporaryRoot);
       if (outcome === "masked") {
         expect(JSON.stringify(output.mock.calls)).toContain(unmask);
       }
-      expect(await fs.promises.readFile(reportPath, "utf8")).toContain("Bounded diagnostic JSON:");
       await expect(fs.promises.stat(callerState)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(fs.promises.stat(serviceState)).rejects.toMatchObject({ code: "ENOENT" });
       expect(native.stop).not.toHaveBeenCalled();

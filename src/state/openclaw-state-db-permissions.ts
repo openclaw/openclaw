@@ -249,18 +249,22 @@ export function restorePrivateStateStoreModes(env: NodeJS.ProcessEnv): void {
   }
 }
 
+function resolveStatePermissionDirectory(pathname: string, env: NodeJS.ProcessEnv) {
+  const dir = path.dirname(pathname);
+  const defaultPath = resolveOpenClawStateSqlitePath(env);
+  const isDefaultStateDatabase = path.resolve(pathname) === path.resolve(defaultPath);
+  if (isDefaultStateDatabase && dir !== path.dirname(defaultPath)) {
+    throw new Error(`OpenClaw state database path resolved outside its state dir: ${pathname}`);
+  }
+  return { dir, isDefaultStateDatabase };
+}
+
 export function ensureOpenClawStatePermissions(
   pathname: string,
   env: NodeJS.ProcessEnv,
   options: { createDirectory?: boolean } = {},
 ): void {
-  const dir = path.dirname(pathname);
-  const defaultPath = resolveOpenClawStateSqlitePath(env);
-  const defaultDir = path.dirname(defaultPath);
-  const isDefaultStateDatabase = path.resolve(pathname) === path.resolve(defaultPath);
-  if (isDefaultStateDatabase && dir !== defaultDir) {
-    throw new Error(`OpenClaw state database path resolved outside its state dir: ${pathname}`);
-  }
+  const { dir, isDefaultStateDatabase } = resolveStatePermissionDirectory(pathname, env);
   const dirExisted = existsSync(dir);
   if (options.createDirectory) {
     mkdirSync(dir, { recursive: true, mode: OPENCLAW_STATE_DIR_MODE });
@@ -285,4 +289,29 @@ export function ensureOpenClawStatePermissions(
       }
     }
   }
+}
+
+/**
+ * Read-only: whether {@link ensureOpenClawStatePermissions} would chmod an existing
+ * database, sidecar or (default) state directory. A filesystem that ignores chmod
+ * keeps reporting drift, as the repair keeps attempting it.
+ */
+export function hasOpenClawStatePermissionDrift(pathname: string, env: NodeJS.ProcessEnv): boolean {
+  const { dir, isDefaultStateDatabase } = resolveStatePermissionDirectory(pathname, env);
+  const targets: Array<[string, number]> = resolveSqliteDatabaseFilePaths(pathname).map(
+    (candidate) => [candidate, OPENCLAW_STATE_FILE_MODE],
+  );
+  if (isDefaultStateDatabase) {
+    targets.push([dir, OPENCLAW_STATE_DIR_MODE]);
+  }
+  return targets.some(([target, mode]) => {
+    try {
+      return (statSync(target).mode & 0o7777) !== mode;
+    } catch (error) {
+      if (hasErrnoCode(error, "ENOENT")) {
+        return false;
+      }
+      throw error;
+    }
+  });
 }
