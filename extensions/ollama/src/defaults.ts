@@ -69,8 +69,8 @@ export function resolveOllamaCloudDefaultModel(modelId: string) {
 /**
  * Hosted Ollama output budget, curated list only. Ollama's API reports no
  * per-model output limit and a context window is never a safe output budget,
- * so uncurated cloud models return undefined and take the shared conservative
- * default, like local models.
+ * so uncurated cloud models return undefined and take the shared unknown-limit
+ * default on their full window (32,768 for large windows).
  */
 export function resolveOllamaOutputBudget(params: {
   modelId: string;

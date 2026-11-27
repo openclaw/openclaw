@@ -156,9 +156,8 @@ describe("Ollama app-guided setup HTTP discovery", () => {
   });
 
   it.each([
-    // Uncurated remote/cloud models take the shared conservative default, like local models.
-    { name: "remote host", tag: { remote_host: "https://ollama.com" }, expected: 16_384 },
-    { name: "remote model", tag: { remote_model: "upstream-model" }, expected: 16_384 },
+    { name: "remote host", tag: { remote_host: "https://ollama.com" }, expected: 32_768 },
+    { name: "remote model", tag: { remote_model: "upstream-model" }, expected: 32_768 },
     { name: "local", tag: {}, expected: 16_384 },
     {
       name: "authored remote cap",

@@ -37,8 +37,8 @@ it.each([
   ["kimi-k2.6", 262_144],
   ["kimi-k2.7-code", 262_144],
   ["kimi-k3", 1_048_576],
-  ["deepseek-v4-pro", 1_048_576],
-  ["deepseek-v4-pro:0813", 1_048_576],
+  ["deepseek-v4-pro", 32_768],
+  ["deepseek-v4-pro:0813", 32_768],
   ["gemma4", 262_144],
   ["gemma4:31b", 262_144],
   ["glm-5.2", 131_072],
@@ -55,7 +55,6 @@ it.each([
 });
 
 it.each<[string, string, number, Partial<ModelDefinitionConfig>?, number?]>([
-  // Uncurated hosted/cloud models take the generic conservative default.
   ["custom", cloud, 32_768],
   ["custom:cloud", local, 32_768],
   ["custom", local, 32_768],

@@ -454,7 +454,11 @@ export function buildOllamaModelDefinition(
     contextWindow: resolvedContext,
     maxTokens:
       resolveOllamaOutputBudget({ modelId, remote: opts?.remote }) ??
-      resolveDefaultModelMaxTokens(Math.min(resolvedContext, OLLAMA_LOCAL_CONTEXT_TOKENS)),
+      resolveDefaultModelMaxTokens(
+        opts?.remote || isOllamaCloudModel(modelId)
+          ? resolvedContext
+          : Math.min(resolvedContext, OLLAMA_LOCAL_CONTEXT_TOKENS),
+      ),
     ...(opts?.parameterCount !== undefined ? { parameterCount: opts.parameterCount } : {}),
     ...(opts?.thinkingLevelMap ? { thinkingLevelMap: opts.thinkingLevelMap } : {}),
     compat: {

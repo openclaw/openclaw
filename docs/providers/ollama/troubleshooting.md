@@ -183,9 +183,8 @@ sidebarTitle: "Troubleshooting"
     `num_predict`; lower the model's `maxTokens` if generation runs too long.
     Discovered local models default to 16,384 output tokens, half of the
     32,768-token local context cap (less for smaller windows). Curated Ollama
-    Cloud models use their documented output limits; uncurated cloud models fall
-    back to the shared conservative default (16,384 output tokens when discovered,
-    or up to 32,768 for configured entries without an explicit cap). Authored
+    Cloud models use their documented output limits; uncurated cloud models
+    default to 32,768 output tokens (less for smaller windows). Authored
     `maxTokens` and `params.num_predict` override those defaults. Set
     `params: { num_predict: -1 }` on a model entry to restore Ollama's unlimited
     generation default; an explicit request output cap still wins.

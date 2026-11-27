@@ -55,8 +55,7 @@ describe("Ollama onboarding model selection", () => {
         ]),
       );
       expect(models.map(({ id, maxTokens }) => ({ id, maxTokens }))).toEqual([
-        // Uncurated remote aliases take the shared conservative default, like local models.
-        { id: "private-alias", maxTokens: 16_384 },
+        { id: "private-alias", maxTokens: 32_768 },
         { id: "local-model", maxTokens: 16_384 },
       ]);
     },
