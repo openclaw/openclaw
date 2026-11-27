@@ -317,7 +317,12 @@ export class WorkboardStore extends WorkboardNotificationStore {
           shouldSyncWorkboardLifecycleStatus(card, input.targetStatus)
         ) {
           patch.status = input.targetStatus;
-          metadata = { lifecycleStatusSourceUpdatedAt: input.sourceUpdatedAt };
+          metadata = {
+            lifecycleStatusSourceUpdatedAt: input.sourceUpdatedAt,
+            // A failed worker can no longer heartbeat or release its claim. Release it with
+            // the run, or the card and its owner's slot stay held until the claim expires.
+            ...(input.targetStatus === "blocked" ? { claim: null } : {}),
+          };
         }
         const acceptedLaunch = input.association
           ? acceptedLaunchForAssociation(card, input.association)
