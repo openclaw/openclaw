@@ -36,7 +36,7 @@ function runServiceStartChild(tempRoot: string, programArguments: string[]): unk
     const result = await startGatewayService(service, { env: {}, stdout: process.stdout });
     process.stdout.write(JSON.stringify({
       outcome: result.outcome,
-      issueCodes: "issues" in result ? result.issues.map((issue) => issue.code) : [],
+      issueMessages: "issues" in result ? result.issues.map((issue) => issue.message) : [],
       startCalls,
     }));
   `;
@@ -68,7 +68,7 @@ describe("service temporary program paths", () => {
   it("does not treat the filesystem root as a temporary program directory", () => {
     expect(
       runServiceStartChild(path.parse(process.execPath).root, [process.execPath, "gateway", "run"]),
-    ).toEqual({ outcome: "started", issueCodes: [], startCalls: 1 });
+    ).toEqual({ outcome: "started", issueMessages: [], startCalls: 1 });
   });
 
   it.runIf(process.platform === "win32").each(["executable", "entrypoint"])(
@@ -85,7 +85,7 @@ describe("service temporary program paths", () => {
 
       expect(runServiceStartChild(caseVariant, [...args, "gateway", "run"])).toEqual({
         outcome: "repair-required",
-        issueCodes: ["temporary-program"],
+        issueMessages: [`service command points at a temporary path: ${programPath}`],
         startCalls: 0,
       });
     },
@@ -103,7 +103,7 @@ describe("service temporary program paths", () => {
 
       expect(
         runServiceStartChild(tempRoot, [process.execPath, entrypoint, "gateway", "run"]),
-      ).toEqual({ outcome: "started", issueCodes: [], startCalls: 1 });
+      ).toEqual({ outcome: "started", issueMessages: [], startCalls: 1 });
     },
   );
 });
