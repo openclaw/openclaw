@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -17,8 +18,15 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  changedStoreFiles,
+  snapshotStoreFiles,
+} from "../test-utils/store-snapshot.test-support.js";
 import { beginDoctorRepair } from "./doctor-maintenance.admission.test-support.js";
-import { maybeRepairLegacyRuntimeFiles } from "./doctor-usage-cost-cache.js";
+import {
+  checkLegacyRuntimeFilesPending,
+  maybeRepairLegacyRuntimeFiles,
+} from "./doctor-usage-cost-cache.js";
 
 const note = vi.hoisted(() => vi.fn());
 
@@ -284,6 +292,68 @@ describe("legacy usage-cost cache cleanup", () => {
     }
     noted("Removed 1 rebuildable legacy usage-cost cache file", "Usage cost cache");
     await missing(cacheFile);
+  });
+});
+
+describe("legacy runtime file pending check", () => {
+  const preRedactorAudit = `${JSON.stringify({
+    ts: "2026-05-02T00:03:48.471Z",
+    argv: ["node", "openclaw.mjs", "config", "set", "x", "xoxb-bad-token-1234567890abcdef"],
+    execArgv: [],
+  })}\n`;
+
+  it.each([
+    ["retired usage-cost rows", "rows"],
+    ["a pre-redactor config audit entry", "logs/config-audit.jsonl"],
+    ["a legacy usage-cost sidecar", "agents/main/sessions/.usage-cost-cache.json"],
+    ["legacy skill-upload staging", "tmp/skill-uploads/upload/metadata.json"],
+    ["the obsolete Control UI cache", "cache/control-ui-assets/build/index.js"],
+  ])("reports %s as work without writing, and none once repaired", async (_name, seeded) => {
+    const root = tempDirs.make("openclaw-legacy-runtime-pending-");
+    const env = { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv;
+    seedCacheRows(openOpenClawAgentDatabase({ agentId: "worker", env }).db, true);
+    await maybeRepairLegacyRuntimeFiles(true, env);
+    await closeOpenClawAgentDatabasesAsync();
+    await expect(checkLegacyRuntimeFilesPending(env)).resolves.toBe("none");
+
+    if (seeded === "rows") {
+      openOpenClawAgentDatabase({ agentId: "worker", env })
+        .db.prepare(
+          "INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES ('session-cost-usage-rollup-v1', 'retired', '{}', 1)",
+        )
+        .run();
+      await closeOpenClawAgentDatabasesAsync();
+    } else {
+      await fs.mkdir(path.dirname(path.join(root, seeded)), { recursive: true });
+      await fs.writeFile(
+        path.join(root, seeded),
+        seeded.endsWith(".jsonl") ? preRedactorAudit : "x",
+      );
+    }
+    const before = snapshotStoreFiles(root);
+    await expect(checkLegacyRuntimeFilesPending(env)).resolves.toBe("work");
+    await closeOpenClawAgentDatabasesAsync();
+    expect(changedStoreFiles(before, snapshotStoreFiles(root))).toEqual([]);
+
+    await maybeRepairLegacyRuntimeFiles(true, env);
+    await expect(checkLegacyRuntimeFilesPending(env)).resolves.toBe("none");
+  });
+
+  it("leaves clean agent databases unopened for writing, so a held write lock is not waited on", async () => {
+    const root = tempDirs.make("openclaw-legacy-runtime-locked-");
+    const env = { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv;
+    const { path: databasePath } = openOpenClawAgentDatabase({ agentId: "main", env });
+    await closeOpenClawAgentDatabasesAsync();
+    const holder = new DatabaseSync(databasePath);
+    holder.exec("BEGIN IMMEDIATE");
+    try {
+      // A write attempt would wait out the SQLite busy timeout and then report the database.
+      await maybeRepairLegacyRuntimeFiles(true, env);
+      expect(note).not.toHaveBeenCalledWith(expect.anything(), "Doctor warnings");
+    } finally {
+      holder.exec("ROLLBACK");
+      holder.close();
+    }
   });
 });
 

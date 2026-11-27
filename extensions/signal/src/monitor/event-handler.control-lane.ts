@@ -10,11 +10,13 @@ import {
 } from "openclaw/plugin-sdk/command-auth-native";
 import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { SignalSender } from "../identity.js";
 import type { SignalIngressLifecycle } from "./event-handler.types.js";
 
 export type SignalInboundEntry = {
   /** Admission and buffered dispatch share this receipt-time snapshot. */
   cfg: OpenClawConfig;
+  sender: SignalSender;
   senderName: string;
   senderDisplay: string;
   senderRecipient: string;
@@ -36,6 +38,7 @@ export type SignalInboundEntry = {
   replyToBody?: string;
   replyToSender?: string;
   replyToIsQuote?: boolean;
+  historyImageQuotes?: Array<{ messageId: string; sender: SignalSender }>;
   turnAdoptionLifecycle?: SignalIngressLifecycle;
   channelIngress?: readonly ResolvedChannelMessageIngress[];
   resolveChannelIngress: (

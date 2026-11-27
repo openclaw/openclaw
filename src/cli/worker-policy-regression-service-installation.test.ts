@@ -28,14 +28,15 @@ vi.mock("../daemon/systemd-runtime.js", async (importOriginal) => ({
 }));
 vi.mock("../daemon/service-layout.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon/service-layout.js")>()),
-  summarizeGatewayServiceLayout: async (command: { fixtureScope: string }) => command,
-  inspectGatewayServiceInstallationDrift: async (command: { fixtureScope: string } | undefined) =>
-    command
-      ? {
-          serviceRoot: "/" + command.fixtureScope,
-          serviceVersion: fixture.versions[command.fixtureScope],
-        }
-      : undefined,
+  summarizeGatewayServiceLayout: async (command?: { fixtureScope: string }) =>
+    command && {
+      packageRootReal: "/" + command.fixtureScope,
+      packageVersion: fixture.versions[command.fixtureScope],
+    },
+  inspectGatewayServiceInstallationDrift: async (layout?: {
+    packageRootReal: string;
+    packageVersion: string;
+  }) => layout && { serviceRoot: layout.packageRootReal, serviceVersion: layout.packageVersion },
 }));
 vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/openclaw-root.js")>()),

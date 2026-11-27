@@ -92,8 +92,11 @@ or apply to Codex-native Code Mode.
   MCP entries, and overflow entries. Callable `catalog.search(...)` results are
   the fallback. Input hints retain integer and numeric bounds as comments, such
   as `offset?: number /* integer, >= 1 */`. A hint that overflows its budget
-  shows only required arguments, at every level, and ends each object that
-  dropped optional ones with `...`; required types shorten further if needed. Other validation details remain in
+  preserves required arguments first, shortening their types only when needed.
+  Nested optional fields are elided. If every top-level optional field fits in
+  the remaining space with shallow types, those names are included too. `...`
+  marks omitted fields or type details; the input hint stays within 300 characters.
+  Other validation details remain in
   the full schema available through `describe()`. These hints do not change
   tool validation or output contracts. Core file and shell tool signatures stay
   first in the bounded index, followed by tools with declared output hints, so

@@ -1001,4 +1001,30 @@ describe("prepared model runtime scoped refresh", () => {
       ).toMatchObject({ agentId: "pro", config: nextConfig });
     }
   });
+
+  it("retains discovery across a hot reload with rotated identified OAuth", async () => {
+    const provider = "demo";
+    const id = `${provider}:u@e.test`;
+    const setOAuth = (tag: string, expires: number) => {
+      const tok = { type: "oauth" as const, access: tag, refresh: tag, expires };
+      mocks.preparedAuthStore = {
+        version: 1,
+        profiles: { [id]: { ...tok, provider, email: "u@e.test" } },
+      };
+      mocks.authStorage.getAll.mockReturnValue({ [provider]: tok });
+      return { store: mocks.preparedAuthStore, creds: { [provider]: tok } };
+    };
+    const worker = setOAuth("worker", 5_000);
+    setOAuth("startup", 1_000);
+    const catalog = makeCatalog([entry(provider, "learned", "Learned")], {
+      providerOutcomes: [outcome(provider, "ready", id)],
+    });
+    attachAuth(catalog, provider, worker.store, worker.creds);
+    await prepareCatalogOwner(proConfig, catalog);
+    const afterInitial = catalogWorker.mock.calls.length;
+    setOAuth("reloaded", 9_000);
+    await hotReload(proConfig);
+    await published(proConfig).loadFullModelCatalog!({ changedOnly: true });
+    expect(catalogWorker).toHaveBeenCalledTimes(afterInitial);
+  });
 });

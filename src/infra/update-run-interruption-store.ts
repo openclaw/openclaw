@@ -18,6 +18,7 @@ import {
   hasStoredUpdateRecovery,
   readActiveUpdateRun,
   readLatestUpdateRun,
+  readUpdateRuns,
 } from "./update-run-read.kernel.js";
 import { finishUpdateRunRecord, type UpdateRunRecord } from "./update-run-record.js";
 import { upsertStep } from "./update-run-step-upsert.js";
@@ -72,6 +73,37 @@ export function canSettleInterruptedUpdate(run: UpdateRunRecord): boolean {
   );
 }
 
+/** Only interrupted activation can be recovered using the matching readiness observation. */
+function canRecoverLegacyTrialRun(run: UpdateRunRecord): boolean {
+  const abandoned = run.status === "failed" && run.reason === "abandoned";
+  return (
+    run.target.kind === "git" &&
+    run.repair.length === 0 &&
+    !run.verification.recovery &&
+    !run.verification.rollbackOutcome &&
+    (abandoned ||
+      (run.status === "running" &&
+        !run.reason &&
+        ["activating", "restarting", "verifying"].includes(run.phase))) &&
+    recordedUpdateRunDrivers(run).length > 0 &&
+    !run.steps.some(
+      (step) =>
+        step.step === "driver:identity-unavailable" ||
+        step.step === "reconcile:acknowledged" ||
+        step.step === "package rollback" ||
+        step.step === "previous generation restoration" ||
+        (step.status === "failed" &&
+          !(
+            abandoned &&
+            (step.step === "reconcile:abandoned" ||
+              (["activating", "restarting", "verifying"].includes(step.step) &&
+                !step.detail &&
+                !step.failureFacts?.length))
+          )),
+    )
+  );
+}
+
 /** Revalidate the captured run and recovery exclusion inside the worker's transaction. */
 export function persistInterruptedUpdateObservation(
   input: InterruptedUpdateSettlement,
@@ -88,15 +120,46 @@ export function persistInterruptedUpdateObservation(
         assertCurrent("commit");
         return { accepted: true, run, ...(updateResult ? { updateResult } : {}) };
       };
-      const current = readLatestUpdateRun(db);
-      const active = readActiveUpdateRun(db);
-      if (
-        !current ||
-        !isDeepStrictEqual(current, input.expected) ||
-        (active && active.runId !== current.runId) ||
-        hasStoredUpdateRecovery(db, current.runId)
-      ) {
-        return { accepted: false };
+      let current: UpdateRunRecord;
+      const legacyCandidate = input.legacyReady;
+      if (legacyCandidate) {
+        const matches = readUpdateRuns(db, { limit: 2, completedStep: legacyCandidate.step });
+        const [run] = matches;
+        const verification = input.verification;
+        if (
+          !run ||
+          matches.length !== 1 ||
+          !canRecoverLegacyTrialRun(run) ||
+          hasStoredUpdateRecovery(db, run.runId) ||
+          verification?.runningBuildId !== legacyCandidate.buildId ||
+          verification.runningVersion !== legacyCandidate.version ||
+          !verification.booted ||
+          !verification.serviceRunning ||
+          !verification.versionMatch ||
+          !verification.settled ||
+          !verification.coreReady
+        ) {
+          return { accepted: false };
+        }
+        if (
+          readUpdateRuns(db, { active: true, limit: 1, excludeRunId: run.runId }).length ||
+          recordedUpdateRunDrivers(run).some((driver) => inspectUpdateRunDriver(driver) !== "dead")
+        ) {
+          return { accepted: false, retry: true };
+        }
+        current = run;
+      } else {
+        const run = readLatestUpdateRun(db);
+        const active = readActiveUpdateRun(db);
+        if (
+          !run ||
+          !isDeepStrictEqual(run, input.expected) ||
+          (active && active.runId !== run.runId) ||
+          hasStoredUpdateRecovery(db, run.runId)
+        ) {
+          return { accepted: false };
+        }
+        current = run;
       }
       const previous = current.steps.find((step) => step.step === "reconcile:settle");
       const completingCleanup =
@@ -106,7 +169,7 @@ export function persistInterruptedUpdateObservation(
       const eligible = completingCleanup
         ? { ...current, steps: current.steps.filter((step) => step !== previous) }
         : current;
-      if (!canSettleInterruptedUpdate(eligible)) {
+      if (!legacyCandidate && !canSettleInterruptedUpdate(eligible)) {
         return { accepted: false };
       }
       const uncertain = input.cleanup === "pending" || input.cleanup === "unknown";
@@ -136,7 +199,7 @@ export function persistInterruptedUpdateObservation(
       if (!verification) {
         return accept(persistRun(db, current, options));
       }
-      const candidate = readInstalledUpdateCandidate(current);
+      const candidate = legacyCandidate ?? readInstalledUpdateCandidate(current);
       if (!candidate) {
         return { accepted: false };
       }
@@ -145,10 +208,16 @@ export function persistInterruptedUpdateObservation(
         current.phase = "verifying";
         current.finishedAtMs = null;
         for (const step of current.steps) {
-          if (step.step === "reconcile:abandoned") {
+          if (
+            step.step === "reconcile:abandoned" ||
+            (legacyCandidate && ["activating", "restarting", "verifying"].includes(step.step))
+          ) {
             step.status = "completed";
           }
         }
+      }
+      if (legacyCandidate) {
+        delete current.origin.nextAction;
       }
       recordUpdateRunVerificationRecord(current, verification);
       upsertStep(current, {
@@ -157,7 +226,10 @@ export function persistInterruptedUpdateObservation(
         endedAtMs: Date.now(),
         detail: `Updater exited before recording completion; installed and serving candidate build ${candidate.buildId} verified.`,
       });
-      finishUpdateRunRecord(current, { status: "succeeded", after: candidate });
+      finishUpdateRunRecord(current, {
+        status: "succeeded",
+        after: { version: candidate.version, buildId: candidate.buildId },
+      });
       const saved = persistRun(db, current, options);
       return accept(saved, claimUpdateResultInTransaction(db, saved));
     },

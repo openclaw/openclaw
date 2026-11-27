@@ -729,7 +729,7 @@ it.each([
       expect(view.querySelector("h3")?.textContent).toContain(
         status === "running"
           ? "OpenClaw update in progress: verifying"
-          : `OpenClaw update ${status}`,
+          : "OpenClaw couldn't finish updating",
       );
       const reportText = view.textContent;
       const check = findButton("Check status");

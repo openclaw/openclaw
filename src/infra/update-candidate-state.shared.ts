@@ -2,6 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
+import {
+  INSTALLED_PLUGIN_INDEX_STATE_KEY,
+  readPluginMetadataStateRowsInDatabase,
+  type PluginMetadataStateRow,
+} from "../plugins/plugin-metadata-state.kernel.js";
 import { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
 import { readStateSchemaContentVersion } from "../state/openclaw-state-db-schema-version.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
@@ -22,6 +27,7 @@ import {
   type StateDatabaseDiscovery,
 } from "./update-candidate-paths.js";
 import type { UpdateCandidateBundledSource } from "./update-candidate-plugins.js";
+import type { UpdateStateInspectionProgress } from "./update-candidate-state.diagnostics.js";
 
 const StateSchemaDiscoveryOwnershipSchema = z.record(
   z.string(),
@@ -132,6 +138,45 @@ export function collectRegisteredPaths(
   });
 }
 
+export async function withStateDatabaseSnapshot<T>(
+  file: string,
+  read: (location: string) => T | Promise<T>,
+  stagingRoot?: string,
+  onProgress?: (progress: UpdateStateInspectionProgress) => void,
+  preserveSourceArtifacts = false,
+): Promise<T> {
+  const { createUpdateStateSnapshotReporter } =
+    await import("./update-candidate-state.diagnostics.js");
+  const { prepareSqliteReadOnlyLocationInProcess, prepareSqliteReadOnlyLocationSyncInProcess } =
+    await import("./sqlite-readonly-location.js");
+  const { withPreparedSqliteSnapshot } = await import("./sqlite-readonly-location-cleanup.js");
+  const progress = createUpdateStateSnapshotReporter(file, "shared database snapshot", onProgress);
+  const snapshot = preserveSourceArtifacts
+    ? prepareSqliteReadOnlyLocationSyncInProcess(file, stagingRoot)
+    : await prepareSqliteReadOnlyLocationInProcess(
+        file,
+        stagingRoot,
+        undefined,
+        progress.onProgress,
+      );
+  // Temporary cleanup cannot replace a candidate result or its original read failure.
+  return withPreparedSqliteSnapshot(
+    snapshot,
+    async (location) => {
+      progress.complete((await fs.stat(location)).size);
+      return read(location);
+    },
+    { cleanupFailure: "warn" },
+  );
+}
+
+export function readUpdatePluginMetadata(db: EngineConnection): PluginMetadataStateRow[] {
+  return readPluginMetadataStateRowsInDatabase(db, [
+    "plugins.bundledDiscovery",
+    INSTALLED_PLUGIN_INDEX_STATE_KEY,
+  ]);
+}
+
 export async function readSharedDatabaseVersion(
   location: string,
   shared: string,
@@ -141,6 +186,11 @@ export async function readSharedDatabaseVersion(
   const db = openNodeSqliteDatabase(location, { readOnly: true });
   try {
     const registered = collectRegisteredPaths(db, shared, files);
+    await collectSupplementalStateDatabasePaths(
+      input,
+      files,
+      input.additionalPaths === undefined ? readUpdatePluginMetadata(db) : [],
+    );
     let held: string[] = [];
     if (input.includeRetainedAgentPaths) {
       const { readUpdateHeldAgentPaths } = await import("./update-candidate-state.retained.js");
@@ -184,6 +234,7 @@ export async function readUpdateStoreSchemaVersion(
 export async function collectSupplementalStateDatabasePaths(
   input: StateInput,
   files: Map<string, StateDatabaseDiscovery>,
+  metadata: readonly PluginMetadataStateRow[] = [],
 ) {
   const knownRealpaths = new Set(
     await Promise.all([...files.keys()].map((file) => fs.realpath(file).catch(ignoreMissingPath))),
@@ -191,14 +242,14 @@ export async function collectSupplementalStateDatabasePaths(
   // The caller owns registry reads, including legacy schemas.
   // Include declared retained plugin databases on either physical engine here.
   // Prepared lists, including [], already own discovery; workers must not reload its graph.
+  // Shipped 9.37 drivers omit the list while holding maintenance custody in the
+  // parent. Plugin facts come from the caller's existing shared inspection, not
+  // an ordinary source reader or a second snapshot outside its cleanup/space budget.
   const additionalPaths =
     input.additionalPaths ??
     (await (
-      await import("./backup-sqlite-snapshot.js")
-    ).discoverBackupDatabasePaths({
-      ...input,
-      agentRegistry: [],
-    }));
+      await import("./update-candidate-state.plugin-discovery.js")
+    ).discoverUpdateSupplementalDatabasePaths(input, metadata));
   for (const file of additionalPaths) {
     // Supplemental realpaths must not add aliases to the legacy versions inventory.
     // Registry discovery below still preserves every explicitly recorded spelling.

@@ -5,7 +5,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
-import { exportTranscriptLibrary } from "./library.js";
+import { exportTranscriptLibrary, getTranscriptLibrary } from "./library.js";
 import {
   createTranscriptLibraryStoreFixture,
   transcriptLibrarySession as session,
@@ -19,6 +19,57 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
+});
+
+it("presents overlapping speech by its start time while cursors follow appends", async () => {
+  const { store } = createTranscriptLibraryStoreFixture(tempDirs.make("speech-order-"));
+  const target = session("overlap");
+  const selector = transcriptSessionSelector(target);
+  await store.writeSession(target);
+  for (const [id, text, startedAt] of [
+    ["a", "Reply", "2026-08-20T10:00:08Z"],
+    ["b", "Question", "2026-08-20T12:00:02+02:00"],
+    ["a", "Overlapping reply", "2026-08-20T10:00:08Z"],
+    ["b", "Untimed caption", undefined],
+    ["a", "After the gap", "2026-08-20T10:00:01Z"],
+    ["b", "Local clock", "2026-08-20T10:00:00"],
+    ["a", "After the local clock", "2026-08-20T10:00:00Z"],
+  ] as const) {
+    await store.appendUtteranceForSession(target, {
+      text,
+      startedAt,
+      speaker: { id, label: "Sam" },
+    });
+  }
+
+  const expected = [
+    "Sam (2): Question",
+    "Sam: Reply",
+    "Sam: Overlapping reply",
+    "Sam (2): Untimed caption",
+    "Sam: After the gap",
+    "Sam (2): Local clock",
+    "Sam: After the local clock",
+  ];
+  const live = await store.readSummarySnapshot(target, 10);
+  expect(live?.turns.map(formatTranscriptTurn)).toEqual(expected);
+  const stopped = { ...target, stoppedAt: "2026-08-20T10:01:00Z" };
+  await store.writeSession(stopped);
+  const final = await store.readSummarySnapshot(stopped, 10);
+  expect(final?.turns.map(formatTranscriptTurn)).toEqual(expected);
+
+  const download = await exportTranscriptLibrary(store, { selector, format: "markdown" });
+  expect(Buffer.from(download.data, "base64").toString()).toContain(
+    expected.map((line) => `- ${line}`).join("\n"),
+  );
+  const get = (options: { limit?: number; cursor?: string } = {}) =>
+    getTranscriptLibrary(store, { selector, includeUtterances: true, ...options });
+  expect((await get()).utterances?.map((u) => u.sequence)).toEqual([1, 0, 2, 3, 4, 5, 6]);
+  const page = await get({ limit: 1 });
+  expect(page.utterances?.map((u) => u.sequence)).toEqual([0]);
+  expect(
+    (await get({ limit: 1, cursor: page.nextCursor! })).utterances?.map((u) => u.sequence),
+  ).toEqual([1]);
 });
 
 it("attributes ID-only speech using only names already observed in the recording", async () => {

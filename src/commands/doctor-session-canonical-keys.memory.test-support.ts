@@ -2,8 +2,6 @@ import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 import { repairCanonicalSessionKeys } from "./doctor-session-canonical-keys.test-support.js";
 
-export const canonicalMemoryTestSupportModuleUrl = import.meta.url;
-
 async function main(): Promise<void> {
   const [stateDir, storeTemplate, mode] = process.argv.slice(2);
   if (!stateDir || !storeTemplate) {

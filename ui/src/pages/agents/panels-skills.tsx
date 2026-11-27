@@ -20,9 +20,9 @@ import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import {
   SettingsSection,
   SettingsRow,
-  SettingsToggle,
   SettingsEmpty,
 } from "../../components/solid/settings-ui.tsx";
+import { Switch } from "../../components/solid/switch.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { resolveAgentConfig } from "../../lib/agents/display.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -287,7 +287,7 @@ function AgentSkillsContent(
                                 {skill().emoji ? `${skill().emoji}\u00a0` : ""}
                                 {skill().name}
                               </span>
-                              <SettingsToggle
+                              <Switch
                                 checked={enabled()}
                                 disabled={learned() || !editable()}
                                 ariaLabel={skill().name}
