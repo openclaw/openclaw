@@ -372,8 +372,11 @@ function reconcileKeywordIndex(
       records: history,
     },
   ] as const;
+  // Older builds write the same state row but refresh only their own FTS tables.
+  // A checkpoint from another tokenizer cannot certify either of these corpora.
   const snapshot = digest(
     JSON.stringify([
+      FTS_COLUMNS,
       generation,
       data.ontology?.fingerprint,
       records.map((r) => [r.id, r.path, r.hash, r.revision]),
@@ -391,10 +394,8 @@ function reconcileKeywordIndex(
     indexedAt = runSqliteImmediateTransactionSync(
       db,
       () => {
-        if (untracked.length) {
-          for (const prefix of LEGACY_TABLES) {
-            db.exec(`DROP TABLE IF EXISTS ${prefix}${suffix}`);
-          }
+        for (const prefix of LEGACY_TABLES) {
+          db.exec(`DROP TABLE IF EXISTS ${prefix}${suffix}`);
         }
         for (const entry of tables) {
           const { table, rows, records: wanted } = entry;

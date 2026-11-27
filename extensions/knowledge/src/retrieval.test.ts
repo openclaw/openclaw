@@ -681,6 +681,57 @@ it("English inflections match, and a store indexed with the old tokenizer rebuil
   });
 });
 
+it("re-upgrade reconciles both retained indexes after a v1 search advances their shared state", async () => {
+  const f = await fixture();
+  const storage = new KnowledgeStorage(f.config, f.store);
+  const scan = () => storage.run(plainAccess(), (vault) => vault.scan());
+  const binding = "rollback",
+    generation = "1",
+    suffix = digest(binding);
+  await f.put("removed_note", "Retiring", "lilac");
+  await f.put("kept_note", "Runbook", "Servers deployed to Athens.");
+  const before = await scan();
+  const original = f.store.withDatabase((db) =>
+    keywordSearch(db, before, { query: "deploying" }, binding, generation),
+  );
+  expect(ids(original)).toEqual(["kept_note"]);
+
+  await f.put("removed_note", "Retiring", "lilac", { lifecycle: "withdrawn" });
+  await f.put("added_note", "Current", "daffodil");
+  await f.put("earlier_note", "Superseded", "saffron", superseded("added_note"));
+  const after = await scan();
+  // Persist the checkpoint a v1 writer leaves on rollback. Its fingerprint covers
+  // the new records but not the tokenizer, and its writes never touch v2 rows.
+  const stamp = (r: (typeof after.records)[number]) => [r.id, r.path, r.hash, r.revision];
+  const v1Snapshot = digest(
+    JSON.stringify([
+      generation,
+      after.ontology?.fingerprint,
+      after.records.filter((r) => r.lifecycle === "active").map(stamp),
+      after.records.filter((r) => r.lifecycle === "superseded").map(stamp),
+    ]),
+  );
+  f.store.withDatabase((db) => {
+    db.exec(
+      `CREATE VIRTUAL TABLE keyword_fts_v1_${suffix} USING fts5(id UNINDEXED, title, aliases, body, tokenize='unicode61 remove_diacritics 2')`,
+    );
+    db.prepare("UPDATE keyword_state_v1 SET snapshot=? WHERE binding=?").run(v1Snapshot, binding);
+  });
+  f.store.withDatabase((db) => {
+    const search = (query: string) => keywordSearch(db, after, { query }, binding, generation);
+    expect(ids(search("daffodil"))).toEqual(["added_note"]);
+    expect(search("lilac")).toMatchObject({ total: 0, index: { state: "ready" } });
+    expect(search("saffron").hits[0]).toMatchObject({
+      citation: { id: "added_note" },
+      via: { id: "earlier_note" },
+    });
+    expect(search("deploying").hits[0]?.citation).toEqual(original.hits[0]!.citation);
+    expect(
+      db.prepare("SELECT 1 FROM sqlite_schema WHERE name=?").get(`keyword_fts_v1_${suffix}`),
+    ).toBeUndefined();
+  });
+});
+
 it("an index built before row tracking is repopulated, never left empty and ready", async () => {
   const f = await fixture();
   await f.put("upgrade_note_1", "Upgrade sentinel", "lanternword body");

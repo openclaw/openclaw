@@ -146,8 +146,11 @@ The `keyword_fts_v2_*`, `keyword_rows_v2_*`, `keyword_history_fts_v2_*`, and
 `keyword_history_rows_v2_*` tables, `keyword_state_v1`, and the temporal tables are
 projections. Missing tables or changed fingerprints are rebuilt on the next
 query. Stores indexed before stemming have `v1` keyword tables. The first search
-after upgrading builds the `v2` tables and drops that scope's `v1` tables, so a
-store never mixes tokenizations.
+after upgrading builds the `v2` tables and drops that scope's `v1` tables. If
+you roll back, write or withdraw notes, and then upgrade again, the next search
+refreshes both current and superseded wording. A checkpoint from the older
+tokenizer cannot mark the newer index up to date; stored notes and citations
+are unchanged by re-indexing.
 
 Do not drop `state.sqlite` to rebuild search. It also holds store identity,
 receipts, history, Git checkpoints, session activity, and withdrawal and
