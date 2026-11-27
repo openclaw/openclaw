@@ -169,7 +169,9 @@ export function registerThreadWebSearchBindingTests({
     await startOrResumeThread({
       client,
       nativeProviderWebSearchSupport: "unsupported",
-      webSearchAllowed: true,
+      persistentWebSearchAllowed: false,
+      webSearchAllowed: false,
+      webSearchRequested: true,
     });
     await fixture.endTurn("thread-1");
     const savedAfterColdVerdict = await readCodexAppServerBinding(sessionFile);
