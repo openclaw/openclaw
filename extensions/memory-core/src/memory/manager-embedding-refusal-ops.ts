@@ -137,10 +137,18 @@ export abstract class MemoryEmbeddingRefusalOps extends MemoryManagerEmbeddingOp
     return undefined;
   }
 
-  /** An explicit check that reached the endpoint clears its remembered refusal. */
+  /** An explicit check that reached the refused endpoint clears its remembered refusal. */
   protected async forgetEmbeddingRefusal(): Promise<void> {
     const published = this.publishedDatabase;
-    if (published.facts.embeddingRefusal && !published.readOnly) {
+    const refusal = published.facts.embeddingRefusal;
+    // A healthy fallback says nothing about the primary endpoint that refused.
+    const probed = this.implicitEmbeddingEndpoint(this.providerRuntime?.cacheKeyData);
+    if (
+      refusal &&
+      probed &&
+      isSameMemoryEmbeddingEndpoint(refusal, probed) &&
+      !published.readOnly
+    ) {
       await this.writeEmbeddingRefusal(null);
     }
   }

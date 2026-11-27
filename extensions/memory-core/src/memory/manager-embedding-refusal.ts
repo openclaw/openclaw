@@ -8,7 +8,7 @@ export type MemoryEmbeddingEndpoint = {
   provider: string;
   baseUrl: string;
   model: string;
-  headers?: Record<string, unknown>;
+  headers?: unknown;
 };
 
 /** An endpoint that answered "no embeddings here" for one embedding identity. */
@@ -29,9 +29,9 @@ export function readMemoryEmbeddingEndpoint(value: unknown): MemoryEmbeddingEndp
   const baseUrl = record?.baseUrl;
   const model = record?.model;
   // Routing headers (tenant, deployment) pick the endpoint as much as the URL does.
-  const headers = asNullableRecord(record?.headers) ?? undefined;
+  const headers = record?.headers;
   return typeof provider === "string" && typeof baseUrl === "string" && typeof model === "string"
-    ? { provider, baseUrl, model, ...(headers ? { headers } : {}) }
+    ? { provider, baseUrl, model, ...(headers === undefined ? {} : { headers }) }
     : undefined;
 }
 
@@ -54,11 +54,16 @@ export function parseMemoryEmbeddingRefusal(value: unknown): MemoryEmbeddingRefu
     : null;
 }
 
-/** Header order is not identity; values are already credential-free in the adapter's cache key. */
+/**
+ * Adapters publish headers as a record or as [name, value] pairs; order is not identity, and
+ * values are already credential-free in the adapter's cache key.
+ */
 function headerIdentity(endpoint: MemoryEmbeddingEndpoint): string {
-  return JSON.stringify(
-    Object.entries(endpoint.headers ?? {}).toSorted(([a], [b]) => (a < b ? -1 : 1)),
-  );
+  const { headers } = endpoint;
+  const entries = Array.isArray(headers)
+    ? headers
+    : Object.entries(asNullableRecord(headers) ?? {});
+  return JSON.stringify(entries.map((entry) => JSON.stringify(entry)).toSorted());
 }
 
 export function isSameMemoryEmbeddingEndpoint(
