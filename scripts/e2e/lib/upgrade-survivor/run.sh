@@ -2586,7 +2586,7 @@ fi
 phase install-baseline install_baseline
 phase initialize-state initialize_state
 if [ "$SCENARIO" = "boot-plugin-convergence" ]; then
-  require_isolated_manual_baseline "$BASELINE_SPEC"
+  require_isolated_manual_baseline "$baseline_spec"
   boot_plugin_helper=scripts/e2e/lib/upgrade-survivor/boot-plugin-convergence.mjs
   phase prepare-boot-plugin node "$boot_plugin_helper" fixture
   for version in 1.0.0 2.0.0; do
