@@ -136,3 +136,85 @@ it("shows independent session reports while keeping supervised coordination priv
     }
   }
 }, 60_000);
+
+// Real sessions_create and sessions_send turns; only the model's choices are scripted.
+it("keeps an independent opening's result obligation while accepting its peer silence", async () => {
+  const marker = "PROVENANCE_SOURCE_independent_obligation";
+  const parentKey = "agent:main:dashboard:independent-obligation";
+  const opening = `${marker}_OPENING`;
+  const note = `${marker}_NOTE`;
+  const openingPrompts: string[] = [];
+  const notePrompts: string[] = [];
+  let created: Record<string, unknown> | undefined;
+  let sent: Record<string, unknown> | undefined;
+  registerProofModelScript(marker, (request) => {
+    if (request.tools.length === 0) {
+      return { text: "Independent obligation" };
+    }
+    const { prompt, result } = request;
+    if (prompt.includes(note)) {
+      notePrompts.push(prompt);
+      return { text: "NO_REPLY" };
+    }
+    if (prompt.includes(opening)) {
+      openingPrompts.push(prompt);
+      return { text: openingPrompts.length === 1 ? "NO_REPLY" : `${marker}_OPENING_RESULT` };
+    }
+    if (prompt.includes(`${marker}_CREATE`)) {
+      if (!result) {
+        return {
+          tool: { name: "sessions_create", args: { label: marker, message: opening } },
+        };
+      }
+      created = result;
+      return { text: `${marker}_CREATED` };
+    }
+    if (prompt.includes(`${marker}_SEND`)) {
+      if (!result) {
+        return {
+          tool: {
+            name: "sessions_send",
+            args: { sessionKey: created?.sessionKey, message: note, timeoutSeconds: 30 },
+          },
+        };
+      }
+      sent = result;
+      return { text: `${marker}_SENT` };
+    }
+    throw new Error(`Unexpected independent obligation prompt ${prompt.slice(0, 300)}`);
+  });
+  await gateway.client.request("sessions.create", { key: parentKey, agentId: "main" });
+  const start = async (message: string) => {
+    const run = await gateway.client.request<{ runId: string }>("chat.send", {
+      sessionKey: parentKey,
+      message,
+      idempotencyKey: randomUUID(),
+    });
+    expect(await waitForProofRun(run.runId)).toMatchObject({ status: "ok" });
+    await expectProofIdle();
+  };
+
+  await start(`${marker}_CREATE`);
+  expect(created).toMatchObject({ status: "created", runStarted: true });
+  const childKey = created?.sessionKey;
+  if (typeof childKey !== "string") {
+    throw new Error("sessions_create did not return a session key");
+  }
+  const openingOutcome = await waitForProofRun(created?.runId);
+  await expectProofIdle();
+  expect(loadSessionEntry({ agentId: "main", sessionKey: childKey })).toMatchObject({
+    createdIndependently: true,
+    spawnedBy: parentKey,
+    spawnDepth: 1,
+  });
+  // The opening's NO_REPLY is refused, so the run asks the model again for its result.
+  expect({ outcome: openingOutcome.status, openingCalls: openingPrompts.length }).toEqual({
+    outcome: "ok",
+    openingCalls: 2,
+  });
+
+  await start(`${marker}_SEND`);
+  // A later message from the creator is a peer message: exact NO_REPLY is accepted once.
+  expect(notePrompts).toHaveLength(1);
+  expect(sent).toMatchObject({ status: "no_reply", sessionKey: childKey });
+}, 60_000);
