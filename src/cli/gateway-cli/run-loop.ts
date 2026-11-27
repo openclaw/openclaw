@@ -17,6 +17,7 @@ import type { GatewayDrainReason } from "../../process/gateway-work-admission.js
 import { runWithProcessCleanupBudget } from "../../process/supervisor/cleanup-budget.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { releaseOpenClawStateDatabaseCustody } from "../../state/openclaw-state-db-cache.js";
+import { shouldPreserveGatewayProcessArgv } from "../gateway-run-argv.js";
 import { handOffGatewayStartupSignals, registerSignalExitOwner } from "../signal-exit-barrier.js";
 import { measureGatewayBootstrapStep } from "../startup-trace.js";
 import { createGatewayHostLifecycle } from "./host-lifecycle.js";
@@ -55,12 +56,10 @@ const HARD_EXIT_WATCHDOG_GRACE_MS = 2_000;
 
 export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<number> {
   startDiagnosticsTimeline(params.ownsProcessLifecycle === true);
-  // macOS/BSD process inspection reports process.title instead of the original
-  // argv. Give the long-running Gateway a verifiable identity for lock readers.
-  if (process.title === "openclaw") {
+  // Give macOS/BSD lock readers a Gateway role when they see only process.title.
+  if (process.title === "openclaw" && !shouldPreserveGatewayProcessArgv(process.argv)) {
     process.title = "openclaw-gateway";
   }
-  let startupStartedAt: number;
   const initial = await prepareGatewayRunLoop(params, gatewayLog);
   const {
     lifecycleRuntime: eagerLifecycleRuntime,
@@ -1137,7 +1136,7 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<numb
         if (await cleanup.waitForStop(iterationStartupOperations)) {
           break;
         }
-        startupStartedAt = Date.now();
+        const startupStartedAt = Date.now();
         startupWork = measureGatewayBootstrapStep("cli.bootstrap.boot-lifecycle", () =>
           params.beginBoot?.(
             startupStartedAt,

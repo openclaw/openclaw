@@ -106,6 +106,7 @@ function createPausedCardStore(delegate: WorkboardCardStore) {
       lookup: (key) => delegate.lookup(key),
       delete: (key) => write(key, undefined, () => delegate.delete(key), Boolean),
       entries: (boardId) => delegate.entries(boardId),
+      findCardIdsByPrefix: (prefix) => delegate.findCardIdsByPrefix(prefix),
       listCardStatuses: (ids) => delegate.listCardStatuses(ids),
       listBoardAggregates: () => delegate.listBoardAggregates(),
       listStatsAggregates: (boardId) => delegate.listStatsAggregates(boardId),

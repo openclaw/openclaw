@@ -98,6 +98,7 @@ export type ResolvedAgentConfig = {
   contextInjection?: AgentEntry["contextInjection"];
   bootstrapMaxChars?: AgentEntry["bootstrapMaxChars"];
   bootstrapTotalMaxChars?: AgentEntry["bootstrapTotalMaxChars"];
+  sharedUserDir?: AgentEntry["sharedUserDir"];
   experimental?: AgentDefaultsConfig["experimental"];
   skills?: AgentEntry["skills"];
   memory?: AgentEntry["memory"];
@@ -488,6 +489,7 @@ export function resolveAgentConfig(
     contextInjection: entry.contextInjection,
     bootstrapMaxChars: entry.bootstrapMaxChars,
     bootstrapTotalMaxChars: entry.bootstrapTotalMaxChars,
+    sharedUserDir: entry.sharedUserDir,
     experimental: entry.experimental
       ? { ...agentDefaults?.experimental, ...entry.experimental }
       : agentDefaults?.experimental,
@@ -591,7 +593,7 @@ export function resolveAgentWorkspaceProvisioning(
   },
 ): AgentWorkspaceProvisioning {
   const id = normalizeAgentId(agentId);
-  const entry = resolveAgentConfig(cfg, id);
+  const entry = readAgentConfigEntry(cfg, id);
   if (entry?.runtime?.type !== "acp") {
     return "standard";
   }
@@ -623,7 +625,7 @@ export function resolveAgentWorkspaceProvisioning(
  * (configured binding resolution) stay off embedded/default agent turns.
  */
 export function isImplicitAcpWorkspaceCandidate(cfg: OpenClawConfig, agentId: string): boolean {
-  const entry = resolveAgentConfig(cfg, normalizeAgentId(agentId));
+  const entry = readAgentConfigEntry(cfg, normalizeAgentId(agentId));
   return entry?.runtime?.type === "acp" && !entry.workspace?.trim();
 }
 
@@ -648,7 +650,7 @@ export function resolveEffectiveAgentDir(
   deps?: AgentDirResolutionEnv,
 ): string {
   const id = normalizeAgentId(agentId);
-  const configured = resolveAgentConfig(cfg, id)?.agentDir?.trim();
+  const configured = readAgentConfigEntry(cfg, id)?.agentDir?.trim();
   const env = deps?.env ?? process.env;
   return configured
     ? resolveUserPath(configured, env, deps?.homedir)

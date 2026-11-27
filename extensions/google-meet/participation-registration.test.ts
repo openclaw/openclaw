@@ -1,4 +1,9 @@
+import assert from "node:assert/strict";
+import { setImmediate } from "node:timers/promises";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as gatewayRuntime from "openclaw/plugin-sdk/gateway-runtime";
+import type { OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import type { GoogleMeetRuntime } from "./src/runtime.js";
@@ -6,14 +11,23 @@ import { setupParticipationHarness } from "./src/test-support/participation-harn
 import { invokeGoogleMeetGatewayMethodForTest } from "./src/test-support/plugin-harness.js";
 
 const runtime = vi.hoisted(() => ({
+  constructed: vi.fn(),
   reconcileTranscriptPolicy: vi.fn<GoogleMeetRuntime["reconcileTranscriptPolicy"]>(),
   participate: vi.fn(),
+  status: vi.fn(),
+  leave: vi.fn(),
 }));
 
-vi.mock("./src/runtime.js", () => ({
+vi.mock("./src/runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./src/runtime.js")>()),
   GoogleMeetRuntime: class {
+    constructor() {
+      runtime.constructed();
+    }
     reconcileTranscriptPolicy = runtime.reconcileTranscriptPolicy;
     participate = runtime.participate;
+    status = runtime.status;
+    leave = runtime.leave;
   },
 }));
 
@@ -30,11 +44,68 @@ type GatewayHandler = (ctx: {
 
 let harness: ReturnType<typeof setupParticipationHarness>;
 beforeEach(() => {
+  runtime.constructed.mockClear();
   runtime.reconcileTranscriptPolicy.mockReset().mockResolvedValue(undefined);
   runtime.participate.mockReset();
+  runtime.status.mockReset();
+  runtime.leave.mockReset();
   harness = setupParticipationHarness(plugin);
 });
 afterEach(() => vi.restoreAllMocks());
+
+it("retries initial transcript policy on the original runtime after a gateway error", async () => {
+  runtime.reconcileTranscriptPolicy.mockRejectedValueOnce(
+    new Error("Transcript policy unavailable"),
+  );
+  const result = { requestId: request.requestId, status: "unsupported" };
+  runtime.participate.mockResolvedValue(result);
+  const participate = () =>
+    invokeGoogleMeetGatewayMethodForTest(harness.methods, "googlemeet.participate", request);
+  await expect(participate()).rejects.toThrow("Transcript policy unavailable");
+  await expect(participate()).resolves.toEqual(result);
+  expect(runtime.constructed).toHaveBeenCalledOnce();
+  expect(runtime.reconcileTranscriptPolicy).toHaveBeenCalledTimes(2);
+  expect(runtime.participate).toHaveBeenCalledOnce();
+});
+
+it("keeps gateway status and leave available during a later transcript policy failure", async () => {
+  const services: OpenClawPluginService[] = [];
+  const methods = new Map<string, unknown>();
+  const api = createTestPluginApi({
+    id: "google-meet",
+    registerGatewayMethod: (method, handler) => methods.set(method, handler),
+    registerService(service) {
+      if (service.apiVersion === undefined || service.apiVersion === 1) {
+        services.push(service);
+      }
+    },
+  });
+  plugin.register(api);
+  const service = services[0];
+  assert.ok(service?.stop);
+  const status = () => invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.status");
+  runtime.status.mockResolvedValue({ found: true });
+  runtime.leave.mockResolvedValue({ found: true });
+  await status();
+  const gate = createDeferred<void>();
+  runtime.reconcileTranscriptPolicy.mockImplementationOnce(() => gate.promise);
+  const draining = service.stop({ config: {}, stateDir: "unused", logger: api.logger });
+  const during = status();
+  await setImmediate();
+  const callsDuringDrain = runtime.status.mock.calls.length;
+  gate.reject(new Error("Transcript drain failed"));
+  const [read, drain] = await Promise.allSettled([during, draining]);
+  expect(callsDuringDrain).toBe(2);
+  expect(read).toMatchObject({ status: "fulfilled", value: { found: true } });
+  expect(drain).toMatchObject({ status: "rejected", reason: new Error("Transcript drain failed") });
+  await expect(
+    invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.leave", {
+      sessionId: "meeting-1",
+    }),
+  ).resolves.toEqual({ found: true });
+  expect(runtime.reconcileTranscriptPolicy).toHaveBeenCalledTimes(2);
+  expect(runtime.constructed).toHaveBeenCalledOnce();
+});
 
 it("returns structured gateway errors for missing session ids", async () => {
   for (const action of ["leave", "speak", "participationContext", "participate"]) {

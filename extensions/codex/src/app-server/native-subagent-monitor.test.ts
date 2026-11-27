@@ -23,6 +23,7 @@ import {
   nativeCompletionNotification,
   closeAgentNotification,
   childTurnCompletedNotification,
+  agentMessage,
   turnStartedNotification,
   threadRead,
 } from "./native-subagent-monitor.test-support.js";
@@ -588,6 +589,21 @@ describe("CodexNativeSubagentMonitor", () => {
     replacementClient.close();
   });
 
+  it("ignores an older result in the current parent turn until the child confirms its answer", async () => {
+    const { client, runtime, monitor } = createFixture();
+    const parent = await registerParent(monitor);
+    parent.bindTurn("parent-turn");
+    await notifyChildStarted(client);
+    await client.startTurn("followup-turn");
+    await client.completeNative({ turnId: "parent-turn", result: "previous answer" });
+    await client.finishTurn("followup-turn", agentMessage("final", "fresh answer"));
+    await parent.unregister();
+    expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ result: "fresh answer" }),
+    );
+    client.close();
+  });
+
   it.each([
     [undefined, "child-thread"],
     ["first", "codex-thread:child-thread:turn:first"],
@@ -604,13 +620,18 @@ describe("CodexNativeSubagentMonitor", () => {
       let reconciliation: Promise<boolean> | undefined;
       if (turnId) {
         await client.startTurn(turnId);
+        await client.notify(
+          nativeCompletionNotification({ turnId: "previous-parent-turn", result: "old result" }),
+        );
+        expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
+        await client.finishTurn(turnId, agentMessage("child-final", "child final result"));
       } else {
         const readHistory = vi.fn(() => history.promise);
         client.setThreadReadFactory("child-thread", readHistory);
         reconciliation = monitor.reconcileChildThread("child-thread");
         expect(readHistory).toHaveBeenCalledOnce();
+        await client.notify(nativeCompletionNotification());
       }
-      await client.notify(nativeCompletionNotification());
 
       expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(1);
       history.resolve(threadRead({ turnId: "recovered-turn", result: "child final result" }));
@@ -627,6 +648,7 @@ describe("CodexNativeSubagentMonitor", () => {
       for (const [request] of runtime.deliverAgentHarnessCompletion.mock.calls) {
         expect(request.childSessionKey).toBe("codex-thread:child-thread");
         expect(request.announceId).toBe(`codex-native:parent-thread:${identity}:succeeded`);
+        expect(request.result).toBe("child final result");
       }
       client.close();
     } finally {
@@ -696,15 +718,15 @@ describe("CodexNativeSubagentMonitor", () => {
     );
     await client.notify(nativeCompletionNotification({ turnId: "parent-turn" }));
 
-    await vi.waitFor(() =>
+    await vi.waitFor(() => {
       expect(client.request).toHaveBeenCalledExactlyOnceWith(
         "thread/unsubscribe",
         { threadId: "child-thread" },
         { timeoutMs: 5_000 },
-      ),
-    );
+      );
+      expect(isCodexAppServerLiveThreadClaimed(client as never, "child-thread")).toBe(false);
+    });
     expect(oldestRelease).toHaveBeenCalledExactlyOnceWith("thread-oldest", undefined, undefined);
-    expect(isCodexAppServerLiveThreadClaimed(client as never, "child-thread")).toBe(false);
     await expect(
       consumeCodexAppServerLiveThread(client as never, "child-thread"),
     ).resolves.toBeUndefined();

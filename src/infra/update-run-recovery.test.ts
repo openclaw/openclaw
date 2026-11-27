@@ -26,19 +26,16 @@ import {
   getUpdateRun,
   recordUpdateRunPhase,
 } from "./update-run-ledger.js";
+import { assertUpdateRecoveryAdmission } from "./update-run-recovery-admission.js";
 import { legacyRecord } from "./update-run-recovery-legacy.test-support.js";
 import {
   decodeUpdateRecovery,
   inspectUpdateRecovery,
+  isUpdateRecoveryPending,
   type UpdateRecoveryRecord,
 } from "./update-run-recovery-schema.js";
 import { readRecovery } from "./update-run-recovery-store.js";
-import {
-  assertNoPendingUpdateRecovery,
-  inspectUpdateRecoveries,
-  loadUpdateRecovery,
-  UpdateRecoveryRequiredError,
-} from "./update-run-recovery.js";
+import { inspectUpdateRecoveries, loadUpdateRecovery } from "./update-run-recovery.js";
 import { captureCompletedUpdateRun } from "./update-run-terminal-record.js";
 import { updateRunLedgerSchema } from "./update-run-write.js";
 
@@ -212,7 +209,6 @@ describe("retained recovery read-only compatibility", () => {
     const inspected = inspectUpdateRecoveries(f.options);
     expect(inspected).toEqual([{ format: "legacy-serving", raw, record: JSON.parse(raw) }]);
     expect(() => loadUpdateRecovery(record.runId, f.options)).toThrow(/legacy.*readiness/i);
-    expect(() => assertNoPendingUpdateRecovery(f.options)).toThrow(/legacy.*readiness/i);
     expect(snapshot(f.root)).toEqual(before);
     expect(inspectUpdateRecovery(raw, record.runId)).toEqual(inspected[0]);
     expect(() => decodeUpdateRecovery(raw, record.runId)).toThrow(/legacy.*readiness/i);
@@ -231,31 +227,45 @@ describe("retained recovery read-only compatibility", () => {
     expect(() => inspectUpdateRecovery(raw, randomUUID())).toThrow("history run");
     expect(JSON.stringify(decode(f.original))).toBe(JSON.stringify(f.original));
   });
-  it("admits terminal legacy history without execution authority", () => {
-    const f = setup();
-    const record = legacyRecord(retainedTerminalRecord(f.record, false));
-    const raw = storeRaw(f, record);
-    const before = closedSnapshot(f);
-    expect(() => assertNoPendingUpdateRecovery(f.options)).not.toThrow();
-    expect(() => loadUpdateRecovery(record.runId, f.options)).toThrow(/legacy.*readiness/i);
-    expect(inspectUpdateRecoveries(f.options)[0]?.raw).toBe(raw);
-    expect(snapshot(f.root)).toEqual(before);
-    const preview = createUpdateRun({ trigger: "cli" }, f.options);
-    finishInterruptedUpdatePreview(preview, f.options);
-    expect(getUpdateRun(preview.runId, f.options)?.status).toBe("skipped");
-    const next = createUpdateRun({ trigger: "cli" }, f.options);
-    finishUpdateRun(next.runId, { status: "succeeded" }, f.options);
-    expect(loadUpdateRecovery(next.runId, f.options)).toBeUndefined();
-    expect(captureCompletedUpdateRun(next.runId, () => {}, f.options)?.runId).toBe(next.runId);
-    expect(inspectUpdateRecoveries(f.options)[0]?.raw).toBe(raw);
-  });
+  it.each(["pending", "terminal-legacy"] as const)(
+    "does not let foreign %s history grant execution authority or block new work",
+    async (kind) => {
+      const f = setup();
+      const record =
+        kind === "terminal-legacy"
+          ? legacyRecord(retainedTerminalRecord(f.record, false))
+          : f.record;
+      const raw = storeRaw(f, record);
+      const before = closedSnapshot(f);
+      await expect(assertUpdateRecoveryAdmission(f.options)).resolves.toBeUndefined();
+      if (kind === "terminal-legacy") {
+        expect(() => loadUpdateRecovery(record.runId, f.options)).toThrow(/legacy.*readiness/i);
+      } else {
+        expect(loadUpdateRecovery(record.runId, f.options)).toEqual(record);
+      }
+      expect(snapshot(f.root)).toEqual(before);
+      finishUpdateRun(f.run.runId, { status: "failed", reason: "interrupted" }, f.options);
+      expect(getUpdateRun(f.run.runId, f.options)).toMatchObject({
+        status: "failed",
+        reason: "interrupted",
+      });
+      const preview = createUpdateRun({ trigger: "cli" }, f.options);
+      finishInterruptedUpdatePreview(preview, f.options);
+      expect(getUpdateRun(preview.runId, f.options)?.status).toBe("skipped");
+      const next = createUpdateRun({ trigger: "cli" }, f.options);
+      finishUpdateRun(next.runId, { status: "succeeded" }, f.options);
+      expect(loadUpdateRecovery(next.runId, f.options)).toBeUndefined();
+      expect(captureCompletedUpdateRun(next.runId, () => {}, f.options)?.runId).toBe(next.runId);
+      expect(inspectUpdateRecoveries(f.options)[0]?.raw).toBe(raw);
+    },
+  );
 
-  it("keeps missing-state reads non-creating", () => {
+  it("keeps missing-state reads non-creating", async () => {
     const root = dirs.make("retained-empty-");
     const options = { env: { OPENCLAW_STATE_DIR: root } };
     expect(loadUpdateRecovery("missing-run", options)).toBeUndefined();
     expect(inspectUpdateRecoveries(options)).toEqual([]);
-    expect(() => assertNoPendingUpdateRecovery(options)).not.toThrow();
+    await expect(assertUpdateRecoveryAdmission(options)).resolves.toBeUndefined();
     expect(fs.readdirSync(root)).toEqual([]);
   });
   it("reads only the named recovery payload regardless of unrelated history", () => {
@@ -309,7 +319,6 @@ describe("retained recovery read-only compatibility", () => {
     const before = closedSnapshot(f);
     expect(loadUpdateRecovery(record.runId, f.options)).toEqual(record);
     expect(inspectUpdateRecoveries(f.options)).toEqual([{ format: "current", raw, record }]);
-    expect(() => assertNoPendingUpdateRecovery(f.options)).toThrow(UpdateRecoveryRequiredError);
     expect(snapshot(f.root)).toEqual(before);
   });
   it.each([
@@ -342,11 +351,7 @@ describe("retained recovery read-only compatibility", () => {
     }
     storeRetainedUpdateRecovery(record, f.options);
     const before = closedSnapshot(f);
-    if (scenario === "cleanup") {
-      expect(() => assertNoPendingUpdateRecovery(f.options)).not.toThrow();
-    } else {
-      expect(() => assertNoPendingUpdateRecovery(f.options)).toThrow(UpdateRecoveryRequiredError);
-    }
+    expect(isUpdateRecoveryPending(decode(record))).toBe(scenario !== "cleanup");
     expect(snapshot(f.root)).toEqual(before);
   });
   it.each(["version", "backup-path"] as const)("rejects invalid %s descriptors", (mismatch) => {
@@ -361,7 +366,6 @@ describe("retained recovery read-only compatibility", () => {
     const before = closedSnapshot(f);
     expect(() => loadUpdateRecovery(record.runId, f.options)).toThrow();
     expect(() => inspectUpdateRecoveries(f.options)).toThrow();
-    expect(() => assertNoPendingUpdateRecovery(f.options)).toThrow();
     expect(snapshot(f.root)).toEqual(before);
   });
   it.each([
@@ -534,7 +538,6 @@ it.each(["current", "legacy-serving"] as const)("inspects %s packages", (format)
       expect(() => loadUpdateRecovery(record.runId, f.options)).toThrow(/legacy.*readiness/i),
     );
   }
-  expect(() => assertNoPendingUpdateRecovery(f.options)).not.toThrow();
   expect(snapshot(f.root)).toEqual(before);
 });
 

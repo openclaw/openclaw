@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { listConversations } from "../config/sessions/conversation-registry.js";
 import {
@@ -11,6 +11,12 @@ import {
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  createDoctorHealthFlowContext,
+  createDoctorPrompterFixture,
+  decideDoctorContributionPending,
+} from "../flows/doctor-health-context.test-support.js";
+import { initialDoctorHealthContribution } from "../flows/doctor-health-contributions-selection.test-support.js";
 import { resolveDoctorContributionHealthChecks } from "../flows/doctor-health-contributions.js";
 import { runDoctorHealthRepairs } from "../flows/doctor-repair-flow.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
@@ -23,6 +29,7 @@ const CHECK_ID = "core/doctor/telegram-general-topic-conversations";
 describe("doctor Telegram General-topic conversation repair", () => {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     afterEach(async () => {
+      vi.unstubAllEnvs();
       for (const root of tempDirs.dirs) {
         await cleanupSessionStateForTest({ stateDir: path.join(root, "state"), rootPath: root });
       }
@@ -141,10 +148,28 @@ describe("doctor Telegram General-topic conversation repair", () => {
   it("canonicalizes a legacy-only current entry before later session writes", async () => {
     const { scope, write, expectCanonical } = session("-1002223334444", "legacy-only-session");
     await write("telegram:-1002223334444:topic:1");
+    const contribution = initialDoctorHealthContribution(
+      "doctor:telegram-general-topic-conversations",
+    );
+    // Core contributions read the process environment, as in a Doctor run.
+    vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", env.OPENCLAW_CONFIG_PATH);
+    const ctx = (shouldRepair: boolean) =>
+      createDoctorHealthFlowContext({
+        cfg,
+        env,
+        prompter: createDoctorPrompterFixture(shouldRepair),
+      });
+    const before = await listConversations(scope, { channel: "telegram" });
 
-    const repaired = await repair();
-    expect(repaired.remainingFindings).toEqual([]);
+    // Doctor's pending check reads the same detect the repair runs, without writing.
+    await expect(decideDoctorContributionPending(contribution, ctx(true))).resolves.toBe("work");
+    await expect(decideDoctorContributionPending(contribution, ctx(false))).resolves.toBe("none");
+    expect(await listConversations(scope, { channel: "telegram" })).toEqual(before);
+
+    await contribution.run(ctx(true));
     await expectCanonical();
+    await expect(decideDoctorContributionPending(contribution, ctx(true))).resolves.toBe("none");
 
     await patchSessionEntryCore(scope, () => ({ displayName: "harmless later write" }));
     await expectCanonical();

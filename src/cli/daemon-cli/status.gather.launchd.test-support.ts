@@ -2,7 +2,7 @@ import { expect, it } from "vitest";
 import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 
-export const staleUpdateLaunchdJobsFixture: StaleOpenClawUpdateLaunchdJob[] = [
+const staleUpdateLaunchdJobsFixture: StaleOpenClawUpdateLaunchdJob[] = [
   { label: "ai.openclaw.update.2026.5.12", lastExitStatus: 127 },
   { label: "ai.openclaw.manual-update.1717168800", lastExitStatus: 0 },
 ];

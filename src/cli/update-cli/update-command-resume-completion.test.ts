@@ -73,6 +73,14 @@ describe("update completion ownership", () => {
       vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
       const deferred = "Model retirement deferred until configured plugin installation converges.";
       const unrelated = "An unrelated Doctor advisory remains.";
+      // Retirement waits for plugin convergence only when it has a model reference to decide.
+      await state.writeConfig({
+        plugins: { enabled: false },
+        update: { channel: "stable" },
+        agents: {
+          defaults: { model: { primary: "ghost-provider/model-a", fallbacks: ["openai/gpt-5.5"] } },
+        },
+      });
       await writeScenario("repair", {
         runDoctorConfigFlow: true,
         doctorWarningsByInvocation: [[deferred, ...(otherAdvisory ? [unrelated] : [])], []],

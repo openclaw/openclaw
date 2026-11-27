@@ -30,7 +30,6 @@ import {
 } from "./warm-reload-browser-probe.ts";
 import { launchWarmReloadBrowser, calibrateWarmReloadPaintHolding } from "./warm-reload-browser.ts";
 import { prepareWarmReloadBuild, createWarmReloadComparison } from "./warm-reload-compare.ts";
-import { seedWarmReloadFixture } from "./warm-reload-fixture.ts";
 import { analyzeReloadFrames, type ReloadFrame } from "./warm-reload-frames.ts";
 import { createWarmReloadGatewayOwner, runWarmReloadCli } from "./warm-reload-lifecycle.ts";
 import { applyWarmReloadPaintAudit } from "./warm-reload-paint-audit.ts";
@@ -893,6 +892,7 @@ async function captureReload(
 }
 
 async function main(signal: AbortSignal) {
+  const { seedWarmReloadFixture } = await import("./warm-reload-fixture.ts");
   let gateway: ChildProcess | undefined;
   let gatewayOwner: Awaited<ReturnType<typeof createWarmReloadGatewayOwner>> | undefined;
   let browser: Browser | undefined;

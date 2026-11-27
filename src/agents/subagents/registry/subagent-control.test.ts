@@ -841,7 +841,7 @@ describe("controlled subagent cancellation races", () => {
     }
   });
 
-  it("does not abort or clear queues after the child session incarnation resets", async () => {
+  it("finishes the claimed original run after the child session incarnation resets", async () => {
     const {
       run: entry,
       storePath,
@@ -867,16 +867,16 @@ describe("controlled subagent cancellation races", () => {
     }, "after");
 
     await expect(controlledKill([entry], storePath)).resolves.toMatchObject({
-      status: "error",
-      error: "old session work: Subagent session changed while the kill was pending; retry.",
+      status: "ok",
+      killed: 1,
     });
 
-    expect(abort).not.toHaveBeenCalled();
-    expect(clearQueues).not.toHaveBeenCalled();
+    expect(abort).toHaveBeenCalledOnce();
+    expect(clearQueues).toHaveBeenCalledOnce();
     expect(await latestRun(childSessionKey)).toMatchObject({
       runId: entry.runId,
       killIntent: undefined,
-      execution: { status: "running" },
+      execution: { status: "terminal" },
     });
   });
 

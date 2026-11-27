@@ -12,7 +12,16 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { noteDoctorAgentMemorySchemaHealth } from "./doctor-agent-memory-schema.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import {
+  changedStoreFiles,
+  listSqliteSidecars,
+  snapshotStoreFiles,
+} from "../test-utils/store-snapshot.test-support.js";
+import {
+  checkDoctorAgentMemorySchemaPending,
+  noteDoctorAgentMemorySchemaHealth,
+} from "./doctor-agent-memory-schema.js";
 
 const tempDirs: string[] = [];
 
@@ -61,6 +70,49 @@ afterEach(() => {
   agentDatabase.closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   cleanupTempDirs(tempDirs);
+});
+
+/** A plain connection that holds a store's WAL sidecars, as a serving Gateway does. */
+function holdStore(pathname: string) {
+  const holder = sqlite.openNodeSqliteDatabase(pathname);
+  holder.prepare("SELECT count(*) FROM sqlite_schema").get();
+  return holder;
+}
+
+it("decides pending schema work only beside held stores, without writing", async () => {
+  const { databasePath, env } = createRegisteredAgentDatabase();
+  const root = env.OPENCLAW_STATE_DIR;
+  const statePath = resolveOpenClawStateSqlitePath(env);
+  const check = (shouldRepair = true) => checkDoctorAgentMemorySchemaPending({ env, shouldRepair });
+  recreateUnreleasedInlineMemoryMetadata(databasePath);
+  invalidateRegisteredAgentDatabasesMemo({ env });
+
+  // A stopped install: no connection holds either store, so opening one would create sidecars.
+  expect(listSqliteSidecars(root)).toEqual([]);
+  const stopped = snapshotStoreFiles(root);
+  expect(await check()).toBe("undecidable");
+  expect(changedStoreFiles(stopped, snapshotStoreFiles(root))).toEqual([]);
+
+  let holders = [holdStore(statePath), holdStore(databasePath)];
+  try {
+    const held = snapshotStoreFiles(root);
+    expect(await check()).toBe("work");
+    expect(await check(false)).toBe("none");
+    expect(changedStoreFiles(held, snapshotStoreFiles(root))).toEqual([]);
+  } finally {
+    holders.forEach((holder) => holder.close());
+  }
+  expect(readMemoryChunkColumns(databasePath)).toContain("importance");
+
+  const report = await repairMemory(env);
+  expect(report.repaired).toHaveLength(1);
+  expect(readMemoryChunkColumns(databasePath)).not.toContain("importance");
+  holders = [holdStore(statePath), holdStore(databasePath)];
+  try {
+    expect(await check()).toBe("none");
+  } finally {
+    holders.forEach((holder) => holder.close());
+  }
 });
 
 it("removes a stale clean-close seal before failed writable repair while inspection preserves it", async () => {
