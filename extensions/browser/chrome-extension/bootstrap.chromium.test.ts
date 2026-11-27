@@ -866,6 +866,8 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         chromium.executablePath(),
         [
           "--headless=new",
+          // CI runs as root in a container, where Chromium refuses its sandbox.
+          "--no-sandbox",
           "--no-first-run",
           "--no-default-browser-check",
           "--password-store=basic",
@@ -889,7 +891,10 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         },
         { timeout: 15_000 },
       );
-      const context = required(browser, "Chromium did not start").contexts()[0];
+      const context = required(
+        browser?.contexts()[0],
+        "Chromium did not expose its default context",
+      );
       const extensionDir = path.dirname(fileURLToPath(import.meta.url));
       await loadUnpackedExtension(context, extensionDir);
       const extensionPage = await context.newPage();
