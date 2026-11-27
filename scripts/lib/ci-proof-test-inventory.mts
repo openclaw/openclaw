@@ -2418,6 +2418,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/gateway/github-publication-deferred-profile.test.ts",
   "src/gateway/github-publication-personal-pending.test.ts",
   "src/gateway/github-publication-requester-aliases.test.ts",
+  "src/gateway/github-publication-requester.local-owner.test.ts",
   "src/gateway/github-publication-requester.test.ts",
   "src/gateway/github-publication-session-access.test.ts",
   "src/gateway/github-publication-sqlite.test.ts",

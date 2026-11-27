@@ -384,6 +384,7 @@ const runtimeConsumers = [
     "src/gateway/gateway-ssh-upload-signal.test.ts",
     "src/gateway/github-publication-draft.test.ts",
     "src/gateway/github-publication-requester-aliases.test.ts",
+    "src/gateway/github-publication-requester.local-owner.test.ts",
     "src/gateway/github-publication-requester.test.ts",
   ].map((file) => ({
     file,
