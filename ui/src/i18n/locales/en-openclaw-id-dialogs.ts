@@ -110,8 +110,9 @@ const enOpenClawIdDialogs = {
     step_reserve: "Setting up {host}",
     step_relay: "Connecting {name}",
     stepRelayOffline: "Remote access is not connected yet. This claw will keep trying.",
-    stepProfileNotLinked:
-      "Your OpenClaw ID isn't linked to your profile yet. To link it, open Remote access, choose Invite someone, enter your OpenClaw ID's email and pick your profile under Existing person on this claw. Then approve the request in People.",
+    stepProfileNotLinked: "Your OpenClaw ID isn't linked to your profile yet.",
+    stepProfileLinkSteps:
+      "Your OpenClaw ID isn't linked to your profile yet. To link it, open Remote access, choose Invite someone, enter your OpenClaw ID's email and pick your profile under Existing person on this claw. Set Role to the role you have now, then choose Create invite link and approve the request in People.",
     profileLinkSignIn:
       "Your OpenClaw ID isn't linked to your profile yet. Sign in again to check the link.",
     linkProfile: "Check your link",

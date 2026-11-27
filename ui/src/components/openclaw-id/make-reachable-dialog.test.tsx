@@ -235,13 +235,13 @@ describe("Make reachable over a personal sign-in", () => {
     {
       linkProfile: true,
       profileLink: "not_admin",
-      expected: "pick your profile under Existing person on this claw",
+      expected: "Your OpenClaw ID isn't linked to your profile yet.",
       canLink: false,
     },
     {
       linkProfile: true,
       profileLink: "link_approval_required",
-      expected: "Then approve the request in People.",
+      expected: "Set Role to the role you have now",
       canLink: false,
     },
     {
@@ -274,6 +274,10 @@ describe("Make reachable over a personal sign-in", () => {
       expect(pin()).toBe("done");
       if (expected) {
         expect(notice()?.textContent).toContain(expected);
+        // Only an unapproved account gets the self-invite steps; other outcomes stay neutral.
+        expect(notice()?.textContent?.includes("Invite someone")).toBe(
+          profileLink === "link_approval_required",
+        );
       } else {
         expect(notice()).toBeNull();
       }
@@ -290,7 +294,7 @@ describe("Make reachable over a personal sign-in", () => {
   it.each([
     { outcome: "linked", expected: null },
     { outcome: "linked_elsewhere", expected: "already linked to another profile" },
-    { outcome: "link_approval_required", expected: "Then approve the request in People." },
+    { outcome: "link_approval_required", expected: "Set Role to the role you have now" },
     { outcome: null, expected: "Sign in again to check the link" },
   ])(
     "checks the link with a fresh sign-in after sign_in_not_held (outcome $outcome)",

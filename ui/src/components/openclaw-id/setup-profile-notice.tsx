@@ -35,8 +35,9 @@ export function profileNotice(outcome: string | null): ProfileNotice | null {
     case "linked_elsewhere":
       return { message: t("profilePage.openclawId.linkedElsewhere"), canLink: false };
     // The admin who just ran setup reads this, so it says what they do, not who does it.
+    // Approval assigns the invite's role, so the steps ask for their current one.
     case "link_approval_required":
-      return { message: t("openclawId.stepProfileNotLinked"), canLink: false };
+      return { message: t("openclawId.stepProfileLinkSteps"), canLink: false };
     case "profile_linked":
       return { message: t("profilePage.openclawId.profileLinked"), canLink: false };
     default:
