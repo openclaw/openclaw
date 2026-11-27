@@ -251,7 +251,9 @@ export async function captureSessionEventTargetForHost(
       deliver === undefined &&
       isSubagentEnvelopeSession(sessionKey, { cfg, entry }) &&
       !isVisibleSpawnedSession(sessionKey, { cfg, entry }) &&
-      (await listSessionBindingsBySessionAsync(sessionKey)).length === 0;
+      !(await listSessionBindingsBySessionAsync(sessionKey)).some(
+        (binding) => binding.status === "active",
+      );
     assertCaptureCurrent();
     const target: SessionEventTarget = {
       agentId,
