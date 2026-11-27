@@ -1,12 +1,11 @@
 import { deepStrictEqual } from "node:assert/strict";
 import { describe, expect, it } from "vitest";
-import { projectOpenAITools } from "./openai-tool-projection.js";
 import { normalizeOpenAIStrictCompatSchema } from "./openai-tool-schema-compat.js";
 import {
   findOpenAIStrictSchemaViolations,
   isStrictOpenAIJsonSchemaCompatible,
   normalizeStrictOpenAIJsonSchema,
-  resolveOpenAIProjectedToolsStrictToolFlag,
+  resolveOpenAIToolStrictFlag,
 } from "./openai-tool-schema.js";
 
 function objectSchema(properties: Record<string, unknown> = {}) {
@@ -79,8 +78,7 @@ describe("OpenAI strict tool schema normalization", () => {
     };
 
     expect(violations(schema)).toEqual([]);
-    const projection = projectOpenAITools([{ name: "lookup", parameters: schema }]);
-    expect(resolveOpenAIProjectedToolsStrictToolFlag(projection, true)).toBe(true);
+    expect(resolveOpenAIToolStrictFlag(schema, true)).toBe(true);
   });
 
   it("walks legacy and content schema applicators", () => {
@@ -101,5 +99,48 @@ describe("OpenAI strict tool schema normalization", () => {
 
   it.each(["^[a-z]+$", "\\(?=a"])("accepts non-lookaround pattern %s", (pattern) => {
     expect(findOpenAIStrictSchemaViolations({ type: "string", pattern }, "value")).toEqual([]);
+  });
+
+  // OpenAI rejected dispatch_action with "additionalProperties must be false" at args/type/0.
+  it("holds a nullable object key to the object rules", () => {
+    const schema = {
+      type: "object",
+      additionalProperties: false,
+      required: ["args"],
+      properties: { args: { type: ["object", "null"], patternProperties: { "^.*$": {} } } },
+    };
+    expect(findOpenAIStrictSchemaViolations(schema, "parameters")).toContain(
+      "parameters.properties.args.additionalProperties",
+    );
+  });
+
+  // Strict is decided per tool on the schema as written; optional keys are never projected.
+  it("keeps a tool with optional keys non-strict and its schema unchanged", () => {
+    const schema = {
+      type: "object",
+      properties: { path: { type: "string" }, limit: { type: "number" } },
+      required: ["path"],
+      additionalProperties: false,
+    };
+    expect(resolveOpenAIToolStrictFlag(schema, true)).toBe(false);
+    expect(resolveOpenAIToolStrictFlag(objectSchema({ path: { type: "string" } }), true)).toBe(
+      true,
+    );
+  });
+
+  // Strict normalization would close an open root and drop the extra arguments it allows.
+  it("keeps a tool with an open root non-strict", () => {
+    const open = { type: "object", properties: { q: { type: "string" } }, required: ["q"] };
+    expect(resolveOpenAIToolStrictFlag(open, true)).toBe(false);
+    expect(resolveOpenAIToolStrictFlag({ ...open, additionalProperties: false }, true)).toBe(true);
+  });
+
+  // A union branch without a type is valid JSON Schema but outside strict mode's subset.
+  it("keeps a closed tool with a union key non-strict, but accepts a nullable type list", () => {
+    const union = objectSchema({ mode: { anyOf: [{ enum: ["auto"] }, { type: "integer" }] } });
+    expect(resolveOpenAIToolStrictFlag(union, true)).toBe(false);
+    expect(resolveOpenAIToolStrictFlag(objectSchema({ value: {} }), true)).toBe(false);
+    const nullable = objectSchema({ limit: { type: ["integer", "null"] } });
+    expect(resolveOpenAIToolStrictFlag(nullable, true)).toBe(true);
   });
 });

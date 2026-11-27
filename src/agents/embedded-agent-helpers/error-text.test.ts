@@ -33,7 +33,7 @@ describe("formatAssistantErrorText streaming JSON parse classification", () => {
     [
       "HTTP 503 temporary failure",
       "openclaw_repetitive_output",
-      "Repetitive output stopped. Try a larger model or shorten your request before retrying.",
+      "Repetitive output stopped. Shorten or rephrase your request before retrying.",
     ],
     ["request timed out", undefined, "LLM request timed out."],
     ["LLM request timed out.", undefined, "LLM request timed out."],

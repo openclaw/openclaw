@@ -10,6 +10,7 @@ import type {
 import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
 import type { AgentCommandOutputEventFields } from "../infra/agent-activity-events.js";
 import type { AgentApprovalEventData } from "../infra/agent-events.types.js";
+import type { RestartResumeNotice } from "../infra/agent-run-registry.types.js";
 import type { OutboundPayloadPlan } from "../infra/outbound/reply-payload-parts.js";
 import type { ImageContent } from "../llm/types.js";
 import type { MediaFact } from "../media/media-facts.js";
@@ -223,6 +224,7 @@ export type GetReplyOptions = {
   media?: MediaFact[];
   /** Return "reply-dispatch" synchronously to accept the offered completion ownership. */
   onPreparedAgentRunStart?: (start: PreparedAgentRunStart) => unknown;
+  onRestartResumeSaved?: RestartResumeNotice;
   /**
    * @deprecated Use onPreparedAgentRunStart with a prepared transcript boundary. Supported through 2026-12-31. Removal in the first January 2027 stable release.
    * Notifies when an agent run starts. Return "reply-dispatch" synchronously to accept
