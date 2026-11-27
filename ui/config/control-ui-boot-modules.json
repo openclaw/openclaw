@@ -1,5 +1,6 @@
 {
  "shared": [
+  "__vite-browser-external",
   "node_modules/@noble/ed25519/index.js",
   "node_modules/@noble/hashes/_md.js",
   "node_modules/@noble/hashes/_u64.js",
@@ -147,6 +148,9 @@
   "packages/markdown-core/src/reasoning-tags-batch.ts",
   "packages/markdown-core/src/reasoning-tags.ts",
   "packages/media-core/src/base64.ts",
+  "packages/media-core/src/constants.ts",
+  "packages/media-core/src/file-name.ts",
+  "packages/media-core/src/mime.ts",
   "packages/model-catalog-core/src/model-catalog-refs.ts",
   "packages/model-catalog-core/src/provider-id.ts",
   "packages/model-catalog-core/src/provider-model-id-normalize.ts",
@@ -1248,7 +1252,6 @@
   "ui/src/styles/new-session.css"
  ],
  "chat": [
-  "__vite-browser-external",
   "node_modules/@tanstack/virtual-core/dist/esm/index.js",
   "node_modules/@tanstack/virtual-core/dist/esm/lazy-measurements.js",
   "node_modules/@tanstack/virtual-core/dist/esm/utils.js",
@@ -1303,9 +1306,6 @@
   "packages/markdown-core/src/assistant-transcript.ts",
   "packages/markdown-core/src/html-tags.ts",
   "packages/markdown-core/src/ir-metadata.ts",
-  "packages/media-core/src/constants.ts",
-  "packages/media-core/src/file-name.ts",
-  "packages/media-core/src/mime.ts",
   "packages/net-policy/src/ip.ts",
   "src/agents/agent-activity-presentation.ts",
   "src/agents/core-tool-facts.ts",
