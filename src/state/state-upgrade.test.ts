@@ -9,6 +9,11 @@ import { noteSessionTranscriptHealth } from "../commands/doctor-session-transcri
 import { bindFreshClientCredentialStore } from "../infra/client-credential-migration.js";
 import { openClientCredentialCustody } from "../infra/client-credential-store.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
+import {
+  OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
+  OUTBOUND_DELIVERY_QUEUE_NAME,
+} from "../infra/outbound/delivery-queue-namespaces.js";
+import { createUnmodifiedPreparedOutboundBatch } from "../infra/outbound/prepared-batch.js";
 import { quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { autoMigrateLegacyState } from "../infra/state-migrations.doctor.js";
@@ -250,11 +255,59 @@ describe("canonical in-place migration", () => {
         runSqliteImmediateTransactionSync(state, () =>
           bindFreshClientCredentialStore(state, { env, path: statePath }),
         );
+        if (!trial) {
+          const delivery = {
+            id: "retained-delivery",
+            enqueuedAt: 1,
+            retryCount: 0,
+            attemptCount: 0,
+            channel: "matrix",
+            to: "!room:example",
+            preparedBatch: createUnmodifiedPreparedOutboundBatch([{ text: "Retained delivery" }]),
+          };
+          state
+            .prepare(
+              "INSERT INTO delivery_queue_entries (queue_name, id, status, channel, target, entry_json, enqueued_at, updated_at) VALUES (?, ?, 'pending', ?, ?, ?, 1, 1)",
+            )
+            .run(
+              OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
+              delivery.id,
+              delivery.channel,
+              delivery.to,
+              JSON.stringify(delivery),
+            );
+        }
         using agent = new DatabaseSync(agentPath);
         agent.exec(getOpenClawAgentMigrationSchema(43));
         agent.exec(`PRAGMA user_version = 43;
           INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
             VALUES ('primary', 'agent', 43, 'main', 1, 1);`);
+      }
+      const dashboardKey = "agent:main:dashboard:retained";
+      if (!trial) {
+        using agent = new DatabaseSync(agentPath);
+        agent
+          .prepare(
+            "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, 1)",
+          )
+          .run(
+            dashboardKey,
+            "orchid",
+            JSON.stringify({
+              sessionId: "orchid",
+              updatedAt: 1,
+              createdVia: "operator",
+              parentSessionKey: "agent:main:main",
+            }),
+          );
+        const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
+        fs.mkdirSync(sessionsDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(sessionsDir, "sessions.json"),
+          JSON.stringify({
+            "agent:main:archive": { sessionId: "archive", label: "Retained archive", updatedAt: 1 },
+          }),
+        );
       }
       const stateIdentity = fs.statSync(statePath);
       const agentIdentity = fs.statSync(agentPath);
@@ -339,6 +392,30 @@ describe("canonical in-place migration", () => {
           `UPDATE config_machine_state SET value_json = '"allowlist"' WHERE state_key = 'plugins.bundledDiscovery'`,
         );
         using agent = new DatabaseSync(agentPath);
+        if (!trial) {
+          expect(
+            state
+              .prepare(
+                "SELECT queue_name, status, json_extract(entry_json, '$.preparedBatch.entries[0].payload.text') AS text FROM delivery_queue_entries WHERE id = ?",
+              )
+              .all("retained-delivery"),
+          ).toEqual([
+            {
+              queue_name: OUTBOUND_DELIVERY_QUEUE_NAME,
+              status: "pending",
+              text: "Retained delivery",
+            },
+          ]);
+          const entry = agent.prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?");
+          expect(JSON.parse(String(entry.get(dashboardKey)?.entry_json))).toHaveProperty(
+            "chatType",
+            "direct",
+          );
+          expect(JSON.parse(String(entry.get("agent:main:archive")?.entry_json))).toHaveProperty(
+            "label",
+            "Retained archive",
+          );
+        }
         expect(agent.prepare("PRAGMA user_version").get()).toEqual({
           user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
         });
