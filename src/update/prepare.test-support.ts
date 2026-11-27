@@ -37,7 +37,7 @@ beforeEach(async () => {
   for (const key of ["container", "DOCKER_CONTAINER", "OPENCLAW_CONTAINER", "IN_NIX_SHELL"]) {
     vi.stubEnv(key, "");
   }
-  // Every update reclaims earlier updaters' runtimes; keep that scan inside this fixture.
+  // Lease coordination stays inside this fixture, away from other local updates.
   const tmp = path.join(root, "tmp");
   await fs.mkdir(tmp);
   for (const key of ["TMPDIR", "TMP", "TEMP"]) {

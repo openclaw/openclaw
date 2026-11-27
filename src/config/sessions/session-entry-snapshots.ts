@@ -12,6 +12,7 @@ import {
   sessionEntrySnapshotColumnsDefinition as snapshotColumns,
   type SessionEntryProjection,
 } from "./session-entry-snapshot-values.js";
+import type { SessionEntrySnapshotRow } from "./session-entry-storage.types.js";
 import type { SessionEntry } from "./types.js";
 
 export type SessionEntrySnapshot = {
@@ -50,27 +51,42 @@ export const sessionEntrySnapshotColumns = sessionEntrySnapshotColumnsForKeys();
 
 export function splitSessionEntrySnapshots(
   entry: SessionEntry | Record<string, unknown>,
-  mode: "complete" | { previousEntry: SessionEntry | undefined } = "complete",
+  mode:
+    | "complete"
+    | {
+        previousEntry: SessionEntry | undefined;
+        previousRow?: SessionEntrySnapshotRow;
+      } = "complete",
 ): {
   entryJson: string;
   snapshots: SessionEntrySnapshot[];
+  snapshotUpserts: SessionEntrySnapshot[];
   snapshotsChanged: boolean;
   snapshotsRemoved: boolean;
 } {
   const { sessionDiffBaseline, skillsSnapshot, systemPromptReport, ...hot } = entry;
   const values = { sessionDiffBaseline, skillsSnapshot, systemPromptReport };
+  const previous = mode === "complete" ? undefined : mode;
   const snapshotsChanged =
-    mode === "complete" ||
+    !previous ||
     snapshotColumns.some(
       ([field]) =>
-        values[field] !== mode.previousEntry?.[field] &&
-        !isDeepStrictEqual(values[field], mode.previousEntry?.[field]),
+        values[field] !== previous.previousEntry?.[field] &&
+        !isDeepStrictEqual(values[field], previous.previousEntry?.[field]),
     );
   const snapshots: SessionEntrySnapshot[] = [];
-  for (const [field] of snapshotsChanged ? snapshotColumns : []) {
+  const snapshotUpserts: SessionEntrySnapshot[] = [];
+  for (const [field, alias] of snapshotsChanged ? snapshotColumns : []) {
     const valueJson = JSON.stringify(values[field]);
     if (valueJson !== undefined) {
-      snapshots.push({ field, valueJson });
+      // Publication and removals need every field. The database only needs bytes
+      // that differ from this transaction’s canonical side-table row.
+      const stored = previous?.previousRow?.[alias];
+      const snapshot = { field, valueJson };
+      snapshots.push(snapshot);
+      if (valueJson !== stored) {
+        snapshotUpserts.push(snapshot);
+      }
     }
   }
   const snapshotsRemoved =
@@ -81,7 +97,13 @@ export function splitSessionEntrySnapshots(
           mode.previousEntry?.[field] !== undefined &&
           !snapshots.some((snapshot) => snapshot.field === field),
       ));
-  return { entryJson: JSON.stringify(hot), snapshots, snapshotsChanged, snapshotsRemoved };
+  return {
+    entryJson: JSON.stringify(hot),
+    snapshots,
+    snapshotUpserts,
+    snapshotsChanged,
+    snapshotsRemoved,
+  };
 }
 
 export function buildSessionEntrySnapshotUpsert(
@@ -104,7 +126,10 @@ export function writeSessionEntrySnapshots(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionKey: string,
   snapshots: readonly SessionEntrySnapshot[],
-  { snapshotsRemoved = true }: { snapshotsRemoved?: boolean } = {},
+  {
+    snapshotsRemoved = true,
+    snapshotUpserts = snapshots,
+  }: { snapshotsRemoved?: boolean; snapshotUpserts?: readonly SessionEntrySnapshot[] } = {},
 ): void {
   if (!database.db.isTransaction) {
     throw new Error("Session snapshot writes require an entry transaction");
@@ -125,12 +150,12 @@ export function writeSessionEntrySnapshots(
         ),
     );
   }
-  if (snapshots.length > 0) {
+  if (snapshotUpserts.length > 0) {
     executeSqliteQuerySync(
       database.db,
       buildSessionEntrySnapshotUpsert(
         database.db,
-        snapshots.map((snapshot) => ({
+        snapshotUpserts.map((snapshot) => ({
           session_key: sessionKey,
           field: snapshot.field,
           value_json: snapshot.valueJson,

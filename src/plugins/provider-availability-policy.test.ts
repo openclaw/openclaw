@@ -6,8 +6,6 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import { withPluginMetadataSnapshotScope } from "./current-plugin-metadata-snapshot.js";
-import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
-import { createIndex } from "./manifest-registry-installed.test-helpers.js";
 import { loadPluginManifest } from "./manifest.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import {
@@ -64,14 +62,13 @@ it.each([false, "true"])("rejects non-enabled availability declaration %s", (val
   expect(loaded.ok && loaded.manifest.managesOwnAvailability).toBeUndefined();
 });
 
-it("uses cold third-party metadata and the same pinned runtime generation without executing the plugin", async () => {
+it("uses cold third-party metadata and the same pinned runtime generation without executing the plugin", () => {
   const stateDir = tempDirs.make("openclaw-provider-availability-");
   const pluginDir = path.join(stateDir, "extensions", "installed");
   writeArtifacts(pluginDir, {
     "index.js": "throw new Error('provider runtime must remain cold');",
   });
   writeManifest(pluginDir, true);
-  await writePersistedInstalledPluginIndex(createIndex(pluginDir), { stateDir });
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   vi.stubEnv("OPENCLAW_HOME", undefined);
   vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");

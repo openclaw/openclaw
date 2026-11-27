@@ -644,6 +644,66 @@ syncBuiltinESMExports();
     ).toBe(target);
   });
 
+  it.each([true, false])(
+    "fetches legacy closing PRs only when missing (already recorded: %s)",
+    (recorded) => {
+      const notes = [
+        ...createReleaseNotesFixtureLines(),
+        "### Complete contribution record",
+        "#### Pull requests",
+        ...(recorded ? ["- **PR #21** Thanks @writer."] : []),
+        "#### Linked issues",
+        "- #20",
+      ].join("\n");
+      const { cwd, base } = seedRepository("openclaw-release-notes-legacy-lookup-", "main", notes);
+      splitChangelog({ rootDir: cwd });
+      const issue = {
+        __typename: "Issue",
+        number: 20,
+        title: "Playback issue",
+        author: { __typename: "User", login: "reporter" },
+        closedByPullRequestsReferences: { nodes: [{ number: 21 }] },
+      };
+      const pr = {
+        __typename: "PullRequest",
+        number: 21,
+        title: "fix: playback",
+        author: { __typename: "User", login: "writer" },
+        mergedAt: "2020-01-01T00:00:00Z",
+        mergeCommit: { oid: base },
+        closingIssuesReferences: { nodes: [{ number: 20 }] },
+      };
+      const gh = join(cwd, "gh");
+      writeFileSync(
+        gh,
+        `#!${process.execPath}
+const query = process.argv.find((arg) => arg.startsWith("query="));
+const aliases = [...query.matchAll(/(n\\d+): repository/g)].map((match) => match[1]).sort();
+require("node:fs").appendFileSync("reference-requests", aliases.join(",") + "\\n");
+const nodes = ${JSON.stringify({ n20: issue, n21: pr })};
+const data = Object.fromEntries(aliases.map((alias) => [alias, { issueOrPullRequest: nodes[alias] }]));
+console.log(JSON.stringify({ data }));
+`,
+      );
+      chmodSync(gh, 0o755);
+      const manifestPath = join(cwd, "manifest.json");
+      const result = runVerifier(cwd, {
+        base,
+        target: base,
+        manifest: manifestPath,
+        extraArgs: ["--seed-ref", base, "--no-github-snapshot"],
+        env: { PATH: `${cwd}:${process.env.PATH}` },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(readFileSync(join(cwd, "reference-requests"), "utf8").trim().split("\n")).toEqual(
+        recorded ? ["n20,n21"] : ["n20", "n20,n21"],
+      );
+      expect(JSON.parse(readFileSync(manifestPath, "utf8")).pullRequests).toMatchObject([
+        { number: 21, thanks: ["writer", "reporter"] },
+      ]);
+    },
+  );
+
   it("reports deleted contextual references without rendering or crediting them", () => {
     const { cwd, base } = seedRepository("openclaw-release-notes-deleted-ref-", "main");
     git(cwd, [
@@ -1121,28 +1181,6 @@ process.exitCode = errors.length ? 1 : 0;
       expect(readFileSync(filePath, "utf8")).toBe(bytes);
     },
   );
-
-  it("sorts and deduplicates unavailable contextual references", () => {
-    const hash = "b".repeat(40);
-    expect(
-      classifyUnavailableContextualReferences({
-        unresolved: [155121, 155120, 155119],
-        notFound: new Set([155120, 155121]),
-        activeCommits: [
-          { hash, subject: "fix: source", body: "#155121 #155121 #155120" },
-          { hash: "a".repeat(40), subject: "fix: follow-up", body: "#155121" },
-        ],
-        protectedReferences: new Set(),
-        highestResolved: 156166,
-      }),
-    ).toEqual({
-      unavailable: [
-        { number: 155120, commits: ["bbbbbbbbbbbb"] },
-        { number: 155121, commits: ["aaaaaaaaaaaa", "bbbbbbbbbbbb"] },
-      ],
-      stillUnresolved: [155119],
-    });
-  });
 
   it.each([
     { subject: "fix: implementation (#155121)" },

@@ -9,7 +9,6 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import * as providerPolicy from "../plugins/provider-policy-surface.js";
 import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { isSmallModel } from "../shared/model-param-b.js";
 import { makeModel } from "./embedded-agent-runner/model.test-harness.js";
 import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
 import {
@@ -104,7 +103,6 @@ it.each([undefined, 4_000_000_000])(
       const matchesConfiguredRoute = baseUrl === capturedRoute.baseUrl;
       expect(projected.parameterCount).toBe(matchesConfiguredRoute ? 4_000_000_000 : undefined);
       expect(runtimeEntry.parameterCount).toBe(projected.parameterCount);
-      expect(isSmallModel(runtimeEntry)).toBe(matchesConfiguredRoute);
     }
   },
 );

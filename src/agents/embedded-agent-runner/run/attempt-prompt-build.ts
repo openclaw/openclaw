@@ -20,18 +20,14 @@ import {
   buildAgentInternalEventContext,
   resolveInternalEventPromptBody,
 } from "../../internal-events.js";
-import {
-  projectRuntimeContextFragments,
-  type RuntimeContextFragment,
-} from "../../internal-runtime-context.js";
+import type { RuntimeContextFragment } from "../../internal-runtime-context.js";
 import { buildRuntimeFactsContext } from "../../runtime-facts-prompt.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import { wrapUntrustedPromptDataBlock } from "../../sanitize-for-prompt.js";
 import type { AgentSession, SessionManager } from "../../sessions/index.js";
 import {
   appendModelIdentitySystemPrompt,
   buildModelIdentityPromptLine,
-} from "../../system-prompt.js";
+} from "../../system-prompt-model-identity.js";
 import { log } from "../logger.js";
 import { normalizeAssistantReplayContent } from "../replay-history.js";
 import {
@@ -60,6 +56,7 @@ import {
 } from "./attempt-prompt-helpers.js";
 import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-support.js";
 import { composeSystemPromptWithHookContext } from "./attempt-thread-helpers.js";
+import { buildMcpDiagnosticPromptFragments } from "./mcp-diagnostic-prompt.js";
 import {
   buildRuntimeContextCustomMessage,
   buildSystemUpdateMessage,
@@ -390,6 +387,8 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
   appendOnlyRuntimeContext?: boolean;
   executionHost?: boolean;
   inHistorySystemUpdates?: boolean;
+  /** The route drops turn-scoped system updates after the next user message. */
+  clearsTurnScopedSystemUpdates?: boolean;
   attempt: PromptContextAttempt;
   capabilityToolNames: ReadonlySet<string>;
   boundaryTimezone?: string;
@@ -467,14 +466,7 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
     ...buildAgentInternalEventContext(attempt.internalEvents),
     ...(attempt.runtimeContextFragments ?? []),
     ...(input.systemPromptRuntimeContextFragments ?? []),
-    ...(input.mcpDiagnostics ?? []).map((diagnostic): RuntimeContextFragment => ({
-      kind: "conversation-data",
-      text: wrapUntrustedPromptDataBlock({
-        label: "MCP server availability",
-        text: `MCP server ${diagnostic.serverName} unavailable: ${diagnostic.message}. Check server reachability or retry on a later turn.`,
-        maxChars: 2_000,
-      }),
-    })),
+    ...buildMcpDiagnosticPromptFragments(input.mcpDiagnostics ?? []),
     ...(input.prompt.originContext
       ? escapedProjection
         ? input.prompt.originContext.fragments
@@ -519,7 +511,21 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
           sessionTarget: attempt.sessionTarget,
           runId: attempt.runId,
           agentId: input.sessionAgentId,
-          includeEmptySnapshots: input.appendOnlyRuntimeContext === true,
+          // Diff base: earlier carriers this request sends. Routes that do not retain
+          // carriers send none; routes that clear turn-scoped updates drop those.
+          sentHistory: input.appendOnlyRuntimeContext
+            ? sessionMessages.filter(
+                (message) =>
+                  !input.clearsTurnScopedSystemUpdates ||
+                  !(
+                    "details" in message &&
+                    typeof message.details === "object" &&
+                    message.details !== null &&
+                    "turnScoped" in message.details &&
+                    message.details.turnScoped === true
+                  ),
+              )
+            : [],
         });
   // A dispatched user's projection is frozen. Fresh fallback hooks belong to
   // the continuation context, never a second copy of the user or their images.
@@ -535,12 +541,11 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
   const runtimeContextMessageForCurrentTurn =
     isDispatchedCanonicalFallback && runtimeContextForHook
       ? buildSystemUpdateMessage(
-          escapedProjection || input.inHistorySystemUpdates
-            ? projectRuntimeContextFragments(contextFragments)
-            : runtimeContextForHook,
+          runtimeContextForHook,
           "runtime-context",
           true,
           "append",
+          escapedProjection || input.inHistorySystemUpdates ? contextFragments : undefined,
         )
       : buildRuntimeContextCustomMessage(
           runtimeContextForHook,

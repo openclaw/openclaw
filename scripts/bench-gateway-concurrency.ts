@@ -46,7 +46,7 @@ import { asFiniteNumber } from "../packages/normalization-core/src/number-coerci
 import { isRecord } from "../packages/normalization-core/src/record-coerce.ts";
 import { sliceUtf16Safe } from "../packages/normalization-core/src/utf16-slice.ts";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
-import type { createAgentTurnService } from "../src/gateway/agent-turn/agent-turn-service.js";
+import type { prepareExactAgentTurnWait } from "../src/gateway/agent-turn/agent-wait.js";
 import type { SessionsListResult } from "../src/gateway/session-utils.types.js";
 import { createDeferredCore } from "../src/shared/deferred.ts";
 import { applyMockOpenAiModelConfig } from "./e2e/lib/fixtures/mock-openai-config.mjs";
@@ -1646,7 +1646,7 @@ async function runTurn(
   const rpcTimeoutMs = Math.max(1, Math.ceil(remaining));
   const runId = started.runId ?? requestedRunId;
   const completed = await rpc<
-    Awaited<ReturnType<ReturnType<typeof createAgentTurnService>["waitForTurn"]>>["result"]
+    Awaited<ReturnType<ReturnType<typeof prepareExactAgentTurnWait>["wait"]>>["result"]
   >(
     "agent.wait",
     {

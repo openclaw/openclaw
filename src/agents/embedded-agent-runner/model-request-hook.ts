@@ -1,8 +1,10 @@
 import { isResponsesCompactRequest } from "@openclaw/ai/internal/openai";
+import { sanitizeSurrogates } from "@openclaw/ai/internal/shared";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import type { PluginHookModelRequestKind } from "../../plugins/hook-model.types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookAgentContext } from "../../plugins/hook-types.js";
+import { getRuntimeContextDataRanges } from "../runtime-context-data-ranges.js";
 import type { StreamFn } from "../runtime/index.js";
 import { wrapStreamFnWithProviderPromptState } from "./provider-prompt-state.js";
 import { buildEmbeddedAgentHookContext } from "./run/agent-hook-context.js";
@@ -40,6 +42,35 @@ function readProtectedFields(payload: unknown): string {
   return JSON.stringify(fields);
 }
 
+/** Preserve the producer's ranges through provider text sanitization. */
+function collectContextSpans(messages: Context["messages"]) {
+  return messages.flatMap((message) => {
+    if (message.role !== "user" || typeof message.content !== "string") {
+      return [];
+    }
+    const { content } = message;
+    const ranges = getRuntimeContextDataRanges(message);
+    if (!ranges?.length) {
+      return [];
+    }
+    const containerText = sanitizeSurrogates(content);
+    return ranges.flatMap(({ start, end }) => {
+      if (start >= end || end > content.length) {
+        return [];
+      }
+      return [
+        containerText === content
+          ? { containerText, start, end }
+          : {
+              containerText,
+              start: sanitizeSurrogates(content.slice(0, start)).length,
+              end: sanitizeSurrogates(content.slice(0, end)).length,
+            },
+      ];
+    });
+  });
+}
+
 /** Policy sees final provider bytes and a detached copy of host message provenance. */
 function createModelRequestTransformer(
   hookContext: PluginHookAgentContext,
@@ -57,6 +88,7 @@ function createModelRequestTransformer(
     }
     // Snapshot before dispatch: handlers receive the payload by reference and may mutate it.
     const admitted = readProtectedFields(payload);
+    const contextSpans = collectContextSpans(context.messages);
     const result = await hooks.runBeforeModelRequest(
       {
         runtime: "embedded",
@@ -65,6 +97,7 @@ function createModelRequestTransformer(
         provider: model.provider,
         model: model.id,
         messages: structuredClone(context.messages),
+        ...(contextSpans.length ? { contextSpans } : {}),
       },
       hookContext,
     );

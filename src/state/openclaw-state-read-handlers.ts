@@ -253,24 +253,6 @@ export async function prepareOpenClawStateRead(
       run: readInterruptedUpdateCandidate(db),
     });
   }
-  if (command.type === "updateRuns.pluginCohortRecoveries") {
-    const { runSqliteReadSnapshotSync } = await import("../infra/sqlite-transaction.js");
-    const { inspectPluginCohortRecoveryRows } =
-      await import("../infra/update-run-recovery-store.js");
-    return (db: EngineConnection) => ({
-      type: command.type,
-      pairs: runSqliteReadSnapshotSync(db, () => inspectPluginCohortRecoveryRows(db)),
-    });
-  }
-  if (command.type === "updateRuns.pluginSnapshotCollection") {
-    const { runSqliteReadSnapshotSync } = await import("../infra/sqlite-transaction.js");
-    const { canCollectPluginSourceSnapshotsInDatabase } =
-      await import("../infra/update-run-recovery-store.js");
-    return (db: EngineConnection) => ({
-      type: command.type,
-      allowed: runSqliteReadSnapshotSync(db, () => canCollectPluginSourceSnapshotsInDatabase(db)),
-    });
-  }
   if (command.type === "exec-approvals.read") {
     const { readExecApprovalsConfigRow } = await import("../infra/exec-approvals-sqlite.js");
     return (db: EngineConnection) => ({

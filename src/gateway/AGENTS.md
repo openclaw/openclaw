@@ -28,10 +28,22 @@
 - Bind target before first side effect. Never redirect failed writes across accounts, profiles, Gateways, sessions; report/reconcile original target.
 - Timeouts may follow accepted writes: owner's idempotency/outcome reconciliation before retry. Existing transport/failover contracts (including model-call auth-profile failover) never authorize redirecting unrelated user-bound writes.
 
+## Operator Admission
+
+Detail for the root rule [decide authority once](../../AGENTS.md#decide-authority-once).
+
+- `decideOperatorAdmission` (`operator-admission.ts`) decides once per turn or request from prepared owners and committed config. `decideTurnGrant` is the only producer of `TurnGrant` (`owner`, `automations`, `skillAuthoring`, `questionReplace`, `commands`; type in `src/agents/admitted-run-operator-authority.types.ts`).
+- Queued, retried, replayed and continuation turns (exec wake, restart resume, tool handoff, cron) re-enter admission from their recorded source. Turn kind and provenance never widen or narrow the grant (#206665).
+- Consumers read the grant (`grant.owner`), never `senderIsOwner` producers, `ownerAllowFrom`, socket scopes or turn kind. Owner-only tools rely on the turn tool gate (`resolveTurnToolSurface` → `gateAgentToolExecution`); tools add no local owner refusal.
+- Run and turn-claim liveness checks are fences, not authority. Multi-phase admission and mid-run "no longer active" refusals fall under the root ban. Stop on access loss: a permission writer whose committed write lowers or removes a named person's access (`session.members.remove`, `session.members.setAccess`, `users.setRole`) calls `stopWorkStartedBy` (`chat-abort-stop-work.ts`), which selects work by the recorded requester and never reads authority (lint). Config reloads and role policy edits apply to the next request.
+- Refusals: `operatorRefusalText` or `OperatorRefusalError` with a cause from `operator-refusal.ts`. A new cause goes in that table with one next step; never inline refusal text.
+- New permission: add the fact to admission and the field in `decideTurnGrant`, then a cell per entry kind in `operator-admission.table.test.ts` (continuations: `owed-exec-requester.test.ts`). Same principal, same grant by every entry.
+- Lint: `openclaw-boundaries/no-operator-permission-read` (live permission reads, run-authority minting, access re-checks; per-file counts) and `no-turn-authority-derivation` (`scripts/lib/`). Their lists only shrink: fix a finding by reading the grant, never by adding a file or raising a count.
+
 ## Run Authority And Worker Upgrades
 
 - Run liveness: `src/infra/agent-run-registry.ts`; worker-turn liveness: `src/gateway/worker-environments/placement-turn-claims.ts`.
-- Compose live-authority checks in one synchronous pre-commit guard.
+- Compose liveness fences (run, turn claim) in one synchronous pre-commit guard; they never re-read authority.
 - Sessionless runs: retain prepared admission authority without session projection; canonical reservation owns deduplication. Source-specific RPC waits end only on that source's replay publication, never lifecycle completion/another source. Cancellation targets captured controller source ownership.
 - Worker launch/recovery/reclaim/RPC: exact live placement, environment, owner epoch, placement generation, turn claim required.
 - Incompatible execution-context dialects: Reject/reprovision; never legacy payloads, local downgrade, or revived pre-restart claims.

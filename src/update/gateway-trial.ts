@@ -5,15 +5,17 @@ import type { UpdateRunStep } from "../infra/update-run-record.js";
 import { updateRunStepsFromResultStep } from "../infra/update-run-step.js";
 import {
   finishUpdateRunAsync,
-  recordUpdateRunPhaseAsync,
   recordUpdateRunStepAsync,
   recordUpdateRunVerificationAsync,
 } from "../infra/update-run-write.async.js";
 import { redactSensitiveText } from "../logging/redact.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
+import type { LegacyTrial } from "./legacy-trial-record.js";
 import {
+  collectReleases,
   readTrial,
   readUpdateLock,
   releaseUpdateLock,
@@ -22,8 +24,12 @@ import {
   type Trial,
 } from "./store.js";
 
+const log = createSubsystemLogger("gateway/update-run");
+
 /** The committed core keeps serving while its own code updates and reloads installed plugins. */
-async function maintainTrialPlugins(trial: Trial): Promise<{ nextAction?: string } | undefined> {
+async function maintainTrialPlugins(
+  trial: Pick<Trial, "runId" | "acceptCapabilities">,
+): Promise<void> {
   let pluginIds: string[] = [];
   let step: UpdateRunStep | undefined;
   try {
@@ -72,19 +78,24 @@ async function maintainTrialPlugins(trial: Trial): Promise<{ nextAction?: string
       }
       // The child released its lease; the batch owner verifies its exact published install hashes.
       const application = await reload(targets);
-      if (application.restartRequired || application.warnings?.length) {
+      if (application.restartRequired) {
         throw new Error(
           application.warnings?.join("\n") || "Gateway restart required to load edited code.",
+        );
+      }
+      if (application.warnings?.length) {
+        step.detail = redactSensitiveText(
+          [step.detail, ...application.warnings].filter(Boolean).join("\n"),
+          { mode: "tools" },
         );
       }
     }
     getAsyncWorkSignal()?.throwIfAborted();
     step.endedAtMs = Date.now();
     await recordUpdateRunStepAsync(trial.runId, step);
-    return result;
   } catch (error) {
     if (getAsyncWorkSignal()?.aborted) {
-      return undefined;
+      return;
     }
     const nextAction =
       pluginIds.length > 0
@@ -104,7 +115,72 @@ async function maintainTrialPlugins(trial: Trial): Promise<{ nextAction?: string
       detail,
     };
     await recordUpdateRunStepAsync(trial.runId, step);
-    return { nextAction };
+  }
+}
+
+async function runPostUpdateInspections(runId: string): Promise<void> {
+  const step = "post-activation doctor inspections";
+  try {
+    const [{ runPostActivationInspections }, { resolvePostActivationInspectionCheckIds }] =
+      await Promise.all([
+        import("../cli/update-cli/update-command-post-activation-inspections.js"),
+        import("../flows/doctor-health-contributions.js"),
+      ]);
+    const root = await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url });
+    if (!root) {
+      throw new Error("Running release root not found");
+    }
+    const result = await runPostActivationInspections({
+      root,
+      gatewayReady: true,
+      checkIds: await resolvePostActivationInspectionCheckIds(),
+      timeoutMs: 120_000,
+      result: { status: "ok", mode: "unknown", steps: [], durationMs: 0 },
+    });
+    getAsyncWorkSignal()?.throwIfAborted();
+    for (const projected of result.steps.flatMap(updateRunStepsFromResultStep)) {
+      await recordUpdateRunStepAsync(runId, projected);
+    }
+    if (result.steps.length === 0) {
+      await recordUpdateRunStepAsync(runId, { step, status: "completed" });
+    }
+  } catch (error) {
+    if (getAsyncWorkSignal()?.aborted) {
+      return;
+    }
+    // Advisory inspections cannot change the settled aggregate result.
+    const detail = redactSensitiveText(
+      `Doctor inspections did not run after the update (${String(error)}). Run \`openclaw doctor --lint --all\` to check this install.`,
+      { mode: "tools" },
+    ).slice(0, 2000);
+    await recordUpdateRunStepAsync(runId, { step, status: "completed", detail });
+    await recordUpdateRunStepAsync(runId, {
+      step: `warning:${step}`,
+      status: "completed",
+      detail,
+    });
+  }
+}
+
+function schedulePostUpdateMaintenance(trial: Pick<Trial, "runId" | "acceptCapabilities">): void {
+  // Advisory work never holds the committed trial handshake open; the watcher logs its failures.
+  const accepted = wakeUpdateRunWatcher(trial.runId, () =>
+    withCommandProcessScope(async () => {
+      try {
+        await maintainTrialPlugins(trial);
+      } catch (error) {
+        log.warn(`update run ${trial.runId} plugin result could not be recorded: ${String(error)}`);
+      }
+      if (getAsyncWorkSignal()?.aborted) {
+        return;
+      }
+      await runPostUpdateInspections(trial.runId);
+    }, getAsyncWorkSignal()),
+  );
+  if (!accepted) {
+    log.warn(
+      `update run ${trial.runId} post-update maintenance skipped: no Gateway update watcher`,
+    );
   }
 }
 
@@ -124,10 +200,9 @@ if (process.env.OPENCLAW_LAUNCHER_IPC === "1") {
   process.channel?.unref();
 }
 
-export async function settleRunFromTrial(
-  trial: Trial | null,
-  prefix = resolvePrefix(),
-): Promise<void> {
+async function settleRunFromTrial(trial: Trial | null, prefix = resolvePrefix()): Promise<void> {
+  // Ready releases prune by owned path; stale updater records do not gate preparation.
+  void collectReleases(prefix).catch(() => undefined);
   if (
     trial?.outcome &&
     trial.runId &&
@@ -147,12 +222,6 @@ export async function settleRunFromTrial(
     const preparationLock = await readUpdateLock(prefix);
     if (preparationLock?.dead) {
       await releaseUpdateLock(prefix);
-    }
-    if (outcome.status === "succeeded") {
-      await recordUpdateRunPhaseAsync(trial.runId, "verifying", {
-        after: { version: VERSION, ...(buildId ? { buildId } : {}) },
-        step: { step: "plugins", status: "in_progress", startedAtMs: Date.now() },
-      });
     }
     await recordUpdateRunVerificationAsync(trial.runId, {
       runningVersion: VERSION,
@@ -178,94 +247,23 @@ export async function settleRunFromTrial(
         stderrTail,
       });
     }
-    const finish = async (nextAction?: string) => {
-      const finished = await finishUpdateRunAsync(
-        trial.runId,
-        outcome.status === "succeeded"
-          ? {
-              status: "succeeded",
-              after: { version: VERSION, buildId },
-              ...(nextAction ? { nextAction } : {}),
-            }
-          : {
-              status: "failed",
-              reason: `${outcome.reason ?? "The new version did not start"}; v${VERSION} is still running`,
-            },
-      );
-      if (
-        finished.steps.some((step) => step.step === "notice:ack" && step.status === "completed")
-      ) {
-        const { createUpdateRunNotifier } = await import("../gateway/update-run-notice.runtime.js");
-        await (
-          await createUpdateRunNotifier(finished)
-        )(finished, "finished");
-      }
-    };
+    const finished = await finishUpdateRunAsync(
+      trial.runId,
+      outcome.status === "succeeded"
+        ? { status: "succeeded", after: { version: VERSION, buildId } }
+        : {
+            status: "failed",
+            reason: `${outcome.reason ?? "The new version did not start"}; v${VERSION} is still running`,
+          },
+    );
     if (outcome.status === "succeeded") {
-      // The launcher committed already; only the aggregate result waits for required plugins.
-      const accepted = wakeUpdateRunWatcher(trial.runId, () =>
-        withCommandProcessScope(async () => {
-          const step = "post-activation doctor inspections";
-          const plugins = await maintainTrialPlugins(trial);
-          if (getAsyncWorkSignal()?.aborted || !plugins) {
-            return;
-          }
-          await finish(plugins.nextAction);
-          try {
-            const [{ runPostActivationInspections }, { resolvePostActivationInspectionCheckIds }] =
-              await Promise.all([
-                import("../cli/update-cli/update-command-post-activation-inspections.js"),
-                import("../flows/doctor-health-contributions.js"),
-              ]);
-            const root = await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url });
-            if (!root) {
-              throw new Error("Running release root not found");
-            }
-            const result = await runPostActivationInspections({
-              root,
-              gatewayReady: true,
-              checkIds: await resolvePostActivationInspectionCheckIds(),
-              timeoutMs: 120_000,
-              result: { status: "ok", mode: "unknown", steps: [], durationMs: 0 },
-            });
-            getAsyncWorkSignal()?.throwIfAborted();
-            for (const projected of result.steps.flatMap(updateRunStepsFromResultStep)) {
-              await recordUpdateRunStepAsync(trial.runId, projected);
-            }
-            if (result.steps.length === 0) {
-              await recordUpdateRunStepAsync(trial.runId, { step, status: "completed" });
-            }
-          } catch (error) {
-            if (getAsyncWorkSignal()?.aborted) {
-              return;
-            }
-            // Advisory inspections cannot change the settled aggregate result.
-            const detail = redactSensitiveText(
-              `Doctor inspections did not run after the update (${String(error)}). Run \`openclaw doctor --lint --all\` to check this install.`,
-              { mode: "tools" },
-            ).slice(0, 2000);
-            await recordUpdateRunStepAsync(trial.runId, { step, status: "completed", detail });
-            await recordUpdateRunStepAsync(trial.runId, {
-              step: `warning:${step}`,
-              status: "completed",
-              detail,
-            });
-          }
-        }, getAsyncWorkSignal()),
-      );
-      if (!accepted) {
-        const nextAction = "openclaw plugins update --all";
-        const step: UpdateRunStep = {
-          step: "plugins",
-          status: "failed",
-          endedAtMs: Date.now(),
-          detail: `Plugin activation did not run because the Gateway update watcher is unavailable. Run \`${nextAction}\`.`,
-        };
-        await recordUpdateRunStepAsync(trial.runId, step);
-        await finish(nextAction);
-      }
-    } else {
-      await finish();
+      schedulePostUpdateMaintenance(trial);
+    }
+    if (finished.steps.some((step) => step.step === "notice:ack" && step.status === "completed")) {
+      const { createUpdateRunNotifier } = await import("../gateway/update-run-notice.runtime.js");
+      await (
+        await createUpdateRunNotifier(finished)
+      )(finished, "finished");
     }
     return;
   }
@@ -289,6 +287,20 @@ export async function settleRunFromTrial(
   }
 }
 
+/** Separately retire the legacy rollback trial at core readiness. */
+export async function observeLegacyTrialReadiness(
+  buildId: string | null,
+  runningRoot: string | null,
+  captured?: LegacyTrial,
+): Promise<(() => Promise<boolean>) | undefined> {
+  const { disarmLegacyTrial, recoverLegacyTrialRun } = await import("./legacy-trial.js");
+  const receipt = await disarmLegacyTrial(runningRoot, buildId, captured);
+  return (
+    receipt &&
+    (() => recoverLegacyTrialRun(receipt, (runId) => schedulePostUpdateMaintenance({ runId })))
+  );
+}
+
 /** Called after the listener is serving, including the old release after a rollback. */
 export async function announceReady(buildId: string | null): Promise<void> {
   if (process.env.OPENCLAW_LAUNCHER_IPC !== "1" || !process.send || !process.connected) {
@@ -307,8 +319,9 @@ export async function announceReady(buildId: string | null): Promise<void> {
       resolve(message.trial as Trial | null);
     }
   };
+  const onDisconnect = () => resolve(null);
   process.on("message", onMessage);
-  const timer = setTimeout(() => resolve(null), 2000);
+  process.once("disconnect", onDisconnect);
   try {
     process.send({ type: "openclaw.ready", buildId }, (error) => {
       if (error) {
@@ -318,7 +331,7 @@ export async function announceReady(buildId: string | null): Promise<void> {
     const confirmed = await promise;
     await settleRunFromTrial(confirmed ?? (await readTrial()));
   } finally {
-    clearTimeout(timer);
     process.off("message", onMessage);
+    process.off("disconnect", onDisconnect);
   }
 }

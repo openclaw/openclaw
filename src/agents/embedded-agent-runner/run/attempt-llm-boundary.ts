@@ -10,7 +10,6 @@ import {
   RUNTIME_CONTEXT_BEGIN_MARKER,
   RUNTIME_CONTEXT_END_MARKER,
   type ImageContent,
-  type UserMessage,
 } from "../../../llm/types.js";
 import { INTER_SESSION_PROMPT_PREFIX_BASE } from "../../../sessions/input-provenance.js";
 import { hasPersistedMedia, MEDIA_ONLY_USER_TEXT } from "../../../sessions/user-turn-media.js";
@@ -22,10 +21,8 @@ import {
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 import { memoizeFrozenPlainDataProjection } from "../../../shared/immutable-data.js";
 import { isTextContentBlock } from "../../content-blocks.js";
-import { PROJECTED_PROMPT_UPDATE } from "../../embedded-agent-helpers/turns.js";
 import {
   escapeInternalRuntimeContextDelimiters,
-  isOpenClawSystemUpdateMessage,
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
   projectRuntimeContextFragments,
   resolveRuntimeContextPromptOwner,
@@ -47,6 +44,7 @@ import {
 import type { LlmBoundaryOptions, UserTranscriptContext } from "./attempt-llm-boundary.types.js";
 import {
   materializeSteeringRuntimeContext,
+  projectSystemUpdateMessage,
   type RuntimeContextCustomMessage,
 } from "./runtime-context-prompt.js";
 
@@ -59,10 +57,6 @@ const runtimeContextDetailsSchema = z.object({
       text: z.string(),
     }),
   ),
-});
-const systemUpdateDetailsSchema = z.object({
-  kind: z.enum(["prompt-update", "runtime-context"]),
-  turnScoped: z.boolean(),
 });
 
 /** A session keeps its model projection across replay and process restarts. */
@@ -80,30 +74,9 @@ export function usesEscapedRuntimeContext(sessionVersion?: number): boolean {
 const runtimeContextProjections = [false, true].map((escape) =>
   [false, true].map((inHistorySystemUpdates) =>
     memoizeFrozenPlainDataProjection((message: AgentMessage): AgentMessage => {
-      if (message.role === "custom" && isOpenClawSystemUpdateMessage(message)) {
-        const details = systemUpdateDetailsSchema.safeParse(message.details);
-        if (details.success) {
-          // Keep runtime semantics when this route cannot project operator messages.
-          if (!inHistorySystemUpdates && details.data.kind === "runtime-context") {
-            return {
-              ...message,
-              customType: OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
-              details: { source: "openclaw-runtime-context", runtimeContextCarrier: true },
-            };
-          }
-          const projected: UserMessage & { [PROJECTED_PROMPT_UPDATE]?: true } = {
-            role: "user",
-            content: message.content,
-            timestamp: message.timestamp,
-          };
-          if (inHistorySystemUpdates) {
-            projected.operatorMessage = { turnScoped: details.data.turnScoped };
-          } else {
-            // A symbol key never reaches provider JSON or the transcript.
-            projected[PROJECTED_PROMPT_UPDATE] = true;
-          }
-          return projected;
-        }
+      const systemUpdate = projectSystemUpdateMessage(message, inHistorySystemUpdates);
+      if (systemUpdate) {
+        return systemUpdate;
       }
       if (!escape || (message.role === "user" && message.operatorMessage)) {
         return message;

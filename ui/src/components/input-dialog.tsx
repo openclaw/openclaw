@@ -9,6 +9,7 @@ import {
 } from "solid-js";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { formatUiError, UserFacingError } from "../lib/format-error.ts";
+import { clearCompositionEnd, isComposingKeyboardEvent, recordCompositionEnd } from "../lib/ime.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { withPromiseModalHost } from "./promise-modal-host.ts";
@@ -155,6 +156,16 @@ function renderInputDialog(
     >
       <form
         class="oc-dialog input-dialog"
+        onCompositionEnd={recordCompositionEnd}
+        onFocusOut={clearCompositionEnd}
+        onKeyUp={clearCompositionEnd}
+        onKeyDown={(event) => {
+          // Implicit Enter submission runs before onSubmit, so a composing Enter must
+          // be cancelled at the key to keep the draft.
+          if (event.key === "Enter" && isComposingKeyboardEvent(event)) {
+            event.preventDefault();
+          }
+        }}
         onSubmit={(event) => {
           // The outcome slot observes rejection; consume it even if the modal retires.
           void submit(event).catch(() => undefined);

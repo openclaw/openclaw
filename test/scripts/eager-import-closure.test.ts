@@ -112,6 +112,15 @@ it("keeps packaged scripts closed over runtime imports", () => {
   ).toEqual([]);
 });
 
+it("keeps update lease payload schemas out of Gateway ownership checks", () => {
+  const files = collectRuntimeImportClosure(process.cwd(), [
+    "src/infra/gateway-state-owner-heartbeat.runtime.ts",
+    "src/infra/state-lease-process-owner.ts",
+  ]);
+  expect(files).toContain("src/infra/update-managed-service-handoff-boot-schema.ts");
+  expect(files).not.toContain("src/infra/update-managed-service-handoff-schema.ts");
+});
+
 it("keeps the PR wrapper inventory closed over runtime imports", () => {
   const components = readFileSync(wrapperInventory, "utf8").trim().split("\n");
   const stale = components.filter((file) => !existsSync(file)).toSorted();

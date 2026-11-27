@@ -338,7 +338,7 @@ describe("collapseCompletedTurnWork", () => {
           [mcpAppCanvasBlock("completed-turn", "visualization")],
           2_000,
         ),
-        openAIMessage("Checking the details.", 2_500),
+        openAIMessage("Checking the details.", 2_500, { phase: "commentary" }),
         toolResult("call-1", 3_000),
         openAIMessage("All done.", 4_000),
       ],

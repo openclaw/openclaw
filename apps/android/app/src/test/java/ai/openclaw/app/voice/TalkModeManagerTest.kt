@@ -6,6 +6,7 @@ import ai.openclaw.app.SecurePrefs
 import ai.openclaw.app.VoiceCaptureMode
 import ai.openclaw.app.closeNodeRuntimeTestFixture
 import ai.openclaw.app.gateway.DeviceAuthStore
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayClientInfo
 import ai.openclaw.app.gateway.GatewayConnectOptions
 import ai.openclaw.app.gateway.GatewayEndpoint
@@ -122,7 +123,7 @@ class TalkModeManagerTest {
           requestedLanguages += language
           if (requestedLanguages.size == 1) {
             throw GatewayRequestRejected(
-              GatewaySession.ErrorShape(
+              ErrorShape(
                 code = "INVALID_REQUEST",
                 message = "invalid talk.session.create params at root",
               ),
@@ -145,7 +146,7 @@ class TalkModeManagerTest {
           requestPhoneRealtimeSessionWithLanguageFallback("de") {
             attempts += 1
             throw GatewayRequestRejected(
-              GatewaySession.ErrorShape(
+              ErrorShape(
                 code = "INVALID_REQUEST",
                 message = "invalid talk.session.appendAudio params",
               ),

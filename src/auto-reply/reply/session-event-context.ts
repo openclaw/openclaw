@@ -36,7 +36,6 @@ import {
   readSessionEventTargetCommandOwner,
   readSessionEventTargetEnvironment,
   readSessionEventTargetOperatorAuthority,
-  readSessionEventTargetOwnerContinuation,
   readSessionEventTargetScheduledRequester,
   resolveSessionEventKey,
 } from "./session-event-target.js";
@@ -316,12 +315,9 @@ export function buildSessionEventContext(params: {
           senderId: scheduled.requester.requester.senderId,
         }
       : undefined;
-  if (
-    operatorAuthority?.grant.owner &&
-    (automation || options.source === "restart" || readSessionEventTargetOwnerContinuation(target))
-  ) {
-    // Exec completion and tool handoff continue the originating turn's owner decision
-    // without authorizing the internal event text as a command.
+  if (operatorAuthority?.grant.owner) {
+    // The admitted grant is the turn's owner decision for every entry kind (restart, exec
+    // wake, tool handoff, scheduler turn); the internal event text stays unauthorized as a command.
     bindCommandOwnerAuthority(ctx, {
       operatorAuthority,
       isCurrent: () => {

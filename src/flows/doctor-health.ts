@@ -339,12 +339,12 @@ async function runDoctorHealthFlowWithResult(
       }
 
       if (maintenance && (options.repair === true || options.yes === true)) {
-        await tracePending("state-database-repair");
+        const stateIntegrityCheck = options.fullIntegrityCheck ? "full" : "quick";
+        await tracePending("state-database-repair", () =>
+          startup.checkDoctorStateDatabaseRepairPending(stateIntegrityCheck),
+        );
         const repairedState = await measure("doctor.state-database-repair", () =>
-          startup.repairDoctorStateDatabase(
-            effectiveRuntime,
-            options.fullIntegrityCheck ? "full" : "quick",
-          ),
+          startup.repairDoctorStateDatabase(effectiveRuntime, stateIntegrityCheck),
         );
         if (repairedState) {
           schemas = await measure("doctor.database-preflight", () =>
@@ -353,15 +353,18 @@ async function runDoctorHealthFlowWithResult(
         }
       }
       if (maintenance) {
-        const { prepareDoctorMigrationBackups } =
+        const { checkDoctorDatabaseMigrationsPending, prepareDoctorMigrationBackups } =
           await import("../commands/doctor-heartbeat-migration-backup.js");
-        await tracePending("database-migrations");
+        const automaticRepair = Boolean(automaticHeartbeatRepair);
+        await tracePending("database-migrations", () =>
+          checkDoctorDatabaseMigrationsPending({ schemas, env: process.env, automaticRepair }),
+        );
         await prepareDoctorMigrationBackups({
           schemas,
           env: process.env,
           check: options.fullIntegrityCheck ? "full" : "quick",
           verifiedSnapshots,
-          automaticRepair: Boolean(automaticHeartbeatRepair),
+          automaticRepair,
           runtime: effectiveRuntime,
           measure,
         });
@@ -375,7 +378,9 @@ async function runDoctorHealthFlowWithResult(
           options.fullIntegrityCheck ? "full" : "quick",
         ),
       );
-      await tracePending("runtime-checks");
+      await tracePending("runtime-checks", () =>
+        startup.checkDoctorRuntimeChecksPending(schemas, root, prompter),
+      );
       const preparedRuntime = await startup.prepareDoctorRuntimeChecks(
         schemas,
         root,
@@ -445,6 +450,10 @@ async function runDoctorHealthFlowWithResult(
         configPath: configResult.path ?? CONFIG_PATH,
         stateDirExistedAtStart,
         gatewayMaintenanceActive: maintenance !== undefined,
+        // Doctor restores the Gateway it stopped; an updater owns its own stop and restart.
+        ...(maintenance && !repairMode.updateInProgress && !writeAuthority
+          ? { afterRestartContributions: [] }
+          : {}),
         agentDatabaseRefusals,
         updateWarnings: normalizeUpdatePostInstallDoctorWarnings([
           ...(startupFindings.updateWarnings ?? []),
@@ -461,6 +470,12 @@ async function runDoctorHealthFlowWithResult(
       healthContext = ctx;
       const { runDoctorHealthContributions } = await import("./doctor-health-contributions.js");
       await measure("doctor.contributions", () => runDoctorHealthContributions(ctx));
+      if (startup.isDoctorRepairRefused(ctx)) {
+        // The refusal summary below closes Doctor's report; complete it first.
+        await (
+          await import("./doctor-health-contributions.js")
+        ).runDoctorAfterRestartContributions(ctx);
+      }
       if (recordRepairRefusal(ctx)) {
         return undefined;
       }
@@ -518,19 +533,25 @@ async function runDoctorHealthFlowWithResult(
       const activeMaintenance = maintenance;
       if (activeMaintenance) {
         const completed = ctx;
-        await measure("doctor.maintenance.finish", () =>
-          activeMaintenance.finish(
-            completed?.cfg,
-            completed
-              ? async (nextConfig) => {
-                  const { writeDoctorGatewayConfig } =
-                    await import("./doctor-health-contribution-runners.gateway.js");
-                  return writeDoctorGatewayConfig(completed, nextConfig);
-                }
-              : undefined,
-            failure,
-          ),
-        );
+        const { finishDoctorMaintenanceThenDiagnose } =
+          await import("./doctor-health-maintenance-steps.js");
+        await finishDoctorMaintenanceThenDiagnose({
+          ctx: healthContext,
+          measure,
+          failed: failure !== undefined,
+          finish: () =>
+            activeMaintenance.finish(
+              completed?.cfg,
+              completed
+                ? async (nextConfig) => {
+                    const { writeDoctorGatewayConfig } =
+                      await import("./doctor-health-contribution-runners.gateway.js");
+                    return writeDoctorGatewayConfig(completed, nextConfig);
+                  }
+                : undefined,
+              failure,
+            ),
+        });
       }
     }
     if (!ctx) {

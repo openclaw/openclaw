@@ -75,23 +75,30 @@ export function readHostFreeMemoryBytes(): number {
   return available > 0 ? available : os.freemem();
 }
 
+let pressureCgroup: { membership: string; view: ReturnType<typeof readCgroupV2View> } | undefined;
+
 /** Defer optional background work before consuming the last 20% of process or host capacity. */
 export function isMemoryPressureHigh(): boolean {
-  const limit = process.constrainedMemory();
-  if (
-    Number.isSafeInteger(limit) &&
-    limit > 0 &&
-    readProcessAvailableMemoryBytes() <= limit * 0.2
-  ) {
-    return true;
+  const linuxNode = process.platform === "linux" && !process.versions.bun;
+  const membership = linuxNode ? readCgroupV2Membership() : undefined;
+  // A live move via cgroup.procs changes the leaf and its ancestors.
+  if (membership && pressureCgroup?.membership !== membership) {
+    pressureCgroup = { membership, view: readCgroupV2View(membership) };
   }
-  // Node/Linux reports reclaimable host memory even without a process limit.
-  // Other runtimes retain their process-limit policy; unknown host readings do not defer work.
-  if (process.platform !== "linux" || process.versions.bun) {
+  const view = membership ? pressureCgroup?.view : undefined;
+  const delegated = view?.delegated ? readDelegatedMemory(view) : undefined;
+  const limit = delegated ? delegated.limitBytes : process.constrainedMemory();
+  if (Number.isSafeInteger(limit) && limit > 0) {
+    const available = delegated ? delegated.availableBytes : readProcessAvailableMemoryBytes();
+    if (available !== undefined && available <= limit * 0.2) {
+      return true;
+    }
+  }
+  if (!linuxNode) {
     return false;
   }
   const free = readHostFreeMemoryBytes();
-  return (free > 0 && free <= os.totalmem() * 0.2) || isCgroupV2AncestorPressured();
+  return (free > 0 && free <= os.totalmem() * 0.2) || isCgroupV2AncestorPressured(view);
 }
 
 const CGROUP_V2_MOUNT = "/sys/fs/cgroup";
@@ -115,9 +122,10 @@ function directoriesToMount(start: string): string[] {
 }
 
 /** Map namespace-relative membership through the visible cgroup2 mount before reading any limits. */
-function readCgroupV2View() {
-  const membership = process.platform === "linux" ? readCgroupV2Membership() : undefined;
-  if (!membership || membership.split("/").includes("..")) {
+function readCgroupV2View(
+  membership = process.platform === "linux" ? readCgroupV2Membership() : undefined,
+) {
+  if (!membership) {
     return undefined;
   }
   const overmounts = new Set<string>();
@@ -127,8 +135,17 @@ function readCgroupV2View() {
   } catch {
     // Restricted procfs still permits the historical hard-limit read. Optional
     // work needs a verified ancestor charge before it can use this view.
+    if (membership.split("/").includes("..")) {
+      return undefined;
+    }
     const leaf = path.resolve(CGROUP_V2_MOUNT, `.${membership}`);
-    return { leaf, directories: directoriesToMount(leaf), overmounts, verified: false };
+    return {
+      leaf,
+      directories: directoriesToMount(leaf),
+      overmounts,
+      verified: false,
+      delegated: false,
+    };
   }
   const views = [
     ...mountinfo.matchAll(
@@ -154,8 +171,10 @@ function readCgroupV2View() {
     return undefined;
   }
   const relative = path.relative(controller.root, membership);
-  if (relative.split("/")[0] === "..") {
-    return undefined;
+  const delegated = controller.root !== "/";
+  if (membership.split("/").includes("..") || relative.split("/")[0] === "..") {
+    // A delegated mount is identifiable even when this membership lies outside it.
+    return { leaf: undefined, directories: [], overmounts, verified: true, delegated };
   }
   const leaf = path.join(CGROUP_V2_MOUNT, relative);
   const directories = directoriesToMount(leaf);
@@ -194,6 +213,7 @@ function readCgroupV2View() {
     ),
     overmounts,
     verified: true,
+    delegated,
   };
 }
 
@@ -221,6 +241,83 @@ function readCgroupV2Number(
 ): number | undefined {
   const value = readCgroupV2File(directory, file, overmounts)?.trim();
   return value !== undefined && /^\d+$/u.test(value) ? Number(value) : undefined;
+}
+
+// libuv 1.52.1 began including the two soft rlimits in constrainedMemory(), but not in
+// availableMemory(). Read them independently: the native combined result may belong to a decoy.
+function readLibuvMemoryRlimit() {
+  const [major = 0, minor = 0, patch = 0] = process.versions.uv.split(".").map(Number);
+  let limit = Infinity;
+  if (major < 1 || (major === 1 && (minor < 52 || (minor === 52 && patch < 1)))) {
+    return limit;
+  }
+  try {
+    const limits = readFileSync("/proc/self/limits", "utf8");
+    for (const match of limits.matchAll(/^Max (?:address space|data size)\s+(\d+)\s+/gmu)) {
+      const soft = Number(match[1]);
+      if (Number.isSafeInteger(soft) && soft > 0) {
+        limit = Math.min(limit, soft);
+      }
+    }
+  } catch {
+    // Restricted procfs cannot establish a process-specific soft limit.
+  }
+  return limit;
+}
+
+function readDelegatedCgroupMemory(view: ReturnType<typeof readCgroupV2View>) {
+  const leaf =
+    view?.verified && view.leaf && view.directories.includes(view.leaf) ? view.leaf : undefined;
+  const high = leaf && readCgroupV2File(leaf, "memory.high", view?.overmounts)?.trim();
+  const max = leaf && readCgroupV2File(leaf, "memory.max", view?.overmounts)?.trim();
+  const limits = [high, max].map((value) =>
+    value === "max" ? Infinity : value && /^\d+$/u.test(value) ? Number(value) : undefined,
+  );
+  const limitBytes = Math.min(...limits.map((limit) => limit ?? Infinity));
+  let availableBytes: number | undefined;
+  // Node counts raw charges, including file cache. An obscured counter gives no
+  // remaining allowance; never substitute the unstripped path or a sibling here.
+  if (leaf && limits.every((limit) => limit !== undefined) && limitBytes > 0) {
+    if (limitBytes > os.totalmem()) {
+      availableBytes = os.freemem();
+    } else {
+      const current = readCgroupV2Number(leaf, "memory.current", view?.overmounts);
+      if (current !== undefined) {
+        availableBytes = Math.max(0, limitBytes - current);
+      }
+    }
+  }
+  return { limitBytes: limitBytes || Infinity, availableBytes };
+}
+
+function readDelegatedMemory(view: ReturnType<typeof readCgroupV2View>) {
+  const { limitBytes, availableBytes } = readDelegatedCgroupMemory(view);
+  return { limitBytes: Math.min(limitBytes, readLibuvMemoryRlimit()), availableBytes };
+}
+
+function startsInDelegatedNodeCgroup() {
+  return process.platform === "linux" && !process.versions.bun && readCgroupV2View()?.delegated;
+}
+
+/** Ordinary schedulers keep the native read. Delegated schedulers recheck membership and masks. */
+export function captureServiceAvailableMemoryReader(): () => number | undefined {
+  if (!startsInDelegatedNodeCgroup()) {
+    return () => process.availableMemory();
+  }
+  return () => {
+    const view = readCgroupV2View();
+    return view?.verified && !view.delegated
+      ? process.availableMemory()
+      : readDelegatedCgroupMemory(view).availableBytes;
+  };
+}
+
+/** Ordinary startup mounts keep the native tick. Delegated ticks recheck membership and masks. */
+export function captureDelegatedMemoryPressureReader() {
+  if (startsInDelegatedNodeCgroup()) {
+    return () => readDelegatedMemory(readCgroupV2View());
+  }
+  return undefined;
 }
 
 /** Read cgroup-v2 limits through visible ancestors, including a namespaced mount root. */
@@ -263,10 +360,9 @@ export function captureCgroupV2WorkingSetReader(): (() => number | undefined) | 
   };
 }
 
-// Node's native check covers the leaf. Sibling usage belongs to each shared ancestor,
+// The process pressure reader covers the leaf. Sibling usage belongs to each shared ancestor,
 // so compare its own charge with its own reclaim or hard limit.
-function isCgroupV2AncestorPressured(): boolean {
-  const view = readCgroupV2View();
+function isCgroupV2AncestorPressured(view: ReturnType<typeof readCgroupV2View>): boolean {
   if (!view?.verified) {
     return false;
   }

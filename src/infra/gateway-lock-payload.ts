@@ -1,17 +1,22 @@
 import fs from "node:fs";
 import os from "node:os";
+import { sql } from "kysely";
 import { z } from "zod";
+import type { DB } from "../state/openclaw-state-db.generated.js";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
 import { isContainerEnvironment } from "./container-environment.js";
 import { readProcessMachineIdentity } from "./current-machine-identity.js";
 import { isTruthyEnvValue } from "./env.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import { openNodeSqliteDatabase, resolveReadOnlyShmSqliteFileUri } from "./node-sqlite.js";
 import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
+import { managedHandoffBootSchema } from "./update-managed-service-handoff-boot-schema.js";
 import { createManagedHandoffBootIdentityReader } from "./update-managed-service-handoff-boot.js";
-import { managedHandoffBootSchema } from "./update-managed-service-handoff-schema.js";
 
 // Sidecar mtime is the cross-namespace heartbeat; payload bytes and ownership stay immutable.
 export const GATEWAY_OWNER_HEARTBEAT_MS = 15_000;
 export const GATEWAY_OWNER_HEARTBEAT_STALE_MS = 90_000;
+export const LEGACY_GATEWAY_OWNER_LEASE_TTL_MS = 5 * 60_000;
 
 const [uuidBoot, windowsBoot, freebsdBoot] = managedHandoffBootSchema.options;
 const host = z.string().min(1);
@@ -62,7 +67,29 @@ export function readGatewayLockProcessNamespace(): ProcessNamespace | null {
 type GatewayLockHolder = Partial<Pick<LockPayload, "pid" | "processNamespace">> & {
   host?: string;
   heartbeatAt?: number;
+  ownerId?: unknown;
+  role?: unknown;
+  createdAt?: unknown;
+  expiresAt?: number | null;
 };
+
+function isLegacyGatewayLeaseLock(holder: {
+  processNamespace?: unknown;
+  role?: unknown;
+  ownerId?: unknown;
+  createdAt?: unknown;
+}): holder is { role: "gateway"; ownerId: string; createdAt: string } {
+  // 9.7 introduced explicit Gateway-role process owners; 9.6 projections omit the role.
+  return (
+    process.platform === "linux" &&
+    !isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_REQUIRE_NAMESPACE_PROOF) &&
+    holder.processNamespace === undefined &&
+    holder.role === "gateway" &&
+    typeof holder.ownerId === "string" &&
+    holder.ownerId.length > 0 &&
+    typeof holder.createdAt === "string"
+  );
+}
 
 function readLockHeartbeat(lockPath: string): number | undefined {
   try {
@@ -104,12 +131,25 @@ export function describeGatewayLockHolder(
 
 export class GatewayLockNamespaceError extends Error {
   readonly heartbeatAgeMs?: number;
+  readonly legacyLock: boolean;
+  readonly legacyLease: boolean;
 
   constructor(holder: GatewayLockHolder, lockPath?: string) {
+    const legacyLock = process.platform === "linux" && holder.processNamespace === undefined;
     super(
-      `cannot verify Gateway ownership from this process${lockPath ? ` at ${lockPath}` : ""}. ${describeGatewayLockHolder(holder, lockPath)}`,
+      `cannot verify Gateway ownership from this process${lockPath ? ` at ${lockPath}` : ""}. ${
+        legacyLock
+          ? `Legacy holder ${holder.pid ?? "unknown"} has no PID namespace evidence. It may already have stopped. Independently verify that no Gateway using this state is running on this host or in any sharing container. With a current OpenClaw CLI using the same state and profile, run \`openclaw gateway recover-lock --json\`, then \`openclaw gateway recover-lock --confirm <confirmation> --json\` with the returned confirmation. Retry Doctor afterward.`
+          : describeGatewayLockHolder(holder, lockPath)
+      }`,
     );
     this.name = "GatewayLockNamespaceError";
+    this.legacyLock = legacyLock;
+    this.legacyLease =
+      isLegacyGatewayLeaseLock(holder) ||
+      (legacyLock &&
+        !isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_REQUIRE_NAMESPACE_PROOF) &&
+        typeof holder.expiresAt === "number");
     const owner = GatewayProcessNamespaceSchema.safeParse(holder.processNamespace).data;
     if (isForeignLinuxNamespace(owner, readGatewayLockProcessNamespace())) {
       const heartbeatAt = lockPath ? readLockHeartbeat(lockPath) : holder.heartbeatAt;
@@ -122,15 +162,56 @@ export class GatewayLockNamespaceError extends Error {
 
 /**
  * File-lock recovery also covers pre-namespace (before 2026.10.1) records from supported
- * upgrades on hosts whose PIDs are kernel-global. Linux PID namespaces keep them unknown.
+ * upgrades on hosts whose PIDs are kernel-global. Linux legacy Gateways use their DB lease.
  */
 export function classifyGatewayLockProcessNamespace(
   holder:
-    | { processNamespace?: unknown; machineIdentity?: unknown; pid?: unknown; startTime?: unknown }
+    | {
+        processNamespace?: unknown;
+        machineIdentity?: unknown;
+        pid?: unknown;
+        startTime?: unknown;
+        ownerId?: unknown;
+        role?: unknown;
+        createdAt?: unknown;
+      }
     | null
     | undefined,
   lockPath?: string,
+  databasePath?: string,
 ): "same" | "dead" | "unknown" {
+  if (holder && databasePath && isLegacyGatewayLeaseLock(holder)) {
+    const now = Date.now();
+    const createdAt = Date.parse(holder.createdAt);
+    if (!Number.isFinite(createdAt) || now - createdAt <= LEGACY_GATEWAY_OWNER_LEASE_TTL_MS) {
+      return "unknown";
+    }
+    try {
+      // This lock primitive must inspect the selected DB before it can obtain maintenance.
+      // Read the live WAL without changing its SHM; legacy files never renew their mtime.
+      const db = openNodeSqliteDatabase(resolveReadOnlyShmSqliteFileUri(databasePath), {
+        readOnly: true,
+      });
+      try {
+        const stateDb = getNodeSqliteKysely<Pick<DB, "state_leases">>(db);
+        const { rows } = executeSqliteQuerySync(db, {
+          compile: () =>
+            /* kysely-allow-raw: lock recovery must not trust a damaged lease lookup index. */
+            sql<{ expiresAt: number | null }>`SELECT expires_at AS expiresAt
+              FROM ${sql`state_leases NOT INDEXED`}
+              WHERE scope = ${"gateway-owner"} AND owner = ${holder.ownerId}`.compile(stateDb),
+        });
+        return rows.every((row) => typeof row.expiresAt === "number" && row.expiresAt <= now)
+          ? "dead"
+          : "unknown";
+      } finally {
+        db.close();
+      }
+    } catch {
+      // Missing/unreadable databases, old schemas and PostgreSQL anchors prove nothing.
+      return "unknown";
+    }
+  }
   if (
     (process.platform === "win32" || process.platform === "darwin") &&
     holder &&
@@ -268,6 +349,29 @@ export const LockPayloadSchema = z.object({
 });
 
 export type LockPayload = z.infer<typeof LockPayloadSchema>;
+export type GatewayLockIdentity = {
+  pid: number;
+  ownerId?: string;
+  cronOwnerProjection?: "dynamic-default-v1";
+  createdAt: string;
+  port: number;
+  startTime?: number;
+};
+
+export function isSameGatewayLockIdentity(
+  previous: GatewayLockIdentity,
+  current: GatewayLockIdentity,
+): boolean {
+  if (previous.ownerId && current.ownerId) {
+    return previous.ownerId === current.ownerId;
+  }
+  return (
+    previous.pid === current.pid &&
+    previous.createdAt === current.createdAt &&
+    previous.startTime === current.startTime
+  );
+}
+
 export type GatewayLockRole = NonNullable<LockPayload["role"]>;
 
 /** Parent loss cancels maintenance; peers still wait for its native process to exit. */

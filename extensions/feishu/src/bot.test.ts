@@ -46,7 +46,7 @@ import {
 } from "./bot.test-support.js";
 import { feishuPlugin } from "./channel.js";
 import type { FeishuMessageEvent } from "./event-types.js";
-import { parseFeishuMessageEvent, parseMergeForwardContent } from "./message-content.js";
+import { parseMergeForwardContent } from "./message-content.js";
 import { setFeishuRuntime } from "./runtime.js";
 
 const failedFinalReceipt = {
@@ -1245,29 +1245,6 @@ describe("handleFeishuMessage command authorization", () => {
     });
   });
 
-  it("delivers post files with caption 'Compare the attached report' to agent context", async () => {
-    const caption = "Compare the attached report";
-    const files = ["report.csv", "notes.csv"];
-    saveMessageResource.mockImplementation(
-      async (params: { fileKey: string; originalFilename?: string }) =>
-        savedMedia(params.fileKey, "text/csv", 20, `/tmp/${params.originalFilename}`),
-    );
-    await receiveMedia(`msg-post-files-${files.length}`, "post", {
-      content: [[{ tag: "text", text: caption }]],
-      files: files.map((fileName, index) => ({
-        file_key: `file_report_${index}`,
-        file_name: fileName,
-      })),
-    });
-
-    const context = inboundContext();
-    expect(context.BodyForAgent).toContain(caption);
-    expect(context).toMatchObject({
-      MediaPaths: files.map((fileName) => `/tmp/${fileName}`),
-      MediaTypes: files.map(() => "text/csv"),
-    });
-  });
-
   it("delivers unique rich-post attachments in their original mixed-media order", async () => {
     saveMessageResource.mockImplementation(
       async (params: { fileKey: string; originalFilename?: string; type: "file" | "image" }) =>
@@ -1315,28 +1292,6 @@ describe("handleFeishuMessage command authorization", () => {
       MediaTypes: ["video/mp4", "image/png", "video/mp4", "image/png"],
     });
     expect(context.BodyForAgent).toContain("**Urgent***[Docs](https://example.com)* <u>@Bob</u>");
-  });
-
-  it("parses direct interactive webhook content through the canonical card parser", () => {
-    const event = createFeishuTestEvent({
-      messageId: "msg-direct-card",
-      messageType: "interactive",
-      content: JSON.stringify({
-        schema: "2.0",
-        header: { title: { tag: "plain_text", content: "Direct task" } },
-        body: {
-          elements: [
-            {
-              tag: "table",
-              columns: [{ name: "status", display_name: "Status" }],
-              rows: [{ status: "Open" }],
-            },
-          ],
-        },
-      }),
-    });
-
-    expect(parseFeishuMessageEvent(event).content).toBe("Direct task\nStatus\nOpen");
   });
 
   it.each([

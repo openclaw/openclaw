@@ -1,6 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import {
+  publishRemoteModelCatalogSnapshot,
+  withRemoteModelCatalogSnapshot,
+  type ActiveRemoteModelCatalog,
+} from "../model-catalog/remote-overlay.js";
+import { setRemoteModelCatalogOverlaySourcesForTest } from "../model-catalog/remote-overlay.test-support.js";
 import { getPluginMetadataSnapshotCache } from "../plugins/plugin-cache.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
@@ -12,7 +18,9 @@ import {
   stubCatalogEnv,
 } from "./prepared-model-catalog-worker.shared.test-support.js";
 import {
+  catalogInput,
   createCatalogFixture,
+  PLUGIN_ID,
   PROVIDER_ID,
   writeFixtureFiles,
 } from "./prepared-model-catalog-worker.test-support.js";
@@ -140,3 +148,138 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
   expect(metadataTransfers).toBe(workers.length);
   observer.close();
 }, 30_000);
+
+it("sends only current published catalog bytes and preserves scoped prices on a reused worker", async () => {
+  const fixture = await createCatalogFixture(makeTempDir, 0);
+  stubCatalogEnv(fixture.env);
+  // A manifest provider accepts published models without runtime discovery replacing its rows.
+  writeFixtureFiles(path.join(fixture.root, "plugin"), {
+    "index.cjs": `module.exports = { id: ${JSON.stringify(PLUGIN_ID)}, register() {} };`,
+    "openclaw.plugin.json": {
+      id: PLUGIN_ID,
+      providers: [PROVIDER_ID],
+      configSchema: { type: "object" },
+      modelCatalog: {
+        providers: {
+          [PROVIDER_ID]: {
+            api: "openai-completions",
+            baseUrl: "https://catalog.invalid/v1",
+            models: [
+              {
+                id: "manifest-model",
+                name: "Manifest model",
+                contextWindow: 8192,
+                maxTokens: 4096,
+              },
+            ],
+          },
+        },
+      },
+    },
+  });
+  const models = (price: number) => [
+    {
+      id: "published-model",
+      name: "Published model",
+      contextWindow: 8192,
+      maxTokens: 4096,
+      cost: { input: price, output: 8, cacheRead: 0, cacheWrite: 0 },
+    },
+  ];
+  const remote: ActiveRemoteModelCatalog = {
+    sourceUrl: "https://catalog.invalid/snapshot.json",
+    revision: "first",
+    generatedAt: 1,
+    providers: {
+      [PROVIDER_ID]: {
+        models: models(3),
+      },
+    },
+    recommendations: {},
+    pricing: {},
+    upstreamPricing: {},
+  };
+  const config = {
+    plugins: fixture.config.plugins,
+    models: {
+      catalogRefresh: { url: remote.sourceUrl },
+      providers: {
+        [PROVIDER_ID]: {
+          api: "openai-completions" as const,
+          baseUrl: "https://catalog.invalid/v1",
+          apiKey: "synthetic-key",
+          models: [],
+        },
+      },
+    },
+  };
+  const retirement = new AbortController();
+  retireAfterTest(() => retirement.abort());
+  const transfers: unknown[] = [];
+  const threads = new Set<number>();
+  const observer = observeWorkers((thread) => {
+    threads.add(thread.threadId);
+    const post = thread.postMessage.bind(thread);
+    vi.spyOn(thread, "postMessage").mockImplementation((message, ...rest) => {
+      const task = (message as { input?: PreparedModelCatalogWorkerTask }).input;
+      if (task?.value) {
+        transfers.push("remoteCatalog" in task.value ? task.value.remoteCatalog : undefined);
+      }
+      post(message, ...rest);
+    });
+  });
+  setRemoteModelCatalogOverlaySourcesForTest();
+  observer.subscribe();
+  try {
+    expect(publishRemoteModelCatalogSnapshot(remote, null)).toBe(true);
+    const metadata = loadPluginMetadataSnapshot({
+      config,
+      env: fixture.env,
+      workspaceDir: fixture.workspaceDir,
+    });
+    const input = {
+      ...catalogInput(fixture, { config }),
+      allowGatewaySubagentBinding: true,
+      env: undefined,
+    };
+    const createWorker = () =>
+      createPreparedModelCatalogWorker({
+        agentFacts: catalogAgentFacts(input, fixture.env, { providerIds: [PROVIDER_ID] }),
+        pluginMetadataSnapshot: metadata,
+        isCurrent: () => !retirement.signal.aborted,
+        retirementSignal: retirement.signal,
+      });
+    const first = createWorker();
+    const loadPrice = async (worker: typeof first) =>
+      (await worker.loadCatalog([PROVIDER_ID])).runtimeModels
+        .get(PROVIDER_ID)
+        ?.find((model) => model.id === "published-model")?.cost.input;
+    expect(await loadPrice(first)).toBe(3);
+    await first.loadAuth({ providerIds: [PROVIDER_ID] });
+    const next = {
+      ...remote,
+      revision: "second",
+      providers: {
+        [PROVIDER_ID]: {
+          models: models(7),
+        },
+      },
+    };
+    expect(publishRemoteModelCatalogSnapshot(next, remote)).toBe(true);
+    // The same worker inherited the first revision. It must decode the second from the task.
+    expect(await loadPrice(createWorker())).toBe(7);
+    // The old owner no longer has published bytes. Its direct snapshot still wins over the new pair.
+    expect(await loadPrice(first)).toBe(3);
+    expect(await loadPrice(withRemoteModelCatalogSnapshot(null, createWorker))).toBeUndefined();
+    expect(threads.size).toBe(1);
+    const shared = (revision: string) => ({
+      sourceUrl: remote.sourceUrl,
+      revision,
+      sharedBytes: expect.any(SharedArrayBuffer),
+    });
+    expect(transfers).toEqual([shared("first"), undefined, shared("second"), remote, null]);
+  } finally {
+    observer.close();
+    setRemoteModelCatalogOverlaySourcesForTest();
+  }
+}, 60_000);

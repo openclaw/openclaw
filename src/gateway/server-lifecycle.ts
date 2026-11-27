@@ -535,7 +535,7 @@ export async function prepareGatewayLifecycle(params: {
       {
         resolveGatewayContext: runtime.resolvePluginGatewayContext,
         preparePluginRegistryClose: () => pluginRuntime.prepareClose(),
-        persistRunningSessionsForRestart: async (signal) => {
+        persistRunningSessionsForRestart: async (signal, collectNotice) => {
           const cfg = runtimeState.configReloader.getCommittedRuntimeConfig?.();
           // Input admission stays closed until this instance's config owner is prepared.
           if (!cfg) {
@@ -544,6 +544,7 @@ export async function prepareGatewayLifecycle(params: {
           await shutdownRuntime.sessionRestartResume.persistRunningSessionsForRestart({
             cfg,
             signal,
+            ...(optsValue?.restartExpectedMs != null ? { collectNotice } : {}),
           });
         },
         terminateRunningSubagentsForShutdown: async () => {
