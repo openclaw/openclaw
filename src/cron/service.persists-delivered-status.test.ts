@@ -49,11 +49,6 @@ const destination = { channel: "forum", to: "123" };
 const commandOk = { status: "ok", summary: "HOOKSCHED_PAYLOAD" } as const;
 const commandError = { status: "error", error: "command exited with code 1" } as const;
 const failureAlert = true;
-const deliveryRejected = {
-  status: "ok",
-  delivered: false,
-  deliveryError: "delivery rejected",
-} as const;
 const verifiedDelivery = {
   delivered: true,
   resolved: { ok: true, ...destination },

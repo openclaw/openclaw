@@ -404,7 +404,9 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
       const cron = getRecord(raw.cron);
       for (const scope of ["agents", "creators"] as const) {
         const entries = getRecord(cron?.[scope]);
-        if (!entries) continue;
+        if (!entries) {
+          continue;
+        }
         for (const [key, entry] of Object.entries(entries)) {
           if (deleteRetiredPath(entry, ["failureAlert"])) {
             changes.push(
@@ -414,7 +416,9 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
                 key +
                 ".failureAlert; only the global failure alert policy remains.",
             );
-            if (Object.keys(getRecord(entry) ?? {}).length === 0) delete entries[key];
+            if (Object.keys(getRecord(entry) ?? {}).length === 0) {
+              delete entries[key];
+            }
           }
         }
       }

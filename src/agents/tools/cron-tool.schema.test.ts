@@ -2,7 +2,6 @@ import {
   findLlamacppGbnfSchemaViolations,
   normalizeToolParameterSchema,
 } from "@openclaw/ai/internal/tool-schema";
-import { validateToolArguments } from "@openclaw/llm-core/validation";
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { getToolTerminalPresentation } from "../tool-terminal-presentation.js";

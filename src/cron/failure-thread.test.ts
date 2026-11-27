@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import type { SessionCreatedActor } from "../config/sessions/session-entry-provenance.js";
 import type { CronConfig } from "../config/types.cron.js";
 import { makeCronJob } from "./delivery.test-helpers.js";

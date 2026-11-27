@@ -57,11 +57,21 @@ import { gatewayReplyMock } from "./test-helpers.runtime-state.js";
 vi.mock("../agents/embedded-agent-runner/run.js", () => ({ runEmbeddedAgent: vi.fn() }));
 
 const fetchWithSsrFGuardMock = vi.hoisted(() =>
-  vi.fn(async (params: GuardedFetchOptions) => ({
-    response: new Response("ok", { status: 200 }),
-    finalUrl: params.url,
-    release: async () => {},
-  })),
+  vi.fn(async (params: GuardedFetchOptions) => {
+    // The result and failure alert can share a URL. Only reject the alert request.
+    if (
+      params.url === "https://example.invalid/failed-failure-alert" &&
+      typeof params.init?.body === "string" &&
+      Object.hasOwn(JSON.parse(params.init.body), "message")
+    ) {
+      throw new Error("alert transport rejected");
+    }
+    return {
+      response: new Response("ok", { status: 200 }),
+      finalUrl: params.url,
+      release: async () => {},
+    };
+  }),
 );
 
 const sendCronAnnouncePayloadStrictMock = vi.hoisted(() =>
@@ -910,9 +920,7 @@ describe("gateway server cron", () => {
 
     for (const outcome of ["delivered", "failed", "unreached"] as const) {
       const error = outcome === "failed" ? "alert transport rejected" : "adapter_returned_no_send";
-      if (outcome === "failed") {
-        fetchWithSsrFGuardMock.mockRejectedValueOnce(new Error(error));
-      } else if (outcome === "unreached") {
+      if (outcome === "unreached") {
         sendCronAnnouncePayloadStrictMock.mockImplementationOnce(async (params) => {
           params.onDeliveryAttempt?.(false);
           return { status: "suppressed", reason: "adapter_returned_no_send" };

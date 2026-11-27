@@ -77,14 +77,7 @@ export function buildCronMocks(
       message: "Sync the team calendar and summarize schedule conflicts.",
     },
     delivery: { mode: "announce", channel: "telegram", to: "@operations" },
-    failureAlert: {
-      after: 2,
-      channel: "telegram",
-      to: "@operations",
-      cooldownMs: 3_600_000,
-      includeSkipped: false,
-      mode: "announce",
-    },
+    failureAlert: true,
     state: {
       nextRunAtMs: baseTime + 5 * hour,
       lastRunAtMs: baseTime - 5 * minute,

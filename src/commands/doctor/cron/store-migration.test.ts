@@ -377,7 +377,9 @@ it("normalizes isolated legacy jobs without mutating runtime code paths", () => 
   expectFields(job, {
     sessionKey: "agent:main:discord:channel:ops",
     schedule: { kind: "at", at: new Date(1_700_000_000_000).toISOString() },
-    delivery: { mode: "announce", channel: "telegram", to: "7200373102", bestEffort: true },
+    enabled: false,
+    failureAlert: false,
+    delivery: { mode: "announce", channel: "telegram", to: "7200373102" },
     isolation: undefined,
     payload: { kind: "agentTurn", message: "hi" },
   });

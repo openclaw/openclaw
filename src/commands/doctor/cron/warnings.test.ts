@@ -58,11 +58,10 @@ it("reports configured default destinations on unavailable channels", async () =
   const cfg: OpenClawConfig = {
     cron: {
       delivery: { channel: "ghost", to: "1" },
-      failureAlert: { channel: "telegram", to: "1" },
+      failureAlert: { channel: "missing-channel", to: "1" },
       agents: { ops: { delivery: { channel: "last", to: "1" } } },
       creators: {
         alice: {
-          failureAlert: { channel: "missing-channel", to: "1" },
           delivery: { channel: "gchat", to: "spaces/a" },
         },
       },
@@ -75,7 +74,7 @@ it("reports configured default destinations on unavailable channels", async () =
   );
   expect(message?.split("\n")).toEqual([
     "Automation delivery targets unavailable channels.",
-    "- Default destinations on a channel whose plugin is not active: cron.delivery.channel -> ghost, cron.creators.alice.failureAlert.channel -> missing-channel; automations that fall back to them will fail to deliver",
+    "- Default destinations on a channel whose plugin is not active: cron.delivery.channel -> ghost, cron.failureAlert.channel -> missing-channel; automations that fall back to them will fail to deliver",
     expect.stringContaining("or the listed `cron` default after reviewing"),
   ]);
 });

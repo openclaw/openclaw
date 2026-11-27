@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalStringifiedId } from "@openclaw/normalization-core/string-coerce";
 import { tryResolveAmbientOwnerAgentId } from "../../../agents/agent-scope-config.js";
 import {
   canDeferRehearsalCronMigration,
@@ -31,7 +32,9 @@ export function migrateCronFailureSettings(
     delivery &&
     (Object.hasOwn(delivery, "failureDestination") || Object.hasOwn(delivery, "bestEffort"));
   const invalidAlert = job.failureAlert !== undefined && typeof job.failureAlert !== "boolean";
-  if (!invalidAlert && !retiredDelivery && scopedPaths.length === 0) return undefined;
+  if (!invalidAlert && !retiredDelivery && scopedPaths.length === 0) {
+    return undefined;
+  }
   const dropped = [
     ...Object.keys(destination ?? {}).map((key) => "delivery.failureDestination." + key),
     ...customKeys.map((key) => "failureAlert." + key),
@@ -58,21 +61,27 @@ export function migrateCronFailureSettings(
     (invalidAlert && !alert) ||
     (alertsWereOn &&
       (changesPolicy || Object.keys(destination ?? {}).length > 0 || scopedPaths.length > 0));
-  if (invalidAlert) job.failureAlert = Boolean(alert);
-  else if (bestEffort && job.failureAlert === undefined) job.failureAlert = false;
+  if (invalidAlert) {
+    job.failureAlert = Boolean(alert);
+  } else if (bestEffort && job.failureAlert === undefined) {
+    job.failureAlert = false;
+  }
   if (delivery) {
     delete delivery.failureDestination;
     delete delivery.bestEffort;
   }
-  if (needsReview) job.enabled = false;
-  const label = JSON.stringify(job.name ?? job.id ?? "unnamed automation");
+  if (needsReview) {
+    job.enabled = false;
+  }
+  const id = normalizeOptionalStringifiedId(job.id);
+  const label = JSON.stringify(job.name ?? id ?? "unnamed automation");
   const change = dropped.length
     ? "removed " + dropped.join(", ") + "."
     : "converted failure alerts to On/Off.";
   return (
     "Automation " +
     label +
-    (job.id ? " (" + job.id + "): " : ": ") +
+    (id ? " (" + id + "): " : ": ") +
     change +
     (needsReview
       ? " Paused because its old notification or delivery behavior cannot be kept. Review delivery and failure alerts before re-enabling."
@@ -110,7 +119,9 @@ export async function repairScopedCronFailureAlertsBeforeConfigWrite(params: {
   const defaultAgent = tryResolveAmbientOwnerAgentId(params.snapshot.config);
   const notes: string[] = [];
   const changes = inventory.jobs.flatMap((job) => {
-    if (!job.definition) return [];
+    if (!job.definition) {
+      return [];
+    }
     const definition = structuredClone(job.definition);
     const agent = resolveStoredCronJobOwner(definition) ?? defaultAgent;
     const actor = asOptionalRecord(definition.createdActor);
@@ -126,9 +137,13 @@ export async function repairScopedCronFailureAlertsBeforeConfigWrite(params: {
       ...creators.filter(({ key }) => key === creator),
       ...agents.filter(({ key }) => !agent || normalizeAgentId(key) === normalizeAgentId(agent)),
     ].map(({ path }) => path);
-    if (!paths.length) return [];
+    if (!paths.length) {
+      return [];
+    }
     const message = migrateCronFailureSettings(definition, params.nextConfig.cron, paths);
-    if (message) notes.push(message);
+    if (message) {
+      notes.push(message);
+    }
     return isDeepStrictEqual(job.definition, definition) ? [] : [{ job, definition }];
   });
   const assertCurrent = () => {
@@ -141,13 +156,17 @@ export async function repairScopedCronFailureAlertsBeforeConfigWrite(params: {
     }
     maintenance.assertDatabaseAccess(resolveOpenClawStateSqlitePath(params.env));
   };
-  if (changes.length === 0) return notes;
+  if (changes.length === 0) {
+    return notes;
+  }
   const result = await repairCronJobsForDoctor(
     scope,
     { assertCurrent, assertOwnedInTransaction: assertCurrent },
     inventory,
     changes,
   );
-  if (result.backupPath) notes.push("Saved pre-repair cron backup: " + result.backupPath);
+  if (result.backupPath) {
+    notes.push("Saved pre-repair cron backup: " + result.backupPath);
+  }
   return [...notes, ...(result.warnings ?? [])];
 }

@@ -131,7 +131,6 @@ export function registerCronRepairCases(
         }
       });
       await run(jobId);
-      await run(jobId);
       expect(await withinTest(repairOutcome.promise, signal)).toMatchObject({
         result: { meta: { terminalReply: { disposition: "silent" } } },
       });

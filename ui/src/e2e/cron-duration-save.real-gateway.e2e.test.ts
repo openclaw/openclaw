@@ -1,6 +1,6 @@
 import { withTimeout } from "@openclaw/fs-safe/advanced";
 // Browser edits persist through the normal built Gateway with independent readback.
-import type { Locator, Page } from "playwright";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { GatewayClient } from "../../../src/gateway/client.ts";
 import { acquireGatewayTestClient } from "../../../test/helpers/gateway-client.ts";
@@ -18,11 +18,7 @@ import {
 } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installControlUiE2eRendererStallProbe } from "../test-helpers/control-ui-e2e-renderer-stall.ts";
-import {
-  openChatModelPicker,
-  pickerValue,
-  selectPickerValue,
-} from "../test-helpers/select-picker-e2e.ts";
+import { openChatModelPicker } from "../test-helpers/select-picker-e2e.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -538,11 +534,6 @@ async function seedPausedAgentJob(
       ...overrides,
     }),
   );
-}
-
-async function choosePicker(picker: Locator, value: string) {
-  await selectPickerValue(picker, value);
-  await expect.poll(() => pickerValue(picker)).toBe(value);
 }
 
 async function openEdit(page: Page) {

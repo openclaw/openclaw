@@ -364,7 +364,7 @@ export function findJobOrThrow(state: CronServiceState, id: string) {
 
 /** Returns the effective enabled flag, defaulting missing values to enabled. */
 export function isJobEnabled(job: Pick<CronJob, "enabled" | "failureAlert" | "delivery">): boolean {
-  return job.enabled !== false && hasCanonicalCronFailureSettings(job);
+  return (job.enabled ?? true) && hasCanonicalCronFailureSettings(job);
 }
 
 export function isTimeScheduledJob(job: Pick<CronJob, "schedule">): boolean {

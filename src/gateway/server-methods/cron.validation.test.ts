@@ -77,7 +77,6 @@ import {
   telegramDisabledAccountConfig,
   msteamsConfig,
   slackSynologyConfig,
-  slackConfig,
 } from "./cron.validation.test-support.js";
 import type { GatewayClient } from "./types.js";
 
