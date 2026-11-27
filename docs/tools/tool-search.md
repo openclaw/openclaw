@@ -294,11 +294,13 @@ Deferred MCP tools. Skip tool_search for a listed name: call dispatch_action wit
 Each row shows the tool's compact input signature, the same one `tool_search`
 returns, so the model can call `dispatch_action` with a listed name directly,
 skipping the `tool_search` and `tool_describe` round trips. Arguments that do
-not match return the input schema to retry from. A row whose input cannot be
-rendered completely, or whose rendered input looks like markup, is listed
-without one, and the heading then tells the model to call `tool_describe`
-first for such names; when no row shows its input, the heading asks for
-`tool_describe` first. Rows of a server that advertises
+not match return the input schema to retry from. A row is listed without its
+input when the signature cannot show the whole required structure (for example
+a root `allOf`, a union, a reference, or an object that does not set
+`additionalProperties: false`), when the row could not carry its keys and
+literals exactly, or when the rendered input looks like markup. The heading then
+tells the model to call `tool_describe` first for such names; when no row shows
+its input, the heading asks for `tool_describe` first. Rows of a server that advertises
 instructions end with `[instructions]`, and the heading then tells the model to
 call `tool_describe` first for them, because that is where the instructions
 are returned. The directory lists

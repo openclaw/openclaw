@@ -2,7 +2,7 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { isCoreCodingSurfaceToolName, isRunGrantedCoreToolId } from "./core-tool-facts.js";
-import { compactToolInputHint } from "./tool-schema-hints.js";
+import { compactCompleteToolInputHint } from "./tool-schema-hints.js";
 import {
   applyToolCatalogCompaction,
   collectUniqueCatalogToolNames,
@@ -328,19 +328,20 @@ type McpDirectoryLayout = {
 };
 
 /**
- * The compact input signature tool_search already returns, for a row the model can dispatch
- * without tool_describe. A partial signature (`unknown` or elided `...` parts), or one this
- * one-line row could not carry exactly, is omitted: that row keeps the describe-first rule.
+ * A complete compact input signature, for a row the model can dispatch without tool_describe.
+ * The schema-hint owner decides completeness; a signature this one-line row could not carry
+ * exactly is omitted too. Either way the row keeps the describe-first rule.
  */
 function mcpDirectoryInputSignature(entry: ToolSearchCatalogEntry): string | undefined {
-  const hint = compactToolInputHint(entry.parameters);
+  const hint = compactCompleteToolInputHint(entry.parameters);
   // Keys and literals must reach the model exactly: text that normalization or a one-line
   // row would alter (controls, invisible or compatibility characters, runs of whitespace)
   // omits the signature instead of rewriting it. Generic types (`Array<string>`) and
   // comparators in bounds stay; tag-like text and code fences do not.
   const unsafe =
+    hint === undefined ||
     hint !== hint.normalize("NFKC") ||
-    /[\p{Cc}\p{Cf}\p{Co}\p{Cs}]|[^\S ]| {2}|\bunknown\b|\.\.\.|`|(?<!\w)<[A-Za-z/!?]/u.test(hint);
+    /[\p{Cc}\p{Cf}\p{Co}\p{Cs}]|[^\S ]| {2}|`|(?<!\w)<[A-Za-z/!?]/u.test(hint);
   return unsafe ? undefined : hint;
 }
 
