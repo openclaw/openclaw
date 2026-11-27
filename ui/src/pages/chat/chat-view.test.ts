@@ -1324,9 +1324,9 @@ describe("chat slash menu accessibility", () => {
       } else {
         inputDraftAtEnd(container, `/goal ${selection} `);
       }
-      await waitForSolid(() =>
-        expect(container.querySelector(".agent-chat__goal-mode")).not.toBeNull(),
-      );
+      await vi.dynamicImportSettled();
+      flush();
+      expect(container.querySelector(".agent-chat__goal-mode")).not.toBeNull();
       expect(container.querySelector(".slash-menu")).toBeNull();
       expect(onGoalSubmit).not.toHaveBeenCalled();
       expect(onSend).not.toHaveBeenCalled();
