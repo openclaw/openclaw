@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.GatewayConnectionDisplay
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NodeApp
 import ai.openclaw.app.NodeRuntime
@@ -96,8 +97,8 @@ class SkillsSwitchAccessibilityTest {
     findTestField(runtime, "operatorConnected").set(runtime, true)
 
     @Suppress("UNCHECKED_CAST")
-    val connected = findTestField(runtime, "_isConnected").get(runtime) as MutableStateFlow<Boolean>
-    connected.value = true
+    val display = findTestField(runtime, "_gatewayConnectionDisplay").get(runtime) as MutableStateFlow<GatewayConnectionDisplay>
+    display.value = display.value.copy(isConnected = true)
 
     @Suppress("UNCHECKED_CAST")
     val operatorScopes = findTestField(runtime, "_operatorScopes").get(runtime) as MutableStateFlow<List<String>>
@@ -232,7 +233,7 @@ class SkillsSwitchAccessibilityTest {
     composeRule.waitUntil(timeoutMillis = 5_000) {
       shadowOf(Looper.getMainLooper()).idle()
       val state = runtime.skillsState.value
-      val skills = state.summary?.skills.orEmpty()
+      val skills = state.summary.orEmpty()
       val actual = skills.associate { it.skillKey to !it.disabled }
       !state.refreshing && runtime.skillMutationKeys.value.isEmpty() &&
         actual == mapOf("alpha" to alpha, "beta" to beta)
