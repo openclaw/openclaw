@@ -693,6 +693,10 @@ export async function modelsAuthAddCommand(opts: { agent?: string }, runtime: Ru
 }
 
 type LoginOptions = {
+  signal?: AbortSignal;
+  assertCurrent?: () => void;
+  /** A host running the login can publish credentials into its own runtime. */
+  refreshAfterLogin?: (agentId: string) => Promise<void>;
   provider?: string;
   method?: string;
   profileId?: string;
@@ -721,18 +725,14 @@ export type ModelsAuthLoginFlowResult = {
 export type ModelsAuthLoginFlowOptions = LoginOptions & {
   ownerPluginId?: string;
   credentialOnly?: boolean;
-  assertCurrent?: () => void;
   config?: OpenClawConfig;
   runtime: RuntimeEnv;
   prompter: WizardPrompter;
   env?: NodeJS.ProcessEnv;
   isRemote?: boolean;
-  signal?: AbortSignal;
   openUrl?: (url: string) => Promise<void>;
   browserAuthorization?: ProviderAuthContext["oauth"]["authorize"];
   beforePersistentEffect?: () => void | Promise<void>;
-  /** Publish a hosted login through its current Gateway instead of a separate CLI connection. */
-  refreshAfterLogin?: (agentId: string) => Promise<void>;
 };
 
 export async function runModelsAuthLoginFlowCore(
@@ -949,13 +949,14 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     );
   }
 
-  await runModelsAuthLoginFlow(
-    {
-      ...opts,
-      runtime,
-      prompter: createClackPrompter(),
-    },
+  const result = await runModelsAuthLoginFlow(
+    { ...opts, runtime, prompter: createClackPrompter(process.stdout, opts.signal) },
     isSharedGatewayForCliLogin,
   );
+  if (opts.refreshAfterLogin && result.authRefresh !== "refreshed") {
+    throw new ProviderCredentialsSavedError(
+      "Sign-in was saved, but this session could not refresh its credentials. Restart the local TUI and retry your message.",
+    );
+  }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
