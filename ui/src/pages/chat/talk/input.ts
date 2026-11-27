@@ -15,6 +15,10 @@ export type RealtimeTalkCameraDevice = RealtimeTalkInputDevice;
 
 // Discovery owns failure reasons; each surface owns their presentation.
 const deviceIssueMessageKeys = {
+  "insecure-context": [
+    "chat.composer.microphoneInsecureContext",
+    "chat.composer.cameraInsecureContext",
+  ],
   "list-unsupported": [
     "chat.composer.microphoneListUnsupported",
     "chat.composer.cameraListUnsupported",
@@ -126,7 +130,9 @@ async function discoverRealtimeTalkDevices(
 ): Promise<RealtimeTalkDeviceDiscovery> {
   const devices = globalThis.navigator?.mediaDevices;
   if (!devices?.enumerateDevices) {
-    return { devices: [], permissionRequired: false, issue: "list-unsupported" };
+    // Browsers remove mediaDevices entirely outside HTTPS and localhost.
+    const issue = !globalThis.isSecureContext ? "insecure-context" : "list-unsupported";
+    return { devices: [], permissionRequired: false, issue };
   }
   const permissionRequestedAtStart = requestPermission();
   let entries: MediaDeviceInfo[];
@@ -200,11 +206,13 @@ async function openRealtimeTalkMedia(
   const devices = globalThis.navigator?.mediaDevices;
   if (!devices?.getUserMedia) {
     throw new Error(
-      t(
-        kind === "audioinput"
-          ? "chat.composer.realtimeTalkRequiresMicrophone"
-          : "chat.composer.cameraAccessFailed",
-      ),
+      !globalThis.isSecureContext
+        ? realtimeTalkDeviceIssueMessage("insecure-context", kind)
+        : t(
+            kind === "audioinput"
+              ? "chat.composer.realtimeTalkRequiresMicrophone"
+              : "chat.composer.cameraAccessFailed",
+          ),
     );
   }
   const deviceId = selectedDeviceId?.trim();

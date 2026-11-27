@@ -269,6 +269,7 @@ describe("realtime Talk microphone inputs", () => {
   });
 
   it("reports an unsupported enumeration instead of a generic access failure", async () => {
+    vi.stubGlobal("isSecureContext", true);
     stubMediaDevices({});
 
     await expect(discoverRealtimeTalkInputs(() => true)).resolves.toEqual({
@@ -276,6 +277,18 @@ describe("realtime Talk microphone inputs", () => {
       permissionRequired: false,
       issue: "list-unsupported",
     });
+  });
+
+  it("names HTTPS or localhost when an insecure page hides the microphone", async () => {
+    vi.stubGlobal("isSecureContext", false);
+    vi.stubGlobal("navigator", {});
+    const message =
+      "Microphone access needs HTTPS or localhost. Open this dashboard over HTTPS, or at localhost on the computer running OpenClaw.";
+
+    await expect(discoverRealtimeTalkInputs(() => true)).resolves.toMatchObject({
+      issue: "insecure-context",
+    });
+    await expect(openMicrophone(undefined)).rejects.toThrow(message);
   });
 
   it("reports microphone permission denial with actionable guidance", async () => {
