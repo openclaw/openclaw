@@ -8,7 +8,11 @@ import {
 } from "../auto-reply/reply/session-event-handoff.js";
 import { applySessionEntryReplacements } from "../config/sessions/session-accessor.js";
 import { captureSessionQueuedInputsForRestart } from "../config/sessions/session-pending-input-history.js";
-import { acknowledgeRestartResumeMarker } from "../config/sessions/session-restart-recovery.js";
+import {
+  acknowledgeRestartResumeMarker,
+  reconcileInterruptedShellCalls,
+  resolveInterruptedShellNoticeRoute,
+} from "../config/sessions/session-restart-recovery.js";
 import {
   createLiveRestartResumeMarker,
   restartResumeMarkerMatchesRun,
@@ -384,6 +388,7 @@ async function resumeRestartStore(
     for (const { sessionKey, entry: snapshotEntry } of entries) {
       const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? target.agentId;
       let authority: Awaited<ReturnType<typeof prepareSessionSystemTurnAuthority>> | undefined;
+      let requesterSignal: AbortSignal | undefined;
       let interrupted = false;
       let stale = false;
       try {
@@ -514,6 +519,7 @@ async function resumeRestartStore(
               operatorSource: marker.operatorSource ?? pendingShell?.notice?.operatorSource,
               assertCurrent: () => signal.throwIfAborted(),
             });
+            requesterSignal = authority?.authority.signal;
             admissionStage = "target";
             const captured = await captureSessionEventTargetForHost(agentId, sessionKey, {
               operatorAuthority: authority?.authority,
@@ -547,42 +553,49 @@ async function resumeRestartStore(
                 runSetupScript: authority?.authority.scopes.includes(ADMIN_SCOPE) === true,
               });
             }
-            if (pendingShell) {
-              admissionStage = "shell-recovery";
-              if (
-                await pauseInterruptedShellTurn({
-                  target: { ...target, agentId, sessionKey },
-                  entry,
-                  marker,
-                  assertCurrent: () => {
-                    assertRecoveryCurrent();
-                    authority?.authority.signal?.throwIfAborted();
-                    if (
-                      authority &&
-                      "assertCurrent" in authority &&
-                      typeof authority.assertCurrent === "function"
-                    ) {
-                      authority.assertCurrent();
-                    }
-                  },
-                })
-              ) {
-                summary.record(agentId, sessionKey, "shell-outcome-unknown");
-                continue;
-              }
-            }
+            admissionStage = "shell-recovery";
+            const checked =
+              pendingShell &&
+              (await reconcileInterruptedShellCalls({
+                target: { ...target, agentId, sessionKey },
+                entry,
+                marker,
+                assertCurrent: () => {
+                  assertRecoveryCurrent();
+                  requesterSignal?.throwIfAborted();
+                },
+              }));
+            const unresolved = checked?.pendingShellCalls;
+            const originalRoute =
+              unresolved && resolveInterruptedShellNoticeRoute(unresolved, marker);
             admissionStage = "session-event";
             const receipt = withPluginRuntimeGatewayContextResolver(
               context.resolveGatewayContext,
               () =>
-                enqueueSessionEventForHost(buildGatewayRestartResumeText(marker.sourceRunId), {
-                  agentId,
-                  sessionKey,
-                  source: "restart",
-                  sourceRunId: marker.sourceRunId,
-                  expectedTarget: captured,
-                  abortSignal: signal,
-                }),
+                enqueueSessionEventForHost(
+                  buildGatewayRestartResumeText(marker.sourceRunId, Boolean(unresolved)),
+                  {
+                    agentId,
+                    sessionKey,
+                    source: "restart",
+                    sourceRunId: marker.sourceRunId,
+                    expectedTarget: captured,
+                    abortSignal: signal,
+                    // A session's latest destination cannot receive the interrupted requester's result.
+                    ...(unresolved &&
+                      (originalRoute
+                        ? {
+                            restartReplyToId: originalRoute.replyToId,
+                            deliveryContext: {
+                              channel: originalRoute.channel,
+                              to: originalRoute.to,
+                              accountId: originalRoute.accountId,
+                              threadId: originalRoute.threadId,
+                            },
+                          }
+                        : { deliver: false })),
+                  },
+                ),
             );
             const accepted = acceptRestartResumeReceipt(receipt, sessionKey, authority, log);
             authority = undefined;
@@ -591,19 +604,21 @@ async function resumeRestartStore(
           } catch (error) {
             signal.throwIfAborted();
             if (admissionStage === "shell-recovery") {
-              // Preserve the marker when recording the host notice failed. New queued user
-              // input drains independently below; the interrupted turn is never dispatched.
+              // Keep custody when the receipt check fails. Independent queued inputs still drain below.
               throw error;
             }
-            // A failed admission still owns its diagnostic. Only the local transcript
-            // may report the shell uncertainty when requester or workspace validation failed.
+            // A failed admission still owns its diagnostic. An unavailable requester or
+            // workspace must not cause a fallback send outside the local transcript.
             if (pendingShell) {
               await pauseInterruptedShellTurn({
                 target: { ...target, agentId, sessionKey },
                 entry,
                 marker,
-                assertCurrent: assertRecoveryCurrent,
-                transcriptOnly: true,
+                assertCurrent: () => {
+                  assertRecoveryCurrent();
+                  requesterSignal?.throwIfAborted();
+                },
+                transcriptOnly: admissionStage !== "session-event",
               });
             }
             summary.record(agentId, sessionKey, "admission-failed");
