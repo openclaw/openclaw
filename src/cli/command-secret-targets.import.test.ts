@@ -95,7 +95,7 @@ describe("command secret targets module import", () => {
         targetIds: getModelsCommandSecretTargetIds(),
         localGatewayAbsent: true,
       });
-      expect(result.resolvedConfig.models?.providers?.fixture.apiKey).toBe("fixture-model-key");
+      expect(result.resolvedConfig.models?.providers?.fixture?.apiKey).toBe("fixture-model-key");
       expect(result.hadUnresolvedTargets).toBe(false);
     } finally {
       vi.doUnmock("../secrets/runtime-web-tools.js");
