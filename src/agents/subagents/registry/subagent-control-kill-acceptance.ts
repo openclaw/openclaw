@@ -13,7 +13,6 @@ import type { captureSubagentCommands } from "./subagent-control-commands.js";
 export function createSubagentKillAcceptance(params: {
   stopAcceptance: { accepted: boolean };
   assertNativeCurrent: () => void;
-  ownsSessionIncarnation: () => boolean;
   isKillOwnerCurrent: () => boolean;
   commands?: ReturnType<typeof captureSubagentCommands>;
 }) {
@@ -29,7 +28,7 @@ export function createSubagentKillAcceptance(params: {
       }
       try {
         params.assertNativeCurrent();
-        if (!params.ownsSessionIncarnation() || !params.isKillOwnerCurrent()) {
+        if (!params.isKillOwnerCurrent()) {
           throw new Error("Subagent accepted cancellation lost its native owner.", {
             cause: error,
           });
@@ -48,15 +47,10 @@ export function createSubagentKillAcceptance(params: {
   };
   const accept = (accepted: boolean) => {
     params.stopAcceptance.accepted ||= accepted;
-    if (
-      accepted &&
-      params.commands?.owners.length &&
-      params.ownsSessionIncarnation() &&
-      params.isKillOwnerCurrent()
-    ) {
+    if (accepted && params.commands?.owners.length && params.isKillOwnerCurrent()) {
       params.commands.cancel(() => {
         params.assertNativeCurrent();
-        if (!params.ownsSessionIncarnation() || !params.isKillOwnerCurrent()) {
+        if (!params.isKillOwnerCurrent()) {
           throw new Error("Subagent command cancellation lost its native owner.");
         }
       });
