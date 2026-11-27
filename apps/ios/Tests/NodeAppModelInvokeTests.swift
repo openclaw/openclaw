@@ -8730,8 +8730,10 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(response.ok)
         #expect(response.id == request.id)
         let data = try #require(response.payloadJSON?.data(using: .utf8))
-        let payload = try JSONDecoder().decode([String: AnyCodable].self, from: data)
-        let expected = try JSONDecoder().decode([String: AnyCodable].self, from: Data(expectedJSON.utf8))
+        let payload = try JSONDecoder().decode([String: OpenClawProtocol.AnyCodable].self, from: data)
+        let expected = try JSONDecoder().decode(
+            [String: OpenClawProtocol.AnyCodable].self,
+            from: Data(expectedJSON.utf8))
         #expect(payload == expected)
     }
 
