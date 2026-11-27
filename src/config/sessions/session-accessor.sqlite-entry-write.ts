@@ -214,6 +214,7 @@ function prepareSessionEntryWrite(
   );
   const persisted = splitSessionEntrySnapshots(canonicalEntry, {
     previousEntry: canonicalPreviousEntry,
+    previousRow: options.allowStoredAliases ? undefined : canonicalPreviousRow,
   });
   if (
     actorPreparation &&
@@ -311,7 +312,7 @@ function prepareSessionEntryWrite(
         nodeChanged &&
         persisted.snapshotsChanged &&
         !persisted.snapshotsRemoved &&
-        persisted.snapshots.length > 0
+        persisted.snapshotUpserts.length > 0
           ? queries.postgres?.nodeWithSnapshots
           : undefined;
       const writeNodeWithWindow =
@@ -348,7 +349,7 @@ function prepareSessionEntryWrite(
                   }
                   if (writeNodeWithSnapshots) {
                     writeNodeWithSnapshots(
-                      { node: sessionNode, snapshots: persisted.snapshots },
+                      { node: sessionNode, snapshots: persisted.snapshotUpserts },
                       withLegacySources,
                     );
                   } else if (writeNodeWithWindow) {

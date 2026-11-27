@@ -617,6 +617,39 @@ it("does not expose unmeasured intrinsic overflow as an independent scroll range
   expect(distance()).toBe(200);
 });
 
+it("keeps a shrinking end target smooth during a native scroll", async () => {
+  const { host, thread, extent, distance } = await mountEndFollowFixture(800);
+  await expect.poll(() => thread.scrollTop).toBe(800);
+  const originalEnd = thread.scrollHeight - thread.clientHeight;
+  const writes: Array<ScrollToOptions & { before: number; jump: number }> = [];
+  let shrinking = false;
+  observeNativeScroll(thread, (options, scroll) => {
+    const before = thread.scrollTop;
+    scroll();
+    writes.push({ ...options, before, jump: thread.scrollTop - before });
+    if (options?.behavior === "smooth" && !shrinking) {
+      shrinking = true;
+      host.lastRowHeight -= 17;
+      host.requestRender();
+    }
+  });
+  host.transcript.scrollToEnd({ behavior: "smooth" });
+  await expect.poll(() => extent.offsetHeight).toBe(1283);
+  await expect.poll(distance).toBe(0);
+  expect(writes.find((write) => write.top === originalEnd)?.behavior).toBe("smooth");
+  const end = thread.scrollHeight - thread.clientHeight;
+  expect(end).toBe(originalEnd - 17);
+  // Chromium can reach the shorter end before the virtualizer reconciles. An
+  // already-landed retarget is a no-op; a travelling retarget must stay smooth.
+  await expect
+    .poll(() => {
+      const retarget = writes.find((write) => write.top === end);
+      return retarget?.before === end || retarget?.behavior === "smooth";
+    })
+    .toBe(true);
+  expect(writes.every((write) => Math.abs(write.jump) <= 1)).toBe(true);
+});
+
 it("holds the canceled viewport after a smooth journey's automatic final approach", async () => {
   const { host, thread, extent, distance } = await mountEndFollowFixture(0);
   let finalApproach = false;

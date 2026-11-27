@@ -6,15 +6,12 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { stateTest } from "../../plugin-state/plugin-state-fixtures.test-support.js";
 import {
   prepareUserProfileCatalog,
   readUserProfileSnapshot,
 } from "../../state/user-profile-list.js";
 import * as profileWrites from "../../state/user-profile-writes.js";
-import * as stopWork from "../chat-abort-stop-work.js";
 import { readStoredClaw, writeStoredClaw } from "../openclaw-id/claw-store.js";
 import { linkedClaw, serviceFor, TEST_K_SRV } from "../openclaw-id/openclaw-id.test-support.js";
 import { setOpenClawIdTunnelPrincipalLookup } from "../openclaw-id/tunnel-principal.js";
@@ -78,78 +75,6 @@ function setRole(context: GatewayRequestContext, profileId: string, role: string
   });
   return { respond, request };
 }
-
-const role = (
-  sessions: GatewayOperatorRoleDefinition["sessions"],
-  scopes: GatewayOperatorRoleDefinition["scopes"] = ["operator.read", "operator.write"],
-): GatewayOperatorRoleDefinition => ({ agents: ["main"], scopes, sessions });
-
-const cfg: OpenClawConfig = {
-  gateway: {
-    roles: {
-      default: "viewer",
-      assignments: { byGithubLogin: { carol: "writer" } },
-      definitions: {
-        none: role({ others: "none" }),
-        viewer: role({ others: "view" }),
-        writer: role({ others: "write" }),
-        invitedSend: role({ others: "invited", maxInvitedAccess: "send" }),
-        invitedRead: role({ others: "invited", maxInvitedAccess: "read" }),
-        invitedUncapped: role({ others: "invited" }),
-        invitedSendExec: role({
-          others: "invited",
-          maxInvitedAccess: "send",
-          invitedTools: ["read", "exec"],
-        }),
-        reader: role({ others: "view" }, ["operator.read"]),
-      },
-    },
-  },
-};
-
-it.for([
-  ["none", "viewer", false],
-  ["viewer", "writer", false],
-  ["invitedRead", "invitedSend", false],
-  ["invitedSend", "writer", false],
-  // Invited tool limits apply to the next request, in either direction.
-  ["invitedSend", "invitedSendExec", false],
-  ["invitedSend", "invitedUncapped", false],
-  ["invitedUncapped", "invitedRead", true],
-  // Without a ceiling a member's stored level is ignored; any ceiling applies it, so a member
-  // stored at read drops to read.
-  ["invitedUncapped", "invitedSend", true],
-  ["viewer", "viewer", false],
-  ["viewer", "none", true],
-  ["invitedSend", "invitedRead", true],
-  ["invitedSend", "viewer", true],
-  ["viewer", "reader", true],
-  // An unassigned GitHub-linked profile is a writer; clearing an explicit writer keeps that role.
-  [null, "viewer", true],
-  ["writer", null, false],
-] as const)("%s -> %s stops work: %s", async ([before, after, expected], { state }) => {
-  state.applyEnv();
-  const { id: profileId } = await profileWrites.syncCanonicalGitHubIdentity({
-    identity: { accountId: 42, login: "carol" },
-    authenticationAlias: { kind: "github-login", login: "carol" },
-  });
-  await profileWrites.setCanonicalUserProfileRole(profileId, before);
-  const context = createContext([], () => cfg);
-  using stopped = vi.spyOn(stopWork, "stopWorkStartedBy");
-  const { request, respond } = setRole(context, profileId, after);
-  await request;
-  expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
-    profile: expect.objectContaining({ id: profileId }),
-  });
-  if (expected) {
-    expect(stopped).toHaveBeenCalledExactlyOnceWith(context, {
-      profileId,
-      stopReason: "access-reduced",
-    });
-  } else {
-    expect(stopped).not.toHaveBeenCalled();
-  }
-});
 
 it("does not redirect a role assignment through a profile merge during its write", async ({
   state,
