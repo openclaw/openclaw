@@ -122,6 +122,44 @@ suite.define(() => {
     );
   });
 
+  it.each(["focus moved", "no agents", "one agent"] as const)(
+    "does not open after an early Enter with %s",
+    async (scenario) => {
+      await withSettingsPage(
+        1440,
+        "appearance",
+        async (page, gateway) => {
+          const trigger = page.locator(".settings-sidebar .agent-select__trigger");
+          await gateway.waitForRequest("agents.list");
+          await trigger.focus();
+          expect(await trigger.evaluate((element) => element === document.activeElement)).toBe(
+            true,
+          );
+          await page.keyboard.press("Enter");
+          if (scenario === "focus moved") {
+            const search = page.locator(".settings-sidebar__search-input");
+            await search.focus();
+            await gateway.resolveDeferred("agents.list");
+            await expectSelectedAgent(page, "Clawd");
+            expect(await search.evaluate((element) => element === document.activeElement)).toBe(
+              true,
+            );
+          } else {
+            await gateway.resolveDeferred("agents.list", {
+              defaultId: "main",
+              mainKey: "main",
+              scope: "per-sender",
+              agents: scenario === "no agents" ? [] : [{ id: "main", name: "Clawd" }],
+            });
+            await expect.poll(() => trigger.isDisabled()).toBe(true);
+          }
+          expect(await trigger.getAttribute("aria-expanded")).toBe("false");
+        },
+        { holdAgentRoster: true },
+      );
+    },
+  );
+
   it("retains the Settings agent across pages and history without changing the chat agent", async () => {
     await withSettingsPage(1440, "model-providers", async (page, gateway) => {
       await page.getByRole("heading", { name: "Defaults for all agents", exact: true }).waitFor();

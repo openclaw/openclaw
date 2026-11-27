@@ -17,7 +17,7 @@ import { MenuHeading } from "./solid/menu-heading.tsx";
 
 type AgentSelectProps = {
   options: readonly AgentSelectOption[];
-  pendingOptions: Promise<unknown> | null;
+  triggerAttrs?: (attrs: JSX.ButtonHTMLAttributes<HTMLButtonElement>) => typeof attrs;
   value: string;
   placeholder: string;
   accessibleLabel: string;
@@ -159,7 +159,7 @@ defineSolidBridge<AgentSelectProps>(
       ),
       trigger: (attributes: Accessor<JSX.ButtonHTMLAttributes<HTMLButtonElement>>) => (
         <button
-          {...attributes()}
+          {...(props.triggerAttrs?.(attributes()) ?? attributes())}
           class="agent-select__trigger"
           aria-label={
             props.accessibleLabel
@@ -196,9 +196,6 @@ defineSolidBridge<AgentSelectProps>(
             get options() {
               return props.options;
             },
-            get pendingOptions() {
-              return props.pendingOptions;
-            },
             get disabled() {
               return props.disabled || props.options.length === 0;
             },
@@ -229,7 +226,7 @@ defineSolidBridge<AgentSelectProps>(
   {
     properties: {
       options: { default: [], attribute: false },
-      pendingOptions: { default: null, attribute: false },
+      triggerAttrs: { default: undefined, attribute: false },
       value: { default: "", attribute: false },
       placeholder: { default: "", attribute: false },
       accessibleLabel: { default: "", attribute: false },

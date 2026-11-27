@@ -18,12 +18,9 @@ import { createAnchoredOverlay } from "../lib/reactive/overlay-anchor.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
 import { createScrollPosition, createScrollStateRef } from "../lib/reactive/scroll-state.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
+import type { OverlayPlacement } from "./overlay-anchor.ts";
 import { createOverlay } from "./overlay-lifecycle.ts";
-import {
-  createPendingPickerOpen,
-  pickerSheetAdapter,
-  resolvePickerPlacement,
-} from "./select-picker-opening.ts";
+import type { OverlayNativeAdapter } from "./overlay-types.ts";
 import { createPickerPhoneSheet } from "./select-picker-phone-sheet.tsx";
 import { PickerOptionContent, PickerTriggerContent } from "./select-picker-presentation.tsx";
 import { pickerSearchInputProps } from "./select-picker-search.ts";
@@ -39,6 +36,15 @@ import "./solid/overlay.css";
 type Section<Option> = { group?: PickerGroup; options: Option[]; expanded: boolean };
 const PickerWindow = lazy(() => import("./select-picker-window.tsx"));
 let nextId = 0;
+const sheetAdapter: OverlayNativeAdapter = {
+  isOpen: (surface) => !surface.hidden,
+  show: (surface) => {
+    surface.hidden = false;
+  },
+  hide: (surface) => {
+    surface.hidden = true;
+  },
+};
 const normalizeSearch = (value: string) => value.toLocaleLowerCase().normalize("NFC");
 
 export function PickerContent<Option extends PickerOption>(props: {
@@ -97,10 +103,15 @@ export function PickerContent<Option extends PickerOption>(props: {
   const [keyboard, setKeyboard] = createSignal(false);
   const [collapsed, setCollapsed] = createStore<string[]>([]);
   const direction = () => (getComputedStyle(props.host).direction === "rtl" ? "rtl" : "ltr");
-  const pendingOpen = createPendingPickerOpen(
-    () => props.params,
-    () => trigger.matches(":focus"),
-  );
+  const resolvePlacement = (
+    placement: PickerParams<Option>["placement"],
+    variant: PickerParams<Option>["variant"],
+  ): OverlayPlacement =>
+    variant === "submenu"
+      ? direction() === "rtl"
+        ? "left-start"
+        : "right-start"
+      : `${placement ?? "bottom"}-start`;
   const options = createMemo((): readonly Option[] => {
     const { value, options: configuredOptions } = props.params;
     if (
@@ -182,7 +193,7 @@ export function PickerContent<Option extends PickerOption>(props: {
   // Native presentation mode belongs to this mounted overlay lifetime.
   const initialSheet = untrack(() => props.params.sheet);
   const overlay = createOverlay(id, undefined, {
-    native: initialSheet ? pickerSheetAdapter : undefined,
+    native: initialSheet ? sheetAdapter : undefined,
     exclusiveGroup: "menu",
     isValid: () => !props.params.disabled,
     acquireOcclusion: acquireNativeOverlaySurface,
@@ -229,7 +240,7 @@ export function PickerContent<Option extends PickerOption>(props: {
     () => trigger,
     () => {
       const { placement, variant } = props.params;
-      return { placement: () => resolvePickerPlacement(placement, variant, direction) };
+      return { placement: () => resolvePlacement(placement, variant) };
     },
     { anchored: !initialSheet, paused: () => !overlay.open },
   );
@@ -270,7 +281,6 @@ export function PickerContent<Option extends PickerOption>(props: {
   }
   function open(last = false, focus = true, initialKey?: string) {
     if (props.params.disabled || overlay.open) {
-      pendingOpen.request(() => open(last, focus, initialKey));
       return;
     }
     setSearching(
@@ -282,10 +292,7 @@ export function PickerContent<Option extends PickerOption>(props: {
         return;
       }
       if (!initialSheet) {
-        anchor.update(
-          trigger,
-          resolvePickerPlacement(props.params.placement, props.params.variant, direction),
-        );
+        anchor.update(trigger, resolvePlacement(props.params.placement, props.params.variant));
       }
       if (!overlay.request(true, focus ? (last ? "last" : "first") : "none")) {
         return;
@@ -317,10 +324,7 @@ export function PickerContent<Option extends PickerOption>(props: {
     content: () => (opened() ? rows() : undefined),
   });
   function handleKeydown(event: KeyboardEvent) {
-    if (event.key === "Escape") {
-      pendingOpen.cancel();
-    }
-    if (event.isComposing || (props.params.disabled && !props.params.pendingOptions)) {
+    if (event.isComposing || props.params.disabled) {
       return;
     }
     pointerHighlight = false;
@@ -517,7 +521,6 @@ export function PickerContent<Option extends PickerOption>(props: {
   const triggerAttributes = (): JSX.ButtonHTMLAttributes<HTMLButtonElement> => ({
     ref: (element) => (trigger = element),
     onKeyDown: handleKeydown,
-    onBlur: pendingOpen.cancel,
     "data-menu-trigger": id,
     id: triggerId(),
     class: "picker-select__trigger",
@@ -531,7 +534,7 @@ export function PickerContent<Option extends PickerOption>(props: {
     "aria-invalid": props.params.invalid ? "true" : undefined,
     "aria-describedby": props.params.describedBy,
     title: props.params.title,
-    disabled: props.params.disabled && !props.params.pendingOptions,
+    disabled: props.params.disabled,
     onClick: () => {
       clearTimeout(hoverTimer);
       setKeyboard(false);

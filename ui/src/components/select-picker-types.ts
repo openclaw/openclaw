@@ -21,8 +21,6 @@ export type PickerParams<Option extends PickerOption> = {
   label: string;
   value: string | null;
   options: readonly Option[];
-  /** Allow the focused trigger to retain activation while initial options load. */
-  pendingOptions?: Promise<unknown> | null;
   disabled?: boolean;
   invalid?: boolean;
   describedBy?: string;
