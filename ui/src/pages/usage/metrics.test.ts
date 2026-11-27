@@ -45,9 +45,7 @@ it("scopes the active-time denominator to the selected days", () => {
   // With days selected, a missing daily breakdown must not fall back to the
   // unfiltered aggregate — the day-filtered totals would divide by other
   // days' activity.
-  expect(
-    usageActiveMs({ latency: { count: 10, avgMs: 60_000 } }, ["2026-11-16"]),
-  ).toBe(0);
+  expect(usageActiveMs({ latency: { count: 10, avgMs: 60_000 } }, ["2026-11-16"])).toBe(0);
   expect(
     usageActiveMs(
       {
