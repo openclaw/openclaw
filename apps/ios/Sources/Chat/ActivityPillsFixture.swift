@@ -204,6 +204,15 @@ enum ActivityPillsFixture {
     static var initialGoal: OpenClawChatSessionGoal? {
         guard self.isEnabled else { return nil }
         let now = Date().timeIntervalSince1970 * 1000
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-goal-controls-fixture") {
+            return OpenClawChatSessionGoal(
+                id: "goal-release",
+                objective: "Draft a 500-character summary of the release plan.",
+                status: .active,
+                createdAt: now - 31000,
+                updatedAt: now,
+                tokensUsed: 660)
+        }
         return OpenClawChatSessionGoal(
             id: "goal-lisbon",
             objective: "Plan a week in Lisbon for two in mid-May: flights from SFO, a quiet hotel near Alfama, "

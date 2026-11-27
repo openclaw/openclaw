@@ -130,10 +130,19 @@ struct LocalChatFixture {
         ])
 }
 
-struct LocalFixtureChatTransport: OpenClawChatTransport, OpenClawChildStopTransport {
+struct LocalFixtureChatTransport: OpenClawChatGoalTransport, OpenClawChildStopTransport {
     func prepareChildStop(_ target: OpenClawChildStopTarget) async -> OpenClawChildStopAction? {
         guard ActivityPillsFixture.isEnabled, ActivityPillsFixture.child(forKey: target.key) != nil else { return nil }
         return OpenClawChildStopAction(target: target) { try await self.store.stopChild(target) }
+    }
+
+    func goalControls() async -> (update: Bool, clear: Bool) {
+        (true, true)
+    }
+
+    func mutateGoal(_ mutation: OpenClawChatGoalMutation) async throws -> Data {
+        if ActivityPillsFixture.failsReads { throw OpenClawChatTransportSendError.notDispatched }
+        return try await self.store.mutateGoal(mutation)
     }
 
     var supportsComposerCapabilities: Bool {
@@ -590,6 +599,9 @@ actor LocalFixtureChatStore {
         if Self.playsToolRunFixture {
             self.activeRunID = Self.toolRunID
             self.messages = Self.toolRunSeed()
+        }
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-goal-running-fixture") {
+            self.activeRunID = "fixture-goal-run"
         }
     }
 
@@ -1176,6 +1188,13 @@ actor LocalFixtureChatStore {
         if ProcessInfo.processInfo.arguments.contains("--openclaw-reaction-tool-fixture") {
             return Self.reactionToolMessages(now: now)
         }
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-goal-controls-fixture") {
+            return [Self.message(
+                role: "user",
+                text: "Summarize the release plan in 500 characters.",
+                timestamp: now - 31000,
+                transcriptMessageID: "fixture-release-request")]
+        }
         if ProcessInfo.processInfo.arguments.contains("--openclaw-external-run-fixture") {
             return [Self.message(
                 role: "user",
@@ -1485,5 +1504,50 @@ actor LocalFixtureChatStore {
     private static func normalizedSessionKey(_ value: String, fallback: String) -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? fallback : trimmed
+    }
+}
+
+extension LocalFixtureChatStore {
+    fileprivate func mutateGoal(_ mutation: OpenClawChatGoalMutation) throws -> Data {
+        struct Receipt: Encodable {
+            let action: String
+            let operationId: String
+            let sessionId: String
+            let goalId: String
+            let status: String
+            let goal: OpenClawChatSessionGoal?
+            let runId: String?
+        }
+        guard let goal, goal.id == mutation.goalID, let status = goal.status, let objective = goal.objective,
+              let createdAt = goal.createdAt else { throw OpenClawChatTransportSendError.notDispatched }
+        let now = Date().timeIntervalSince1970 * 1000
+        let nextStatus: OpenClawChatSessionGoal.Status = switch mutation.action {
+        case .pause: .paused
+        case .resume: .active
+        default: status
+        }
+        let nextObjective: String = if case let .edit(text) = mutation.action {
+            text
+        } else { objective }
+        self.goal = mutation.action == .clear ? nil : OpenClawChatSessionGoal(
+            id: mutation.goalID,
+            objective: nextObjective,
+            status: nextStatus,
+            createdAt: createdAt,
+            updatedAt: now,
+            tokensUsed: goal.tokensUsed ?? 0,
+            tokenBudget: goal.tokenBudget,
+            lastStatusNote: goal.lastStatusNote,
+            statusAt: nextStatus == status ? goal.statusChangedAt : now)
+        if mutation.action == .resume { self.activeRunID = mutation.operationID }
+        return try JSONEncoder().encode(Receipt(
+            action: mutation.action.name,
+            operationId: mutation.operationID,
+            sessionId: mutation.sessionID,
+            goalId: mutation.goalID,
+            status: mutation.action == .clear ? "cleared" : mutation
+                .action == .resume ? "started" : "updated",
+            goal: self.goal,
+            runId: mutation.action == .resume ? self.activeRunID : nil))
     }
 }

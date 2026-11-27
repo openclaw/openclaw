@@ -137,6 +137,7 @@ public final class OpenClawChatViewModel {
     @ObservationIgnored var cliAssistantStream: (runID: String, text: String, sealedPrefix: String)?
     public internal(set) var progressCard: ProgressCard?
     var activityChildren = ChatActivityChildren()
+    var goalActivity = ChatGoalActivity()
     var progressCardStoreAvailable: Bool?
     var progressCardRefreshAvailable = false
     var progressCardRefreshPending = false
@@ -1290,6 +1291,7 @@ extension OpenClawChatViewModel {
     /// Clears state owned by the current session/agent before a new identity can consume events.
     func clearSessionOwnedState(preservingTranscriptPresentation: Bool = false) {
         self.activityChildren = ChatActivityChildren()
+        self.goalActivity = ChatGoalActivity()
         let retained = preservingTranscriptPresentation ? self.retainedTranscriptPresentation : []
         if !preservingTranscriptPresentation { self.transcriptPresentationTarget = nil }
         self.historyDeltaMessageIDs = []

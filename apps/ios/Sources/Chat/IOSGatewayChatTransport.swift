@@ -4,7 +4,7 @@ import OpenClawKit
 import OpenClawProtocol
 import OSLog
 
-struct IOSGatewayChatTransport: OpenClawChatGatewayTransport, OpenClawChildStopTransport {
+struct IOSGatewayChatTransport: OpenClawChatGatewayTransport, OpenClawChatGoalTransport, OpenClawChildStopTransport {
     func prepareChildStop(_ target: OpenClawChildStopTarget) async -> OpenClawChildStopAction? {
         guard let route = await self.currentSessionMutationRoute(),
               let scopes = await self.gateway.currentOperatorScopes(ifCurrentRoute: route),
@@ -14,6 +14,22 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport, OpenClawChildStopT
         return OpenClawChildStopAction(target: target) {
             try await self.requestSessionMutation(target.request, ifCurrentRoute: route)
         }
+    }
+
+    func goalControls() async -> (update: Bool, clear: Bool) {
+        guard let route = await self.currentSessionMutationRoute(),
+              let scopes = await self.gateway.currentOperatorScopes(ifCurrentRoute: route),
+              scopes.contains("operator.write") || scopes.contains("operator.admin") else { return (false, false) }
+        async let update = self.gateway.supportsServerMethod("sessions.goal.update", ifCurrentRoute: route)
+        async let clear = self.gateway.supportsServerMethod("sessions.goal.clear", ifCurrentRoute: route)
+        return await (update == true, clear == true)
+    }
+
+    func mutateGoal(_ mutation: OpenClawChatGoalMutation) async throws -> Data {
+        guard let route = await self.currentSessionMutationRoute() else {
+            throw OpenClawChatTransportSendError.notDispatched
+        }
+        return try await self.requestSessionMutation(mutation.request, ifCurrentRoute: route)
     }
 
     var chatGatewayAgentID: String? {

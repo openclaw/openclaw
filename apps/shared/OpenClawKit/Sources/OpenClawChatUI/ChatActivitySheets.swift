@@ -17,6 +17,14 @@ struct ChatActivitySheetView: View {
     @State private var fittedHeight: CGFloat?
 
     var body: some View {
+        if self.sheet == .goal {
+            ChatActivityGoalPage(viewModel: self.viewModel)
+        } else {
+            self.listSheet
+        }
+    }
+
+    private var listSheet: some View {
         NavigationStack(path: self.$path) {
             self.root
                 .listStyle(.insetGrouped)
@@ -59,7 +67,7 @@ struct ChatActivitySheetView: View {
     private var root: some View {
         switch self.sheet {
         case .goal:
-            ChatActivityGoalPage(viewModel: self.viewModel)
+            EmptyView() // The Goal owns its content-fitted presentation.
         case .progress:
             ChatActivityProgressPage(viewModel: self.viewModel, onHide: {
                 self.onHideProgress()
@@ -82,56 +90,311 @@ enum ChatActivitySheetMetrics {
 
 private struct ChatActivityGoalPage: View {
     let viewModel: OpenClawChatViewModel
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var controls = (update: false, clear: false)
+    @State private var confirmsDelete = false
+    @State private var editingGoal: OpenClawChatSessionGoal?
+    @State private var draft = ""
+    @State private var error: String?
+    @State private var retrying = false
+    @State private var expanded = false
+    @State private var headerHeight: CGFloat = 76
+    @State private var objectiveHeight: CGFloat = 52
+    @State private var noteHeight: CGFloat = 0
+    @State private var bottomHeight: CGFloat = 64
+    @State private var progressHeight: CGFloat = 44
 
-    var body: some View {
-        let goal = self.viewModel.currentSessionEntry()?.goal
-        List {
-            if let goal, goal.isPresentable {
-                Section {
-                    Text(verbatim: goal.objective ?? "")
-                        .font(OpenClawChatTypography.settingsBody)
-                        .textSelection(.enabled)
-                        .accessibilityIdentifier("chat-activity-goal-objective")
-                }
-                Section {
-                    LabeledContent {
-                        Text(verbatim: Self.statusName(goal.status))
-                    } label: {
-                        Text("Status")
-                    }
-                    if let created = goal.createdAt {
-                        LabeledContent {
-                            ChatActivityElapsed(since: created, until: goal.statusChangedAt)
-                        } label: {
-                            Text("Time")
-                        }
-                    }
-                    if let usage = ChatActivityFormat.goalUsage(goal) {
-                        LabeledContent {
-                            Text(verbatim: usage).monospacedDigit()
-                        } label: {
-                            Text("Tokens")
-                        }
-                    }
-                }
-                .font(OpenClawChatTypography.settingsBody)
-                if let note = goal.lastStatusNote?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty {
-                    Section {
-                        Text(verbatim: note)
-                            .font(OpenClawChatTypography.settingsBody)
-                            .foregroundStyle(.secondary)
-                    } header: {
-                        Text("Latest note")
-                    }
-                }
-            } else {
-                ChatActivityEmptyRow(text: String(localized: "No goal"))
-            }
-        }
-        .navigationTitle(Text("Goal"))
+    private var current: OpenClawChatSessionGoal? {
+        self.viewModel.currentSessionEntry()?.goal
     }
 
-    static func statusName(_ status: OpenClawChatSessionGoal.Status?) -> String {
+    private var editing: Bool {
+        self.editingGoal != nil
+    }
+
+    private var objective: String {
+        self.draft.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var pending: Bool {
+        self.viewModel.goalActivity.pending
+    }
+
+    private var disabled: Bool {
+        !self.viewModel.canManageGoal || self.pending
+    }
+
+    var body: some View {
+        let goal = self.editingGoal ?? self.current.flatMap { $0.isPresentable ? $0 : nil }
+        let operation = self.viewModel.goalActivity.operation.flatMap { $0.goalID == goal?.id ? $0 : nil }
+        let retry = operation != nil && (!self.pending || self.retrying)
+        let note = goal?.lastStatusNote?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let budget = goal.flatMap(ChatGoalBudget.init)
+        let resting = PresentationDetent.height(ceil(self.headerHeight + min(self.objectiveHeight, 198) +
+                (note.isEmpty ? 0 : min(self.noteHeight, 96) + 12) + (budget == nil ? 0 : self.progressHeight) +
+                (goal == nil ? 0 : self.bottomHeight) + 8))
+        VStack(alignment: .leading, spacing: 0) {
+            self.header(goal: goal, budget: budget, retry: retry)
+                .padding(.top, 20)
+                .padding(.bottom, 12)
+                // The native Save circle is shorter than the Edit capsule; keep the fitted reading row.
+                .frame(minHeight: self.editing ? self.headerHeight : nil)
+                .fixedSize(horizontal: false, vertical: true)
+                .layoutPriority(2)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { self.headerHeight = $0 }
+            if let goal {
+                ChatGoalScrollRegion(height: self.$objectiveHeight, limit: self.expanded ? .infinity : 198) {
+                    Group {
+                        if self.editing {
+                            ChatGoalDraftField(draft: self.$draft, pending: self.pending)
+                                .accessibilityLabel(Text("Goal text"))
+                        } else {
+                            Text(verbatim: goal.objective ?? "")
+                                .textSelection(.enabled)
+                                .accessibilityIdentifier("chat-activity-goal-objective")
+                        }
+                    }
+                    .font(OpenClawChatTypography.settingsBody)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 15)
+                }
+                .background(
+                    Color(uiColor: self.colorScheme == .dark
+                        ? .tertiarySystemGroupedBackground : .secondarySystemGroupedBackground),
+                    in: RoundedRectangle(cornerRadius: 26))
+                .clipShape(.rect(cornerRadius: 26))
+                if let budget {
+                    self.progress(budget, for: goal)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .layoutPriority(2)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { self.progressHeight = $0 }
+                }
+                if !note.isEmpty {
+                    ChatGoalScrollRegion(height: self.$noteHeight, limit: self.expanded ? 198 : 96) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Latest note").fontWeight(.semibold)
+                            Text(verbatim: note).textSelection(.enabled)
+                        }
+                        .font(OpenClawChatTypography.settingsFootnote)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 18)
+                    }
+                    .padding(.top, 12)
+                }
+                if !self.editing { Spacer(minLength: 0) }
+                self.bottom(goal: goal, operation: operation, retry: retry)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .layoutPriority(2)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { self.bottomHeight = $0 }
+                if self.editing { Spacer(minLength: 0) }
+            } else {
+                ChatActivityEmptyRow(text: String(localized: "No goal"))
+                    .padding(.horizontal, 18)
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 8)
+        .tint(.primary)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("chat-activity-sheet")
+        // Keep a compact editor compact when the keyboard appears. An already expanded sheet stays expanded.
+        .presentationDetents(self.editing && !self.expanded ? [resting] : [resting, .large], selection: Binding(
+            get: { self.expanded ? .large : resting },
+            set: { self.expanded = $0 == .large }))
+        .presentationContentInteraction(.scrolls)
+        .presentationDragIndicator(.visible)
+        .presentationBackground(Color(uiColor: .systemGray6))
+        .task(id: self.viewModel.healthOK ? self.viewModel.sessionMetadataGeneration : nil) {
+            guard self.viewModel.healthOK,
+                  let transport = self.viewModel.transport as? any OpenClawChatGoalTransport else { return }
+            self.controls = await transport.goalControls()
+        }
+    }
+
+    private func header(goal: OpenClawChatSessionGoal?, budget: ChatGoalBudget?, retry: Bool) -> some View {
+        ZStack {
+            VStack(spacing: 1) {
+                Text("Goal").font(OpenClawChatTypography.body(size: 17, weight: .semibold, relativeTo: .headline))
+                if let goal {
+                    let status = self.viewModel.goalOperationLabel(for: goal) ?? Self.statusName(goal.status)
+                    Group {
+                        if budget == nil, let created = goal.createdAt {
+                            ChatActivityElapsed(since: created, until: goal.statusChangedAt, prefix: status)
+                        } else {
+                            Text(verbatim: status)
+                        }
+                    }
+                    .font(OpenClawChatTypography.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("chat-goal-status")
+                }
+            }
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 70)
+            HStack {
+                Button {
+                    if self.editing {
+                        self.endEdit()
+                    } else {
+                        self.dismiss()
+                    }
+                } label: {
+                    Image(systemName: "xmark").font(.body.weight(.semibold))
+                }
+                .modifier(ChatGoalButtonStyle(circle: true))
+                .accessibilityLabel(self.editing ? Text("Cancel") : Text("Close"))
+                .accessibilityIdentifier("chat-activity-sheet-close")
+                Spacer(minLength: 0)
+                if let goal, self.editing {
+                    Button { self.perform(.edit(self.objective), goal: goal) } label: {
+                        Image(systemName: "checkmark").font(.body.weight(.semibold))
+                            .opacity(self.pending ? 0 : 1)
+                            .overlay { if self.pending { ProgressView().controlSize(.small) } }
+                    }
+                    .modifier(ChatGoalButtonStyle(circle: true, prominent: true))
+                    .disabled(self.disabled || self.changed(goal) || self.objective.isEmpty ||
+                        self.objective == goal.objective || self.objective.utf16.count > 16000)
+                    .accessibilityLabel(Text("Save"))
+                } else if let goal, self.controls.update, !retry, goal.status != .complete {
+                    Button {
+                        self.error = nil
+                        self.draft = goal.objective ?? ""
+                        self.editingGoal = goal
+                    } label: { Text("Edit").font(OpenClawChatTypography.body(
+                        size: 17,
+                        weight: .medium,
+                        relativeTo: .body)) }
+                        .modifier(ChatGoalButtonStyle())
+                        .disabled(self.disabled)
+                        .accessibilityLabel(Text("Edit goal"))
+                }
+            }
+        }
+    }
+
+    private func progress(_ budget: ChatGoalBudget, for goal: OpenClawChatSessionGoal) -> some View {
+        VStack(spacing: 9) {
+            ProgressView(value: budget.fraction)
+                .tint(goal.status == .paused ? .secondary : OpenClawChatTheme.assistantText)
+                .accessibilityHidden(true)
+            HStack(alignment: .firstTextBaseline) {
+                Text(verbatim: budget.label)
+                Spacer(minLength: 8)
+                if let created = goal.createdAt {
+                    ChatActivityElapsed(since: created, until: goal.statusChangedAt)
+                }
+            }
+            .font(OpenClawChatTypography.settingsFootnote)
+            .foregroundStyle(.secondary)
+            .monospacedDigit()
+        }
+        .padding(.horizontal, 18)
+        .padding(.top, 14)
+        .opacity(self.editing ? 0.35 : 1)
+    }
+
+    private func bottom(
+        goal: OpenClawChatSessionGoal,
+        operation: OpenClawChatGoalMutation?,
+        retry: Bool) -> some View
+    {
+        let resumeBusy = goal.status != .active && (self.viewModel.hasBlockingRunActivity || self.viewModel.isSending)
+        let showsControls = self.controls.update || self.controls.clear
+        return VStack(alignment: .leading, spacing: 0) {
+            if showsControls {
+                HStack {
+                    if self.controls.clear, !retry {
+                        Button { self.confirmsDelete = true } label: {
+                            Image(systemName: "trash").foregroundStyle(Color(uiColor: .systemRed))
+                                .opacity(self.pending && operation?.action == .clear ? 0 : 1)
+                                .overlay { if self.pending,
+                                              operation?.action == .clear { ProgressView().controlSize(.small) }
+                                }
+                        }
+                        .modifier(ChatGoalButtonStyle(circle: true))
+                        .accessibilityLabel(Text("Delete goal"))
+                        .accessibilityIdentifier("chat-goal-delete")
+                        .confirmationDialog(
+                            Text("Delete this goal?"),
+                            isPresented: self.$confirmsDelete,
+                            titleVisibility: .visible)
+                        {
+                            Button(role: .destructive) { self.perform(.clear, goal: goal) } label: {
+                                Text("Delete goal")
+                            }
+                            Button(role: .cancel) {} label: { Text("Cancel") }
+                        }
+                    }
+                    Spacer(minLength: 0)
+                    if retry, let operation {
+                        Button {
+                            self.retrying = true
+                            self.perform(operation.action, goal: goal)
+                        } label: {
+                            Text(operation
+                                .action == .resume ? LocalizedStringKey("Retry resume") :
+                                LocalizedStringKey("Check outcome"))
+                                .font(OpenClawChatTypography.body(size: 17, weight: .medium, relativeTo: .body))
+                                .opacity(self.pending ? 0 : 1)
+                                .overlay { if self.pending { ProgressView().controlSize(.small) } }
+                        }
+                        .modifier(ChatGoalButtonStyle())
+                    } else if self.controls.update {
+                        let active = goal.status == .active
+                        let busy = self.pending && (operation?.action == .pause || operation?.action == .resume)
+                        Button { self.perform(active ? .pause : .resume, goal: goal) } label: {
+                            HStack(spacing: 7) {
+                                Image(systemName: active ? "pause.fill" : "play.fill")
+                                    .font(.subheadline.weight(.semibold))
+                                Text(active ? LocalizedStringKey("Pause") : LocalizedStringKey("Resume"))
+                                    .font(OpenClawChatTypography.body(size: 17, weight: .medium, relativeTo: .body))
+                            }
+                            .opacity(busy ? 0 : 1)
+                            .overlay { if busy { ProgressView().controlSize(.small) } }
+                        }
+                        .modifier(ChatGoalButtonStyle(prominent: !active))
+                        .disabled(resumeBusy)
+                        .accessibilityLabel(active ? Text("Pause goal") : Text("Resume goal"))
+                    }
+                }
+                .disabled(self.disabled || self.editing)
+                .opacity(self.editing ? 0.5 : 1)
+                .padding(.top, 20)
+            }
+            if self.editing || showsControls, let footer = self.footer(
+                goal: goal,
+                retry: retry,
+                resumeBusy: resumeBusy)
+            {
+                Text(verbatim: footer)
+                    .font(OpenClawChatTypography.settingsFootnote)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 18)
+                    .padding(.top, 10)
+            }
+        }
+    }
+
+    private func footer(goal: OpenClawChatSessionGoal, retry: Bool, resumeBusy: Bool) -> String? {
+        if let error { return error }
+        if self.editing {
+            if self.changed(goal) { return String(localized: "The goal changed. Cancel to review it.") }
+            if !self.viewModel.canManageGoal { return String(localized: "Reconnect to save this goal.") }
+            if self.objective.utf16
+                .count > 16000 { return String(localized: "Shorten the goal to 16,000 characters or fewer.") }
+        } else {
+            if !self.viewModel.canManageGoal { return String(localized: "Reconnect to manage this goal.") }
+            if retry { return String(localized: "Check whether your change went through.") }
+            if resumeBusy { return String(localized: "Wait for this reply to finish before resuming the goal.") }
+        }
+        return nil
+    }
+
+    private static func statusName(_ status: OpenClawChatSessionGoal.Status?) -> String {
         switch status {
         case .active, nil: String(localized: "Active")
         case .paused: String(localized: "Paused")
@@ -140,6 +403,177 @@ private struct ChatActivityGoalPage: View {
         case .usageLimited: String(localized: "Usage limit reached")
         case .budgetLimited: String(localized: "Budget reached")
         }
+    }
+
+    private func changed(_ goal: OpenClawChatSessionGoal) -> Bool {
+        self.current?.id != goal.id || self.current?.objective != goal.objective || self.current?.status == .complete
+    }
+
+    private func endEdit() {
+        self.editingGoal = nil
+        self.error = nil
+    }
+
+    private func perform(_ action: OpenClawChatGoalMutation.Action, goal: OpenClawChatSessionGoal) {
+        guard let id = goal.id else { return }
+        self.error = nil
+        Task {
+            defer { self.retrying = false }
+            do {
+                try await self.viewModel.applyGoalAction(action, to: id)
+                if action == .clear { self.dismiss() }
+                if case .edit = action { self.endEdit() }
+            } catch {
+                let uncertain = self.viewModel.goalActivity.operation != nil
+                if self.editing {
+                    self
+                        .error = uncertain ?
+                        String(localized: "Couldn’t confirm the edit. Cancel and check its outcome.")
+                        : String(localized: "Couldn’t save the goal. Try again.")
+                } else {
+                    self
+                        .error = uncertain ?
+                        String(localized: "Couldn’t confirm the change. Check whether it went through.")
+                        : String(localized: "Couldn’t change the goal. Review its status and try again.")
+                }
+            }
+        }
+    }
+}
+
+/// The inline editor becomes first responder once it is attached to the presented sheet's window.
+private struct ChatGoalDraftField: UIViewRepresentable {
+    @Binding var draft: String
+    let pending: Bool
+
+    final class Field: UITextView {
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            guard self.window != nil else { return }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.window != nil, self.isEditable else { return }
+                self.becomeFirstResponder()
+            }
+        }
+    }
+
+    final class Coordinator: NSObject, UITextViewDelegate {
+        let draft: Binding<String>
+        init(draft: Binding<String>) {
+            self.draft = draft
+        }
+
+        func textViewDidChange(_ textView: UITextView) {
+            self.draft.wrappedValue = textView.text
+            textView.invalidateIntrinsicContentSize()
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(draft: self.$draft)
+    }
+
+    func makeUIView(context: Context) -> Field {
+        let field = Field()
+        field.delegate = context.coordinator
+        field.backgroundColor = .clear
+        field.font = OpenClawChatTypography.bodyUIFont
+        field.adjustsFontForContentSizeCategory = true
+        field.textContainerInset = .zero
+        field.textContainer.lineFragmentPadding = 0
+        field.isScrollEnabled = false // The enclosing prompt viewport also owns scrolling while editing.
+        field.text = self.draft
+        field.selectedRange = NSRange(location: self.draft.utf16.count, length: 0)
+        return field
+    }
+
+    func updateUIView(_ field: Field, context _: Context) {
+        field.isEditable = !self.pending
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: Field, context _: Context) -> CGSize? {
+        guard let width = proposal.width else { return nil }
+        return uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
+    }
+}
+
+/// Only goals with an actual budget show token progress. Unbudgeted usage is not a denominator.
+struct ChatGoalBudget {
+    let label: String
+    let fraction: Double
+
+    init?(_ goal: OpenClawChatSessionGoal) {
+        guard let total = goal.tokenBudget, total.isFinite, total > 0 else { return nil }
+        let used = goal.tokensUsed ?? 0
+        self.fraction = min(max(used / total, 0), 1)
+        self.label = String(
+            format: String(localized: "%1$@ of %2$@ tokens"),
+            ChatActivityFormat.tokens(used),
+            ChatActivityFormat.tokens(total))
+    }
+}
+
+private struct ChatGoalButtonStyle: ViewModifier {
+    var circle = false
+    var prominent = false
+
+    func body(content: Content) -> some View {
+        Group {
+            if #available(iOS 26, *) {
+                if self.prominent {
+                    content.buttonStyle(.glassProminent).tint(OpenClawChatTheme.accent)
+                } else {
+                    content.buttonStyle(.glass)
+                }
+            } else {
+                if self.prominent {
+                    content.buttonStyle(.borderedProminent).tint(OpenClawChatTheme.accent)
+                } else {
+                    content.buttonStyle(.bordered)
+                }
+            }
+        }
+        .controlSize(.large)
+        .buttonBorderShape(self.circle ? .circle : .capsule)
+    }
+}
+
+/// Fit prose before capping its viewport; never clip its controls or fade an edge with no hidden text.
+private struct ChatGoalScrollRegion<Content: View>: View {
+    @Binding var height: CGFloat
+    let limit: CGFloat
+    @ViewBuilder let content: () -> Content
+    @State private var edges: Edge.Set = []
+
+    var body: some View {
+        ScrollView {
+            self.content()
+                .fixedSize(horizontal: false, vertical: true)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { self.height = ceil($0) }
+        }
+        .scrollIndicators(.hidden)
+        .scrollBounceBehavior(.basedOnSize)
+        .onScrollGeometryChange(for: Edge.Set.self) { geometry in
+            var edges: Edge.Set = []
+            if geometry.visibleRect.minY > 1 { edges.insert(.top) }
+            if geometry.visibleRect.maxY < geometry.contentSize.height - 1 { edges.insert(.bottom) }
+            return edges
+        } action: { _, edges in self.edges = edges }
+        .mask {
+            VStack(spacing: 0) {
+                if self.edges.contains(.top) { LinearGradient(
+                    colors: [.clear, .black],
+                    startPoint: .top,
+                    endPoint: .bottom).frame(height: 22) }
+                Color.black
+                if self.edges.contains(.bottom) { LinearGradient(
+                    colors: [.black, .clear],
+                    startPoint: .top,
+                    endPoint: .bottom).frame(height: 30) }
+            }
+        }
+        .frame(maxHeight: min(self.height, self.limit))
+        .layoutPriority(1)
     }
 }
 
