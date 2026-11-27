@@ -42,7 +42,7 @@ describe("loadIrohBinding", () => {
     loaded.sourceCheckout = sourceCheckout;
     expect(() => loadIrohBinding()).toThrow(
       sourceCheckout
-        ? "OpenClaw ID is enabled, but the iroh binding is not built or could not be loaded. Run `pnpm build:iroh` from the source checkout."
+        ? "Run `pnpm build:iroh` from the Git worktree serving the Gateway (the active release's openclaw directory after an update), then restart the Gateway."
         : "The OpenClaw ID transport is not available in this build.",
     );
   });

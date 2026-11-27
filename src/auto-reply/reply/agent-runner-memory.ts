@@ -24,7 +24,6 @@ import {
   resolveFreshSessionTotalTokens,
   type InternalSessionEntry as SessionEntry,
 } from "../../config/sessions.js";
-import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
   resolveMaxActiveTranscriptBytes,
   refreshTranscriptByteCompactionLatch,
@@ -74,7 +73,7 @@ import {
   buildVisibleMemoryFlushFailure,
   resolveVisibleMemoryFlushErrorPayloads,
 } from "./memory-flush-errors.js";
-import { recordMemoryFlushFailure } from "./memory-flush-failure.js";
+import { recordMemoryFlushFailure, recordMemoryFlushSuccess } from "./memory-flush-outcome.js";
 import {
   isToolsMemoryFlushPlan,
   memoryFlushResultIsSilent,
@@ -91,6 +90,7 @@ import {
   shouldRunPreflightCompaction,
 } from "./memory-flush.js";
 import { appendPostCompactionRefreshPrompt } from "./post-compaction-context.js";
+import { startMemoryFlushStallGuard } from "./preflight-stall.js";
 import { startFollowupRunPreAdoptionHeartbeat } from "./queue/lifecycle.js";
 import { resolveFollowupAbortSignal } from "./queue/types.js";
 import { incrementCompactionCount } from "./session-updates.js";
@@ -504,7 +504,7 @@ export async function runMemoryFlushIfNeeded(
   const { writable: memoryFlushWritable, toolPolicy: sandboxToolPolicy } =
     await resolveMemoryFlushSandbox(params, assertMemoryFlushCurrent);
 
-  let entry =
+  const entry =
     params.sessionEntry ??
     (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined);
   if (entry?.incognito === true || isIncognitoSessionKey(params.sessionKey)) {
@@ -663,12 +663,13 @@ export async function runMemoryFlushIfNeeded(
     maintenanceRun,
     sourcePolicySessionKey,
   } = preparedAttempt;
+  const stallGuard = startMemoryFlushStallGuard(params, selection, abortSignal);
   const deferredLifecycle = createDeferredEmbeddedRunLifecycleManager({
     runId: flushRunId,
     sessionId: memorySession.sessionId,
     sessionKey: memorySession.sessionKey,
     sessionFile: memorySession.sessionFile,
-    abortSignal,
+    abortSignal: stallGuard?.signal ?? abortSignal,
   });
   const flushedCompactionCount = entry?.compactionCount ?? 0;
   let visibleErrorPayloads: ReplyPayload[] = [];
@@ -742,6 +743,7 @@ export async function runMemoryFlushIfNeeded(
       sessionOverride: { kind: "preserve" },
       abortSignal: deferredLifecycle.signal,
       runCandidate: async (provider, model, runOptions) => {
+        stallGuard?.setModel(provider, model);
         const sessionRuntimeOverride = runOptions.agentHarnessRuntimeOverride;
         const candidateThinkLevel = resolveRunThinkingLevelForFallbackCandidate({
           cfg: params.cfg,
@@ -773,6 +775,8 @@ export async function runMemoryFlushIfNeeded(
           ...runBaseParams,
           awaitSessionDiffBaseline: params.followupRun.runObservers?.awaitSessionDiffBaseline,
           ...memorySession,
+          onMemoryFlushModelProgress:
+            stallGuard && (() => stallGuard.progress(deferredLifecycle.signal)),
           agentHarnessId: resolveSessionPinnedHarnessId(entry),
           agentHarnessRuntimeOverride: sessionRuntimeOverride,
           sandboxSessionKey: sourcePolicySessionKey,
@@ -832,30 +836,16 @@ export async function runMemoryFlushIfNeeded(
     ) {
       throw new Error("no persistence tool call succeeded");
     }
-    if (params.storePath && params.sessionKey) {
-      try {
-        const updatedEntry = await updateSessionEntry(
-          { storePath: params.storePath, sessionKey: params.sessionKey },
-          async () => ({
-            memoryFlush: { kind: "succeeded", compactionCount: flushedCompactionCount },
-          }),
-          { skipMaintenance: true, takeCacheOwnership: true },
-        );
-        if (updatedEntry) {
-          entry = updatedEntry;
-        }
-      } catch (err) {
-        logVerbose(`failed to persist memory flush metadata: ${String(err)}`);
-      }
-    }
-    return { sessionEntry: entry, outcome: "completed" };
+    return await recordMemoryFlushSuccess(params, flushedCompactionCount, entry);
   } catch (error) {
     if (error instanceof MemoryFlushToolsUnavailableError) {
       memoryFlushLog.debug(error.message);
       return { sessionEntry: entry, outcome: "skipped" };
     }
-    return await recordFailure(error);
+    // A stalled flush is an ordinary, counted flush failure; the reply continues without it.
+    return await recordFailure(stallGuard?.stall ?? error);
   } finally {
+    stallGuard?.stop();
     stopHeartbeat?.();
     if (parentRunId && !abortSignal?.aborted) {
       emitAgentRunStatusEvent({

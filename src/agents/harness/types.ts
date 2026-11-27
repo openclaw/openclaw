@@ -325,9 +325,32 @@ export type AgentHarnessSideQuestionParams = {
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
 };
+export type AgentHarnessSideQuestionRequest = {
+  prompt: string;
+  prependContext?: string;
+  appendContext?: string;
+  images?: Array<import("../../llm/types.js").ImageContent & { displayName?: string }>;
+};
+
 /** Current side-question contract for hosts that always provide closure-bound authority. */
 export type AgentHarnessSideQuestionParamsV2 = AgentHarnessSideQuestionParams & {
   hostCapabilities: AgentHarnessHostCapabilities;
+  /** Prepare sanitized context and exact auth for a fresh tool-free side completion.
+   * The host retains transcript/fork ownership; new calls fail after this side execution closes.
+   */
+  prepareIsolatedSideQuestion?: () => Promise<
+    | { kind: "handled"; result: AgentHarnessSideQuestionResult }
+    | {
+        kind: "completion";
+        params: AgentHarnessIsolatedCompletionParamsV2;
+        messages: import("../../llm/types.js").Message[];
+        images: import("../../llm/types.js").ImageContent[];
+        /** Apply the host's final request policy inside the completion deadline. */
+        prepareRequest: (
+          request: AgentHarnessSideQuestionRequest,
+        ) => Promise<AgentHarnessSideQuestionRequest>;
+      }
+  >;
   /** Non-authorizing native ownership captured before model and auth preparation. */
   expectedSessionRuntimeOwnership?: InternalEmbeddedRunAttemptParams["expectedSessionRuntimeOwnership"];
   /** Core-prepared search policy, bound to the side question's model and requester facts. */
@@ -493,6 +516,8 @@ export type AgentHarnessModelCatalogParams = {
   agentDir: string;
   workspaceDir: string;
   configuredModelRefs?: readonly ModelRef[];
+  /** Requested discovery scope; omitted for unscoped picker enumeration. */
+  providerIds?: readonly string[];
 };
 
 export type AgentHarnessModelCatalogResult =
@@ -737,6 +762,8 @@ type AgentHarnessContract<
     },
   ): Promise<import("../agent-bundle-mcp-types.js").SessionMcpRuntimeLease | undefined>;
 
+  /** Providers listed by this catalog, independent of configured execution routes. */
+  modelCatalogProviderIds?: readonly string[];
   /** Lists account-scoped models owned by this native runtime. */
   loadModelCatalog?(
     params: AgentHarnessModelCatalogParams,

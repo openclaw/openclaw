@@ -77,7 +77,6 @@ import {
 } from "../../sessions/model-overrides.js";
 import { getSessionControllerOperation } from "../../sessions/session-controller.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
-import { acknowledgeReplySessionTransition } from "../../sessions/session-controller.session-reader.js";
 import { recordSessionCreated } from "../../sessions/session-created.js";
 import { recordAcceptedSessionParticipantInput } from "../../sessions/session-participant-input-recording.js";
 import { prepareChannelParticipantObservation } from "../../sessions/session-participant-input.js";
@@ -122,6 +121,7 @@ import type {
   SessionInitResult,
 } from "./session-init.types.js";
 import {
+  acknowledgeCommittedReplyInitialization,
   assertReplySessionInitializationAllowed,
   loadReplySessionInitializationForAttempt,
   prepareReplySessionInitialization,
@@ -820,16 +820,15 @@ async function initSessionStateAttemptLocked(
     // The outer retry owns conflicts; never retry while holding the writer lane.
     throw new ReplySessionInitConflictError(sessionKey);
   }
-  await acknowledgeReplySessionTransition(
-    params.replyOperation,
+  await acknowledgeCommittedReplyInitialization(
+    params,
+    sessionTarget,
     { previous: entry, current: committed.sessionEntry },
-    captureSessionTarget({ storeScope: storePath, sessionKey, agentId }),
+    !isSystemEvent && !isInterSession,
   );
   clearCommittedSessionResetRuntimeState({
+    ...sessionTarget,
     previousSessionEntry,
-    storePath,
-    agentId,
-    sessionKey,
     signal: params.signal,
     onError: (error) =>
       log.warn(`failed to clear reset runtime state for session ${sessionKey}: ${String(error)}`),

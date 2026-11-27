@@ -62,6 +62,11 @@ export type TranscriptHeader = {
 
 export type TranscriptSearchProjection = { query: string; empty: boolean } | null;
 
+export type TranscriptProjectionSource = {
+  messages: readonly unknown[];
+  search: TranscriptSearchProjection;
+};
+
 export type ChatTranscriptSession = {
   readonly layout: Pick<TranscriptLayoutOwner, "viewportResizePending" | "configureRows" | "ready">;
   readonly entryAnimations: ChatMessageEntryAnimations;
@@ -85,7 +90,7 @@ export type ChatTranscriptSession = {
   syncMessageRows(
     messageRowKeysById: ReadonlyMap<string, string>,
     messageRowsByKey: ReadonlyMap<string, string>,
-    search?: TranscriptSearchProjection,
+    source?: TranscriptProjectionSource,
   ): void;
   /** Returns the sampled loaded message at or preceding the viewport midpoint. */
   activeMessageId(messageIds: readonly string[]): string | null;

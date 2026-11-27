@@ -1,5 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { expect, it, vi } from "vitest";
+import { readImageProbeFromHeader } from "../media/image-ops.js";
+import { CHAT_IMAGE_RENDITION_MAX_BYTES } from "../shared/chat-image-renditions.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   encodeImageThumbnail,
@@ -49,4 +51,13 @@ it.each(["hevc", "msf1"])("refuses HEIF sequence brand %s before transcoding", a
   await expect(encodeImageThumbnail(source)).rejects.toThrow(
     "Managed image thumbnail is unavailable for this image format",
   );
+});
+
+it("keeps photo detail at the requested width within the preview byte limit", async () => {
+  const photo = await readFile(
+    new URL("../../test/fixtures/media/roof-camera-sky.jpg", import.meta.url),
+  );
+  const preview = await encodeImageThumbnail(photo, 960);
+  expect(readImageProbeFromHeader(preview.data)?.width).toBe(960);
+  expect(preview.data.byteLength).toBeLessThanOrEqual(CHAT_IMAGE_RENDITION_MAX_BYTES[960]);
 });

@@ -228,9 +228,10 @@ it("rejects a changed database before hashing retained payloads or imaging curre
   expect(await f.reuse(), "grown database").toBeUndefined();
   expectNoComparison("grown database");
 
+  // The fresh capture replaces the superseded original rather than adding to it.
   const fresh = await f.capture();
-  expect(fresh).toHaveLength(2);
-  expect(fresh).toEqual(expect.arrayContaining(originals));
+  expect(fresh).toHaveLength(1);
+  expect(fresh).not.toEqual(originals);
   expect(await f.capture(), "the fresh capture is reusable while unchanged").toEqual(fresh);
   const { payloadPath } = await f.capturedFile(file, true);
   {

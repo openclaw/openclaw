@@ -128,9 +128,8 @@ public enum ChatTranscriptExporter {
 
 extension OpenClawChatViewModel {
     public func exportTranscriptMarkdown() -> String {
-        let title = self.sessions.first { $0.key == self.sessionKey }?.displayName
-        return ChatTranscriptExporter.markdown(
-            sessionTitle: title,
+        ChatTranscriptExporter.markdown(
+            sessionTitle: self.currentSessionEntry()?.displayName,
             sessionKey: self.sessionKey,
             messages: self.messages)
     }

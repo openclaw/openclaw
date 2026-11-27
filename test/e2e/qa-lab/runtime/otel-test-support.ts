@@ -163,7 +163,7 @@ function oversizedBodyError(label: string, actualBytes: number, maxBytes: number
   return error;
 }
 
-export async function readRequestBody(
+async function readRequestBody(
   req: IncomingMessage,
   maxBytes = MAX_OTLP_COMPRESSED_BODY_BYTES,
 ): Promise<Buffer> {

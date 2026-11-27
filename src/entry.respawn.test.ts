@@ -11,17 +11,16 @@ vi.mock("./process/child-process-bridge.js", async (importOriginal) => ({
   attachChildProcessBridge: vi.fn(),
 }));
 
-const warningFlag = "--disable-warning=ExperimentalWarning";
 const caReady = "OPENCLAW_NODE_EXTRA_CA_CERTS_READY";
-const optionsReady = "OPENCLAW_NODE_OPTIONS_READY";
 
 type PlanOptions = NonNullable<Parameters<typeof buildCliRespawnPlan>[0]> & { args?: string[] };
-function buildPlan({ args = ["status"], ...params }: PlanOptions) {
+function buildPlan({ args = ["status"], autoNodeExtraCaCerts = "", ...params }: PlanOptions) {
   return buildCliRespawnPlan({
     argv: ["node", "openclaw", ...args],
     env: {},
     execArgv: [],
     platform: "linux",
+    autoNodeExtraCaCerts,
     ...params,
   });
 }
@@ -30,7 +29,7 @@ function requirePlan(params: Parameters<typeof buildPlan>[0]) {
   return expectDefined(buildPlan(params), "Expected CLI respawn plan");
 }
 
-const warningPrefix = ["--import", CLI_PARENT_BOUND_PRELOAD, warningFlag];
+const caPrefix = ["--import", CLI_PARENT_BOUND_PRELOAD];
 const systemCa = "/etc/ssl/certs/ca-certificates.crt";
 const windowsNode = "C:\\Program Files\\nodejs\\node.exe";
 const windowsScript =
@@ -46,53 +45,28 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it("runs one-shot model inference in process unless Node must reload its trust store", () => {
-  const local = ["infer", "model", "run", "--local", "--prompt-stdin"];
-  const alias = ["--profile", "dev", "capability", "model", "--agent", "main", "run"];
-  for (const args of [local, alias, [...alias, "--gateway"]]) {
-    expect(buildPlan({ args, autoNodeExtraCaCerts: "" })).toBeNull();
+it.each([
+  ["agent", "--local", "--message", "hi"],
+  ["status"],
+  ["infer", "model", "run", "--local", "--prompt-stdin"],
+])("runs %j in process unless Node must reload its trust store", (...args) => {
+  for (const platform of ["linux", "darwin"] as const) {
+    expect(buildPlan({ args, platform, autoNodeExtraCaCerts: "" })).toBeNull();
   }
-  const withCa = requirePlan({ args: local, autoNodeExtraCaCerts: systemCa });
+  const withCa = requirePlan({ args, autoNodeExtraCaCerts: systemCa });
   expect(withCa.env.NODE_EXTRA_CA_CERTS).toBe(systemCa);
-  expect(withCa.argv).not.toContain(warningFlag);
-  const otherCommand = ["infer", "model", "--agent", "run", "list"];
-  expect(requirePlan({ args: otherCommand, autoNodeExtraCaCerts: "" }).argv).toContain(warningFlag);
+  expect(withCa.argv).toEqual(["--import", CLI_PARENT_BOUND_PRELOAD, "openclaw", ...args]);
 });
-
-it.each([undefined, "--max-old-space-size=4096"])(
-  "suppresses standalone warnings through NODE_OPTIONS while preserving %s",
-  (nodeOptions) => {
-    vi.stubGlobal("__openclawStandaloneRootUrl", "file:///app/runtime/");
-    const args = ["--profile", "work", "config", "get", "gateway.mode"];
-    const argv = ["bun", "/app/runtime/openclaw.mjs", ...args];
-    const respawnPlan = requirePlan({
-      argv,
-      env: { NODE_OPTIONS: nodeOptions },
-      platform: "darwin",
-    });
-
-    expect(respawnPlan).toMatchObject({
-      argv: args,
-      env: {
-        NODE_OPTIONS: nodeOptions ? `${nodeOptions} ${warningFlag}` : warningFlag,
-        [optionsReady]: "1",
-        OPENCLAW_CLI_RESPAWN_PARENT: String(process.pid),
-      },
-    });
-    expect(buildPlan({ argv, env: respawnPlan.env, platform: "darwin" })).toBeNull();
-  },
-);
 
 it.each(["linux", "win32"] as const)(
   "leaves foreground Gmail shutdown with its lifecycle owner on %s",
   (platform) => {
-    const plan = (args: string[], ca?: string) =>
-      buildPlan({ args, platform, autoNodeExtraCaCerts: ca });
+    const plan = (args: string[]) => buildPlan({ args, platform, autoNodeExtraCaCerts: systemCa });
     for (const args of [
       ["webhooks", "gmail", "run", "--account", "fixture@example.com"],
       ["--profile", "fixture", "webhooks", "gmail", "run"],
     ]) {
-      expect(plan(args, systemCa)).toBeNull();
+      expect(plan(args)).toBeNull();
     }
     expect(plan(["webhooks", "gmail", "setup"])).not.toBeNull();
   },
@@ -102,24 +76,7 @@ it.each([
   [
     "bare-root startup stays attached to the terminal",
     { args: [], autoNodeExtraCaCerts: systemCa },
-    { argv: [...warningPrefix, "openclaw"], detachForProcessTree: false },
-  ],
-  [
-    "macOS system CA trust survives one-shot warning respawns",
-    {
-      args: ["cron", "list", "--json"],
-      env: { NODE_USE_SYSTEM_CA: "1" },
-      platform: "darwin",
-    },
-    {
-      argv: [...warningPrefix, "openclaw", "cron", "list", "--json"],
-      env: { NODE_USE_SYSTEM_CA: "1" },
-    },
-  ],
-  [
-    "explicit NODE_EXTRA_CA_CERTS survives discovery",
-    { env: { NODE_EXTRA_CA_CERTS: "/custom/ca.pem" }, autoNodeExtraCaCerts: systemCa },
-    { env: { NODE_EXTRA_CA_CERTS: "/custom/ca.pem" } },
+    { argv: [...caPrefix, "openclaw"], detachForProcessTree: false },
   ],
   [
     "Windows normalization preserves post-script node.exe arguments",
@@ -139,10 +96,11 @@ it.each([
       argv: [voltaShim, "/usr/local/bin/openclaw", "status"],
       env: { PATH: "/home/alice/.volta/bin:/usr/bin:/bin" },
       execPath: voltaShim,
+      autoNodeExtraCaCerts: systemCa,
     },
     {
       command: "node",
-      argv: [...warningPrefix, "/usr/local/bin/openclaw", "status"],
+      argv: [...caPrefix, "/usr/local/bin/openclaw", "status"],
       detachForProcessTree: true,
     },
   ],
@@ -152,20 +110,20 @@ it.each([
 
 it.each([
   [
-    "interactive macOS retains system CA loading",
+    "macOS system CA loading needs no respawn",
     {
-      args: ["tui"],
+      args: ["cron", "list", "--json"],
       env: { NODE_USE_SYSTEM_CA: "1" },
       platform: "darwin",
     },
   ],
   [
-    "satisfied respawn guards prevent another respawn",
-    {
-      env: { [caReady]: "1", [optionsReady]: "1" },
-      execArgv: [warningFlag],
-      autoNodeExtraCaCerts: systemCa,
-    },
+    "explicit NODE_EXTRA_CA_CERTS needs no respawn",
+    { env: { NODE_EXTRA_CA_CERTS: "/custom/ca.pem" }, autoNodeExtraCaCerts: systemCa },
+  ],
+  [
+    "satisfied respawn guard prevents another respawn",
+    { env: { [caReady]: "1" }, autoNodeExtraCaCerts: systemCa },
   ],
   [
     "Windows accepts underscore stack-size spelling",
@@ -182,7 +140,6 @@ it.each([
 
 it.each([
   ["injects a discovered CA for whitespace", "linux", " ", "/etc/ca.pem", "/etc/ca.pem", "1"],
-  ["drops whitespace without discovery", "linux", " ", undefined, undefined, undefined],
   ["drops whitespace on Windows", "win32", " ", undefined, undefined, undefined],
 ] as const)("%s", (_label, platform, inherited, discovered, expected, expectedReady) => {
   const respawnPlan = requirePlan({
@@ -208,6 +165,7 @@ it("spawns the standalone plan without adding runtime flags", async () => {
   const plan = requirePlan({
     argv: [process.execPath, "/app/runtime/openclaw.mjs", "doctor"],
     platform: "darwin",
+    autoNodeExtraCaCerts: systemCa,
   });
   const { child, spawn } = mockChild();
   const completion = runCliRespawnPlan(plan, vi.fn());
@@ -230,7 +188,7 @@ it("records status after the respawn child closes", async () => {
   const plan = {
     command: "/usr/bin/node",
     argv: ["--import", CLI_PARENT_BOUND_PRELOAD, "/repo/openclaw/dist/entry.js", "status"],
-    env: { OPENCLAW_NODE_OPTIONS_READY: "1" },
+    env: { [caReady]: "1" },
     detachForProcessTree: true,
   };
   const completion = runCliRespawnPlan(plan, writeError);

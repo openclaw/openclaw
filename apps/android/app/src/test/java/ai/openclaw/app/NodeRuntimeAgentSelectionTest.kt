@@ -7,6 +7,7 @@ import ai.openclaw.app.chat.ChatSessionDeletion
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatSessionPatch
 import ai.openclaw.app.chat.selectChatAgentSessionKey
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayHelloSummary
 import ai.openclaw.app.gateway.GatewayRequestRejected
@@ -647,7 +648,7 @@ class NodeRuntimeAgentSelectionTest {
             "models.list" -> {
               catalogJobs.send(currentCoroutineContext().job)
               if ("agentId" in Json.parseToJsonElement(paramsJson.orEmpty()).jsonObject) {
-                throw GatewayRequestRejected(GatewaySession.ErrorShape("INVALID_REQUEST", "Legacy catalog parameters unsupported"))
+                throw GatewayRequestRejected(ErrorShape("INVALID_REQUEST", "Legacy catalog parameters unsupported"))
               }
               """{"models":[{"id":"legacy-model","provider":"fixture","name":"Legacy"}]}"""
             }

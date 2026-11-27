@@ -14,6 +14,7 @@ import type { PluginStateKeyedStore } from "../../extensions/visitor-access/api.
 import { VisitorPolicyClient } from "../../extensions/visitor-access/src/cloudflare.js";
 import type { VisitorGrant } from "../../extensions/visitor-access/src/grant-record.js";
 import { VisitorAccessService } from "../../extensions/visitor-access/src/visitors.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const iterations = 3000;
 const grants: VisitorGrant[] = Array.from({ length: 500 }, (_, index) => ({
@@ -86,12 +87,7 @@ try {
     });
   }
   const inspector = new Session();
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 128,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 128);
   for (let i = 0; i < iterations; i++) {
     lookup();
   }

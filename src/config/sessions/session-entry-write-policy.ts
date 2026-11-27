@@ -15,6 +15,7 @@ export function applySessionEntryWritePolicy(
   options: {
     allowStoredAliases?: boolean;
     providerReviewMutation?: boolean;
+    shellCallMutation?: boolean;
     profileInvolvement?: SessionEntry["profileInvolvement"];
     previousEntry?: SessionEntry | null;
     consumePendingReset?: boolean;
@@ -32,6 +33,7 @@ export function applySessionEntryWritePolicy(
     normalizedEntry.incognito
   ) {
     delete normalizedEntry.resumeAfterRestart;
+    delete normalizedEntry.pendingShellCalls;
     delete normalizedEntry.lifecycleRestartScope;
     delete normalizedEntry.mainRestartRecovery;
   } else {
@@ -44,6 +46,19 @@ export function applySessionEntryWritePolicy(
           ? { resumeAfterRestart: canonicalPreviousEntry.resumeAfterRestart }
           : {}),
       };
+    }
+    if (!options.shellCallMutation) {
+      // Whole-row bookkeeping can carry an older list. Only the fenced shell writer
+      // changes it. Normal completion retires it when the terminal run identity matches.
+      const pending = canonicalPreviousEntry.pendingShellCalls;
+      if (
+        pending &&
+        !(normalizedEntry.status === "done" && normalizedEntry.lastRunId === pending.runId)
+      ) {
+        normalizedEntry = { ...normalizedEntry, pendingShellCalls: pending };
+      } else {
+        delete normalizedEntry.pendingShellCalls;
+      }
     }
     const sourceRunId = normalizedEntry.resumeAfterRestart?.sourceRunId;
     const nextRunId = normalizedEntry.lifecycleRunId;

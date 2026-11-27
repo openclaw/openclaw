@@ -149,6 +149,10 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   handlePointerDown(event: PointerEvent): boolean {
+    if (event.button === 0 && this.active) {
+      // A new press is explicit Stop, even if the held release was lost outside the window.
+      this.clearClickSuppression();
+    }
     if (event.button !== 0 || this.phase !== "idle" || !this.canHold()) {
       return false;
     }
@@ -181,6 +185,8 @@ export class ComposerDictationOwner extends EventTarget {
     listen(document, "pointermove", this.handleDocumentPointerMove, pointerOptions);
     listen(document, "pointerup", this.handleDocumentPointerUp, pointerOptions);
     listen(document, "pointercancel", this.handleDocumentPointerCancel, pointerOptions);
+    listen(document, "visibilitychange", this.handleGestureInterruption, pointerOptions);
+    listen(window, "blur", this.handleGestureInterruption, pointerOptions);
     this.suppressionListeners?.abort();
     this.suppressionListeners = new AbortController();
     const suppressionOptions = { signal: this.suppressionListeners.signal };
@@ -192,7 +198,13 @@ export class ComposerDictationOwner extends EventTarget {
   handleClick(event: MouseEvent): void {
     if (this.suppressedPointerId !== null) {
       this.clearClickSuppression();
-    } else if (this.active) {
+      // Keyboard/assistive Stop has no pointer-release click to suppress.
+      if (event.detail !== 0 || !this.active) {
+        event.preventDefault();
+        return;
+      }
+    }
+    if (this.active) {
       void this.finishActive();
     } else if (this.phase === "idle") {
       this.options.onTap?.();
@@ -275,19 +287,14 @@ export class ComposerDictationOwner extends EventTarget {
     this.cancel();
   };
 
-  // Leaving the window interrupts capture but keeps dictated text in the draft.
-  // The browser's microphone permission prompt (Safari, Chrome) blurs the window
-  // while the microphone is still opening, so a blur waits until listening: Allow
-  // then starts listening and a denial reports its error. A hidden page still ends
-  // dictation at any point.
-  private readonly handleWindowLeave = (event: Event): void => {
-    if (
-      event.type === "visibilitychange" ? document.visibilityState !== "hidden" : this.connecting
-    ) {
+  // Only an unfinished hold gesture depends on focus/visibility. Latching capture
+  // removes these listeners with the pointer gesture, so background dictation continues.
+  private readonly handleGestureInterruption = (event: Event): void => {
+    if (event.type === "visibilitychange" && document.visibilityState !== "hidden") {
       return;
     }
     this.clearClickSuppression();
-    void this.finishActive();
+    void this.stop({ commit: false });
   };
 
   private canHold(): boolean {
@@ -313,8 +320,8 @@ export class ComposerDictationOwner extends EventTarget {
       // suppression only after handleClick has had a chance to consume the tail.
       return;
     }
-    // Crossing the threshold latches dictation. Pointer ownership ends here,
-    // while Escape/visibility/blur keep guarding the live capture lifecycle.
+    // Crossing the threshold latches dictation. Recording no longer depends on
+    // the pointer, window focus, or page visibility; explicit controls still stop it.
     this.clearPointerGesture();
     const captureStart = {};
     this.captureStart = captureStart;
@@ -489,8 +496,6 @@ export class ComposerDictationOwner extends EventTarget {
       this.cancellationListeners = new AbortController();
       const options = { signal: this.cancellationListeners.signal };
       listen(document, "keydown", this.handleDocumentKeyDown, options);
-      listen(document, "visibilitychange", this.handleWindowLeave, options);
-      listen(window, "blur", this.handleWindowLeave, options);
     } else {
       this.cancellationListeners?.abort();
       this.cancellationListeners = null;

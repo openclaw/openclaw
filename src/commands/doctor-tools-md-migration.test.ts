@@ -9,6 +9,7 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
 
 import { note } from "../../packages/terminal-core/src/note.js";
 import {
+  checkToolsMdMigrationPending,
   collectToolsMdMigrationFindings,
   maybeMigrateToolsMd,
 } from "./doctor-tools-md-migration.js";
@@ -110,6 +111,15 @@ describe("TOOLS.md migration", () => {
       expect.stringContaining("will be archived and merged into AGENTS.md when customized"),
       "TOOLS.md migration preview",
     );
+  });
+  it("reports pending work without touching files until the migration runs", async () => {
+    const fixture = await createFixture();
+    await expect(checkToolsMdMigrationPending(fixture.cfg)).resolves.toBe("work");
+    await expectUnchanged(fixture, DEFAULT_AGENTS, DEFAULT_TOOLS);
+    await expectMissing(fixture.stateDir);
+
+    expectSuccess(await fixture.migrate());
+    await expect(checkToolsMdMigrationPending(fixture.cfg)).resolves.toBe("none");
   });
   it("refuses to migrate a TOOLS.md whose bytes are not valid UTF-8", async () => {
     const toolsBytes = Buffer.from([0xff, 0xfe]);

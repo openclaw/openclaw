@@ -14,6 +14,7 @@ import {
 } from "../../infra/agent-events.js";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
+import { cancelSelfSnoozeForUserInput } from "../../sessions/session-self-snooze.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import { rethrowIncognitoSessionError } from "../../state/incognito-session-error.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
@@ -236,6 +237,7 @@ export function bindSessionPendingInputSources(
 
 type PendingInputStageOptions = PendingInputRequest & {
   lifecycleAdmission?: SessionInputLifecycleAdmission;
+  inputAlreadyAccepted?: boolean;
   onCommitted?: (receipt: SessionPendingInputReceipt) => void;
   authority?: SessionPendingInputAuthority;
   recoverySource?: origin.QueuedOperatorRecoverySource;
@@ -691,6 +693,9 @@ async function stagePreparedPendingInput(
             // COMMIT already accepted this custody. Preserve it before fallible publication.
             registerSessionPendingInputOwner(owner);
             retained = true;
+            if (fresh && !options.inputAlreadyAccepted) {
+              cancelSelfSnoozeForUserInput(prepared, ownerScope);
+            }
             options.onCommitted?.(Object.assign(ownerReceipt(owner), completionMethods));
             assertPrepared(
               facts,

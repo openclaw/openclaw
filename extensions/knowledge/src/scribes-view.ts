@@ -9,8 +9,23 @@ import {
   scribeTile,
 } from "./scribe-dialog.js";
 import { openScheduleDialog } from "./scribe-schedule-dialog.js";
-import { runScribeNow, setScribePaused, startScribe, turnOffScribe } from "./scribes-actions.js";
-import { scribeById, scribeLabel } from "./scribes-catalog.js";
+import { settingsValue } from "./scribe-settings-dialog.js";
+import {
+  needsUpgrade,
+  replacesTurnCreated,
+  repairScribe,
+  runScribeNow,
+  setScribePaused,
+  startScribe,
+  turnOffScribe,
+  updateScribe,
+} from "./scribes-actions.js";
+import {
+  EDITABLE_SETTINGS,
+  scribeById,
+  scribeLabel,
+  type ScribeDefinition,
+} from "./scribes-catalog.js";
 import {
   detectSources,
   loadRuns,
@@ -23,16 +38,7 @@ import {
   type ScribeSnapshot,
   type ScribeStatus,
 } from "./scribes-state.js";
-import {
-  repair,
-  reschedule,
-  settleUpdates,
-  update,
-  updateNotice,
-  updateState,
-  updatingNotice,
-  watchUpdates,
-} from "./scribes-updates.js";
+import { replacementButton, update, updateNotice, upgradeNotice } from "./scribes-updates.js";
 import { storeLabel, storeOf } from "./stores-view.js";
 import { icon } from "./ui-icons.js";
 
@@ -46,12 +52,17 @@ const STATUS: Record<ScribeStatus, [string, string]> = {
   done: ["Done", "scribe-chip-on"],
   missing: ["Conversation not found", "scribe-chip-warn"],
 };
+/** Why automation controls are off: scribe automations are written with administrator access. */
+const NEEDS_ADMIN = "Scribe automations need a Gateway administrator (operator.admin).";
+
 /**
- * Jobs whose first run this page already forced. A job reads as never run until its forced run
- * starts, so this keeps reloads in that gap from forcing it again. Another page open at the same
- * moment could force a second run; that is a visible, harmless extra run.
+ * Whether this connection can start `scribe`: a once run is a message in its conversation and
+ * needs write access; an ongoing scribe is an automation and needs an administrator.
  */
-const firstRuns = new Set<string>();
+const canStart = (ui: Page, scribe: ScribeDefinition) => {
+  const { canWrite, canAdmin } = ui.s.context.host.connection;
+  return canWrite && (canAdmin || scribe.modes.includes("once"));
+};
 
 /** Scribes the list shows under "On": everything set up that is not finished or startable. */
 const isOn = (status: ScribeStatus) => status !== "available" && status !== "done";
@@ -139,8 +150,8 @@ function activeMeta(snapshot: ScribeSnapshot) {
     );
   } else if (status === "paused") {
     parts.push("Disabled");
-  } else if (firstRunPending(snapshot)) {
-    parts.push(job?.state.runningAtMs ? "First run in progress" : "First run requested");
+  } else if (job?.state.runningAtMs) {
+    parts.push("Running now");
   }
   if (job && status !== "missing") {
     parts.push(scheduleText(job.schedule));
@@ -205,16 +216,13 @@ export async function scribes(ui: Page, n: number, target: HTMLElement) {
       ? Promise.resolve({})
       : detectSources(host, agentId).catch(() => ({})),
   ]);
-  const snapshots = loaded;
-  settleUpdates(ui, agentId, snapshots);
-  watchUpdates(ui);
-  if (host.connection.canWrite) {
-    await Promise.all(
-      snapshots.map(async (snapshot) => {
-        await update(ui, snapshot, agentId);
-        await startFirstRun(ui, snapshot);
-      }),
-    );
+  let snapshots = loaded;
+  // An administrator's load brings earlier automations up to date, then reads the result.
+  if (host.connection.canAdmin) {
+    const wrote = await Promise.all(snapshots.map((snapshot) => update(ui, snapshot, agentId)));
+    if (wrote.some(Boolean)) {
+      snapshots = await loadScribes(host, agentId);
+    }
   }
   const snapshot = selected && snapshots.find((entry) => entry.scribe.id === selected.id);
   let runs: ScribeRun[] = [];
@@ -235,34 +243,6 @@ export async function scribes(ui: Page, n: number, target: HTMLElement) {
     snapshot ? detail(ui, snapshot, runs, detection, runError) : list(ui, snapshots, detection),
   );
 }
-
-/**
- * Force an ongoing scribe's first run once its setup turn reported `on`. Setup turns never run
- * their own job, so the page does it, at most once per job from this page.
- */
-async function startFirstRun(ui: Page, snapshot: ScribeSnapshot) {
-  const { job } = snapshot;
-  if (!snapshot.firstRunDue || !job || firstRuns.has(job.id)) {
-    return;
-  }
-  firstRuns.add(job.id);
-  try {
-    await runScribeNow(ui.s.context.host, job);
-    ui.announce(`${snapshot.scribe.title}: first run requested.`);
-  } catch (error) {
-    // Not started: forget it so the next load tries again and nothing shows it as running.
-    firstRuns.delete(job.id);
-    ui.announce(`${snapshot.scribe.title}: the first run did not start. ${ui.errorText(error)}`);
-  }
-}
-
-/** The first run is forced or running and nothing has finished yet. */
-const firstRunPending = (snapshot: ScribeSnapshot) =>
-  Boolean(
-    snapshot.job &&
-    !snapshot.job.state.lastRunAtMs &&
-    (snapshot.job.state.runningAtMs || firstRuns.has(snapshot.job.id)),
-  );
 
 /** Number of the agent's scribes that are on, for the Scribes tab count. */
 export async function countScribesOn(host: Parameters<typeof loadScribes>[0], agentId: string) {
@@ -300,9 +280,10 @@ function start(ui: Page, snapshot: ScribeSnapshot, detection: ScribeDetection) {
     agentName,
     detection,
     canWrite: host.connection.canWrite,
+    canAdmin: host.connection.canAdmin,
     basePath: host.basePath,
-    start: async (prompt) => {
-      await startScribe(host, snapshot, agentId, prompt, attempt);
+    start: async (setup, text) => {
+      await startScribe(host, snapshot, agentId, setup, text, attempt);
       ui.announce(`Started ${scribeLabel(snapshot.scribe)}.`);
       openScribe(ui, snapshot.scribe.id);
     },
@@ -317,7 +298,6 @@ function openScribe(ui: Page, id: string) {
 
 function list(ui: Page, snapshots: ScribeSnapshot[], detection: ScribeDetection) {
   const { agentName, storeName } = pageNames(ui);
-  const canWrite = ui.s.context.host.connection.canWrite;
   const root = el("div", undefined, "scribes");
   root.append(
     el(
@@ -341,7 +321,7 @@ function list(ui: Page, snapshots: ScribeSnapshot[], detection: ScribeDetection)
       surface.append(
         isOn(snapshot.status)
           ? activeRow(ui, snapshot)
-          : availableRow(ui, snapshot, detection, agentName, canWrite),
+          : availableRow(ui, snapshot, detection, agentName),
       );
     }
     root.append(surface);
@@ -349,7 +329,9 @@ function list(ui: Page, snapshots: ScribeSnapshot[], detection: ScribeDetection)
   root.append(
     el(
       "p",
-      "Ongoing scribes also appear on the Automations page.",
+      ui.s.context.host.connection.canAdmin
+        ? "Ongoing scribes also appear on the Automations page."
+        : `Ongoing scribes also appear on the Automations page. ${NEEDS_ADMIN}`,
       "knowledge-muted scribes-footnote",
     ),
   );
@@ -371,9 +353,8 @@ function activeRow(ui: Page, snapshot: ScribeSnapshot) {
   );
   chevron.setAttribute("aria-label", `Open ${scribe.title}`);
   chevron.append(icon("chevronRight", 16));
-  const state = updateState(ui, snapshot.job);
-  if (state === "updating") {
-    actions.append(chip("Updating…"));
+  if (needsUpgrade(snapshot)) {
+    actions.append(chip("Upgrade available"));
   } else if (snapshot.runMessage?.state === "differs") {
     actions.append(chip("New run instructions"));
   }
@@ -387,9 +368,9 @@ function availableRow(
   snapshot: ScribeSnapshot,
   detection: ScribeDetection,
   agentName: string,
-  canWrite: boolean,
 ) {
   const { scribe } = snapshot;
+  const startable = canStart(ui, scribe);
   const row = el("div", undefined, "scribe-row");
   const copy = el("span", undefined, "scribe-copy");
   copy.append(
@@ -416,9 +397,11 @@ function availableRow(
       ? "knowledge-button knowledge-small"
       : "knowledge-button knowledge-primary knowledge-small",
   );
-  startButton.disabled = !canWrite || Boolean(blocked);
-  if (!canWrite) {
+  startButton.disabled = !startable || Boolean(blocked);
+  if (!ui.s.context.host.connection.canWrite) {
     startButton.title = "Starting a scribe needs write access to this Gateway.";
+  } else if (!startable) {
+    startButton.title = NEEDS_ADMIN;
   } else if (scribe.plugin && blocked) {
     startButton.title = `Connect the ${scribe.plugin.name} plugin first.`;
   }
@@ -467,7 +450,8 @@ function detail(
   const { scribe, job, session, status } = snapshot;
   const host = ui.s.context.host;
   const { agentId, agentName, storeName } = pageNames(ui);
-  const canWrite = host.connection.canWrite;
+  // Every automation control is an administrator's write.
+  const canAdmin = host.connection.canAdmin;
   const root = el("div", undefined, "scribe-detail");
   const crumb = button("", () => openScribe(ui, ""), "knowledge-quiet knowledge-crumb");
   crumb.append(icon("arrowLeft", 14), el("span", "Scribes"));
@@ -492,7 +476,7 @@ function detail(
         controls.forEach((other) => (other.disabled = true));
         feedback.textContent = "";
         feedback.className = "knowledge-dialog-feedback";
-        const restore = () => controls.forEach((other) => (other.disabled = !canWrite));
+        const restore = () => controls.forEach((other) => (other.disabled = !canAdmin));
         run().then(
           () => {
             restore();
@@ -508,7 +492,10 @@ function detail(
       },
       className,
     );
-    node.disabled = !canWrite;
+    node.disabled = !canAdmin;
+    if (!canAdmin) {
+      node.title = NEEDS_ADMIN;
+    }
     controls.push(node);
     return node;
   };
@@ -527,15 +514,19 @@ function detail(
     );
   }
   // A scribe with an automation repairs it; one without starts over from the start dialog.
+  // Repairing an automation an agent turn created replaces it, so it asks first, as Upgrade does.
   if (job && (status === "missing" || status === "failing")) {
+    const repair = () => repairScribe(host, snapshot, job, agentId);
     actions.append(
-      control(
-        "Repair",
-        () => repair(ui, snapshot, job, agentId),
-        status === "missing" && session?.archived
-          ? `Restored ${scribeLabel(scribe)} and turned it back on.`
-          : `Asked ${scribeLabel(scribe)} to repair its setup.`,
-      ),
+      replacesTurnCreated(snapshot)
+        ? replacementButton(ui, snapshot, "Repair…", "Repair", "repaired and turned on", repair)
+        : control(
+            "Repair",
+            repair,
+            status === "missing" && session?.archived
+              ? `Restored ${scribeLabel(scribe)} and turned it back on.`
+              : `Repaired ${scribe.title} and turned it on.`,
+          ),
     );
   }
   if (job && status !== "missing") {
@@ -566,7 +557,7 @@ function detail(
         ),
       "knowledge-quiet knowledge-small",
     );
-    turnOff.disabled = !canWrite;
+    turnOff.disabled = !canAdmin;
     actions.append(turnOff);
   }
   if (!job && status !== "starting") {
@@ -575,7 +566,7 @@ function detail(
       () => start(ui, snapshot, detection),
       "knowledge-button knowledge-primary knowledge-small",
     );
-    again.disabled = !canWrite;
+    again.disabled = !canStart(ui, scribe);
     actions.append(again);
   }
   head.append(scribeTile(scribe), heading, actions);
@@ -590,7 +581,8 @@ function detail(
   const facts: [string, string | Node][] = [["Status", statusValue]];
   if (job) {
     const scheduleValue = el("span", scheduleText(job.schedule), "scribe-status");
-    if (status !== "missing") {
+    // A schedule change replaces an automation an agent turn created; Upgrade does that first.
+    if (status !== "missing" && !needsUpgrade(snapshot)) {
       const change = button(
         "Change…",
         () =>
@@ -599,19 +591,22 @@ function detail(
             schedule: job.schedule,
             describe: scheduleText,
             save: async (next) => {
-              await reschedule(ui, snapshot, job, agentId, next);
+              await updateScribe(host, snapshot, job, agentId, { schedule: next });
+              ui.announce(`${scribe.title}: schedule changed.`);
               void ui.load();
             },
           }),
         "knowledge-quiet knowledge-small",
       );
       change.setAttribute("aria-label", "Change schedule");
-      // One turn changes the automation at a time.
-      change.disabled = !canWrite || Boolean(updateState(ui, job));
+      change.disabled = !canAdmin;
       scheduleValue.append(change);
     }
+    facts.push(["Schedule", scheduleValue]);
+    if (EDITABLE_SETTINGS.has(scribe.id) && status !== "missing") {
+      facts.push(["Settings", settingsValue(ui, snapshot, job, agentId, detection)]);
+    }
     facts.push(
-      ["Schedule", scheduleValue],
       [
         "Next run",
         job.state.runningAtMs
@@ -717,14 +712,6 @@ function detail(
     );
     failure.setAttribute("role", "alert");
     rows.append(failure);
-  } else if (!runs.length && firstRunPending(snapshot)) {
-    const line = el("div", undefined, "scribe-run");
-    line.append(
-      el("time", "First run"),
-      el("span", job?.state.runningAtMs ? "Running now" : "Run requested"),
-      el("span"),
-    );
-    rows.append(line);
   } else if (!runs.length && snapshot.result) {
     const line = el("div", undefined, "scribe-run");
     line.append(el("time", "Latest"), el("span", snapshot.result.summary), el("span"));
@@ -743,9 +730,8 @@ function detail(
   }
   history.append(rows);
   root.append(crumb, head, feedback);
-  const state = updateState(ui, job);
-  if (state) {
-    root.append(updatingNotice(ui, snapshot, state));
+  if (job && needsUpgrade(snapshot)) {
+    root.append(upgradeNotice(ui, snapshot, job, agentId));
   } else if (job && snapshot.runMessage?.state === "differs") {
     root.append(updateNotice(ui, snapshot, job, agentId, snapshot.runMessage.current));
   }

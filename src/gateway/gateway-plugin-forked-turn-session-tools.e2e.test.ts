@@ -1,12 +1,18 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import { SessionManager } from "../agents/sessions/session-manager.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import {
   type Fixture,
   type MethodResult,
   withForkGateway,
 } from "./gateway-plugin-forked-turn.test-support.js";
+
+const EXEC_FULL = { host: "gateway", security: "full", ask: "off", notifyOnExit: false } as const;
 
 describe("plugin forked turns with the session's read, ls and exec", () => {
   it(
@@ -18,7 +24,7 @@ describe("plugin forked turns with the session's read, ls and exec", () => {
           ...config,
           tools: {
             ...config.tools,
-            exec: { host: "gateway", security: "full", ask: "off", notifyOnExit: false },
+            exec: EXEC_FULL,
           },
         }),
         async (fixture) => {
@@ -56,22 +62,21 @@ describe("plugin forked turns with the session's read, ls and exec", () => {
           );
           expect(fixture.forkToolOutputs()).toEqual([expect.stringContaining("OWN_EXEC_RAN")]);
 
-          // A non-owner's turn keeps read, but a request with exec is refused before any model call.
+          // exec follows the caller, not the anchored turn's sender: the admin runs it on a
+          // stranger's turn, as the admin's own next turn in that chat could.
           const stranger = await fixture.channelTurn(
             `agent:main:telegram:direct:fork-core-7-${randomUUID()}`,
             "7",
           );
-          const strangerForkCalls = fixture.forkRequests.length;
-          await expect(fixture.fork(stranger, coreTools)).resolves.toEqual({
-            ok: true,
-            result: { status: "refused", reason: "tool_policy" },
-          });
-          expect(fixture.forkRequests).toHaveLength(strangerForkCalls);
-          fixture.forkScript.calls = [{ name: "read", args: { path: "notes.txt" } }];
-          await expect(fixture.fork(stranger, { tools: ["read", "ls"] })).resolves.toMatchObject(
-            settled,
-          );
-          expect(fixture.forkToolOutputs()).toEqual([expect.stringContaining("Release notes.")]);
+          fixture.forkScript.calls = [
+            { name: "read", args: { path: "notes.txt" } },
+            { name: "exec", args: { command: "echo STRANGER_TURN_RAN" } },
+          ];
+          await expect(fixture.fork(stranger, coreTools)).resolves.toMatchObject(settled);
+          expect(fixture.forkToolOutputs()).toEqual([
+            expect.stringContaining("Release notes."),
+            expect.stringContaining("STRANGER_TURN_RAN"),
+          ]);
 
           // An unmatched command under allowlist/on-miss is denied without an approval request.
           await fixture.patchConfig({ tools: { exec: { security: "allowlist", ask: "on-miss" } } });
@@ -144,6 +149,22 @@ describe("plugin forked turns with the session's read, ls and exec", () => {
           });
           expect(fixture.forkToolOutputs()).toEqual([expect.stringContaining("Release notes.")]);
           expect(fixture.proof.settled.at(-1)).toMatchObject({ ok: true, text: "FORK_DONE" });
+
+          // An internal wake as the latest input changes nothing for a caller without exec.
+          await appendWake(key, fixture.workspaceDir, {
+            kind: "inter_session",
+            sourceTool: "subagent_announce",
+          });
+          await expect(fixture.ownFork(key, ["read", "ls", "exec"])).resolves.toEqual({
+            ok: true,
+            result: { status: "refused", reason: "tool_policy" },
+          });
+          fixture.forkScript.calls = [{ name: "ls", args: { path: "." } }];
+          await expect(fixture.ownFork(key, ["read", "ls"])).resolves.toMatchObject({
+            ok: true,
+            result: { status: "settled" },
+          });
+          expect(fixture.forkToolOutputs()).toEqual([expect.stringContaining("notes.txt")]);
         },
         { proxyScopes: ["operator.sessions.write"] },
       );
@@ -151,7 +172,39 @@ describe("plugin forked turns with the session's read, ls and exec", () => {
   );
 
   it(
-    "runs exec through a session-scoped method only on the signed-in caller's own turn",
+    "runs exec on the caller's admitted authority when the latest input is an internal wake",
+    { timeout: 150_000 },
+    async () => {
+      await withForkGateway(
+        (config) => ({ ...config, tools: { ...config.tools, exec: EXEC_FULL } }),
+        async (fixture) => {
+          const settled = { ok: true, result: { status: "settled" } };
+          const tools = ["read", "ls", "exec"];
+          for (const [name, provenance] of [
+            ["SUBAGENT", { kind: "inter_session", sourceTool: "subagent_announce" }],
+            ["EXEC", { kind: "internal_system", sourceTool: "exec" }],
+          ] as const) {
+            const owner = await fixture.dashboardTurn(
+              `agent:main:dashboard:direct:fork-wake-${randomUUID()}`,
+            );
+            await appendWake(owner.sessionKey, fixture.workspaceDir, provenance);
+            // Without `through`, the fork reads through the wake's answer, as `/better` does.
+            fixture.forkScript.calls = [{ name: "exec", args: { command: `echo ${name}_WAKE` } }];
+            await expect(fixture.fork(owner, { tools, through: undefined })).resolves.toMatchObject(
+              settled,
+            );
+            expect(fixture.forkToolOutputs()).toEqual([expect.stringContaining(`${name}_WAKE`)]);
+            fixture.forkScript.calls = [{ name: "exec", args: { command: `echo OWN_${name}` } }];
+            await expect(fixture.ownFork(owner.sessionKey, tools)).resolves.toMatchObject(settled);
+            expect(fixture.forkToolOutputs()).toEqual([expect.stringContaining(`OWN_${name}`)]);
+          }
+        },
+      );
+    },
+  );
+
+  it(
+    "runs exec for an admin caller through a session-scoped method on any owner's turn",
     { timeout: 150_000 },
     async () => {
       await withForkGateway(
@@ -160,7 +213,7 @@ describe("plugin forked turns with the session's read, ls and exec", () => {
           commands: { ownerAllowFrom: ["telegram:7"] },
           tools: {
             ...config.tools,
-            exec: { host: "gateway", security: "full", ask: "off", notifyOnExit: false },
+            exec: EXEC_FULL,
           },
         }),
         async (fixture) => {
@@ -171,15 +224,19 @@ describe("plugin forked turns with the session's read, ls and exec", () => {
           await expect(fixture.ownFork(own, ["exec"])).resolves.toMatchObject(settled);
           expect(fixture.forkToolOutputs()).toEqual([expect.stringContaining("SAME_PERSON_RAN")]);
 
-          // Another owner's turn: the session-scoped caller may not run exec as that person.
+          // Another owner's turn: the session-scoped method admits the same exec the admin
+          // already runs there through a plain operator method.
           const other = await fixture.channelTurn(
             `agent:main:telegram:direct:fork-owner-7-${randomUUID()}`,
             "7",
           );
-          await expect(fixture.ownFork(other.sessionKey, ["read", "exec"])).resolves.toEqual({
-            ok: true,
-            result: { status: "refused", reason: "tool_policy" },
-          });
+          fixture.forkScript.calls = exec("SESSION_METHOD_RAN");
+          await expect(fixture.ownFork(other.sessionKey, ["read", "exec"])).resolves.toMatchObject(
+            settled,
+          );
+          expect(fixture.forkToolOutputs()).toEqual([
+            expect.stringContaining("SESSION_METHOD_RAN"),
+          ]);
           fixture.forkScript.calls = exec("OWNER_TURN_RAN");
           await expect(fixture.fork(other, { tools: ["exec"] })).resolves.toMatchObject(settled);
           expect(fixture.forkToolOutputs()).toEqual([expect.stringContaining("OWNER_TURN_RAN")]);
@@ -189,6 +246,58 @@ describe("plugin forked turns with the session's read, ls and exec", () => {
     },
   );
 });
+
+/**
+ * Appends a stored internal wake (a subagent or exec completion) and its answer, as the host
+ * records them: never owner-attributed, whoever started the work.
+ */
+async function appendWake(
+  sessionKey: string,
+  workspaceDir: string,
+  provenance: { kind: "inter_session" | "internal_system"; sourceTool: string },
+) {
+  const scope = {
+    agentId: "main",
+    sessionKey,
+    storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+  };
+  const sessionId = expectDefined(loadSessionEntry(scope)?.sessionId, "session id");
+  const session = await SessionManager.openAsync({ ...scope, sessionId }, workspaceDir);
+  const timestamp = Date.now();
+  const messages = [
+    {
+      role: "user",
+      content: "Continue the OpenClaw runtime event.",
+      timestamp,
+      provenance,
+      __openclaw: {
+        senderIsOwner: false,
+        requesterOrigin: { messageProvider: "webchat", operatorProfileId: "owner-profile" },
+      },
+    },
+    {
+      role: "assistant",
+      content: [{ type: "text", text: "Handled the event." }],
+      api: "openai-responses",
+      provider: "mock-openai",
+      model: "fork-proof",
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: timestamp + 1,
+    },
+  ];
+  for (const message of messages) {
+    // SAFETY: fixtures follow the stored message shapes the transcript owner accepts.
+    await session.appendMessageAsync(message as never);
+  }
+}
 
 /** A WebChat turn by the signed-in client in a chat it creates; returns the session key. */
 async function webChatTurn(fixture: Fixture) {

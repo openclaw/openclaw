@@ -43,6 +43,7 @@ import {
   prepareSubagentSessionListReadCache,
 } from "../subagents/registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "../subagents/registry/subagent-registry.types.js";
+import { isSubagentPausedByYield } from "../subagents/registry/subagent-requester-turn-custody.js";
 import { isSameSubagentRunOwner } from "../subagents/registry/subagent-run-generation.js";
 import {
   jsonResult,
@@ -81,14 +82,14 @@ function mapRun(
   // Observe announced children from the snapshot, as the list does; a parent waiting on them is not a leaf.
   const pausedForMs = resolveYieldedLeafPausedForMs(
     run,
-    observeSubagentExecution(run, run.pauseReason === "sessions_yield" ? snapshot.values() : []),
+    observeSubagentExecution(run, isSubagentPausedByYield(run) ? snapshot.values() : []),
     now,
   );
   return {
     runId: run.runId,
     sessionKey: run.childSessionKey,
     label: sanitizeRunStatusText(run.label, { maxChars: 80 }) || undefined,
-    status: run.pauseReason === "sessions_yield" ? "waiting" : run.execution.status,
+    status: isSubagentPausedByYield(run) ? "waiting" : run.execution.status,
     outcome: run.execution.outcome
       ? {
           status: run.execution.outcome.status,
@@ -129,7 +130,7 @@ function waitForSelectedRuns(params: {
       return task.delivery?.status === "suspended" || wait?.kind === "external";
     });
     const completed = tasks.filter(
-      (task) => task.execution.status === "terminal" && task.pauseReason !== "sessions_yield",
+      (task) => task.execution.status === "terminal" && !isSubagentPausedByYield(task),
     );
     return {
       reason: unavailable.length
