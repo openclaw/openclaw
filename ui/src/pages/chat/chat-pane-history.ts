@@ -317,6 +317,14 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
     this.evaluateHistoryEdge();
   }
 
+  protected readonly searchEarlier = async (isSearching: () => boolean) => {
+    while (isSearching()) {
+      if (!(await this.loadOlderMessages(false))) {
+        return;
+      }
+    }
+  };
+
   protected async loadOlderMessages(readerIntent = true): Promise<boolean> {
     if (this.activeOlderLoad) {
       return this.activeOlderLoad;

@@ -1,5 +1,14 @@
 import type { JSX } from "@solidjs/web";
-import { Loading, Show, lazy, createMemo, createSignal, onSettled, useContext } from "solid-js";
+import {
+  Loading,
+  Show,
+  lazy,
+  createEffect,
+  createMemo,
+  createSignal,
+  onSettled,
+  useContext,
+} from "solid-js";
 import { routeIdFromPath } from "../../../app-route-paths.ts";
 import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-blocks.ts";
 import {
@@ -288,6 +297,26 @@ function ChatThreadContent(
   const search = createMemo(() =>
     projectOwner(getTranscriptState(paneId()).search, (owner) => owner.snapshot, Object.is),
   );
+  const searchingPane = createMemo(() => {
+    const page = input.props.historyPagination;
+    return page?.onSearchEarlier &&
+      input.presented &&
+      page.connected &&
+      !page.error &&
+      search().read().query.trim()
+      ? paneId()
+      : undefined;
+  });
+  createEffect(searchingPane, (id) => {
+    if (!id) {
+      return undefined;
+    }
+    let active = true;
+    void input.props.historyPagination?.onSearchEarlier?.(() => active);
+    return () => {
+      active = false;
+    };
+  });
   const transcript = createMemo(() => input.transcript);
   const geometry = createMemo(() => projectOwner(transcript(), (owner) => owner));
   const presentation = createMemo(
