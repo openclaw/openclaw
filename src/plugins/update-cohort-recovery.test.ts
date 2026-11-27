@@ -412,7 +412,7 @@ it.each(["records", "same-record", "successor"] as const)(
                 JSON.parse(fs.readFileSync(path.join(reader.rootDir, "package.json"), "utf8")),
               ).toMatchObject({ version: "1.0.0" });
             } finally {
-              await reader.release();
+              reader.release();
             }
           }
         }
