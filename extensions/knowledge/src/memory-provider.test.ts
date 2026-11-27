@@ -23,7 +23,8 @@ it("shared search/get/health roundtrip uses native publication, provenance and r
     candidates: ["trigger", "project"],
     projectFilter: false,
   });
-  const result = await provider.search({ query: "Orchid" });
+  // The shared memory client omits the keyword mode, so an extra word must not hide the page.
+  const result = await provider.search({ query: "Orchid fertilizer" });
   expect(result.hits.length).toBe(1);
   const hit = result.hits[0];
   expect(hit.reference).toStrictEqual({

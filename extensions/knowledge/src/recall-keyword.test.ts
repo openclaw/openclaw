@@ -14,6 +14,28 @@ it("matches across possessives and simple plurals, ignoring stopwords", () => {
   ]);
 });
 
+it("matches English inflections across message and page", () => {
+  const pages = [
+    page("a", "Release log", "Nova deployed the changes on Monday."),
+    page("b", "Thing", "A string of things."),
+  ];
+  expect(keywordCandidates("Who is deploying the changed code?", pages, 10, budget)).toMatchObject([
+    { id: "a" },
+  ]);
+  for (const [note, query] of [
+    ["cookie", "cookies"],
+    ["rose", "roses"],
+    ["menu", "menus"],
+    ["emoji", "emojis"],
+    ["ache", "aches"],
+    ["story", "stories"],
+  ] as const) {
+    expect(keywordCandidates(query, [page("p", note, "")], 1, budget)).toMatchObject([{ id: "p" }]);
+  }
+  // Short stems keep their ending rather than collapsing to a fragment.
+  expect(keywordCandidates("thing strings", pages, 10, budget)).toMatchObject([{ id: "b" }]);
+});
+
 it("ranks by BM25 with a title boost and keeps only pages sharing a word", () => {
   const pages = [
     page("a", "Pizza oven", "Firebrick order placed."),

@@ -301,6 +301,8 @@ function leanHit(hit: FullHit, withSnippet: boolean): LeanHit {
 }
 
 const leanSearch = (o: SearchOutput): Static<typeof LeanSearchOutput> => ({
+  // Tells the agent a default search fell back to any-word matching.
+  ...(o.queryMode === "any" ? { queryMode: o.queryMode } : {}),
   hits: o.hits.map((h) => leanHit(h, true)),
   resultCount: o.resultCount,
   total: o.total,

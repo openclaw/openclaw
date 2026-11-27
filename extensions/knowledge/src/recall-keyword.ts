@@ -22,13 +22,47 @@ const K1 = 1.2;
 const B = 0.75;
 const TITLE_BOOST = 4;
 
-/** Normalized word token with simple plural folding, or undefined for stopwords and one-letter words. */
+/** Normalized word token with light stemming, or undefined for stopwords and one-letter words. */
 function keywordToken(word: string): string | undefined {
   const token = word.normalize("NFKC").toLowerCase();
   if (/^.?$/su.test(token) || STOP.has(token)) {
     return undefined;
   }
-  return token.length > 4 && token.endsWith("s") ? token.slice(0, -1) : token;
+  return stem(token);
+}
+
+/**
+ * Light English suffix folding so inflections share a token (deployed, deploying,
+ * deploys -> deploy; changes, changed -> chang). It need not produce real words,
+ * only the same token for both message and page. Other scripts keep plural folding.
+ */
+function stem(token: string): string {
+  // Start from the shipped plural token. Every pair it equated must still converge.
+  let s = token.length > 4 && token.endsWith("s") ? token.slice(0, -1) : token;
+  if (!/^[a-z]+$/u.test(s)) {
+    return s;
+  }
+  if (s.endsWith("sse")) {
+    return s.slice(0, -2); // classes -> clas, like the shipped token for class
+  }
+  if (s.length >= 4 && /[xz]e$/u.test(s)) {
+    return s.slice(0, -1); // boxes -> box
+  }
+  if (s.length <= 4) {
+    return s;
+  }
+  if (/ied?$/u.test(s)) {
+    return s.replace(/ied?$/u, "y");
+  }
+  if (/(?:ing|ed)$/u.test(s) && s.length - (s.endsWith("ed") ? 2 : 3) >= 4) {
+    // thing, string and speed keep their ending: too little would remain.
+    s = s.slice(0, s.endsWith("ed") ? -2 : -3);
+    // stopped -> stop; falling -> fall and passed -> pass keep their double letter.
+    if (/([^aeiouylsz])\1$/u.test(s)) {
+      s = s.slice(0, -1);
+    }
+  }
+  return s.length > 4 && s.endsWith("e") ? s.slice(0, -1) : s;
 }
 
 /** Unicode letter/number runs; apostrophes split words, so possessive "'s" drops as a one-letter word. */

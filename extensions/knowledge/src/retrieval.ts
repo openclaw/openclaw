@@ -281,7 +281,20 @@ export function keywordExpression(input: SearchInput): string {
     .join(input.mode === "any" ? " OR " : " AND ");
 }
 
-const FTS_COLUMNS = "id UNINDEXED, title, aliases, body, tokenize='unicode61 remove_diacritics 2'";
+// Porter folds English inflections (deployed, deploying, deploys -> deploy) on both
+// the index and the query. It runs on every word, so it can also conflate unrelated
+// words in other languages that happen to end in English suffixes: accepted for
+// better recall. Changing the tokenizer needs new table names (see LEGACY_TABLES).
+const FTS_COLUMNS =
+  "id UNINDEXED, title, aliases, body, tokenize='porter unicode61 remove_diacritics 2'";
+/** Prefixes of earlier projections built with another tokenizer, dropped when their
+ * successors are built so one store never mixes tokenizations. */
+const LEGACY_TABLES = [
+  "keyword_fts_v1_",
+  "keyword_rows_v1_",
+  "keyword_history_fts_v1_",
+  "keyword_history_rows_v1_",
+];
 
 /** The scope's keyword corpora: eligible current records, and the eligible
  * superseded records whose `superseded_by` chain reaches one of them, each mapped to
@@ -352,10 +365,10 @@ function reconcileKeywordIndex(
 ) {
   const suffix = digest(binding);
   const tables = [
-    { table: `keyword_fts_v1_${suffix}`, rows: `keyword_rows_v1_${suffix}`, records },
+    { table: `keyword_fts_v2_${suffix}`, rows: `keyword_rows_v2_${suffix}`, records },
     {
-      table: `keyword_history_fts_v1_${suffix}`,
-      rows: `keyword_history_rows_v1_${suffix}`,
+      table: `keyword_history_fts_v2_${suffix}`,
+      rows: `keyword_history_rows_v2_${suffix}`,
       records: history,
     },
   ] as const;
@@ -378,6 +391,11 @@ function reconcileKeywordIndex(
     indexedAt = runSqliteImmediateTransactionSync(
       db,
       () => {
+        if (untracked.length) {
+          for (const prefix of LEGACY_TABLES) {
+            db.exec(`DROP TABLE IF EXISTS ${prefix}${suffix}`);
+          }
+        }
         for (const entry of tables) {
           const { table, rows, records: wanted } = entry;
           db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS ${table} USING fts5(${FTS_COLUMNS})`);
@@ -470,7 +488,9 @@ function temporaryCorpus(db: DatabaseSync, name: string, records: LoadedRecord[]
   }
 }
 
-/** Called only inside the storage authority/identity fence, using the latest validated snapshot. */
+/** Called only inside the storage authority/identity fence, using the latest validated snapshot.
+ * A search without an explicit mode that no record matches on every word retries once
+ * with any word and reports `queryMode: "any"`; explicit `mode: "all"` stays strict. */
 export function keywordSearch(
   db: DatabaseSync,
   data: Snapshot,
@@ -479,7 +499,7 @@ export function keywordSearch(
   generation: string,
   withdrawn = new Set<string>(),
 ): SearchOutput {
-  const expression = keywordExpression(input),
+  const strictExpression = keywordExpression(input),
     offset = input.offset ?? 0,
     limit = input.limit ?? 20;
   const base = {
@@ -533,10 +553,29 @@ export function keywordSearch(
             [r.title, r.body, ...(r.metadata.aliases ?? [])].some((v) => v.includes(marker)),
           )
         );
-        const total = Number(
-          db.prepare(`SELECT count(*) AS n FROM ${corpus} WHERE ${corpus} MATCH ?`).get(expression)!
-            .n,
-        );
+        const fieldExpression = keywordExpression({
+          ...input,
+          mode: input.mode === "phrase" ? "phrase" : "any",
+        });
+        const count = db.prepare(`SELECT count(*) AS n FROM ${corpus} WHERE ${corpus} MATCH ?`);
+        let expression = strictExpression;
+        let total = Number(count.get(expression)!.n);
+        // Strict matches in either corpus take precedence, even on an empty later page.
+        if (
+          input.mode === undefined &&
+          total === 0 &&
+          fieldExpression !== expression &&
+          !(
+            ranked.length &&
+            db
+              .prepare(`SELECT 1 FROM ${historyCorpus} WHERE ${historyCorpus} MATCH ? LIMIT 1`)
+              .get(expression)
+          )
+        ) {
+          expression = fieldExpression;
+          base.queryMode = "any";
+          total = Number(count.get(expression)!.n);
+        }
         const rows = db
           .prepare(`SELECT id,bm25(${corpus},0,8,6,1) AS score,
       CASE WHEN length(CAST(body AS BLOB))<=${SEARCH_HIGHLIGHT_MAX_BYTES} THEN highlight(${corpus},1,?,'') END AS title,
@@ -548,10 +587,6 @@ export function keywordSearch(
         // FTS5 highlight/snippet enumeration becomes quadratic with many repeated
         // instances. Full-record matching and BM25 stay authoritative; large bodies
         // use an explicitly labelled opening excerpt, not an approximate token match.
-        const fieldExpression = keywordExpression({
-          ...input,
-          mode: input.mode === "phrase" ? "phrase" : "any",
-        });
         const columnMatch = db.prepare(
           `SELECT 1 FROM ${corpus} WHERE id=? AND ${corpus} MATCH ? LIMIT 1`,
         );

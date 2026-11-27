@@ -19,7 +19,8 @@ ranked search never proves that an inventory is complete.
 
 | Operation or input            | Meaning                                                                              |
 | ----------------------------- | ------------------------------------------------------------------------------------ |
-| `knowledge_grep({query})`     | FTS5/BM25 over title, aliases, and body; every word token must match                 |
+| `knowledge_grep({query})`     | FTS5/BM25 over title, aliases, and body; every word token must match, else any word  |
+| `mode: "all"`                 | Every word token must match; never falls back                                        |
 | `mode: "any"`                 | Any word token may match                                                             |
 | `mode: "phrase"`              | Word tokens in order and adjacent within one field                                   |
 | `knowledge_lookup({query})`   | Exact ID, full title, or alias; returns `found`, `ambiguous`, or `missing`           |
@@ -28,15 +29,25 @@ ranked search never proves that an inventory is complete.
 | `limit`, `offset`             | 1–50 results (default 20), offset 0–500; follow `nextOffset` with unchanged filters  |
 | `timeField`, `since`, `until` | Date filters applied before ranking; see [Dates and Chronicle](#dates-and-chronicle) |
 
+A search without `mode` that no record matches on every word retries once with
+any word. Its response reports `queryMode: "any"`; agent results include
+`queryMode: "any"` whenever any-word matching ran. A replacement found through
+[superseded wording](#superseded-wording) counts as a match, so it prevents the
+retry. The shared memory provider's `memory_search` omits `mode`, so it gets the
+retry too.
+
 Queries accept 1–64 word tokens within 500 characters. Punctuation separates
 tokens; `OR`, `NOT`, column syntax, and quotes are not executed as FTS syntax.
 Matching is case-insensitive. Decomposed diacritics fold away in any script, so
 decomposed `άλφα` and unaccented `αλφα` match alike. Precomposed letters with
 diacritics fold to their base letters across the Latin script, including Latin
 Extended-A (`cafe` matches `café`, and `c` matches `č`): an unaccented query
-does not reach a composed accented word in other scripts. There is no stemming,
-prefix search, or language-specific segmentation, so unsegmented CJK substrings
-may not match.
+does not reach a composed accented word in other scripts. English inflections
+match through the FTS5 Porter stemmer, which the index and the query share:
+`deploying` finds `deployed`, `deploys`, and `deploy`. The stemmer runs on every
+word, so in other languages it can occasionally join unrelated words that end
+in English suffixes. There is no prefix search or language-specific
+segmentation, so unsegmented CJK substrings may not match.
 Canonically equivalent Unicode spellings (composed NFC and decomposed NFD, e.g.
 Greek `άλφα`) retrieve the same records: in `all` and `any` modes each word
 matches its original spelling plus both canonical forms, so a partially
@@ -131,10 +142,12 @@ There is no background indexing worker.
 
 ### What is rebuildable
 
-The `keyword_fts_v1_*`, `keyword_rows_v1_*`, `keyword_history_fts_v1_*`, and
-`keyword_history_rows_v1_*` tables, `keyword_state_v1`, and the temporal tables are
+The `keyword_fts_v2_*`, `keyword_rows_v2_*`, `keyword_history_fts_v2_*`, and
+`keyword_history_rows_v2_*` tables, `keyword_state_v1`, and the temporal tables are
 projections. Missing tables or changed fingerprints are rebuilt on the next
-query.
+query. Stores indexed before stemming have `v1` keyword tables. The first search
+after upgrading builds the `v2` tables and drops that scope's `v1` tables, so a
+store never mixes tokenizations.
 
 Do not drop `state.sqlite` to rebuild search. It also holds store identity,
 receipts, history, Git checkpoints, session activity, and withdrawal and

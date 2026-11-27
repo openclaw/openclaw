@@ -302,7 +302,7 @@ it("withdrawal durably hides pages and transitive dependents, preserves evidence
   f.store.withDatabase((db: any) => {
     for (const row of db
       .prepare(
-        "SELECT name FROM sqlite_master WHERE name LIKE 'keyword_fts_v1_%' AND sql LIKE 'CREATE VIRTUAL%' ",
+        "SELECT name FROM sqlite_master WHERE name LIKE 'keyword_fts_v2_%' AND sql LIKE 'CREATE VIRTUAL%' ",
       )
       .all()) {
       db.exec(`DROP TABLE ${row.name}`);
