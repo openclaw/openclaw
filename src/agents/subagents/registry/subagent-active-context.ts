@@ -11,13 +11,11 @@ import { resolveSubagentCompletionResultText } from "../completion/subagent-comp
 import { isSubagentRunVisibleToSession } from "./subagent-control-scope.js";
 import { isSubagentDeliveryWithheld } from "./subagent-delivery-state.js";
 import { buildSubagentList, captureSubagentListReadContext } from "./subagent-list.js";
-import { subagentRuns } from "./subagent-registry-memory.js";
-import { buildSubagentRunReadIndexFromRuns } from "./subagent-registry-queries.js";
+import { withSubagentSessionListRead } from "./subagent-registry-read-index.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
-import { withSubagentRunReadSnapshot } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isRequesterSettleWakeForRun } from "./subagent-requester-settle-identity.js";
-import { recordLatestSubagentRun } from "./subagent-run-generation.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 
 // Prompt data is sanitized then JSON-quoted so active subagent state cannot add
 // executable prompt instructions through labels or task text.
@@ -95,27 +93,19 @@ export async function buildActiveSubagentRuntimeContext(params: {
       entry.controllerStorePath === storePath) ||
       (entry.requesterSessionKey.trim() === controllerSessionKey &&
         entry.requesterStorePath === storePath));
-  return withSubagentRunReadSnapshot(
-    subagentRuns,
-    (snapshot) => {
-      const latest = new Map<string, SubagentRunReadRecord>();
-      for (const entry of snapshot.values()) {
-        const key = entry.childSessionKey.trim();
-        if (key) {
-          recordLatestSubagentRun(latest, key, entry);
-        }
-      }
+  return withSubagentSessionListRead(
+    [controllerSessionKey],
+    ({ latestRunsByChildSessionKey: latest }) => {
       const yielded = [...latest.values()].filter(
-        (entry) => isVisible(entry) && entry.pauseReason === "sessions_yield",
+        (entry) => isVisible(entry) && isSubagentPausedByYield(entry),
       );
       return {
-        snapshot,
         latest,
         runIds: [],
         sessionKeys: [controllerSessionKey, ...yielded.map((entry) => entry.childSessionKey)],
       };
     },
-    ({ snapshot: readSnapshot, latest }, snapshot) => {
+    ({ latest }, snapshot, readIndex) => {
       const visible = [...snapshot.values()].filter(isVisible);
       const runs = visible.filter(
         (entry) => latest.get(entry.childSessionKey.trim())?.runId === entry.runId,
@@ -153,17 +143,7 @@ export async function buildActiveSubagentRuntimeContext(params: {
         params.includeSpawnContext === false
           ? undefined
           : buildSubagentList({
-              context: captureSubagentListReadContext(
-                runs,
-                buildSubagentRunReadIndexFromRuns({
-                  runs: readSnapshot,
-                  inMemoryRuns: [...readSnapshot.keys()].flatMap(
-                    (id) => subagentRuns.get(id) ?? [],
-                  ),
-                }),
-                snapshot,
-                recentMinutes,
-              ),
+              context: captureSubagentListReadContext(runs, readIndex(), snapshot, recentMinutes),
               // Prompt fields are registry-owned; enrichment belongs to visible lists.
               sessionEntries: new Map(),
               taskMaxChars: 96,
@@ -227,6 +207,5 @@ export async function buildActiveSubagentRuntimeContext(params: {
       }
       return sections.map((lines) => lines.join("\n")).join("\n\n");
     },
-    { sessionKeys: [controllerSessionKey], descendants: true },
   );
 }

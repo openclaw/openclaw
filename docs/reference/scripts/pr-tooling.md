@@ -465,6 +465,28 @@ findings continue to block ordinary qualification and merge. This command
 does not change the candidate, publish it, waive CI/security/review requirements,
 or authorize a merge.
 
+### Upgrade an incoming READY review
+
+Before preparation starts, use the same exact-identity successor command with
+`--incoming-review`. Set `--expected-review` to the `.local/review.json` blob.
+The retained review must be ordinary READY in PR mode, and the unchanged clean
+local head must equal the live hosted head. No preparation branch or contributor
+commit signature is required beyond ordinary incoming review admission.
+
+This mode requires the existing registered checkout and preserves its source,
+index and review files. Preparation, publication, gate, correction, pending-proof
+or baseline records refuse admission. A pending review transition is refused
+before recovery can change the checkout; reconcile it through its original owner.
+Existing merge captures, outcomes, auto-merge and queue membership also refuse.
+
+The version-3 binding records `reviewKind: incoming` and links the fixed review
+inventory, including metadata, mode and review context. Earlier version-3 readers
+refuse this new discriminator. No preparation or proof is manufactured or carried
+forward. After success, run ordinary `scripts/pr prepare-run <PR>` with the selected
+workflow; all preparation, CI, review and merge requirements still apply.
+If interrupted, inspect the exact binding before continuing. Source and review
+remain unchanged on either side of the binding transaction.
+
 ### Upgrade an ordinary READY preparation
 
 An already-published ordinary READY preparation can use the same command with

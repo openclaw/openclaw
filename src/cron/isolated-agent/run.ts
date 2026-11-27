@@ -52,7 +52,6 @@ import { isCronExecutionIdle } from "../execution-idle.js";
 import { resolveCronOwnerTransferRecoveryError } from "../human-owner.js";
 import { CronOperatorSourceError } from "../operator-source-error.js";
 import { CronSessionLifecycleClaimError } from "../run-authority.js";
-import { removeCronRunContinuationSessionIfIdle } from "../run-continuation-cleanup.js";
 import { createCronRunDiagnosticsFromError, mergeCronRunDiagnostics } from "../run-diagnostics.js";
 import {
   resolveCronAgentErrorClassification,
@@ -131,7 +130,6 @@ async function runCronIsolatedAgentTurnInTrace(
   const abortReason = () =>
     resolveCronAbortReasonText(abortSignal?.reason) ?? "cron: job execution timed out";
   const isFastTestEnv = isFastTestRuntimeEnv();
-  await using runtimeResources = new AsyncDisposableStack();
   let preparation: Awaited<ReturnType<typeof prepareCronRunContext>>;
   try {
     preparation = await prepareCronRunContext({
@@ -183,21 +181,7 @@ async function runCronIsolatedAgentTurnInTrace(
   async function runPreparedCronTurn(
     context: PreparedCronRunContext,
   ): Promise<RunCronAgentTurnResult> {
-    const preparedRuntimeLease = runtimeResources.use(context.preparedModelRuntimeLease);
-    if (context.runContinuationSession) {
-      // Native deletion drains the turn owner; release admission before cleanup and its runtime.
-      runtimeResources.defer(async () => {
-        try {
-          await withPluginRuntimeGenerationScope(preparedRuntimeLease.snapshot, () =>
-            removeCronRunContinuationSessionIfIdle(context.runSessionKey),
-          );
-        } catch (error) {
-          logWarn(
-            `[cron:${params.job.id}] Failed to remove unused run continuation: ${String(error)}`,
-          );
-        }
-      });
-    }
+    const preparedRuntimeLease = context.preparedModelRuntimeLease;
     const prepared = { context };
     await using _ = {
       [Symbol.asyncDispose]: async () => {

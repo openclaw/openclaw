@@ -179,10 +179,16 @@ describe("buildPromptSection", () => {
     [["memory_search"], "off"],
   ] as const)("guides recall using %j with citations=%s", (tools, citationsMode) => {
     const result = buildMemoryPromptSection({ availableTools: new Set(tools), citationsMode });
-    expect(result[1]).toContain(`run ${tools[0]}`);
-    expect(result[1]).toContain("not already present in the current turn");
-    expect(result[1]).toContain("Do not repeat memory retrieval");
-    expect(result[1]?.includes("for memory-file hits, use memory_get")).toBe(tools.length === 2);
+    expect(result[1]).toContain(tools[0]);
+    expect(result[1]).toContain("not in this turn");
+    expect(result[1]).toContain("Skip it when supplied context fully answers");
+    expect(result[1]).toContain("say you checked");
+    expect(result[1]?.includes("; memory_get only the needed lines of file hits")).toBe(
+      tools.length === 2,
+    );
+    if (tools[0] === "memory_search") {
+      expect(result[1]).toContain("run memory_search without corpus");
+    }
     if (tools[0] === "memory_get") {
       expect(result[1]).not.toContain("run memory_search");
     }
@@ -214,8 +220,8 @@ describe("buildPromptSection", () => {
     for (const name of excluded) {
       expect(modelVisibleText).not.toContain(name);
     }
-    expect(prompt).toContain("Session search line numbers are not history offsets");
-    expect(prompt).toContain("Never read raw transcript files");
+    expect(prompt).toContain("Search line numbers are not history offsets");
+    expect(prompt).toContain("never read raw transcript files");
     if (sessionTools.length === 2) {
       expect(prompt).toContain("returned sessionKey, messageId, and sessionId");
     }

@@ -14,8 +14,9 @@ The `llama-cpp` plugin provides one `llama-cpp` model provider. OpenClaw can
 manage a local `llama-server` or connect to one that you operate. Both choices
 use `llama-cpp/<model>` references and the OpenAI-compatible transport.
 
+The plugin ships with OpenClaw. Choose llama.cpp in onboarding:
+
 ```bash
-openclaw plugins install @openclaw/llama-cpp-provider
 openclaw onboard
 ```
 

@@ -1,5 +1,6 @@
 package ai.openclaw.app.systemagent
 
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.coroutines.CompletableDeferred
@@ -283,7 +284,7 @@ class SystemAgentChatControllerTest {
         }
       }
       harness.handler = {
-        throw GatewayRequestRejected(GatewaySession.ErrorShape("FAILED", "old route failure"))
+        throw GatewayRequestRejected(ErrorShape("FAILED", "old route failure"))
       }
 
       harness.controller.refresh()

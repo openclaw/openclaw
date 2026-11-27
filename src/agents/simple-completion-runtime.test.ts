@@ -46,9 +46,13 @@ vi.mock("./prepared-model-runtime.js", () => ({
   acquireAgentRunPreparedModelRuntime: hoisted.acquireRuntimeLeaseMock,
 }));
 
+// mock-isolation: preparation has no retained generation registry.
+vi.mock("../plugins/runtime/generation-state.js", () => ({
+  getPluginRuntimeGenerationRegistry: () => undefined,
+}));
+
 // mock-isolation: preparation runs without a published plugin generation.
 vi.mock("../plugins/runtime/generation-scope.js", () => ({
-  getPluginRuntimeGenerationRegistry: () => undefined,
   runOutsidePluginRuntimeGenerationScope: (run: () => unknown) => run(),
   withPluginRuntimeGenerationScope: (_snapshot: unknown, run: () => unknown) => run(),
 }));
@@ -546,6 +550,10 @@ describe("acquireSimpleCompletionModelForAgent", () => {
       expect(modelResolver.mock.calls[1]?.[4]).toMatchObject({ agentId: "main" });
       expect(modelResolver.mock.calls[0]?.[4]?.abortSignal).toBe(signal);
       expect(modelResolver.mock.calls[1]?.[4]?.abortSignal).toBe(signal);
+      const firstStores = modelResolver.mock.calls[0]?.[4];
+      const nextStores = modelResolver.mock.calls[1]?.[4];
+      expect(nextStores?.modelRegistry).toBe(firstStores?.modelRegistry);
+      expect(nextStores?.authStorage).toBe(firstStores?.authStorage);
     } finally {
       if (!("error" in result)) {
         await result[Symbol.asyncDispose]();

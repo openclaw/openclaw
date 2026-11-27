@@ -2,7 +2,7 @@ package ai.openclaw.app.node
 
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.gateway.DeviceIdentityStore
-import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.InvokeResult
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.takeUtf16Safe
 import android.content.Context
@@ -20,9 +20,9 @@ class DebugHandler(
   /**
    * Runs an Ed25519 self-test and returns redacted diagnostics for debug builds.
    */
-  fun handleEd25519(): GatewaySession.InvokeResult {
+  fun handleEd25519(): InvokeResult {
     if (!BuildConfig.DEBUG) {
-      return GatewaySession.InvokeResult.error(code = "UNAVAILABLE", message = "debug commands are disabled in release builds")
+      return InvokeResult.error(code = "UNAVAILABLE", message = "debug commands are disabled in release builds")
     }
     // Self-test Ed25519 signing without returning full private/public key material.
     try {
@@ -72,9 +72,9 @@ class DebugHandler(
       }
 
       val diagnostics = results.joinToString("\n")
-      return GatewaySession.InvokeResult.ok("""{"diagnostics":${JsonPrimitive(diagnostics)}}""")
+      return InvokeResult.ok("""{"diagnostics":${JsonPrimitive(diagnostics)}}""")
     } catch (e: Throwable) {
-      return GatewaySession.InvokeResult.error(
+      return InvokeResult.error(
         code = "ED25519_TEST_FAILED",
         message = "${e.javaClass.simpleName}: ${e.message}\n${e.stackTraceToString().takeUtf16Safe(500)}",
       )
@@ -84,9 +84,9 @@ class DebugHandler(
   /**
    * Returns a filtered logcat snapshot plus CameraX debug log for debug builds.
    */
-  fun handleLogs(): GatewaySession.InvokeResult {
+  fun handleLogs(): InvokeResult {
     if (!BuildConfig.DEBUG) {
-      return GatewaySession.InvokeResult.error(code = "UNAVAILABLE", message = "debug commands are disabled in release builds")
+      return InvokeResult.error(code = "UNAVAILABLE", message = "debug commands are disabled in release builds")
     }
     val pid = android.os.Process.myPid()
     val rt = Runtime.getRuntime()
@@ -152,6 +152,6 @@ class DebugHandler(
       } else {
         ""
       }
-    return GatewaySession.InvokeResult.ok("""{"logs":${JsonPrimitive(info + logResult + camLog)}}""")
+    return InvokeResult.ok("""{"logs":${JsonPrimitive(info + logResult + camLog)}}""")
   }
 }

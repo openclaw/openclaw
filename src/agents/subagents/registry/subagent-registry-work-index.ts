@@ -1,4 +1,5 @@
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { hasPendingRequesterTurnResult } from "./subagent-requester-turn-custody.js";
 
 export const SUBAGENT_SESSION_RUN_TTL_MS = 5 * 60_000;
 
@@ -8,7 +9,7 @@ export function needsSubagentActivation(entry: SubagentRunRecord): boolean {
     entry.cleanupCompletedAt === undefined ||
     Boolean(
       // Collectors retain their spawning turn for cancellation, without owing a requester wake.
-      (entry.requesterTurnRunId && entry.expectsCompletionMessage === true) ||
+      hasPendingRequesterTurnResult(entry) ||
       entry.requesterSettleWake ||
       entry.pauseReason ||
       entry.killIntent ||

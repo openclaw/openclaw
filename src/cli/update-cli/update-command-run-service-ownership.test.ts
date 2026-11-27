@@ -26,10 +26,7 @@ import * as updateInstallStatus from "../../infra/update-install-status.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
 import * as updateRunLedger from "../../infra/update-run-ledger.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
-import {
-  loadUpdateRecovery,
-  UpdateRecoveryRequiredError,
-} from "../../infra/update-run-recovery.js";
+import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -291,26 +288,27 @@ it.each([
       expect(
         fs.existsSync(resolveOpenClawStateSqlitePath({ ...process.env, ...callerOverrides })),
       ).toBe(false);
-    } else if (scenario === "owned" || scenario === "stale-install" || scenario === "absent") {
+    } else if (
+      scenario === "owned" ||
+      scenario === "owned-pending" ||
+      scenario === "stale-install" ||
+      scenario === "absent"
+    ) {
       const usesServiceState = scenario !== "absent";
       await expectAdmitted(usesServiceState);
       expect(fs.existsSync(path.join(usesServiceState ? callerState : serviceState, "state"))).toBe(
         false,
       );
-    } else if (scenario === "owned-pending" || scenario === "root-probe-error") {
+      if (pending) {
+        expect(loadUpdateRecovery(pending.runId, { env: serviceEnv })).toEqual(pending);
+        expect(fs.existsSync(path.join(serviceState, "tmp"))).toBe(false);
+      }
+    } else if (scenario === "root-probe-error") {
       const admission = resolveUpdateCommandAdmissionEnv({ opts: {}, root }).then((env) =>
         admitUpdateCommandRun({ opts: {}, root, env }),
       );
-      if (pending) {
-        await expect(admission).rejects.toBeInstanceOf(UpdateRecoveryRequiredError);
-        expect(loadUpdateRecovery(pending.runId, { env: serviceEnv })).toEqual(pending);
-      } else {
-        await expect(admission).rejects.toBe(rootFailure);
-      }
+      await expect(admission).rejects.toBe(rootFailure);
       await closeStateDatabaseForTest();
-      if (pending) {
-        expect(fs.existsSync(path.join(serviceState, "tmp"))).toBe(false);
-      }
       expect(snapshot()).toEqual(before);
     } else {
       expect(await servicePlan.resolveManagedServicePackageUpdatePlan({ root })).toEqual({
@@ -447,9 +445,6 @@ it.each([
       await expect(prepareUpdateCommand({ dryRun: true })).rejects.toBeInstanceOf(
         servicePlan.GatewayServiceUpdateOwnershipError,
       );
-      const temporaryRoot = path.join(home, "reports");
-      await fs.promises.mkdir(temporaryRoot);
-      vi.spyOn(os, "tmpdir").mockReturnValue(temporaryRoot);
       const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
       vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
       const exit = await updateCommand({ dryRun: outcome !== "masked", json: true }).catch(
@@ -461,15 +456,11 @@ it.each([
         expect.objectContaining({
           status: "error",
           reason: "managed-service-preflight",
-          reportPath: expect.any(String),
         }),
       );
-      const { reportPath } = output.mock.calls[0]![0] as { reportPath: string };
-      expect(path.dirname(path.dirname(reportPath))).toBe(temporaryRoot);
       if (outcome === "masked") {
         expect(JSON.stringify(output.mock.calls)).toContain(unmask);
       }
-      expect(await fs.promises.readFile(reportPath, "utf8")).toContain("Bounded diagnostic JSON:");
       await expect(fs.promises.stat(callerState)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(fs.promises.stat(serviceState)).rejects.toMatchObject({ code: "ENOENT" });
       expect(native.stop).not.toHaveBeenCalled();

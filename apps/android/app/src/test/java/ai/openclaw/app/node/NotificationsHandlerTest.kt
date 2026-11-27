@@ -1,6 +1,6 @@
 package ai.openclaw.app.node
 
-import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.InvokeResult
 import android.content.Context
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
@@ -284,7 +284,7 @@ class NotificationsHandlerTest {
     assertFalse(actionRequiresClearableNotification(NotificationActionKind.Reply))
   }
 
-  private fun parsePayload(result: GatewaySession.InvokeResult): JsonObject {
+  private fun parsePayload(result: InvokeResult): JsonObject {
     val payloadJson = result.payloadJson ?: error("expected payload")
     return Json.parseToJsonElement(payloadJson).jsonObject
   }

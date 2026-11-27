@@ -86,6 +86,14 @@ export function resolveUpdateResultNextAction(params: {
   ) {
     return UPDATE_INSTALL_SKIP_GUIDANCE[result.reason];
   }
+  if (result.status === "skipped" && result.reason === "already-current") {
+    const serviceWarning = result.steps.findLast(
+      (step) => step.name === "managed-service-reconciliation" && step.advisory,
+    )?.advisory;
+    if (serviceWarning) {
+      return serviceWarning.message;
+    }
+  }
   if (result.status === "error") {
     const refusalNextAction = updateRepairRefusalNextAction(result.reason, (command) =>
       formatCliCommand(command, env),
@@ -162,6 +170,9 @@ export function resolveUpdateResultNextAction(params: {
     const configRefusal = result.steps.findLast(
       (step) => step.name === "config-rollback",
     )?.stderrTail;
+    const migrationRecovery = result.steps.findLast(
+      (step) => step.name === "gateway migration recovery" && step.exitCode !== 0,
+    )?.stderrTail;
     const failedStep = result.failedStep;
     const detail =
       result.reason && UPDATE_ENVIRONMENT_FAILURE_REASONS.has(result.reason)
@@ -191,6 +202,7 @@ export function resolveUpdateResultNextAction(params: {
       deployment,
       configRefusal,
       state,
+      dataAtRisk ? migrationRecovery : undefined,
       retentionGuidance,
       servingVersion && !hostLinkFailure
         ? `Fix ${truncateUtf16Safe(result.reason ?? "the update failure", 240)} then run \`${formatCliCommand("openclaw update", env)}\` again.`

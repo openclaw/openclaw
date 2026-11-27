@@ -27,8 +27,9 @@ export async function runDoctorStartupReadinessSteps(params: {
   resumeCapture?: () => void;
 }): Promise<{ sqliteReclamationAgents?: readonly AgentDatabaseMigrationTarget[] } | undefined> {
   const { ctx, runtime, measure, databaseTargets } = params;
-  const { validateDoctorExternalConfigForStartup } = await import("./doctor-external-config.js");
-  await traceDoctorMaintenancePending("external-config");
+  const { checkDoctorExternalConfigPending, validateDoctorExternalConfigForStartup } =
+    await import("./doctor-external-config.js");
+  await traceDoctorMaintenancePending("external-config", checkDoctorExternalConfigPending);
   if (
     !(await measure("doctor.external-config", () =>
       validateDoctorExternalConfigForStartup(runtime),
@@ -38,7 +39,15 @@ export async function runDoctorStartupReadinessSteps(params: {
   }
   const { assertDoctorMaintenanceReady } =
     await import("../commands/doctor-maintenance-inspection.js");
-  await traceDoctorMaintenancePending("maintenance-ready");
+  // The readiness assertions only read; the step writes when it completes migration backups.
+  await traceDoctorMaintenancePending("maintenance-ready", async () => {
+    const { checkDoctorMigrationBackupsPending } =
+      await import("../commands/doctor-migration-backup-artifacts.js");
+    return checkDoctorMigrationBackupsPending(
+      process.env,
+      databaseTargets.map((target) => target.path),
+    );
+  });
   const readiness = await measure("doctor.maintenance-ready", () =>
     assertDoctorMaintenanceReady(ctx.cfg, process.env, runtime.log, databaseTargets),
   );
@@ -51,9 +60,21 @@ export async function runDoctorStartupReadinessSteps(params: {
       await initializeDebugProxyCaptureAsync("cli");
     }
   }
-  const { repairGatewayMaintenanceStartupFailures } =
-    await import("../infra/gateway-boot-lifecycle.js");
-  await traceDoctorMaintenancePending("boot-lifecycle");
+  const {
+    countRepairableGatewayMaintenanceStartupFailures,
+    repairGatewayMaintenanceStartupFailures,
+  } = await import("../infra/gateway-boot-lifecycle.js");
+  const [{ decideDoctorPendingFromLiveStores }, { resolveOpenClawStateSqlitePath }] =
+    await Promise.all([
+      import("../commands/doctor-live-store-pending.js"),
+      import("../state/openclaw-state-db.paths.js"),
+    ]);
+  // Boot lifecycle records live in the state database.
+  await traceDoctorMaintenancePending("boot-lifecycle", () =>
+    decideDoctorPendingFromLiveStores([resolveOpenClawStateSqlitePath()], async () =>
+      (await countRepairableGatewayMaintenanceStartupFailures()) > 0 ? "work" : "none",
+    ),
+  );
   repairGatewayMaintenanceStartupFailures();
   return { sqliteReclamationAgents };
 }
@@ -102,9 +123,11 @@ export async function runDoctorPreStopMaintenance(params: {
   runtime: RuntimeEnv;
   measure: DoctorProgressMeasure;
 }): Promise<void> {
-  const { cleanupRetainedUpdateRuntimesBeforeMaintenance } =
+  const { checkRetainedUpdateRuntimesPending, cleanupRetainedUpdateRuntimesBeforeMaintenance } =
     await import("../commands/doctor-retained-runtime.js");
-  await traceDoctorMaintenancePending("retained-runtimes");
+  await traceDoctorMaintenancePending("retained-runtimes", () =>
+    checkRetainedUpdateRuntimesPending(process.env),
+  );
   try {
     await params.measure("doctor.retained-runtimes", () =>
       cleanupRetainedUpdateRuntimesBeforeMaintenance(process.env),

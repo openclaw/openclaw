@@ -43,10 +43,10 @@ describe("buildAgentSystemPrompt with worker-placed session tools", () => {
     const { local, worker } = renderLocalAndWorker({
       toolNames: ["sessions_spawn", "sessions_create"],
     });
-    expect(local).toContain("use hidden children by default");
+    expect(local).toContain("hidden `sessions_spawn` children by default");
     expect(worker).toContain("## Session routing");
-    expect(worker).toContain("`sessions_spawn` children are always visible sessions");
-    expect(worker).not.toContain("hidden children");
+    expect(worker).toContain("`sessions_spawn` children are always visible sidebar sessions");
+    expect(worker).not.toContain("hidden `sessions_spawn` children");
   });
 
   it("omits ACP spawn guidance on a worker", () => {

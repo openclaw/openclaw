@@ -82,12 +82,8 @@ explicit API use the generic OpenAI-compatible bridge. For ClawRouter, see
 [Text embeddings for memory](/providers/clawrouter#text-embeddings-for-memory)
 for the `/v1` base URL, explicit router credential binding, and qualified model id.
 
-For local embeddings with no API key, install and configure the official
-llama.cpp provider, then set `provider: "local"`:
-
-```bash
-openclaw plugins install @openclaw/llama-cpp-provider
-```
+For local embeddings with no API key, configure the bundled llama.cpp
+provider, then set `provider: "local"`.
 
 Choose llama.cpp once in interactive setup. OpenClaw installs a verified
 `llama-server`, downloads the embedding GGUF, and writes its managed service

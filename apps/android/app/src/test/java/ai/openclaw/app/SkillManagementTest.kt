@@ -1,7 +1,7 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayErrorDetails
-import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
@@ -229,7 +229,7 @@ class SkillManagementTest {
     for (message in listOf("review required", "download blocked", "security verification unavailable")) {
       val rejection =
         clawHubInstallRejection(
-          GatewaySession.ErrorShape(
+          ErrorShape(
             code = "UNAVAILABLE",
             message = message,
             details =
@@ -253,7 +253,7 @@ class SkillManagementTest {
     for (warning in listOf(null, "", " \n ")) {
       val rejection =
         clawHubInstallRejection(
-          GatewaySession.ErrorShape(
+          ErrorShape(
             code = "UNAVAILABLE",
             message = " \n ",
             details =

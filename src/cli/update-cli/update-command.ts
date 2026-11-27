@@ -97,7 +97,6 @@ async function updateCommandWithRuntime(
       ),
     );
   }
-  const reportHints: NonNullable<Parameters<typeof withUpdateAdmissionReporting>[3]> = {};
   return await withUpdateAdmissionReporting(
     inputOpts,
     async () => {
@@ -115,8 +114,6 @@ async function updateCommandWithRuntime(
       return await withUpdateDatabaseEngine(
         env,
         async (configReadable, malformedConfig) => {
-          // Late admission refusals retain the captured malformed-source report decision.
-          reportHints.writeArtifacts = !malformedConfig;
           if (await tryRunReleaseUpdateCommand(inputOpts, prepared, env)) {
             return;
           }
@@ -181,7 +178,6 @@ async function updateCommandWithRuntime(
       );
     },
     "unknown",
-    reportHints,
   );
 }
 

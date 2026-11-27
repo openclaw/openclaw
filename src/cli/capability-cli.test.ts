@@ -192,7 +192,6 @@ const mocks = await vi.hoisted(async () => ({
     typeof import("../web-search/runtime.js").isWebSearchProviderConfigured
   >(() => false),
   isWebFetchProviderConfigured: vi.fn(() => false),
-  getModelsCommandSecretTargetIds: vi.fn(() => new Set(["models.providers.*.apiKey"])),
   getMemoryEmbeddingCommandSecretTargetIds: vi.fn(() => new Set(["models.providers.*.apiKey"])),
   getTtsCommandSecretTargetIds: vi.fn(() => new Set(["models.providers.*.apiKey"])),
   getCapabilityWebSearchCommandSecretTargets: vi.fn(
@@ -268,11 +267,11 @@ vi.mock("./command-config-resolution.js", () => ({
   resolveCommandConfigWithSecrets: mocks.resolveCommandConfigWithSecrets,
 }));
 
+// mock-isolation: Web, memory and TTS command wiring uses fixture discovery targets.
 vi.mock("./command-secret-targets.js", () => ({
   getCapabilityWebFetchCommandSecretTargets: mocks.getCapabilityWebFetchCommandSecretTargets,
   getCapabilityWebSearchCommandSecretTargets: mocks.getCapabilityWebSearchCommandSecretTargets,
   getMemoryEmbeddingCommandSecretTargetIds: mocks.getMemoryEmbeddingCommandSecretTargetIds,
-  getModelsCommandSecretTargetIds: mocks.getModelsCommandSecretTargetIds,
   getTtsCommandSecretTargetIds: mocks.getTtsCommandSecretTargetIds,
 }));
 

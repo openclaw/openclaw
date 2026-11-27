@@ -85,7 +85,7 @@ const loaders = {
     import("../config/io.health-state.kernel.js").then((m) => m.configHealthReadOperations),
   plugins: async () => {
     const { deferredPluginMigrationReadOperations } =
-      await import("../infra/deferred-plugin-migrations.js");
+      await import("../infra/deferred-plugin-migrations.read.kernel.js");
     return {
       ...deferredPluginMigrationReadOperations,
       ...pluginMetadataReadOperations,

@@ -42,6 +42,7 @@ import {
   mergeSecretsRuntimeEnv,
   resolveRefreshAgentDirs,
 } from "./runtime-fast-path.js";
+import { hasPluginConfigValues } from "./runtime-secret-scan.js";
 import type { SecretResolverWarning } from "./runtime-shared.js";
 import {
   activateProviderAuthRuntimeSnapshot,
@@ -92,7 +93,7 @@ async function resolveLoadablePluginOrigins(params: {
 
 function shouldLoadPluginMetadataForSecrets(config: OpenClawConfig): boolean {
   const entries = config.plugins?.entries;
-  if (isRecord(entries) && Object.keys(entries).length > 0) {
+  if (isRecord(entries) && Object.values(entries).some(hasPluginConfigValues)) {
     return true;
   }
   const channels = config.channels;
@@ -216,7 +217,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
       includeConfigRefs,
       includeAuthStoreRefs,
       loadAuthStore: fastPathLoadAuthStore,
-      loadablePluginOrigins: params.loadablePluginOrigins ?? new Map<string, PluginOrigin>(),
+      loadablePluginOrigins: params.loadablePluginOrigins,
       ...(manifestRegistry ? { manifestRegistry } : {}),
     });
     return snapshot;
@@ -245,7 +246,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
     params.loadablePluginOrigins ??
     (manifestRegistry
       ? await resolveLoadablePluginOrigins({ plugins: manifestRegistry })
-      : new Map<string, PluginOrigin>());
+      : undefined);
   const context = createResolverContext({
     sourceConfig,
     env: runtimeEnv,
@@ -593,7 +594,6 @@ function createSecretsRuntimeSnapshotActivation(snapshot: PreparedSecretsRuntime
       explicitAgentDirs: null,
       includeAuthStoreRefs: snapshot.authStores.length > 0,
       loadAuthStore: loadSecretsRuntimeAuthStore,
-      loadablePluginOrigins: new Map<string, PluginOrigin>(),
     } satisfies SecretsRuntimeRefreshContext);
 
   return {
