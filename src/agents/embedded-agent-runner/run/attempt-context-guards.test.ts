@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
+import { rm } from "node:fs/promises";
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
@@ -7,6 +9,7 @@ import type { AssistantMessage } from "../../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../../llm/utils/event-stream.js";
 import { forceFullGc } from "../../../test-utils/retention.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import { agentSessionDeferThresholdCompaction } from "../../sessions/agent-session-types.js";
 import { SessionManager, type AgentSession } from "../../sessions/index.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
@@ -254,6 +257,33 @@ describe("installEmbeddedAttemptContextGuards", () => {
     guards.remove();
     expect(removeToolResultGuard).toHaveBeenCalledOnce();
     expect(removeLoopHook).toHaveBeenCalledOnce();
+  });
+
+  it("bounds the result a prior afterToolCall hook returned and spills it", async () => {
+    const huge = `${"row\n".repeat(30_000)}LAST`;
+    const previous = vi.fn(async () => ({ content: [{ type: "text" as const, text: huge }] }));
+    const input = createInput({
+      sessionManager: guardSessionManager(SessionManager.inMemory(), {
+        contextWindowTokens: 200_000,
+      }),
+    });
+    Object.assign(input.activeSession.agent, { afterToolCall: previous });
+
+    const guards = installEmbeddedAttemptContextGuards(input as never);
+    const update = await input.activeSession.agent.afterToolCall?.({
+      result: { content: [{ type: "text", text: "small" }], details: {} },
+    } as never);
+    guards.remove();
+
+    const text = update?.content?.[0]?.type === "text" ? update.content[0].text : "";
+    const spill = isRecord(update?.details) ? update.details.spill : undefined;
+    const path = isRecord(spill) && typeof spill.path === "string" ? spill.path : "";
+    onTestFinished(() => rm(path, { force: true }));
+    expect(previous).toHaveBeenCalledOnce();
+    expect(text.length).toBeLessThan(huge.length);
+    expect(text).toMatch(/LAST$/u);
+    expect(text).toContain(`Full output: ${path}`);
+    expect(input.activeSession.agent.afterToolCall).toBe(previous);
   });
 
   it("does not inspect providers when attempt configuration is absent", () => {

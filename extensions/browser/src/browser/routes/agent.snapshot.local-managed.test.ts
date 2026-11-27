@@ -30,6 +30,7 @@ const routeState = vi.hoisted(() => ({
 }));
 
 const cdp = vi.hoisted(() => ({
+  readCdpTargetCrashState: async () => false,
   captureScreenshot: vi.fn(),
   getDocumentIdentitiesViaCdp: vi.fn<
     (_opts?: unknown) => Promise<{ mainFrame?: string; frameTree?: string }>
@@ -134,6 +135,7 @@ const blocked = "browser navigation blocked by policy";
 const changed = "Frame changed while its browser snapshot was being captured; retry.";
 const roleQuery = { format: "ai", interactive: "true" };
 const snapshotState = () => ({
+  profiles: browserRuntime.profiles,
   resolved: { ssrfPolicy: { dangerouslyAllowPrivateNetwork: false } },
 });
 const dialogState = (pending: { id: string; message: string }[] = []) => ({

@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { TriageUpdateFailure } from "../commands/triage-update.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
-import { buildRestartSentinelRow } from "./restart-sentinel-store.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { triageTestRuntimeEntrypoints } from "./triage-runtime.test-support.js";
 import { managedServiceStateUpdateScript } from "./update-managed-service-handoff-state.test-support.js";
@@ -419,9 +418,20 @@ export function createManagedServiceUpdaterFixtureScript(params: {
           },
         })
       : null;
-  // Use the canonical row shape without moving publication ahead of the child.
+  // The child publishes this row; the Gateway decodes it from the typed columns.
   const notificationRow = notification
-    ? buildRestartSentinelRow(notification, notification.ts)
+    ? {
+        sentinel_key: "current",
+        version: 1,
+        kind: notification.kind,
+        status: notification.status,
+        ts: notification.ts,
+        message: notification.message ?? null,
+        doctor_hint: notification.doctorHint ?? null,
+        stats_json: notification.stats ? JSON.stringify(notification.stats) : null,
+        payload_json: JSON.stringify(notification),
+        updated_at_ms: notification.ts,
+      }
     : null;
   const consume =
     options?.updaterNotification === "consumed-before-exit" ||

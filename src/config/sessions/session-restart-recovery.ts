@@ -4,14 +4,38 @@ import {
   applySessionEntryOperation,
   patchSessionEntryCore,
 } from "./session-accessor.sqlite-entry.js";
+import { readSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.js";
 import { captureSessionEntrySourceAssertion } from "./session-entry-source-authority.js";
 import {
+  isRestartResumeEntryOutOfScope,
+  restartResumeMarkerMatchesRun,
   selectPendingRestartShellCalls,
   type PendingSessionShellCalls,
 } from "./session-restart-resume-scope.js";
 import type { InternalSessionEntry } from "./types.js";
 type Target = { agentId: string; sessionKey: string; storePath: string; env?: NodeJS.ProcessEnv };
 type Marker = NonNullable<InternalSessionEntry["resumeAfterRestart"]>;
+
+/** Check whether restart recovery has custody of the interrupted reply. */
+export async function hasSessionRestartResume(
+  target: Target & { sessionId: string },
+  runId: string | undefined,
+): Promise<boolean> {
+  const entry = await readSessionEntryReadOnlyInWorker({
+    agentId: target.agentId,
+    sessionKey: target.sessionKey,
+    storePath: target.storePath,
+    readConsistency: "latest",
+    hydrateSkillPromptRefs: false,
+  });
+  const marker = entry?.resumeAfterRestart;
+  return (
+    entry?.sessionId === target.sessionId &&
+    marker !== undefined &&
+    !isRestartResumeEntryOutOfScope(entry) &&
+    restartResumeMarkerMatchesRun(marker, runId)
+  );
+}
 
 export async function acknowledgeRestartResumeMarker(
   target: Target,

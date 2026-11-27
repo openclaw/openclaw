@@ -588,3 +588,37 @@ it("cancels the shared Messages stream after a text delta", async () => {
     "off",
   );
 });
+
+it("counts LM Studio cache reads inside input_tokens once", async () => {
+  const usage = { input_tokens: 2114, cache_read_input_tokens: 2048 };
+  await withTransport(
+    async ({ call }) => {
+      const result = await (await call()).result();
+      expect(result.usage).toMatchObject({
+        input: 66,
+        output: 3,
+        cacheRead: 2048,
+        totalTokens: 2117,
+        contextUsage: { state: "available", promptTokens: 2114, totalTokens: 2117 },
+      });
+    },
+    (response) =>
+      response.end(
+        sse([
+          {
+            ...messageStart(),
+            message: { ...messageStart().message, usage: { ...usage, output_tokens: 0 } },
+          },
+          { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+          { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+          { type: "content_block_stop", index: 0 },
+          {
+            type: "message_delta",
+            delta: { stop_reason: "end_turn" },
+            usage: { ...usage, output_tokens: 3 },
+          },
+          { type: "message_stop" },
+        ]),
+      ),
+  );
+});

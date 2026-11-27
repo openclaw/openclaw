@@ -222,13 +222,18 @@ export async function prepareDoctorInteractiveMaintenance(params: {
   };
 }
 
+/** The contribution pass ended in a refusal that showDoctorRepairRefusal reports. */
+export function isDoctorRepairRefused(ctx: DoctorHealthFlowContext): boolean {
+  return Boolean(ctx.configWriteRefusal) || ctx.postInstallDoctorResult?.status === "error";
+}
+
 export function showDoctorRepairRefusal(
   ctx: DoctorHealthFlowContext,
 ): UpdatePostInstallDoctorResult | undefined {
+  if (!isDoctorRepairRefused(ctx)) {
+    return undefined;
+  }
   if (!ctx.configWriteRefusal) {
-    if (ctx.postInstallDoctorResult?.status !== "error") {
-      return undefined;
-    }
     showDoctorHealthSummary(ctx);
     showDoctorOutro("Doctor blocked; required repairs remain incomplete.");
     return ctx.postInstallDoctorResult;

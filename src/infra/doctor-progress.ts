@@ -20,6 +20,7 @@ const CORE_PHASES = [
   "doctor.sqlite-reclamation",
   "doctor.retained-runtimes",
   "doctor.maintenance.finish",
+  "doctor.after-restart-diagnostics",
   "doctor.maintenance.release",
   "Update schema admission",
   "Update schema rehearsal",

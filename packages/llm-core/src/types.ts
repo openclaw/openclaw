@@ -731,6 +731,18 @@ export interface OpenAICompletionsCompat {
   supportsPromptCacheKey?: boolean;
   /** Whether the provider supports long prompt cache retention (`prompt_cache_retention: "24h"` or Anthropic-style `cache_control.ttl: "1h"`, depending on format). Default: true. */
   supportsLongCacheRetention?: boolean;
+  /** Name of the sampling seed field: `seed`, or Mistral's `random_seed`. Default: `seed`. */
+  seedField?: "seed" | "random_seed";
+  /** Whether streamed text may carry DeepSeek DSML tool-call markup that must be parsed out. Default: true for the `deepseek` thinking format. */
+  emitsDsmlToolCalls?: boolean;
+  /** Whether tool schemas must give every union branch an explicit `type`. Default: false. */
+  requiresTypedUnionBranches?: boolean;
+  /** Whether every request must carry a non-empty user or assistant message. Default: false. */
+  requiresNonEmptyUserOrAssistantMessage?: boolean;
+  /** With `cacheControlFormat: "anthropic"`, mark only the system prompt. Default: false. */
+  cacheControlSystemOnly?: boolean;
+  /** With `cacheControlFormat: "anthropic"`, place the system marker on one shared system block. Default: false. */
+  cacheControlSharedSystem?: boolean;
 }
 
 /** Compatibility settings for OpenAI Responses APIs. */
@@ -798,6 +810,12 @@ export interface AnthropicMessagesCompat {
   supportsCacheControlOnTools?: boolean;
   /** Whether empty thinking signatures can be replayed as native thinking blocks. Default: false. */
   allowEmptySignature?: boolean;
+  /**
+   * Whether reported `input_tokens` already include `cache_read_input_tokens`
+   * (for example LM Studio). When true, usage parsing subtracts cache reads so
+   * `input` stays the uncached bucket. Default: false (Anthropic's disjoint buckets).
+   */
+  inputTokensIncludeCacheRead?: boolean;
 }
 
 /**

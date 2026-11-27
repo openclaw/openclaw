@@ -77,10 +77,6 @@ struct OnboardingWizardView: View {
             initialValue: OnboardingStateStore.shouldPresentFirstRunIntro() ? .intro : .welcome)
     }
 
-    private var isFullScreenStep: Bool {
-        self.step == .intro || self.step == .welcome || self.step == .success
-    }
-
     private var currentProblem: GatewayConnectionProblem? {
         self.appModel.lastGatewayProblem
     }
@@ -138,68 +134,46 @@ struct OnboardingWizardView: View {
     }
 
     private var lifecycleContent: some View {
-        NavigationStack {
+        NavigationStack(path: self.pushedSteps) {
             Group {
                 switch self.step {
                 case .intro:
                     OnboardingIntroStep(onContinue: self.advanceFromIntro)
-                case .welcome:
-                    self.welcomeStep
                 case .success:
                     self.successStep
                 default:
-                    Form {
-                        if self.dynamicTypeSize.isAccessibilitySize {
-                            Section {
-                                self.stepHeading
-                                    .frame(maxWidth: .infinity)
-                                    .multilineTextAlignment(.center)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                    .listRowBackground(Color.clear)
-                            }
-                        }
-                        switch self.step {
-                        case .mode:
-                            self.modeStep
-                        case .connect:
-                            self.connectStep
-                        case .auth:
-                            self.authStep
-                        default:
-                            EmptyView()
-                        }
-                    }
-                    .formStyle(.grouped)
-                    .scrollContentBackground(.hidden)
-                    .background(Color(uiColor: .systemGroupedBackground))
-                    .scrollDismissesKeyboard(.interactively)
+                    // Also under the manual steps: a back swipe reveals it.
+                    self.welcomeStep
                 }
             }
-            .navigationTitle(self.isFullScreenStep || self.dynamicTypeSize.isAccessibilitySize ? "" : self.step.title)
-            .navigationBarTitleDisplayMode(.inline)
             .tint(OpenClawBrand.activationPrimaryAction)
-            .toolbar {
-                if !self.isFullScreenStep, self.dynamicTypeSize.isAccessibilitySize {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button("Back", systemImage: "chevron.left", action: self.navigateBack)
-                            .labelStyle(.iconOnly)
-                    }
-                }
-                if !self.isFullScreenStep, !self.dynamicTypeSize.isAccessibilitySize {
-                    ToolbarItem(placement: .principal) {
-                        self.stepHeading
-                    }
-                }
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
+            .navigationDestination(for: OnboardingStep.self) { step in
+                self.manualStep(step)
             }
         }
         .safeAreaInset(edge: .bottom, alignment: .trailing, spacing: 0) {
             self.keyboardDismissControl
         }
-        .overlay(alignment: .topLeading) {
-            if self.isFullScreenStep || !self.dynamicTypeSize.isAccessibilitySize {
-                self.leadingChromeButton
-                    .padding(.leading, 16)
-                    .padding(.top, 10)
+        // A toolbar item would give these screens a navigation bar and push the hero down; the
+        // overlay sits where a sheet's close button does.
+        .overlay(alignment: .topTrailing) {
+            if self.allowSkip, self.step.pushedSteps.isEmpty {
+                Button {
+                    self.invalidateSetupAttempt()
+                    self.onClose()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 18, weight: .medium))
+                        .frame(width: 44, height: 44)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.primary)
+                .glassEffect(.regular.interactive(), in: Circle())
+                .accessibilityLabel("Close")
+                .padding(.trailing, 16)
             }
         }
         .gatewayTrustPromptAlert()
@@ -374,26 +348,52 @@ struct OnboardingWizardView: View {
         }
     }
 
-    @ViewBuilder
-    private var leadingChromeButton: some View {
-        if self.step.canGoBack {
-            Button {
-                self.navigateBack()
-            } label: {
-                Image(systemName: "chevron.left")
-                    .font(OpenClawType.subheadSemiBold)
-                    .accessibilityLabel("Back")
+    /// The path is derived from `step`. Only the system back button and the back swipe write
+    /// it, and they pop one step at a time.
+    private var pushedSteps: Binding<[OnboardingStep]> {
+        Binding(
+            get: { self.step.pushedSteps },
+            set: { path in
+                guard path.count < self.step.pushedSteps.count else { return }
+                self.navigateBack(to: path.last ?? .welcome)
+            })
+    }
+
+    private func manualStep(_ step: OnboardingStep) -> some View {
+        Form {
+            if self.dynamicTypeSize.isAccessibilitySize {
+                Section {
+                    self.stepHeading(step)
+                        .frame(maxWidth: .infinity)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .listRowBackground(Color.clear)
+                }
             }
-            .buttonStyle(OpenClawCloseButtonStyle())
-        } else if self.allowSkip {
-            Button {
-                self.invalidateSetupAttempt()
-                self.onClose()
-            } label: {
-                Text("Close")
-                    .font(OpenClawType.subheadSemiBold)
+            switch step {
+            case .mode:
+                self.modeStep
+            case .connect:
+                self.connectStep
+            case .auth:
+                self.authStep
+            default:
+                EmptyView()
             }
-            .buttonStyle(OpenClawCloseButtonStyle())
+        }
+        .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
+        .background(Color(uiColor: .systemGroupedBackground))
+        .scrollDismissesKeyboard(.interactively)
+        .tint(OpenClawBrand.activationPrimaryAction)
+        .navigationTitle(self.dynamicTypeSize.isAccessibilitySize ? "" : step.title)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if !self.dynamicTypeSize.isAccessibilitySize {
+                ToolbarItem(placement: .principal) {
+                    self.stepHeading(step)
+                }
+            }
         }
     }
 
@@ -409,7 +409,7 @@ struct OnboardingWizardView: View {
                     .contentShape(Capsule(style: .continuous))
             }
             .buttonStyle(.plain)
-            .foregroundStyle(OpenClawBrand.activationPrimaryAction)
+            .foregroundStyle(.primary)
             .background(.ultraThinMaterial, in: Capsule(style: .continuous))
             .overlay {
                 Capsule(style: .continuous)
@@ -675,12 +675,12 @@ extension OnboardingWizardView {
         return "Gateway Status"
     }
 
-    private var stepHeading: some View {
+    private func stepHeading(_ step: OnboardingStep) -> some View {
         VStack(spacing: 2) {
-            Text(self.step.title)
+            Text(step.title)
                 .font(OpenClawType.headline)
                 .accessibilityAddTraits(.isHeader)
-            Text(self.step.manualProgressTitle)
+            Text(step.manualProgressTitle)
                 .font(OpenClawType.caption2)
                 .foregroundStyle(.secondary)
         }
@@ -718,7 +718,7 @@ extension OnboardingWizardView {
                 .buttonStyle(.bordered)
                 .buttonBorderShape(.capsule)
                 .controlSize(.regular)
-                .tint(OpenClawBrand.activationPrimaryAction)
+                .tint(.primary)
                 .disabled(!self.canApplySetupCode)
             }
             .frame(minHeight: 50)
@@ -1174,8 +1174,7 @@ extension OnboardingWizardView {
         self.onRequestLocalNetworkAccess(reason)
     }
 
-    private func navigateBack() {
-        guard let target = step.previous else { return }
+    private func navigateBack(to target: OnboardingStep) {
         self.invalidateSetupAttempt()
         self.qrCodeCompletion.cancel()
         self.localConnectionFailure = nil
@@ -1201,7 +1200,14 @@ extension OnboardingWizardView {
 
     private func navigate(to target: OnboardingStep) {
         self.focusedField = nil
-        self.step = target
+        guard target == .success else {
+            self.step = target
+            return
+        }
+        // Success replaces the manual steps; popping them animated would read as going back.
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { self.step = target }
     }
 
     private func beginSetupAttempt() -> GatewaySetupAttempt? {

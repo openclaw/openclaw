@@ -1200,6 +1200,7 @@ src/infra/net/proxy/active-managed-proxy-tls.ts
 src/infra/net/proxy/active-proxy-state.ts
 src/infra/net/proxy/managed-proxy-undici.ts
 src/infra/net/proxy/proxy-tls.ts
+src/infra/net/proxyline-runtime.ts
 src/infra/net/redirect-headers.ts
 src/infra/net/runtime-fetch.ts
 src/infra/net/ssrf-trusted-host-linklocal-exemptions.ts
@@ -3055,6 +3056,7 @@ src/infra/sqlite-migration-scoped-snapshot.ts
 src/infra/update-candidate-plugin-code-links.ts
 src/agents/cli-backends.ts
 src/agents/plugin-text-transforms.ts
+src/agents/runtime-context-data-ranges.ts
 src/agents/stream-iterator-wrapper.ts
 src/llm/utils/stream-wrapper.ts
 src/plugins/api-builder.ts
