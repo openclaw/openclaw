@@ -13,6 +13,7 @@ import { generateUUID } from "../../lib/uuid.ts";
 import { discardChatAttachmentDataUrls } from "./attachment-payload-store.ts";
 import { readChatResetTargetAccess } from "./chat-commands.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
+import { retireDeliveredQueuedUserTurn } from "./chat-delivery-retirement.runtime.ts";
 import { setChatError } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { captureChatNativeRuntimeRecovery } from "./chat-model-recovery.runtime.ts";
@@ -40,11 +41,7 @@ import {
   updateQueuedSendItem,
 } from "./chat-send-queue-state.ts";
 import { requestChatSend } from "./chat-send-request.ts";
-import {
-  chatOfflineQueueStorageError,
-  retireDeliveredQueuedUserTurn,
-  surfaceChatDeliveryFailure,
-} from "./chat-send-support.ts";
+import { chatOfflineQueueStorageError, surfaceChatDeliveryFailure } from "./chat-send-support.ts";
 import { refreshChatSessionListForTarget } from "./chat-session.ts";
 import { attachmentBatchRejection } from "./components/chat-attachment-admission.ts";
 import { formatConnectError } from "./connect-error.ts";

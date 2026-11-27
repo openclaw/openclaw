@@ -14,6 +14,7 @@ import {
   createDeliveryAttachmentBatch,
   reloadChatDocumentStorage,
 } from "./chat-delivery-attachments.test-support.ts";
+import * as chatDeliveryRetirement from "./chat-delivery-retirement.runtime.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost, makeRequestMock } from "./chat-host.test-support.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
@@ -22,7 +23,6 @@ import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { keepVolatileQueuedMessage } from "./chat-queue.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
-import * as chatSendSupport from "./chat-send-support.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { loadChatComposerState } from "./composer-draft-storage.ts";
@@ -32,7 +32,7 @@ import { adoptStartedChatRun } from "./run-lifecycle.ts";
 import { cacheChatSessionSnapshot, readChatMessagesFromCache } from "./session-message-cache.ts";
 
 type DeliveredTurnRetirement = Awaited<
-  ReturnType<typeof chatSendSupport.retireDeliveredQueuedUserTurn>
+  ReturnType<typeof chatDeliveryRetirement.retireDeliveredQueuedUserTurn>
 >;
 const requireRecord = createRequireRecord("object", "expected-label");
 
@@ -344,7 +344,7 @@ describe("chat attachment terminal retirement", () => {
           },
         },
       } as Parameters<typeof handlePageGatewayEvent>[1];
-      const retirementOwner = vi.spyOn(chatSendSupport, "retireDeliveredQueuedUserTurn");
+      const retirementOwner = vi.spyOn(chatDeliveryRetirement, "retireDeliveredQueuedUserTurn");
       expect(handlePageGatewayEvent(inactive as ChatPageHost, event)).toBeUndefined();
       expect(handlePageGatewayEvent(visible as ChatPageHost, event)).toBeUndefined();
       expect(retirementOwner).toHaveBeenCalledTimes(2);
