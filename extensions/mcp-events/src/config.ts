@@ -2,33 +2,30 @@ import { resolvePinnedHostnameWithPolicy } from "openclaw/plugin-sdk/ssrf-runtim
 import { asOptionalRecord as record } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { canonicalArguments } from "./protocol.js";
 
-export type McpEventsConfig = { callbackOrigin: string; maxPendingEvents: number };
+/** `callbackBaseUrl` is the HTTPS origin plus any path prefix, without a trailing slash. */
+export type McpEventsConfig = { callbackBaseUrl: string; maxPendingEvents: number };
+
+function resolveCallbackBaseUrl(value: unknown): string {
+  let url: URL | undefined;
+  try {
+    url = typeof value === "string" ? new URL(value) : undefined;
+  } catch {}
+  if (!url || url.protocol !== "https:" || url.username || url.password || url.search || url.hash) {
+    throw new Error(
+      "MCP Events callbackBaseUrl must be a public HTTPS URL without credentials, query, or fragment",
+    );
+  }
+  return url.origin + url.pathname.replace(/\/+$/, "");
+}
 
 export function resolveMcpEventsConfig(value: unknown): McpEventsConfig {
   const config = record(value);
-  if (!config || typeof config.callbackOrigin !== "string") {
+  if (config?.callbackBaseUrl === undefined) {
     throw new Error(
-      "Configure mcp-events.callbackOrigin with a public HTTPS origin; expose only the callback route through your reverse proxy",
+      "Configure mcp-events.callbackBaseUrl with a public HTTPS URL; expose only the callback route through your reverse proxy",
     );
   }
-  let url: URL;
-  try {
-    url = new URL(config.callbackOrigin);
-  } catch {
-    throw new Error("MCP Events callbackOrigin must be a public HTTPS origin");
-  }
-  if (
-    url.protocol !== "https:" ||
-    url.username ||
-    url.password ||
-    url.search ||
-    url.hash ||
-    url.pathname !== "/"
-  ) {
-    throw new Error(
-      "MCP Events callbackOrigin must be a public HTTPS origin without credentials, path, query, or fragment",
-    );
-  }
+  const callbackBaseUrl = resolveCallbackBaseUrl(config.callbackBaseUrl);
   const maxPendingEvents = config.maxPendingEvents ?? 10_000;
   if (
     typeof maxPendingEvents !== "number" ||
@@ -38,12 +35,15 @@ export function resolveMcpEventsConfig(value: unknown): McpEventsConfig {
   ) {
     throw new Error("MCP Events maxPendingEvents must be an integer from 1 to 100000");
   }
-  return { callbackOrigin: url.origin, maxPendingEvents };
+  return { callbackBaseUrl, maxPendingEvents };
 }
 
 /** DNS/public-address preflight is not a reachability claim or permission to expose the Gateway. */
-export async function preflightCallbackOrigin(origin: string, signal: AbortSignal): Promise<void> {
-  const url = new URL(origin);
+export async function preflightCallbackBaseUrl(
+  baseUrl: string,
+  signal: AbortSignal,
+): Promise<void> {
+  const url = new URL(baseUrl);
   await resolvePinnedHostnameWithPolicy(url.hostname, { signal });
 }
 

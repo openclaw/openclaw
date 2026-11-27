@@ -407,7 +407,10 @@ try {
     plugins: {
       slots: { memory: "none" },
       entries: {
-        "mcp-events": { enabled: true, config: { callbackOrigin, maxPendingEvents: 100 } },
+        "mcp-events": {
+          enabled: true,
+          config: { callbackBaseUrl: callbackOrigin, maxPendingEvents: 100 },
+        },
       },
     },
     mcp: {
