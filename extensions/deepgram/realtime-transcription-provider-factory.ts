@@ -183,12 +183,13 @@ export function buildDeepgramRealtimeTranscriptionProvider({
           Buffer.byteLength(nextFinalized, "utf8") + Buffer.byteLength(nextPartial, "utf8");
         if (retainedBytes > DEEPGRAM_REALTIME_MAX_RETAINED_TRANSCRIPT_BYTES) {
           clearTurn();
+          transport.closeNow();
           config.onError?.(
             new Error(
               `Deepgram realtime retained transcript exceeded ${DEEPGRAM_REALTIME_MAX_RETAINED_TRANSCRIPT_BYTES} bytes`,
             ),
+            "terminal",
           );
-          transport.closeNow();
           return false;
         }
         finalizedTranscript = nextFinalized;

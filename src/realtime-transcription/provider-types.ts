@@ -11,7 +11,8 @@ export type RealtimeTranscriptionSessionCallbacks = {
   onPartial?: (partial: string) => void;
   onTranscript?: (transcript: string) => void;
   onSpeechStart?: () => void;
-  onError?: (error: Error) => void;
+  /** Terminal errors indicate the session has exhausted its recovery path. */
+  onError?: (error: Error, disposition?: "terminal") => void;
 };
 
 /** Runtime control surface for a realtime transcription session. */

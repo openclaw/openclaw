@@ -264,7 +264,10 @@ it("terminates instead of retaining an oversized utterance", async () => {
   });
   const { session, onError } = scenario;
   await vi.waitFor(() =>
-    expect(onError.mock.calls[0]?.[0].message).toContain("retained transcript exceeded"),
+    expect(onError).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ message: expect.stringContaining("retained transcript exceeded") }),
+      "terminal",
+    ),
   );
   expect(session.isConnected()).toBe(false);
 });

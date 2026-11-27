@@ -256,7 +256,7 @@ it.each<[string, Record<string, unknown>[], number, string | number]>([
   // Start the teardown deadline after overflow is reported, preserving the processing budget.
   await errorReceived;
   await waitClosed();
-  expect(onError).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ message }));
+  expect(onError).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ message }), "terminal");
 
   expect(partialCalls).toBe(count);
   expect(typeof last === "number" ? lastPartial.length : lastPartial).toBe(last);

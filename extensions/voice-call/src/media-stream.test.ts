@@ -619,6 +619,60 @@ describe("MediaStreamHandler security hardening", () => {
     });
   });
 
+  it("keeps the call on recoverable STT errors and disconnects once on terminal failure", async () => {
+    const requested = createDeferred<RealtimeTranscriptionSessionCreateRequest>();
+    const onTranscriptionReady = vi.fn();
+    const onDisconnect = vi.fn();
+    const onTranscript = vi.fn();
+    const session = { ...createStubSession(), close: vi.fn() };
+    const handler = createHandler({
+      transcriptionProvider: createStubSttProvider((request) => {
+        requested.resolve(request);
+        return session;
+      }),
+      shouldAcceptStream: () => true,
+      onTranscriptionReady,
+      onDisconnect,
+      onTranscript,
+    });
+
+    await withConnection(handler, async (ws) => {
+      try {
+        sendStart(ws, "MZ-stt-terminal", "CA-stt-terminal");
+        const callbacks = await requested.promise;
+        await vi.waitFor(() => expect(onTranscriptionReady).toHaveBeenCalledOnce());
+
+        callbacks.onError?.(new Error("recoverable provider error"));
+        callbacks.onTranscript?.("Speech after recovery");
+        expect(ws.readyState).toBe(WebSocket.OPEN);
+        expect(onTranscript).toHaveBeenCalledExactlyOnceWith(
+          "CA-stt-terminal",
+          "Speech after recovery",
+          "MZ-stt-terminal",
+        );
+        expect(onDisconnect).not.toHaveBeenCalled();
+
+        const closed = waitForClose(ws);
+        callbacks.onError?.(new Error("provider reconnect limit reached"), "terminal");
+        await vi.waitFor(
+          () => {
+            expect(onDisconnect).toHaveBeenCalledExactlyOnceWith(
+              "CA-stt-terminal",
+              "MZ-stt-terminal",
+            );
+          },
+          { timeout: 1_000 },
+        );
+        expect(await closed).toEqual({ code: 1011, reason: "STT session ended" });
+        expect(session.close).toHaveBeenCalledOnce();
+      } finally {
+        if (ws.readyState !== WebSocket.CLOSED) {
+          await closeWs(ws);
+        }
+      }
+    });
+  });
+
   it("rejects oversized pre-start frames at the websocket maxPayload guard before validation runs", async () => {
     const shouldAcceptStream = vi.fn(() => true);
     const handler = createHandler({ preStartTimeoutMs: 1_000, shouldAcceptStream });

@@ -341,16 +341,20 @@ export class MediaStreamHandler {
         }
         this.config.onSpeechStart?.(callSid, streamSid);
       },
-      onError: (error) => {
+      onError: (error, disposition) => {
         console.warn("[MediaStream] Transcription session error:", error.message);
         const session = this.sessions.get(streamSid);
-        if (session) {
-          this.emitTalkEvent(session, {
-            type: "session.error",
-            final: true,
-            payload: { callId: callSid, error: error.message },
-          });
+        if (session?.ws !== ws) {
+          return;
         }
+        if (disposition === "terminal" && ws.readyState === WebSocket.OPEN) {
+          ws.close(1011, "STT session ended");
+        }
+        this.emitTalkEvent(session, {
+          type: "session.error",
+          final: true,
+          payload: { callId: callSid, error: error.message },
+        });
       },
     });
 

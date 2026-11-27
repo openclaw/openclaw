@@ -160,7 +160,7 @@ export function buildOpenAIRealtimeTranscriptionProvider(
         resetTranscriptionState();
         transport.closeNow();
         try {
-          config.onError?.(error);
+          config.onError?.(error, "terminal");
         } catch {
           // The provider terminal owns this outcome; observer failures must not
           // re-enter shared error dispatch or duplicate the terminal callback.
