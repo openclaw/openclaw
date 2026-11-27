@@ -12,6 +12,15 @@ type SessionEventDeliveryState = {
   deliveryError: string | undefined;
 };
 
+export function createSessionEventDeliveryState(): SessionEventDeliveryState {
+  return {
+    delivered: false,
+    deliveryAttempted: false,
+    deliveryAmbiguous: false,
+    deliveryError: undefined,
+  };
+}
+
 export async function deliverSessionEventReply(params: {
   route: DeliveryContext | undefined;
   payload: ReplyPayload;

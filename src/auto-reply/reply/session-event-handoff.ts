@@ -52,7 +52,10 @@ import {
   captureSessionEventConfigPolicy,
   narrowSessionEventSettings,
 } from "./session-event-policy.js";
-import { deliverSessionEventReply } from "./session-event-reply-delivery.js";
+import {
+  createSessionEventDeliveryState,
+  deliverSessionEventReply,
+} from "./session-event-reply-delivery.js";
 import {
   assertSessionEventTargetCurrent,
   assertSessionEventSettingsCurrent,
@@ -157,12 +160,7 @@ function enqueueSessionEventAttempt(
   let readmittedReceipt: SessionEventReceipt | undefined;
   let operation: ReplyOperation | undefined;
   let inputRecorder: UserTurnTranscriptRecorder | undefined;
-  const delivery = {
-    delivered: false,
-    deliveryAttempted: false,
-    deliveryAmbiguous: false,
-    deliveryError: undefined as string | undefined,
-  };
+  const delivery = createSessionEventDeliveryState();
   let conversationResultCommitted: true | undefined;
   let deliverySuppressionReason: NormalizeReplySkipReason | undefined;
   let summary: string | undefined;
