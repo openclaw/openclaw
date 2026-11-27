@@ -33,7 +33,7 @@ export function fragmentTrajectorySnapshot(
     return { value, json, bytes: Buffer.byteLength(json) };
   });
   let sha256 = "0".repeat(64);
-  const fragment = (messages: unknown[], index: number, count: number): TrajectoryEvent => ({
+  const fragment = (chunk: unknown[], index: number, count: number): TrajectoryEvent => ({
     ...event,
     type: TRAJECTORY_SNAPSHOT_FRAGMENT,
     seq: event.seq + index,
@@ -45,7 +45,7 @@ export function fragmentTrajectorySnapshot(
       index,
       count,
       sha256,
-      messagesSnapshot: messages,
+      messagesSnapshot: chunk,
     },
   });
   const groups: (typeof messages)[] = [];
@@ -88,10 +88,10 @@ export function fragmentTrajectorySnapshot(
     },
   };
   const sizes = groups.map(
-    (messages, index) =>
+    (chunk, index) =>
       Buffer.byteLength(JSON.stringify(fragment([], index, groups.length))) +
-      messages.reduce((sum, message) => sum + message.bytes, 0) +
-      messages.length -
+      chunk.reduce((sum, message) => sum + message.bytes, 0) +
+      chunk.length -
       1,
   );
   sizes.push(Buffer.byteLength(JSON.stringify(parent)));
@@ -103,9 +103,9 @@ export function fragmentTrajectorySnapshot(
   }
   sha256 = hash("sha256", `[${messages.map(({ json }) => json).join(",")}]`);
   parent.data!.messagesSnapshotFragments = { id, count: groups.length, sha256 };
-  const records = groups.map((messages, index) => {
+  const records = groups.map((chunk, index) => {
     const entry = fragment(
-      messages.map(({ value }) => value),
+      chunk.map(({ value }) => value),
       index,
       groups.length,
     );
@@ -116,7 +116,7 @@ export function fragmentTrajectorySnapshot(
     return {
       event: entry,
       // The header ends with the data and event braces; append the already encoded array once.
-      line: `${header.slice(0, -2)},"messagesSnapshot":[${messages.map(({ json }) => json).join(",")}]}}`,
+      line: `${header.slice(0, -2)},"messagesSnapshot":[${chunk.map(({ json }) => json).join(",")}]}}`,
     };
   });
   records.push({ event: parent, line: JSON.stringify(parent) });
@@ -178,7 +178,7 @@ export function restoreTrajectorySnapshots(events: TrajectoryEvent[]): Trajector
     ) {
       continue;
     }
-    const ordered = [...fragments].sort(
+    const ordered = fragments.toSorted(
       (left, right) => Number(left.data?.index) - Number(right.data?.index),
     );
     const parentSeq = event.sourceSeq ?? event.seq;
@@ -191,7 +191,7 @@ export function restoreTrajectorySnapshots(events: TrajectoryEvent[]): Trajector
           part.data?.index === index &&
           part.data.count === count &&
           part.data.sha256 === sha256 &&
-          (part.sourceSeq ?? part.seq) === parentSeq - Number(count) + index &&
+          (part.sourceSeq ?? part.seq) === parentSeq - count + index &&
           Array.isArray(part.data.messagesSnapshot),
       )
     ) {

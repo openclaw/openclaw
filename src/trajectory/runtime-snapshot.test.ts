@@ -50,12 +50,24 @@ describe("prepared trajectory snapshots", () => {
   it("keeps incomplete, duplicated, altered and cross-run groups explicitly partial", () => {
     for (const mutation of ["missing", "duplicate", "payload", "run", "index", "digest"]) {
       const encoded = records().map(({ line }) => JSON.parse(line) as TrajectoryEvent);
-      if (mutation === "missing") encoded.shift();
-      if (mutation === "duplicate") encoded.splice(1, 0, structuredClone(encoded[0]!));
-      if (mutation === "payload") encoded[0]!.data!.messagesSnapshot = [];
-      if (mutation === "run") encoded[0]!.runId = "another-run";
-      if (mutation === "index") encoded[0]!.data!.index = 9;
-      if (mutation === "digest") encoded[0]!.data!.sha256 = "0".repeat(64);
+      if (mutation === "missing") {
+        encoded.shift();
+      }
+      if (mutation === "duplicate") {
+        encoded.splice(1, 0, structuredClone(encoded[0]!));
+      }
+      if (mutation === "payload") {
+        encoded[0]!.data!.messagesSnapshot = [];
+      }
+      if (mutation === "run") {
+        encoded[0]!.runId = "another-run";
+      }
+      if (mutation === "index") {
+        encoded[0]!.data!.index = 9;
+      }
+      if (mutation === "digest") {
+        encoded[0]!.data!.sha256 = "0".repeat(64);
+      }
       const decoded = restoreTrajectorySnapshots(encoded);
       expect(decoded, mutation).toHaveLength(1);
       expect(decoded.at(-1)?.data?.truncated, mutation).toBe(true);
