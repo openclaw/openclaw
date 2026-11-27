@@ -167,7 +167,7 @@ function shareReads<T>(read: (pid: number) => Promise<T>): (pid: number) => Prom
 async function readMemory(pid: number): Promise<HostExecMemoryUsage> {
   try {
     const rollup = await readKernelFile(`/proc/${pid}/smaps_rollup`);
-    if (rollup.indexOf(pssField) >= 0) {
+    if (rollup.includes(pssField)) {
       return {
         memoryBytes: readStatusNumber(rollup, pssField) * 1024,
         swapBytes: readStatusNumber(rollup, swapPssField) * 1024,
