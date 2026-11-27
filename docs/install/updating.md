@@ -2440,9 +2440,9 @@ checkout. With the default state directory it reads:
 git pull --ff-only && openclaw gateway stop --force && pnpm install --frozen-lockfile && pnpm build && rm -f "$HOME/.openclaw/git-install/lib/node_modules/openclaw" && openclaw gateway install --force || { openclaw gateway start; false; }
 ```
 
-The printed line names your state directory relative to `$HOME`; for a state directory outside
-it, the line requires `OPENCLAW_STATE_DIR` in the shell. On Windows the update prints the same
-steps to run one at a time.
+The printed line names your state directory relative to `$HOME`. For a state directory outside
+it, the line starts by requiring `OPENCLAW_STATE_DIR` in the shell and changes nothing without it.
+On Windows the update prints the same steps to run one at a time.
 
 The Gateway is down while the checkout builds. The older updater's release link
 (`git-install/lib/node_modules/openclaw`) is removed after the build, because while it exists

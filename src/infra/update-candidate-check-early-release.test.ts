@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
@@ -93,12 +93,6 @@ it("refuses a schema change for the early release updater and names the rebuild 
     expect(lines.join("\n")).not.toContain(home);
     expect(lines.join("\n")).not.toMatch(/automatic|background|systemctl|launchctl/iu);
   }
-  // Outside HOME the shell must supply the state directory, or the line stops at `rm`.
-  expect(
-    refuse(root, { ...env, HOME: "/nonexistent-home" }, "linux")!
-      .split("\n")
-      .at(-1),
-  ).toBe(rebuild("${OPENCLAW_STATE_DIR:?set it to the OpenClaw state directory}"));
   // PowerShell has no `{ ...; false; }` group, so Windows gets the steps one per line.
   const windows = refuse(root, homeEnv, "win32")!.split("\n");
   expect(windows.slice(-4)).toEqual([
@@ -136,6 +130,47 @@ it.runIf(process.platform !== "win32")(
     });
     expect(expanded).toBe(path.join(odd, "git-install", "lib", "node_modules", "openclaw"));
     expect(fs.lstatSync(expanded).isSymbolicLink()).toBe(true);
+  },
+);
+
+it.runIf(process.platform !== "win32")(
+  "runs the printed line only when the shell can name a state directory outside HOME",
+  () => {
+    const { root, stateDir, env } = install({});
+    const line = refuse(root, { ...env, HOME: "/nonexistent-home" }, "linux")!
+      .split("\n")
+      .at(-1)!;
+    // Stand-ins for git, pnpm and openclaw record each step the line reaches.
+    const bin = makeTempDir(roots, "openclaw-early-release-bin-");
+    const log = path.join(bin, "calls.log");
+    for (const tool of ["git", "pnpm", "openclaw"]) {
+      fs.writeFileSync(path.join(bin, tool), `#!/bin/sh\necho "${tool} $*" >> "${log}"\n`, {
+        mode: 0o755,
+      });
+    }
+    const run = (extra: NodeJS.ProcessEnv) =>
+      spawnSync("/bin/sh", ["-c", line], {
+        env: { PATH: `${bin}:/usr/bin:/bin`, ...extra },
+        encoding: "utf8",
+      });
+    const link = path.join(stateDir, "git-install", "lib", "node_modules", "openclaw");
+
+    const unset = run({});
+    expect(unset.status).not.toBe(0);
+    expect(unset.stderr).toContain("set it to the OpenClaw state directory");
+    // Nothing ran: the Gateway was not stopped and the link is still there.
+    expect(fs.existsSync(log)).toBe(false);
+    expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+
+    expect(run({ OPENCLAW_STATE_DIR: stateDir }).status).toBe(0);
+    expect(fs.readFileSync(log, "utf8").trim().split("\n")).toEqual([
+      "git pull --ff-only",
+      "openclaw gateway stop --force",
+      "pnpm install --frozen-lockfile",
+      "pnpm build",
+      "openclaw gateway install --force",
+    ]);
+    expect(fs.lstatSync(link, { throwIfNoEntry: false })).toBeUndefined();
   },
 );
 

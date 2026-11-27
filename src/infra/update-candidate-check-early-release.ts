@@ -23,20 +23,28 @@ import { collectRegisteredPaths } from "./update-candidate-state.shared.js";
  * while the link exists, so the rebuild removes it before reinstalling the service. */
 const EARLY_RELEASE_LINK = ["git-install", "lib", "node_modules", "openclaw"];
 
-/** A double-quoted shell word for the link. The early updater replaces the state and home
- * directories in this check's output with placeholders, so the path is spelled from `$HOME`, or
- * from `$OPENCLAW_STATE_DIR` (which the shell then requires) for a state directory outside it. */
-function shellEarlyReleaseLink(stateDir: string, env: NodeJS.ProcessEnv): string {
+/** The link as a double-quoted shell word, plus a guard for the start of the line. The early
+ * updater replaces the state and home directories in this check's output with placeholders, so
+ * the path is spelled from `$HOME`, or for a state directory outside it from `$OPENCLAW_STATE_DIR`,
+ * which the line then requires before it changes anything. */
+function shellEarlyReleaseLink(
+  stateDir: string,
+  env: NodeJS.ProcessEnv,
+): { link: string; guard?: string } {
   const home = env.HOME?.trim();
   const relative = home ? path.relative(home, stateDir) : "";
-  const base =
-    home && relative && !relative.startsWith("..") && !path.isAbsolute(relative)
-      ? `$HOME/${relative
-          .split(path.sep)
-          .join("/")
-          .replace(/["$`\\]/gu, "\\$&")}`
-      : "${OPENCLAW_STATE_DIR:?set it to the OpenClaw state directory}";
-  return `"${base}/${EARLY_RELEASE_LINK.join("/")}"`;
+  const tail = EARLY_RELEASE_LINK.join("/");
+  if (home && relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
+    const spelled = relative
+      .split(path.sep)
+      .join("/")
+      .replace(/["$`\\]/gu, "\\$&");
+    return { link: `"$HOME/${spelled}/${tail}"` };
+  }
+  return {
+    link: `"$OPENCLAW_STATE_DIR/${tail}"`,
+    guard: ': "${OPENCLAW_STATE_DIR:?set it to the OpenClaw state directory}"',
+  };
 }
 
 /** The one-time rebuild, run from the checkout. On POSIX shells (proven with systemd and launchd
@@ -56,9 +64,11 @@ function formatRebuild(platform: NodeJS.Platform, stateDir: string, env: NodeJS.
       ...build,
     ];
   }
+  const { link, guard } = shellEarlyReleaseLink(stateDir, env);
+  const steps = [...(guard ? [guard] : []), ...build, `rm -f ${link}`, install];
   return [
     "Rebuild the checkout once from its directory. It also removes this updater's release link, so the reinstalled Gateway runs the rebuilt checkout; later updates then run normally:",
-    `${[...build, `rm -f ${shellEarlyReleaseLink(stateDir, env)}`, install].join(" && ")} || { openclaw gateway start; false; }`,
+    `${steps.join(" && ")} || { openclaw gateway start; false; }`,
   ];
 }
 
