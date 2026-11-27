@@ -62,8 +62,13 @@ import {
   maintainBackupScratch,
 } from "./backup-scratch.js";
 import {
+  BackupSqliteSourceAppearedError,
+  withBackupSqliteDiscoveryRetry,
+} from "./backup-sqlite-discovery-retry.js";
+import {
   classifyBackupSqliteSource,
   createBackupSqliteSnapshotPlan,
+  stripSqliteSidecarSuffix,
 } from "./backup-sqlite-snapshot.js";
 import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
 import { walkBackupTar } from "./backup-tar-walk.js";
@@ -319,28 +324,21 @@ export async function createBackupArchive(
     : capture());
 }
 
-async function createBackupArchiveInScope(
-  opts: BackupCreateOptions,
-  preparedPlan?: Awaited<ReturnType<typeof resolveBackupPlanFromDisk>>,
-): Promise<BackupCreateResult> {
+async function createBackupArchiveInScope(opts: BackupCreateOptions): Promise<BackupCreateResult> {
   const nowMs = resolveDateTimestampMs(opts.nowMs);
-  const archiveRoot = buildBackupArchiveRoot(nowMs);
   const onlyConfig = Boolean(opts.onlyConfig);
   const includeWorkspace = onlyConfig ? false : (opts.includeWorkspace ?? true);
+  const options = { ...opts, nowMs, onlyConfig, includeWorkspace };
   opts.onProgress?.({ stage: "plan", phase: "start" });
-  const plan =
-    preparedPlan ??
-    (await resolveBackupPlanFromDisk({
-      includeWorkspace,
-      excludeWorktreeTemplates: opts.excludeWorktreeTemplates,
-      excludeMigrationBackups: opts.excludeMigrationBackups,
-      localCompanion: opts.localCompanion,
-      onlyConfig,
-      nowMs,
-    }));
+  const plan = await resolveBackupPlanFromDisk(options);
   opts.onProgress?.({ stage: "plan", phase: "done" });
   const selection = plan.databaseSelection;
-  if (!preparedPlan && opts.localCompanion) {
+  const capture = () =>
+    withBackupSqliteDiscoveryRetry(
+      (requiredPaths) => createBackupArchiveAttempt(options, plan, requiredPaths),
+      opts.log,
+    );
+  if (opts.localCompanion) {
     if (
       onlyConfig ||
       !selection?.postgres ||
@@ -352,18 +350,26 @@ async function createBackupArchiveInScope(
         "Local companion capture requires PostgreSQL for all portable database families.",
       );
     }
-    return withDatabaseEngineSelection(selection, () =>
-      createBackupArchiveInScope({ ...opts, nowMs }, plan),
-    );
+    return withDatabaseEngineSelection(selection, capture);
   }
-  if (!preparedPlan && !opts.dryRun && selection?.postgres && plan.databaseConfig) {
+  if (!opts.dryRun && selection?.postgres && plan.databaseConfig) {
     return runOfflineDatabaseBackup(
       plan.stateDir,
-      () => createBackupArchiveInScope({ ...opts, nowMs }, plan),
+      capture,
       { config: plan.databaseConfig, selection },
       { online: true },
     );
   }
+  return capture();
+}
+
+async function createBackupArchiveAttempt(
+  opts: BackupCreateOptions & { nowMs: number; onlyConfig: boolean; includeWorkspace: boolean },
+  plan: Awaited<ReturnType<typeof resolveBackupPlanFromDisk>>,
+  requiredPaths: ReadonlySet<string>,
+): Promise<BackupCreateResult> {
+  const { nowMs, onlyConfig, includeWorkspace } = opts;
+  const archiveRoot = buildBackupArchiveRoot(nowMs);
   const outputPath = await resolveOutputPath({
     output: opts.output,
     nowMs,
@@ -462,10 +468,13 @@ async function createBackupArchiveInScope(
       onProgress: opts.onProgress,
     });
     const inventory = stateSqliteBackup.inventory;
-    snapshotFacts = describeCapturedBackupSqliteSnapshots(
-      inventory,
-      stateSqliteBackup.snapshots.map((snapshot) => snapshot.archiveSourcePath),
-    );
+    const capturedPaths = stateSqliteBackup.snapshots.map((snapshot) => snapshot.archiveSourcePath);
+    for (const pathname of requiredPaths) {
+      if (!capturedPaths.includes(pathname)) {
+        throw new Error(`Newly discovered SQLite database could not be snapshotted: ${pathname}`);
+      }
+    }
+    snapshotFacts = describeCapturedBackupSqliteSnapshots(inventory, capturedPaths);
     const sourcePathRemaps = new Map(configRemaps);
     const skippedStateSourcePaths = new Set(configRemaps.values());
     if (plan.configCapture?.files.length === 0) {
@@ -552,9 +561,7 @@ async function createBackupArchiveInScope(
         return false;
       }
       if (sqliteSourceKind === "sqlite" && (entryStat.isFile() || entryStat.isSymbolicLink())) {
-        throw new Error(
-          `SQLite state appeared after snapshot discovery: ${entryPath}. Retry backup so it can be snapshotted.`,
-        );
+        throw new BackupSqliteSourceAppearedError(stripSqliteSidecarSuffix(resolvedEntryPath));
       }
       if (sqliteSourceKind === "opaque" && entryStat.isFile()) {
         opaqueSqliteSourcePaths.set(resolvedEntryPath, "archived");
