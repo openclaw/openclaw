@@ -37,6 +37,7 @@ import {
 import type { StartedCodexAttemptResources } from "./run-attempt-start.js";
 import { prependCurrentInboundContext } from "./run-attempt-state.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
+import { renderCodexRelayRefreshableFallback } from "./thread-policy.js";
 import { buildCodexConversationTurnInstructions } from "./thread-prompt.js";
 import { recordCodexTrajectoryContext } from "./trajectory.js";
 import { buildCodexParentLocalInstructions, buildTurnStartParams } from "./turn-params.js";
@@ -291,6 +292,9 @@ export async function prepareCodexAttemptTurnRequest(
       resourceState.releaseInferenceContext?.();
       const inferenceThread = resourceState.thread;
       const inferenceInstructions = joinPresentSections(
+        usesSupervisionConnection
+          ? undefined
+          : renderCodexRelayRefreshableFallback(inferenceThread.liveThreadEphemeralPolicy),
         usesSupervisionConnection
           ? undefined
           : (buildCodexParentLocalInstructions(

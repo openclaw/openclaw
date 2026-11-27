@@ -37,7 +37,7 @@ const SECOND_CATALOG =
   "<available_skills><skill><name>weather</name><description>edited</description></skill></available_skills>";
 
 describe("Codex app-server skill catalog delivery", () => {
-  it("refreshes managed catalogs on the thread and keeps the personal overlay parent-local", async () => {
+  it("refreshes managed catalogs on the thread and relays the edit through compaction", async () => {
     const sessionKey = "agent:main:dashboard:incognito-managed-skills";
     await seedRunSessionOwnerForTest("session-1", sessionKey);
     const received: string[] = [];
@@ -53,11 +53,13 @@ describe("Codex app-server skill catalog delivery", () => {
         personalUser: true,
       });
     });
+    let turnStart: unknown;
     const harness = createStartedThreadHarness(async (method, request) => {
       if (method === "account/read") {
         return { account: { type: "apiKey" } };
       }
       if (method === "turn/start") {
+        turnStart = request;
         received.push(readManagedInstructions(harness.client, request));
       }
       return undefined;
@@ -78,25 +80,52 @@ describe("Codex app-server skill catalog delivery", () => {
         params.bootstrapContextMode = "lightweight";
         params.bootstrapContextRunKind = "cron";
       }
+      if (index === 3) {
+        // Allow the real before_compaction history worker to start.
+        params.timeoutMs = 60_000;
+      }
       const run = runCodexAppServerAttempt(params);
       await run.waitForTurnAccepted();
+      if (index === 3) {
+        // Native compaction rebuilds from the creation catalog; the relay still carries
+        // the edit on the continuation request of this turn.
+        await harness.notify(
+          itemNotification("item/started", { type: "contextCompaction", id: "compact-1" }),
+        );
+        await harness.notify(
+          itemNotification("item/completed", { type: "contextCompaction", id: "compact-1" }),
+        );
+        received.push(readManagedInstructions(harness.client, turnStart));
+      }
       await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
       const result = await run;
       if (index !== 2) {
-        expect(received[index]).toContain(personalUser);
+        expect(received[index]?.split(personalUser)).toHaveLength(2);
         expect(result.systemPromptReport?.injectedWorkspaceFiles).toContainEqual(
           expect.objectContaining({ path: personalPath, injectedChars: personalUser.length }),
         );
       }
     }
-    expect(received.join("\n")).not.toContain("available_skills");
+    // The relay carries the current catalog only while the native one differs.
+    expect(received[0]).not.toContain("available_skills");
+    expect(received[2]).toContain("refreshable thread instructions are empty");
+    for (const text of [received[1], received[2], received[3], received[4]]) {
+      expect(text).not.toContain(FIRST_CATALOG);
+    }
+    for (const text of [received[1], received[3], received[4]]) {
+      expect(text).toContain(SECOND_CATALOG);
+    }
+    expect(received[4]?.split(personalUser)).toHaveLength(2);
+    expect(received[2]).not.toContain("available_skills");
     const nativeRequests = harness.requests.filter(
       ({ method, params }) =>
         ["thread/start", "thread/resume", "thread/inject_items"].includes(method) &&
         !isCodexTurnContextHandoff(params),
     );
+    // Creation, two refreshes, then the edit again and its post-compaction restore.
     expect(nativeRequests.map(({ method }) => method)).toEqual([
       "thread/start",
+      "thread/inject_items",
       "thread/inject_items",
       "thread/inject_items",
       "thread/inject_items",
@@ -106,6 +135,7 @@ describe("Codex app-server skill catalog delivery", () => {
     expect(delivered[1]).toContain(SECOND_CATALOG);
     expect(delivered[2]).not.toContain("available_skills");
     expect(delivered[3]).toContain(SECOND_CATALOG);
+    expect(delivered[4]).toContain(SECOND_CATALOG);
     expect(JSON.stringify(harness.requests)).not.toContain(personalUser);
   });
 

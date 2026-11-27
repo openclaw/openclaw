@@ -161,10 +161,13 @@ Changing other generic policy still cold-resumes an ordinary persistent thread; 
 incognito thread rejects that change.
 
 An injected section (incognito threads, and persistent threads until their protected
-work ends) has two limitations: automatic compaction can restore the thread's
+work ends) has two limitations. First, automatic compaction can restore the thread's
 section from its last start or resume for the immediate continuation before OpenClaw
-re-delivers the current section; restoration applies to the following request. A
-fresh native child without inherited history can also receive that earlier section
+re-delivers the current section; restoration applies to the following request. On
+managed relay connections the relay also sends the current section in request
+instructions while it differs from the thread's native copy, so the continuation
+still sees it; connections without a relay keep this one-request window. Second, a
+fresh native child without inherited history can receive that earlier section
 rather than subsequent injected edits. A full-history child can inherit the later
 handoff. Standalone compaction invalidates recorded delivery so the next turn
 refreshes it, including after a failed restore. These refreshes do not erase older

@@ -102,13 +102,32 @@ export function isCodexNativeSectionStale(
 export async function refreshCodexThreadInstructions(
   params: CodexThreadHandoffParams & { refreshableInstructions: string | undefined },
 ): Promise<void> {
-  const notice =
-    "The following is the complete current OpenClaw refreshable thread instructions. It replaces the earlier refreshable instructions in this conversation.\n\n";
-  const text =
-    notice +
-    (params.refreshableInstructions ??
-      "The current OpenClaw refreshable thread instructions are empty; earlier refreshable instructions are withdrawn.");
-  await injectCodexThreadDeveloperHandoff(params, text);
+  await injectCodexThreadDeveloperHandoff(
+    params,
+    renderCodexRefreshableInstructions(params.refreshableInstructions),
+  );
+}
+
+function renderCodexRefreshableInstructions(refreshableInstructions: string | undefined): string {
+  return (
+    "The following is the complete current OpenClaw refreshable thread instructions. It replaces the earlier refreshable instructions in this conversation.\n\n" +
+    (refreshableInstructions ??
+      "The current OpenClaw refreshable thread instructions are empty; earlier refreshable instructions are withdrawn.")
+  );
+}
+
+/**
+ * While a thread's native section differs from the current one (incognito edits, or
+ * protected work deferring a cold resume), native compaction can sample its continuation
+ * from the native section before any handoff. A relay sends this with every request until
+ * the native copy matches again. The section never holds the personal overlay.
+ */
+export function renderCodexRelayRefreshableFallback(
+  policy: CodexEphemeralThreadPolicy | undefined,
+): string | undefined {
+  return policy && policy.nativeRefreshableInstructions !== policy.refreshableInstructions
+    ? renderCodexRefreshableInstructions(policy.refreshableInstructions)
+    : undefined;
 }
 
 /**
