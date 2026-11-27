@@ -1,4 +1,6 @@
 /** Local-only punctuation. Offsets are half-open UTF-16 ranges in the raw revision. */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+
 export type DictationPunctuationMode = "verbatim" | "automatic" | "explicit";
 
 export type DictationPunctuationPolicy = Readonly<{
@@ -119,10 +121,6 @@ function rawResult(
     reasons: [reason],
     effectiveLocale: effectiveLocale(request),
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function withinBytes(text: string, limit: number): boolean {
