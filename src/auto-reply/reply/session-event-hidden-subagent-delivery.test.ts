@@ -4,6 +4,10 @@ import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import {
+  registerSessionBindingAdapter,
+  testing as sessionBindingTesting,
+} from "../../infra/outbound/session-binding-service.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import * as routedReplies from "./route-reply.js";
 import * as handoff from "./session-event-handoff.js";
@@ -30,7 +34,7 @@ const requesterRoute = { channel: "telegram", to: "synthetic-requester-chat" };
 
 const destinations: Record<
   string,
-  { sessionKey: string; entry: Partial<SessionEntry>; delivered: boolean }
+  { sessionKey: string; entry: Partial<SessionEntry>; delivered: boolean; threadBound?: true }
 > = {
   "hidden subagent": {
     sessionKey: "agent:main:subagent:synthetic-worker",
@@ -41,6 +45,12 @@ const destinations: Record<
     sessionKey: "agent:main:dashboard:synthetic-hidden-child",
     entry: { spawnedBy: "agent:main:main", spawnDepth: 1 },
     delivered: false,
+  },
+  "thread-bound subagent": {
+    sessionKey: "agent:main:subagent:synthetic-thread-worker",
+    entry: { spawnedBy: "agent:main:main", spawnDepth: 1 },
+    delivered: true,
+    threadBound: true,
   },
   "visible spawned session": {
     sessionKey: "agent:main:dashboard:synthetic-visible-child",
@@ -63,6 +73,33 @@ it.for(Object.keys(destinations))(
     }
     await runEventFixture("session-event-hidden-subagent", onTestFinished, async (state) => {
       await configureEventState(state);
+      sessionBindingTesting.resetSessionBindingAdaptersForTests();
+      onTestFinished(() => sessionBindingTesting.resetSessionBindingAdaptersForTests());
+      if (destination.threadBound) {
+        // The user talks to this worker in its own bound thread, so its replies belong there.
+        registerSessionBindingAdapter({
+          channel: "telegram",
+          accountId: "default",
+          listBySession: (key) =>
+            key === destination.sessionKey
+              ? [
+                  {
+                    bindingId: "synthetic-thread-binding",
+                    targetSessionKey: key,
+                    targetKind: "subagent",
+                    conversation: {
+                      channel: "telegram",
+                      accountId: "default",
+                      conversationId: "synthetic-worker-thread",
+                    },
+                    status: "active",
+                    boundAt: 1,
+                  },
+                ]
+              : [],
+          resolveByConversation: () => null,
+        });
+      }
       const scope = { agentId: "main", sessionKey: destination.sessionKey };
       // The child inherited the chat its requester was using when the task started.
       await replaceSessionEntry(scope, {

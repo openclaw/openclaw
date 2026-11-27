@@ -42,6 +42,7 @@ import {
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { GatewayOperatorAccessUnavailableError } from "../../infra/operator-authority-error.js";
+import { listSessionBindingsBySessionAsync } from "../../infra/outbound/session-binding-service.js";
 import { channelRouteDedupeKey } from "../../plugin-sdk/channel-route.js";
 import {
   bindGatewayContextResolver,
@@ -243,6 +244,14 @@ export async function captureSessionEventTargetForHost(
             { env },
           )
         : undefined;
+    // Hidden workers report through the announce chain; their inherited chat route is the
+    // requester's, so a wake turn must not reply there directly. Visible spawns and sessions
+    // bound to their own conversation (thread-bound subagents, persistent ACP) stay interactive.
+    const hiddenWorker =
+      deliver === undefined &&
+      isSubagentEnvelopeSession(sessionKey, { cfg, entry }) &&
+      !isVisibleSpawnedSession(sessionKey, { cfg, entry }) &&
+      (await listSessionBindingsBySessionAsync(sessionKey)).length === 0;
     assertCaptureCurrent();
     const target: SessionEventTarget = {
       agentId,
@@ -253,13 +262,7 @@ export async function captureSessionEventTargetForHost(
       assertCurrent: options.assertCurrent,
       // Empty identity pins absence until normal admission creates the first session.
       sessionId: entry?.sessionId ?? "",
-      // Hidden workers report through the announce chain; their inherited chat route is the
-      // requester's, so a wake turn must not reply there directly. Visible spawns stay interactive.
-      ...(deliver === undefined &&
-      isSubagentEnvelopeSession(sessionKey, { entry }) &&
-      !isVisibleSpawnedSession(sessionKey, { entry })
-        ? { deliver: false as const }
-        : {}),
+      ...(hiddenWorker ? { deliver: false as const } : {}),
       lifecycleRevision: entry?.lifecycleRevision,
       generation,
       deliveryContext: structuredClone(deliveryContextFromSession(entry)),
