@@ -102,6 +102,7 @@ export async function startCodexAttemptThread(params: {
   dynamicTools: CodexDynamicToolSpec[];
   askUserAvailable?: boolean;
   persistentWebSearchAllowed?: boolean;
+  webSearchRequested?: boolean;
   webSearchAllowed: boolean;
   developerInstructions: string | undefined;
   systemPromptReplaced?: boolean;
@@ -457,6 +458,7 @@ export async function startCodexAttemptThread(params: {
                 dynamicTools: params.dynamicTools,
                 askUserAvailable: params.askUserAvailable,
                 persistentWebSearchAllowed: params.persistentWebSearchAllowed,
+                webSearchRequested: params.webSearchRequested,
                 webSearchAllowed: params.webSearchAllowed,
                 appServer: pluginAppServer,
                 developerInstructions: params.developerInstructions,
