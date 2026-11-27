@@ -28,8 +28,15 @@ import {
   synthesizeSpeech,
   textToSpeech,
 } from "../../tts/tts.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import {
+  getSessionRowProjection,
+  requireSessionRowProjection,
+} from "../session-row-projection-access.js";
+import { withPreparedSessionResolve } from "../sessions-resolve.js";
 import { formatForLog } from "../ws-log.js";
 import { respondError, respondUnavailableOnThrow } from "./response.js";
+import { isStartableMainSession } from "./session-scoped-read.js";
 import { inferSpeechMimeType } from "./speech-mime.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -169,7 +176,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
   },
   // Unlike tts.convert (gateway-local audioPath) this returns the clip inline,
   // so remote clients (mobile apps) can play it without filesystem access.
-  "tts.speak": async ({ params, respond, context }) => {
+  "tts.speak": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateTtsSpeakParams, "tts.speak", respond)) {
       return;
     }
@@ -180,9 +187,47 @@ export const ttsHandlers: GatewayRequestHandlers = {
     }
     try {
       const cfg = context.getRuntimeConfig();
+      let agentId: string | undefined;
+      if (params.sessionKey) {
+        const sessionKey = params.sessionKey;
+        const projection = requireSessionRowProjection(context);
+        // The lookup applies the caller's session visibility, so a hidden session
+        // is rejected like a missing one and its agent's voice stays out of reach.
+        const session = await withPreparedSessionResolve(
+          {
+            projection,
+            client,
+            p: { key: sessionKey, allowMissing: true },
+            isCurrent: () => getSessionRowProjection(context) === projection,
+          },
+          (resolved) => {
+            if (!resolved.ok || "agentId" in resolved) {
+              return resolved;
+            }
+            // As in talk.catalog, a main conversation the caller may start reads in
+            // its agent's voice before the first turn creates it.
+            const requested = resolveRequestedSessionAgentId(cfg, sessionKey, undefined, "read");
+            return "missing" in resolved &&
+              requested.ok &&
+              isStartableMainSession({ cfg, client, sessionKey, agentId: requested.agentId })
+              ? requested
+              : undefined;
+          },
+        );
+        if (!session?.ok) {
+          respond(
+            false,
+            undefined,
+            session?.error ??
+              errorShape(ErrorCodes.INVALID_REQUEST, `No session found: ${sessionKey}`),
+          );
+          return;
+        }
+        agentId = session.agentId;
+      }
       // synthesizeSpeech enforces the same tts.maxTextLength bound but
       // reports it as a synthesis failure; pre-check to return a request error.
-      const maxTextLength = resolveTtsConfig(cfg).maxTextLength;
+      const maxTextLength = resolveTtsConfig(cfg, agentId).maxTextLength;
       if (text.length > maxTextLength) {
         respondError(
           respond,
@@ -192,7 +237,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
         return;
       }
       assertSecretOwnerAvailable("capability", "tts");
-      const result = await synthesizeSpeech({ text, cfg });
+      const result = await synthesizeSpeech({ text, cfg, agentId });
       const provider = normalizeOptionalString(result.provider);
       if (!result.success || !result.audioBuffer || result.audioBuffer.length === 0 || !provider) {
         const primary = result.attempts?.[0];

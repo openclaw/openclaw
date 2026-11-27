@@ -17,8 +17,9 @@ Use `agents.entries.*.tts` to give an agent its own TTS provider, voice, model,
 style, or auto-TTS mode. The agent block deep-merges over global
 `tts`, so shared credentials can stay in one place while individual
 agents override only the voice or provider fields they need. The active agent's
-override applies to automatic spoken replies, `/tts audio`, `/tts status`, and
-the `tts` agent tool. See [Text-to-speech](/tools/tts#per-agent-voice-overrides)
+override applies to automatic spoken replies, `/tts audio`, `/tts status`, the
+`tts` agent tool, and Gateway `tts.speak` requests that pass the chat's
+`sessionKey`. See [Text-to-speech](/tools/tts#per-agent-voice-overrides)
 for provider examples and precedence.
 
 ```json5
