@@ -72,3 +72,51 @@ it("freezes only the hook-enriched current user projection before native dispatc
     __openclaw: { modelPromptProjection: { version: 1, text: expected } },
   });
 });
+
+// Production (1 turn): an embedded primary dispatched the turn without a projection and failed;
+// this Codex fallback then tried to freeze its own text after dispatch and refused the turn.
+it("runs after an earlier candidate dispatched the turn without a projection", async () => {
+  setRuntimeConfigSnapshot({});
+  initializeGlobalHookRunner(
+    createMockPluginRegistry([
+      {
+        hookName: "before_prompt_build",
+        handler: () => ({ prependContext: "codex attempt context" }),
+      },
+    ]),
+  );
+  const params = createParams(path.join(tempDir, "dispatched.jsonl"), tempDir);
+  const target = {
+    agentId: "main",
+    sessionId: "dispatched",
+    sessionKey: "agent:main:dispatched",
+    storePath: path.join(tempDir, "dispatched.sqlite"),
+  };
+  await attachSqliteSessionTarget(params, target.storePath, target.sessionId);
+  const createRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
+  const recorder = createRecorder({
+    input: {
+      text: params.prompt,
+      idempotencyKey: "dispatched:user",
+      provenance: { kind: "internal_system", sourceTool: "test" },
+    },
+    target: { ...target, sessionEntry: undefined },
+  });
+  await recorder.persistApproved();
+  recorder.markSentToProvider?.();
+  params.userTurnTranscriptRecorder = recorder;
+  await bindProductionHarnessHostCapabilitiesForTest(params);
+  let dispatchInput: unknown;
+  const harness = createStartedThreadHarness(async (method, payload) => {
+    if (method === "turn/start") {
+      dispatchInput = payload;
+    }
+  });
+  const run = runCodexAppServerAttempt(params);
+  await run.waitForTurnAccepted();
+  await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+  await run;
+  expect(JSON.stringify(dispatchInput)).toContain("codex attempt context");
+  expect(JSON.stringify(dispatchInput)).toContain(params.prompt);
+  expect(recorder.getPersistedMessage?.()?.["__openclaw"]?.modelPromptProjection).toBeUndefined();
+});

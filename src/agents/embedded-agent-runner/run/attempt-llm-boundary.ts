@@ -569,8 +569,9 @@ export function installModelPromptProjection(params: {
               : capture());
             assertCurrent();
             const capturedText = readModelPromptProjection(captured);
+            // A turn already dispatched without a projection keeps its transcript text.
             if (capturedText === undefined) {
-              throw new Error("Transcript recorder did not capture the model prompt projection");
+              continue;
             }
             text = capturedText;
           }

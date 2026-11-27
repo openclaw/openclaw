@@ -811,6 +811,45 @@ describe("durable model prompt projection at provider dispatch", () => {
       });
     },
   );
+
+  // A harness that does not capture (or an unchanged inter-session prompt) sent the turn, then
+  // failed; an embedded fallback must not fail the turn trying to freeze its own hook text.
+  it("sends the transcript text when an earlier candidate dispatched without a projection", async () => {
+    await withOpenClawTestState({ label: "dispatched-fallback-projection" }, async (state) => {
+      const target = {
+        ...(await prepareTarget(state, "dispatched-fallback-projection")),
+        sessionEntry: { sessionId, updatedAt: 1 },
+      };
+      const recorder = createUserTurnTranscriptRecorder({
+        input: { text: "original request", timestamp: 1, idempotencyKey: "dispatched:user" },
+        target,
+      });
+      await recorder.persistApproved();
+      recorder.markSentToProvider?.();
+      const manager = await SessionManager.openAsync(target, state.workspaceDir);
+      const { session } = await createTestSession({ sessionManager: manager });
+      normalizeSession(session);
+      const requests = captureRequests();
+
+      await submit(session, {
+        attempt: { sessionId, userTurnTranscriptRecorder: recorder },
+        transcriptPrompt: "original request",
+        modelPrompt: undefined,
+        prependContext: "fallback hook context",
+        appendContext: undefined,
+        getUserTranscriptContexts: () => [],
+        withTranscriptWrite: (write) => write(),
+        promptActiveSession: async (_prompt, options) => {
+          options?.preflightResult?.(true);
+          await session.agent.continue();
+        },
+      });
+
+      expect(requests).toHaveLength(1);
+      expect(JSON.stringify(requests[0])).toContain("original request");
+      expect(JSON.stringify(requests[0])).not.toContain("fallback hook context");
+    });
+  });
 });
 
 describe("tool-result projection persistence at dispatch", () => {
