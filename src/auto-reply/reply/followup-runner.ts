@@ -62,6 +62,7 @@ import {
   isReplyOperationStalledBeforeOutput,
   resolveStalledTurnNoticeText,
 } from "./stalled-turn-recovery.js";
+import { createTypingController } from "./typing.js";
 
 type FollowupDrainDisposition = { kind: "consumed" } | { kind: "retry"; error: unknown };
 
@@ -112,12 +113,12 @@ function resolveFollowupCompletion(
 }
 
 export function createFollowupRunner(
-  initialDefaults: FollowupRunnerParams,
+  initialDefaults: Omit<FollowupRunnerParams, "typing">,
 ): (queued: FollowupRun) => Promise<void> {
   const resolveGatewayContext = Object.hasOwn(initialDefaults, "resolveGatewayContext")
     ? initialDefaults.resolveGatewayContext
     : getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
-  const defaults = { ...initialDefaults, resolveGatewayContext };
+  const runnerDefaults = { ...initialDefaults, resolveGatewayContext };
   // Follow-ups retain the host owner, never the invoking turn's transcript or request scope.
   const runFollowup = (queued: FollowupRun): Promise<void> =>
     withoutRequiredSessionPlacement(() =>
@@ -125,7 +126,18 @@ export function createFollowupRunner(
         runWithAgentWorkspaceReadiness(undefined, () =>
           withPluginRuntimeGatewayContextResolver(
             resolveGatewayContext,
-            () => executeFollowup(queued),
+            // The source dispatch sealed its typing when it returned; each turn owns a fresh one.
+            () =>
+              executeFollowup(queued, {
+                ...runnerDefaults,
+                typing: createTypingController({
+                  onReplyStart: runnerDefaults.opts?.onReplyStart,
+                  onCleanup: runnerDefaults.opts?.onTypingCleanup,
+                  typingIntervalSeconds: queued.run.config.agents?.defaults?.typingIntervalSeconds,
+                  keepalive: runnerDefaults.opts?.typingKeepalive ?? true,
+                  log: defaultRuntime.log,
+                }),
+              }),
             {
               inheritRequestScope: false,
             },
@@ -133,7 +145,10 @@ export function createFollowupRunner(
         ),
       ),
     );
-  const executeFollowup = async (queued: FollowupRun): Promise<void> => {
+  const executeFollowup = async (
+    queued: FollowupRun,
+    defaults: FollowupRunnerParams,
+  ): Promise<void> => {
     let disposition: FollowupDrainDisposition = { kind: "retry", error: undefined };
     let operation: ReplyOperation | undefined;
     let admittedTurn: AdmittedFollowupTurn | undefined;
