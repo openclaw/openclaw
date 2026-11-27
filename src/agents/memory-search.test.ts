@@ -455,6 +455,42 @@ describe("memory search config", () => {
   });
 
   it.each([
+    {
+      case: "custom chat endpoint, auto",
+      baseUrl: "http://127.0.0.1:8787/v1",
+      search: {},
+      provider: "none",
+    },
+    {
+      case: "custom chat endpoint, explicit openai",
+      baseUrl: "http://127.0.0.1:8787/v1",
+      search: { provider: "openai" },
+      provider: "openai",
+    },
+    {
+      case: "custom chat endpoint, embeddings remote",
+      baseUrl: "http://127.0.0.1:8787/v1",
+      search: { remote: { baseUrl: "https://embed.example/v1" } },
+      provider: "openai",
+    },
+    {
+      case: "native OpenAI, auto",
+      baseUrl: "https://api.openai.com/v1",
+      search: { provider: "auto" },
+      provider: "openai",
+    },
+    { case: "no openai provider config, auto", baseUrl: undefined, search: {}, provider: "openai" },
+  ] as const)("selects the embedding provider for $case", ({ baseUrl, search, provider }) => {
+    const cfg = asConfig({
+      memory: { search },
+      ...(baseUrl && {
+        models: { providers: { openai: { baseUrl, api: "openai-completions", models: [] } } },
+      }),
+    });
+    expect(resolveMemorySearchConfig(cfg, "main")?.provider).toBe(provider);
+  });
+
+  it.each([
     { search: { experimental: { sessionMemory: true } }, enabledBy: "sessionMemory" },
     { search: { rememberAcrossConversations: true }, enabledBy: "conversation recall" },
   ])("keeps a requested session source when $enabledBy is enabled", ({ search }) => {

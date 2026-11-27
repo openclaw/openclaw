@@ -1,6 +1,7 @@
 /**
  * Resolves memory-search source, sync, and ranking configuration.
  */
+import { isNativeOpenAIEndpoint } from "@openclaw/ai/internal/openai-completions-compat";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -174,6 +175,15 @@ export function resolveMemorySearchIndexConfig(cfg: OpenClawConfig, agentId: str
   };
 }
 
+function openAIProviderReachesOpenAI(cfg: OpenClawConfig): boolean {
+  const openai = cfg.models?.providers?.openai;
+  // A chat-only ChatGPT route sends its embeddings to native OpenAI (#165476).
+  return (
+    openai?.api === "openai-chatgpt-responses" ||
+    isNativeOpenAIEndpoint({ provider: "openai", baseUrl: openai?.baseUrl })
+  );
+}
+
 function produceMemorySearchConfig(cfg: OpenClawConfig, agentId: string) {
   const indexConfig = resolveMemorySearchIndexConfig(cfg, agentId);
   if (!indexConfig) {
@@ -181,10 +191,23 @@ function produceMemorySearchConfig(cfg: OpenClawConfig, agentId: string) {
   }
   const defaults = cfg.memory?.search;
   const overrides = resolveAgentConfig(cfg, agentId)?.memory?.search;
-  const provider = resolveMemorySearchProviderId(overrides?.provider ?? defaults?.provider);
-  const primaryAdapter = getConfiguredMemoryEmbeddingProvider(provider, cfg);
   const defaultRemote = defaults?.remote;
   const overrideRemote = overrides?.remote;
+  const hasRemoteConfig = [overrideRemote, defaultRemote].some(
+    (remote) => remote?.baseUrl || remote?.apiKey || remote?.headers,
+  );
+  const configuredProvider = (overrides?.provider ?? defaults?.provider)?.trim();
+  const embeddingsConfigured =
+    (configuredProvider && configuredProvider.toLowerCase() !== "auto") ||
+    hasRemoteConfig ||
+    Boolean(overrides?.model ?? defaults?.model);
+  // Auto embeds through OpenAI only where the openai provider reaches OpenAI itself. A custom
+  // chat endpoint is no embeddings route, so search stays keyword-only there.
+  const provider =
+    embeddingsConfigured || openAIProviderReachesOpenAI(cfg)
+      ? resolveMemorySearchProviderId(configuredProvider)
+      : "none";
+  const primaryAdapter = getConfiguredMemoryEmbeddingProvider(provider, cfg);
   // Auth can follow another adapter only when the shared destination follows it too.
   const inheritedRemote =
     isSameMemorySearchProvider(provider, defaults?.provider) ||
@@ -197,9 +220,6 @@ function produceMemorySearchConfig(cfg: OpenClawConfig, agentId: string) {
     normalizeProviderId(provider) !== "none" && fallback && fallback !== "none"
       ? getConfiguredMemoryEmbeddingProvider(fallback, cfg)
       : undefined;
-  const hasRemoteConfig = [overrideRemote, defaultRemote].some(
-    (remote) => remote?.baseUrl || remote?.apiKey || remote?.headers,
-  );
   const includeRemote =
     hasRemoteConfig ||
     primaryAdapter?.transport !== "local" ||
