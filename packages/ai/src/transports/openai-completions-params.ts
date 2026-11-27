@@ -299,10 +299,13 @@ export function buildOpenAICompletionsRequest(
     cacheOptOutIndexes,
     supportsTools,
     // Deferred tools stay callable without a declaration; only unavailable history becomes text.
-    declaredToolNames: new Set([
-      ...(converted?.projection.tools.map((tool) => tool.name) ?? []),
-      ...(options?.[PROVIDER_DEFERRED_TOOL_NAMES] ?? []),
-    ]),
+    // A request that offers no tools has no catalog to reconcile, so its history stays native.
+    declaredToolNames: context.tools?.length
+      ? new Set([
+          ...(converted?.projection.tools.map((tool) => tool.name) ?? []),
+          ...(options?.[PROVIDER_DEFERRED_TOOL_NAMES] ?? []),
+        ])
+      : undefined,
     preserveSystemPromptCacheBoundary:
       cacheControl !== undefined &&
       !managedCompat?.requiresStringContent &&
