@@ -7,9 +7,15 @@ import {
   createApiKeyCredential,
   createAuthProfileStoreFixture,
 } from "../agents/auth-profiles/credential-fixtures.test-support.js";
+import { SHARED_AUTH_STORE_STATE_KEY } from "../agents/auth-profiles/sqlite-json.js";
 import { writePersistedAuthProfileStoreRaw } from "../agents/auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { updateConfigMachineState } from "../state/config-machine-state-write.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -392,6 +398,26 @@ describe("inspectAuthProfileHealth", () => {
         env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-doctor-auth-other-") },
         inspectProfiles: true,
       }),
+    ).resolves.toBe("undecidable");
+    expect(authProfileMocks.loadAuthProfileStoreForRuntimeAsync).not.toHaveBeenCalled();
+    expect(sidecars()).toEqual([]);
+  });
+
+  it("cannot decide the ambient-token notice while a legacy shared auth store is unheld", async () => {
+    const env = { OPENCLAW_STATE_DIR: tempDir, GH_TOKEN: "synthetic-ambient-token" };
+    // The shared store is still the legacy main agent database, and main is not configured.
+    updateConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, () => ({ location: "legacy-main" }), {
+      env,
+    });
+    openOpenClawAgentDatabase({ agentId: "main", env });
+    closeOpenClawAgentDatabasesForTest();
+    const mainDir = path.join(tempDir, "agents", "main", "agent");
+    const sidecars = () => fs.readdirSync(mainDir).filter((name) => /-(wal|shm)$/u.test(name));
+    expect(sidecars()).toEqual([]);
+    useLocalStore(createAuthProfileStoreFixture({}));
+
+    await expect(
+      checkAuthProfileRefreshPending({ cfg: configForAgents("work"), env, inspectProfiles: false }),
     ).resolves.toBe("undecidable");
     expect(authProfileMocks.loadAuthProfileStoreForRuntimeAsync).not.toHaveBeenCalled();
     expect(sidecars()).toEqual([]);

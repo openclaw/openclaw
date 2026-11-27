@@ -518,39 +518,47 @@ export async function checkAuthProfileRefreshPending(params: {
   inspectProfiles: boolean;
 }): Promise<DoctorMaintenancePending> {
   const env = params.env ?? process.env;
-  // Each read touches the state database and the agent auth stores of its environment:
-  // the notice reads Doctor's env, while the profile inspection (like the repair) reads
-  // the process env. Read only stores a connection holds.
-  const heldStores = (storeEnv: NodeJS.ProcessEnv) => [
-    resolveOpenClawStateSqlitePath(storeEnv),
-    ...listAgentIds(params.cfg).map((agentId) =>
-      resolveAuthProfileDatabasePath(resolveAgentDir(params.cfg, agentId, storeEnv)),
-    ),
-  ];
-  const notice = await decideDoctorPendingFromLiveStores(heldStores(env), async () =>
+  // The notice reads Doctor's env; the profile inspection, like the repair, reads the
+  // process env. Each decides only while every store it may read is held.
+  const notice = await decideFromHeldAuthStores(params.cfg, env, async () =>
     // The once-per-state ambient-token notice records that it was shown.
     (await isCopilotAmbientTokenNoticePending(params.cfg, env)) ? "work" : "none",
   );
   if (notice !== "none" || !params.inspectProfiles) {
     return notice;
   }
-  return decideDoctorPendingFromLiveStores(heldStores(process.env), async () => {
-    // The shared store's location is known only after its ownership is read.
-    await prepareSharedAuthStoreOwnership();
-    return decideDoctorPendingFromLiveStores([resolveSharedAuthStorePath()], async () => {
-      for (const target of await listAuthProfileHealthTargets(params.cfg)) {
-        const { summary } = await loadAuthProfileHealth({
-          cfg: params.cfg,
-          target,
-          allowKeychainPrompt: false,
-          readOnly: true,
-        });
-        if (listAuthProfileRefreshTargets(summary).length > 0) {
-          return "work";
-        }
+  return decideFromHeldAuthStores(params.cfg, process.env, async () => {
+    for (const target of await listAuthProfileHealthTargets(params.cfg)) {
+      const { summary } = await loadAuthProfileHealth({
+        cfg: params.cfg,
+        target,
+        allowKeychainPrompt: false,
+        readOnly: true,
+      });
+      if (listAuthProfileRefreshTargets(summary).length > 0) {
+        return "work";
       }
-      return "none";
-    });
+    }
+    return "none";
+  });
+}
+
+/** The state database, every agent's auth store, then the shared auth store, all held. */
+async function decideFromHeldAuthStores(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  decide: () => Promise<DoctorMaintenancePending>,
+): Promise<DoctorMaintenancePending> {
+  const stores = [
+    resolveOpenClawStateSqlitePath(env),
+    ...listAgentIds(cfg).map((agentId) =>
+      resolveAuthProfileDatabasePath(resolveAgentDir(cfg, agentId, env)),
+    ),
+  ];
+  return decideDoctorPendingFromLiveStores(stores, async () => {
+    // The shared store's location is known only after its ownership is read.
+    await prepareSharedAuthStoreOwnership(env);
+    return decideDoctorPendingFromLiveStores([resolveSharedAuthStorePath(env)], decide);
   });
 }
 
