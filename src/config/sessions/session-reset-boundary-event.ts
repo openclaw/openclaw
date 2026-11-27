@@ -52,16 +52,24 @@ export function createSessionResetBoundaryId(): string {
   return randomUUID();
 }
 
-/** Full entries, or reset navigation rows whose messages carry only their navigation fields. */
+/** Full entries, or reset navigation rows, which keep only the fields context selection reads. */
 function isResetWindowEntry(entry: unknown): entry is SessionTreeEntry {
-  return (
-    isIndexedSessionEntry(entry) ||
-    (isRecord(entry) &&
-      entry.type === "message" &&
-      recordId(entry) !== undefined &&
-      isRecord(entry.message) &&
-      typeof entry.message.role === "string")
-  );
+  if (isIndexedSessionEntry(entry)) {
+    return true;
+  }
+  if (!isRecord(entry) || recordId(entry) === undefined) {
+    return false;
+  }
+  switch (entry.type) {
+    case "message":
+      return isRecord(entry.message) && typeof entry.message.role === "string";
+    // Boundaries cut the window; their reason, summary and token count are not projected.
+    case "reset":
+    case "compaction":
+      return entry.firstKeptEntryId === undefined || typeof entry.firstKeptEntryId === "string";
+    default:
+      return false;
+  }
 }
 
 function projectLatestBoundaryWindow(entries: readonly unknown[]): unknown[] {
