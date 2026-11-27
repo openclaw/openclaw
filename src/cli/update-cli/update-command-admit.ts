@@ -64,6 +64,7 @@ import {
   hasSchemaRefusal,
 } from "./schema-preflight.js";
 import { resolveUpdateRoot, UpdatePreMutationError } from "./shared.js";
+import { inspectSystemServiceAccountForAdmission } from "./update-command-admit-service-account.js";
 import { preflightConfiguredNpmPluginTargets } from "./update-command-plugin-preflight.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 
@@ -121,6 +122,28 @@ async function inspectUpdateAdmission(
       throw new Error("Candidate package schema declarations are unavailable.");
     }
     const installedVersion = await readPackageVersion(root, { maxBytes: 1024 * 1024 });
+    // Checks below would read this process's state, not the selected service's.
+    const serviceAccount = await inspectSystemServiceAccountForAdmission({
+      env: process.env,
+      root,
+      packageManager: context.installation.packageManager,
+      candidateVersion,
+    });
+    if (serviceAccount) {
+      return {
+        protocol: UPDATE_ADMISSION_PROTOCOL,
+        verdict: "refuse",
+        reasons: [{ code: "service-account-mismatch", ...serviceAccount }],
+        warnings: [],
+        facts: {
+          candidateVersion,
+          installedVersion,
+          checks: [
+            { name: "managed-service-account", status: "refuse", detail: serviceAccount.message },
+          ],
+        },
+      };
+    }
     const env = cloneEnvWithPlatformSemantics(process.env);
     env.OPENCLAW_VERSION = candidateVersion;
     env.OPENCLAW_DEV_SOURCE_ROOT = candidateRoot;
