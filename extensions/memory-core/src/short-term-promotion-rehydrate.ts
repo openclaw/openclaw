@@ -1,3 +1,7 @@
+import {
+  isDreamingFenceMarkerLine,
+  lineRangeOverlapsDreamingFence,
+} from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { readWorkspaceText } from "./memory-workspace-files.js";
 import { resolveShortTermSourcePathCandidates } from "./short-term-promotion-record.js";
@@ -57,7 +61,7 @@ function buildRelocatedDailyHeadingLookup(lines: string[]): (string | null)[] {
   for (let index = 0; index < lines.length; index += 1) {
     headings[index + 1] = currentHeading;
     const line = lines[index] ?? "";
-    if (DREAMING_FENCE_START_RE.test(line) || DREAMING_FENCE_END_RE.test(line)) {
+    if (isDreamingFenceMarkerLine(line)) {
       currentHeading = null;
       continue;
     }
@@ -208,37 +212,6 @@ function relocateCandidateRange(
     endLine: bestMatch.endLine,
     snippet: bestMatch.snippet,
   };
-}
-
-const DREAMING_FENCE_START_RE = /<!--\s*openclaw:dreaming:[a-z][a-z0-9-]*:start\s*-->/i;
-const DREAMING_FENCE_END_RE = /<!--\s*openclaw:dreaming:[a-z][a-z0-9-]*:end\s*-->/i;
-
-function lineRangeOverlapsDreamingFence(
-  lines: string[],
-  startLine: number,
-  endLine: number,
-): boolean {
-  if (lines.length === 0) {
-    return false;
-  }
-  const safeStart = Math.max(1, Math.min(startLine, lines.length));
-  const safeEnd = Math.max(safeStart, Math.min(endLine, lines.length));
-  let insideFence = false;
-  for (let i = 0; i < safeEnd; i += 1) {
-    const line = lines[i] ?? "";
-    const oneIndexed = i + 1;
-    const isStart = DREAMING_FENCE_START_RE.test(line);
-    const isEnd = DREAMING_FENCE_END_RE.test(line);
-    // Marker lines are managed content too; promoting them would leak
-    // dreaming scratchwork into MEMORY.md (#80613).
-    if ((isStart || isEnd || insideFence) && oneIndexed >= safeStart && oneIndexed <= safeEnd) {
-      return true;
-    }
-    if (isStart || isEnd) {
-      insideFence = isStart;
-    }
-  }
-  return false;
 }
 
 export async function rehydratePromotionCandidate(
