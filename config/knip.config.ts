@@ -74,6 +74,8 @@ const repositoryScriptEntries = [
   "test/fixtures/fs-safe-drvfs-calls.mjs!",
   // Forked by update-command-doctor-child.test.ts to model the successor's state swap.
   "src/cli/update-cli/update-command-state-handoff.process.test-support.ts!",
+  // Forked by server-startup-legacy-completion.test.ts to model a schema-40 verifier.
+  "src/gateway/legacy-schema40-driver.test-support.ts!",
   // Their source headers document standalone benchmark and measurement commands.
   "scripts/bench-ci-lint-plan.mts!",
   "scripts/bench-ci-planner.mts!",
