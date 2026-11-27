@@ -38,8 +38,7 @@ import {
 } from "../../internal-runtime-context.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { testing as deliveryTesting } from "./subagent-announce-delivery.test-support.js";
-import { testing as outputTesting } from "./subagent-announce-output.test-support.js";
-import { announceTesting } from "./subagent-announce-overrides.test-support.js";
+import { announceTesting, outputTesting } from "./subagent-announce-overrides.test-support.js";
 import { runSubagentAnnounceFlow } from "./subagent-announce.js";
 import {
   visibleAgentResponse,
@@ -513,7 +512,10 @@ describe("subagent announce formatting", () => {
         ...gatewayDeps,
         resolveSessionStorePathCore: () => storePath,
       });
-      await announceWithDefaults();
+      await announceWithDefaults({ startedAt: undefined, endedAt: undefined });
+      expect(getAgentCall().params?.internalEvents?.[0]).toMatchObject({
+        statsLine: `Stats: runtime n/a • ${expected}`,
+      });
       expectText(getAgentCallContext(), ["Stats:", expected], [excluded]);
     } finally {
       await closeOpenClawAgentDatabasesAsync(root);
@@ -523,6 +525,15 @@ describe("subagent announce formatting", () => {
   it.each([
     [{}, "tokens unknown", "tokens 0 (in 0 / out 0)"],
     [{ inputTokens: 0, outputTokens: 0 }, "tokens 0 (in 0 / out 0)", "tokens unknown"],
+    [
+      {
+        totalTokens: 500,
+        totalTokensFresh: true,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+      },
+      "tokens 500 context",
+      "tokens 0 (in 0 / out 0)",
+    ],
   ] as const)("announces real session-store usage %j", expectRealStoreUsage);
 
   it.each([true, false])("replays durable silence (completion required=%s)", async (required) => {

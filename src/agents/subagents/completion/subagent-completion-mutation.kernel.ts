@@ -35,6 +35,7 @@ import {
 } from "../registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { sameRequesterSettleRunIdentity } from "../registry/subagent-requester-settle-identity.js";
+import { isSubagentPausedByYield } from "../registry/subagent-requester-turn-custody.js";
 import { compareSubagentRunGeneration } from "../registry/subagent-run-generation.js";
 import type {
   SubagentCompletionMutation,
@@ -137,7 +138,7 @@ function prepareHistorySettledCompletion(
   if (
     !subagent ||
     subagent.execution.status !== "terminal" ||
-    subagent.pauseReason === "sessions_yield" ||
+    isSubagentPausedByYield(subagent) ||
     subagent.expectsCompletionMessage === false ||
     subagent.delivery?.status === "delivered" ||
     (subagent.delivery?.generation ?? 1) !== (expected.delivery?.generation ?? 1)
@@ -228,7 +229,7 @@ function mutateRequesterBatch(
         return { subagent, retire: completeRequesterSettleWakeState(subagent) };
       }
       if (
-        subagent.pauseReason === "sessions_yield" &&
+        isSubagentPausedByYield(subagent) &&
         Boolean(subagent.requesterSettleWake?.pauseNotice) !==
           Boolean(params.operation.state.pauseNotice)
       ) {
@@ -253,7 +254,7 @@ function mutateRequesterBatch(
     }
     // A batch that missed its turn already has its status in requester history.
     if (
-      subagent.pauseReason !== "sessions_yield" &&
+      !isSubagentPausedByYield(subagent) &&
       subagent.expectsCompletionMessage === true &&
       ["pending", "in_progress", "failed", "suspended"].includes(
         subagent.delivery?.status ?? "pending",
@@ -328,7 +329,7 @@ function reconcileRequesterWake(
       !isDeepStrictEqual(current.killIntent, intended.killIntent) ||
       !isDeepStrictEqual(current.killReconciliation, intended.killReconciliation) ||
       !isDeepStrictEqual(current.requesterSettleWake, intended.requesterSettleWake) ||
-      current.retireAfterRequesterTurn !== intended.retireAfterRequesterTurn ||
+      current.retireAfterSettle !== intended.retireAfterSettle ||
       (params.kind === "requesterBatch" &&
         (!isDeepStrictEqual(current.delivery, intended.delivery) ||
           current.suppressCompletionDelivery !== intended.suppressCompletionDelivery ||

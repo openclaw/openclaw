@@ -31,14 +31,14 @@ import { holdProviderReviewQueuedInputs } from "./chat-provider-review.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import { flushChatQueueForEvent, resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import type { ChatSessionStateSnapshot } from "./chat-session-state-snapshot.ts";
-import { handlePageGatewayEvent } from "./chat-state-events.ts";
+import {
+  handlePageGatewayEvent,
+  reconcileChatRunAfterSessionPublication,
+} from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { getChatSessionProjection } from "./history-merge.ts";
-import {
-  reconcileChatRunAfterSessionStatePublication,
-  replayPendingChatAbort,
-} from "./run-lifecycle.ts";
+import { replayPendingChatAbort } from "./run-lifecycle.ts";
 import { cacheChatSessionSnapshot, readChatSessionSnapshot } from "./session-message-cache.ts";
 
 function applyObservedChatSessionRow(
@@ -302,7 +302,10 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
       );
       return;
     }
-    const reconciledLocalCompletion = reconcileChatRunAfterSessionStatePublication(state);
+    const reconciledLocalCompletion = reconcileChatRunAfterSessionPublication(
+      state,
+      this.presented,
+    );
     this.reconcileWaitingApprovalSnapshot();
     if (reconciledLocalCompletion) {
       void resumeStoredChatOutboxes(state);

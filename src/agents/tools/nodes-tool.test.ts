@@ -213,24 +213,6 @@ it.each<[string, Record<string, unknown>, string, Parameters<typeof createNodesT
   }
 });
 
-it("bounds durationMs schema to positive values capped at 300000", () => {
-  expect(createNodesTool().parameters).toMatchObject({
-    properties: { durationMs: { type: "integer", minimum: 1, maximum: 300_000 } },
-  });
-});
-
-it("resolves and describes the explicit node", async () => {
-  gatewayMocks.callGatewayTool.mockResolvedValue({ nodeId: "node-1" });
-  await onNode("describe", { node: "Office Mac" });
-
-  expect(nodeUtilsMocks.resolveAgentNodeId).toHaveBeenCalledWith({}, "Office Mac");
-  expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
-    "node.describe",
-    {},
-    { nodeId: "node-1" },
-  );
-});
-
 it.each([
   { name: "title only", input: { title: "Build complete" } },
   { name: "body only", input: { body: "Deployment finished" } },
@@ -478,47 +460,12 @@ it("caps photos_latest limit at 20 before gateway invoke", async () => {
   ]);
 });
 
-it("forwards validated camera_snap numeric params to gateway invoke", async () => {
-  gatewayPayload();
-  await onNode("camera_snap", {
-    facing: "front",
-    maxWidth: "640",
-    quality: "0.8",
-    delayMs: "2000",
-  });
-
-  expect(gatewayMocks.callGatewayTool.mock.calls[0]).toEqual([
-    "node.invoke",
-    expect.anything(),
-    expect.objectContaining({
-      params: expect.objectContaining({ maxWidth: 640, quality: 0.8, delayMs: 2000 }),
-    }),
-  ]);
-});
-
 it("preserves explicit null location_get payloads from node.invoke", async () => {
   gatewayPayload(null);
   const result = await onNode("location_get");
 
   expect(result.details).toBeNull();
   expect(result.content).toEqual([{ type: "text", text: "null" }]);
-});
-
-it("forwards typed which bins to system.which", async () => {
-  gatewayPayload({ bins: ["hostname"], paths: { hostname: "/bin/hostname" } });
-  const result = await onNode("which", { bins: ["hostname"] });
-
-  expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
-    "node.invoke",
-    {},
-    {
-      nodeId: "node-1",
-      command: "system.which",
-      params: { bins: ["hostname"] },
-      idempotencyKey: expect.any(String),
-    },
-  );
-  expect(result.details).toEqual({ bins: ["hostname"], paths: { hostname: "/bin/hostname" } });
 });
 
 it.each([

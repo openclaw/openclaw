@@ -74,14 +74,6 @@ const declarations = (readNames: () => string[] | undefined) =>
     },
   });
 
-const continuation = (isCurrent: () => boolean) => ({
-  isCurrent,
-  assertCurrent: () => assert(isCurrent(), "owner closed"),
-  senderId: "original-owner",
-  channel: "discord",
-  accountId: "original-account",
-});
-
 it("enters the registered owner's scopes and retains the execution cancellation scope", async () => {
   const observed: string[] = [];
   const observe = () => {
@@ -198,21 +190,6 @@ it.each([false, true])("preserves V1 callbacks with host authority=%s", async (h
   expect(effect).toHaveBeenCalledOnce();
 });
 
-it.each([false, true])(
-  "does not promote legacy continuation factories, preserving direct owner=%s",
-  (directOwner) => {
-    const create = vi.fn(() => null);
-    const direct = { senderIsOwner: directOwner, requesterSenderId: "direct-sender" };
-    const { entry, context } = register(create, {
-      context: direct,
-      ownerContinuation: continuation(() => true),
-    });
-    entry.factory(context);
-    expect(create).toHaveBeenCalledWith(expect.objectContaining(direct));
-    expect([context.messageChannel, context.agentAccountId]).toEqual([undefined, undefined]);
-  },
-);
-
 it.each(["probe", "records"])("checks memory audience currency for slot owner=%s", (slotOwner) => {
   const checkAudience = vi.fn(() => assert.fail("memory audience is no longer current"));
   const { context } = register(() => null, {
@@ -251,13 +228,12 @@ it("allows metadata construction but rejects V2 effects without an admitted invo
   expect(effect).not.toHaveBeenCalled();
 });
 
-it.each(["allowed", "owner-close", "run-close", "plugin-close"] as const)(
+it.each(["allowed", "run-close", "plugin-close"] as const)(
   "checks %s before the asynchronous tool's final effect and in retained preparers",
   async (mode) => {
     const entered = createDeferred();
     const release = createDeferred();
     const effect = vi.fn();
-    let ownerCurrent = true;
     let runCurrent = true;
     const registration = register(
       {
@@ -279,21 +255,12 @@ it.each(["allowed", "owner-close", "run-close", "plugin-close"] as const)(
         assertInvocationCurrent() {
           assert(runCurrent, "run closed");
         },
-        ownerContinuation: continuation(() => ownerCurrent),
       },
     );
-    const { context } = registration;
-    expect(context).toMatchObject({
-      senderIsOwner: true,
-      requesterSenderId: "original-owner",
-      messageChannel: "discord",
-      agentAccountId: "original-account",
-    });
     const tool = registration.tool();
     const work = tool.execute("probe", {});
     void work.catch(() => {});
     await entered.promise;
-    ownerCurrent = mode !== "owner-close";
     runCurrent = mode !== "run-close";
     if (mode === "plugin-close") {
       markPluginRegistryRetired(registration.registry);

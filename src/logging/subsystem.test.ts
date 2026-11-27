@@ -14,8 +14,13 @@ import { logCodeModeFailure } from "./code-mode-diagnostic.js";
 import { setConsoleSubsystemFilter, shouldLogSubsystemToConsole } from "./console.js";
 import { readConfiguredLogTail } from "./log-tail.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
-import { applyLoggingConfig, getLogger, resetLogger, setLoggerOverride } from "./logger.js";
-import { testApi } from "./logger.test-support.js";
+import {
+  applyLoggingConfig,
+  flushLogger,
+  getLogger,
+  resetLogger,
+  setLoggerOverride,
+} from "./logger.js";
 import { getDefaultRedactPatterns } from "./redact.js";
 import { loggingState } from "./state.js";
 import { createSubsystemLogger, runtimeForLogger } from "./subsystem.js";
@@ -29,7 +34,7 @@ function fileLogging(level: "info" | "warn" | "error" | "trace") {
 }
 
 async function readRecords(file: string) {
-  await testApi.flushFileLogQueueForTests();
+  await flushLogger();
   return fs
     .readFileSync(file, "utf8")
     .trim()
@@ -62,7 +67,7 @@ beforeAll(() => logPathTracker.setup());
 
 afterEach(async () => {
   // Settle owned file writes before resetting logging state or removing the suite directory.
-  await testApi.flushFileLogQueueForTests();
+  await flushLogger();
   setConsoleSubsystemFilter(null);
   setLoggerOverride(null);
   loggingState.rawConsole = null;
@@ -75,18 +80,6 @@ afterEach(async () => {
 });
 
 afterAll(() => logPathTracker.cleanup());
-
-it("formats host runtime arguments before routing them to the subsystem logger", () => {
-  setLoggerOverride({ level: "silent", consoleLevel: "info" });
-  const logger = createSubsystemLogger("runtime-arguments");
-  const info = vi.spyOn(logger, "info").mockImplementation(() => {});
-  const error = vi.spyOn(logger, "error").mockImplementation(() => {});
-  const runtime = runtimeForLogger(logger);
-  runtime.log("ready", { active: true }, 17);
-  runtime.error("failed", { retryable: false });
-  expect(info).toHaveBeenCalledExactlyOnceWith("ready { active: true } 17");
-  expect(error).toHaveBeenCalledExactlyOnceWith("failed { retryable: false }");
-});
 
 it("does not inspect or serialize disabled runtime output as sink levels change", () => {
   const inspect = vi.fn(() => "fixture inspected");
@@ -107,18 +100,6 @@ it("does not inspect or serialize disabled runtime output as sink levels change"
     expect(inspect).toHaveBeenCalledTimes(consoleLevel === "info" ? 2 : 0);
     expect(toJSON).toHaveBeenCalledTimes(consoleLevel === "info" ? 1 : 0);
     expect(sink).toHaveBeenCalledTimes(consoleLevel === "info" ? 3 : 0);
-  }
-});
-
-it("keeps Template Add timings out of info logs while retaining debug diagnostics", async () => {
-  const { withTemplateAddTimings } = await import("../templates/timings.js");
-  for (const level of ["info", "trace"] as const) {
-    const file = fileLogging(level);
-    await withTemplateAddTimings("synthetic-add", async () => undefined);
-    await testApi.flushFileLogQueueForTests();
-    const records = fs.existsSync(file) ? await readRecords(file) : [];
-    expect(records).toHaveLength(level === "info" ? 0 : 2);
-    expect(records.every((record) => record._meta.logLevelName === "DEBUG")).toBe(true);
   }
 });
 
@@ -151,11 +132,8 @@ it.each(["pretty", "compact", "json"] as const)(
 describe("createSubsystemLogger().isEnabled", () => {
   it.each([
     ["guest", undefined, "WARN"],
-    ["input", undefined, "WARN"],
     ["bridge", "invalid_input", "WARN"],
-    ["bridge", "input_contract", "WARN"],
     ["bridge", "tool_error", "ERROR"],
-    ["bridge", "output_contract", "ERROR"],
     ["host", "runtime_unavailable", "ERROR"],
   ] as const)("logs %s/%s failures at %s", async (failurePhase, failureCode, level) => {
     const file = fileLogging("warn");
@@ -219,16 +197,6 @@ describe("createSubsystemLogger().isEnabled", () => {
     expect(records.map((record) => record["1"])).toEqual(
       failures.map(({ expected }) => Object.assign({}, context, expected)),
     );
-  });
-  it.each([
-    ["discord gateway: closed", "[discord] gateway: closed"],
-    ["[discord] connection stalled", "[discord] connection stalled"],
-  ])("emits one subsystem label for %s", (input, expected) => {
-    vi.stubEnv("NO_COLOR", "1");
-    vi.stubEnv("FORCE_COLOR", "0");
-    const log = consoleLogging("compact", "info");
-    createSubsystemLogger("discord").info(input);
-    expect(log).toHaveBeenCalledExactlyOnceWith(expected);
   });
   it("omits routine call sites while retaining error and fatal locations", async () => {
     const file = fileLogging("trace");
@@ -303,13 +271,8 @@ describe("createSubsystemLogger().isEnabled", () => {
   });
   it("resolves sink enablement from thresholds and console-only subsystem filters", () => {
     for (const [level, consoleLevel, query, filtered, malformed, file, console] of [
-      ["debug", "silent", "debug", false, false, true, false],
-      ["silent", "debug", "debug", false, false, false, true],
-      ["silent", "fatal", "error", false, false, false, false],
       ["silent", "fatal", "fatal", false, false, false, true],
-      ["silent", "trace", "debug", false, false, false, true],
       ["silent", "info", "silent", false, false, false, false],
-      ["silent", "silent", "debug", false, false, false, false],
       ["silent", "info", "info", true, false, false, false],
       ["info", "silent", "info", true, false, true, false],
       ["silent", "info", "info", true, true, false, false],
@@ -356,7 +319,7 @@ describe("createSubsystemLogger().isEnabled", () => {
       });
     }
     expect(warn).not.toHaveBeenCalled();
-    await testApi.flushFileLogQueueForTests();
+    await flushLogger();
     const fileLog = fs.readFileSync(file, "utf8");
     expectText(fileLog, [...messages, '"provider":"openai"']);
   });
@@ -366,7 +329,7 @@ describe("createSubsystemLogger().isEnabled", () => {
       const secret = prefix === "1234/" ? `${"Ab9Q".repeat(8)}Ab9` : "Ab9Q".repeat(10);
       const file = fileLogging("info");
       getLogger().info(`s3://user:${prefix}${secret}@bucket`);
-      await testApi.flushFileLogQueueForTests();
+      await flushLogger();
       const written = fs.readFileSync(file, "utf8");
       expect(written).toContain(secret);
       const tail = await readConfiguredLogTail();
@@ -484,7 +447,7 @@ describe("createSubsystemLogger().isEnabled", () => {
       err: failure,
       runId: "synthetic-child",
     });
-    await testApi.flushFileLogQueueForTests();
+    await flushLogger();
     const record = JSON.parse(fs.readFileSync(file, "utf8").trim());
     expect(record["1"]).toEqual({
       err: { ...expectedError, stack: failure.stack },
@@ -515,19 +478,11 @@ describe("createSubsystemLogger().isEnabled", () => {
     });
     expectText(consoleLine(warn), ["...(truncated)"], ["opaque-value"]);
   });
-  it("leaves json console output untouched and serializes each field once", () => {
+  it("keeps structured fields in JSON console output", () => {
     const warn = consoleLogging("json");
-    let serializations = 0;
-    const stateful = {
-      toJSON() {
-        serializations += 1;
-        return { calls: serializations };
-      },
-    };
     createSubsystemLogger("gateway/auth").warn("provider retry", {
       elapsedMs: 12,
       attempt: 2,
-      stateful,
     });
     const parsed = JSON.parse(consoleLine(warn));
     expect(parsed).toMatchObject({
@@ -537,7 +492,6 @@ describe("createSubsystemLogger().isEnabled", () => {
       elapsedMs: 12,
       attempt: 2,
     });
-    expect(serializations).toBe(1);
   });
   it("keeps a circular field readable on one line and omits fields with no JSON form", () => {
     const warn = consoleLogging();

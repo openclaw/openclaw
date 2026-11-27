@@ -27,10 +27,10 @@ import {
   TSDOWN_UNIFIED_CONFIG_GROUP,
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
 } from "../../scripts/lib/tsdown-config-groups.mts";
+import { describeInsufficientTsdownHeap } from "../../scripts/lib/tsdown-memory-admission.mts";
 import {
   cleanTsdownOutputRoots,
   createTsdownOutputScanner,
-  describeInsufficientTsdownHeap,
   listTsdownOutputRoots,
   prepareTsdownBuildExecution,
   pruneStaleRootChunkFiles,
@@ -791,7 +791,9 @@ describe("resolveTsdownBuildInvocation", () => {
           })),
         });
         expect(snapshot).toHaveBeenCalledWith({}, { includeMemoryDetails: true });
-        expect(error).toHaveBeenCalledWith(expect.stringContaining("full build needs 4352MB"));
+        expect(error).toHaveBeenCalledWith(
+          expect.stringContaining("full build needs 4352MB of Node heap. Runtime bundling alone"),
+        );
         expect(remove).not.toHaveBeenCalled();
         expect(compiler).not.toHaveBeenCalled();
         parentReadable = false;

@@ -20,6 +20,7 @@ import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -157,12 +158,7 @@ try {
   global.gc();
   await nextTurn();
   if (values.mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   }
   const hostLoad = loadavg();
   const cpuStart = process.threadCpuUsage();

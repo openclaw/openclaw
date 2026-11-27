@@ -33,7 +33,10 @@ import {
   resolveCodexPromptContinuity,
   selectCodexStaleBindingDelta,
 } from "./run-attempt-prompt-continuity.js";
-import { resolveCodexShiftedPromptRanges } from "./run-attempt-prompt-ranges.js";
+import {
+  bindCodexFrozenPrompt,
+  resolveCodexShiftedPromptRanges,
+} from "./run-attempt-prompt-ranges.js";
 import { prependCurrentInboundContext } from "./run-attempt-state.js";
 import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
 import type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle-types.js";
@@ -386,13 +389,12 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       },
       continuity: (reportedContinuity = resolveContinuity()),
     });
+  const applyFrozenPrompt = bindCodexFrozenPrompt(params);
   const decorateCodexTurnPromptText = (
-    promptBuildResult: {
-      prompt: string;
-      promptInputRange?: { start: number; end: number };
-    },
+    promptBuild: Parameters<typeof applyFrozenPrompt>[1],
     includeWorkspaceReferences = true,
   ) => {
+    const promptBuildResult = applyFrozenPrompt(promptState.promptText, promptBuild);
     const turnPromptText = prependCodexOpenClawPromptContext(
       promptBuildResult.prompt,
       buildOpenClawPromptContext(includeWorkspaceReferences),
@@ -403,10 +405,8 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       },
     );
     const projectedRanges = resolveCodexShiftedPromptRanges({
-      prompt: promptBuildResult.prompt,
-      promptInputRange: promptBuildResult.promptInputRange,
+      ...promptBuildResult,
       turnPromptText,
-      promptText: promptState.promptText,
       promptContextRange: promptState.promptContextRange,
     });
     const preservedRange =
@@ -460,21 +460,21 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   let threadDeveloperInstructions: string | undefined;
   let baseInDeveloperCarrier = false;
   // Observability view of OpenClaw-managed developer instructions; not the complete
-  // native/provider prompt. Reuse registered relay text so diagnostics include every
-  // relay component. Hook context is already in that text, so only native policy
-  // precedes it. These projections must never feed native thread requests.
+  // native/provider prompt. Stable context is on the thread either way; relay text
+  // already holds hook context, so only native policy precedes it. These projections
+  // must never feed native thread requests.
   const buildRenderedCodexDeveloperInstructions = () =>
     joinPresentSections(
       renderCodexThreadPolicy(
         baseInDeveloperCarrier ? reportedOpenClawBaseInstructions : undefined,
         threadDeveloperInstructions ??
-          (inferenceInstructions !== undefined
-            ? (turnState.promptBuild.threadDeveloperInstructions ??
-              turnState.promptBuild.developerInstructions)
-            : joinPresentSections(
-                turnState.promptBuild.developerInstructions,
-                refreshableInstructions,
-              )),
+          joinPresentSections(
+            inferenceInstructions !== undefined
+              ? (turnState.promptBuild.threadDeveloperInstructions ??
+                  turnState.promptBuild.developerInstructions)
+              : turnState.promptBuild.developerInstructions,
+            refreshableInstructions,
+          ),
       ),
       inferenceInstructions ?? collaboration.developer_instructions ?? undefined,
     );

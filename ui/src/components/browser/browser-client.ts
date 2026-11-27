@@ -9,6 +9,7 @@ import { t } from "../../i18n/index.ts";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import { readBlobAsDataUrl } from "../../lib/blob-data-url.ts";
 import { browserInspectScript } from "./browser-inspect-script.ts";
+import { browserRouteParams, browserSessionTabScope } from "./browser-session-tab-list.ts";
 import {
   readBrowserTabTarget,
   type BrowserRoute,
@@ -140,12 +141,6 @@ function withoutBrowserTarget(value: unknown): Record<string, unknown> {
   return result;
 }
 
-export function browserRequestReferencedTabs(
-  tabs: readonly BrowserTabTarget[],
-): BrowserTabTarget[] {
-  return tabs.slice(-64);
-}
-
 /** Bind every browser operation to one route and one live panel scope. */
 export function bindBrowserRequestClient(
   client: BrowserRequestClient,
@@ -183,22 +178,16 @@ export function bindBrowserRequestClient(
         : route || dashboard || session
           ? {
               ...envelope,
-              ...(route
-                ? {
-                    target: route.target,
-                    ...(route.target === "node" ? { node: route.node } : {}),
-                    query: { ...asRecord(envelope?.query), profile: route.profile },
-                  }
-                : {}),
+              ...browserRouteParams(route, asRecord(envelope?.query)),
               ...(dashboard ? { dashboard } : {}),
               ...(session
                 ? {
-                    tabScope: {
-                      sessionKey: session.sessionKey,
-                      ...(envelope?.method === "GET" && envelope.path === "/tabs"
-                        ? { referencedTabs: browserRequestReferencedTabs(session.referencedTabs) }
-                        : {}),
-                    },
+                    tabScope: browserSessionTabScope(
+                      session.sessionKey,
+                      envelope?.method === "GET" && envelope.path === "/tabs"
+                        ? session.referencedTabs
+                        : undefined,
+                    ),
                   }
                 : {}),
             }
@@ -257,8 +246,9 @@ function normalizeTab(value: unknown): BrowserPanelTab | null {
   };
 }
 
-export async function listBrowserTabs(client: BrowserRequestClient) {
-  const result = asRecord(await browserRequest(client, { method: "GET", path: "/tabs" }));
+export async function listBrowserTabs(client: BrowserRequestClient, prepared?: Promise<unknown>) {
+  const request = () => browserRequest(client, { method: "GET", path: "/tabs" });
+  const result = asRecord(await (prepared ? prepared.catch(request) : request()));
   const tabs = Array.isArray(result?.tabs)
     ? result.tabs.flatMap((tab) => normalizeTab(tab) ?? [])
     : [];
@@ -373,13 +363,24 @@ export async function requestBrowserScreencast(
   return wsPath;
 }
 
-export function isBrowserScreencastUnsupportedError(error: unknown): boolean {
+function hasBrowserErrorCode(error: unknown, code: string): boolean {
   const record = asRecord(error);
   const details = asRecord(record?.details);
   return (
-    details?.code === "SCREENCAST_UNSUPPORTED" ||
-    asRecord(details?.body)?.code === "SCREENCAST_UNSUPPORTED" ||
-    asRecord(record?.body)?.code === "SCREENCAST_UNSUPPORTED"
+    details?.code === code ||
+    asRecord(details?.body)?.code === code ||
+    asRecord(record?.body)?.code === code
+  );
+}
+
+export function isBrowserCapabilityUnsupportedError(error: unknown): boolean {
+  return hasBrowserErrorCode(error, "BROWSER_CAPABILITY_UNSUPPORTED");
+}
+
+export function isBrowserScreencastUnsupportedError(error: unknown): boolean {
+  return (
+    hasBrowserErrorCode(error, "SCREENCAST_UNSUPPORTED") ||
+    isBrowserCapabilityUnsupportedError(error)
   );
 }
 

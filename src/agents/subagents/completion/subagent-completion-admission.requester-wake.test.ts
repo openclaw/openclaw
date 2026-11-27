@@ -59,7 +59,6 @@ describe("persisted subagent requester wakes", () => {
     settleRequesterCompletionBatch({
       entries: [input.subagent],
       outcome,
-      databaseOptions: { database: db.value },
     });
   const expectNoRejection = (driver: ReturnType<typeof requesterWakeDriver>) =>
     expect(driver.warn).not.toHaveBeenCalledWith(
@@ -87,9 +86,9 @@ describe("persisted subagent requester wakes", () => {
     const input = expectDefined(batch[2], "required child");
     optional.subagent.expectsCompletionMessage = false;
     optional.subagent.delivery = { status: "not_required" };
-    optional.subagent.requesterSettleWake!.retireAfterSettle = true;
+    optional.subagent.retireAfterSettle = true;
     delivered.subagent.delivery = { status: "delivered" };
-    input.subagent.requesterSettleWake!.retireAfterSettle = true;
+    input.subagent.retireAfterSettle = true;
     input.subagent.cleanup = "delete";
     input.subagent.execution.outcome = { status: "error", error: "Gateway stopped" };
     for (const member of batch) {
@@ -120,7 +119,6 @@ describe("persisted subagent requester wakes", () => {
       settleRequesterCompletionBatch({
         entries: batch.map(({ subagent }) => subagent),
         outcome,
-        databaseOptions: { database: db.value },
       });
     await expect(settle()).rejects.toThrow("synthetic notice write failure");
     expect(stored(input)?.requesterSettleWake).toBeDefined();
@@ -145,7 +143,7 @@ describe("persisted subagent requester wakes", () => {
     const input = armRequesterWake(records());
     input.subagent.expectsCompletionMessage = false;
     input.subagent.delivery = { status: "not_required" };
-    input.subagent.requesterSettleWake!.retireAfterSettle = true;
+    input.subagent.retireAfterSettle = true;
     persistOwner(input);
     let committed: RequesterWakeCommittedWrite | undefined;
     await expect(
@@ -365,7 +363,7 @@ describe("persisted subagent requester wakes", () => {
       const inputs = wakeBatch("run", "second");
       for (const input of inputs) {
         if (cut === "retirement") {
-          input.subagent.requesterSettleWake!.retireAfterSettle = true;
+          input.subagent.retireAfterSettle = true;
         }
         persistOwner(input);
       }
@@ -437,7 +435,7 @@ describe("persisted subagent requester wakes", () => {
     "records the settled completion outcome before retention or retirement (retire=%s)",
     async (retire) => {
       const input = armRequesterWake(records());
-      input.subagent.requesterSettleWake!.retireAfterSettle = retire;
+      input.subagent.retireAfterSettle = retire ? true : undefined;
       const receipt = input.subagent.delivery!;
       receipt.payload = loadPendingFinalDeliveryPayload(input.subagent);
       receipt.attemptCount = 2;
@@ -494,7 +492,7 @@ describe("persisted subagent requester wakes", () => {
       const [first, second, third] = [inputs[0]!, inputs[1]!, inputs[2]!];
       for (const input of inputs) {
         if (input === second && change === "blocked retirement") {
-          input.subagent.requesterSettleWake!.retireAfterSettle = true;
+          input.subagent.retireAfterSettle = true;
         }
         input.subagent.requesterSettleWake!.status = "dispatching";
         input.subagent.requesterSettleWake!.attemptCount = 1;
@@ -551,7 +549,6 @@ describe("persisted subagent requester wakes", () => {
           expect(
             await settleSubagentCompletionInHistory({
               subagent: second.subagent,
-              databaseOptions: { database: db.value },
             }),
           ).toBe(true);
           expect(currentRun(second).requesterSettleWake?.rearmGeneration).toBe(1);
@@ -657,7 +654,7 @@ describe("persisted subagent requester wakes", () => {
           cleanupCompletedAt: undefined,
         });
         input.subagent.execution.outcome = undefined;
-        input.subagent.requesterSettleWake!.retireAfterSettle = true;
+        input.subagent.retireAfterSettle = true;
       }
       persistOwner(input);
       const before = structuredClone(input.subagent);

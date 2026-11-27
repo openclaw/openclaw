@@ -48,7 +48,7 @@ async function runDatabasePreflight(
 async function inspectDatabaseOwnership(databasePath: string) {
   const [{ readConfigSnapshotBeforeEngineSelection }, errors, { resolveDatabaseFamilyEngines }] =
     await Promise.all([
-      import("../../commands/config-preflight-snapshot.js"),
+      import("../../config/io.factory.js"),
       import("../../config/io.invalid-config.js"),
       import("../../infra/database-engine/registry.js"),
     ]);

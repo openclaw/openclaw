@@ -101,11 +101,18 @@ async function inspectRequest(request: InspectionRequest): Promise<void> {
       const inspected = withDatabaseEngineSelection(request.databaseEngineSelection, () =>
         withEngineStoreAdmission(() =>
           withFreshOpenClawAgentDatabaseReadOnly(
-            ({ db }) => ({
-              version: readAgentDatabaseSchemaVersion(db),
-              integrityGateOutcome: "healthy" as const,
-              agentSchemaMeta: readExistingAgentSchemaMeta(db),
-            }),
+            ({ db }) => {
+              const metadata = readExistingAgentSchemaMeta(db);
+              const version = readAgentDatabaseSchemaVersion(db);
+              const minReader =
+                metadata?.minReader ?? Math.max(metadata?.schemaVersion ?? 0, version);
+              return {
+                version,
+                ...(minReader !== version ? { minReader } : {}),
+                integrityGateOutcome: "healthy" as const,
+                agentSchemaMeta: metadata,
+              };
+            },
             { agentId, path: input.pathname, env: input.env },
           ),
         ),

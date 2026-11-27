@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { isChildProcessTreeAlive } from "../process/child-process-tree.js";
 import { executeSqliteQuerySync } from "./kysely-sync.js";
+import { managedHandoffBootSchema } from "./update-managed-service-handoff-boot-schema.js";
 import {
   predatesCurrentBoot,
   type createManagedHandoffBootIdentityReader,
@@ -41,7 +42,6 @@ import {
 } from "./update-managed-service-handoff-rows.js";
 import type { createManagedHandoffLeaseRows } from "./update-managed-service-handoff-rows.js";
 import {
-  managedHandoffBootSchema,
   parseManagedHandoffLeasePayload,
   type ManagedHandoffLeaseAction,
 } from "./update-managed-service-handoff-schema.js";

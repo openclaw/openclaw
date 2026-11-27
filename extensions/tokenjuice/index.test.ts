@@ -36,9 +36,10 @@ function toolEvent(toolName: string, details: unknown, text = "file contents\n")
   };
 }
 async function applyBashResult(details: unknown) {
-  const result = await createTokenjuiceAgentToolResultMiddleware()(toolEvent("bash", details), {
-    runtime: "openclaw",
-  });
+  const result = await createTokenjuiceAgentToolResultMiddleware({ warn: vi.fn() })(
+    toolEvent("bash", details),
+    { runtime: "openclaw" },
+  );
   return { received: toolResultHandler.mock.calls[0]?.[0], result };
 }
 
@@ -47,10 +48,11 @@ describe("tokenjuice plugin", () => {
     toolResultHandler.mockReset().mockResolvedValue(undefined);
     vi.mocked(clearRuleCache).mockClear();
   });
-  it("releases rule cache capacity even when concurrent reducers reject", async () => {
-    toolResultHandler.mockRejectedValue(new Error("synthetic reducer failure"));
-    const middleware = createTokenjuiceAgentToolResultMiddleware();
-    const settled = await Promise.allSettled(
+  it("falls back and releases rule cache capacity when concurrent reducers reject", async () => {
+    toolResultHandler.mockRejectedValue(new Error("private command, cwd and result"));
+    const warn = vi.fn();
+    const middleware = createTokenjuiceAgentToolResultMiddleware({ warn });
+    const results = await Promise.all(
       Array.from(
         { length: 128 },
         async (_, worktree) =>
@@ -63,8 +65,32 @@ describe("tokenjuice plugin", () => {
           ),
       ),
     );
-    expect(settled.every((result) => result.status === "rejected")).toBe(true);
+    expect(results).toEqual(Array.from({ length: 128 }));
     expect(clearRuleCache).toHaveBeenCalled();
+    expect(warn.mock.calls).toEqual([
+      ["Tokenjuice could not compact shell output; keeping the original result."],
+    ]);
+  });
+
+  it("keeps the original result if cache cleanup fails after a successful reduction", async () => {
+    vi.mocked(clearRuleCache).mockImplementationOnce(() => {
+      throw new Error("synthetic cleanup failure");
+    });
+    const warn = vi.fn();
+    const middleware = createTokenjuiceAgentToolResultMiddleware({ warn });
+    const context = { runtime: "openclaw" as const };
+    toolResultHandler.mockResolvedValue({ content: compacted });
+    const outcomes = [];
+    for (let i = 0; i < 128; i++) {
+      const event = toolEvent("exec", completed);
+      event.args.workdir = "/synthetic-tokenjuice/cleanup-" + i;
+      outcomes.push(await middleware(event, context));
+    }
+    expect(outcomes.filter((outcome) => outcome === undefined)).toEqual([undefined]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(await middleware(toolEvent("exec", completed), context)).toMatchObject({
+      result: { content: compacted },
+    });
   });
   it("registers all runtimes and compacts oversized exec results within the details limit", async () => {
     const captured = capturePluginRegistration({

@@ -11,6 +11,7 @@ import { Session, type HeapProfiler } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import { buildSubagentRunReadIndexFromRuns } from "../../src/agents/subagents/registry/subagent-registry-queries.ts";
 import type { SubagentRunReadRecord } from "../../src/agents/subagents/registry/subagent-registry-read.types.ts";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 const now = Date.UTC(2026, 9, 26);
 const roots = Array.from({ length: 2000 }, (_, i) => `agent:main:parent-${i}`);
 const runs = new Map<string, SubagentRunReadRecord>();
@@ -50,12 +51,7 @@ const inspector = new Session();
 assert(global.gc);
 global.gc();
 if (mode === "allocation") {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 32768,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 32768);
 }
 const load = loadavg();
 const cpuBefore = process.threadCpuUsage();

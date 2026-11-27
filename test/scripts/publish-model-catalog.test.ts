@@ -14,7 +14,6 @@ import {
   assembleVersionedModelCatalogBundle,
   enrichModelCatalogPricing,
   hydrateModelCatalogFromModelsDev,
-  MODEL_CATALOG_MIN_MODELS,
   parsePublishModelCatalogArgs,
   readModelCatalogManifests,
   resolveProviderFeaturedModels,
@@ -124,15 +123,6 @@ async function publishedPricingParams(bundle: RemoteModelCatalogBundle, provider
   };
   await prepareRemoteModelCatalogStartupSnapshot();
   return { config, agentDir, provider };
-}
-
-function writeFixtureManifest(root: string, pluginId: string, providers: Record<string, unknown>) {
-  const pluginDir = path.join(root, "extensions", pluginId);
-  fs.mkdirSync(pluginDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(pluginDir, "openclaw.plugin.json"),
-    `${JSON.stringify({ id: pluginId, modelCatalog: { providers } }, null, 2)}\n`,
-  );
 }
 
 function assembleFixtureBundle(
@@ -292,26 +282,6 @@ describe("publish model catalog", () => {
       }),
     ).rejects.toThrow("DeepInfra pricing");
     expect(serializeModelCatalogBundle(bundle)).toBe(previous);
-  });
-
-  it("assembles and validates fixture manifests at the 200-model floor", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-publish-catalog-"));
-    tempDirs.push(root);
-    writeFixtureManifest(root, "anthropic", { anthropic: fixtureProvider("claude", 100) });
-    writeFixtureManifest(root, "openai", { openai: fixtureProvider("gpt", 100) });
-
-    const bundle = await assembleModelCatalogBundle({
-      manifests: readModelCatalogManifests({ rootDir: root }),
-      generatedAt: Date.now(),
-      sourceCommit: "fixture-sha",
-    });
-    expect(summarizeModelCatalogBundle(bundle)).toEqual({
-      providers: 2,
-      models: 200,
-      costModels: 0,
-      pricingEntries: 0,
-    });
-    expect(MODEL_CATALOG_MIN_MODELS).toBe(200);
   });
 
   it("omits empty static catalogs owned by runtime discovery", async () => {

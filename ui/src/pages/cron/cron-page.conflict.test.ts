@@ -90,7 +90,11 @@ it.each(["save", "toggle"] as const)(
     expect(dom.text(page, ".cron-detail-title")).toContain(authoritativeJob.name);
     // The reloaded definition stays in the settings for review.
     expect(page.querySelector('.cron-page[data-view="edit"]')).not.toBeNull();
-    expect(dom.text(page, ".callout.danger")).toContain("review it before retrying");
+    expect(dom.text(page, ".callout.danger")).toContain(
+      operation === "save"
+        ? "Review the latest settings shown here, then reapply your edits."
+        : "review it before retrying",
+    );
     expect(updates).toBe(1);
     await harness.waitForCronPage(() => expect(page.cron.cronBusy).toBe(false));
     dom.click(page, action);

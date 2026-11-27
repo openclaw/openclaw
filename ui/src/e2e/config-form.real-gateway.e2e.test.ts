@@ -158,15 +158,21 @@ suite.define(() => {
         await page.locator(".settings-disclosure > summary").click();
         await page.getByRole("button", { name: "Edit: proof", exact: true }).click();
         const lifetime = page.getByLabel("Max lifetime", { exact: true });
+        const input = await lifetime.elementHandle();
         await lifetime.fill("9h");
         await waitForSettledFormControls(page, [{ locator: lifetime, value: "9h" }]);
-        const input = await lifetime.elementHandle();
+        expect(await lifetime.evaluate((element, original) => element === original, input)).toBe(
+          true,
+        );
         await expect.poll(() => catalogReplies.length).toBeGreaterThan(0);
         const save = page.getByRole("button", { name: "Save", exact: true });
         await save.click();
         await expect.poll(() => Boolean(release)).toBe(true);
         expect(patches).toBe(1);
         expect(await lifetime.isDisabled()).toBe(true);
+        expect(await lifetime.evaluate((element, original) => element === original, input)).toBe(
+          true,
+        );
         releaseCatalog();
         await page
           .locator(".settings-row")

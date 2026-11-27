@@ -11,7 +11,7 @@ import { hasUncommittedSqliteWrites } from "./sqlite-schema-facts.js";
 
 export type SqliteIntegrityCheckOptions = {
   check?: "quick" | "full";
-  /** Constraint-only migration admission; never a full database verification. */
+  /** Agent version step: catalog and declared tables only; never a full database verification. */
   schemaOnly?: true;
   /** Tables rewritten or re-indexed by the migration; absent tables may be created by it. */
   tables?: readonly string[];
@@ -90,7 +90,8 @@ export function consumeSqliteMaintenanceIntegrity(
     (suffix) => (fs.statSync(`${pathname}${suffix}`, { throwIfNoEntry: false })?.size ?? 0) > 0,
   );
   return (
-    receipt.schemaOnly === (options.schemaOnly === true) &&
+    // A whole-file QUICK covers a schema-only step; a schema-only proof never covers more.
+    (!receipt.schemaOnly || options.schemaOnly === true) &&
     source !== undefined &&
     sameFileMutationFingerprint(receipt.source, source) &&
     !hasRecoveryData &&

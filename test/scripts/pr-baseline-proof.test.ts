@@ -316,7 +316,280 @@ const boundFixture = reuseBaselineFixture((root) => {
   };
 });
 
+function advanceQualification(
+  f: ReturnType<typeof boundFixture>,
+  advanced: string,
+  advanceTracking = false,
+) {
+  const workflow = f.sourceReview.correction.proofPublication.workflowSource;
+  const marker = f.local("qualification-advanced");
+  const selectionMarker = f.local("selection-advanced");
+  if (advanceTracking) {
+    // Advance shared tracking at the descriptor handoff; locked qualification
+    // below independently fetches the remote main and authenticates its closure.
+    writeFileSync(
+      join(f.root, "bin/node"),
+      `#!/bin/sh
+set -e
+case " $* " in
+  *' workflow-context-read '*)
+    if [ ! -f '${selectionMarker}' ]; then
+      git -C '${f.repo}' update-ref refs/remotes/origin/main '${advanced}' '${workflow}'
+      printf '%s' '${advanced}' > '${selectionMarker}'
+    fi ;;
+esac
+exec '${process.execPath}' "$@"
+`,
+      { mode: 0o700 },
+    );
+  }
+  const proxy = f.local("advance-main-git.cjs");
+  writeFileSync(
+    proxy,
+    `#!/usr/bin/env node
+const fs = require('node:fs'), cp = require('node:child_process');
+const args = process.argv.slice(2);
+if (args.includes('fetch') && args.some(arg => arg.includes(':refs/openclaw/pr-workflow-qualification/42/')) && !fs.existsSync(${JSON.stringify(marker)})) {
+  cp.execFileSync('git', ['-C', ${JSON.stringify(f.repo)}, 'update-ref', 'refs/heads/main', ${JSON.stringify(advanced)}, ${JSON.stringify(workflow)}]);
+  fs.writeFileSync(${JSON.stringify(marker)}, ${JSON.stringify(advanced)});
+}
+const result = cp.spawnSync(${JSON.stringify(f.extra.OPENCLAW_PR_GIT)}, args, {stdio:'inherit'});
+if (result.error) throw result.error;
+if (result.signal) process.kill(process.pid, result.signal);
+else process.exit(result.status ?? 1);
+`,
+    { mode: 0o755 },
+  );
+  return { marker, selectionMarker, extra: { OPENCLAW_PR_GIT: proxy } };
+}
+
+function workflowAdmission(
+  f: ReturnType<typeof boundFixture>,
+  phase: string,
+  main: string,
+  admission = "proof-baseline",
+) {
+  const wrapper = readFileSync("scripts/pr", "utf8");
+  const gitOwner = wrapper.slice(
+    wrapper.indexOf("pr_batch_wrapper_git() {"),
+    wrapper.indexOf("\nEOF_WRAPPER_GIT\n}") + "\nEOF_WRAPPER_GIT\n}".length,
+  );
+  const script = f.local("workflow-admission.sh");
+  writeFileSync(
+    script,
+    `#!/bin/bash
+set -e
+${gitOwner}
+if [ "$2" != read ]; then git -C "$1" update-ref refs/remotes/origin/main "$4"; fi
+if [ "$2" = admit ]; then
+  pr_batch_wrapper_git workflow-admit "$1" 42 "$3" "$5" refs/remotes/origin/main "" "" "$6"
+else
+  pr_batch_wrapper_git workflow-context-write "$1" 42 "$3" "$5" "$$" 0 "" "" "$6" > "$7"
+  if [ "$2" = read ]; then
+    chmod 400 "$7"
+    exec 8< "$7"
+    rm "$7"
+    export OPENCLAW_PR_WORKFLOW_CONTEXT=$(node -e 'const s=require("node:fs").fstatSync(8); process.stdout.write(s.dev+":"+s.ino)')
+    git -C "$1" update-ref refs/remotes/origin/main "$4"
+    pr_batch_wrapper_git workflow-context-read "$1" 42 "$$" "$PPID" "" "" "$6"
+  fi
+fi
+`,
+  );
+  return spawnSync(
+    process.platform === "darwin" ? "/bin/bash" : "bash",
+    [script, f.repo, phase, f.baseline, main, f.binding, admission, f.local("selection-context")],
+    { env: { ...f.env, GIT_EXEC: "git" }, encoding: "utf8" },
+  );
+}
+
+describePosix("proof workflow selection across main advancement", () => {
+  it.each(["write", "read", "admit"])("authenticates the selected workflow during %s", (phase) => {
+    for (const changed of [false, true]) {
+      const f = boundFixture();
+      if (changed) {
+        const path = join(f.repo, "scripts/lib/record-shared.mjs");
+        writeFileSync(path, readFileSync(path, "utf8") + "\n");
+        f.git(f.repo, "add", "scripts/lib/record-shared.mjs");
+      }
+      const main = f.git(
+        f.repo,
+        "commit-tree",
+        "-S",
+        f.git(f.repo, "write-tree"),
+        "-p",
+        f.baseline,
+        "-m",
+        "test: advanced workflow checkpoint",
+      );
+      f.git(f.repo, "reset", "--hard", f.baseline);
+      const result = workflowAdmission(f, phase, main);
+      // Reads authenticate the held selection; the fresh locked checkpoint
+      // owns closure comparison. Shared tracking can advance between them.
+      const rejectsDrift = changed && phase !== "read";
+      expect(result.status, result.stdout + result.stderr).toBe(rejectsDrift ? 1 : 0);
+      if (rejectsDrift) {
+        expect(result.stderr).toContain("Proof baseline workflow differs");
+      }
+      expect(f.git(f.repo, "rev-parse", "refs/openclaw/pr-workflow-bindings/42")).toBe(f.binding);
+    }
+  });
+
+  it.each(["1", "review-recovery"])(
+    "keeps %s admission exact-current even when the wrapper closure is identical",
+    (admission) => {
+      const f = boundFixture();
+      const main = f.git(
+        f.repo,
+        "commit-tree",
+        "-S",
+        f.git(f.repo, "write-tree"),
+        "-p",
+        f.baseline,
+        "-m",
+        "test: advanced strict checkpoint",
+      );
+      const result = workflowAdmission(f, "admit", main, admission);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("requires official current main");
+      expect(f.git(f.repo, "rev-parse", "refs/openclaw/pr-workflow-bindings/42")).toBe(f.binding);
+    },
+  );
+
+  it.each(["foreign origin", "symbolic anchor", "stale binding"])(
+    "refuses %s with an otherwise equivalent proof workflow",
+    (fault) => {
+      const f = boundFixture();
+      const main = f.git(
+        f.repo,
+        "commit-tree",
+        "-S",
+        f.git(f.repo, "write-tree"),
+        "-p",
+        f.baseline,
+        "-m",
+        "test: advanced guarded checkpoint",
+      );
+      if (fault === "foreign origin") {
+        f.git(f.repo, "remote", "set-url", "origin", f.repo);
+      } else if (fault === "symbolic anchor") {
+        f.git(f.repo, "symbolic-ref", "refs/remotes/origin/main", "refs/heads/main");
+      } else {
+        const source = JSON.parse(f.git(f.repo, "show", f.binding + ":binding.json")).source;
+        const binding = f.git(
+          f.repo,
+          "commit-tree",
+          "--no-gpg-sign",
+          f.git(f.repo, "rev-parse", f.binding + "^{tree}"),
+          "-p",
+          source,
+          "-m",
+          "test: replaced retained binding",
+        );
+        f.git(f.repo, "update-ref", "refs/openclaw/pr-workflow-bindings/42", binding, f.binding);
+      }
+      const before = nativeState(f);
+      const result = workflowAdmission(f, "admit", main);
+      expect(result.status, result.stdout + result.stderr).toBe(1);
+      expect(result.stderr).toContain(
+        fault === "foreign origin"
+          ? "requires official current main"
+          : fault === "symbolic anchor"
+            ? "Refusing symbolic"
+            : "Workflow binding changed",
+      );
+      expect(nativeState(f)).toEqual(before);
+    },
+  );
+});
+
 describePosix("proof baseline with retained predecessor authority", () => {
+  it("retains the reviewed workflow when main advances during handoff and qualification", () => {
+    const f = boundFixture();
+    const workflow = f.sourceReview.correction.proofPublication.workflowSource;
+    const advanced = f.advanceMain("unrelated qualification update");
+    f.git(f.repo, "reset", "--hard", workflow);
+    const { marker, selectionMarker, extra } = advanceQualification(f, advanced, true);
+    const before = nativeState(f);
+    const result = f.run(command, f.args, extra);
+    nativeTrace(f, "allowed-equivalent-new-main", before, result, 0);
+    expect(readFileSync(selectionMarker, "utf8")).toBe(advanced);
+    expect(existsSync(marker), result.stdout + result.stderr).toBe(true);
+    expect(readFileSync(marker, "utf8")).toBe(advanced);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    const record = JSON.parse(f.readLocal("prepare-baseline.json").toString());
+    expect(record).toMatchObject({
+      capturedMain: advanced,
+      baselineHead: f.baseline,
+      proofSource: { workflowSource: workflow, workflowBinding: f.binding },
+    });
+    expect(f.git(f.repo, "rev-parse", "refs/openclaw/pr-workflow-bindings/42")).toBe(f.binding);
+    f.expectSnapshot(f.original);
+    expect(JSON.parse(f.readLocal("correction-review.json").toString()).recommendation).toBe(
+      "NEEDS WORK",
+    );
+  });
+
+  it.each(["content", "mode", "removal", "inventory", "nonancestor"])(
+    "refuses %s drift at qualification without replacing source authority",
+    (fault) => {
+      const f = boundFixture();
+      const workflow = f.sourceReview.correction.proofPublication.workflowSource;
+      // This eager wrapper component lives outside scripts/pr-lib, so an
+      // intersection or wrapper-directory-only comparison would miss its drift.
+      const component = "scripts/lib/record-shared.mjs";
+      if (fault === "content") {
+        writeFileSync(
+          join(f.repo, component),
+          readFileSync(join(f.repo, component), "utf8") + "\n",
+        );
+      } else if (fault === "removal") {
+        f.git(f.repo, "rm", component);
+      } else if (fault === "inventory") {
+        writeFileSync(join(f.repo, "docs/new-component.md"), "new wrapper input\n");
+        const path = join(f.repo, "scripts/pr-lib/wrapper-components.txt");
+        writeFileSync(path, readFileSync(path, "utf8") + "docs/new-component.md\n");
+      }
+      f.git(f.repo, "add", "--all");
+      if (fault === "mode") {
+        f.git(f.repo, "update-index", "--chmod=+x", component);
+      }
+      const advanced = f.git(
+        f.repo,
+        "commit-tree",
+        "-S",
+        f.git(f.repo, "write-tree"),
+        "-p",
+        fault === "nonancestor" ? f.meta.baseRefOid : workflow,
+        "-m",
+        "test: qualification drift",
+      );
+      f.git(f.repo, "reset", "--hard", workflow);
+      const { marker, selectionMarker, extra } = advanceQualification(
+        f,
+        advanced,
+        fault === "content",
+      );
+      const before = nativeState(f);
+      const result = f.run(command, f.args, extra);
+      if (fault === "content") {
+        expect(readFileSync(selectionMarker, "utf8")).toBe(advanced);
+      }
+      expect(existsSync(marker), result.stdout + result.stderr).toBe(true);
+      expect(readFileSync(marker, "utf8")).toBe(advanced);
+      expect(result.status, result.stdout + result.stderr).not.toBe(0);
+      expect(result.stderr).toContain(
+        fault === "nonancestor"
+          ? "Git read failed"
+          : fault === "mode"
+            ? "Proof baseline workflow differs"
+            : "Current main workflow changed",
+      );
+      expect(nativeState(f)).toEqual(before);
+      f.expectSnapshot(f.original);
+    },
+  );
+
   it("admits a published incoming-source baseline without approving its pending proof", () => {
     const f = boundFixture();
     const receipt = f.readLocal("prepare-push-result.env");
@@ -1067,6 +1340,7 @@ describePosix("proof baseline from the retained publication lifecycle", () => {
   });
 
   it.each([
+    "blocker",
     "missing-proof",
     "wrong-version",
     "wrong-purpose",
@@ -1086,7 +1360,9 @@ describePosix("proof baseline from the retained publication lifecycle", () => {
       args = args.map((item, i) => (args[i - 1] === option ? value : item));
     };
     const review = structuredClone(f.review);
-    if (fault === "wrong-review") {
+    if (fault === "blocker") {
+      review.findings[0]!.severity = "BLOCKER";
+    } else if (fault === "wrong-review") {
       f.writeLocal("source-review.json", JSON.stringify(review) + "\n");
     } else if (fault === "missing-proof") {
       Reflect.deleteProperty(review.correction, "proofPublication");
@@ -1157,17 +1433,19 @@ describePosix("proof baseline from the retained publication lifecycle", () => {
     expect(result.status, result.stdout + result.stderr).not.toBe(0);
     const error = result.stdout + result.stderr;
     const expected =
-      fault === "wrong-review"
-        ? /Selected proof source review changed/u
-        : fault === "wrong-proof-lease"
-          ? /Proof source hosted lease changed/u
-          : fault === "private-baseline"
-            ? /merge-base --is-ancestor/u
-            : fault.startsWith("unsigned")
-              ? /verify-commit/u
-              : fault === "stale-lease"
-                ? /PR head changed|PR identity changed/u
-                : /Proof publication requires|workflow continuation changed|does not exist/u;
+      fault === "blocker"
+        ? /BLOCKER findings remain blocking/u
+        : fault === "wrong-review"
+          ? /Selected proof source review changed/u
+          : fault === "wrong-proof-lease"
+            ? /Proof source hosted lease changed/u
+            : fault === "private-baseline"
+              ? /merge-base --is-ancestor/u
+              : fault.startsWith("unsigned")
+                ? /verify-commit/u
+                : fault === "stale-lease"
+                  ? /PR head changed|PR identity changed/u
+                  : /Proof publication requires|workflow continuation changed|does not exist/u;
     expect(error).toMatch(expected);
     f.expectSnapshot(f.before);
     expect(existsSync(f.local("prepare-baseline.json"))).toBe(false);

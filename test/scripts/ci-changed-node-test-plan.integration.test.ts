@@ -10,11 +10,11 @@ import {
   createNodeTestShardBundles,
   resolveUiE2ePrTestSelection,
 } from "../../scripts/lib/ci-node-test-plan.mts";
+import { PR_PROTECTED_RUNTIME_TEST_FILES } from "../../scripts/lib/ci-proof-test-inventory.mts";
 import {
   isReleaseOnlyRuntimeTestFile,
   listPrExemptRuntimeTestFiles,
-  PR_PROTECTED_RUNTIME_TEST_FILES,
-} from "../../scripts/lib/ci-proof-test-inventory.mts";
+} from "../../scripts/lib/ci-test-tier-policy.mts";
 import { resolveAffectedTestsFromImportGraph } from "../../scripts/test-projects.test-support.mts";
 import { fallbackGroups, selectedFiles } from "./ci-changed-node-test-plan.test-support.js";
 
@@ -322,4 +322,26 @@ it("selects the exec completion tests when the owed-result owner changes", () =>
   ]) {
     expect(selected.has(test), test).toBe(true);
   }
+});
+
+it("keeps reset-fork coverage when the parent-fork transcript owner changes", () => {
+  const source = "src/config/sessions/session-accessor.sqlite-parent-fork.ts";
+  const ownerTest = "src/config/sessions/session-accessor.parent-fork.test.ts";
+  const resetFork = "src/gateway/server.sessions.create.reset-fork.test.ts";
+  const options = {
+    selectionMode: "aggressive" as const,
+    includePrExemptRuntimeTests: false,
+    includeReleaseOnlyRuntimeTests: false,
+  };
+  const changedPaths = [source, ownerTest];
+  const targets = resolveChangedNodeTestTargets(changedPaths, options);
+  expect(targets).toContain(resetFork);
+  expect(
+    selectedFiles(
+      createChangedNodeTestShards(changedPaths, { ...options, selectedTestTargets: targets }),
+    ),
+  ).toContain(resetFork);
+  const testOnly = resolveChangedNodeTestTargets([ownerTest], options);
+  expect(testOnly).toContain(ownerTest);
+  expect(testOnly).not.toContain(resetFork);
 });

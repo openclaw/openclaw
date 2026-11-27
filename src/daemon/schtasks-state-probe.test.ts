@@ -99,7 +99,9 @@ it.each([
   ["inventory", 2_400_000, 60_000],
   ["process", 699.5, 699],
   ["process", 0.75, 0],
-  ["process", 10_000, 5_000],
+  ["process", undefined, 60_000],
+  ["process", 10_000, 10_000],
+  ["process", 2_400_000, 2_400_000],
 ] as const)("bounds %s inspection (budget=%s, timeout=%s)", (scope, budget, expected) =>
   withMockedPlatform("win32", () => {
     if (scope === "process") {
@@ -133,4 +135,13 @@ it.each([
       ]);
     }
   }),
+);
+
+it.each([nativeResult("", null, timeout), nativeResult('[{"ProcessId":1234}]', 1)])(
+  "keeps failed process snapshots unknown",
+  (failure) =>
+    withMockedPlatform("win32", () => {
+      native.mockReturnValue(failure);
+      expect(readWindowsProcessSnapshot()).toBeNull();
+    }),
 );

@@ -68,7 +68,8 @@ jobs:
       should_closeout: ${{ steps.inputs.outputs.should_closeout }}
       tag: ${{ steps.inputs.outputs.tag }}
     steps:
-      - name: Install GitHub API backoff helper
+      - &github-api-backoff
+        name: Install GitHub API backoff helper
         run: |
           cat > "$RUNNER_TEMP/github-api-backoff.sh" <<'BASH'
           gh_with_retry() {
@@ -77,8 +78,9 @@ jobs:
               if output="$(gh "$@" 2>&1)"; then
                 printf '%s\n' "$output"
                 return 0
+              else
+                status=$?
               fi
-              status=$?
               lower_output="${output,,}"
               if [[ "$lower_output" != *"rate limit"* && "$output" != *"HTTP 429"* ]]; then
                 printf '%s\n' "$output" >&2
@@ -426,29 +428,7 @@ jobs:
             exit 1
           fi
 
-      - name: Install GitHub API backoff helper
-        run: |
-          cat > "$RUNNER_TEMP/github-api-backoff.sh" <<'BASH'
-          gh_with_retry() {
-            local attempt output status lower_output
-            for attempt in 1 2 3 4 5; do
-              if output="$(gh "$@" 2>&1)"; then
-                printf '%s\n' "$output"
-                return 0
-              fi
-              status=$?
-              lower_output="${output,,}"
-              if [[ "$lower_output" != *"rate limit"* && "$output" != *"HTTP 429"* ]]; then
-                printf '%s\n' "$output" >&2
-                return "$status"
-              fi
-              echo "::warning::GitHub API throttled stable closeout on attempt ${attempt}; retrying after backoff." >&2
-              sleep $((attempt * attempt * 5))
-            done
-            printf '%s\n' "$output" >&2
-            return "$status"
-          }
-          BASH
+      - *github-api-backoff
 
       - name: Set up Docker verification for manual recovery
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_failed_publish_recovery }}
@@ -774,6 +754,13 @@ jobs:
             -f 'inputs[site_url]=https://openclaw.ai/' --jq '.workflow_run_id')"
           [[ "$run_id" =~ ^[1-9][0-9]*$ ]] || { echo "Website dispatch did not return a run ID." >&2; exit 1; }
           echo "Website verification: https://github.com/openclaw/openclaw.ai/actions/runs/$run_id" >> "$GITHUB_STEP_SUMMARY"
+          # A just-dispatched run can briefly return 404 for its jobs, which
+          # makes `gh run watch` fail before the run starts (v2026.11.8).
+          for attempt in 1 2 3 4 5 6; do
+            gh api "repos/openclaw/openclaw.ai/actions/runs/$run_id/jobs" --silent && break
+            (( attempt < 6 )) || { echo "Website run $run_id jobs did not become readable." >&2; exit 1; }
+            sleep 10
+          done
           gh run watch "$run_id" --repo openclaw/openclaw.ai --exit-status --interval 15
 
       - name: Attach immutable closeout evidence

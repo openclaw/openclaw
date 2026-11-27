@@ -3,6 +3,7 @@ import { z } from "zod";
 import { WorkerWorkspaceGitHistorySchema } from "../gateway/worker-environments/workspace-result-inventory.js";
 import { NODE_WORKSPACE_RESULT_VERSION } from "../infra/node-runner-inventory.js";
 import { workerProtocolObject } from "./protocol-record.js";
+import { WORKER_STANDALONE_GIT_VIEW_JS } from "./workspace-git-policy.js";
 
 export const NODE_WORKSPACE_EMPTY_MANIFEST = JSON.stringify({
   version: 1,
@@ -14,47 +15,67 @@ export const NODE_WORKSPACE_EMPTY_MANIFEST_REF = `sha256:${createHash("sha256").
 export const NODE_WORKSPACE_TRANSFER_PATH = "/__openclaw__/worker-transfer/v1";
 export const MAX_WORKSPACE_RESULT_GIT_PACK_BYTES = 256 * 1024 * 1024;
 
-/** Shared by native and SSH transfers; only the dispatch base is borrowed from the receiver. */
+/**
+ * Shared by native and SSH transfers; only the dispatch base is borrowed from the receiver.
+ * The worker owns its repository, so Git reads only its standalone object and ref
+ * storage through trusted config and a scrubbed environment. Repository config,
+ * alternates, gitdir pointers and ambient GIT_* variables can otherwise run commands
+ * (lazy fetch through core.sshCommand) or export another repository on this host.
+ */
 export const NODE_WORKSPACE_GIT_HISTORY_SCRIPT = String.raw`
 const fs = require("node:fs");
+const path = require("node:path");
 const cp = require("node:child_process");
 const { pipeline } = require("node:stream/promises");
 const { Transform } = require("node:stream");
 const [root, baseCommit, packPath] = process.argv.slice(1);
-const git = (args) => cp.spawnSync("git", ["-C", root, ...args], {encoding:"utf8"});
+${WORKER_STANDALONE_GIT_VIEW_JS}
+const report = (history) => process.stdout.write(JSON.stringify({baseCommit, ...history}));
 (async () => {
-  const head = git(["rev-parse", "--verify", "HEAD^{commit}"]);
-  if (head.status !== 0) throw new Error("Worker Git HEAD is unavailable");
-  const headCommit = head.stdout.trim();
-  if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(headCommit)) throw new Error("Invalid worker Git HEAD");
-  const ancestry = git(["merge-base", "--is-ancestor", baseCommit, headCommit]);
-  // A rewritten worker can have pruned the dispatch commit; it cannot be adopted.
-  if (ancestry.status !== 0 && ancestry.status !== 1 && ancestry.status !== 128) throw new Error("Worker Git ancestry is unavailable");
-  const descendsFromBase = ancestry.status === 0;
-  let unavailableReason;
-  if (descendsFromBase && headCommit !== baseCommit) {
-    const child = cp.spawn("git", ["-C", root, "pack-objects", "--revs", "--stdout"], {stdio:["pipe","pipe","pipe"]});
-    let bytes = 0;
-    let stderr = "";
-    child.stderr.on("data", chunk => { stderr = (stderr + chunk).slice(-4096); });
-    const exit = new Promise((resolve, reject) => {
-      child.on("error", reject);
-      child.on("close", code => code === 0 ? resolve() : reject(new Error("Worker Git pack failed: " + stderr)));
-    });
-    child.stdin.end(headCommit + "\n^" + baseCommit + "\n");
-    try {
-      await Promise.all([exit, pipeline(child.stdout, new Transform({transform(chunk, encoding, callback) {
-        bytes += chunk.length;
-        callback(bytes > ${MAX_WORKSPACE_RESULT_GIT_PACK_BYTES} ? new Error("Worker Git pack exceeds its byte limit") : null, chunk);
-      }}), fs.createWriteStream(packPath, {flags:"wx", mode:0o600}))]);
-    } catch (error) {
-      child.kill("SIGKILL");
-      await exit.catch(() => {});
-      fs.rmSync(packPath, {force:true});
-      unavailableReason = (error instanceof Error ? error.message : String(error)).slice(0, 512);
-    }
+  const view = createWorkerGitView(root, baseCommit, path.dirname(packPath));
+  if (!view) {
+    report({headCommit: baseCommit, descendsFromBase: false, unavailableReason: "worker Git repository is not a standalone checkout"});
+    return;
   }
-  process.stdout.write(JSON.stringify({baseCommit, headCommit, descendsFromBase, unavailableReason}));
+  try {
+    const { env } = view;
+    const git = (args) => cp.spawnSync("git", args, {cwd:root, env, encoding:"utf8"});
+    const head = git(["rev-parse", "--verify", "HEAD^{commit}"]);
+    if (head.status !== 0) throw new Error("Worker Git HEAD is unavailable");
+    const headCommit = head.stdout.trim();
+    if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(headCommit)) throw new Error("Invalid worker Git HEAD");
+    const ancestry = git(["merge-base", "--is-ancestor", baseCommit, headCommit]);
+    // A rewritten worker can have pruned the dispatch commit; it cannot be adopted.
+    if (ancestry.status !== 0 && ancestry.status !== 1 && ancestry.status !== 128) throw new Error("Worker Git ancestry is unavailable");
+    const descendsFromBase = ancestry.status === 0;
+    let unavailableReason;
+    if (descendsFromBase && headCommit !== baseCommit) {
+      // Objects absent from a partial clone fail here instead of being fetched.
+      const child = cp.spawn("git", ["pack-objects", "--revs", "--stdout"], {cwd:root, env, stdio:["pipe","pipe","pipe"]});
+      let bytes = 0;
+      let stderr = "";
+      child.stderr.on("data", chunk => { stderr = (stderr + chunk).slice(-4096); });
+      const exit = new Promise((resolve, reject) => {
+        child.on("error", reject);
+        child.on("close", code => code === 0 ? resolve() : reject(new Error("Worker Git pack failed: " + stderr)));
+      });
+      child.stdin.end(headCommit + "\n^" + baseCommit + "\n");
+      try {
+        await Promise.all([exit, pipeline(child.stdout, new Transform({transform(chunk, encoding, callback) {
+          bytes += chunk.length;
+          callback(bytes > ${MAX_WORKSPACE_RESULT_GIT_PACK_BYTES} ? new Error("Worker Git pack exceeds its byte limit") : null, chunk);
+        }}), fs.createWriteStream(packPath, {flags:"wx", mode:0o600}))]);
+      } catch (error) {
+        child.kill("SIGKILL");
+        await exit.catch(() => {});
+        fs.rmSync(packPath, {force:true});
+        unavailableReason = (error instanceof Error ? error.message : String(error)).slice(0, 512);
+      }
+    }
+    report({headCommit, descendsFromBase, unavailableReason});
+  } finally {
+    view.close();
+  }
 })().catch(reportFailure);
 /** @param {unknown} error */
 function reportFailure(error) {

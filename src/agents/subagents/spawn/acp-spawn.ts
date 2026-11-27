@@ -51,7 +51,7 @@ import { runSpawnPipeline, type SpawnBackendAdapter } from "../../spawn-pipeline
 import {
   mintSpawnSessionKey,
   prepareSpawnThreadBinding,
-  resolveSpawnAdmission,
+  createSpawnAdmission,
   resolveSpawnMode,
   type PreparedSpawnThreadBinding,
 } from "../../spawn-plan.js";
@@ -105,6 +105,7 @@ import { getSubagentDepthFromSessionStoreInWorker } from "./subagent-depth.js";
 import { withPreparedSessionCapabilityRead } from "./subagent-session-store.js";
 import { readGatewayRunId } from "./subagent-spawn-gateway.js";
 import { resolveSubagentSpawnOwnership } from "./subagent-spawn-ownership.js";
+import { resolveParticipationSpawnError } from "./subagent-spawn-participation.js";
 import { resolveConfiguredSubagentRunTimeoutSeconds } from "./subagent-spawn-plan.js";
 
 type SpawnAcpSandboxMode = "inherit" | "require";
@@ -165,6 +166,10 @@ export async function spawnAcpDirect(
   params: SpawnAcpParams,
   ctx: SpawnAcpContext,
 ): Promise<SpawnAcpResult> {
+  const participationError = resolveParticipationSpawnError({ runtime: "acp" }, ctx, undefined);
+  if (participationError) {
+    return buildAcpSpawnError("runtime_policy", participationError, "forbidden");
+  }
   const cfg = getRuntimeConfig();
   const creatorProfileId = requesterCreatorProfileId(
     getGatewayToolCallerIdentity()?.requesterOrigin,
@@ -307,22 +312,21 @@ export async function spawnAcpDirect(
   });
   await prepareSubagentSessionListReadCache();
   ctx.assertActive?.();
-  const resolveAdmission = (pendingChildren = 0, pendingChildSessionKeys?: ReadonlySet<string>) =>
-    resolveSpawnAdmission({
-      cfg,
-      callerDepth,
-      inheritedToolPolicySource: ctx.inheritedToolPolicySource,
-      enabled: hasSubagentEnvelope || senderRestricted,
-      requesterSessionKey: requesterInternalKey,
-      requesterAgentId,
-      targetAgentId,
-      requestedAgentId: params.agentId,
-      configuredAgentIds: Array.from(resolveConfiguredAcpSubagentTargetIds(cfg)),
-      additionalActiveChildren: hasSubagentEnvelope
-        ? countUntrackedActiveAcpRunsForOwner(requesterInternalKey, pendingChildSessionKeys) +
-          pendingChildren
-        : 0,
-    });
+  const resolveAdmission = createSpawnAdmission({
+    cfg,
+    callerDepth,
+    inheritedToolPolicySource: ctx.inheritedToolPolicySource,
+    enabled: hasSubagentEnvelope || senderRestricted,
+    requesterSessionKey: requesterInternalKey,
+    requesterAgentId,
+    targetAgentId,
+    requestedAgentId: params.agentId,
+    configuredAgentIds: Array.from(resolveConfiguredAcpSubagentTargetIds(cfg)),
+    countAdditionalActiveChildren: hasSubagentEnvelope
+      ? (pendingChildSessionKeys) =>
+          countUntrackedActiveAcpRunsForOwner(requesterInternalKey, pendingChildSessionKeys)
+      : undefined,
+  });
   const admission = resolveAdmission();
   if (!admission.ok) {
     return buildAcpSpawnError("subagent_policy", admission.error, "forbidden");

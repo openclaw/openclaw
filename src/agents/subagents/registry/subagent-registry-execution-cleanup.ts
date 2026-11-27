@@ -27,6 +27,7 @@ import {
 } from "./subagent-registry-memory.js";
 import { resolveControllerSessionKey } from "./subagent-registry-read-topology.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 import { hasSubagentRunEnded, isYieldedSubagentRun } from "./subagent-run-liveness.js";
 
@@ -236,7 +237,7 @@ export function captureSubagentRetainedWork() {
     return (
       entry.execution.status !== "terminal" ||
       !entry.execution.endedAt ||
-      entry.pauseReason === "sessions_yield" ||
+      isSubagentPausedByYield(entry) ||
       Boolean(entry.requesterSettleWake) ||
       captureSubagentEmbeddedExecution(entry) !== undefined ||
       hasRetainedControllerExecution(entry) ||

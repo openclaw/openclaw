@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/deep-research",
-  "version": "2026.11.8",
+  "version": "2026.11.10",
   "private": true,
   "description": "Bounded, evidence-backed research through portable models and managed services",
   "type": "module",

@@ -55,7 +55,7 @@ async function recordedFixture(stateDir: string, scopes: string[]) {
 it("admits an untiered person's session work only through their recorded, current source", () =>
   withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
     const { admit, record } = await recordedFixture(stateDir, ["operator.write"]);
-    await expect(admit()).rejects.toThrow("no current run authority");
+    await expect(admit()).rejects.toThrow("Your role on this Gateway does not allow it");
 
     await record();
     const admitted = await admit();
@@ -96,7 +96,7 @@ it("admits a restart wake for a Tailscale Control UI person whose browser key wa
         ...fixture.target,
         sessionPrincipal: true,
       });
-    await expect(admit()).rejects.toThrow("no current run authority");
+    await expect(admit()).rejects.toThrow("Your role on this Gateway does not allow it");
 
     // A new message from this person is admitted and records its source.
     const message = expectDefined(

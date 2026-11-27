@@ -32,25 +32,11 @@ import {
   listSecretTargetRegistryEntries,
 } from "../secrets/target-registry.js";
 import { parseConcreteConfigPathTokens } from "../shared/dot-path.js";
+import { MODEL_COMMAND_SECRET_TARGET_IDS } from "./model-secret-targets.js";
 
 const STATIC_QR_REMOTE_TARGET_IDS = ["gateway.remote.token", "gateway.remote.password"] as const;
-const STATIC_MODEL_TARGET_IDS = [
-  "models.providers.*.apiKey",
-  "models.providers.*.headers.*",
-  "models.providers.*.request.headers.*",
-  "models.providers.*.request.auth.token",
-  "models.providers.*.request.auth.value",
-  "models.providers.*.request.proxy.tls.ca",
-  "models.providers.*.request.proxy.tls.cert",
-  "models.providers.*.request.proxy.tls.key",
-  "models.providers.*.request.proxy.tls.passphrase",
-  "models.providers.*.request.tls.ca",
-  "models.providers.*.request.tls.cert",
-  "models.providers.*.request.tls.key",
-  "models.providers.*.request.tls.passphrase",
-] as const;
 const STATIC_TTS_TARGET_IDS = [
-  ...STATIC_MODEL_TARGET_IDS,
+  ...MODEL_COMMAND_SECRET_TARGET_IDS,
   "agents.entries.*.tts.providers.*.apiKey",
   "agents.entries.*.tts.personas.*.providers.*.apiKey",
   "tts.providers.*.apiKey",
@@ -68,7 +54,7 @@ const STATIC_AGENT_RUNTIME_BASE_TARGET_IDS = [
   "skills.entries.*.apiKey",
 ] as const;
 const STATIC_MEMORY_EMBEDDING_TARGET_IDS = [
-  ...STATIC_MODEL_TARGET_IDS,
+  ...MODEL_COMMAND_SECRET_TARGET_IDS,
   ...STATIC_MEMORY_TARGET_IDS,
 ] as const;
 const STATIC_STATUS_TARGET_IDS = [
@@ -395,11 +381,6 @@ export function getQrRemoteCommandSecretTargetIds(): Set<string> {
 /** All registered channel secret targets, regardless of current config. */
 export function getChannelsCommandSecretTargetIds(): Set<string> {
   return new Set(getChannelSecretTargetIds());
-}
-
-/** Model-provider credential targets used by commands that can touch provider config. */
-export function getModelsCommandSecretTargetIds(): Set<string> {
-  return new Set(STATIC_MODEL_TARGET_IDS);
 }
 
 function getSelectedMemoryProviderSecretTargetIds(config: OpenClawConfig): string[] {

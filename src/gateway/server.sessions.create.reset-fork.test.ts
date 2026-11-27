@@ -108,6 +108,25 @@ test.each([false, true])("does not revive reset context in forks (active=%s)", a
       requireNonEmptyString(full.payload?.sessionId, "full fork session id"),
       requireNonEmptyString(full.payload?.key, "full fork session key"),
     ),
-  ).toEqual(parentMessages);
+  ).toEqual([
+    ...parentMessages,
+    ...(active
+      ? [
+          {
+            role: "toolResult",
+            toolCallId: "new-call",
+            toolName: "lookup",
+            content: [
+              {
+                type: "text",
+                text: "The parent session's result for this tool call was not available when this conversation was forked.",
+              },
+            ],
+            isError: false,
+            timestamp: expect.any(Number),
+          },
+        ]
+      : []),
+  ]);
   expect(await loadTranscriptEvents(parentScope)).toEqual(originalEvents);
 });
