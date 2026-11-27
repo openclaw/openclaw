@@ -238,7 +238,9 @@ describe("dictation refinement at the composer boundary", () => {
         .getByRole("checkbox", { name: "Review dictated text before inserting" })
         .click();
       flush();
-      within(mobileControls).getByRole("button", { name: "Dictation", exact: true }).click();
+      within(mobileControls)
+        .getByRole("button", { name: /^Dictation$/u })
+        .click();
       await vi.dynamicImportSettled();
       await vi.advanceTimersByTimeAsync(0);
       flush();

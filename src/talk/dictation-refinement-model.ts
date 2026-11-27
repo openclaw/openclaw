@@ -319,7 +319,7 @@ export function createSelectedDictationModelAdapter(
       } finally {
         try {
           if (acquired && "model" in acquired) {
-            const release = acquired[Symbol.asyncDispose]();
+            const release = Promise.resolve(acquired[Symbol.asyncDispose]());
             // Release is initiated even when an uncooperative transport outlives cancellation.
             await racePromiseWithAbortSignal(release, operationSignal).catch(() => {});
           }

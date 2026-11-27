@@ -20,6 +20,12 @@ const finalText = "Do not delete customer_id or -12 mg.";
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const viewport = { width: 1280, height: 1000 };
 
+declare global {
+  interface Window {
+    dictationProofTracks?: MediaStreamTrack[];
+  }
+}
+
 async function capture(
   suite: ControlUiE2eSuite,
   page: Page,
@@ -119,6 +125,15 @@ for (const mode of ["realtime", "file"] as const) {
                   request: { allowPrivateNetwork: true },
                   models: [{ id: "metadata", name: "Fixture" }],
                 },
+                ...(mode === "file"
+                  ? {
+                      deepgram: {
+                        baseUrl: provider.baseUrl,
+                        request: { allowPrivateNetwork: true },
+                        models: [],
+                      },
+                    }
+                  : {}),
               },
             },
             plugins: { allow: ["deepgram", "openai"] },
@@ -126,15 +141,7 @@ for (const mode of ["realtime", "file"] as const) {
               ? {
                   tools: {
                     media: {
-                      models: [
-                        {
-                          provider: "deepgram",
-                          model: "nova-3",
-                          capabilities: ["audio"],
-                          baseUrl: provider.baseUrl,
-                          request: { allowPrivateNetwork: true },
-                        },
-                      ],
+                      models: [{ provider: "deepgram", model: "nova-3", capabilities: ["audio"] }],
                     },
                   },
                 }
@@ -151,8 +158,7 @@ for (const mode of ["realtime", "file"] as const) {
   });
 
   suite.define(() => {
-    // Real provider drain, browser audio and cross-process delivery cannot be proved by fake timers.
-    // Only external provider I/O and Chromium's microphone source are synthetic.
+    // Only provider I/O and Chromium's microphone source are synthetic.
     it("keeps Stop in finishing until provider completion, inserts only on acceptance, and retires cancelled text", () =>
       suite.withPage(
         {
@@ -183,9 +189,8 @@ for (const mode of ["realtime", "file"] as const) {
             });
           });
           await page.addInitScript(() => {
-            // Observe native tracks without replacing the browser's capture or audio processing.
             const tracks: MediaStreamTrack[] = [];
-            Object.defineProperty(window, "dictationProofTracks", { value: tracks });
+            window.dictationProofTracks = tracks;
             const getUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
             navigator.mediaDevices.getUserMedia = async (constraints) => {
               const stream = await getUserMedia(constraints);
@@ -217,14 +222,14 @@ for (const mode of ["realtime", "file"] as const) {
           await waitForControlUiGatewayReady(page);
           const shell = page.locator(".agent-chat__composer-shell");
           const draft = shell.locator(".agent-chat__composer-combobox textarea");
-          const microphone = shell.locator(".chat-mobile-dictation-action");
           const review = shell.locator(".agent-chat__dictation-refinement");
           const status = review.getByRole("status");
           const preview = review.getByRole("textbox", { name: "Text preview", exact: true });
           const attempts = mode === "realtime" ? provider.realtime : provider.files;
           await draft.fill(initialDraft);
-          await microphone
+          await shell
             .getByRole("button", { name: "Dictation text options", exact: true })
+            .filter({ visible: true })
             .click();
           const optIn = review.getByRole("checkbox", {
             name: "Review dictated text before inserting",
@@ -234,10 +239,17 @@ for (const mode of ["realtime", "file"] as const) {
           await optIn.check();
           const start = async () => {
             const appended = methods["talk.session.appendAudio"] ?? 0;
-            await microphone.getByRole("button", { name: "Dictation", exact: true }).click();
-            await shell
-              .locator('.agent-chat__dictation-status [data-status="listening"]')
-              .waitFor();
+            const listening = shell.locator(
+              '.agent-chat__dictation-status [data-status="listening"]',
+            );
+            // At this desktop viewport a tap starts Talk. Hold until dictation latches.
+            await shell.getByRole("button", { name: "Start voice input", exact: true }).hover();
+            await page.mouse.down();
+            try {
+              await listening.waitFor();
+            } finally {
+              await page.mouse.up();
+            }
             await expect
               .poll(() => methods["talk.session.appendAudio"] ?? 0)
               .toBeGreaterThan(appended);
@@ -245,6 +257,7 @@ for (const mode of ["realtime", "file"] as const) {
           const stop = async (index: number) => {
             await shell
               .getByRole("button", { name: "Finish and review text", exact: true })
+              .and(shell.locator("button.chat-send-btn--dictation-commit"))
               .click();
             await expect.poll(() => attempts[index]?.finishing).toBe(true);
             expect(attempts[index]!.audioBytes).toBeGreaterThan(0);
@@ -253,9 +266,10 @@ for (const mode of ["realtime", "file"] as const) {
               .toBe("Finishing text. The microphone is off.");
             expect(
               await page.evaluate(() => {
-                const tracks = (window as Window & { dictationProofTracks: MediaStreamTrack[] })
-                  .dictationProofTracks;
-                return tracks.length > 0 && tracks.every((track) => track.readyState === "ended");
+                const tracks = window.dictationProofTracks;
+                return Boolean(
+                  tracks?.length && tracks.every((track) => track.readyState === "ended"),
+                );
               }),
             ).toBe(true);
           };
@@ -263,26 +277,9 @@ for (const mode of ["realtime", "file"] as const) {
             await start();
             const stoppedAt = performance.now();
             await stop(0);
-            if (mode === "file") {
-              await capture(suite, page, "finishing", shell, status);
-              attempts[0]!.release(finalText);
-            } else {
-              attempts[0]!.release(finalText);
-              await capture(suite, page, "finishing", shell, status);
-            }
-            try {
-              await preview.waitFor({ timeout: 15_000 });
-            } catch (error) {
-              await capture(
-                suite,
-                page,
-                "final-unavailable",
-                shell,
-                status,
-                "Final text unavailable for review",
-              );
-              throw error;
-            }
+            await capture(suite, page, "finishing", shell, status);
+            attempts[0]!.release(finalText);
+            await preview.waitFor({ timeout: 15_000 });
             timings.stopToPreviewMs = performance.now() - stoppedAt;
             expect(closedSessions).toBe(1);
             expect(await preview.inputValue()).toBe(finalText);

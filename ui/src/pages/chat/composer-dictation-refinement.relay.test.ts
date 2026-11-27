@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { GatewayRequestContext } from "../../../../src/gateway/server-methods/shared-types.js";
+import { createGatewayRequestContext } from "../../../../src/gateway/server-request-context.js";
+import { makeContextParams } from "../../../../src/gateway/server-request-context.test-support.js";
 import { cleanupTalkConnection } from "../../../../src/gateway/talk/session-registry.js";
 import {
   createTalkTranscriptionRelaySession,
@@ -39,7 +40,6 @@ function fixture() {
   const listeners = new Set<(frame: GatewayEventFrame) => void>();
   const media = audioFixture();
   const onError = vi.fn();
-  const logGateway = { warn: vi.fn() };
   let providerRequest: RealtimeTranscriptionSessionCreateRequest | undefined;
   const providerSession = {
     connect: async () => undefined,
@@ -57,16 +57,16 @@ function fixture() {
     },
   };
   const releaseAuthority = vi.fn();
-  // SAFETY: the relay consumes only these runtime-config, log, and transport operations.
-  const context = {
-    getRuntimeConfig: () => ({}),
-    logGateway,
-    broadcastToConnIds: (event: string, payload: unknown) => {
-      for (const listener of listeners) {
-        listener({ type: "event", event, payload });
-      }
-    },
-  } as GatewayRequestContext;
+  const context = createGatewayRequestContext(
+    makeContextParams({
+      broadcastToConnIds: (event, payload) => {
+        for (const listener of listeners) {
+          listener({ type: "event", event, payload });
+        }
+      },
+    }),
+  );
+  context.getRuntimeConfig = () => ({});
   const request = vi.fn(async (method: string, params: Record<string, unknown> = {}) => {
     if (method === "talk.session.create") {
       const relay = createTalkTranscriptionRelaySession({
@@ -131,7 +131,7 @@ function fixture() {
   cleanups.push(async () => {
     review.cancel();
     await session.cancel().catch(() => undefined);
-    cleanupTalkConnection(connId, logGateway);
+    cleanupTalkConnection(connId, context.logGateway);
   });
   return {
     session,
