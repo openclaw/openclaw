@@ -70,6 +70,31 @@ it("refuses overflow without invalidating pending occurrences or removal receipt
   expect(texts(sessionKey)).toEqual(["Revised reminder", "Admitted after consumption"]);
 });
 
+it("reports passive pool exhaustion to callers that must surface capacity", () => {
+  const sessionKey = "agent:main:capacity-reported";
+  expect(
+    enqueueSystemEventEntry(
+      "Reported notice",
+      { sessionKey, contextKey: "reported" },
+      { throwOnFull: true },
+    ),
+  ).not.toBeNull();
+  for (let index = 0; index < 19; index++) {
+    enqueueSystemEvent(`Exec completed ${index}`, { sessionKey, contextKey: `exec:${index}` });
+  }
+  const pending = peekSystemEventEntries(sessionKey);
+  expect(() =>
+    enqueueSystemEventEntry(
+      "Late notice",
+      { sessionKey, contextKey: "late" },
+      { throwOnFull: true },
+    ),
+  ).toThrow("queue is full");
+  // The accepting call must still enqueue passively: a reporting caller cannot take the wake pool.
+  expect(enqueueSystemEventEntry("Late notice", { sessionKey, contextKey: "late" })).toBeNull();
+  expect(peekSystemEventEntries(sessionKey)).toEqual(pending);
+});
+
 it("bounds passive notices separately from the turn-owned occurrences that resume a session", () => {
   const sessionKey = "agent:main:capacity-pools";
   for (let index = 0; index < 20; index++) {
