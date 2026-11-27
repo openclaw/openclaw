@@ -93,10 +93,10 @@ describe("host-owned update notices", () => {
           ? [
               headline,
               ...(recovered ? ["The previous version (2026.10.4) is still serving."] : []),
-              `Update failed ${description} (restart-unhealthy).`,
+              `Update failed ${description} (restart-unhealthy). Failing check update (restart-unhealthy) Failed step: ${phase}.`,
               `Next: ${advice}`,
             ].join("\n")
-          : `${headline}\nFor details, open Settings → Updates in the OpenClaw app or run \`openclaw update status\` in your terminal.`,
+          : `${headline}\nNext: ${advice}`,
       ),
     ]);
     expect(getUpdateRun(initial.runId)).toMatchObject({
