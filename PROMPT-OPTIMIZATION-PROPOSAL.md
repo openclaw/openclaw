@@ -71,7 +71,7 @@ That is a more fundamental context-management problem: not merely whether existi
 
 ## In summary: we have solutions, not just suggestions
 
-We were right about separating durable model state from transient per-turn information in August. Today's work extends that principle to context growth and active token consumption, not just cache preservation. Even where cached input is free, redundant tokens still occupy the context window. Avoiding premature context rebuilds should reduce the amount of uncached input that must be processed again over the lifetime of a session. The reduction in context growth is already demonstrated; the additional savings in fresh-token usage over longer sessions remain to be quantified.
+We were right about separating durable model state from transient per-turn information in August. Today's work goes further: reducing context growth should reduce cache resets and fresh-token consumption, even where cached tokens are free. Long-term fresh-token savings remain to be quantified.
 
 We've been using the general transient-turn approach in our Discord deployments for months, with approximately threefold improvement in usage efficiency reported from our operational experience. This is not a controlled benchmark of the two November changes.
 
