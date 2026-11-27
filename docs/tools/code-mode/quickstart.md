@@ -225,11 +225,15 @@ unchanged; no partially saved value is advertised.
 
 ## Recover from tool errors
 
-Hidden catalog tools are not top-level model tools. Calling one directly returns
-a failed tool result with guidance to use JavaScript inside `exec`; the rejected
-call does not execute the tool or add it to the visible surface. Inside `exec`,
-use the callable from the quick index or `catalog.search(...)`, since normalized
-names, collisions, and MCP namespaces can differ from the original tool name.
+Hidden catalog tools are not top-level model tools. If the model calls one
+directly by a name that resolves to exactly one catalog entry, OpenClaw runs
+that call through the same tool hooks and guards as any other call; the tool is
+not added to the visible surface. A name that does not resolve to one callable
+entry (a duplicate name, or an MCP tool that needs its exact id) returns a failed
+tool result with guidance to use JavaScript inside `exec`, and that rejected
+call does not execute anything. Inside `exec`, use the callable from the quick
+index or `catalog.search(...)`, since normalized names, collisions, and MCP
+namespaces can differ from the original tool name.
 
 Thrown tool errors are catchable. Returned values may instead report failure.
 Follow the tool's result contract, and inspect possible effects before retrying.
