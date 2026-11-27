@@ -117,6 +117,31 @@ skipped.
 }
 ```
 
+## Token counts and freshness
+
+JSON session rows separate run accounting from context occupancy:
+
+| Field                         | Meaning                                                                                                                                |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `inputTokens`, `outputTokens` | Accounting snapshots for the latest recorded run, which can include multiple model calls.                                              |
+| `totalTokens`                 | The recorded context-usage snapshot, not `inputTokens + outputTokens`. A stale snapshot can remain visible; a missing count is `null`. |
+| `totalTokensFresh`            | Whether the recorded context snapshot has valid freshness provenance and uses the current accounting version.                          |
+| `contextTokens`               | The resolved context capacity used as the utilization denominator, or `null` when unknown.                                             |
+
+Polling does not refresh the run-accounting snapshots. `inputTokens` and
+`outputTokens` can remain unchanged for hours on an idle session and must not be
+used as live context-pressure measurements. `totalTokensFresh: true` describes
+the validity of the recorded context snapshot, not whether the session is active
+or the count was sampled during this poll.
+
+For context pressure, use `totalTokens / contextTokens` only when
+`totalTokensFresh` is `true` and `contextTokens` is known and positive. Otherwise,
+treat utilization as unknown. Apply an activity filter separately when deciding
+whether to alert on idle sessions; `--active <minutes>` filters listing activity.
+
+See the [session store schema](/reference/session-management-compaction/schema#session-store-schema)
+for the stored fields and freshness provenance.
+
 ## Import transcripts
 
 Preserve native session catalog transcripts in the running Gateway's durable
