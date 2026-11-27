@@ -53,6 +53,8 @@ const shellCases = [
 ] as const;
 const shellEffectFile = (cycle: number) => `shell-effect-${cycle}.txt`;
 const UNKNOWN_SHELL = "Its effect is unknown. I paused this turn without retrying the command.";
+const RECONCILED_SHELL =
+  "Checked the process list. The command outcome is still unknown; I did not retry it.";
 const INDEPENDENT_FILE = "independent.txt";
 const INDEPENDENT_CONTENT = "INDEPENDENT_WORK_AVAILABLE";
 const CASES = ["stream", "tool", "parent", "background", "idle", "compact"] as const;
@@ -316,6 +318,13 @@ async function providerFixture(signal: AbortSignal, childTimer = false) {
                 }
               } else {
                 gate(`resume:${cycle}:${name}`).resolve();
+                if (name === "tool") {
+                  expect(current).toContain(SHELL_CHECKPOINT);
+                  expect(input.includes(`/tool/${cycle}/tool`)).toBe(true);
+                  issued.add(`shell-check:${cycle}`);
+                  tool("process", { action: "list" });
+                  return;
+                }
                 if (name === "compact") {
                   issued.add(`gateway:${cycle}:${name}`);
                   tool("sessions_list", { limit: 20, search: `restart-resume-${cycle}-${name}` });
@@ -323,6 +332,9 @@ async function providerFixture(signal: AbortSignal, childTimer = false) {
                 }
               }
               text(`RESUMED_${cycle}_${name}`);
+            } else if (name === "tool" && issued.delete(`shell-check:${cycle}`)) {
+              expect(toolOutput.output).toMatch(/No running or recent sessions/);
+              text(RECONCILED_SHELL);
             } else if (issued.delete(`gateway:${cycle}:${name}`)) {
               const result = asRecord(JSON.parse(String(toolOutput.output)));
               expect(result.error).toBeUndefined();
@@ -1318,7 +1330,9 @@ it.skipIf(process.platform === "win32")(
       config,
       env: { ...restartEnv, OPENCLAW_NO_RESPAWN: "1" },
     });
-    onTestFailed(() => process.stderr.write(instance.logs()));
+    onTestFailed(() => {
+      process.stderr.write(instance.logs());
+    });
     const workspace = instance.state.workspaceDir;
     provider.useShellWorkspace(workspace);
     const queuedCycle = 30;
@@ -1540,6 +1554,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
       client!.request<{
         messages: unknown[];
         pendingInputs?: { items: Array<{ state: string; message: unknown }> };
+        sessionId: string;
         sessionInfo: { hasActiveRun: boolean };
       }>("chat.history", { sessionKey, limit: 100 });
     const waitHistory = (
@@ -1677,6 +1692,12 @@ it.skipIf(process.platform === "win32").for([true, false])(
           });
           await send(key(cycle, "stream"), queued(cycle, 2), "followup");
           await waitQueued(key(cycle, "stream"), [LITERAL_QUEUED_COMMAND, queued(cycle, 2)]);
+          const shellSessionId = cases.includes("tool")
+            ? (await history(key(cycle, "tool"))).sessionId
+            : undefined;
+          if (cases.includes("tool")) {
+            expect(shellSessionId).toBeTruthy();
+          }
           const child = instance.child;
           assert(child?.pid, "Owned Gateway process unavailable");
           const closed = once(child, "close");
@@ -1877,7 +1898,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
               )
               .map((name) => ({
                 name,
-                text: name === "tool" ? UNKNOWN_SHELL : `RESUMED_${cycle}_${name}`,
+                text: name === "tool" ? RECONCILED_SHELL : `RESUMED_${cycle}_${name}`,
               })),
             // The stopped background command is reported as its own input, not as a resume.
             ...(cases.includes("background")
@@ -1900,9 +1921,9 @@ it.skipIf(process.platform === "win32").for([true, false])(
             const expected = expectedReplies[index];
             const diagnostic =
               completion.status === "rejected"
-                ? `${mode} cycle=${cycle} ${expected?.text}: ${String(completion.reason)}\n${JSON.stringify(provider.calls.filter((call) => call.cycle === cycle && call.name === expected?.name))}\n${instance.logs().slice(-40_000)}`
+                ? `${mode} cycle=${cycle}: ${expected?.name} did not produce its expected final reply`
                 : expected?.text;
-            expect.soft(completion, diagnostic).toMatchObject({ status: "fulfilled" });
+            expect.soft(completion.status, diagnostic).toBe("fulfilled");
           }
           const streamInputs = provider.calls
             .filter((call) => call.cycle === cycle && call.name === "stream")
@@ -1937,26 +1958,31 @@ it.skipIf(process.platform === "win32").for([true, false])(
               expect(completions).toHaveLength(1);
               expect(completions[0]?.current).toContain(`restart_child_${cycle}`);
             }
-            expect(
-              resumes,
-              `${name}: ${JSON.stringify(calls.map((call) => call.current.slice(-4_000)))}`,
-            ).toHaveLength(
-              name === "idle" || name === "background" || name === "parent" || name === "tool"
-                ? 0
-                : 1,
+            expect(resumes.length, `${mode} cycle=${cycle} ${name} resume count`).toBe(
+              name === "idle" || name === "background" || name === "parent" ? 0 : 1,
             );
             const result = await history(key(cycle, name));
             expectCleanHistory(result.messages);
             if (name === "tool") {
               expect(provider.callbacks(`/tool/${cycle}/tool`)).toBe(1);
+              expect(result.sessionId).toBe(shellSessionId);
+              expect(
+                result.messages.filter(
+                  (message) =>
+                    isRecord(message) &&
+                    message.role === "user" &&
+                    JSON.stringify(message.content).includes(marker(cycle, name)),
+                ),
+              ).toHaveLength(1);
               expect(
                 result.messages.filter(
                   (message) =>
                     isRecord(message) &&
                     message.role === "assistant" &&
-                    JSON.stringify(message.content).includes(UNKNOWN_SHELL),
+                    JSON.stringify(message.content).includes(RECONCILED_SHELL),
                 ),
               ).toHaveLength(1);
+              expect(JSON.stringify(result.messages).includes(UNKNOWN_SHELL)).toBe(false);
             }
             expect(
               result.pendingInputs?.items.some((item) => item.state === "interrupted"),

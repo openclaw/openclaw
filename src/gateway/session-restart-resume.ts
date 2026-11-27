@@ -572,6 +572,7 @@ async function resumeRestartStore(
                     ...(unresolved &&
                       (originalRoute
                         ? {
+                            restartReplyToId: originalRoute.replyToId,
                             deliveryContext: {
                               channel: originalRoute.channel,
                               to: originalRoute.to,
