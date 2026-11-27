@@ -12,7 +12,6 @@ import { registerBuiltInApiProviders } from "./register-builtins.js";
 const options = { apiKey: "synthetic-key", cacheRetention: "none" as const };
 const transport = createOpenAIResponsesTransportStreamFn();
 const string = { type: "string" };
-const filename = { type: "string", pattern: "^(?![\\\\/])(?![A-Za-z]:)(?!.*\\.\\.).+$" };
 function schema(properties: Record<string, unknown>, required = Object.keys(properties)) {
   return { type: "object", properties, required, additionalProperties: false };
 }
