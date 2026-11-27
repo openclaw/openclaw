@@ -10,6 +10,7 @@ import {
   bindCronManagementGrant,
   bindCronRequesterGrant,
 } from "../cron-creator-authority-context.js";
+import { participationAllowsTool } from "../participation-ceiling.js";
 import { AUTOMATIONS_TOOL_NAME } from "./automations-tool-name.js";
 import { getInProcessGatewayToolContext } from "./in-process-gateway.js";
 
@@ -50,6 +51,8 @@ export function prepareSessionPortalToolAccess(input: {
   // These tools already own narrower live authorization. The retained-admin
   // projection must not replace their scoped RPC or captured-target checks.
   const hasIndependentAuthority = (name: string) =>
+    (operatorAuthority?.participationCeiling &&
+      participationAllowsTool(operatorAuthority.participationCeiling, name)) ||
     name === "sessions" ||
     (name === "portal" && sessionPortalTarget !== undefined) ||
     (name === AUTOMATIONS_TOOL_NAME && hasAutomationGrant);

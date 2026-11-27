@@ -15,6 +15,7 @@ import {
   fetchClawRouterCapabilityOffers,
   resolveClawRouterCapabilityHttpContext,
 } from "./capability-offers.js";
+import { GOOGLE_IMAGE_CAPABILITIES, qualifiedGoogleImageOffers } from "./image-google.js";
 
 // Qualified by ClawRouter's JSON Images API contract; not a list of key grants.
 const SUPPORTED_IMAGE_MODELS = new Set([
@@ -30,7 +31,15 @@ export const CLAWROUTER_IMAGE_CAPABILITIES: ImageGenerationProvider["capabilitie
     supportsAspectRatio: false,
     supportsResolution: false,
   },
-  edit: { enabled: false },
+  edit: {
+    enabled: true,
+    maxCount: 10,
+    maxInputImages: 0,
+    maxInputImagesByModel: Object.fromEntries([...SUPPORTED_IMAGE_MODELS].map((id) => [id, 16])),
+    supportsSize: true,
+    supportsAspectRatio: false,
+    supportsResolution: false,
+  },
   output: {
     qualities: ["low", "medium", "high", "xhigh", "max", "auto"],
     formats: ["png", "jpeg", "webp"],
@@ -48,7 +57,7 @@ type ImageLimits = {
   maxAspectRatio: number;
 };
 type ImageCatalogEntry = UnifiedModelCatalogEntry<ImageGenerationProvider["capabilities"]> & {
-  limits: ImageLimits;
+  limits?: ImageLimits;
 };
 
 function parseImageLimits(value: unknown): ImageLimits | undefined {
@@ -152,24 +161,41 @@ export async function fetchClawRouterImageModels(params: {
   signal?: AbortSignal;
   ssrfPolicy?: ImageGenerationRequest["ssrfPolicy"];
 }): Promise<ImageCatalogEntry[]> {
-  const offers = await fetchClawRouterCapabilityOffers(params);
-  const result: ImageCatalogEntry[] = [];
-  const seen = new Set<string>();
+  const offers = await fetchClawRouterCapabilityOffers({
+    ...params,
+    requireFreshProxyCatalog: true,
+  });
+  const result = new Map<string, ImageCatalogEntry>();
+  for (const offer of qualifiedGoogleImageOffers(offers)) {
+    const model = String(offer.model!.id);
+    if (result.has(model)) {
+      continue;
+    }
+    result.set(model, {
+      kind: "image_generation",
+      provider: "clawrouter",
+      model,
+      label: normalizeOptionalString(offer.model?.displayName) ?? model,
+      source: "live",
+      modes: ["generate", "edit"],
+      capabilities: GOOGLE_IMAGE_CAPABILITIES,
+    });
+  }
   for (const offer of offers) {
     const model = offer.model;
     const id = normalizeOptionalString(model?.id);
+    const mode = offer.endpoint === "images_edits" ? "edit" : "generate";
     if (
       offer.providerId !== "openai" ||
-      offer.endpoint !== "images_generations" ||
+      !["images_generations", "images_edits"].includes(offer.endpoint) ||
       offer.routeKind !== "unified" ||
-      offer.requestFormat !== "openai.images_generations" ||
+      offer.requestFormat !== `openai.${offer.endpoint}` ||
       offer.responseFormat !== "openai.images_generations" ||
       !offer.methods.includes("POST") ||
       !id ||
-      seen.has(id) ||
       !isSupportedClawRouterImageModel(id) ||
       !Array.isArray(model?.capabilities) ||
-      !model.capabilities.includes("image.generation")
+      !model.capabilities.includes(mode === "edit" ? "image.edit" : "image.generation")
     ) {
       continue;
     }
@@ -177,22 +203,26 @@ export async function fetchClawRouterImageModels(params: {
     if (!limits) {
       continue;
     }
-    seen.add(id);
-    result.push({
+    const existing = result.get(id);
+    const modes = [...new Set([...(existing?.modes ?? []), mode])];
+    result.set(id, {
       kind: "image_generation",
       provider: "clawrouter",
       model: id,
       label: normalizeOptionalString(model.displayName) ?? id,
       source: "live",
-      modes: ["generate"],
+      modes,
       capabilities: {
         ...CLAWROUTER_IMAGE_CAPABILITIES,
         generate: { ...CLAWROUTER_IMAGE_CAPABILITIES.generate, maxCount: limits.maxImages },
+        edit: modes.includes("edit")
+          ? { ...CLAWROUTER_IMAGE_CAPABILITIES.edit, maxCount: limits.maxImages }
+          : { enabled: false },
       },
       limits,
     });
   }
-  return result;
+  return [...result.values()];
 }
 
 export async function listClawRouterImageModelCatalog(

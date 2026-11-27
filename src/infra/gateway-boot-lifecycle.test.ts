@@ -25,6 +25,7 @@ import {
   readGatewayLastShutdownAsync,
   readGatewayRecentCrashesAsync,
   beginGatewayBootLifecycle,
+  countRepairableGatewayMaintenanceStartupFailures,
   recordGatewayCrashLoopRecovery,
   repairGatewayMaintenanceStartupFailures,
 } from "./gateway-boot-lifecycle.js";
@@ -635,7 +636,13 @@ describe("gateway crash-loop breaker", () => {
       ),
       completedBoot("unrelated", nowMs - 1, nowMs, "startup_failed", { reason: "EADDRINUSE" }),
     ]);
+    // Doctor's pending check counts exactly the rows the repair changes, and only reads.
+    await expect(countRepairableGatewayMaintenanceStartupFailures(lifecycle.env)).resolves.toBe(2);
+    expect(readBootRows(lifecycle).filter((row) => row.outcome === "startup_failed")).toHaveLength(
+      3,
+    );
     expect(repairGatewayMaintenanceStartupFailures(lifecycle.env)).toBe(2);
+    await expect(countRepairableGatewayMaintenanceStartupFailures(lifecycle.env)).resolves.toBe(0);
     expect(repairGatewayMaintenanceStartupFailures(lifecycle.env)).toBe(0);
     expectDecision(await lifecycle.inspect(nowMs + 1), 1);
     const rows = readBootRows(lifecycle)

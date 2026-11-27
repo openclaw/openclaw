@@ -216,7 +216,7 @@ try {
       }),
     },
     config,
-    assertActive: composeSessionSourceAssertion([sessionSource.source, authority.assertCurrent]),
+    assertActive: composeSessionSourceAssertion([sessionSource.source]),
     signal: authority.signal ?? new AbortController().signal,
   }).capabilities.prepareContextMedia!;
   let completedItems = 0;

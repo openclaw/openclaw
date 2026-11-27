@@ -196,6 +196,7 @@ export function updateRegistryWorktree(
   options: {
     onlyIfLive?: boolean;
     onlyIfActiveAt?: number;
+    pendingId?: string;
     assertCurrent?: () => void;
     removalToken?: string;
     workerAuthority?: WorktreeWorkerAuthority;
@@ -209,6 +210,28 @@ export function updateRegistryWorktree(
       input: { value: { id, patch, ...conditions }, receipt: randomUUID() },
     },
     workerAuthority ?? { assertCurrent },
+  );
+}
+
+/** Persist use at run boundaries, sharing the five-minute write limit across processes. */
+export async function recordRegistryWorktreeActivity(
+  env: NodeJS.ProcessEnv,
+  record: ManagedWorktreeRecord,
+  assertCurrent?: () => void,
+): Promise<void> {
+  const now = Date.now();
+  if (record.removedAt !== undefined || now - record.lastActiveAt < 5 * 60 * 1000) {
+    return;
+  }
+  await updateRegistryWorktree(
+    env,
+    record.id,
+    { lastActiveAt: now },
+    {
+      onlyIfLive: true,
+      onlyIfActiveAt: record.lastActiveAt,
+      assertCurrent,
+    },
   );
 }
 

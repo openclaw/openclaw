@@ -13,6 +13,7 @@ import {
   mockSystemAccountHome,
 } from "../../daemon/service.test-helpers.js";
 import { nativeExit } from "../../daemon/systemd-exec.test-support.js";
+import * as systemdServiceFiles from "../../daemon/systemd-service-files.js";
 import * as lockPayload from "../../infra/gateway-lock-payload.js";
 import * as gatewayLocks from "../../infra/gateway-lock.js";
 import { tryAcquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
@@ -42,7 +43,12 @@ vi.mock("../../daemon/service.js", async (importOriginal) => ({
   resolveGatewayService: mocks.service,
 }));
 
-beforeEach(() => mockSystemAccountHome());
+beforeEach(() => {
+  mockSystemAccountHome();
+  vi.spyOn(systemdServiceFiles, "readSystemdServiceCommandLocation").mockRejectedValue(
+    new Error("Location-only observation unavailable in full-state fixtures"),
+  );
+});
 afterEach(() => vi.restoreAllMocks());
 
 async function writeRuntimeRoot(root: string) {
@@ -87,6 +93,7 @@ async function withRuntimePublicationFixture(
     vi.spyOn(lockPayload, "readGatewayLockProcessNamespace").mockReturnValue(nativeNamespace);
     const root = path.join(home, "checkout");
     await writeRuntimeRoot(root);
+    await fs.mkdir(path.join(root, ".git"));
     await fs.mkdir(path.join(root, "dist-runtime"));
     const env = { ...process.env };
     const service = createMockGatewayService({
@@ -381,7 +388,7 @@ it.each([
     }
     const effect = vi.fn(async () => "published");
     await expect(publish(effect)).rejects.toThrow(
-      /affected Gateway.*openclaw gateway status --deep.*openclaw gateway stop.*retry the original command/,
+      /must be republished \(this update changed them or they were already stale\), but the affected Gateway.*openclaw gateway status --deep.*openclaw gateway stop.*retry the original command/,
     );
     expect(effect).not.toHaveBeenCalled();
   }),

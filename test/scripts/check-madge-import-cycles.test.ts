@@ -23,6 +23,7 @@ function createCheckerFixture(files: Record<string, string>, config: object = {}
     "scripts/lib/import-cycle-graph.ts",
     "scripts/lib/native-typescript.mts",
     "scripts/lib/native-typescript-diagnostics.mts",
+    "scripts/lib/direct-run.mjs",
     "scripts/lib/ts-guard-utils.mts",
   ]) {
     fs.copyFileSync(path.resolve(file), path.join(root, file));

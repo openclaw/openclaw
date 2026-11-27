@@ -1,0 +1,6 @@
+# Passive memory backends: a new loader registration mode and caller-authority boundary. Tests cover
+# the real loader with fixture memory plugins (full/discovery loads, opt-in, opt-out, slot "none",
+# owner manifest request, standalone lookup), the registration gate and frozen backend authority,
+# config validation warnings, the shared backend policy, and the Gateway startup plan. Exact
+# measured net test-line growth at the head.
+214

@@ -71,6 +71,7 @@ export async function createPluginReloadRecoveryFixture(
     registerFirst?: (api: OpenClawPluginApi, record: ReturnType<typeof createPluginRecord>) => void;
     abortOnCandidateStart?: boolean;
     waitForDrain?: boolean;
+    automatic?: boolean;
     drainSignal?: AbortSignal;
     checkpoint?: Parameters<typeof reloadGatewayPlugins>[1]["checkpoint"];
     prepareAttached?: () => Promise<void>;
@@ -329,13 +330,15 @@ export async function createPluginReloadRecoveryFixture(
           prepareConfigEffects:
             options.prepareConfigEffects ??
             (() => ({ retire: () => {}, rollback: rollbackConfigEffects })),
-          pluginLifecycle: {
-            reason: "reload",
-            waitForDrain: options.waitForDrain,
-            drainSignal: options.drainSignal,
-            operationId: "service-recovery",
-            pluginIds,
-          },
+          pluginLifecycle: options.automatic
+            ? undefined
+            : {
+                reason: "reload",
+                waitForDrain: options.waitForDrain,
+                drainSignal: options.drainSignal,
+                operationId: "service-recovery",
+                pluginIds,
+              },
           commitRuntime: async (publication) => {
             await options.beforePublish?.();
             publication?.publish();

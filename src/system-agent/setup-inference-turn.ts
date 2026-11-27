@@ -12,7 +12,10 @@ import {
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { CONNECTION_CHECK_PROMPT } from "../agents/connection-check.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
-import type { AgentHarnessPluginSelection } from "../agents/harness/runtime-plugin-load-plan.js";
+import {
+  requiresAgentHarnessPluginSelection,
+  type AgentHarnessPluginSelection,
+} from "../agents/harness/runtime-plugin-load-plan.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
 import { SessionManager } from "../agents/sessions/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -43,6 +46,7 @@ import {
   parseInferenceRef,
   redactSetupInferenceError,
   resolveSetupInferenceWinnerError,
+  resolveSetupContextShortfall,
   resolveToolFreeCliSetupError,
   SETUP_INFERENCE_REMOTE_TEST_TIMEOUT_MS,
   SETUP_INFERENCE_TEST_TIMEOUT_MS,
@@ -116,7 +120,9 @@ export async function runSetupInferenceTurn(params: {
       error:
         status === "timeout"
           ? "The setup response check timed out. Retry setup, or choose another model or runtime. No default model was changed."
-          : error,
+          : status === "rate_limit"
+            ? "The model check failed because the provider is busy or limiting requests. Wait a few minutes, then try again."
+            : error,
     };
   };
   const preparedRunAdmission = prepareSystemAgentRunAdmission(
@@ -190,6 +196,7 @@ export async function runSetupInferenceTurn(params: {
         // instead of spending the chat turn's ~90 s backoff ladder on 5xx/429/overload.
         retryTransientErrors: false,
         preparedModelRuntimeMode: "isolated-read-only",
+        refreshModelCatalog: !harness || harness === "openclaw",
         ...(harness === "codex" ? { cleanupBundleMcpOnRunEnd: true } : {}),
         ...(harness ? { agentHarnessRuntimeOverride: harness } : {}),
         lane: `session:probe-setup-inference:${route.provider}`,
@@ -235,6 +242,9 @@ export async function runSetupInferenceTurn(params: {
       latencyMs: Date.now() - started,
       text,
       auth: successfulAuth ?? (route.authProfileId ? { authProfileId: route.authProfileId } : {}),
+      ...(result.meta?.agentMeta?.contextTokens !== undefined
+        ? { contextTokens: result.meta.agentMeta.contextTokens }
+        : {}),
     };
   } catch (error) {
     const described = describeSetupInferenceError(error, route);
@@ -562,6 +572,8 @@ export async function verifySetupInferenceConfig(
     requireExecutionOwner?: boolean;
     assertSourceCurrent?: () => void;
     signal?: AbortSignal;
+    /** A model being chosen in setup gets a context warning; existing routes keep the runtime guard. */
+    candidateSetup?: true;
   },
 ): Promise<VerifySetupInferenceResult> {
   const configuredRoute = await resolveSystemAgentConfiguredRouteFromConfig(
@@ -590,13 +602,32 @@ export async function verifySetupInferenceConfig(
   const baselineRoute = requireExecutionOwner
     ? await projectInferenceRoute(params.config, route.agentId, { modelTarget: params.modelTarget })
     : undefined;
+  await using cache = requireExecutionOwner ? createPluginCache() : null;
+  let generation: SetupInferencePluginGeneration | undefined;
+  const withGeneration = <T>(run: () => T): T =>
+    generation ? withPluginRuntimeGenerationScope(generation, run) : run();
   let stagedOwnerPluginArtifacts: SystemAgentOwnerPluginArtifactSnapshot | undefined;
-  if (requireExecutionOwner) {
+  if (cache) {
     try {
-      stagedOwnerPluginArtifacts = captureSystemAgentOwnerPluginArtifacts({
-        config: route.sourceConfig,
-        executionRoute: route,
-      });
+      const selection = { provider: route.provider, modelId: route.model, agentId: route.agentId };
+      if (
+        route.runner === "embedded" &&
+        !route.agentHarnessRuntimeOverride &&
+        requiresAgentHarnessPluginSelection(selection, route.runConfig)
+      ) {
+        generation = await loadSetupInferencePluginGeneration({
+          cache,
+          config: route.runConfig,
+          workspaceDir: resolveAgentWorkspaceDir(route.runConfig, route.agentId, process.env),
+          selection,
+        });
+      }
+      stagedOwnerPluginArtifacts = withGeneration(() =>
+        captureSystemAgentOwnerPluginArtifacts({
+          config: route.sourceConfig,
+          executionRoute: route,
+        }),
+      );
     } catch (error) {
       return {
         ok: false,
@@ -605,14 +636,16 @@ export async function verifySetupInferenceConfig(
       };
     }
   }
-  const turn = await runSetupInferenceTurn({
-    route,
-    timeoutMs: params.timeoutMs,
-    requireExecutionOwner,
-    runtime: params.runtime,
-    assertSourceCurrent: params.assertSourceCurrent,
-    signal: params.signal,
-  });
+  const turn = await withGeneration(() =>
+    runSetupInferenceTurn({
+      route,
+      timeoutMs: params.timeoutMs,
+      requireExecutionOwner,
+      runtime: params.runtime,
+      assertSourceCurrent: params.assertSourceCurrent,
+      signal: params.signal,
+    }),
+  );
   if (!turn.ok) {
     return { ...turn, error: await redactSetupInferenceError(turn.error) };
   }
@@ -658,10 +691,14 @@ export async function verifySetupInferenceConfig(
       return { ok: false, status: "auth", error: await redactSetupInferenceError(error) };
     }
   }
+  const warning = params.candidateSetup
+    ? resolveSetupContextShortfall(route, turn.contextTokens)
+    : undefined;
   return {
     ok: true,
     modelRef: route.modelLabel,
     latencyMs: turn.latencyMs,
     ...(route.modelTarget ? { modelTarget: route.modelTarget } : {}),
+    ...(warning ? { warning } : {}),
   };
 }

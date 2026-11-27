@@ -25,21 +25,24 @@ import { createProviderModelCatalogRoutePolicy } from "./provider-model-route.js
 
 const OPENAI_PROVIDER_ID = "openai";
 
-export function createOpenAIModelRoutesResolver(params: {
-  config?: OpenClawConfig;
-  agentId?: string;
-  primaryModel?: ProviderModelRef;
-  resolveProfileAuthMode?: (profileId: string) => string | undefined;
-  resolveProfileAuthFlow?: (profileId: string) => string | undefined;
-  env?: Readonly<Record<string, string | undefined>>;
-  requestTransportOverrides?: ProviderRouteOverridePresence;
-}) {
-  const resolveRoutes = createProviderModelRoutesResolver({
+/** Prepared callers share config-only indexes; agent/account route intent stays per call. */
+export function createOpenAIModelRoutesResolver(
+  params: {
+    config?: OpenClawConfig;
+    agentId?: string;
+    primaryModel?: ProviderModelRef;
+    resolveProfileAuthMode?: (profileId: string) => string | undefined;
+    resolveProfileAuthFlow?: (profileId: string) => string | undefined;
+    env?: Readonly<Record<string, string | undefined>>;
+    requestTransportOverrides?: ProviderRouteOverridePresence;
+  },
+  resolveRoutes = createProviderModelRoutesResolver({
     provider: OPENAI_PROVIDER_ID,
     config: params.config,
     env: params.env,
     requestTransportOverrides: params.requestTransportOverrides,
-  });
+  }),
+) {
   return (observed: {
     modelId?: string;
     api?: string | null;
@@ -61,6 +64,7 @@ export function createOpenAIModelRoutesResolver(params: {
       });
     return resolveRoutes({
       modelId: observed.modelId ? splitTrailingAuthProfile(observed.modelId).model : undefined,
+      requestTransportOverrides: params.requestTransportOverrides,
       routeIntent:
         routeIntent?.source === "inherited" &&
         routeIntent.authRequirement &&
@@ -135,34 +139,40 @@ function resolveModelCatalogIdentityKeyWithPolicies(
 }
 
 /** Resolves provider-owned OpenAI route state without loading the full provider runtime. */
-export function resolveOpenAIModelRoutes(params: {
-  provider?: string;
-  modelId?: string;
-  api?: string | null;
-  baseUrl?: unknown;
-  observedRoutes?: readonly ProviderModelRouteSource[];
-  config?: OpenClawConfig;
-  agentId?: string;
-  primaryModel?: ProviderModelRef;
-  resolveProfileAuthMode?: (profileId: string) => string | undefined;
-  resolveProfileAuthFlow?: (profileId: string) => string | undefined;
-  env?: Readonly<Record<string, string | undefined>>;
-  requestTransportOverrides?: ProviderRouteOverridePresence;
-  routeIntent?: ProviderResolveModelRoutesContext["routeIntent"];
-  pinnedAuthRequirement?: ProviderModelRouteAuthRequirement;
-}): ProviderModelRouteResolution | null {
+export function resolveOpenAIModelRoutes(
+  params: {
+    provider?: string;
+    modelId?: string;
+    api?: string | null;
+    baseUrl?: unknown;
+    observedRoutes?: readonly ProviderModelRouteSource[];
+    config?: OpenClawConfig;
+    agentId?: string;
+    primaryModel?: ProviderModelRef;
+    resolveProfileAuthMode?: (profileId: string) => string | undefined;
+    resolveProfileAuthFlow?: (profileId: string) => string | undefined;
+    env?: Readonly<Record<string, string | undefined>>;
+    requestTransportOverrides?: ProviderRouteOverridePresence;
+    routeIntent?: ProviderResolveModelRoutesContext["routeIntent"];
+    pinnedAuthRequirement?: ProviderModelRouteAuthRequirement;
+  },
+  resolveProviderRoutes?: ReturnType<typeof createProviderModelRoutesResolver>,
+): ProviderModelRouteResolution | null {
   if (normalizeProviderId(params.provider ?? "") !== OPENAI_PROVIDER_ID) {
     return null;
   }
-  return createOpenAIModelRoutesResolver({
-    config: params.config,
-    agentId: params.agentId,
-    primaryModel: params.primaryModel,
-    resolveProfileAuthMode: params.resolveProfileAuthMode,
-    resolveProfileAuthFlow: params.resolveProfileAuthFlow,
-    env: params.env,
-    requestTransportOverrides: params.requestTransportOverrides,
-  })({
+  return createOpenAIModelRoutesResolver(
+    {
+      config: params.config,
+      agentId: params.agentId,
+      primaryModel: params.primaryModel,
+      resolveProfileAuthMode: params.resolveProfileAuthMode,
+      resolveProfileAuthFlow: params.resolveProfileAuthFlow,
+      env: params.env,
+      requestTransportOverrides: params.requestTransportOverrides,
+    },
+    resolveProviderRoutes,
+  )({
     modelId: params.modelId,
     api: params.api as ModelApi | null | undefined,
     baseUrl: params.baseUrl,

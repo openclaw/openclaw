@@ -3,6 +3,7 @@ import type { ReplyToMode } from "../../config/types.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
 import {
   copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
   isRenderablePayload,
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
@@ -20,11 +21,15 @@ export function applyReplyTagsToPayload(params: {
   currentMessageId?: string;
   replyThreading?: ReplyThreadingPolicy;
 }): ReplyPayload {
-  const payload = normalizeOptionalString(params.payload.replyToId)
-    ? setReplyPayloadMetadata(copyReplyPayloadMetadata(params.payload, { ...params.payload }), {
-        replyToIdExplicit: true,
-      })
-    : params.payload;
+  const payload =
+    normalizeOptionalString(params.payload.replyToId) &&
+    (params.payload.replyToTag ||
+      params.payload.replyToCurrent ||
+      getReplyPayloadMetadata(params.payload)?.replyToIdExplicit !== false)
+      ? setReplyPayloadMetadata(copyReplyPayloadMetadata(params.payload, { ...params.payload }), {
+          replyToIdExplicit: true,
+        })
+      : params.payload;
   const implicitReplyToId = normalizeOptionalString(params.implicitReplyToId);
   const currentMessageId = normalizeOptionalString(params.currentMessageId);
   const allowImplicitReplyToCurrentMessage = resolveImplicitCurrentMessageReplyAllowance(
@@ -56,6 +61,9 @@ export function applyReplyTagsToPayload(params: {
       replyToTag: tags.hasReplyTag || resolved.replyToTag,
       replyToCurrent: tags.replyToCurrent || resolved.replyToCurrent,
     });
+    if (tags.hasReplyTag) {
+      setReplyPayloadMetadata(resolved, { replyToIdExplicit: true });
+    }
   }
 
   if (resolved.replyToCurrent && !resolved.replyToId && currentMessageId) {

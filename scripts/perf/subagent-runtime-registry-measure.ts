@@ -26,6 +26,7 @@ import { parseArgs } from "node:util";
 import type { PreparedModelRuntimeSnapshot } from "../../src/agents/prepared-model-runtime.types.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { PluginRegistry } from "../../src/plugins/registry-types.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.js";
 
 const { values } = parseArgs({
@@ -279,12 +280,7 @@ try {
   const registrationsBefore = registrations;
   const hostLoadBefore = loadavg();
   if (values.allocations) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 32768,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 32768);
   }
   const processCpuBefore = process.cpuUsage();
   const threadCpuBefore = process.threadCpuUsage();

@@ -3,6 +3,7 @@ import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
   getPreparedModelFullCatalogAuth,
   hasSamePreparedModelCatalogAuth,
+  preparedModelCatalogAuthIdentity,
   type PreparedModelCatalogAuth,
 } from "./prepared-model-runtime-auth.js";
 import type {
@@ -17,8 +18,30 @@ import { preparedModelInventoryKey } from "./prepared-model-runtime.facts.js";
 import { fingerprintPreparedRuntimeFacts } from "./prepared-model-runtime.fingerprint.js";
 import type {
   PreparedModelCatalogInventory,
+  PreparedModelRuntimeOwner,
   PreparedModelRuntimePluginGeneration,
 } from "./prepared-model-runtime.types.js";
+
+/** Keep acquired provider scopes after auth replacement removes their rows. */
+export function createCatalogInventoryPublisher(
+  owner: Pick<PreparedModelRuntimeOwner, "catalogInventory">,
+) {
+  const acquiredProviderIds = new Set([
+    ...(owner.catalogInventory?.acquiredProviderIds ?? []),
+    ...(owner.catalogInventory?.providers.keys() ?? []),
+  ]);
+  return (inventory: PreparedModelCatalogInventory | undefined) => {
+    // A native no-op does not replace the retained provider acquisition history.
+    if (!inventory) {
+      return;
+    }
+    for (const provider of inventory.providers.keys()) {
+      acquiredProviderIds.add(provider);
+    }
+    inventory.acquiredProviderIds = acquiredProviderIds;
+    owner.catalogInventory = inventory;
+  };
+}
 
 export function preparedProviderCatalogSource(
   facts: PreparedModelRuntimeAgentFacts,
@@ -65,18 +88,10 @@ export function preparedProviderCatalogCredentials(
   provider: string,
   normalize: (provider: string) => string,
 ): string {
-  const { authStore, credentials } = source;
   return fingerprintPreparedRuntimeFacts({
-    profiles: Object.fromEntries(
-      Object.entries(authStore.profiles).filter(
-        ([, profile]) => normalize(profile.provider) === provider,
-      ),
-    ),
-    credentials: Object.fromEntries(
-      Object.entries(credentials ?? {}).filter(([id]) => normalize(id) === provider),
-    ),
+    ...preparedModelCatalogAuthIdentity(source, (id) => normalize(id) === provider),
     order: Object.fromEntries(
-      Object.entries(authStore.order ?? {}).filter(([id]) => normalize(id) === provider),
+      Object.entries(source.authStore.order ?? {}).filter(([id]) => normalize(id) === provider),
     ),
   });
 }

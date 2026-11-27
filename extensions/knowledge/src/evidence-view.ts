@@ -1,5 +1,5 @@
 import type { FeatureClient, FeatureOutput } from "openclaw/plugin-sdk/feature-contract";
-import type { contract } from "./contract.js";
+import type { FullOutputContract } from "./contract.js";
 import { confidenceView } from "./knowledge-presentation.js";
 import { icon } from "./ui-icons.js";
 
@@ -10,7 +10,7 @@ declare global {
   }
 }
 
-type Detail = FeatureOutput<typeof contract, "record">;
+type Detail = FeatureOutput<FullOutputContract, "record_detail">;
 type FileEvidence = NonNullable<Detail["evidence"]>[number];
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, text?: string) => {
   const n = document.createElement(tag);
@@ -21,7 +21,7 @@ const el = <K extends keyof HTMLElementTagNameMap>(tag: K, text?: string) => {
 };
 
 export function evidenceView(
-  feature: FeatureClient<typeof contract>,
+  feature: FeatureClient<FullOutputContract>,
   result: Detail,
   alive: () => boolean,
   redact: (s: string) => string,
@@ -35,7 +35,12 @@ export function evidenceView(
   root.className = "knowledge-evidence-list";
   root.setAttribute("aria-label", "Source evidence");
   if ((result.evidenceTotal ?? 0) > 1 || (result.evidenceSourceTotal ?? 0) > 1) {
-    root.append(el("p", `${result.evidenceTotal} citations · ${result.evidenceSourceTotal} files`));
+    root.append(
+      el(
+        "p",
+        `${result.evidenceTotal} citations · ${result.evidenceSourceTotal} ${result.evidenceSourceTotal === 1 ? "file" : "files"}`,
+      ),
+    );
   }
   const sources = new Map<
     string,
@@ -191,14 +196,14 @@ export function evidenceView(
   }
   let offset = result.nextEvidenceOffset;
   if (offset != null) {
-    const more = el("button", "More source files");
+    const more = el("button", "More citations");
     more.type = "button";
     root.append(more);
     const loadMore = async () => {
       more.disabled = true;
       expansion.count = Math.max(expansion.count, offset! + 20);
       try {
-        const page = await feature.invoke("record", {
+        const page = await feature.invoke("record_detail", {
           id,
           view: "summary",
           includeEvidence: true,
@@ -240,7 +245,7 @@ export function evidenceView(
 /** Download control for one retained original, streamed through `id`'s attachment authority.
  * `compact` renders an icon-only button for dense lists such as the Sources rail. */
 export function originalDownload(
-  feature: FeatureClient<typeof contract>,
+  feature: FeatureClient<FullOutputContract>,
   id: string,
   e: FileEvidence,
   alive: () => boolean,
@@ -307,7 +312,9 @@ export function originalDownload(
         link.click();
         setTimeout(() => URL.revokeObjectURL(url), 60000);
       }
-      status.textContent = "Original file downloaded.";
+      status.textContent = writer
+        ? "Original file saved."
+        : "Download started. Check your browser downloads.";
     } catch (error) {
       await writer?.abort().catch(() => {});
       status.textContent = redact(String(error));

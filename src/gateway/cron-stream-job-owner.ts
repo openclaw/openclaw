@@ -7,6 +7,7 @@ import type { CronJobState } from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayScheduledJob, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
+import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
 import { type getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
 import type { RunExit } from "../process/supervisor/types.js";
@@ -30,7 +31,11 @@ import {
   CRON_STREAM_SOURCE_CHANGED,
   prepareCronStreamSourceAuthority,
 } from "./cron-stream-source-authority.js";
-import { assertCronStreamExtinction, stopCronStreamRun } from "./cron-stream-stop.js";
+import {
+  assertCronStreamExtinction,
+  observeCronStreamRun,
+  stopCronStreamRun,
+} from "./cron-stream-stop.js";
 
 const STABLE_RUN_MS = 60_000;
 const MAX_CONSECUTIVE_FAILURES = 5;
@@ -54,7 +59,6 @@ export class CronStreamJobOwner {
   private cleanupHostScope?: () => Promise<void>;
   private sourceAuthority?: Awaited<ReturnType<typeof prepareCronStreamSourceAuthority>>;
   private opTail: Promise<void> = Promise.resolve();
-  private job: CronStreamJob;
   private scheduleKey: string;
   private sourceIdentity: string;
   private scheduler: GatewaySchedulerScope;
@@ -67,11 +71,10 @@ export class CronStreamJobOwner {
   private readonly output: CronStreamOutput;
 
   constructor(
-    job: CronStreamJob,
+    private job: CronStreamJob,
     private readonly params: CronStreamOwnerParams,
     private readonly spawnBroker: ReturnType<typeof getSpawnBroker>,
   ) {
-    this.job = job;
     this.scheduleKey = cronStreamScheduleKey(
       job.schedule,
       job.streamSandbox,
@@ -346,6 +349,15 @@ export class CronStreamJobOwner {
         // The existing stop owner fences output, cancels the exact process and joins cleanup.
         void this.stop("restart-exhausted", undefined, CRON_STREAM_SOURCE_CHANGED).catch(() => {});
       },
+    }).catch((error: unknown) => {
+      const unavailable = isOperatorAuthorityUnavailable(error);
+      this.state = unavailable ? "backoff" : "stopped";
+      if (unavailable) {
+        void this.scheduleRestart(
+          errorBackoffMs(this.consecutiveFailures || 1, this.params.retryBackoffMs),
+        );
+      }
+      throw error;
     });
     this.sourceAuthority = sourceAuthority;
     if (!sourceAuthority) {
@@ -429,6 +441,14 @@ export class CronStreamJobOwner {
           toErrorObject(cleanupError, "stream source startup cleanup is unconfirmed"),
         );
       }
+      if (isOperatorAuthorityUnavailable(error)) {
+        sourceAuthority.release();
+        this.state = "backoff";
+        void this.scheduleRestart(
+          errorBackoffMs(this.consecutiveFailures || 1, this.params.retryBackoffMs),
+        );
+        throw error;
+      }
       if (!isCurrent()) {
         this.state = "stopped";
         return;
@@ -470,36 +490,14 @@ export class CronStreamJobOwner {
       "cron-stream: source running",
     );
     this.output.schedulePendingIfNeeded();
-    void run
-      .wait()
-      .then(
-        (exit) => {
-          endOutput();
-          return this.processExited(exit, run);
-        },
-        (error: unknown) => {
-          this.params.logger.warn(
-            { jobId: this.job.id, err: formatErrorMessage(error) },
-            "cron-stream: supervised wait failed",
-          );
-          return this.processExited(
-            {
-              reason: "spawn-error",
-              exitCode: null,
-              exitSignal: null,
-              durationMs: Math.max(0, this.params.scheduler.now() - run.startedAtMs),
-              stdout: "",
-              stderr: "",
-              timedOut: false,
-              noOutputTimedOut: false,
-            },
-            run,
-          );
-        },
-      )
-      .catch(() => {
-        // The serialized owner already records exit handling failures.
-      });
+    void observeCronStreamRun({
+      run,
+      now: () => this.params.scheduler.now(),
+      logger: this.params.logger,
+      jobId: this.job.id,
+      endOutput,
+      onExit: (exit) => this.processExited(exit, run),
+    });
   }
 
   private async recoverSource(message: string, exit?: RunExit): Promise<void> {

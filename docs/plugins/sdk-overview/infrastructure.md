@@ -99,6 +99,15 @@ of treating them as a complete inventory.
 These inventories do not authorize later reads or writes against concurrent path
 replacement; use the root-bound file APIs for that boundary.
 
+### Root-scoped file errors
+
+`describeRootFileOpenFailure({ failure, subject, boundaryLabel, filePath })` from
+`openclaw/plugin-sdk/file-access-runtime` describes an unsuccessful `openRootFile`
+result as missing, unreadable, or rejected by boundary/alias checks. It does not
+authorize access. If outside-path existence must stay private, first compare the
+requested path with the authorized root using `isPathInside` and reject outside
+paths uniformly before opening them or describing the failure.
+
 ### File-watch capacity errors
 
 `getFileWatchCapacityCode(error)` from `openclaw/plugin-sdk/file-access-runtime`
@@ -748,6 +757,15 @@ the user can retry after the blocking condition changes. This result field is
 Telegram-specific; other channels keep their own interactive result contracts.
 
 ### Doctor plugin-state repairs
+
+`runtime-doctor-migrations` also exports `PluginDoctorRecoveryCliRegistrar` and
+`PluginDoctorRecoveryCliContext` for optional explicit recovery commands that
+must stay reachable during a pending migration. Declare the owned command paths
+in [the manifest](/plugins/manifest/surfaces#explicit-recovery-cli-subtrees) and
+export `registerRecoveryCli` from the separate Doctor artifact. It receives the
+mounted command, selected config/environment/state directory, and a plugin-bound
+keyed-store adapter. It receives no Gateway runtime. This registration never
+participates in automatic state migration or implies recovery consent.
 
 `PluginDoctorStateMigrationContext.repairPluginStateEntries(namespace, replacements)`
 is available during the offline `after-session-repair` phase. Each replacement

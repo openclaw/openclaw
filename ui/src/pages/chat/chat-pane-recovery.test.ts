@@ -2,14 +2,14 @@
 
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
-import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
+import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { admitStoredChatComposerQueueItemResult } from "./composer-queue-persistence.ts";
 
@@ -100,33 +100,78 @@ function queuedSendFixture() {
   };
 }
 
-it("unlocks the composer when shared session state settles the exact local run", () => {
-  const sessions = createSessionCapabilityFixture();
-  const { pane, state } = createTestChatPane({
-    client: {} as GatewayBrowserClient,
-    sessions,
-  });
-  state.chatRunId = "run-missed-terminal";
-  state.chatStream = "answer already rendered";
-
-  Object.assign(pane.context.sessions.state, {
-    result: sessionsResult({
-      key: state.sessionKey,
+it.each(["publication", "event"] as const)(
+  "recovers the saved first reply after a terminal row %s",
+  async (delivery) => {
+    const runId = "run-missed-terminal";
+    const active: GatewaySessionRow = {
+      key: "agent:main:first-reply",
+      sessionId: "first-session",
       kind: "direct",
+      updatedAt: 10,
+      activeRunIds: [runId],
+      hasActiveRun: true,
+      status: "running",
+    };
+    const idle: GatewaySessionRow = {
+      ...active,
       updatedAt: 20,
-      status: "done",
+      activeRunIds: [],
       hasActiveRun: false,
-      lastRunId: "run-missed-terminal",
-    }),
-    agentId: "main",
-    loading: false,
-    error: null,
-    deletedSessions: [],
-  });
-  pane.applySessionsState(pane.context.sessions.state);
+      lastRunId: runId,
+      status: "done",
+    };
+    const prompt = { role: "user", content: "Say hello", __openclaw: { id: "prompt", seq: 1 } };
+    const reply = {
+      role: "assistant",
+      content: "Hello!",
+      __openclaw: { id: "reply", seq: 2, runId },
+    };
+    const host = makeChatHost({
+      sessionKey: active.key,
+      currentSessionId: active.sessionId,
+      chatRunId: runId,
+      chatStream: delivery === "publication" ? "Hello!" : null,
+      chatMessages: [prompt],
+      sessionsResult: sessionsResult(active),
+      requestHandlers: {
+        "chat.history": { messages: [prompt, reply], sessionId: idle.sessionId, sessionInfo: idle },
+        "sessions.list": sessionsResult(active),
+      },
+    });
+    const { pane } = createTestChatPane({ client: host.client!, sessions: host.sessions });
+    pane.state = host as unknown as ChatPageHost;
+    pane.applySessionsState(host.sessions.state);
+    const unsubscribe = host.sessions.subscribe((state) => pane.applySessionsState(state));
+    cleanups.push(unsubscribe);
 
-  expect(state).toMatchObject({ chatRunId: null, chatStream: null });
-});
+    if (delivery === "publication") {
+      host.sessions.reconcile(idle);
+    } else {
+      host.sessionsResult = sessionsResult(idle);
+      handlePageGatewayEvent(
+        pane.state,
+        {
+          type: "event",
+          event: "sessions.changed",
+          payload: { ...idle, reason: "agent.run.ended" },
+        },
+        () => true,
+        { applied: true, row: idle },
+      );
+    }
+
+    expect(host).toMatchObject({ chatRunId: null, chatStream: null });
+    expect(host.request.mock.calls.filter(([method]) => method === "chat.history")).toHaveLength(1);
+    const history = getChatHistoryLoadState(host);
+    if (history.phase === "in-flight") {
+      await history.promise;
+    }
+    expect(host.chatMessages).toEqual([prompt, reply]);
+    pane.applySessionsState(host.sessions.state);
+    expect(host.request.mock.calls.filter(([method]) => method === "chat.history")).toHaveLength(1);
+  },
+);
 
 it("releases a restored queued send when the canonical session state records idle", async () => {
   const { pane, host, listRefresh, idle, calls } = queuedSendFixture();

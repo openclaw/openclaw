@@ -1,4 +1,5 @@
 import { iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import type { OpenClawAgentDatabaseReadOnlyResult } from "../../state/openclaw-agent-db-readonly-open.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
@@ -23,16 +24,7 @@ type DeferredTranscriptRows = {
 /** Payload text from one read transaction; `resumeAfterSeq` is set when the budget ended it. */
 type TranscriptPayloadSlice = { payloads: Array<string | undefined>; resumeAfterSeq?: number };
 
-/**
- * Reads one export snapshot: the head in the first slice's transaction (or the batch head while
- * the transcript context version still matches it), then its deferred rows in bounded slices,
- * one short read transaction each, parsed after that transaction closed. Every later slice first
- * compares the transcript context version, the token writers already validate loaded bytes
- * against; on a change the transcript is reread inside one transaction.
- */
-export function readTranscriptExportInSlices<
-  Snapshot extends DeferredTranscriptRows & { events: TranscriptEvent[] },
->(params: {
+type TranscriptExportSliceParams<Snapshot> = {
   sessionId: string;
   /** Runs one short read transaction on a fresh database borrow. */
   transaction: <T>(read: (database: ExportDatabase) => T) => OpenClawAgentDatabaseReadOnlyResult<T>;
@@ -40,24 +32,29 @@ export function readTranscriptExportInSlices<
   readHead: (database: ExportDatabase, slicing?: { deferAboveBytes: number }) => Snapshot | "cold";
   /** A deferred head the caller's batch transaction already read. */
   batchHead?: Snapshot;
-  projection?: "reset-boundary";
   projectEvent?: (event: TranscriptEvent) => TranscriptEvent;
-}) {
-  const { sessionId, transaction, batchHead, projectEvent } = params;
-  const hot = (snapshot: Snapshot | "cold") => {
-    if (snapshot === "cold") {
-      throw new SessionTranscriptColdError(sessionId);
-    }
-    return snapshot;
-  };
-  const readWhole = () => {
-    const whole = transaction((database) => hot(params.readHead(database)));
-    return whole.found ? whole.value : undefined;
-  };
-  // Reset navigation is a small native projection and stays in one transaction.
-  if (params.projection === "reset-boundary") {
-    return readWhole();
+};
+
+/** A sliced export observed a transcript context version change after its first slice. */
+export class SessionTranscriptExportChangedError extends Error {
+  constructor(readonly sessionId: string) {
+    super(`Session transcript ${sessionId} changed during a sliced export`);
+    this.name = "SessionTranscriptExportChangedError";
   }
+}
+
+/**
+ * Opens one export: the head in the first slice's transaction (or the batch head while the
+ * transcript context version still matches it). Its `events` iterate the head's rows, then read
+ * the deferred rows in bounded slices, one short read transaction each, parsed after that
+ * transaction closed. Each later slice first compares the transcript context version, the token
+ * writers already validate loaded bytes against, and throws `SessionTranscriptExportChangedError`
+ * on a change. Iteration retains no rows it already yielded.
+ */
+export function openTranscriptExportInSlices<
+  Snapshot extends DeferredTranscriptRows & { events: TranscriptEvent[] },
+>(params: TranscriptExportSliceParams<Snapshot>) {
+  const { sessionId, transaction, batchHead, projectEvent } = params;
   const first = transaction((database) => {
     const snapshot =
       batchHead?.deferred &&
@@ -66,7 +63,7 @@ export function readTranscriptExportInSlices<
         batchHead.deferred.version,
       )
         ? batchHead
-        : hot(params.readHead(database, { deferAboveBytes: 0 }));
+        : hotExportSnapshot(sessionId, params.readHead(database, { deferAboveBytes: 0 }));
     const { deferred } = snapshot;
     return {
       snapshot,
@@ -77,42 +74,86 @@ export function readTranscriptExportInSlices<
   if (!first.found) {
     return undefined;
   }
-  const { deferred, ...snapshot } = first.value.snapshot;
-  if (!deferred) {
-    return snapshot;
+  const { deferred, events: headEvents, ...snapshot } = first.value.snapshot;
+  let firstSlice = first.value.slice;
+  function* events(): Generator<TranscriptEvent, void, undefined> {
+    yield* headEvents;
+    let slice = firstSlice;
+    firstSlice = undefined;
+    while (slice) {
+      // Each captured payload is released as it is parsed.
+      const { payloads } = slice;
+      for (let index = 0; index < payloads.length; index++) {
+        const event: TranscriptEvent = JSON.parse(payloads[index]!);
+        payloads[index] = undefined;
+        yield projectEvent ? projectEvent(event) : event;
+      }
+      const afterSeq = slice.resumeAfterSeq;
+      if (afterSeq === undefined || !deferred) {
+        return;
+      }
+      const next = transaction((database) =>
+        isSameTranscriptContextVersion(
+          readTranscriptContextVersionInTransaction(database, sessionId),
+          deferred.version,
+        )
+          ? readTranscriptPayloadSlice(database, sessionId, deferred, afterSeq)
+          : undefined,
+      );
+      if (!next.found || !next.value) {
+        throw new SessionTranscriptExportChangedError(sessionId);
+      }
+      slice = next.value;
+    }
   }
-  const events = [...snapshot.events];
-  let slice = first.value.slice;
-  while (slice) {
-    // Each captured payload is released as it is parsed.
-    const { payloads } = slice;
-    for (let index = 0; index < payloads.length; index++) {
-      const event: TranscriptEvent = JSON.parse(payloads[index]!);
-      payloads[index] = undefined;
-      events.push(projectEvent ? projectEvent(event) : event);
-    }
-    const afterSeq = slice.resumeAfterSeq;
-    if (afterSeq === undefined) {
-      break;
-    }
-    const next = transaction((database) =>
-      isSameTranscriptContextVersion(
-        readTranscriptContextVersionInTransaction(database, sessionId),
-        deferred.version,
-      )
-        ? readTranscriptPayloadSlice(database, sessionId, deferred, afterSeq)
-        : undefined,
+  return { snapshot, events: events() };
+}
+
+/**
+ * Reads one complete export snapshot through `openTranscriptExportInSlices`. On a version change
+ * the transcript is reread inside one transaction.
+ */
+export function readTranscriptExportInSlices<
+  Snapshot extends DeferredTranscriptRows & { events: TranscriptEvent[] },
+>(params: TranscriptExportSliceParams<Snapshot> & { projection?: "reset-boundary" }) {
+  const { sessionId, transaction } = params;
+  const readWhole = () => {
+    const whole = transaction((database) =>
+      hotExportSnapshot(sessionId, params.readHead(database)),
     );
-    if (!next.found) {
+    if (!whole.found) {
       return undefined;
     }
-    if (!next.value) {
-      return readWhole();
-    }
-    slice = next.value;
+    const { deferred: _deferred, ...snapshot } = whole.value;
+    return snapshot;
+  };
+  // Reset navigation is a small native projection and stays in one transaction.
+  if (params.projection === "reset-boundary") {
+    return readWhole();
   }
-  return { ...snapshot, events };
+  const opened = openTranscriptExportInSlices(params);
+  if (!opened) {
+    return undefined;
+  }
+  try {
+    return { ...opened.snapshot, events: [...opened.events] };
+  } catch (error) {
+    if (!(error instanceof SessionTranscriptExportChangedError)) {
+      throw error;
+    }
+    return readWhole();
+  }
 }
+
+function hotExportSnapshot<Snapshot>(sessionId: string, snapshot: Snapshot | "cold"): Snapshot {
+  if (snapshot === "cold") {
+    throw new SessionTranscriptColdError(sessionId);
+  }
+  return snapshot;
+}
+
+// PostgreSQL materializes a result before iteration. SQLite streams rows until the byte budget.
+const POSTGRES_TRANSCRIPT_SLICE_ROWS = 256;
 
 /** Captures decoded payload text after `afterSeq` up to the slice budget. */
 function readTranscriptPayloadSlice(
@@ -124,6 +165,7 @@ function readTranscriptPayloadSlice(
   return readHotSessionTranscriptSnapshot(database, sessionId, "events", () => {
     const slice: TranscriptPayloadSlice = { payloads: [] };
     let bytes = 0;
+    const postgres = isPostgresSqlConnection(database.db);
     // Leaving the loop early or by a throw closes the iterator; no live cursor escapes a read.
     for (const row of iterateSqliteQuerySync(
       database.db,
@@ -134,11 +176,17 @@ function readTranscriptPayloadSlice(
         .where("session_id", "=", sessionId)
         .where("seq", "<=", throughSeq)
         .$if(afterSeq !== undefined, (query) => query.where("seq", ">", afterSeq!))
-        .orderBy("seq", "asc"),
+        .orderBy("seq", "asc")
+        .$if(postgres, (query) => query.limit(POSTGRES_TRANSCRIPT_SLICE_ROWS)),
     )) {
       slice.payloads.push(readTranscriptPayload(row));
       bytes += row.payload_bytes;
-      if (bytes >= TRANSCRIPT_PAYLOAD_SLICE_BYTES) {
+      if (
+        bytes >= TRANSCRIPT_PAYLOAD_SLICE_BYTES ||
+        (postgres &&
+          slice.payloads.length === POSTGRES_TRANSCRIPT_SLICE_ROWS &&
+          row.seq < throughSeq)
+      ) {
         slice.resumeAfterSeq = row.seq;
         break;
       }

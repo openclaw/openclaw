@@ -175,7 +175,7 @@ extension OpenClawChatViewModel {
 
     func composerPermissionDisabledReason(_ mode: OpenClawChatPermissionMode?) -> String? {
         if mode == .full, !self.composerCapabilityCatalog.canSelectFullPermission {
-            return String(localized: "Full permission requires operator.admin access.")
+            return String(localized: "You don’t have permission to turn on Full access.")
         }
         return self.composerPermissionMutationDisabledReason
     }
@@ -280,6 +280,20 @@ extension OpenClawChatViewModel {
             self.composerCapabilityState.errorMessage = String(localized: "Composer capabilities are unavailable.")
         } else {
             self.composerCapabilityState.errorMessage = catalog.loadFailureMessage
+        }
+    }
+
+    /// Health recovery retries a snapshot that never loaded on a healthy route: one loaded before the
+    /// operator connected has no scopes, and its owner ID need not change on connect. A loaded snapshot
+    /// stays; replacement sockets invalidate it through the reconnect events.
+    func reloadUnsettledComposerCapabilities() {
+        guard self.supportsComposerCapabilities,
+              !self.composerCapabilityOwnerMatches || self.composerCapabilityState.phase != .loaded
+        else { return }
+        Task { [weak self] in
+            // The recovery pass reloads capabilities after its transcript settles.
+            guard let self, self.pendingTransportRecoveryID == nil else { return }
+            await self.loadComposerCapabilities(force: true)
         }
     }
 

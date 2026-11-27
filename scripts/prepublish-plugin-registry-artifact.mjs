@@ -2,9 +2,9 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { compareReleaseVersions } from "./lib/release-version.mjs";
 
 export const PREPUBLISH_PLUGIN_REGISTRY_MANIFEST = "prepublish-plugin-registry.json";
 const SCHEMA = "openclaw.prepublish-plugin-registry/v1";
@@ -283,7 +283,13 @@ function readPreparedRegistryPackages(preparedBundleDir, sourceSha, candidateVer
   return entries;
 }
 
-function assertCompatibleRuntimePlugins(repoRoot, sourceSha, candidateVersion, requiredPackages) {
+function assertCompatibleRuntimePlugins(
+  repoRoot,
+  sourceSha,
+  hostVersion,
+  requiredPackages,
+  packageVersions,
+) {
   const policyPath = "src/plugins/official-runtime-plugins.ts";
   const trackedPolicy = execFileSync("git", ["ls-tree", sourceSha, "--", policyPath], {
     cwd: repoRoot,
@@ -329,15 +335,20 @@ process.stdout.write(JSON.stringify(candidates));`,
     ) {
       continue;
     }
+    // Only creation needs the source owner; copied verifiers stay dependency-light.
+    const { isRuntimeAdmissibleForFloor } = createRequire(import.meta.url)(
+      "../src/infra/semver.ts",
+    );
     const floor = candidate.minimumCompatibleVersion;
-    const comparison =
+    const candidateVersion = packageVersions.get(candidate.npmSpec);
+    const admissible =
       typeof floor === "string" &&
       floor === floor.trim() &&
       typeof candidateVersion === "string" &&
       candidateVersion === candidateVersion.trim()
-        ? compareReleaseVersions(candidateVersion, floor)
+        ? isRuntimeAdmissibleForFloor(candidateVersion, hostVersion, floor)
         : null;
-    if (comparison === null || comparison < 0) {
+    if (admissible !== true) {
       throw new Error(
         `${candidate.npmSpec} candidate ${candidateVersion} does not satisfy selected-source minimum ${String(floor)} at ${sourceSha}; align the release cohort before packaging`,
       );
@@ -382,17 +393,23 @@ export function createPrepublishPluginRegistryArtifact(params) {
       return [];
     }
     const { packageDir, packageJson } = findPublishablePlugin(repoRoot, packageName);
-    if (packageJson.version !== params.candidateVersion) {
-      throw new Error(`${packageName} version differs from the root package candidate`);
-    }
-    return [{ packageName, packageDir }];
+    return [{ packageName, packageDir, packageJson }];
   });
   assertCompatibleRuntimePlugins(
     repoRoot,
     params.sourceSha,
-    params.candidateVersion,
+    rootPackage.version,
     requiredPackages,
+    new Map([
+      ...packages.map(({ name, version }) => [name, version]),
+      ...pluginSources.map(({ packageName, packageJson }) => [packageName, packageJson.version]),
+    ]),
   );
+  for (const { packageName, packageJson } of pluginSources) {
+    if (packageJson.version !== params.candidateVersion) {
+      throw new Error(`${packageName} version differs from the root package candidate`);
+    }
+  }
   fs.mkdirSync(outputDir, { recursive: true });
   if (fs.readdirSync(outputDir).length !== 0) {
     throw new Error(`prepublish plugin registry output directory must be empty: ${outputDir}`);
@@ -404,10 +421,27 @@ export function createPrepublishPluginRegistryArtifact(params) {
       fs.constants.COPYFILE_EXCL,
     );
   }
-  for (const { packageName, packageDir } of pluginSources) {
+  const batchEntry = path.join(repoRoot, "scripts/lib/plugin-npm-build-and-pack-batch.mts");
+  // Bound module retention without adding build/pack concurrency. Older sources keep their CLI.
+  const batchSize = fs.existsSync(batchEntry) ? 4 : 1;
+  for (let offset = 0; offset < pluginSources.length; offset += batchSize) {
+    const batch = pluginSources.slice(offset, offset + batchSize);
+    const { packageDir } = batch[0];
     const before = new Set(fs.readdirSync(outputDir));
     const buildAndPack = path.join(repoRoot, "scripts/lib/plugin-npm-build-and-pack.mts");
-    if (fs.existsSync(buildAndPack)) {
+    if (batchSize > 1) {
+      runChecked(
+        process.execPath,
+        [
+          "--import",
+          "./scripts/tsx.mjs",
+          batchEntry,
+          outputDir,
+          ...batch.map((entry) => entry.packageDir),
+        ],
+        repoRoot,
+      );
+    } else if (fs.existsSync(buildAndPack)) {
       runChecked(
         process.execPath,
         ["--import", "./scripts/tsx.mjs", buildAndPack, packageDir, outputDir],
@@ -438,21 +472,26 @@ export function createPrepublishPluginRegistryArtifact(params) {
       );
     }
     const created = fs.readdirSync(outputDir).filter((name) => !before.has(name));
-    if (created.length !== 1 || !TARBALL_PATTERN.test(created[0])) {
-      throw new Error(`${packageName} pack must create exactly one .tgz`);
+    if (created.length !== batch.length || created.some((name) => !TARBALL_PATTERN.test(name))) {
+      throw new Error("plugin pack must create exactly one .tgz per package");
     }
-    const tarball = created[0];
-    const tarballPath = path.join(outputDir, tarball);
-    const packedPackage = readTarballPackageJson(tarballPath);
-    if (packedPackage.name !== packageName || packedPackage.version !== params.candidateVersion) {
-      throw new Error(`${packageName} packed identity differs from the candidate`);
+    const expectedNames = new Set(batch.map((entry) => entry.packageName));
+    for (const tarball of created) {
+      const tarballPath = path.join(outputDir, tarball);
+      const packedPackage = readTarballPackageJson(tarballPath);
+      if (
+        packedPackage.version !== params.candidateVersion ||
+        !expectedNames.delete(packedPackage.name)
+      ) {
+        throw new Error(`${tarball} packed identity differs from the candidate batch`);
+      }
+      packages.push({
+        name: packedPackage.name,
+        version: params.candidateVersion,
+        tarball,
+        sha256: sha256File(tarballPath),
+      });
     }
-    packages.push({
-      name: packageName,
-      version: params.candidateVersion,
-      tarball,
-      sha256: sha256File(tarballPath),
-    });
   }
   const manifest = {
     schema: SCHEMA,

@@ -1,20 +1,16 @@
 import { createMemo, createUniqueId, Errored, For, Loading, onSettled, Show } from "solid-js";
-import { normalizeAgentModelRefForConfig } from "../../../../src/config/model-input.js";
 import type {
   AgentIdentityResult,
   AgentsFilesListResult,
   AgentsListResult,
 } from "../../api/types.ts";
 import { AgentEmojiPicker } from "../../components/agent-emoji-picker.tsx";
-import { MultiSelect } from "../../components/multi-select.tsx";
 import { createOverlayAnchor } from "../../components/overlay-anchor.ts";
 import { createOverlay, findOverlayParent } from "../../components/overlay-lifecycle.ts";
 import { failPanelRefresh } from "../../components/panel-refresh-status-state.ts";
 import "../../components/tooltip.ts";
-import { DecisionModelPicker } from "../../components/solid/decision-model-picker.tsx";
 import { useAvatarGatewayContext } from "../../components/solid/identity-avatar-view.ts";
 import { AgentIdentityAvatar } from "../../components/solid/identity-avatar.tsx";
-import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import { PanelRefreshStatus as PanelRefreshNotice } from "../../components/solid/panel-refresh-status.tsx";
 import {
   SettingsNavRow,
@@ -28,23 +24,18 @@ import "../../components/solid/overlay.css";
 import {
   type AgentContext,
   buildAgentContext,
-  buildModelOptions,
-  createPrimaryModelExclusion,
-  resolveAgentConfig,
   resolveAgentTextAvatar,
-  resolveEffectiveModelFallbacks,
-  resolveModelFallbacks,
-  resolveModelPrimary,
 } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
+import type { AgentSettingsAccess } from "../../lib/agents/settings-access.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
-import { formatThinkingOverrideLabel } from "../../lib/chat/thinking.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { createIdentityAvatars } from "../../lib/identity-avatar-loader.ts";
 import { projectApplicationConfig } from "../../lib/reactive/application.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
+import { AgentModelSettings } from "./agent-model-settings.tsx";
 import type { AgentsPageView } from "./agents-page-state.ts";
 import { AvatarPicker } from "./avatar-picker.tsx";
 import type { AgentIdentityOutcome } from "./identity-actions.ts";
@@ -63,6 +54,7 @@ export function AgentOverview(
       agentFilesList: AgentsFilesListResult | null;
       agentIdentity: AgentIdentityResult | null;
       canUpdateIdentity: boolean;
+      panelAccess: AgentSettingsAccess["panels"];
       onSelectPanel: (panel: AgentsPanel) => void;
     },
 ) {
@@ -99,58 +91,6 @@ export function AgentOverview(
       params.defaultId,
       params.agentIdentity,
     ),
-  );
-  const isDefault = createMemo(() => context().isDefault);
-  const primaryModelLabel = () => t(`agents.overview.primaryModel${isDefault() ? "Default" : ""}`);
-  const config = createMemo(() => resolveAgentConfig(configForm(), params.agent.id));
-  const agentModel = () => visibleAgent().model;
-  const entryPrimary = createMemo(() => resolveModelPrimary(config().entry?.model));
-  const inheritedPrimary = createMemo(() =>
-    resolveModelPrimary(config().defaults?.model ?? agentModel()),
-  );
-  const defaultPrimary = createMemo(
-    () =>
-      resolveModelPrimary(config().defaults?.model) ||
-      (inheritedPrimary() !== "-" ? inheritedPrimary() : null) ||
-      (configForm() ? null : resolveModelPrimary(agentModel())),
-  );
-  const effectivePrimary = createMemo(() => entryPrimary() ?? defaultPrimary() ?? null);
-  const selectedPrimary = createMemo(() => (isDefault() ? effectivePrimary() : entryPrimary()));
-  const primaryModelOptions = createMemo(() => {
-    const inherited = defaultPrimary();
-    return [
-      {
-        value: "",
-        label: isDefault()
-          ? t("agents.overview.notSet")
-          : inherited
-            ? t("agents.overview.inheritDefaultModel", { model: inherited })
-            : t("agents.overview.inheritDefault"),
-      },
-      ...buildModelOptions(
-        configForm(),
-        effectivePrimary() ?? undefined,
-        params.modelCatalog,
-        params.agent.id,
-      ),
-    ];
-  });
-  const decisionModel = createMemo(() => {
-    const value = config().entry?.decisionModel;
-    return typeof value === "string" ? value : undefined;
-  });
-  const inheritedDecisionModel = createMemo(() => {
-    const value = config().defaults?.decisionModel;
-    return typeof value === "string" ? value : undefined;
-  });
-  const modelFallbacks = createMemo(
-    () =>
-      resolveEffectiveModelFallbacks(config().entry?.model, config().defaults?.model) ??
-      (configForm() ? null : resolveModelFallbacks(agentModel())),
-  );
-  const fallbackChips = createMemo(() => modelFallbacks() ?? []);
-  const disabled = createMemo(
-    () => !params.canUpdateConfig || !configForm() || params.configLoading || params.configSaving,
   );
   const identityDraft = () => params.readData().identityDraft;
   const identityName = createMemo(
@@ -239,15 +179,6 @@ export function AgentOverview(
       }}
       onImageError={identityImageError()}
     />
-  );
-
-  // Same catalog the primary picker offers; the field hides the effective
-  // primary and current chain itself. Order is preserved: a pick appends.
-  const fallbackOptions = createMemo(() =>
-    buildModelOptions(configForm(), null, params.modelCatalog, params.agent.id),
-  );
-  const isPrimaryModel = createMemo(() =>
-    createPrimaryModelExclusion(configForm(), effectivePrimary(), params.agent.id),
   );
 
   return (
@@ -371,8 +302,11 @@ export function AgentOverview(
           </div>
         </div>
       </SettingsSection>
-      <SettingsSection
-        title={t("agents.overview.modelSelection")}
+      <AgentModelSettings
+        {...params}
+        agent={visibleAgent()}
+        modelConfigForm={configForm()}
+        canUpdate={params.canUpdateConfig && !params.configLoading && !params.configSaving}
         notice={
           <For
             each={
@@ -405,73 +339,37 @@ export function AgentOverview(
             )}
           </For>
         }
-      >
-        <SettingsRow
-          title={primaryModelLabel()}
-          control={
-            <ModelPicker
-              label={primaryModelLabel()}
-              title={effectivePrimary() ?? undefined}
-              value={selectedPrimary() ?? ""}
-              options={primaryModelOptions()}
-              disabled={disabled()}
-              onChange={(value) => params.onModelChange(params.agent.id, value || null)}
-              onOpen={params.onModelCatalogOpen}
-            />
-          }
-        />
-        <SettingsRow
-          title={t("agents.overview.fallbacks")}
-          control={
-            <MultiSelect
-              class="agent-fallbacks"
-              options={fallbackOptions()}
-              value={fallbackChips()}
-              isExcluded={isPrimaryModel()}
-              getValueKey={normalizeAgentModelRefForConfig}
-              placeholder={t("agents.overview.addFallback")}
-              accessibleLabel={t("agents.overview.fallbacks")}
-              allowCustom={!catalogOwnsChoices()}
-              disabled={disabled()}
-              onChange={(next: string[]) => params.onModelFallbacksChange(params.agent.id, next)}
-              onOpen={params.onModelCatalogOpen}
-            />
-          }
-        />
-        <SettingsRow
-          title={t("chat.modelControls.decisionLabel")}
-          description={t("chat.modelControls.decisionAgentHelp")}
-          control={
-            <DecisionModelPicker
-              id="agent-decision-model"
-              models={params.decisionModels}
-              value={decisionModel()}
-              inherit={{ model: inheritedDecisionModel() }}
-              disabled={disabled()}
-              onChange={(value) => params.onDecisionModelChange(params.agent.id, value)}
-              onOpen={params.onModelCatalogOpen}
-            />
-          }
-        />
-      </SettingsSection>
+      />
       <SettingsSection title={t("agents.context.title")}>
-        <SettingsNavRow
-          title={t("agents.context.workspace")}
-          description={<span class="agent-overview__workspace">{context().workspace}</span>}
-          onClick={() => params.onSelectPanel("files")}
-        />
-        <SettingsNavRow
-          title={t("agents.context.skillsFilter")}
-          control={<SettingsValue value={context().skillsLabel} />}
-          onClick={() => params.onSelectPanel("skills")}
-        />
-        <Show when={params.agent.thinkingDefault}>
-          {(level) => (
+        <Show
+          when={params.panelAccess.files === "available"}
+          fallback={
             <SettingsRow
-              title={t("agents.context.thinkingDefault")}
-              control={<SettingsValue value={formatThinkingOverrideLabel(level())} />}
+              title={t("agents.context.workspace")}
+              control={<SettingsValue mono value={context().workspace} />}
             />
-          )}
+          }
+        >
+          <SettingsNavRow
+            title={t("agents.context.workspace")}
+            description={<span class="agent-overview__workspace">{context().workspace}</span>}
+            onClick={() => params.onSelectPanel("files")}
+          />
+        </Show>
+        <Show
+          when={params.panelAccess.skills === "available"}
+          fallback={
+            <SettingsRow
+              title={t("agents.context.skillsFilter")}
+              control={<SettingsValue value={context().skillsLabel} />}
+            />
+          }
+        >
+          <SettingsNavRow
+            title={t("agents.context.skillsFilter")}
+            control={<SettingsValue value={context().skillsLabel} />}
+            onClick={() => params.onSelectPanel("skills")}
+          />
         </Show>
         <Show when={context().runtime !== "-"}>
           <SettingsRow

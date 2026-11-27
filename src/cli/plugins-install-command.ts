@@ -25,7 +25,7 @@ import {
   requestDeferredPackageDirInstall,
   resolvePackageDirInstallTransaction,
 } from "../infra/install-package-dir.js";
-import { buildNpmResolutionFields } from "../infra/install-source-utils.js";
+import { buildNpmResolutionFields } from "../infra/npm-registry-spec.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub.js";
 import {
   loadConfigForInstall,

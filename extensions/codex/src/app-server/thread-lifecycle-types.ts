@@ -123,5 +123,6 @@ export type CodexThreadResumePreparation = {
   assertCurrent: () => void;
   dispose: () => void;
   settledSystemError: boolean;
+  releaseFailedRemoteRuntime: (releasedOnCurrentClient: boolean) => Promise<void>;
   waitForUnload: (requireClosed?: boolean) => Promise<boolean>;
 };

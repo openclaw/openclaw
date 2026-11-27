@@ -146,6 +146,7 @@ async function expectAssignmentAvatarLayout(page: Page, compact = false): Promis
         return {
           width: style.width,
           height: style.height,
+          slotWidth: getComputedStyle(slot).width,
           square: Math.abs(bounds.width - bounds.height) < 0.01,
           contained: bounds.left >= slotBounds.left && bounds.right <= slotBounds.right,
           gap: label.getBoundingClientRect().left - bounds.right,
@@ -156,6 +157,7 @@ async function expectAssignmentAvatarLayout(page: Page, compact = false): Promis
   expect(layout.length).toBeGreaterThan(0);
   for (const avatar of layout) {
     expect(avatar).toMatchObject({ width: "24px", height: "24px", square: true, contained: true });
+    expect(avatar.slotWidth).toBe("24px");
     expect(avatar.gap).toBeGreaterThanOrEqual(5.5);
   }
 }
@@ -242,12 +244,12 @@ suite.define(() => {
         const { assignTo, panel } = ownerControls(page);
         await assignTo.hover();
         const search = panel.getByRole("searchbox");
-        await expectBrowser(panel.locator(".header-search__toggle")).toBeVisible();
+        await expectBrowser(search).toBeVisible();
         await page.keyboard.type("zz");
         await expectBrowser(search).toHaveValue("zz");
         await expectBrowser(panel).toContainText("No people or agents match your search.");
         await page.keyboard.press("Escape");
-        await expectBrowser(search).toBeHidden();
+        await expectBrowser(search).toHaveValue("");
         await page.keyboard.type("carol");
         await expectBrowser(search).toHaveValue("carol");
         await expectBrowser(search).toBeFocused();
@@ -580,7 +582,6 @@ suite.define(() => {
         await expectAssignmentAvatarLayout(page, compact);
         const target = extraNames.at(-1) ?? "Carol";
         if (extraNames.length > 0) {
-          await page.locator(".header-search__toggle:visible").last().click();
           await page.getByRole("searchbox", { name: "Search people and agents…" }).fill(target);
           await expectBrowser(page.locator('button[value^="assign-owner:"]:visible')).toHaveCount(
             1,
@@ -626,7 +627,6 @@ suite.define(() => {
             await expectBrowser(unassigned).toBeDisabled();
             await expectBrowser(unassigned).toHaveAttribute("aria-pressed", "false");
           }
-          await page.locator(".header-search__toggle:visible").last().click();
           const search = page.getByRole("searchbox", { name: "Search people and agents…" });
           await search.fill("Teammate 0999");
           await gateway.resolveDeferred("users.list", directoryResponse(names));
@@ -635,8 +635,9 @@ suite.define(() => {
           await search.clear();
           await expectBrowser(ownerChoices(page, compact)).toHaveCount(compact ? 1005 : 1004);
           await search.fill("Teammate 0999");
+          // Escape clears the query and keeps the field; the next Escape leaves the list.
           await search.press("Escape");
-          await expectBrowser(search).toBeHidden();
+          await expectBrowser(search).toHaveValue("");
           await page.keyboard.press("Escape");
           if (width < 560) {
             await expectBrowser(page.locator(".session-actions-page")).toBeHidden();
@@ -657,7 +658,6 @@ suite.define(() => {
           renamed.updatedAt = 2;
           await gateway.setMethodResponse("users.list", directory);
           await openAssignment();
-          await page.locator(".header-search__toggle:visible").last().click();
           await search.fill("Renamed teammate");
           const match = assignee(page, "Renamed teammate", compact);
           await expectBrowser(match).toBeVisible();

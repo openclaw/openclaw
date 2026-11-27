@@ -103,8 +103,10 @@ vi.mock("./server-startup-model-runtime.js", () => ({
   publishConfiguredModelRuntimeSnapshots: async () => {},
   hydrateConfiguredExternalCliAuth: async () => ({}),
 }));
-vi.mock("../auto-reply/reply/dispatch-from-config.runtime-loaders.js", () => ({
-  loadGetReplyFromConfigRuntime: async () => ({ prewarmConfigDrivenReplyRuntime: async () => {} }),
+// mock-isolation: Restart-sentinel setup prepares runtimes without executing agent turns.
+vi.mock("../auto-reply/reply/get-reply-run-helpers.js", () => ({
+  loadEmbeddedAgentRuntime: async () => {},
+  loadSessionUpdatesRuntime: async () => {},
 }));
 const { startGatewaySidecars } = await import("./server-startup-sidecars.js");
 const sessionWorker = await vi.importActual<typeof SessionWorker>(

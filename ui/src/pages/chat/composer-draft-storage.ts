@@ -83,7 +83,11 @@ export function loadCapturedChatComposerState(
     const draft = normalizeChatComposerDraft(session?.draft ?? "");
     if (
       !session ||
-      (!draft && !session.goalMode && !session.replyTarget && !session.queue?.length)
+      (!draft &&
+        session.draftAttachmentVersion === undefined &&
+        !session.goalMode &&
+        !session.replyTarget &&
+        !session.queue?.length)
     ) {
       return { snapshot: null, revisions };
     }
@@ -91,6 +95,9 @@ export function loadCapturedChatComposerState(
       revisions,
       snapshot: {
         draft,
+        ...(session.draftAttachmentVersion !== undefined
+          ? { attachmentVersion: session.draftAttachmentVersion }
+          : {}),
         ...(session.draftMentions ? { mentions: session.draftMentions } : {}),
         ...(session.goalMode ? { goalMode: session.goalMode } : {}),
         ...(session.replyTarget ? { replyTarget: session.replyTarget } : {}),
@@ -186,7 +193,9 @@ export function persistCapturedChatComposerStateResult(
       draft,
       Object.hasOwn(options, "mentions") ? options.mentions : state.chatMentions,
     );
+    const attachmentVersion = incognito ? undefined : options.attachmentVersion;
     const matchesDraftMetadata = (saved: typeof session) =>
+      saved?.draftAttachmentVersion === attachmentVersion &&
       JSON.stringify(saved?.draftMentions ?? []) === JSON.stringify(mentions ?? []) &&
       JSON.stringify(saved?.goalMode ?? null) === JSON.stringify(goalMode ?? null) &&
       JSON.stringify(saved?.replyTarget ?? null) === JSON.stringify(replyTarget ?? null);
@@ -226,6 +235,7 @@ export function persistCapturedChatComposerStateResult(
       ...(goalMode ? { goalMode } : {}),
       ...(replyTarget ? { replyTarget: { ...replyTarget } } : {}),
       draftRevision,
+      ...(attachmentVersion !== undefined ? { draftAttachmentVersion: attachmentVersion } : {}),
       ...(session?.queue?.length ? { queue: session.queue } : {}),
       updatedAt: Date.now(),
     };

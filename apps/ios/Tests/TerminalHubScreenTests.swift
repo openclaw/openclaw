@@ -222,9 +222,9 @@ struct TerminalHubScreenTests {
             onConnected: {},
             onDisconnected: { _ in },
             onInvoke: { request in .init(id: request.id, ok: true) })
-        model.setOperatorConnected(true)
+        model.apply(.connected(GatewaySessionInfo()), to: .operator, route: nil)
         defer {
-            model.setOperatorConnected(false)
+            model.apply(.dropped, to: .operator, route: nil)
             Task { await model.operatorSession.disconnect() }
         }
         let currentRoute = await model.operatorSession.currentRoute()
@@ -280,10 +280,10 @@ struct TerminalHubScreenTests {
         #expect(try await webView.callAsyncJavaScript(
             challenge, arguments: [:], in: nil, contentWorld: .page) as? String == "effect-observed")
         #expect(server.requests.filter { $0.target == "/native-auth-effect" }.count == 2)
-        model.setOperatorConnected(false)
+        model.apply(.dropped, to: .operator, route: nil)
         #expect(try await webView.callAsyncJavaScript(
             challenge, arguments: [:], in: nil, contentWorld: .page) as? String == "denied")
-        model.setOperatorConnected(true)
+        model.apply(.connected(GatewaySessionInfo()), to: .operator, route: nil)
         #expect(try await webView.callAsyncJavaScript(
             challenge, arguments: [:], in: nil, contentWorld: .page) as? String == "effect-observed")
         #expect(server.requests.filter { $0.target == "/native-auth-effect" }.count == 3)

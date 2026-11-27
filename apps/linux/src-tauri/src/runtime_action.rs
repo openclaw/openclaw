@@ -338,9 +338,31 @@ pub(crate) fn fresh(
     is_current: &dyn Fn() -> bool,
 ) -> Result<(), String> {
     let launcher = read_launcher(cli)?;
+    let terminal_cli = cli;
     let selected_cli = select_cli(cli, runtime)?;
     let cli = &selected_cli;
     validate_runtime(runtime)?;
+    // Expose only a qualified app-owned Gateway CLI, before any baseline or service mutation.
+    if let Some(launcher) = launcher.as_ref().filter(|file| {
+        file.selection
+            .as_ref()
+            .is_some_and(|selection| selection.purpose == Purpose::Gateway)
+    }) {
+        check_current(is_current)?;
+        // Qualify the current launcher, not a pending runtime switch.
+        let mut command = terminal_cli
+            .command(["setup", "--terminal-path"])
+            .map_err(|error| error.to_string())?;
+        command.arg(&launcher.path);
+        // command() prepends the managed bin for app use. Terminal selection must see the
+        // original parent PATH instead, including Windows case-insensitive key handling.
+        if let Some(path) = std::env::var_os("PATH") {
+            command.env("PATH", path);
+        } else {
+            command.env_remove("PATH");
+        }
+        checked_output(command, "CLI installed, but terminal PATH setup")?;
+    }
     let observed = inspect(cli)?;
     if !observed.absent() {
         return Err(CHANGED.into());

@@ -408,6 +408,9 @@ run_update_candidate() {
   local update_stderr_file
   local update_stderr
   update_stderr_file="$(mktemp)"
+  local build_info installed_build_before
+  build_info="$(quiet_npm root -g)/$PACKAGE_NAME/dist/build-info.json"
+  installed_build_before="$(node -p 'require(process.argv[1]).buildId' "$build_info" 2>/dev/null || true)"
   set +e
   UPDATE_JSON="$(
     run_with_heartbeat "openclaw update" \
@@ -436,6 +439,8 @@ run_update_candidate() {
     UPDATE_BASELINE_VERSION="$UPDATE_BASELINE_VERSION" \
     UPDATE_EXPECT_OUTCOME="$expected_outcome" \
     UPDATE_TAG_URL="$UPDATE_TAG_URL" \
+    BUILD_INFO="$build_info" \
+    INSTALLED_BUILD_BEFORE="$installed_build_before" \
     node - <<'NODE'
 function parseFirstJsonObject(raw) {
   const start = raw.indexOf("{");
@@ -482,6 +487,32 @@ if (!["applied", "already-current"].includes(expectedOutcome)) {
   throw new Error(`unknown expected update outcome ${expectedOutcome}`);
 }
 const noOp = expectedOutcome === "already-current";
+// Release-aware updaters (src/update) report their update run record instead.
+if (noOp && typeof payload.runId === "string") {
+  if (payload.status !== "skipped" || payload.reason !== "already-current") {
+    throw new Error(
+      `expected skipped already-current update record, got ${JSON.stringify([payload.status, payload.reason, payload.phase])}`,
+    );
+  }
+  if ((payload.before?.version ?? null) !== baselineVersion || payload.target?.version !== expectedVersion) {
+    throw new Error(`unexpected update record versions ${JSON.stringify([payload.before, payload.target])}`);
+  }
+  const recordSteps = Array.isArray(payload.steps) ? payload.steps : [];
+  if (!recordSteps.some((step) => step?.step === "prepare:pack" && step.status === "completed")) {
+    throw new Error("already-current update record did not stage the requested artifact");
+  }
+  if (recordSteps.some((step) => ["validating", "activating"].includes(step?.step))) {
+    throw new Error("already-current update record validated or activated a release");
+  }
+  const fs = require("node:fs");
+  const before = String(process.env.INSTALLED_BUILD_BEFORE || "");
+  const after = JSON.parse(fs.readFileSync(String(process.env.BUILD_INFO || ""), "utf8")).buildId;
+  if (!before || after !== before) {
+    throw new Error(`already-current update changed or omitted installed build identity: ${before} -> ${after}`);
+  }
+  console.log("Verified already-current no-op: artifact staged, installed build unchanged, no activation");
+  process.exit(0);
+}
 const legacySameVersionApply = noOp && allowLegacySameVersionApply && payload.status === "ok";
 const expectedStatus = noOp && !legacySameVersionApply ? "skipped" : "ok";
 if (payload.status !== expectedStatus) {

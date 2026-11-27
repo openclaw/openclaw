@@ -1,8 +1,11 @@
 import { Show } from "solid-js";
 import { IconButton } from "../../../components/solid/icon-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatGoalsOptionalEnglish } from "../../../i18n/locales/en-chat-goals-optional.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { GoalComposer } from "./chat-composer-goal-mode.tsx";
+
+registerEnglishCatalog(registerChatGoalsOptionalEnglish);
 
 export function GoalComposerMode(props: { composer: GoalComposer }) {
   return (
@@ -27,6 +30,7 @@ export function GoalComposerMode(props: { composer: GoalComposer }) {
             class="composer-context-strip__dismiss"
             icon="x"
             label={t("chat.goals.cancel")}
+            tooltip={false}
             disabled={props.composer.pending}
             onClick={() => props.composer.cancel()}
           />

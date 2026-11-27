@@ -161,6 +161,7 @@ it("publishes legacy transcript previews without acquiring stored row facts agai
     expect(reads).toHaveBeenCalled();
     expect(preview(projection, query)).toBeUndefined();
     await listProjectedSessions({ projection, opts: { includeLastMessage: true } });
+    const source = projection.describe(query)!.materialized.source;
     reads.mockClear();
     // Join the actual producer publication before a synchronous snapshot can consume dirty work.
     const hostReads = observeSqliteReadSql(StatementSync.prototype);
@@ -176,6 +177,7 @@ it("publishes legacy transcript previews without acquiring stored row facts agai
       hostReads.restore();
     }
     expect(preview(projection, query)).toBe("Read-only transcript preview");
+    expect(projection.describe(query)!.materialized.source).toBe(source);
     expect(sessions.loadSessionEntry(scope)).toEqual(stored);
     expect(reads).not.toHaveBeenCalled();
     const list = await listProjectedSessions({ projection, opts: { includeLastMessage: true } });

@@ -140,8 +140,6 @@ export type ManagedServiceStopParams = {
     Partial<Pick<PreManagedServiceStop, "stopped">>;
   allowInstallRootChange?: boolean;
   onStopped?: (state: PreManagedServiceStop) => void;
-  /** Inspection-only selection; never copied into recovery or finalizer records. */
-  onOwnedStartupRuntime?: (executable: string | undefined) => void;
   /** Doctor restores this same native instance after its offline repair. */
   retainNativeIdentity?: boolean;
   assertCurrent?: (phase?: "restore") => void;
@@ -160,6 +158,7 @@ export type UpdateServiceRestartParams = {
   originalManagedServiceRuntime?: OriginalManagedServiceRuntime;
   shouldRestart: boolean;
   observePackageReplacement?: boolean;
+  gitReleaseRestartMode?: "observe" | "signal" | "native";
   result: UpdateRunResult;
   opts: UpdateCommandOptions;
   refreshServiceEnv: boolean;
@@ -181,4 +180,6 @@ export type UpdateServiceRestartParams = {
   onGatewayStartAttempted?: () => void;
   definitionRecovery?: UpdateServiceDefinitionRecovery;
   expectedGatewayIdentity?: { version: string; buildId?: string };
+  /** A rollback refusal; restart failure advice must not offer the old version. */
+  rollbackBlockedReason?: "state-migrated-no-rollback" | "rollback-state-unverified";
 };

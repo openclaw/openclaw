@@ -1,2 +1,0 @@
-# Bind the queued-input regression to the production-owned Gateway generation reader.
-5

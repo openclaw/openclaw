@@ -63,10 +63,10 @@ Profile watched Gateway CPU time when debugging startup/runtime hotspots:
 pnpm gateway:watch --benchmark
 ```
 
-The watch wrapper consumes `--benchmark` before invoking the Gateway and writes one V8 `.cpuprofile` per Gateway child exit under `.artifacts/gateway-watch-profiles/`. Stop or restart the watched gateway to flush the current profile, then open it with Chrome DevTools or Speedscope:
+The watch wrapper consumes `--benchmark` before invoking the Gateway and writes V8 `.cpuprofile` files for the Gateway and workers that inherit profiling flags under `.artifacts/gateway-watch-profiles/openclaw-gateway/`. Stop or restart the watched gateway to flush the current profile, then open it with Chrome DevTools or Speedscope:
 
 ```bash
-npx speedscope .artifacts/gateway-watch-profiles/*.cpuprofile
+npx speedscope .artifacts/gateway-watch-profiles/openclaw-gateway/*.cpuprofile
 ```
 
 - `--benchmark-dir <path>`: write profiles somewhere else.
@@ -224,7 +224,9 @@ For one-off profiling through the normal source runner, set `OPENCLAW_RUN_NODE_C
 OPENCLAW_RUN_NODE_CPU_PROF_DIR=.artifacts/cli-cpu pnpm openclaw status
 ```
 
-The source runner adds Node CPU profile flags and writes a `.cpuprofile` for the command. Use this before adding temporary instrumentation to command code.
+The source runner adds Node CPU profile flags and writes profiles under a command-specific subdirectory, such as `.artifacts/cli-cpu/openclaw-status/`. Node names each `.cpuprofile` with its process ID and thread ID, so normal CLI respawns keep separate profiles. Workers that inherit the profiling flags also get distinct filenames. Profiles flush when their process or worker exits. Use this before adding temporary instrumentation to command code.
+
+`OPENCLAW_RUN_NODE_CPU_PROF_MAX_FILES` keeps best-effort, per-command rotation before each launch. One launch can produce multiple profiles, so the limit can be exceeded until the next launch. Older flat `openclaw-*.cpuprofile` files remain untouched.
 
 Some startup stalls look like synchronous filesystem or module-loader work. For those stalls, add Node's sync I/O trace flag through the source runner:
 

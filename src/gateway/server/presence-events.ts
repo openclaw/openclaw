@@ -33,14 +33,10 @@ export function createPresencePublisher(params: {
         }
       }
       publishedVersion = version;
-      params.broadcast(
-        "presence",
-        { presence: listSystemPresence() },
-        {
-          dropIfSlow: true,
-          stateVersion: { presence: publishedVersion, health: params.getHealthVersion() },
-        },
-      );
+      params.broadcast("presence", Object.freeze({ presence: listSystemPresence() }), {
+        dropIfSlow: true,
+        stateVersion: { presence: publishedVersion, health: params.getHealthVersion() },
+      });
     } catch (error) {
       log.warn(`Presence publication failed: ${formatErrorMessage(error)}`);
     } finally {

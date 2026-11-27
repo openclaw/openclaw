@@ -1,7 +1,7 @@
 import { bindOperatorModelExecution } from "../agents/admitted-run-context.js";
 import { resolveDecisionModelSetting } from "../agents/decision-model-setting.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
-import { normalizeModelRef } from "../agents/model-ref-shared.js";
+import { normalizeModelRef } from "../agents/model-selection-normalize.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { captureAmbientGatewayOperatorAuthority } from "../gateway/operator-invocation-authority.js";

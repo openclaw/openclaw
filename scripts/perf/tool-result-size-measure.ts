@@ -1,7 +1,8 @@
 /**
  * Tool-result sizing owner benchmark (no Gateway latency claim).
- * 40 messages / 20 CJK, emoji and JSON tool results, detached by the initial model
- * history owner into writable containers. Each request applies the context guard's
+ * 40 messages / 20 CJK, emoji and JSON tool results. The initial-context mode
+ * reproduces the former writable model history; frozen models current hydration.
+ * Each request applies the context guard's
  * weight-2 estimate, history limits and compaction sizing. Revise one result every
  * 20 requests, including its persistence cap. Compare five alternating
  * base/candidate runs, separately for timing and sampled allocation (includes GC).
@@ -25,8 +26,9 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { AgentMessage } from "../../src/agents/runtime/index.js";
-import { cloneSessionModelContextEntries } from "../../src/agents/sessions/session-manager-codec.js";
+import { cloneTranscriptView } from "../../src/config/sessions/transcript-snapshot.js";
 import { freezeTrustedJsonSnapshot } from "../../src/shared/immutable-data.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -93,7 +95,9 @@ function createHistory(): AgentMessage[] {
   }));
   freezeTrustedJsonSnapshot(entries);
   const projected =
-    values.history === "frozen" ? entries : cloneSessionModelContextEntries(entries);
+    values.history === "frozen"
+      ? entries
+      : cloneTranscriptView(entries, { shareImmutablePayloads: false });
   return projected.map((entry) => {
     assert(entry.type === "message");
     return entry.message;
@@ -182,12 +186,7 @@ const observer = new PerformanceObserver((list) => {
 observer.observe({ entryTypes: ["gc"] });
 const inspector = new Session();
 if (values.mode === "allocation") {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 16384,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 16384);
 }
 const hostLoad = loadavg();
 const cpuStart = process.cpuUsage();

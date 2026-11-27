@@ -3,7 +3,7 @@ import { createFeatureClient } from "openclaw/plugin-sdk/feature-contract";
 import { browse } from "./browse-view.js";
 import { browserContract } from "./browser-contract.js";
 import { coalesceChanges } from "./change-refresh.js";
-import type { contract } from "./contract.js";
+import type { FullOutputContract } from "./contract.js";
 import { agentDisplayName } from "./knowledge-presentation.js";
 import type { Page } from "./page-context.js";
 import { button, el } from "./page-dom.js";
@@ -32,7 +32,7 @@ export default defineControlUiPlugin({
       id: "knowledge",
       label: "Knowledge",
       page: { id: "overview" },
-      icon: "book",
+      icon: "knowledge",
     });
     const removePage = host.ui.registerPage({
       id: "overview",
@@ -41,7 +41,7 @@ export default defineControlUiPlugin({
         const s = createPageState(initialContext, readLocation(initialContext.props));
         // Store settings and the viewing selector. Every other call goes through
         // `feature`, which reads as the selected agent's effective store.
-        const base = createFeatureClient<typeof contract>(browserContract, s.context.host);
+        const base = createFeatureClient<FullOutputContract>(browserContract, s.context.host);
         const feature = viewingClient(base, () => ({
           agent: s.viewing,
           defaultAgent: s.storesSnapshot?.defaultAgent,
@@ -52,7 +52,7 @@ export default defineControlUiPlugin({
           title = el("div"),
           actions = el("div", undefined, "knowledge-actions");
         const subtitle = el("p", undefined, "knowledge-subtitle");
-        title.append(el("h1", "Knowledge"), subtitle);
+        title.append(el("h1", "Knowledge", "plugin-page-title"), subtitle);
         // Silent until there is something to report: loading placeholders already say so.
         const status = el("span", "", "knowledge-status");
         status.hidden = true;

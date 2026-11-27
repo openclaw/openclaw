@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   note: vi.fn(),
   readCommand: vi.fn(),
   findJobs: vi.fn(),
+  execLaunchctl: vi.fn(),
   schemaPreflight: vi.fn(async () => {}),
 }));
 
@@ -28,7 +29,20 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: mocks.note })
 vi.mock("../daemon/service.js", () => ({
   resolveGatewayService: () => ({ readCommand: mocks.readCommand }),
 }));
-vi.mock("../daemon/launchd.js", () => ({ findStaleOpenClawUpdateLaunchdJobs: mocks.findJobs }));
+// Spy on the real scanner so the warning collector runs the production scan path;
+// the native launchctl result is controlled through execLaunchctl below.
+vi.mock("../daemon/launchd.js", async (importActual) => {
+  const actual = await importActual<typeof import("../daemon/launchd.js")>();
+  mocks.findJobs = vi.fn(actual.findStaleOpenClawUpdateLaunchdJobs);
+  return {
+    ...actual,
+    findStaleOpenClawUpdateLaunchdJobs: mocks.findJobs,
+  };
+});
+vi.mock("../daemon/launchd-exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/launchd-exec.js")>()),
+  execLaunchctl: mocks.execLaunchctl,
+}));
 // mock-isolation: keep real service locks in this test invocation's temporary directory.
 vi.mock("../infra/tmp-openclaw-dir.js", async () => ({
   resolvePreferredOpenClawTmpDir: (await import("node:os")).tmpdir,
@@ -180,14 +194,14 @@ it("does not overwrite service env changed while the operator considers the repa
 });
 
 beforeEach(() => {
-  vi.resetAllMocks();
+  vi.clearAllMocks();
   Object.defineProperty(process, "platform", { ...platformDescriptor, value: "darwin" });
   vi.stubEnv("HOME", "/tmp/openclaw-doctor-host");
   vi.stubEnv("OPENCLAW_STATE_DIR", "/tmp/openclaw-doctor-host-state");
   vi.spyOn(fs, "existsSync").mockReturnValue(false);
   mocks.runExec.mockResolvedValue({ stdout: "", stderr: "" });
   mocks.readCommand.mockResolvedValue(null);
-  mocks.findJobs.mockResolvedValue([]);
+  mocks.execLaunchctl.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
 });
 
 afterEach(() => {
@@ -357,20 +371,18 @@ describe("macOS stale updater warnings", () => {
   });
 
   it("prints stale updater job cleanup guidance on macOS", async () => {
-    mocks.findJobs.mockResolvedValue([
-      {
-        label: "ai.openclaw.update.2026.5.12",
-        lastExitStatus: 127,
-      },
-      {
-        label: "ai.openclaw.manual-update.1717168800",
-        lastExitStatus: 0,
-      },
-    ]);
+    mocks.execLaunchctl.mockResolvedValue({
+      code: 0,
+      stdout: [
+        "- 127 ai.openclaw.update.2026.5.12",
+        "- 0 ai.openclaw.manual-update.1717168800",
+      ].join("\n"),
+      stderr: "",
+    });
 
     await noteMacGatewayPlatformWarnings({});
 
-    expect(mocks.findJobs).toHaveBeenCalledTimes(1);
+    expect(mocks.execLaunchctl).toHaveBeenCalledWith(["list"]);
     const [message, title] = expectDefined<unknown[]>(mocks.note.mock.calls[0], "note call 0");
     expect(title).toBe("Gateway (macOS)");
     expect(message).toContain("Stale OpenClaw updater launchd job(s) detected");
@@ -379,6 +391,29 @@ describe("macOS stale updater warnings", () => {
     expect(message).toContain("launchctl remove <label>");
     expect(message).toContain("openclaw gateway restart");
   });
+
+  it.each(["exit", "reject"])(
+    "warns without private paths when the stale updater scan fails (%s)",
+    async (failure) => {
+      const privatePath = "/Users/private owner/Library/LaunchAgents/updater.plist";
+      const detail = `Operation not permitted: "${privatePath}"`;
+      if (failure === "exit") {
+        mocks.execLaunchctl.mockResolvedValue({ code: 1, stdout: "", stderr: detail });
+      } else {
+        mocks.execLaunchctl.mockRejectedValueOnce(new Error(detail));
+      }
+
+      await noteMacGatewayPlatformWarnings({});
+
+      const [message, title] = expectDefined<unknown[]>(mocks.note.mock.calls[0], "note call 0");
+      expect(title).toBe("Gateway (macOS)");
+      expect(message).toBe(
+        `Could not inspect stale OpenClaw updater launchd jobs: ${failure === "exit" ? "launchctl list failed (exit 1): " : ""}Operation not permitted: [redacted-path]; interrupted-update leftovers were NOT checked. Check launchctl availability and rerun openclaw doctor.`,
+      );
+      expect(message).not.toContain(privatePath);
+      expect(message).not.toContain("private owner");
+    },
+  );
 });
 
 describe("collectGatewayPlatformWarnings", () => {

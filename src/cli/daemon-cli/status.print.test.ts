@@ -112,11 +112,6 @@ vi.mock("./shared.js", async (importOriginal) => ({
   safeDaemonEnv: () => [],
 }));
 
-vi.mock("./status.gather.js", () => ({
-  renderPortDiagnosticsForCli: () => [],
-  resolvePortListeningAddresses: () => ["127.0.0.1:18789"],
-}));
-
 const service: DaemonStatus["service"] = {
   label: "LaunchAgent",
   loaded: true,
@@ -159,6 +154,35 @@ describe("printDaemonStatus", () => {
     renderSystemdUnavailableHintsMock.mockReset().mockReturnValue([]);
     isWSLEnvMock.mockClear();
   });
+
+  it.each([false, true])(
+    "renders real port diagnostics and listening addresses (RPC ok=%s)",
+    (rpcOk) => {
+      printDaemonStatus({
+        service: runningService,
+        gateway,
+        port: {
+          port: 18789,
+          status: "busy",
+          listeners: [
+            { pid: 42, command: "synthetic", address: "TCP 127.0.0.1:18789 (LISTEN)" },
+            { pid: 42, command: "synthetic", address: "127.0.0.1:18789" },
+            { pid: 42, command: "synthetic", address: "TCP [::1]:18789 (LISTEN)" },
+          ],
+          hints: ["synthetic port hint"],
+        },
+        rpc: { ok: rpcOk },
+      });
+
+      expect(output(runtime.error).includes("Port 18789 is already in use.")).toBe(!rpcOk);
+      expect(output(runtime.error).includes("synthetic port hint")).toBe(!rpcOk);
+      expect(
+        output()
+          .split("\n")
+          .filter((line) => line.startsWith("Listening:")),
+      ).toEqual(["Listening: 127.0.0.1:18789, [::1]:18789"]);
+    },
+  );
 
   it("preserves Gateway metadata and input while redacting private definitions in JSON", () => {
     const server = { version: "2026.5.6", buildId: "build-2026.5.6", connId: "conn-1" };
@@ -353,10 +377,10 @@ describe("printDaemonStatus", () => {
     expect(output()).not.toContain("Listed lifecycle jobs may be responsible");
   });
 
-  it("prints stale updater launchd job guidance", () => {
-    printDaemonStatus({
-      service: {
-        runtime: { status: "running", pid: 8000 },
+  it.each([
+    {
+      label: "detected jobs",
+      serviceState: {
         staleUpdateLaunchdJobs: [
           {
             label: "ai.openclaw.update.2026.5.12",
@@ -368,14 +392,35 @@ describe("printDaemonStatus", () => {
           },
         ],
       },
+      expected: [
+        "Stale OpenClaw updater launchd job(s) detected.",
+        "ai.openclaw.update.2026.5.12",
+        "ai.openclaw.manual-update.1717168800",
+        "launchctl remove <label>",
+        formatCliCommand("openclaw gateway restart"),
+      ],
+    },
+    {
+      label: "failed inspection",
+      serviceState: {
+        staleLaunchdInspectionError: "launchctl list failed (exit 1): Operation not permitted",
+      },
+      expected: [
+        "Could not inspect stale OpenClaw updater launchd jobs",
+        "launchctl list failed (exit 1): Operation not permitted",
+        "NOT checked",
+        formatCliCommand("openclaw doctor"),
+      ],
+    },
+  ])("prints stale updater $label guidance", ({ serviceState, expected }) => {
+    printDaemonStatus({
+      service: { runtime: { status: "running", pid: 8000 }, ...serviceState },
       gateway,
     });
 
-    expectMockLineContains(runtime.error, "Stale OpenClaw updater launchd job(s) detected.");
-    expectMockLineContains(runtime.error, "ai.openclaw.update.2026.5.12");
-    expectMockLineContains(runtime.error, "ai.openclaw.manual-update.1717168800");
-    expectMockLineContains(runtime.error, "launchctl remove <label>");
-    expectMockLineContains(runtime.error, formatCliCommand("openclaw gateway restart"));
+    for (const line of expected) {
+      expectMockLineContains(runtime.error, line);
+    }
   });
 
   it("points macOS launchd stdout and stderr at one log when gateway is not listening", () => {
@@ -700,6 +745,21 @@ describe("printDaemonStatus", () => {
     expect(logs).toContain("Gateway accepted the connection");
     expect(errors).not.toContain("Connectivity check: failed");
     expect(logs).not.toContain("not a warm-up delay");
+  });
+  it("does not recommend reinstalling an overridden launcher for a reachable newer Gateway", () => {
+    printDaemonStatus({
+      cli: { version: "2026.11.1" },
+      gateway: { ...gateway, version: "2026.11.2" },
+      service: {
+        command: {
+          programArguments: ["node", "/service/dist/index.js", "gateway"],
+          managedOverrides: { launcher: "command" },
+        },
+      },
+    });
+    expect(output(runtime.error)).toContain("running Gateway is version 2026.11.2");
+    expect(output(runtime.error)).not.toContain("or reinstall the Gateway service");
+    expect(output(runtime.error)).toContain("CLI matching the running Gateway");
   });
   it("does not warn about the service install when it matches the CLI version", () => {
     printDaemonStatus({

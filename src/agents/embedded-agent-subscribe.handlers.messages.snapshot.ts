@@ -3,7 +3,7 @@ import {
   createStreamingDirectiveAccumulator,
   splitTrailingDirective,
 } from "../auto-reply/reply/streaming-directives.js";
-import type { AssistantMessage } from "../llm/types.js";
+import type { AssistantHistoryMessage } from "../llm/types.js";
 import {
   assistantVisibleTextFilters,
   toolCallXmlTextFilter,
@@ -26,9 +26,9 @@ import {
   stripDowngradedToolCallText,
 } from "./embedded-agent-utils.js";
 
-export function extractAssistantStreamSnapshot(
+export function extractAssistantStreamSnapshot<T extends AssistantHistoryMessage>(
   ctx: EmbeddedAgentSubscribeContext,
-  message: AssistantMessage,
+  message: T,
   options?: {
     final?: boolean;
     throughIndex?: number;

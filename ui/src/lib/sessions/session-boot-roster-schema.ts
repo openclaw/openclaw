@@ -41,6 +41,7 @@ const row = json.object({
   thinkingLevel: text,
   model: text,
   modelProvider: text,
+  modelDisplayName: text,
   owner: json.optional(json.object({ actor })),
 });
 export const bootRosterSchema = json.object({

@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { findClientToolNameConflicts } from "../agent-tool-definition-adapter.js";
 import type { ClientToolDefinition } from "../command/shared-types.js";
 import {
   createClientToolDefinition as clientTool,
@@ -15,6 +14,7 @@ import {
   collectAllowedToolNames,
   collectRegisteredToolNames,
   AGENT_RESERVED_TOOL_NAMES,
+  findClientToolNameConflicts,
   toSessionToolAllowlist,
 } from "./tool-name-allowlist.js";
 

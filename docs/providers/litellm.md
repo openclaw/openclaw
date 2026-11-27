@@ -115,6 +115,12 @@ authored provider models. Non-interactive setup with an explicit proxy URL leave
 available for discovery in merge mode; replace mode keeps its documented default. Run
 `openclaw models list --provider litellm --refresh --json` to refresh the proxy's model list.
 
+Chat model choices include the models the proxy lists with `mode: "chat"`, which LiteLLM sets
+from its model map or from `model_info.mode` in the proxy config, and `claude-opus-4-6`. Models
+listed with another mode stay out of chat choices. Models listed without a mode follow the
+[shared listing rule](/plugins/sdk-provider-plugins/model-catalogs#live-model-discovery); set
+`model_info.mode` on a deployment to classify it explicitly.
+
 Re-running authentication also combines case-variant provider keys, such as `LiteLLM` and `litellm`,
 into one canonical row while preserving authored provider options and model settings, including when
 activating a saved sign-in. Non-interactive

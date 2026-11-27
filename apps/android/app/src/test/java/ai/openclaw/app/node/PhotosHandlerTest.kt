@@ -1,5 +1,6 @@
 package ai.openclaw.app.node
 
+import ai.openclaw.app.gateway.InvokeResult
 import android.Manifest
 import android.content.ContentProvider
 import android.content.ContentResolver
@@ -270,7 +271,7 @@ class PhotosHandlerTest : NodeHandlerRobolectricTest() {
     return PhotosHandler(appContext())
   }
 
-  private fun onlyPhoto(result: ai.openclaw.app.gateway.GatewaySession.InvokeResult) =
+  private fun onlyPhoto(result: ai.openclaw.app.gateway.InvokeResult) =
     Json
       .parseToJsonElement(result.payloadJson ?: error("missing photo payload: ${result.error?.message}"))
       .jsonObject

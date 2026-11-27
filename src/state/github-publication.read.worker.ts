@@ -14,6 +14,7 @@ import {
 import {
   listRepositoryGitHubPublicationsInDatabase,
   readPendingRepositoryGitHubPublicationInDatabase,
+  readRepositoryGitHubPublicationInputInDatabase,
 } from "../gateway/github-repository-publication-read.worker.js";
 import {
   readRepositoryGitHubPublicationBranchInDatabase,
@@ -30,13 +31,19 @@ import type { WorkerOperationHandlers } from "./worker-operation-registry.js";
 
 export const publicationReadOperations = {
   "githubPublications.sharedObservation": (
-    { session, selector, entry }: SharedGitHubPublicationReadInput,
+    { session, selector, entry, originSources }: SharedGitHubPublicationReadInput,
     db,
   ) => ({
     type: "githubPublications.sharedObservation" as const,
     row:
-      readSharedRepositoryGitHubPublicationInDatabase(db, session, selector, entry) ??
-      readSharedGitHubPublicationRequestInDatabase(db, session, selector, entry),
+      readSharedRepositoryGitHubPublicationInDatabase(
+        db,
+        session,
+        selector,
+        entry,
+        originSources,
+      ) ??
+      readSharedGitHubPublicationRequestInDatabase(db, session, selector, entry, originSources),
   }),
   "githubPublications.taskReceipts": (input: TaskPublicationRead, db) => ({
     type: "githubPublications.taskReceipts" as const,
@@ -90,6 +97,13 @@ export const publicationReadOperations = {
   ) => ({
     type: "githubPublications.repositoryList" as const,
     rows: listRepositoryGitHubPublicationsInDatabase(db, input),
+  }),
+  "githubPublications.repositoryInput": (
+    input: Parameters<typeof readRepositoryGitHubPublicationInputInDatabase>[1],
+    db,
+  ) => ({
+    type: "githubPublications.repositoryInput" as const,
+    row: readRepositoryGitHubPublicationInputInDatabase(db, input),
   }),
   "githubPublications.repositoryRead": ({ requestId }: { requestId: string }, db) => ({
     type: "githubPublications.repositoryRead" as const,

@@ -7,6 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { captureEnv, deleteTestEnvValue } from "../test-utils/env.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { buildUpdateResultPayload, type UpdateResultPayload } from "./update-result-payload.js";
 import * as outcomeTelemetry from "./update-result-telemetry.js";
@@ -561,13 +562,15 @@ describe("failed bookkeeping never fails the update write", () => {
 });
 
 describe("bounded transport", () => {
+  let environment: ReturnType<typeof captureEnv>;
   beforeEach(() => {
     // The sender stays offline under the test runner unless a case opts into real requests.
-    vi.stubEnv("VITEST", undefined);
-    vi.stubEnv("NODE_ENV", undefined);
+    environment = captureEnv(["VITEST", "NODE_ENV"]);
+    deleteTestEnvValue("VITEST");
+    deleteTestEnvValue("NODE_ENV");
   });
   afterEach(() => {
-    vi.unstubAllEnvs();
+    environment.restore();
   });
 
   it("posts the exact body only after a capable HEAD, with fixed headers", async () => {

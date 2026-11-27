@@ -660,12 +660,13 @@ export async function startOrResumeThread(
             buildLoadedPluginThreadConfig,
             prepareResume: () => prepareCodexThreadResume(params, resumeBinding, requestContext),
             releaseRetainedThread: async (assertCurrent) => {
-              await releaseRetainedThread(
+              const released = await releaseRetainedThread(
                 resumeBinding.threadId,
                 resumeBinding.clientId,
                 assertCurrent,
                 { waitForBackgroundCleanup: true },
               );
+              return released && (!resumeBinding.clientId || resumeBinding.clientId === clientId);
             },
           });
           if (resumed) {

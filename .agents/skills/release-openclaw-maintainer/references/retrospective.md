@@ -1,10 +1,12 @@
 # Release retrospective
 
 Every beta, stable, and extended-stable release ends with a retrospective in
-`openclaw/maintainers`. It is a closeout step, not optional polish: the release
+`openclaw/tideclaw`. It is a closeout step, not optional polish: the release
 is not done until the retrospective PR is open and its ledger update passes.
-Write it after publication, platform assets, and main closeout are terminal, or
-when execution hands off to another operator (a frozen Part 1 snapshot).
+Write it after core publication, platform assets, and main closeout are terminal,
+or when execution hands off to another operator (a frozen Part 1 snapshot).
+ClawHub never delays this PR: record pending or failed ClawHub work with its
+owner, exact run/attempt, evidence, and next action; append its outcome later.
 
 ## Collect while releasing
 
@@ -39,8 +41,9 @@ costs, run ledger, timeline, numbered findings (evidence, cost, improvements),
 **operator nudges that should be defaults** (time, quote, default to encode,
 owner), what worked, prioritized follow-up, and evidence and limits.
 
-## Deliver to openclaw/maintainers
+## Deliver to openclaw/tideclaw
 
+- Read the target repository’s root and release-scoped AGENTS.md first.
 - Path: `release/retrospectives/<version>.md`, with an archive row (newest
   first) in `release/retrospectives/README.md`.
 - If the file exists (a handoff snapshot or an earlier part), append
@@ -65,14 +68,32 @@ owner), what worked, prioritized follow-up, and evidence and limits.
    every anchor's text, unique contiguous IDs, and count sums. A conflict with a
    concurrent retrospective means rebuilding on `main` and rerunning the script.
 
-Validate with `python3 scripts/check-skill-sources.py`,
-`node scripts/render-maintainer-docs.mjs` (restore unrelated render changes),
-`node --test test/maintainer-docs.node-test.mjs`, and `git diff --check`. The PR
-body follows the problem, impact, change, and evidence shape.
+Validate in `openclaw/tideclaw` with the campaign's `--check` script and
+`git diff --check`, following `release/AGENTS.md`. Keep reports and their
+line-number anchors intact; do not run the old repository's skill-source
+or website-rendering checks here. The PR body follows the problem, impact,
+change, and evidence shape.
 
 ## Follow through
 
-Each nudge-that-should-be-a-default and each P0/P1 follow-up becomes a skill,
-tooling, or issue change on `main` (release-process changes then reach the
-active release branch per the shared release boundaries). Link them from the
-retrospective PR when they exist.
+`release/retrospectives/issue-ledger.md` is the canonical tracker for each
+nudge-that-should-be-a-default and P0/P1 follow-up. Record its disposition there
+and link scoped repair issues or PRs from the matching ledger entry and
+retrospective PR. Implement skill and tooling fixes on `main`; release-process
+changes then reach the active release branch per the shared release boundaries.
+
+Unresolved follow-ups do not require a separate release-wide tracking issue.
+Do not duplicate the ledger in an umbrella issue, as happened with the
+[beta.2 duplicate tracker](https://github.com/openclaw/tideclaw/issues/32).
+
+## Track in-flight fixes per agent
+
+Use the [shared tracker issue body](https://github.com/openclaw/tideclaw/issues/11)
+only for per-agent active claims and status linked to ledger entries, not a
+second findings tracker or repository progress commits.
+Before editing, freshly read the body and merge only your own section,
+preserving other agents and your still-active batches; verify the result.
+Once a batch is finished **and its durable ledger-update PR is merged**,
+archive its outcome and evidence (including that PR) in a comment and verify it;
+then freshly read the body, remove only your completed batch, and verify again.
+Keep active, unmerged, or blocked work in the body. Do not close the tracker.

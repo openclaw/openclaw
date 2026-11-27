@@ -13,6 +13,7 @@ export function projectSessionEntryCapabilityFacts(entry: SessionEntryCurrentFac
     agentHarnessId: entry.agentHarnessId,
     agentRuntimeOverride: entry.agentRuntimeOverride,
     initializationPending: entry.initializationPending,
+    templateInitialization: structuredClone(entry.templateInitialization),
     execHost: entry.execHost,
     execNode: entry.execNode,
     deviceFolder: entry.deviceFolder ? { ...entry.deviceFolder } : undefined,
@@ -27,6 +28,7 @@ export function projectSessionEntryCapabilityFacts(entry: SessionEntryCurrentFac
     subagentControlScope: entry.subagentControlScope,
     inheritedToolPolicyVersion: entry.inheritedToolPolicyVersion,
     inheritedToolPolicySource: entry.inheritedToolPolicySource,
+    delegatedOperatorSource: structuredClone(entry.delegatedOperatorSource),
     delegatedToolPolicy: structuredClone(entry.delegatedToolPolicy),
     inheritedToolAllow: Array.isArray(entry.inheritedToolAllow)
       ? [...entry.inheritedToolAllow]

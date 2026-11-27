@@ -58,8 +58,12 @@ Gateway, see [Personal library authoring](/tools/skill-workshop/personal-library
 - **Skill diet:** once a day, one oversized learned skill is shrunk without
   changing its rules. See [Skill diet](#skill-diet).
 
-Changed skills load in new sessions. A running session keeps the skill snapshot
-it started with.
+When you edit a Workshop skill, the current turn keeps the skill catalog it
+received in its prompt. If the run reads the local file directly, a later
+`skills_read` call in that turn sees the updated `SKILL.md`. A worker that
+received a copy keeps using that copy for the rest of the turn. Once OpenClaw
+publishes the refreshed catalog, the next turn uses it in the same session or
+a new one.
 
 <a id="changes-and-recovery" />
 
@@ -93,8 +97,8 @@ and archives skills the review created. Pressing it again reports that the
 change was already undone. The chat command needs the owner, plus
 `operator.admin` from Gateway clients.
 
-You can also undo one skill from the Control UI (**Undo** on the skill's latest
-change or in its History tab) or the CLI:
+You can also undo one skill from its **History** tab in the Control UI or from
+the CLI:
 
 ```bash
 openclaw skills workshop restore deploy-staging
@@ -182,8 +186,9 @@ cleanup also diets one oversized learned skill per agent:
 To undo a diet, restore the previous version from the skill's history in the
 Control UI or with `openclaw skills workshop restore <name>`. Restoring also
 removes the reference files the diet added. A skill that cannot be dieted, for
-example one long procedure section, is left unchanged and tried again when its
-turn comes around. A diet makes two to four tool-free model calls on the
+example one long procedure section or a Markdown file outside `assets/`,
+`examples/`, `references/`, `scripts/`, and `templates/`, is left unchanged and
+tried again when its turn comes around. A diet makes two to four tool-free model calls on the
 agent's primary model and sends the skill's text to that provider.
 
 <a id="learn" />
@@ -329,14 +334,16 @@ and why) lives in the state database and keeps the newest 500 entries per agent.
 ## Operator surfaces
 
 - **Control UI:** open **Plugins → Skill workshop**. Learned skills are listed
-  most used first (or by recent activity or name), each with its latest change
-  and **Undo**; skills idle for two weeks are flagged, since
-  [unused-skill cleanup](#unused-skill-cleanup) may archive them at 30 days.
+  most used first (or by recent activity or name). Skills idle for two weeks are
+  flagged, since [unused-skill cleanup](#unused-skill-cleanup) may archive them
+  at 30 days.
   Selecting a skill shows its instructions, support files, and history.
-  From the history you can compare an earlier version with today's, restore it,
-  or undo a change. **Archive** and **Restore** switch a skill between the
-  Active and Archived lists. The **Drafts** list appears in `propose` mode or
-  while drafts wait; see [Drafts](#drafts). The page header holds the learning mode switch and
+  The Workshop's **History** view lists the latest change per skill. Select a
+  change to open the skill's own **History** tab, where you can compare versions,
+  restore an earlier version, or undo a change. **Archive** and **Restore**
+  switch a skill between the Active and Archived lists. The **Drafts** list
+  appears in `propose` mode or while drafts wait; see [Drafts](#drafts). The page
+  header holds the learning mode switch and
   **Learn from history**. If the learning configuration cannot be loaded, the
   page shows the error and a **Retry** button while keeping the skill library available.
 - **CLI:** `openclaw skills workshop list | changes | show | archive | restore`.

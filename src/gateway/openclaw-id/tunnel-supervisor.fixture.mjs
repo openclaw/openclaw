@@ -15,6 +15,12 @@ if (mode === "unavailable") {
 if (mode === "unavailable-until" && !fs.existsSync(process.env.FAKE_TUNNEL_AVAILABLE ?? "")) {
   process.exit(78);
 }
+if (mode === "key-missing") {
+  process.exit(76);
+}
+if (mode === "key-mismatch") {
+  process.exit(75);
+}
 if (mode === "crash") {
   process.exit(1);
 }
