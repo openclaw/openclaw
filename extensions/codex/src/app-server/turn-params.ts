@@ -261,23 +261,15 @@ export function buildTurnCollaborationMode(
   };
 }
 
+/** Stable shared context rides the cached thread carrier; only the personal overlay stays parent-local. */
 export function buildCodexParentLocalInstructions(
   params: EmbeddedRunAttemptParams,
-  options: {
-    personaInstructions?: string;
-    skillsInstructions?: string;
-    memoryInstructions?: string;
-  } = {},
+  personalPersonaInstructions?: string,
 ): string | null {
-  const contextInstructions = joinPresentSections(
-    options.personaInstructions,
-    options.skillsInstructions,
-    options.memoryInstructions,
-  );
   if (params.trigger === "cron") {
-    return joinPresentSections(CRON_COLLABORATION_INSTRUCTIONS, contextInstructions);
+    return joinPresentSections(CRON_COLLABORATION_INSTRUCTIONS, personalPersonaInstructions);
   }
-  return contextInstructions || null;
+  return personalPersonaInstructions || null;
 }
 
 const CRON_COLLABORATION_INSTRUCTIONS = [

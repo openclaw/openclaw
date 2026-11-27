@@ -16,7 +16,7 @@
 // The steps run one at a time (staging, commit and cancel touch the same key files), and a
 // re-bind starts only once the claw's registration at Discovery is settled: a registration
 // whose receipt was lost can be recovered only with the K_gw Discovery registered.
-import fs from "node:fs";
+import fs from "node:fs/promises";
 import type { Channel } from "../../../packages/openclaw-id-protocol/src/index.js";
 import type { GatewayOpenClawIdConfig } from "../../config/types.gateway.js";
 import type { AuthorityRefusal } from "./authority-result.js";
@@ -43,7 +43,7 @@ const notLocal = () =>
 
 /** The keys a re-bind moves to; the tunnel child stages K_srv'. */
 async function stageKeys(stateDir: string) {
-  return { kGw: stageGatewayKey(stateDir), kSrv: await stageEndpointKey(stateDir) };
+  return { kGw: await stageGatewayKey(stateDir), kSrv: await stageEndpointKey(stateDir) };
 }
 
 /** A re-bind step, and what commit (the signed binding) and prepare/commit (the code) take. */
@@ -206,9 +206,9 @@ export function createServiceRebind(deps: Deps) {
     const bound = owner.current()?.binding?.body;
     const stateDir = deps.getStateDir();
     const stagedGateway = stagedKeyPath(gatewayKeyPath(stateDir));
-    const gatewayKey = loadKeyFile(stagedGateway);
+    const gatewayKey = await loadKeyFile(stagedGateway);
     if (gatewayKey && `ed25519:${ed25519PublicKeyHex(gatewayKey)}` !== bound?.k_gw) {
-      fs.rmSync(stagedGateway, { force: true });
+      await fs.rm(stagedGateway, { force: true });
     }
     gatewayKey?.fill(0);
     await discardStagedEndpointKey(stateDir, bound?.k_srv ?? "");

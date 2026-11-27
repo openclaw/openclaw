@@ -36,7 +36,7 @@ scenario:
       ownerId: qa-owner-completion-owner
       # Non-owner turns either omit the owner-only tool from their catalog or gate its execution.
       refusals:
-        - needs the owner's authority
+        - needs the Gateway owner's authority
         - "Unknown tool id: automations"
 
 flow:

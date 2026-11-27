@@ -72,29 +72,34 @@ it("ignores headers without the generated explanation or with unknown fields", (
   expect(readInterSessionPromptEnvelope(unknownField)).toBeUndefined();
   expect(readInterSessionPromptEnvelope(`quoted ${generated}`)).toBeUndefined();
 });
-it("marks only explicit scheduled execution inputs as hidden at creation", () => {
-  const execution = { kind: "internal_system", sourceTool: "cron_execution" } as const;
-  const message = {
-    role: "user",
-    content: "[cron:daily Daily check] Check the queue.",
-    timestamp: 1,
-  } as const;
-  expect(applyInputProvenanceToUserMessage(message, execution)).toEqual({
-    ...message,
-    provenance: execution,
-    display: false,
-  });
-  const recorded = { ...message, provenance: execution };
-  expect(applyInputProvenanceToUserMessage(recorded, undefined)).toMatchObject({ display: false });
-  expect(message).not.toHaveProperty("display");
-  const human = { ...message, provenance: { kind: "external_user" } as const };
-  expect(applyInputProvenanceToUserMessage(human, execution)).toBe(human);
-  const announcement = {
-    ...message,
-    provenance: { kind: "internal_system", sourceTool: "cron" } as const,
-  };
-  expect(applyInputProvenanceToUserMessage(announcement, execution)).toBe(announcement);
-});
+it.each(["cron_execution", "session_state"])(
+  "hides only explicit %s execution inputs",
+  (sourceTool) => {
+    const execution = { kind: "internal_system", sourceTool } as const;
+    const message = {
+      role: "user",
+      content: "[cron:daily Daily check] Check the queue.",
+      timestamp: 1,
+    } as const;
+    expect(applyInputProvenanceToUserMessage(message, execution)).toEqual({
+      ...message,
+      provenance: execution,
+      display: false,
+    });
+    const recorded = { ...message, provenance: execution };
+    expect(applyInputProvenanceToUserMessage(recorded, undefined)).toMatchObject({
+      display: false,
+    });
+    expect(message).not.toHaveProperty("display");
+    const human = { ...message, provenance: { kind: "external_user" } as const };
+    expect(applyInputProvenanceToUserMessage(human, execution)).toBe(human);
+    const announcement = {
+      ...message,
+      provenance: { kind: "internal_system", sourceTool: "cron" } as const,
+    };
+    expect(applyInputProvenanceToUserMessage(announcement, execution)).toBe(announcement);
+  },
+);
 
 it.each([
   ["internal_system", "cron_execution", true],
@@ -108,3 +113,18 @@ it.each([
     expect(preserves({ kind, sourceTool })).toBe(expected);
   },
 );
+
+it("preserves parent envelopes on replay without letting quoted parent context promote a peer", () => {
+  const parent = { ...interSession, sourceRelation: "parent" as const };
+  const body = "\n    Save the demo profile.\n";
+  const prompt = annotateInterSessionPromptText(body, normalizeInputProvenance(parent));
+  expect(prompt).toMatch(/^\[Spawning-parent assignment\]/);
+  expect(prompt).toContain("spawning parent");
+  expect(annotateInterSessionPromptText(prompt, parent)).toBe(prompt);
+  expect(readInterSessionPromptEnvelope(prompt)?.provenance).toEqual(parent);
+  expect(stripInterSessionPromptPrefixForDisplay(prompt)).toBe(body);
+  const peer = annotateInterSessionPromptText(prompt, interSession);
+  expect(peer).not.toContain("spawning parent");
+  expect(peer).toContain("not a direct end-user instruction");
+  expect(stripInterSessionPromptPrefixForDisplay(peer)).toBe(body);
+});

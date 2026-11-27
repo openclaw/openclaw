@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
+import { createCronViewJob, getElement, renderCronView } from "./view.test-support.ts";
 import "../../styles/base.css";
 import "../../styles/settings.css";
 import "../../styles/cron.css";
@@ -22,6 +23,42 @@ async function nextFrame() {
 }
 
 describe.skipIf(!hasBrowserLayout)("cron editor browser layout", () => {
+  it("wraps long saved facts between the clock and Edit without clipping the delivery mode", async () => {
+    const job = createCronViewJob("release-digest", {
+      schedule: { kind: "cron", expr: "30 9 * * 1-5", tz: "America/New_York" },
+      sessionTarget: "isolated",
+      payload: {
+        kind: "agentTurn",
+        message: "Draft the digest.",
+        model: "example/" + "longname".repeat(12),
+      },
+      delivery: { mode: "announce" },
+    });
+    const detail = await renderCronView({ editingJob: job, detailTab: "history" });
+    detail.style.inlineSize = "366px";
+    await nextFrame();
+    const facts = getElement(detail, ".cron-prompt__facts", HTMLSpanElement);
+    const ink = document.createRange();
+    ink.selectNodeContents(facts);
+    const lines = Array.from(ink.getClientRects());
+    const clock = getElement(
+      detail,
+      ".cron-prompt__clock svg",
+      SVGSVGElement,
+    ).getBoundingClientRect();
+    const edit = getElement(
+      detail,
+      ".cron-prompt__edit",
+      HTMLButtonElement,
+    ).getBoundingClientRect();
+    const first = expectDefined(lines[0], "first line of schedule facts");
+    expect(lines.length).toBeGreaterThan(1);
+    expect(Math.abs(centerY(first) - centerY(clock))).toBeLessThanOrEqual(alignmentTolerancePx);
+    expect(first.left).toBeGreaterThan(clock.right);
+    expect(lines.every((line) => line.right <= edit.left)).toBe(true);
+    expect(Math.abs(centerY(edit) - centerY(clock))).toBeLessThanOrEqual(alignmentTolerancePx);
+  });
+
   it("vertically centers the configured trigger status with the Advanced heading", async () => {
     const details = document.createElement("details");
     details.className = "cron-advanced";

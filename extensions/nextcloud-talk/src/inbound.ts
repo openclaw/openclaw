@@ -44,7 +44,7 @@ import {
   saveNextcloudTalkInboundMedia,
 } from "./inbound-media.js";
 import {
-  normalizeNextcloudTalkAllowEntry,
+  nextcloudTalkIngressIdentity,
   normalizeNextcloudTalkAllowlist,
   resolveNextcloudTalkGroupRequireMention,
   resolveNextcloudTalkAllowlistMatch,
@@ -150,12 +150,7 @@ export async function handleNextcloudTalkInbound(params: {
     await core.channel.inbound.ingress.resolveStable({
       channelId: CHANNEL_ID,
       accountId: account.accountId,
-      identity: {
-        key: "nextcloud-talk-user-id",
-        normalize: (value) => normalizeNextcloudTalkAllowEntry(value) || null,
-        sensitivity: "pii",
-        entryIdPrefix: "nextcloud-talk-entry",
-      },
+      identity: nextcloudTalkIngressIdentity,
       cfg: config as OpenClawConfig,
       readStoreAllowFrom: async () =>
         await pairing.readStoreForDmPolicy(CHANNEL_ID, account.accountId),

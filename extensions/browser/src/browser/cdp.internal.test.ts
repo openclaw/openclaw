@@ -264,6 +264,30 @@ it("hard-bounds CDP role rendering above a requested depth", async () => {
   expect(snap.truncated).toBe(true);
 });
 
+it("does not count ignored nodes or unnamed generic wrappers toward page depth", async () => {
+  const wrappers = Array.from({ length: 8 }, (_, index) =>
+    ax(`w${index}`, "generic", "", { childIds: [index < 7 ? `w${index + 1}` : "button"] }),
+  );
+  const server = await startMockWsServer({
+    "Accessibility.getFullAXTree": axTreeResult([
+      ax("root", "RootWebArea", "Deep page", { childIds: ["ignored"] }),
+      ax("ignored", "none", "", { ignored: true, childIds: ["w0"] }),
+      ...wrappers,
+      ax("button", "button", "Deep"),
+    ]),
+    "Runtime.evaluate": cdpError("unavailable"),
+  });
+  const efficient = await snapshotRoleViaCdp({
+    wsUrl: server.wsUrl,
+    options: { interactive: true, compact: true, maxDepth: 1 },
+  });
+  expect(efficient.snapshot).toBe('- button "Deep" [ref=e1]');
+
+  const full = await snapshotRoleViaCdp({ wsUrl: server.wsUrl, options: { maxDepth: 1 } });
+  expect(full.snapshot.split("\n")).toHaveLength(11);
+  expect(full.snapshot.split("\n").at(-2)).toBe(`${"  ".repeat(9)}- generic`);
+});
+
 it("places child frame content after the real iframe ref, not ref-looking page text", async () => {
   const name = "Literal [ref=e2]\t\b";
   const server = await startMockWsServer({

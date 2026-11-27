@@ -31,20 +31,35 @@ const { coreParams, deferred, mocks } = await vi.hoisted(
   () => import("./client-gateway-control.agent-consult.test-support.js"),
 );
 
+// mock-isolation: controlled admission refs so Talk custody and claims are asserted deterministically.
 vi.mock("../../agents/admitted-run-context.js", () => ({
+  closeAdmittedRunDelegatedAuthority: vi.fn(),
   createOperationalRunInstanceRef: mocks.createOperationalRunInstanceRef,
   prepareAgentRunAdmission: mocks.prepareAgentRunAdmission,
 }));
 vi.mock("../../agents/embedded-agent.js", () => ({
   runEmbeddedAgent: mocks.runEmbeddedAgentCore,
 }));
+// Gateway consults enter the typed-turn command owner; model its admission
+// and run contract so this suite keeps exercising Talk's own custody and completion claims.
+// mock-isolation: command-owner stand-in; the suite exercises Talk's own custody and completion claims.
+vi.mock("../../agents/agent-command.js", async () => {
+  const { createTalkCommandOwnerStandIn } =
+    await import("./client-agent-runtime.command-owner.test-support.js");
+  return {
+    agentCommandFromGatewayIngress: createTalkCommandOwnerStandIn({
+      run: (params) => mocks.runEmbeddedAgentCore(params),
+      prepareAdmission: (params) => mocks.prepareAgentRunAdmission(params),
+    }),
+  };
+});
 vi.mock("../../talk/agent-consult-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../talk/agent-consult-runtime.js")>()),
-  consultRealtimeVoiceAgent: mocks.consultRealtimeVoiceAgent,
+  consultRealtimeVoiceAgentInSessionRuntime: mocks.consultRealtimeVoiceAgent,
 }));
 vi.mock("../../talk/agent-run-control.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../talk/agent-run-control.js")>()),
-  controlRealtimeVoiceAgentRun: mocks.controlRealtimeVoiceAgentRun,
+  controlTalkAgentRun: mocks.controlTalkAgentRun,
 }));
 
 import { sharingPolicyClient } from "../session-sharing.test-utils.js";
@@ -61,7 +76,7 @@ const agentId = "researcher";
 const sessionId = "session-talk";
 const sessionKey = "agent:researcher:talk";
 type ControlParams = Parameters<
-  typeof import("../../talk/agent-run-control.js").controlRealtimeVoiceAgentRun
+  typeof import("../../talk/agent-run-control.js").controlTalkAgentRun
 >[0];
 const cleanups: Array<() => void> = [];
 const finalizers: Array<() => void> = [];
@@ -116,11 +131,10 @@ function mockConsult(run: (params: ConsultParams) => Promise<void>) {
 }
 
 async function projectSteering(params: ControlParams) {
-  const overlay = params.getToolAuthorityOverlay?.();
-  if (overlay) {
-    await params.prepareToolAuthorityOverlay?.(overlay);
-  }
-  return { ok: true, queued: true, message: "Steering accepted." };
+  const actual = await vi.importActual<typeof import("../../talk/agent-run-control.js")>(
+    "../../talk/agent-run-control.js",
+  );
+  return await actual.controlTalkAgentRun(params);
 }
 
 function pendingBackend(
@@ -137,7 +151,10 @@ function pendingBackend(
     published.resolve();
     await finish.promise;
     clearActiveEmbeddedRun("session-talk", handle, "agent:researcher:talk");
-    return { payloads: [] };
+    return {
+      payloads: [],
+      meta: { durationMs: 0, terminalReply: { disposition: "visible", text: "done" } },
+    };
   });
   return { finish, published };
 }
@@ -251,13 +268,20 @@ describe("Talk client agent consult admission", () => {
         const publish = gate();
         const ready = gate();
         const assertCurrent = vi.fn();
+        let expectedOverlay: ReplyToolAuthorityOverlay | undefined;
+        const queueMessage = vi.fn(async () => {});
         const project = vi.fn((_overlay: ReplyToolAuthorityOverlay) => "authority");
         const client = sharingPolicyClient({
           deviceId: "caller-device",
           scopes: ["operator.admin"],
         });
-        const authority = resolveTalkAgentConsultAuthority(client.connect.scopes, client);
-        const handle = createEmbeddedRunHandle({ runId: "run-talk" });
+        const authority = resolveTalkAgentConsultAuthority(client);
+        const handle = createEmbeddedRunHandle({
+          runId: "run-talk",
+          guarded: true,
+          toolAuthorityFingerprint: "authority",
+          queueMessage,
+        });
         const { finish } = pendingBackend(entrypoint, handle, async (instance) => {
           entered.resolve();
           await publish.promise;
@@ -284,7 +308,10 @@ describe("Talk client agent consult admission", () => {
               )
             : runner.runPrompt({ prompt: "first task" }),
         );
-        mocks.controlRealtimeVoiceAgentRun.mockImplementationOnce(async (params: ControlParams) => {
+        mocks.controlTalkAgentRun.mockImplementationOnce(async (params: ControlParams) => {
+          expectedOverlay = params.getToolAuthorityOverlayAsync
+            ? await params.getToolAuthorityOverlayAsync()
+            : params.getToolAuthorityOverlay?.();
           const recorder = params.createUserTurnTranscriptRecorder?.(params.text);
           if (entrypoint === "runPrompt") {
             expect(recorder).toBeDefined();
@@ -307,17 +334,23 @@ describe("Talk client agent consult admission", () => {
           }
           await awaitGateBeforeSettlement(entered.promise, run, "Talk backend must register");
           await Promise.resolve();
-          expect(mocks.controlRealtimeVoiceAgentRun).not.toHaveBeenCalled();
+          expect(mocks.controlTalkAgentRun).not.toHaveBeenCalled();
           publish.resolve();
           await steering;
           if (entrypoint === "runOwnedArgs") {
             expect(assertCurrent).toHaveBeenCalledBefore(mocks.consultRealtimeVoiceAgent);
           }
           expect(mocks.prepareAgentRunAdmission).toHaveBeenCalledBefore(mocks.runEmbeddedAgentCore);
-          expect(mocks.runEmbeddedAgentCore).toHaveBeenCalledBefore(
-            mocks.controlRealtimeVoiceAgentRun,
-          );
-          expect(project).toHaveBeenCalledOnce();
+          expect(mocks.runEmbeddedAgentCore).toHaveBeenCalledBefore(mocks.controlTalkAgentRun);
+          // Pure authority is rechecked at each boundary; delivery remains singular.
+          expect(expectedOverlay).toBeDefined();
+          expect(project).toHaveBeenCalled();
+          for (const [overlay] of project.mock.calls) {
+            // Direct controller turns intentionally suppress trace authority.
+            expect(overlay).toEqual({ ...expectedOverlay, traceAuthorized: false });
+          }
+          expect(queueMessage).toHaveBeenCalledOnce();
+          expect(mocks.controlTalkAgentRun).toHaveBeenCalledOnce();
           expect(mocks.consultRealtimeVoiceAgent.mock.calls[0]?.[0]).toMatchObject({
             senderIsOwner: true,
             toolsAllow: undefined,
@@ -396,7 +429,10 @@ describe("Talk client agent consult admission", () => {
       } finally {
         detach();
       }
-      return { payloads: [] };
+      return {
+        payloads: [],
+        meta: { durationMs: 0, terminalReply: { disposition: "visible", text: "done" } },
+      };
     });
     const runs = consults.map(({ runner }) =>
       track(runner.runPrompt({ prompt: "finish this task" })),
@@ -418,8 +454,18 @@ describe("Talk client agent consult admission", () => {
   it.each([false, true])(
     "accepts a new attempt only within the same admission (foreign=%s)",
     async (foreign) => {
-      const first = createEmbeddedRunHandle({ runId: "run-talk" });
-      const next = createEmbeddedRunHandle({ runId: "run-talk" });
+      const first = createEmbeddedRunHandle({
+        runId: "run-talk",
+        guarded: true,
+        toolAuthorityFingerprint: "first-authority",
+      });
+      const queueMessage = vi.fn(async () => {});
+      const next = createEmbeddedRunHandle({
+        runId: "run-talk",
+        guarded: true,
+        toolAuthorityFingerprint: "next-authority",
+        queueMessage,
+      });
       let live = true;
       const assertActive = () => {
         if (!live) {
@@ -432,6 +478,7 @@ describe("Talk client agent consult admission", () => {
       });
       const nextProject = vi.fn((_overlay: ReplyToolAuthorityOverlay) => "next-authority");
       const outbound = vi.fn();
+      let expectedOverlay: ReplyToolAuthorityOverlay | undefined;
       const { published } = pendingBackend("owner", next, async (instance) => {
         await publishBackend(first, instance, firstProject, "attempt", assertActive);
         await Promise.resolve();
@@ -444,7 +491,10 @@ describe("Talk client agent consult admission", () => {
           "attempt",
         );
       });
-      mocks.controlRealtimeVoiceAgentRun.mockImplementationOnce(async (params) => {
+      mocks.controlTalkAgentRun.mockImplementationOnce(async (params) => {
+        expectedOverlay = params.getToolAuthorityOverlayAsync
+          ? await params.getToolAuthorityOverlayAsync()
+          : params.getToolAuthorityOverlay?.();
         const result = await projectSteering(params);
         outbound();
         return result;
@@ -454,10 +504,18 @@ describe("Talk client agent consult admission", () => {
       const steering = steer(runner.runPrompt);
       if (foreign) {
         await expect(steering).rejects.toThrow("backend is no longer current");
-        expectUnused(nextProject, outbound);
+        expectUnused(nextProject, outbound, queueMessage);
       } else {
         await expect(steering).resolves.toEqual({ text: "" });
-        expect(nextProject).toHaveBeenCalledOnce();
+        expect(queueMessage).toHaveBeenCalledOnce();
+        // The real controller rechecks pure authority at each admission boundary.
+        // Only the backend effect is once; every projection uses current request policy.
+        expect(expectedOverlay).toBeDefined();
+        expect(nextProject).toHaveBeenCalled();
+        for (const [overlay] of nextProject.mock.calls) {
+          // Direct controller turns intentionally suppress trace authority.
+          expect(overlay).toEqual({ ...expectedOverlay, traceAuthorized: false });
+        }
         expect(outbound).toHaveBeenCalledOnce();
       }
       expect(firstProject).not.toHaveBeenCalled();
@@ -470,6 +528,8 @@ describe("Talk client agent consult admission", () => {
       const waiting = [gate(), gate()];
       const release = [gate(), gate()];
       const registerRun = vi.fn(async () => ({ release: vi.fn(), isCurrent: () => true }));
+      let expectedOverlay: ReplyToolAuthorityOverlay | undefined;
+      const queueMessage = vi.fn(async () => {});
       const project = vi.fn((_overlay: ReplyToolAuthorityOverlay) => "current-authority");
       let invocation = 0;
       mocks.consultRealtimeVoiceAgent.mockImplementation(async (params: ConsultParams) => {
@@ -489,11 +549,16 @@ describe("Talk client agent consult admission", () => {
       let published: Promise<void> | undefined;
       if (phase === "announcement") {
         rpcSourceTesting.clear();
-        const handle = createEmbeddedRunHandle({ runId: "run-talk" });
+        const handle = createEmbeddedRunHandle({
+          runId: "run-talk",
+          guarded: true,
+          toolAuthorityFingerprint: "current-authority",
+          queueMessage,
+        });
         published = pendingBackend("current-owner", handle, async (instance) => {
           await publishBackend(handle, instance, project, "attempt");
         }).published.promise;
-        mocks.controlRealtimeVoiceAgentRun.mockImplementationOnce(projectSteering);
+        mocks.controlTalkAgentRun.mockImplementationOnce(projectSteering);
       }
       const { runner, run: first } = startOwnedConsult({ registerRun });
       await waiting[0]!.promise;
@@ -510,11 +575,19 @@ describe("Talk client agent consult admission", () => {
         expect(mocks.prepareAgentRunAdmission).toHaveBeenCalledOnce();
         expect(runner.runPrompt.claimFailureAppend()).toBe(true);
       } else {
+        expectedOverlay = await runner.getToolAuthorityOverlay(undefined, "reply");
         await expect(runner.runPrompt.steer?.({ prompt: "latest task" })).resolves.toEqual({
           text: "",
         });
         expect(registerRun).toHaveBeenCalledOnce();
-        expect(project).toHaveBeenCalledOnce();
+        expect(expectedOverlay).toBeDefined();
+        expect(project).toHaveBeenCalled();
+        for (const [overlay] of project.mock.calls) {
+          // Direct controller turns intentionally suppress trace authority.
+          expect(overlay).toEqual({ ...expectedOverlay, traceAuthorized: false });
+        }
+        expect(queueMessage).toHaveBeenCalledOnce();
+        expect(mocks.controlTalkAgentRun).toHaveBeenCalledOnce();
       }
     },
   );

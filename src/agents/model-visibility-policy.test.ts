@@ -166,6 +166,9 @@ describe("explicit model visibility policy", () => {
       manifestPlugins,
       allowPluginNormalization: false,
     });
+    if (!selected) {
+      throw new Error("expected a configured default");
+    }
     const policy = createModelVisibilityPolicy({
       cfg,
       catalog: [],

@@ -277,4 +277,125 @@ struct ChatMarkdownRendererTests {
         #expect(code.language == "bash")
         #expect(code.code == "echo \"Hello\"")
     }
+
+    private struct RenderedChip: Equatable {
+        let kind: ChatInlineChipKind
+        let label: String
+        let link: String?
+    }
+
+    private struct RenderedProse: Equatable {
+        let text: String
+        let chips: [RenderedChip]
+    }
+
+    /// Prose and heading blocks as a message body renders them: file references resolve only with
+    /// file links on, labelled across the whole message.
+    @MainActor private func render(_ markdown: String, fileLinks: Bool = true) -> RenderedProse {
+        let snapshot = ChatMarkdownRenderSnapshot(text: markdown, isComplete: true)
+        let labels = fileLinks ? ChatMarkdownInlineChips.shortestFileLabels(snapshot.filePaths) : nil
+        var texts: [String] = []
+        var chips: [RenderedChip] = []
+        for block in snapshot.blocks {
+            let prose: ChatMarkdownProse
+            switch block {
+            case let .prose(value), let .heading(_, value): prose = value
+            default: continue
+            }
+            let attributed = labels.map { ChatMarkdownInlineChips.resolvingFiles(in: prose.attributed, labels: $0) }
+                ?? prose.attributed
+            texts.append(String(attributed.characters))
+            chips += attributed.runs[ChatInlineChipAttribute.self].compactMap { kind, range in
+                kind.map {
+                    RenderedChip(
+                        kind: $0,
+                        label: String(attributed[range].characters),
+                        link: attributed[range].runs.first?.link?.absoluteString)
+                }
+            }
+        }
+        return RenderedProse(text: texts.joined(separator: "\n"), chips: chips)
+    }
+
+    @Test @MainActor func `file references become chips labelled by their shortest unique path`() throws {
+        let rendered = self.render("Edit `src/app.ts`, then ui/src/a/index.ts:42 and ui/src/b/index.ts.")
+        #expect(rendered.text == "Edit app.ts, then a/index.ts:42 and b/index.ts.")
+        #expect(rendered.chips.map(\.kind) == [.file, .file, .file])
+        let target = try #require(rendered.chips[1].link.flatMap(URL.init(string:)).flatMap {
+            ChatMarkdownInlineChips.fileTarget(from: $0)
+        })
+        #expect(target == .init(path: "ui/src/a/index.ts", line: 42))
+        // An allowlisted bare filename is a file only as a whole code span.
+        #expect(self.render("Read `README.md` before README.md").chips.map(\.label) == ["README.md"])
+    }
+
+    @Test @MainActor func `file labels are unique across the whole message, not per block`() {
+        let snapshot = ChatMarkdownRenderSnapshot(
+            text: "Changed:\n\n- ui/src/a/index.ts\n- ui/src/b/index.ts\n\nSee `docs/guide.md`.",
+            isComplete: true)
+        #expect(ChatMarkdownInlineChips.shortestFileLabels(snapshot.filePaths) == [
+            "ui/src/a/index.ts": "a/index.ts",
+            "ui/src/b/index.ts": "b/index.ts",
+            "docs/guide.md": "guide.md",
+        ])
+    }
+
+    @Test @MainActor func `file references stay plain text where file links are off`() {
+        let source = "Edit `src/app.ts` and ui/src/views/chat.tsx:42."
+        let rendered = self.render(source, fileLinks: false)
+        #expect(rendered.text == "Edit src/app.ts and ui/src/views/chat.tsx:42.")
+        #expect(rendered.chips.isEmpty)
+    }
+
+    @Test @MainActor func `version numbers, domains, URLs and repository names are not files`() {
+        for source in [
+            "Bump 1.1/1.2 and ship openclaw/openclaw.ai today.",
+            "See example.com/app.ts and https://example.com/src/app.ts for details.",
+            "Plain words like README, main and docs stay text.",
+            "`npm run build`",
+        ] {
+            #expect(self.render(source).chips.isEmpty)
+        }
+    }
+
+    @Test @MainActor func `GitHub items render their full reference and open the URL as written`() {
+        #expect(self.render("Landed https://github.com/openclaw/openclaw/pull/198221/files today.") == RenderedProse(
+            text: "Landed openclaw/openclaw#198221 today.",
+            chips: [RenderedChip(
+                kind: .pullRequest,
+                label: "openclaw/openclaw#198221",
+                link: "https://github.com/openclaw/openclaw/pull/198221/files")]))
+        #expect(self.render("The fix ([#198221](https://github.com/openclaw/openclaw/pull/198221)) is live.").text
+            == "The fix (openclaw/openclaw#198221) is live.")
+        #expect(self.render("Tracked in openclaw/openclaw#12, and `https://github.com/openclaw/openclaw/issues/9`.")
+            == RenderedProse(
+                text: "Tracked in openclaw/openclaw#12, and openclaw/openclaw#9.",
+                chips: [
+                    RenderedChip(
+                        kind: .issue,
+                        label: "openclaw/openclaw#12",
+                        link: "https://github.com/openclaw/openclaw/issues/12"),
+                    RenderedChip(
+                        kind: .issue,
+                        label: "openclaw/openclaw#9",
+                        link: "https://github.com/openclaw/openclaw/issues/9"),
+                ]))
+        #expect(self.render("See openclaw/openclaw PR #34.").chips == [
+            RenderedChip(
+                kind: .pullRequest,
+                label: "openclaw/openclaw#34",
+                link: "https://github.com/openclaw/openclaw/pull/34"),
+        ])
+    }
+
+    @Test @MainActor func `GitHub non-item URLs, unqualified numbers and headings stay plain`() {
+        for source in [
+            "Read https://github.com/openclaw/openclaw/blob/main/README.md first.",
+            "[the repo](https://github.com/openclaw/openclaw/pull/12) and #12 and issue #45",
+            "Item 4 of #1234 at v1.2#3 and step#5",
+            "# Fixes openclaw/openclaw#12",
+        ] {
+            #expect(self.render(source).chips.isEmpty)
+        }
+    }
 }

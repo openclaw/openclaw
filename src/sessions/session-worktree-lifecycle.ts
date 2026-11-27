@@ -99,7 +99,7 @@ export async function removeSessionWorktree(params: {
   };
   try {
     assertCurrent();
-    await service.remove({
+    const result = await service.remove({
       id: record.id,
       reason: params.reason,
       runEndCleanup: { outcome: "removed-lossless", at: Date.now() },
@@ -115,6 +115,9 @@ export async function removeSessionWorktree(params: {
         ],
       },
     });
+    if (result.preserved) {
+      return { id: record.id, branch: record.branch, path: record.path, reason: "cleanup-failed" };
+    }
   } catch (error) {
     // Authorization loss is a failed lifecycle action, not successful best-effort cleanup.
     params.commitGuard?.();
@@ -173,7 +176,7 @@ export async function restoreSessionWorktree(params: {
   entry: SessionEntry;
   scope: SessionAccessScope;
   commitGuard?: SessionSourceAssertion;
-  assertRestoreAllowed?: () => void;
+  assertRestoreAllowed?: (effect: "validate" | "recreate") => void;
 }): Promise<SessionSourceAssertion> {
   const { entry, scope: requestedScope } = params;
   const id = entry.worktree?.id;
@@ -187,7 +190,7 @@ export async function restoreSessionWorktree(params: {
   };
   const metadata = captureSessionEntryMetadataRead(scope, () => {
     params.commitGuard?.();
-    params.assertRestoreAllowed?.();
+    params.assertRestoreAllowed?.("validate");
   });
   const accept = captureWorktreeRegistryReadGuard(context, "session-owner");
   const record = await readRegistryWorktree(context, id);
@@ -285,7 +288,7 @@ export async function restoreSessionWorktree(params: {
       );
     }
     if (record.removedAt !== undefined) {
-      params.assertRestoreAllowed?.();
+      params.assertRestoreAllowed?.("recreate");
       try {
         await new ManagedWorktreeService({ env: scope.env }).restore({
           id,

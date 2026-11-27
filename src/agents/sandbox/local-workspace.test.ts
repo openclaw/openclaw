@@ -3,7 +3,10 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { withLocalWorkspaceStore } from "../../gateway/worker-environments/local-workspace-store.js";
+import * as backoff from "../../infra/backoff.js";
 import { runCommandBuffered } from "../../process/exec.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { SandboxBackendHandle } from "./backend-handle.types.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
 import {
@@ -73,6 +76,129 @@ const finalization = (status: "completed" | "failed", token: unknown) => ({
   timedOut: false,
   token,
 });
+
+it("hands a workspace lease to a waiting sandbox call before later checkpoints", async () => {
+  await withOpenClawTestState({ label: "sandbox-lease-handoff" }, async ({ env, workspaceDir }) => {
+    const params = { worktreeId: "own-worktree", env };
+    const entered = createDeferred();
+    const release = createDeferred();
+    const retry = createDeferred();
+    const order: string[] = [];
+    const holder = withLocalWorkspaceStore(params, async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    await entered.promise;
+    const sleep = vi.spyOn(backoff, "sleepWithAbort").mockImplementation(() => retry.promise);
+    const { backend, bind } = createLocalSandbox(workspaceDir, () => {}, {
+      runShellCommand: async () => {
+        order.push("tool");
+        return { code: 0, stdout: Buffer.from("finished"), stderr: Buffer.alloc(0) };
+      },
+    });
+    bind({ provision: (run, signal) => withLocalWorkspaceStore({ ...params, signal }, run) });
+    const tool = backend.runShellCommand({ script: "true" });
+    try {
+      // A different workspace drains earlier worker commands without sharing this lease.
+      await withLocalWorkspaceStore({ ...params, worktreeId: "other-worktree" }, async () => {});
+      release.resolve();
+      await holder;
+      for (let cycle = 0; cycle < 3; cycle++) {
+        await withLocalWorkspaceStore(params, async () => {
+          order.push("checkpoint");
+        });
+      }
+      retry.resolve();
+      expect((await tool).stdout.toString()).toBe("finished");
+      expect(order).toEqual(["tool", "checkpoint", "checkpoint", "checkpoint"]);
+    } finally {
+      release.resolve();
+      retry.resolve();
+      sleep.mockRestore();
+      await Promise.allSettled([holder, tool]);
+    }
+  });
+});
+
+it("reports a tool-triggered checkpoint waiting on its own lease immediately", async () => {
+  await withOpenClawTestState(
+    { label: "sandbox-lease-self-wait" },
+    async ({ env, workspaceDir }) => {
+      const controller = new AbortController();
+      const triggered = createDeferred();
+      const params = { worktreeId: "own-worktree", env, signal: controller.signal };
+      const { backend, bind } = createLocalSandbox(workspaceDir, () => {}, {
+        runShellCommand: async () => {
+          const checkpoint = withLocalWorkspaceStore(params, async () => {});
+          triggered.resolve();
+          await checkpoint;
+          return { code: 0, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
+        },
+      });
+      bind({ provision: (run) => withLocalWorkspaceStore(params, run) });
+      const result = backend.runShellCommand({ script: "true" }).catch((error: unknown) => error);
+      await triggered.promise;
+      await withLocalWorkspaceStore({ ...params, worktreeId: "other-worktree" }, async () => {});
+      controller.abort(new Error("test stopped self-wait"));
+      expect(await result).toMatchObject({ message: expect.stringContaining("already holds") });
+    },
+  );
+});
+
+it.each(["timeout", "abort"])(
+  "bounds a sandbox lease waiter and removes its queue slot: %s",
+  async (ending) => {
+    await withOpenClawTestState(
+      { label: "sandbox-lease-deadline" },
+      async ({ env, workspaceDir }) => {
+        const params = { worktreeId: "own-worktree", env };
+        const entered = createDeferred();
+        const release = createDeferred();
+        const holder = withLocalWorkspaceStore(params, async () => {
+          entered.resolve();
+          await release.promise;
+        });
+        await entered.promise;
+        const command = vi.fn(async () => ({
+          code: 0,
+          stdout: Buffer.alloc(0),
+          stderr: Buffer.alloc(0),
+        }));
+        const { backend, bind } = createLocalSandbox(workspaceDir, () => {}, {
+          runShellCommand: command,
+        });
+        bind({ provision: (run, signal) => withLocalWorkspaceStore({ ...params, signal }, run) });
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        const controller = new AbortController();
+        const pending = backend
+          .runShellCommand({ script: "true", signal: controller.signal })
+          .catch((error: unknown) => error);
+        try {
+          if (ending === "timeout") {
+            await vi.advanceTimersByTimeAsync(60_000);
+            expect(await pending).toMatchObject({
+              code: "OPENCLAW_STATE_LEASE_HELD",
+              message: expect.stringMatching(/Timed out after 60000 ms.*retry the tool call/),
+            });
+          } else {
+            controller.abort(new Error("caller stopped waiting"));
+            expect(await pending).toMatchObject({
+              code: "OPENCLAW_STATE_LEASE_ABORTED",
+              cause: controller.signal.reason,
+            });
+          }
+          expect(command).not.toHaveBeenCalled();
+        } finally {
+          vi.useRealTimers();
+          release.resolve();
+          await holder;
+        }
+        await backend.runShellCommand({ script: "true" });
+        expect(command).toHaveBeenCalledOnce();
+      },
+    );
+  },
+);
 
 it.runIf(process.platform !== "win32")(
   "keeps real bridge reads, path identity, and writes while checkpointing mutations",

@@ -6,6 +6,7 @@ import {
   ErrorCodes,
   errorShape,
   validateSkillsBinsParams,
+  validateSkillsCategoriesParams,
   validateSkillsDetailParams,
   validateSkillsSearchParams,
   validateSkillsSecurityVerdictsParams,
@@ -14,15 +15,16 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
 import { redactConfigObject } from "../../config/redact-snapshot.js";
-import { fetchClawHubSkillDetail } from "../../infra/clawhub-skills.js";
+import { fetchClawHubSkillCategories } from "../../infra/clawhub-skill-categories.js";
+import { fetchClawHubSkillDetail, searchClawHubSkillsPage } from "../../infra/clawhub-skills.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { registerClawHubCatalogIconUrls } from "../../plugins/catalog-icon-registry.js";
-import { updateSkillConfigEntry } from "../../skills/config/mutations.js";
-import { parseRequestedClawHubSkillRef } from "../../skills/lifecycle/clawhub-store.js";
 import {
-  searchSkillsFromClawHub,
-  updateSkillsFromClawHub,
-} from "../../skills/lifecycle/clawhub.js";
+  SkillApiKeyReferenceError,
+  updateSkillConfigEntry,
+} from "../../skills/config/mutations.js";
+import { parseRequestedClawHubSkillRef } from "../../skills/lifecycle/clawhub-store.js";
+import { updateSkillsFromClawHub } from "../../skills/lifecycle/clawhub.js";
 import { prepareWorkspaceSkillEntries } from "../../skills/loading/workspace-skill-loader.js";
 import {
   collectClawHubVerdictTargets,
@@ -132,16 +134,27 @@ export const skillsHandlers: GatewayRequestHandlers = {
     }
     respond(true, { bins: [...bins].toSorted() }, undefined);
   },
+  "skills.categories": defineValidatedGatewayHandler(
+    "skills.categories",
+    validateSkillsCategoriesParams,
+    async ({ respond }) => respond(true, await fetchClawHubSkillCategories(), undefined),
+    (error) => errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)),
+  ),
   "skills.search": defineValidatedGatewayHandler(
     "skills.search",
     validateSkillsSearchParams,
     async ({ params, respond }) => {
-      const results = await searchSkillsFromClawHub({
-        query: params.query,
-        limit: params.limit,
-      });
-      registerClawHubCatalogIconUrls(results.map((result) => result.icon ?? undefined));
-      respond(true, { results }, undefined);
+      if (params.query?.trim() && params.cursor) {
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "ClawHub text search does not support a cursor.",
+        );
+        return;
+      }
+      const page = await searchClawHubSkillsPage(params);
+      registerClawHubCatalogIconUrls(page.results.map((result) => result.icon ?? undefined));
+      respond(true, page, undefined);
     },
     (error) => errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)),
   ),
@@ -229,7 +242,16 @@ export const skillsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const updated = await updateSkillConfigEntry(p);
+    let updated: Record<string, unknown>;
+    try {
+      updated = await updateSkillConfigEntry(p);
+    } catch (error) {
+      if (error instanceof SkillApiKeyReferenceError) {
+        respondError(respond, ErrorCodes.INVALID_REQUEST, error.message);
+        return;
+      }
+      throw error;
+    }
     respond(
       true,
       { ok: true, skillKey: p.skillKey, config: redactConfigObject(updated) },

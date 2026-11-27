@@ -10,6 +10,8 @@
     "PYTHONPATH",
     "PERL5LIB",
     "PERL5OPT",
+    "PERL5SHELL",
+    "PERLLIB",
     "RUBYLIB",
     "RUBYOPT",
     "BASHOPTS",
@@ -112,6 +114,8 @@
     "HOSTALIASES"
   ],
   "blockedOverrideOnlyKeys": [
+    "OPENCLAW_NODE_WORKER_EXECUTION",
+    "OPENCLAW_WORKER_TOOL_DATA",
     "HOME",
     "GRADLE_USER_HOME",
     "ZDOTDIR",

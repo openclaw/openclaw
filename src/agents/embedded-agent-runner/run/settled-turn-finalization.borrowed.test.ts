@@ -172,7 +172,9 @@ it.each([false, true])(
               });
               const result = revoked
                 ? await expect(pending)
-                    .rejects.toThrow("admitted run authority is no longer active")
+                    .rejects.toThrow(
+                      "This agent run is no longer active. Start a new turn to retry.",
+                    )
                     .then(() => undefined)
                 : await pending;
               expect(await fs.readFile(path.join(state.workspaceDir, "note.txt"), "utf8")).toBe(

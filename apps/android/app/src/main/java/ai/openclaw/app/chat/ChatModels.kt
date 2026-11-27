@@ -477,6 +477,8 @@ data class ChatSessionEntry(
   val hasMarkedUnreadMetadata: Boolean = markedUnreadAt != null,
   val snoozedUntil: Long? = null,
   val snoozedAt: Long? = null,
+  // Gateway-to-handset offset at receipt. Local presentation only; never patch the wire deadline.
+  val snoozeClockOffsetMs: Long = 0L,
   val hasSnoozedUntilMetadata: Boolean = snoozedUntil != null,
   val hasSnoozedAtMetadata: Boolean = snoozedAt != null,
   val agentStatus: ChatSessionAgentStatus? = null,
@@ -510,6 +512,8 @@ data class ChatSessionEntry(
   val hasActiveRunMetadata: Boolean = hasActiveRun != null || activeRunIds != null,
   val hasActiveRunIdsMetadata: Boolean = activeRunIds != null,
   val parentSessionKey: String? = null,
+  /** The Gateway keeps this row at the top level of navigation despite its parent link. */
+  val sidebarRoot: Boolean? = null,
   val worktreeId: String? = null,
   val hasWorktreeMetadata: Boolean = worktreeId != null,
   val spawnDepth: Int? = null,
@@ -532,7 +536,9 @@ data class ChatSessionEntry(
   val hasRunMetadata: Boolean =
     status != null || startedAt != null || endedAt != null || runtimeMs != null || outputTokens != null,
 ) {
-  fun isSnoozed(nowMs: Long): Boolean = snoozedUntil?.let { it > nowMs } == true
+  val localSnoozeWakeMs: Long? get() = snoozedUntil?.let { it + snoozeClockOffsetMs }
+
+  fun isSnoozed(nowMs: Long): Boolean = localSnoozeWakeMs?.let { it > nowMs } == true
 }
 
 // Match Gateway precedence: terminal status wins; only missing live flags use historical status.
@@ -554,6 +560,7 @@ internal data class ChatSessionPatch(
   val clearLabel: Boolean = false,
   val category: String? = null,
   val clearCategory: Boolean = false,
+  /** Handset-clock wake time; the controller converts it with the connection's Gateway clock sample. */
   val snoozedUntil: Long? = null,
   val clearSnooze: Boolean = false,
   val color: String? = null,
@@ -618,6 +625,22 @@ data class ChatHistory(
   val sessionInfo: ChatSessionEntry? = null,
   val inFlightRun: ChatInFlightRun? = null,
   val defaultModelRef: String? = null,
+  val deltaCursor: String? = null,
+  val olderCursor: String? = null,
+  val newerCursor: String? = null,
+  val activeLeafEntryId: String? = null,
+  val hasActiveLeafEntryId: Boolean = false,
+  val isDelta: Boolean = false,
+  val olderComplete: Boolean = false,
+)
+
+/** Paging is independent of initial hydration and never blocks the composer. */
+internal data class ChatHistoryPaging(
+  val hasOlder: Boolean = false,
+  val hasNewer: Boolean = false,
+  val loading: Boolean = false,
+  val failed: Boolean = false,
+  val olderComplete: Boolean = false,
 )
 
 /**

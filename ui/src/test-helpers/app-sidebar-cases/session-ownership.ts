@@ -203,7 +203,7 @@ describe("AppSidebar session ownership", () => {
 
   it.each(["truncated agents"])(
     "hides session-row owner avatars for one human with %s",
-    async (scenario) => {
+    async () => {
       const gateway = createGatewayHarness({} as GatewayBrowserClient);
       gateway.publish({
         selfUser: {
@@ -224,16 +224,9 @@ describe("AppSidebar session ownership", () => {
         row.participantCount = 1;
       }
       const ada = { type: "human" as const, id: "profile-ada", label: "Ada" };
-      const agent = { type: "agent" as const, id: "research", label: "Research" };
       result.owners = [ada];
-      if (scenario === "agent owner") {
-        result.owners.push(agent);
-        setEffectiveOwner(result.sessions[2]!, agent);
-      }
-      if (scenario === "agent participant" || scenario === "truncated agents") {
-        result.sessions[1]!.participants = [{ identity: { type: "agent", id: "research" } }];
-        result.sessions[1]!.participantCount = scenario === "truncated agents" ? 5 : 1;
-      }
+      result.sessions[1]!.participants = [{ identity: { type: "agent", id: "research" } }];
+      result.sessions[1]!.participantCount = 5;
       const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
       harness.publishList({ result, agentId: "main" });
       await sidebar.updateComplete;

@@ -8,7 +8,6 @@ import {
   buildToolLifecycleErrorResult,
   prepareToolResult,
 } from "../../embedded-agent-tool-results.js";
-import { createMediaGenerationOperation } from "../../media-generation-activity.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../../media-generation-activity.test-support.js";
 import {
   createAssistant,
@@ -237,7 +236,7 @@ export function createCatalogSubscription() {
 }
 
 export async function observeTerminalRunActivity(
-  scenario: "ordinary" | "cancelled" | "deferred cancellation" | "pending task",
+  scenario: "ordinary" | "cancelled" | "deferred cancellation",
   setSubscribe: Parameters<typeof trackPreparedStreamSubscriptions>[0],
 ) {
   resetGeneratedMediaTaskActivityForTests();
@@ -249,15 +248,6 @@ export async function observeTerminalRunActivity(
     const runAbortController = new AbortController();
     if (cancelled) {
       runAbortController.abort();
-    }
-    if (scenario === "pending task") {
-      createMediaGenerationOperation({
-        taskId: "tool:image_generate:terminal",
-        status: "running",
-        taskKind: "image_generation",
-        requesterSessionKey: sessionKey,
-        runId: "tool:image_generate:terminal",
-      });
     }
     const terminalEvents: Array<{ phase: unknown; active: boolean }> = [];
     const prepared = prepareCatalogExecutor({

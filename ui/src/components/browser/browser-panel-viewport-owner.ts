@@ -1,6 +1,7 @@
 import type { NativeBrowserTab } from "../../app/native-browser-bridge.ts";
 import { resizeBrowserViewport, type BrowserRequestClient } from "./browser-client.ts";
 import type { BrowserPanelOperations } from "./browser-panel-operation-ownership.ts";
+import type { BrowserPanelStream } from "./browser-panel-stream.ts";
 import type { BrowserPanelView } from "./browser-panel-surface.ts";
 
 interface BrowserPanelViewportHost {
@@ -10,6 +11,7 @@ interface BrowserPanelViewportHost {
   readonly canAutoResizeViewport: boolean;
   readonly view: BrowserPanelView | null;
   readonly operations: Pick<BrowserPanelOperations, "captureClient">;
+  readonly stream: Pick<BrowserPanelStream, "resize">;
   runAction(
     action: (client: BrowserRequestClient) => Promise<void>,
     refreshView?: boolean,
@@ -137,6 +139,11 @@ export class BrowserPanelViewportOwner {
       void this.controller
         // Viewport sync is not the person's action, so it leaves their error visible.
         .runAction((client) => resizeBrowserViewport(client, request), true, { passive: true })
+        .then((current) => {
+          if (current) {
+            this.controller.stream.resize(true);
+          }
+        })
         .finally(() => {
           this.resizing = false;
           this.schedule();

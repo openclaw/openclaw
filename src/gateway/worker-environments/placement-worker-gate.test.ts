@@ -116,7 +116,7 @@ describe("worker session placement gate", () => {
         } else {
           await store.abandonWorkspaceResult((await store.listPendingWorkspaceResultsAsync())[0]!);
         }
-        expect(() => refresh.assertCurrent()).toThrow("placement authority changed");
+        expect(() => refresh.assertCurrent()).toThrow("placement changed");
       }
       refresh.release();
 

@@ -543,12 +543,12 @@ describe("cleanup path removals", () => {
       const workspaceDir = path.join(tempDirs.make("openclaw-cleanup-workspace-"), "workspace");
       await fs.mkdir(workspaceDir);
       const siblingMarker = `${workspaceDir}.attested`;
-      if (operation === "preview") {
-        await fs.writeFile(
-          siblingMarker,
-          "openclaw-workspace-attestation:v1\n2026-07-15T11:00:00.000Z\n",
-        );
-      } else if (operation === "failure") {
+      const markers = [siblingMarker, `${siblingMarker}.doctor-importing`];
+      const markerContents = "openclaw-workspace-attestation:v1\n2026-07-15T11:00:00.000Z\n";
+      for (const marker of markers) {
+        await fs.writeFile(marker, markerContents);
+      }
+      if (operation === "failure") {
         vi.spyOn(fs, "rm").mockRejectedValueOnce(new Error("permission denied"));
       }
       await removeWorkspaceDirs([workspaceDir], runtime, {
@@ -556,13 +556,18 @@ describe("cleanup path removals", () => {
         removeStateRows: true,
       });
       if (operation === "remove") {
-        await expect(fs.stat(workspaceDir)).rejects.toThrow();
+        for (const removed of [workspaceDir, ...markers]) {
+          await expect(fs.lstat(removed)).rejects.toMatchObject({ code: "ENOENT" });
+        }
         expect(workspaceStateMocks.deleteWorkspaceState).toHaveBeenCalledWith({ workspaceDir });
       } else {
         expect(workspaceStateMocks.deleteWorkspaceState).not.toHaveBeenCalled();
-        if (operation === "preview") {
-          expect(runtime.log).toHaveBeenCalledWith(`[dry-run] remove ${siblingMarker}`);
-          await expect(fs.lstat(siblingMarker)).resolves.toBeDefined();
+        await expect(fs.stat(workspaceDir)).resolves.toBeDefined();
+        for (const marker of markers) {
+          await expect(fs.readFile(marker, "utf8")).resolves.toBe(markerContents);
+          if (operation === "preview") {
+            expect(runtime.log).toHaveBeenCalledWith(`[dry-run] remove ${marker}`);
+          }
         }
       }
     },
@@ -582,6 +587,26 @@ describe("cleanup path removals", () => {
     expect(removeWorkspace).toHaveBeenCalledTimes(2);
     expect(failures).toEqual(["/tmp/first"]);
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("trash unavailable"));
+  });
+
+  it("reports a missing path instead of claiming it was removed", async () => {
+    const runtime = createRuntimeMock();
+    const missing = path.join(tempDirs.make("openclaw-cleanup-missing-"), "absent");
+
+    const result = await removePath(missing, runtime);
+
+    expect(result.ok).toBe(true);
+    expect(runtime.log.mock.calls).toEqual([[`Not found: ${missing}`]]);
+  });
+
+  it("reports removal for a path that existed", async () => {
+    const runtime = createRuntimeMock();
+    const target = path.join(tempDirs.make("openclaw-cleanup-present-"), "target");
+    await fs.writeFile(target, "remove me");
+
+    await removePath(target, runtime);
+
+    expect(runtime.log.mock.calls).toEqual([[`Removed ${target}`]]);
   });
 
   it("refuses to remove the current working directory", async () => {

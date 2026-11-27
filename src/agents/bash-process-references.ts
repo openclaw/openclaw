@@ -4,7 +4,11 @@
  * reconnect to prior long-running work.
  */
 import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
-import { compareProcessSessionStartOrder, listRunningSessions } from "./bash-process-registry.js";
+import {
+  compareProcessSessionStartOrder,
+  listRunningSessions,
+  type ProcessSession,
+} from "./bash-process-registry.js";
 import { deriveSessionName } from "./bash-tools.shared.js";
 
 const DEFAULT_ACTIVE_PROCESS_LIMIT = 8;
@@ -26,6 +30,7 @@ export type ActiveProcessSessionReference = {
 /** List active background process sessions for one scope key, newest first. */
 export function listActiveProcessSessionReferences(params: {
   scopeKey?: string;
+  exclude?: ProcessSession;
 }): ActiveProcessSessionReference[] {
   const scopeKey = params.scopeKey?.trim();
   if (!scopeKey) {
@@ -36,6 +41,7 @@ export function listActiveProcessSessionReferences(params: {
     .filter((session) => session.scopeKey === scopeKey)
     .toSorted(compareProcessSessionStartOrder)
     .slice(0, DEFAULT_ACTIVE_PROCESS_LIMIT)
+    .filter((session) => session !== params.exclude)
     .map((session) => ({
       sessionId: session.id,
       status: "running" as const,

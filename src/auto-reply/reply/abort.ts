@@ -4,29 +4,9 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import type {
-  AsyncSessionSourceCheck,
-  SessionSourceCheck,
-} from "../../config/sessions/session-source-authority.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import { isAbortRequestText } from "./abort-primitives.js";
-import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
-
-export type FastAbortRequestParams = {
-  ctx: FinalizedRuntimeMsgContext;
-  cfg: OpenClawConfig;
-  isCommandTargetCurrent?: SessionSourceCheck | AsyncSessionSourceCheck;
-};
-
-export type FastAbortResult = {
-  handled: boolean;
-  aborted: boolean;
-  rejectionReason?: "finalizing";
-  localModelMayStillBeFinishing?: true;
-  stoppedSubagents?: number;
-  failedSubagents?: number;
-};
+import type { FastAbortRequestParams, FastAbortResult } from "./abort.types.js";
+import { stripMentions } from "./mentions.js";
 
 export function formatAbortReplyText(
   stoppedSubagents?: number,
@@ -65,7 +45,7 @@ function resolveFastAbortRequest(params: FastAbortRequestParams) {
       config: cfg,
       fallbackAgentId: ctx.AgentId,
     });
-  const raw = stripStructuralPrefixes(ctx.commandText);
+  const raw = ctx.commandText;
   const isGroup = normalizeOptionalLowercaseString(ctx.ChatType) === "group";
   const stripped = isGroup ? stripMentions(raw, ctx, cfg, resolveTargetAgentId()) : raw;
   if (!isAbortRequestText(stripped)) {
@@ -84,6 +64,7 @@ export async function tryFastAbortFromMessage(
   if (!request) {
     return { handled: false, aborted: false };
   }
+  params.onAbortRequest?.();
   // Normalized ingress is not authority. The operation resolves authorization
   // and retains current-target validation after loading cancellation machinery.
   const { executeFastAbortRequest } = await import("./abort-operation.js");

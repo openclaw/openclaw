@@ -164,7 +164,14 @@ describe("Exact removed worktree snapshot retirement", () => {
     await expectPreserved(expected);
   });
 
-  it("retires only the exact CLI snapshot", async () => {
+  it.each(["capture", "head"])("retires only the exact CLI snapshot (%s)", async (kind) => {
+    if (kind === "head") {
+      await git("update-ref", "-d", snapshotRef);
+      snapshotRef = `refs/openclaw/snapshots/clean-v1/${record.id}`;
+      snapshot = source;
+      await git("update-ref", snapshotRef, snapshot);
+      await updateRegistryWorktree(env, record.id, { snapshotRef });
+    }
     const cli = retirementCli();
     await git("branch", record.branch, source);
     const foreign: ManagedWorktreeRecord = {

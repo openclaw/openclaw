@@ -15,16 +15,41 @@ describe("owned command output bytes", () => {
         [
           process.execPath,
           "-e",
-          "process.stdout.write(Buffer.alloc(256 * 1024, 255));process.stderr.write(Buffer.from([0,128,255]));",
+          "for (let i = 0; i < 4; i++) process.stdout.write(Buffer.alloc(64 * 1024, i));process.stderr.write(Buffer.from([0,128,255]));",
         ],
         { timeoutMs: 10_000 },
       );
       expect(result).toMatchObject({ code: 0, termination: "exit" });
-      expect(result.stdout).toEqual(Buffer.alloc(256 * 1024, 255));
+      const expected = Buffer.alloc(256 * 1024);
+      for (let i = 0; i < 4; i++) {
+        expected.fill(i, i * 64 * 1024, (i + 1) * 64 * 1024);
+      }
+      expect(result.stdout).toEqual(expected);
       expect(result.stderr).toEqual(Buffer.from([0, 128, 255]));
       expect(copy).not.toHaveBeenCalled();
     } finally {
       copy.mockRestore();
+    }
+  });
+
+  it("keeps the raw multibyte prefix when the byte cap stops the command", async () => {
+    const expected = Buffer.from([0x41, 0xf0, 0x9f]);
+    const concat = vi.spyOn(Buffer, "concat");
+    try {
+      const result = await runCommandBuffered(
+        [process.execPath, "-e", "process.stdout.write(Buffer.from('A\\u{1F600}'));"],
+        { timeoutMs: 10_000, maxOutputBytes: { stdout: 3 } },
+      );
+      expect(result).toMatchObject({
+        stdout: expected,
+        stderr: Buffer.alloc(0),
+        code: null,
+        termination: "output-limit",
+        outputLimitStream: "stdout",
+      });
+      expect(concat).not.toHaveBeenCalledWith([expected], expected.length);
+    } finally {
+      concat.mockRestore();
     }
   });
 

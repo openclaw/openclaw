@@ -438,7 +438,7 @@ export function finishDiagnosticsTimeline(
 /** Replays a completed span after its activation config becomes available. */
 export function emitCompletedDiagnosticsTimelineSpan(
   name: string,
-  durationMs: number,
+  timing: { startedAt: number; completedAt: number },
   options: DiagnosticsTimelineSpanOptions = {},
 ): void {
   if (!isDiagnosticsTimelineEnabled(options)) {
@@ -451,8 +451,24 @@ export function emitCompletedDiagnosticsTimelineSpan(
     parentSpanId: options.parentSpanId,
     attributes: options.attributes,
   };
-  emitDiagnosticsTimelineEvent({ type: "span.start", ...span }, options);
-  emitDiagnosticsTimelineEvent({ type: "span.end", ...span, durationMs }, options);
+  // Replay observed monotonic edges, anchored to the process clock rather than flush time.
+  emitDiagnosticsTimelineEvent(
+    {
+      type: "span.start",
+      ...span,
+      timestamp: new Date(performance.timeOrigin + timing.startedAt).toISOString(),
+    },
+    options,
+  );
+  emitDiagnosticsTimelineEvent(
+    {
+      type: "span.end",
+      ...span,
+      timestamp: new Date(performance.timeOrigin + timing.completedAt).toISOString(),
+      durationMs: timing.completedAt - timing.startedAt,
+    },
+    options,
+  );
 }
 
 /** Returns the currently active span so callers can preserve parentage across memoized work. */

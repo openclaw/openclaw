@@ -1,35 +1,10 @@
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
-import {
-  normalizeOptionalString,
-  normalizeOptionalStringifiedId,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { discordDirectoryCacheState } from "./directory-cache-state.js";
+import { normalizeDiscordHandleKey, normalizeDiscordSnowflake } from "./target-parsing.js";
 
 const DISCORD_DIRECTORY_CACHE_MAX_ENTRIES = 4000;
 const DISCORD_DISCRIMINATOR_SUFFIX = /#\d{4}$/;
-
-export function normalizeDiscordSnowflake(value: string | number | bigint): string | null {
-  const text = normalizeOptionalStringifiedId(value) ?? "";
-  if (!/^\d+$/.test(text)) {
-    return null;
-  }
-  return text;
-}
-
-export function normalizeDiscordHandleKey(raw: string): string | null {
-  let handle = normalizeOptionalString(raw) ?? "";
-  if (!handle) {
-    return null;
-  }
-  if (handle.startsWith("@")) {
-    handle = normalizeOptionalString(handle.slice(1)) ?? "";
-  }
-  if (!handle || /\s/.test(handle)) {
-    return null;
-  }
-  return handle.toLowerCase();
-}
 
 function ensureAccountCache(accountId?: string | null): Map<string, string | null> {
   const cacheKey = normalizeAccountId(accountId);

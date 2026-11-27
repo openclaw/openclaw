@@ -173,7 +173,7 @@ export function assertGitHubPublicationSourceFacts(
   expected: GitHubPublicationSourceFacts,
 ): void {
   if (!isDeepStrictEqual(readGitHubPublicationSourceFacts(sourceDb, stateDb, selector), expected)) {
-    throw new Error("GitHub publication source authority changed.");
+    throw new Error("GitHub publication source ended. Retry the publication.");
   }
 }
 

@@ -388,7 +388,7 @@ it.each(["stop", "exit", "retirement", "checkpoint retry", "resume retry"] as co
         ending === "checkpoint retry" ? "conflict" : "runtime resume failed",
       );
       await f.expectCustody({ phase: "stopped" });
-      expect(projection.assertCurrent).toThrow("authority changed");
+      expect(projection.assertCurrent).toThrow("workspace was released");
       if (ending === "checkpoint retry") {
         expect(await fs.readFile(path.join(canonical, "source.txt"), "utf8")).toBe("human edit\n");
         await fs.writeFile(path.join(canonical, "source.txt"), "original\n");

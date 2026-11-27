@@ -1,5 +1,6 @@
-import type { Page } from "playwright";
+import type { Page, Route } from "playwright";
 import { expect, it } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   installMockGateway,
   type ControlUiMockGatewayScenario,
@@ -64,10 +65,33 @@ const returnToDraft = async (page: Page) => {
 };
 
 async function recoverComposer({ page, gateway, composer }: DraftFixture, persistent: boolean) {
+  const probe = createDeferred<Route>();
+  let heldProbe = false;
+  if (persistent) {
+    await page.route("**/index.html", async (route) => {
+      if (!heldProbe && route.request().headers()["x-openclaw-reachability-probe"] === "1") {
+        heldProbe = true;
+        probe.resolve(route);
+      } else {
+        await route.continue();
+      }
+    });
+  }
   await failDraftRender(page, persistent);
   await openDraft(page);
   if (persistent) {
+    const route = await probe.promise;
+    await gateway.waitForRequest("connect");
+    await gateway.resolveDeferred("connect");
+    await gateway.waitForRequest("agents.list");
+    const probeResponse = page.waitForResponse(
+      (response) => response.request().headers()["x-openclaw-reachability-probe"] === "1",
+    );
+    await route.continue();
+    expect((await probeResponse).status()).toBe(200);
     await page.waitForFunction(() => sessionStorage.getItem("test.newSessionBoots") === "2");
+    await gateway.waitForRequest("connect");
+    await gateway.resolveDeferred("connect");
     const error = page.locator("openclaw-new-session-page .lazy-view-error");
     await error.waitFor({ state: "visible", timeout: 5000 });
     // Retrying a persistent failure must not trigger a third document load.
@@ -159,7 +183,10 @@ suite.define(() => {
   it.each([false, true])(
     "restores the composer after a render failure (persistent: %s)",
     (persistent) =>
-      withDraft((fixture) => recoverComposer(fixture, persistent), { awaitInitialRoster: false }),
+      withDraft((fixture) => recoverComposer(fixture, persistent), {
+        awaitInitialRoster: false,
+        deferredMethods: persistent ? ["connect"] : [],
+      }),
   );
   it("keeps a draft and avoids automatic reload after the composer was usable", () =>
     withDraft(preserveDraft));

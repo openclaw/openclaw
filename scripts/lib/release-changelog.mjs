@@ -116,6 +116,7 @@ function sourceReader({ rootDir, ref }) {
         }),
     );
     return {
+      ref: oid,
       files: [...files.keys()],
       read(name) {
         const meta = files.get(name);
@@ -299,7 +300,8 @@ function readRelease(reader, state, requestedVersion) {
 export function findReleaseChangelog(params) {
   const version = normalizeVersion(params.version);
   const reader = sourceReader(params);
-  return readRelease(reader, layout(reader), version);
+  const result = readRelease(reader, layout(reader), version);
+  return result && reader.ref ? { ...result, ref: reader.ref } : result;
 }
 
 /** @param {ChangelogSource & { version: string }} params */

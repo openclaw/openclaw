@@ -25,7 +25,7 @@ scenario:
     - scripts/e2e/lib/bundled-plugin-install-uninstall/probe.mjs
     - scripts/e2e/lib/bundled-plugin-install-uninstall/runtime-smoke.mjs
     - test/e2e/qa-lab/runtime/docker-e2e-lane.ts
-    - test/scripts/bundled-plugin-install-uninstall-probe.test.ts
+    - test/scripts/plugin-gateway-gauntlet.test.ts
   execution:
     kind: script
     path: test/e2e/qa-lab/runtime/docker-e2e-lane.ts

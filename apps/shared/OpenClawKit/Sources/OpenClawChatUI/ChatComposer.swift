@@ -847,7 +847,12 @@ struct OpenClawChatComposer: View {
         return trimmed.isEmpty ? self.viewModel.sessionKey : trimmed
     }
 
+    /// Track draft observation in the editor, not the model-menu/composer body.
     var editorOverlay: some View {
+        ChatComposerSection { self.editorOverlayContent }
+    }
+
+    private var editorOverlayContent: some View {
         ZStack(alignment: editorOverlayAlignment) {
             #if !os(macOS)
             if self.viewModel.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -1348,7 +1353,7 @@ extension OpenClawChatComposer {
 
     /// A third of a text line above the draft, so the first line does not sit on the border.
     var draftTopInset: CGFloat {
-        CleanChatComposerMetrics.editorBlockInset + self.scaledBodyLineHeight * OpenClawChatTypography.scale / 3
+        CleanChatComposerMetrics.editorBlockInset + self.scaledBodyLineHeight * OpenClawChatTypography.scaled(17) / 51
     }
 
     var textMinHeight: CGFloat {

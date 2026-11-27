@@ -72,6 +72,7 @@ export type TranscriptAttachmentEntry = {
   /** Timestamp of the message that carried the media, when the transcript recorded one. */
   timestamp?: number;
   options: ImageRenderOptions;
+  onShowMessage?: () => void;
   onOpenSidebar: (content: SidebarContent) => void;
 } & ({ kind: "image"; image: ImageBlock } | { kind: "attachment"; item: AssistantAttachmentItem });
 
@@ -248,7 +249,7 @@ type SessionDiffSidebarContent = {
   kind: "session-diff";
   owner: SessionDiffOwner;
   load: SessionDiffLoader;
-  /** Last accepted native Uncommitted result for this exact diff loader. */
+  /** Last accepted native Uncommitted result for this owner; only this loader replaces it. */
   uncommitted?: SessionsDiffResult;
   /** Visible Environment demand shares this content's native diff loader. */
   requestUncommitted?: () => void | (() => void);

@@ -200,7 +200,8 @@ it.for([false, true])(
           10_000,
           "Login did not start automatic catalog discovery",
         );
-        await expectPassiveReads(["known-chat"], true);
+        // A refreshable provider lists nothing until its account listing exists.
+        await expectPassiveReads([], true);
         await waitForCatalogPublication({
           signal,
           start: () => {
@@ -262,8 +263,8 @@ it.for([false, true])(
         await staleRefreshSettled;
         expect(signedOut.ids).toEqual([]);
         expect((await list()).ids).toEqual([]);
-        // API-key sign-in also rewrites auth.profiles; its config reload must keep the known rows,
-        // and a failed first listing must not take them away.
+        // API-key sign-in also rewrites auth.profiles. Neither its config reload nor a failed first
+        // listing may list the manifest rows: only the account listing decides existence.
         listingStatus = 500;
         const apiKeyListing = holdNextCatalogResponse();
         await client.request("models.authSetApiKey", {
@@ -274,14 +275,14 @@ it.for([false, true])(
         await withinTest(apiKeyListing.started.promise, signal);
         const apiKeyPending = await list();
         apiKeyListing.release.resolve();
-        expect(apiKeyPending.ids).toEqual(["known-chat"]);
+        expect(apiKeyPending.ids).toEqual([]);
         const apiKeyFailed = await waitForCatalogPublication({
           signal,
           read: list,
           ready: ({ result }) =>
             result.refreshFailed === true && !result.pendingProviders?.includes(provider),
         });
-        expect(apiKeyFailed.ids).toEqual(["known-chat"]);
+        expect(apiKeyFailed.ids).toEqual([]);
         listingStatus = 200;
         await waitForCatalogPublication({
           signal,

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
 import { noteDoctorAgentDatabasePathHealth } from "../commands/doctor-agent-database-paths.js";
 import { createUpdateRun, finishUpdateRun } from "../infra/update-run-ledger.js";
@@ -27,7 +28,7 @@ function fixture() {
     openOpenClawAgentDatabase({ env, agentId: "main", path: path.join(root, basename) });
   const repair = (overrides: NodeJS.ProcessEnv = {}) =>
     noteDoctorAgentDatabasePathHealth({ env: { ...env, ...overrides }, shouldRepair: true });
-  return { root, env, register, registeredPaths, open, repair };
+  return { root, env, state, register, registeredPaths, open, repair };
 }
 
 it("removes sentinel registrations on every platform, deleting only empty files", () => {
@@ -61,18 +62,45 @@ it("removes sentinel registrations on every platform, deleting only empty files"
   expect(f.repair()).toEqual([]);
 });
 
-it("preserves the captured registry and files during active and candidate updates", () => {
+it("defers only repairable registrations during active and candidate updates", () => {
   const f = fixture();
+  const candidate = { OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1" };
+  const run = createUpdateRun({ trigger: "cli" }, { env: f.env });
+  expect([f.repair(), f.repair(candidate)]).toEqual([[], []]);
   const pathname = f.register("(multiple).sqlite", "");
   const before = f.registeredPaths();
-  const run = createUpdateRun({ trigger: "cli" }, { env: f.env });
-  expect(f.repair()).toEqual([expect.stringContaining(`update ${run.runId} is in progress`)]);
-  expect(f.registeredPaths()).toEqual(before);
-  expect(fs.existsSync(pathname)).toBe(true);
-  finishUpdateRun(run.runId, { status: "succeeded" }, { env: f.env });
-  expect(f.repair({ OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1" })).toEqual([
-    expect.stringContaining("during update Doctor"),
+  expect(f.repair()).toEqual([
+    expect.stringContaining(`for 1 registration(s) while update ${run.runId} is in progress`),
   ]);
   expect(f.registeredPaths()).toEqual(before);
   expect(fs.existsSync(pathname)).toBe(true);
+  finishUpdateRun(run.runId, { status: "succeeded" }, { env: f.env });
+  expect(f.repair(candidate)).toEqual([
+    expect.stringContaining("for 1 registration(s) during update Doctor"),
+  ]);
+  expect(f.registeredPaths()).toEqual(before);
+  expect(fs.existsSync(pathname)).toBe(true);
+});
+
+it("decides from a read and opens no write transaction for a clean registry", () => {
+  const f = fixture();
+  f.register("ordinary.sqlite");
+  const holder = new DatabaseSync(f.state.path);
+  holder.exec("BEGIN IMMEDIATE");
+  try {
+    // A write transaction would wait out the busy timeout and fail on the held lock.
+    expect(f.repair()).toEqual([]);
+  } finally {
+    holder.exec("ROLLBACK");
+    holder.close();
+  }
+
+  // Registrations that need repair still reach the write transaction.
+  const sentinels = [
+    f.register("(multiple).sqlite", ""),
+    f.register("(multiple).main.2.sqlite", ""),
+  ];
+  expect(f.repair()).toEqual([]);
+  expect(f.registeredPaths()).toEqual([{ path: path.join(f.root, "ordinary.sqlite") }]);
+  expect(sentinels.map(fs.existsSync)).toEqual([false, false]);
 });

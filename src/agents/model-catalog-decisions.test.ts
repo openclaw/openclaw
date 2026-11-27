@@ -382,10 +382,15 @@ describe("captured model decisions", () => {
       status: "ready",
       listedModelIds,
     });
-    const evaluate = (
+    const accountDecisions = (
       outcomes: readonly Outcome[],
-      id: string,
-      options: { profileIds?: readonly string[]; withApiKey?: boolean; pin?: string } = {},
+      options: {
+        profileIds?: readonly string[];
+        withApiKey?: boolean;
+        pin?: string;
+        accountCatalog?: DecisionParams["accountCatalog"];
+        entries?: ModelCatalogEntry[];
+      } = {},
     ) => {
       mockRouteResolverFactory(
         routeResolverFactory({
@@ -395,7 +400,8 @@ describe("captured model decisions", () => {
       );
       return decisions({
         pinnedProfileId: options.pin,
-        snapshot: catalogSnapshot([], {
+        accountCatalog: options.accountCatalog,
+        snapshot: catalogSnapshot(options.entries, {
           providerOutcomes: outcomes.map((outcome) => ({ provider: "openai", ...outcome })),
         }),
         preparedAuthStore: authStore({
@@ -404,10 +410,72 @@ describe("captured model decisions", () => {
           ),
           ...(options.withApiKey ? { "openai:platform": platformKey } : {}),
         }),
-      }).evaluateEntry({ provider: "openai", id }, undefined, "codex");
+      });
     };
+    const evaluate = (
+      outcomes: readonly Outcome[],
+      id: string,
+      options?: Parameters<typeof accountDecisions>[1],
+    ) =>
+      accountDecisions(outcomes, options).evaluateEntry(
+        { provider: "openai", id },
+        undefined,
+        "codex",
+      );
     // The listing returned gpt-5.5 as a hidden row and did not return gpt-5.4-pro.
     const ready = listing("openai:chatgpt", "gpt-6-sol", "gpt-5.5");
+
+    it("indexes a ready account listing once across distinct models and decision owners", () => {
+      const ids = Array.from({ length: 64 }, (_, index) => `fixture-${index}`);
+      const listedModelIds = ids.map((id) => id.toUpperCase());
+      // Each complete listing traversal reads its first ID, regardless of the iteration method.
+      const firstId = vi.fn(() => " FIXTURE-0 ");
+      Object.defineProperty(listedModelIds, 0, { get: firstId });
+      for (const profileId of ["openai:work", "openai:personal"]) {
+        const owner = accountDecisions([{ profileId, status: "ready", listedModelIds }], {
+          profileIds: [profileId],
+          pin: profileId,
+        });
+        for (const id of ids) {
+          expectAvailable(
+            owner.evaluateEntry({ provider: "openai", id }, undefined, "codex"),
+            profileId,
+          );
+        }
+      }
+      expect(firstId).toHaveBeenCalledTimes(1);
+    });
+
+    it("replaces cached model decisions when the selected account publishes an empty listing", async () => {
+      const profileId = "openai:chatgpt";
+      const accountCatalog = createPreparedAccountCatalogAccess(() => true);
+      await accountCatalog.acquire({
+        profileId,
+        credential: chatgpt,
+        allowDiscovery: true,
+        load: async () => [{ provider: "openai", profileId, status: "ready", listedModelIds: [] }],
+      });
+      const row = model("openai", "gpt-5.5");
+      const sibling = model("other", "fixture");
+      const owner = accountDecisions([ready], {
+        pin: profileId,
+        entries: [row, sibling],
+        accountCatalog,
+      });
+      const evaluateRow = (catalogRow: ModelCatalogEntry) =>
+        owner.evaluateEntry(catalogRow, undefined, "codex");
+      expectAvailable(evaluateRow(row), profileId);
+      const siblingDecision = evaluateRow(sibling);
+      const initial = await owner.projectCatalog();
+      await owner.prepareSelectedAccountCatalog(() => {}, {});
+      expect(owner.isCurrent()).toBe(true);
+      expect(evaluateRow(row).availability).toBe(false);
+      expect(evaluateRow(sibling)).toBe(siblingDecision);
+      const updated = await owner.projectCatalog();
+      expect(updated).not.toBe(initial);
+      await owner.prepareSelectedAccountCatalog(() => {}, {});
+      expect(await owner.projectCatalog()).toBe(updated);
+    });
 
     it("does not offer an unlisted dual-route model to a ChatGPT-only account", () => {
       const unlisted = evaluate([ready], "gpt-5.4-pro");
@@ -415,6 +483,10 @@ describe("captured model decisions", () => {
       // The account is signed in; a missing-auth reason would render sign-in guidance.
       expect(unlisted.unavailableReason).toBeUndefined();
       expectAvailable(evaluate([ready], "gpt-5.5"), "openai:chatgpt");
+      expectAvailable(
+        evaluate([ready, listing("openai:chatgpt", "gpt-5.4-pro")], "gpt-5.4-pro"),
+        "openai:chatgpt",
+      );
     });
 
     it.each([

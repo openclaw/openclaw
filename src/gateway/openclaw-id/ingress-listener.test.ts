@@ -9,6 +9,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import { observeMainThreadFs } from "../../test-utils/main-thread-fs-spies.test-support.js";
 import {
   authorizeHttpGatewayConnect,
   authorizeWsControlUiGatewayConnect,
@@ -176,6 +177,17 @@ describe("OpenClaw ID ingress listener", () => {
       expect(fs.statSync(path.dirname(listener.socketPath)).mode & 0o777).toBe(0o700);
     }
     expect(listener.proxyToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    using filesystem = observeMainThreadFs();
+    await listener.close();
+    await expect(fs.promises.stat(listener.socketPath)).rejects.toMatchObject({ code: "ENOENT" });
+    started = await startOpenClawIdIngressListener({
+      socketPath: listener.socketPath,
+      gatewayServer: () => gateway,
+      log: { warn: vi.fn() },
+    });
+    await started.close();
+    started = undefined;
+    expect(filesystem.calls()).toEqual({});
   });
 
   it("marks relayed requests as tunnel traffic with the authenticated peer key, never as loopback", async () => {

@@ -97,6 +97,67 @@ function cli() {
   };
 }
 
+it("preserves recovery for absent repositories and resumes cleanup when they return", async () => {
+  const [record] = await fixtures(["absent-repository"], { now, ownerKind: "manual" });
+  const service = new ManagedWorktreeService({ env });
+  await service.remove({ id: record!.id, reason: "archive" });
+  const retained = getRegistryWorktree(env, record!.id)!;
+  await requireGit(repo, ["branch", record!.branch]);
+  await requireGit(repo, ["branch", "openclaw/unowned"]);
+  await closeOpenClawStateDatabaseAsync();
+  const { output, run } = cli();
+  const unavailable = `${repo}-unavailable`;
+  await fs.rename(repo, unavailable);
+  try {
+    const code = await run();
+    const result = output.mock.lastCall?.[0];
+    expect(result, JSON.stringify(result)).toMatchObject({
+      outcome: "completed",
+      failedCount: 0,
+      snapshotsPruned: 0,
+    });
+    expect(code).toBe(0);
+    expect(result).not.toHaveProperty("gitMaintenance");
+    expect(getRegistryWorktree(env, record!.id)).toEqual(retained);
+    expect((await service.gc()).failedCount).toBe(0);
+  } finally {
+    await fs.rename(unavailable, repo);
+  }
+  expect(await service.gc()).toMatchObject({
+    outcome: "completed",
+    failedCount: 0,
+    gitMaintenance: { repoRoot: repo, stage: "completed" },
+  });
+  expect(await requireGit(repo, ["branch", "--list", "openclaw/unowned"])).toBe("");
+  expect(await requireGit(repo, ["branch", "--list", record!.branch])).toBe(record!.branch);
+  expect(await requireGit(repo, ["rev-parse", retained.snapshotRef!])).toBeTruthy();
+  expect(getRegistryWorktree(env, record!.id)).toEqual(retained);
+});
+
+it("reports Git errors when the recorded repository directory still exists", async () => {
+  const [record] = await fixtures(["invalid-repository"], { now, ownerKind: "manual" });
+  await new ManagedWorktreeService({ env }).remove({ id: record!.id, reason: "archive" });
+  const retained = getRegistryWorktree(env, record!.id)!;
+  await closeOpenClawStateDatabaseAsync();
+  const { output, run } = cli();
+  const gitdir = path.join(repo, ".git");
+  const unavailable = path.join(repo, ".git-unavailable");
+  await fs.rename(gitdir, unavailable);
+  try {
+    expect(await run()).toBe(1);
+    expect(output.mock.lastCall?.[0]).toMatchObject({
+      outcome: "partial",
+      issues: expect.arrayContaining([
+        expect.objectContaining({ stage: "orphans", outcome: "failed" }),
+        expect.objectContaining({ stage: "git-maintenance", outcome: "failed" }),
+      ]),
+    });
+    expect(getRegistryWorktree(env, record!.id)).toEqual(retained);
+  } finally {
+    await fs.rename(unavailable, gitdir);
+  }
+});
+
 it.each(["checkpoint", "archive"] as const)(
   "records oversized idle %s results once across warm sweeps and reopening",
   async (phase) => {
@@ -240,7 +301,9 @@ it
           orphansRetired: 0,
           protectedCount: 1,
           failedCount: 0,
-          protectionReasons: { unreadable: 1 },
+          protectionReasons: {
+            [pass === 0 ? "unreadable" : getRegistryWorktree(env, record!.id)!.gcProtection!]: 1,
+          },
           issues: [
             {
               id: record!.id,
@@ -256,7 +319,12 @@ it
       gcSpy.mockRestore();
       await fs.chmod(locked, 0o755);
     }
-    expect((await service.gc()).removed).toEqual([record!.id]);
+    expect((await service.gc()).removed).toEqual([]);
+    expect((await service.gc({ retryDeferred: true })).removed).toEqual([record!.id]);
+    const restored = await service.restore({ id: record!.id });
+    expect(await fs.readFile(path.join(restored.path, "tracked/file.txt"), "utf8")).toBe(
+      "preserve unreadable content\n",
+    );
   },
 );
 
@@ -340,7 +408,9 @@ it("finishes CLI cleanup across moved HEADs, orphans, idle, active, leased and m
   expect(getRegistryWorktree(env, orphan!.id)?.removedAt).toBeGreaterThanOrEqual(now);
   expect(getRegistryWorktree(env, orphan!.id)?.removedAt).toBeLessThanOrEqual(Date.now());
   expect((await service.list()).some((record) => record.id === orphan!.id)).toBe(false);
-  await expect(service.restore({ id: orphan!.id })).rejects.toThrow("is not restorable");
+  await expect(service.restore({ id: orphan!.id })).rejects.toThrow(
+    "checkout preserved. Repair its Git metadata or create a new worktree before retrying",
+  );
   expect(await requireGit(repo, ["rev-parse", "--verify", orphan!.branch])).toBeTruthy();
   expect(getRegistryWorktree(env, moved!.id)?.removedAt).toBeUndefined();
   expect(await requireGit(repo, ["rev-parse", "--verify", moved!.branch])).toBeTruthy();
@@ -374,11 +444,11 @@ it.each([
     if (phase === "before cleanup") {
       await changeOrigin();
     } else {
-      const withAllocation = allocation.withWorktreeAllocationLease;
-      vi.spyOn(allocation, "withWorktreeAllocationLease").mockImplementationOnce(
+      const withMutation = allocation.withWorktreeMutationLease;
+      vi.spyOn(allocation, "withWorktreeMutationLease").mockImplementationOnce(
         async (params, run) => {
           await changeOrigin();
-          return await withAllocation(params, run);
+          return await withMutation(params, run);
         },
       );
     }

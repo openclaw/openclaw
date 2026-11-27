@@ -2,8 +2,9 @@ import { isDeepStrictEqual } from "node:util";
 import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import {
   buildChannelInboundEventContext,
-  createChannelInboundEnvelopeBuilderAsync,
+  formatAgentEnvelope,
   formatInboundMediaUnavailableText,
+  resolveEnvelopeFormatOptions,
   toInboundMediaFactsWithMetadata,
   type ChannelInboundTurnPlan,
 } from "openclaw/plugin-sdk/channel-inbound";
@@ -12,6 +13,7 @@ import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
 import { saveMediaBuffer, saveMediaSource } from "openclaw/plugin-sdk/media-store";
+import { resolveOutboundMediaAccessForConfig } from "openclaw/plugin-sdk/outbound-media";
 import {
   sanitizeQaBusToolCallArguments,
   type QaBusToolCall,
@@ -225,6 +227,7 @@ export async function handleQaInbound(params: {
         ...message,
         mediaUrls,
         mediaLocalRoots,
+        mediaAccess: resolveOutboundMediaAccessForConfig(config),
       });
     } else {
       await sendQaChannelText(message);
@@ -287,10 +290,6 @@ export async function handleQaInbound(params: {
     baseSessionKey: route.sessionKey,
     threadId: inbound.threadId,
     parentSessionKey: isGroup ? route.sessionKey : undefined,
-  });
-  const buildEnvelope = await createChannelInboundEnvelopeBuilderAsync({
-    cfg: params.config,
-    route: { agentId: route.agentId, sessionKey: threadKeys.sessionKey },
   });
   const wasMentioned = isGroup
     ? channelRuntime.mentions.matchesMentionPatterns(
@@ -362,10 +361,20 @@ export async function handleQaInbound(params: {
         notice: `[${unavailableCount} QA attachment${unavailableCount === 1 ? "" : "s"} unavailable]`,
       })
     : inbound.text;
-  const body = buildEnvelope({
+  // Read from the channel runtime's session owner. The embedded QA runner owns
+  // its session metadata in memory; the Gateway runtime still uses its worker.
+  const previousTimestamp = await channelRuntime.session.readSessionUpdatedAtAsync({
+    storePath: channelRuntime.session.resolveStorePath(config.session?.store, {
+      agentId: route.agentId,
+    }),
+    sessionKey: threadKeys.sessionKey,
+  });
+  const body = formatAgentEnvelope({
     channel: params.channelLabel,
     from: inbound.senderName || inbound.senderId,
     timestamp: inbound.timestamp,
+    previousTimestamp,
+    envelope: resolveEnvelopeFormatOptions(config),
     body: bodyForAgent,
   });
   const ctxPayload = (params.buildContext ?? buildChannelInboundEventContext)({

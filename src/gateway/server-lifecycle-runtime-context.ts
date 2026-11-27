@@ -1,5 +1,4 @@
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
-import { pluginInvocationContext } from "../plugins/plugin-instance-scope.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { callGateway } from "./call.js";
 import type { GatewayLifecycleRuntime } from "./server-instance-runtime.types.js";
@@ -70,15 +69,11 @@ export function bindGatewayLifecycleRequest(
       request.method === "chat.abort" ||
       request.method === "sessions.delete"
     ) {
-      const method = request.method;
-      // The requesting turn may have finished and closed its plugin scope.
-      result = await pluginInvocationContext.exit(() =>
-        runtime.dispatchSessionMethod<T>(method, request.params, {
-          timeoutMs,
-          signal: request.signal,
-          assertCurrent,
-        }),
-      );
+      result = await runtime.dispatchSessionMethod<T>(request.method, request.params, {
+        timeoutMs,
+        signal: request.signal,
+        assertCurrent,
+      });
     } else {
       throw new Error(`Gateway lifecycle principal cannot dispatch ${request.method}`);
     }

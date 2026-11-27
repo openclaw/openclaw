@@ -42,9 +42,10 @@ export type CodexWorkspaceBootstrapContext = {
   memoryToolRouted?: boolean;
   promptContext?: string;
   threadDeveloperInstructions?: string;
-  personaInstructions?: string;
   sharedPersonaInstructions?: string;
+  personalPersonaInstructions?: string;
   memoryInstructions?: string;
+  sessionProjectGuidance?: string;
 };
 
 /** A child baseline reads the bounded workspace snapshot without invoking admission hooks. */
@@ -165,9 +166,15 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       threadDeveloperInstructions: includeAgentWorkspaceInstructions
         ? instructionSnapshot.instructions || params.agentWorkspaceDeveloperInstructions || ""
         : undefined,
-      personaInstructions: injectOpenClawContext ? prepared.personaInstructions : undefined,
+      sessionProjectGuidance:
+        injectOpenClawContext && availableToolNames.has("session_project")
+          ? await params.params.prepareSessionProjectGuidance?.()
+          : undefined,
       sharedPersonaInstructions: injectOpenClawContext
         ? prepared.sharedPersonaInstructions
+        : undefined,
+      personalPersonaInstructions: injectOpenClawContext
+        ? prepared.personalPersonaInstructions
         : undefined,
       memoryInstructions: injectOpenClawContext
         ? renderCodexWorkspaceMemoryInstructions({

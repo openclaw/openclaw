@@ -41,11 +41,17 @@ function retainUnjoinedDistArtifactWork(owner: ArtifactOwner, error: unknown) {
   return error;
 }
 
-export async function runOwnedDistArtifactEntry(script: string, args: string[]) {
+export async function runOwnedDistArtifactEntry(
+  script: string,
+  args: string[],
+  parentClaim?: string,
+) {
   const directory = resolveDistArtifactLockPath(process.cwd());
-  const claim = path.join(directory, `child-${process.pid}`);
+  const claim = path.join(directory, parentClaim ?? `child-${process.pid}`);
   // A surviving wrapper claim retains ownership for possibly detached compilers.
-  fs.writeFileSync(claim, "Awaiting child completion.\n", { flag: "wx" });
+  if (!parentClaim) {
+    fs.writeFileSync(claim, "Awaiting child completion.\n", { flag: "wx" });
+  }
   const owner: ArtifactOwner = { directory };
   // This entry process inherits ownership until exit. Native bundler callbacks
   // can lose async context and run after the CLI module's import has settled.
@@ -57,7 +63,10 @@ export async function runOwnedDistArtifactEntry(script: string, args: string[]) 
     throw retainUnjoinedDistArtifactWork(owner, error);
   } finally {
     // The pre-existing claim is the durable fence if recording uncertainty failed.
-    if (owner.unjoinedError === undefined || fs.existsSync(path.join(directory, "unjoined"))) {
+    if (
+      !parentClaim &&
+      (owner.unjoinedError === undefined || fs.existsSync(path.join(directory, "unjoined")))
+    ) {
       fs.unlinkSync(claim);
     }
   }

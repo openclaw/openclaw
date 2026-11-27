@@ -1070,6 +1070,8 @@ describe("runCliAgent reliability", () => {
         return true;
       });
 
+      // This scenario proves recovery ordering; the recovery owner tests budget expiry.
+      const clock = vi.spyOn(performance, "now").mockReturnValue(performance.now());
       try {
         const context = makeClaudePreparedContext({
           sessionKey: "agent:main:subagent:retry",
@@ -1078,13 +1080,11 @@ describe("runCliAgent reliability", () => {
           openClawHistoryPrompt: CLI_RESEED_PROMPT,
         });
         if (reason === "format") {
-          context.preparedBackend.backend = {
-            ...context.preparedBackend.backend,
+          Object.assign(context.preparedBackend.backend, {
             output: "jsonl",
             input: "stdin",
             jsonlDialect: "claude-stream-json",
-          };
-          context.backendResolved.config = context.preparedBackend.backend;
+          });
         }
         const result = await runPreparedCliAgent(
           withParams(context, {
@@ -1125,6 +1125,7 @@ describe("runCliAgent reliability", () => {
         expect(modelCallEvents[2]?.callId).toBe(modelCallEvents[3]?.callId);
         expect(modelCallEvents[0]?.callId).not.toBe(modelCallEvents[2]?.callId);
       } finally {
+        clock.mockRestore();
         stopDiagnostics();
       }
     },

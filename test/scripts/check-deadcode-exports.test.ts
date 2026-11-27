@@ -21,20 +21,11 @@ import {
 } from "../../src/infra/runtime-process-manifest.ts";
 
 const fullRootWorkspace = allExportsKnipConfig.workspaces["."];
-const fullAgentCoreWorkspace = allExportsKnipConfig.workspaces["packages/agent-core"];
 const fullExtensionWorkspace = allExportsKnipConfig.workspaces["extensions/*"];
 const fullUiWorkspace = allExportsKnipConfig.workspaces.ui;
 const scriptRootWorkspace = scriptExportsKnipConfig.workspaces["."];
-if (
-  !fullRootWorkspace ||
-  !fullAgentCoreWorkspace ||
-  !fullExtensionWorkspace ||
-  !fullUiWorkspace ||
-  !scriptRootWorkspace
-) {
-  throw new Error(
-    "deadcode Knip configs must define root, agent-core, extension, and UI workspaces",
-  );
+if (!fullRootWorkspace || !fullExtensionWorkspace || !fullUiWorkspace || !scriptRootWorkspace) {
+  throw new Error("deadcode Knip configs must define root, extension, and UI workspaces");
 }
 
 function expectEntries(entries: readonly string[], required: string[]) {
@@ -114,9 +105,6 @@ describe("check-deadcode-exports", () => {
     expect(knipConfig.workspaces["."].entry).not.toContain(
       "test/scripts/service-relay-artifact.test-support.mjs!",
     );
-    expectEntries(fullAgentCoreWorkspace.entry, [
-      "src/harness/compaction/compaction-floor.retention.test-support.ts!",
-    ]);
     for (const extension of ["js", "mjs", "cjs", "ts", "tsx", "mts", "cts"]) {
       expect(isEntry(knipConfig.workspaces["."].entry, `scripts/perf/x.${extension}`)).toBe(
         extension !== "tsx",
@@ -266,9 +254,33 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
     ["sh", "scripts/e2e/lib/upgrade-survivor/run.sh", "readPostCoreSnapshot", "./diagnostics.mjs"],
     [
       "yml",
+      ".github/workflows/full-release-validation.yml",
+      "resolveReleaseContextIdentity",
+      "../../scripts/lib/release-context.mjs",
+    ],
+    [
+      "yml",
+      ".github/workflows/full-release-validation.yml",
+      "resolveReleaseQualificationScope",
+      "../../scripts/full-release-validation-policy.mjs",
+    ],
+    [
+      "yml",
       ".github/workflows/openclaw-release-publish.yml",
       "prefetchPreparedPlugins",
       "../../scripts/openclaw-release-ready.mjs",
+    ],
+    [
+      "yml",
+      ".github/workflows/openclaw-stable-main-closeout.yml",
+      "verifyReleaseEvidenceChecksum",
+      "../../scripts/lib/stable-release-closeout.mjs",
+    ],
+    [
+      "yml",
+      ".github/workflows/openclaw-stable-main-closeout.yml",
+      "verifyStablePublishRecovery",
+      "../../scripts/lib/stable-publish-recovery.mjs",
     ],
   ] as const)("models %s inline imports from %s", (kind, file, symbol, importedFrom) => {
     const source = fs.readFileSync(file, "utf8");
@@ -278,7 +290,7 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
     }
     expect(compile(source, file)).toContain(`import { ${symbol} } from "${importedFrom}";`);
     const remaining = compile(
-      source.replace(new RegExp(`^\\s*import \\{ ${symbol} \\}[^\\n]+\\n`, "mu"), ""),
+      source.replace(new RegExp(`^\\s*(?:import|const) \\{ ${symbol} \\}[^\\n]+\\n`, "mu"), ""),
       file,
     );
     expect(remaining).not.toContain(symbol);
@@ -288,16 +300,80 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
     expect(compile(source, path.join(path.dirname(file), `other.${kind}`))).toBe("");
   });
 
-  it("models named Solid lazy consumers without retaining a deleted loader", () => {
-    const source = `const SettingsSidebar = lazy(() => import("./settings-sidebar-shell.tsx"), {
+  it("ignores full validation imports from an unrelated checkout", () => {
+    const file = ".github/workflows/full-release-validation.yml";
+    const source = replaceFixture(
+      fs.readFileSync(file, "utf8"),
+      "./workflow/scripts/full-release-validation-policy.mjs",
+      "./other/scripts/full-release-validation-policy.mjs",
+    );
+    expect(knipConfig.compilers.yml(source, file)).not.toContain(
+      "resolveReleaseQualificationScope",
+    );
+  });
+
+  it("models the workflow planner without retaining removed consumers", () => {
+    const file = ".github/workflows/plugin-prerelease.yml";
+    const source = fs.readFileSync(file, "utf8");
+    const compile = knipConfig.compilers.yml;
+    const compiled = compile(source, file);
+    expect(compiled).toContain('"../../scripts/lib/plugin-prerelease-test-plan.mts"');
+    expect(compiled).toContain("planner.resolvePluginPrereleaseExtensionRuntimes");
+    const withoutConsumer = replaceFixture(
+      source,
+      `            if (typeof planner.resolvePluginPrereleaseExtensionRuntimes === "function") {
+              resolveExtensionRuntimes = planner.resolvePluginPrereleaseExtensionRuntimes;
+            }`,
+      "",
+    );
+    const remaining = compile(withoutConsumer, file);
+    expect(remaining).not.toContain("resolvePluginPrereleaseExtensionRuntimes");
+    expect(remaining).toContain("planner.assertPluginPrereleaseTestPlanComplete");
+    expect(
+      compile(
+        replaceFixture(source, 'targetPlanPath("plugin-prerelease-test-plan")', '"other"'),
+        file,
+      ),
+    ).not.toContain("plugin-prerelease-test-plan.mts");
+  });
+
+  it("models named Solid lazy consumers in every UI loader without retaining a deleted loader", () => {
+    const sources: Record<string, string> = {
+      "settings-sidebar-lazy.tsx": `const SettingsSidebar = lazy(() => import("./settings-sidebar-shell.tsx"), {
   export: "ShellSettingsSidebar",
-});`;
-    const read = vi.spyOn(fs, "readFileSync").mockReturnValue(source);
+});`,
+      // A second loader in another directory, as #204200 added for the chat bubble.
+      "chat-message-bubble-view.tsx": `const Notice = lazy(() => import("./chat-read-aloud-status.tsx"), {
+  export: "RecordingApiKeyNotice",
+});`,
+      "chat-message-bubble-view.test.tsx": `lazy(() => import("./test-only.tsx"), { export: "TestOnly" });`,
+    };
+    const dirs: Record<string, string> = {
+      "settings-sidebar-lazy.tsx": path.resolve("ui/src/components"),
+      "chat-message-bubble-view.tsx": path.resolve("ui/src/pages/chat/components"),
+      "chat-message-bubble-view.test.tsx": path.resolve("ui/src/pages/chat/components"),
+    };
+    vi.spyOn(fs, "readdirSync").mockReturnValue(
+      Object.keys(sources).map((name) => ({
+        name,
+        parentPath: dirs[name],
+        isFile: () => true,
+      })) as never,
+    );
+    const read = vi
+      .spyOn(fs, "readFileSync")
+      .mockImplementation(((file: string) => sources[path.basename(file)] ?? "") as never);
     const compile = knipConfig.compilers.mjs;
-    expect(compile("// config", "config/knip-vite-consumers.mjs")).toContain(
+    const compiled = compile("// config", "config/knip-vite-consumers.mjs");
+    expect(compiled).toContain(
       'import { ShellSettingsSidebar as __solidLazy0 } from "../ui/src/components/settings-sidebar-shell.tsx";',
     );
-    read.mockReturnValue("const SettingsSidebar = null;");
+    expect(compiled).toContain(
+      'from "../ui/src/pages/chat/components/chat-read-aloud-status.tsx";',
+    );
+    expect(compiled).toContain("import { RecordingApiKeyNotice as __solidLazy");
+    expect(compiled).not.toContain("TestOnly");
+    read.mockImplementation((() => "const SettingsSidebar = null;") as never);
     expect(compile("// config", "config/knip-vite-consumers.mjs")).not.toContain(
       "ShellSettingsSidebar",
     );
@@ -809,7 +885,7 @@ function other(lineageCompletion: typeof lineageWriter) {
     const compile = knipConfig.compilers.mjs;
     const compiled = compile("// dynamic consumers", "config/knip-dynamic-consumers.mjs");
     expect(compiled).toMatch(
-      /import \{ materializeRuntimeProcessScriptFile as __dynamic\d+_0 \} from "\.\.\/src\/infra\/runtime-process-script-file\.ts";/u,
+      /import \{ materializeRuntimeProcessScriptFile as __dynamic\d+_0, materializeRuntimeProcessScriptFileAsync as __dynamic\d+_1 \} from "\.\.\/src\/infra\/runtime-process-script-file\.ts";/u,
     );
     expect(compiled).toMatch(
       /import \{ resolveRuntimeBootstrapToolingEntrypointUrl as __dynamic\d+_0 \} from "\.\.\/runtime-process-bootstrap\.generated\.mjs";/u,
@@ -827,7 +903,7 @@ function other(lineageCompletion: typeof lineageWriter) {
         [
           [
             "scripts/generate-runtime-script-assets.mjs",
-            'import { materializeRuntimeProcessScriptFile } from "./src/infra/runtime-process-script-file.ts";',
+            'import { materializeRuntimeProcessScriptFile, materializeRuntimeProcessScriptFileAsync } from "./src/infra/runtime-process-script-file.ts";',
             "",
           ],
           [
@@ -886,6 +962,7 @@ function other(lineageCompletion: typeof lineageWriter) {
     const manifest = fs.readFileSync("package.json", "utf8");
     const compile = knipConfig.compilers.json;
     const compiled = compile(manifest, "package.json");
+    expect(compiled).not.toContain("import { isImmutableManagedServiceUpdateHandoffProcess");
     expect(compiled).toMatch(
       /import \{ isPackageManagerUpdateMode as __updateCompatibilityConsumer\d+ \} from "\.\/src\/cli\/update-cli\/update-command-service-recovery\.ts";/u,
     );
@@ -907,6 +984,9 @@ function other(lineageCompletion: typeof lineageWriter) {
       ).toBe(false);
       expect(compiled).toContain(`from "./${module}";`);
     }
+    expect(compiled).toMatch(
+      /import \{ runWithOpenClawStateLeaseWorker as __updateCompatibilityConsumer\d+ \} from "\.\/src\/state\/openclaw-state-lease-worker-operation\.ts";/u,
+    );
     const finishAliases = [
       ...compiled.matchAll(
         /import \{ finishUpdateRun as (__updateCompatibilityConsumer\d+) \} from "\.\/src\/infra\/update-run-(?:ledger|write)\.ts";/gu,
@@ -991,9 +1071,5 @@ function other(lineageCompletion: typeof lineageWriter) {
 ${errors}
 Install workspace dependencies in-tree (pnpm install) — on delegated boxes the crabbox wrapper links the hydrated modules dir into the workdir — and rerun.`,
     });
-  });
-
-  it("accepts clean export scan output unchanged", () => {
-    expect(checkExportScan("clean scan", "")).toEqual({ entries: [], message: "", ok: true });
   });
 });

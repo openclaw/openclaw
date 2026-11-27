@@ -14,7 +14,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it.each(["account", "recovery scope"])(
+it.each(["account", "recovery scope", "read access"])(
   "retires identities when the same client's %s changes",
   async (change) => {
     const pending = createDeferred<AgentIdentityResult>();
@@ -47,7 +47,13 @@ it.each(["account", "recovery scope"])(
         ? { selfUser: { id: "bob", name: "Bob" } }
         : {
             selfUser: undefined,
-            hello: { ...hello, auth: { ...hello.auth!, recoveryScope: "bob-scope" } },
+            hello: {
+              ...hello,
+              auth: {
+                ...hello.auth!,
+                ...(change === "recovery scope" ? { recoveryScope: "bob-scope" } : { scopes: [] }),
+              },
+            },
           }),
     });
     expect(capability.get("main")).toBeNull();
@@ -80,11 +86,12 @@ it("retains settled identity during a blip and retires it for a different client
   snapshot.phase = "connected";
   publish(snapshot);
   expect(capability.get("main")).toEqual(original);
+  const refresh = capability.ensure(["main"]);
   snapshot.client = createTestGatewayClient(request);
   publish(snapshot);
   expect(capability.get("main")).toBeNull();
   refreshed.resolve({ ...original, name: "Old connection" });
-  await capability.ensure([]);
+  await refresh;
   expect(capability.get("main")).toBeNull();
 });
 

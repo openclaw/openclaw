@@ -3,6 +3,7 @@ import type { AssistantMessage, UserMessage, Usage } from "openclaw/plugin-sdk/l
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAICompletionsParams } from "../../packages/ai/src/transports/openai-completions-params.js";
 import { markInboundContextLabel } from "../auto-reply/reply/inbound-context-marker.js";
+import { buildAnthropicReplayPolicyForModel } from "../plugins/provider-replay-helpers.js";
 import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../shared/transcript-only-openclaw-assistant.js";
 import {
   loadSanitizeSessionHistoryWithCleanMocks,
@@ -133,7 +134,6 @@ const assistantContent = (messages: AgentMessage[], index = 1) => {
   return (messages[index] as AssistantMessage).content;
 };
 const roles = (messages: AgentMessage[]) => messages.map((message) => message.role);
-const omittedReasoning = [text("[assistant reasoning omitted]")];
 const makeAnthropicReplayPolicy = (
   overrides: Partial<TranscriptPolicy> = {},
 ): TranscriptPolicy => ({
@@ -295,6 +295,55 @@ describe("sanitizeSessionHistory", () => {
     expect(content).toContain("[Inter-session message]");
     expect(content).toContain("sourceSession=agent:main:req");
   });
+
+  it.each([
+    {
+      appendOnlyRuntimeContext: true,
+      roles: ["user", "assistant", "user", "user", "user", "user"],
+    },
+    { appendOnlyRuntimeContext: false, roles: ["user", "assistant", "user"] },
+  ])(
+    "replays background results as labelled user input (appendOnly=$appendOnlyRuntimeContext)",
+    async ({ appendOnlyRuntimeContext, roles: expectedRoles }) => {
+      const reports = ["PR flow 18:12: green", "PR flow 19:12: green", "PR flow 20:12: green"];
+      const policy = makeAnthropicReplayPolicy({
+        appendOnlyRuntimeContext,
+        dropReasoningFromHistory: false,
+      });
+      const sanitized = await sanitizeAnthropic(
+        [
+          user("watch the PR flow"),
+          assistant([text("Watching.")], { usage: makeUsage(1, 1, 2) }),
+          ...reports.map((report) => ({
+            ...assistant([text(report)]),
+            api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
+            provider: "openclaw",
+            model: "automation-result",
+            openclawAutomation: { kind: "cron", jobId: "job-1", runId: "run-1" },
+          })),
+          user("status?"),
+        ],
+        { policy },
+      );
+      const out = await validateAnthropic(sanitized, policy);
+
+      expect(roles(out)).toEqual(expectedRoles);
+      expect(assistantContent(out)).toEqual([text("Watching.")]);
+      const userText = out
+        .filter((message): message is UserMessage => message.role === "user")
+        .map((message) =>
+          typeof message.content === "string"
+            ? message.content
+            : message.content.map((block) => (block.type === "text" ? block.text : "")).join(""),
+        )
+        .join("\n");
+      for (const report of reports) {
+        expect(userText).toContain(
+          `[OpenClaw background result] You sent the message below to the user in this chat from a separate background run. It is a record of what they saw, not a new request.\n\n${report}`,
+        );
+      }
+    },
+  );
 
   it("preserves existing usage cost while normalizing token fields", async () => {
     const cost = {
@@ -589,21 +638,6 @@ describe("sanitizeSessionHistory", () => {
     expect(assistantContent(out, 3)).toEqual(current);
   });
 
-  it("keeps regular latest Anthropic thinking replay while preserving older stripped turns", async () => {
-    const latest = [thinking("latest private reasoning", "sig_latest"), text("latest answer")];
-    const out = await sanitizeAnthropic(
-      [
-        user("first"),
-        assistant([thinking("old private reasoning", "sig_old")]),
-        user("second"),
-        assistant(latest),
-      ],
-      { modelId: "claude-3-7-sonnet-20250219" },
-    );
-    expect(assistantContent(out)).toEqual(omittedReasoning);
-    expect(assistantContent(out, 3)).toEqual(latest);
-  });
-
   it("uses immutable thinking replay for anthropic-compatible providers when policy preserves signatures", async () => {
     const out = await sanitizeAnthropic(
       [user("retry"), assistant([thinking("internal", "sig_1"), toolCall("call_1", " read ")])],
@@ -672,5 +706,35 @@ describe("sanitizeSessionHistory", () => {
     expect(sanitizedExtended.slice(0, sanitizedBase.length)).toEqual(sanitizedBase);
     expect(assistantContent(sanitizedBase)).toEqual([priorCall]);
     expect(sanitizedBase[2]).toMatchObject({ toolCallId: priorId });
+  });
+
+  it("replays an earlier tool turn's signed thinking as stored on Claude models that strip prior thinking", async () => {
+    const haiku = "claude-haiku-4-5-20251001";
+    const policy = makeAnthropicReplayPolicy(buildAnthropicReplayPolicyForModel(haiku));
+    const claude = (
+      content: AssistantMessage["content"],
+      stopReason: "stop" | "toolUse" = "stop",
+    ) => ({
+      ...assistant(content, { stopReason }),
+      api: "anthropic-messages",
+      provider: "anthropic",
+      model: haiku,
+    });
+    const toolId = "toolu_01ABCDEF1234567890";
+    const toolTurn = [thinking("plan the read", "sig-tool"), toolCall(toolId)];
+    const sanitized = await sanitizeAnthropic(
+      [
+        user("read it"),
+        claude(toolTurn, "toolUse"),
+        toolResult(toolId),
+        claude([thinking("summarize", "sig-final"), text("Done.")]),
+        user("next"),
+        claude([text("ok")]),
+        user("again"),
+      ],
+      { modelId: haiku, policy },
+    );
+    // The API keeps prior-turn thinking before a tool call, so a replay drop breaks the cached prefix.
+    expect(assistantContent(sanitized)).toEqual(toolTurn);
   });
 });

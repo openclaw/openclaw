@@ -1,6 +1,6 @@
 import { normalizeProviderIdForAuth } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
+import { isShellEnvAppliedKey } from "../infra/shell-env.js";
 import { resolvePluginSetupProviderCore } from "../plugins/setup-registry.js";
 import { resolveLocalProviderAuthEvidence } from "../secrets/provider-auth-evidence.js";
 import type {
@@ -76,7 +76,6 @@ export function resolveProviderEnvAuthEvidence(
   const providerId = normalizeProviderIdForAuth(provider);
   const { aliasMap, candidateMap, authEvidenceMap } = prepareEnvAuthLookupMaps(env, options);
   const normalized = aliasMap[providerId] ?? providerId;
-  const applied = new Set(getShellEnvAppliedKeys());
 
   for (const envVar of candidateMap[normalized] ?? []) {
     if (!normalizeOptionalSecretInput(env[envVar])) {
@@ -90,7 +89,7 @@ export function resolveProviderEnvAuthEvidence(
           : "api-key";
     return {
       mode,
-      source: applied.has(envVar) ? `shell env: ${envVar}` : `env: ${envVar}`,
+      source: isShellEnvAppliedKey(envVar) ? `shell env: ${envVar}` : `env: ${envVar}`,
     };
   }
 
@@ -144,13 +143,15 @@ export function resolveEnvApiKey(
   const normalizedProvider = normalizeProviderIdForAuth(provider);
   const { aliasMap, candidateMap, authEvidenceMap } = prepareEnvAuthLookupMaps(env, options);
   const normalized = aliasMap[normalizedProvider] ?? normalizedProvider;
-  const applied = new Set(getShellEnvAppliedKeys());
   const candidates = Object.hasOwn(candidateMap, normalized) ? candidateMap[normalized] : undefined;
   if (candidates !== undefined) {
     for (const envVar of candidates) {
       const apiKey = normalizeOptionalSecretInput(env[envVar]);
       if (apiKey) {
-        return { apiKey, source: applied.has(envVar) ? `shell env: ${envVar}` : `env: ${envVar}` };
+        return {
+          apiKey,
+          source: isShellEnvAppliedKey(envVar) ? `shell env: ${envVar}` : `env: ${envVar}`,
+        };
       }
     }
   }

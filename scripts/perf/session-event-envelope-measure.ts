@@ -8,7 +8,7 @@
  * node --expose-gc --experimental-test-module-mocks --import ./scripts/tsx.mjs \
  *   scripts/perf/session-event-envelope-measure.ts --events 3000
  * Add --owner .local/base-projection.ts for a saved projection source, --delivery-owner
- * src/gateway/.delivery-baseline.ts to compare delta preparation, and --allocations
+ * .local/delivery-baseline.ts to compare delta preparation, and --allocations
  * for a separate sampled-allocation pass. Alternate baseline/candidate timing and
  * allocation runs. Acceptance: identical payload digest, lower allocation and CPU;
  * report absolute costs and spread, and do not infer whole-Gateway tail changes.
@@ -33,10 +33,13 @@
  * in a subprocess. Every publication reaches every peer; broadcastCpuMs and tails
  * cover synchronous broadcaster/transport work only, excluding receiver inflation.
  * --fragmented-histories preserves distinct history tokens while clearing baselines;
+ * --mixed-events adds transcript messages, optional bodies, activity recaps and ancestor rows
+ * to lifecycle events. Use --clients 50 --audiences 2 --sessions 2500.
  * --cpu-profile <file> attributes a separate sender-only measured pass.
  * --start-at <epoch-ms> synchronizes warmed paired senders on separate --port values;
  * a sender that misses the start fails rather than reporting an unmatched timing arm.
- * --fields-owner <saved-source.ts> replaces only the field fingerprint owner.
+ * --fields-owner <saved-source.ts> replaces the field/delta owner alongside --delivery-owner.
+ * patchEncoding counts JSON serializations and distinct patch sets in the digest replay.
  * --source-revisions replaces materialized rows for each transcript publication;
  * omit it to measure clock/runtime changes over unchanged materialized facts.
  * --yield-events gives each publication its own job, allowing weak samples to expire.
@@ -60,7 +63,7 @@ import { loadavg } from "node:os";
 import path from "node:path";
 import { mock } from "node:test";
 import { setImmediate, setTimeout as delay } from "node:timers/promises";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { SerializedGatewayFrame } from "../../src/gateway/serialized-json.js";
@@ -74,12 +77,14 @@ import type { GatewayWsClient } from "../../src/gateway/server/ws-types.js";
 import type { SessionRowProjection } from "../../src/gateway/session-row-projection.js";
 import type { GatewaySessionRow } from "../../src/gateway/session-utils.types.js";
 import { freezeTrustedJsonSnapshot } from "../../src/shared/immutable-data.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import type { CompressionPeerReport } from "./ws-compression-peers.js";
 
 const { values } = parseArgs({
   options: {
     compression: { type: "boolean", default: false },
     "fragmented-histories": { type: "boolean", default: false },
+    "mixed-events": { type: "boolean", default: false },
     port: { type: "string", default: "41872" },
     "cpu-profile": { type: "string" },
     "start-at": { type: "string" },
@@ -128,6 +133,25 @@ const fieldsHook = registerHooks({
 let key = "agent:main:stream-envelope";
 let row: GatewaySessionRow;
 let audienceRows: GatewaySessionRow[];
+let includeAncestors = false;
+const presentationCounts = { presenters: 0, rows: 0, ancestors: 0 };
+const ancestors = ["root", "parent"].map((name) => {
+  const ancestorKey = `agent:main:stream-envelope-${name}`;
+  return {
+    key: ancestorKey,
+    agentId: "main",
+    storeTarget: { storePath: "synthetic" },
+    row: freezeTrustedJsonSnapshot({
+      key: ancestorKey,
+      agentId: "main",
+      kind: "direct",
+      label: `Synthetic ${name}`,
+      sessionId: name,
+      updatedAt: 1,
+      snapshotAt: 1,
+    }),
+  };
+});
 function audienceFor(client: GatewayClient): number {
   assert(client.connId);
   return Number(client.connId.slice("synthetic-".length)) % audiences;
@@ -137,10 +161,22 @@ mock.module(new URL("../../src/gateway/session-row-presentation.ts", import.meta
     prepareSessionRowPublication: () => (client: GatewayClient) => ({
       getAudienceKey: () =>
         values["distinct-viewers"] ? client.connId : String(audienceFor(client)),
-      getPresentation: () => ({
-        present: () => audienceRows[audienceFor(client)],
-        sharing: {},
-      }),
+      getPresentation: () => {
+        if (activeDigest) {
+          presentationCounts.presenters++;
+        }
+        return {
+          present: (captured: unknown) => {
+            const ancestor = ancestors.find((record) => record === captured);
+            if (activeDigest) {
+              presentationCounts[ancestor ? "ancestors" : "rows"]++;
+            }
+            return ancestor?.row ?? audienceRows[audienceFor(client)];
+          },
+          target: (query: { key: string }) => query,
+          sharing: { canReadTarget: () => true },
+        };
+      },
     }),
   },
 });
@@ -158,8 +194,18 @@ const ownerUrl = new URL("../../src/gateway/session-event-projection.ts", import
 const loadedOwnerUrl = `${ownerUrl}?measured-owner`;
 const broadcastUrl = new URL("../../src/gateway/server-broadcast.ts", import.meta.url).href;
 const loadedBroadcastUrl = `${broadcastUrl}?measured-owner`;
+const deliveryOwner = path.resolve(values["delivery-owner"]);
+const deliveryUrl = new URL("../../src/gateway/session-ancestor-references.ts", import.meta.url)
+  .href;
 const ownerHook = registerHooks({
   load(url, context, nextLoad) {
+    if (url === deliveryUrl) {
+      return {
+        format: "module-typescript",
+        source: readFileSync(deliveryOwner, "utf8"),
+        shortCircuit: true,
+      };
+    }
     if (url === loadedBroadcastUrl) {
       return {
         format: "module-typescript",
@@ -167,13 +213,17 @@ const ownerHook = registerHooks({
         shortCircuit: true,
       };
     }
-    return url === loadedOwnerUrl
-      ? {
-          format: "module-typescript",
-          source: readFileSync(owner, "utf8"),
-          shortCircuit: true,
-        }
-      : nextLoad(url, context);
+    if (url !== loadedOwnerUrl) {
+      return nextLoad(url, context);
+    }
+    let source = readFileSync(owner, "utf8");
+    if (values["mixed-events"]) {
+      // Keep certification revisions predictable for exact frame comparison across processes.
+      const revision = "const ancestorRevision = randomUUID();";
+      assert(source.includes(revision));
+      source = `let fixtureRevision = 0;\n${source.replace(revision, "const ancestorRevision = String(++fixtureRevision);")}`;
+    }
+    return { format: "module-typescript", source, shortCircuit: true };
   },
 });
 const {
@@ -183,9 +233,8 @@ const { createGatewayBroadcaster }: typeof import("../../src/gateway/server-broa
   await import(loadedBroadcastUrl);
 const { GatewayClientRegistry } = await import("../../src/gateway/server/client-registry.js");
 ownerHook.deregister();
-const deliveryOwner = path.resolve(values["delivery-owner"]);
 const { ConnectionSessionRows }: typeof import("../../src/gateway/session-ancestor-references.js") =
-  await import(pathToFileURL(deliveryOwner).href);
+  await import(deliveryUrl);
 fieldsHook.deregister();
 const fields = Object.fromEntries(
   `createdActor owner participants participantCount visibility channel subject groupChannel space
@@ -290,7 +339,7 @@ const projection = {
   state: { revision: {} },
   describe: () => record,
   isCurrent: () => true,
-  ancestorRows: () => [],
+  ancestorRows: () => (includeAncestors ? ancestors : []),
 } as unknown as SessionRowProjection;
 const transports = new Map<number, ReturnType<typeof createGatewayWebSocketTransport>>();
 let receiver: ChildProcess | undefined;
@@ -313,6 +362,13 @@ const peers = Array.from({ length: clients }, (_, index) => ({
         done?: (error?: Error) => void,
       ) {
         deliveries++;
+        if (activeDigest) {
+          const text =
+            typeof frame === "string"
+              ? frame
+              : (Buffer.isBuffer(frame) ? frame : Buffer.concat(frame.segments)).toString();
+          activeDigest.update(JSON.stringify(JSON.parse(text).payload));
+        }
         if (activeWireDigest) {
           if (typeof frame === "string" || Buffer.isBuffer(frame)) {
             activeWireDigest.update(frame);
@@ -360,11 +416,18 @@ const context: Parameters<ReturnType<typeof prepareSessionEventProjection>>[3] =
   references: (client) => references.get(client)!,
   createRunProjector: () => () => ({ active: false }),
 };
+const reuseEnvelope = values["reuse-envelope"] || undefined;
 const prepare = prepareSessionEventProjection(
   projection,
   undefined,
-  values["reuse-envelope"]
-    ? { ancestors: [], reuseEnvelope: true, encodeMessage: true }
+  values["mixed-events"] || reuseEnvelope
+    ? {
+        reuseEnvelope,
+        encodeMessage: true,
+        ...(values["mixed-events"]
+          ? { omitMessage: (client: GatewayClient) => audienceFor(client) === 1 }
+          : { ancestors: [] }),
+      }
     : undefined,
 );
 
@@ -386,12 +449,12 @@ const broadcaster = createGatewayBroadcaster({
       ((client) => {
         const result = project(client);
         assert(result);
-        activeDigest?.update(JSON.stringify(result.payload));
         if (sessionEncodeCounts) {
           currentSessionEncoder = result.serializeSession;
         }
-        if (!encodedPayloads.has(result.payload)) {
-          encodedPayloads.add(result.payload);
+        const payloadIdentity = result.payload ?? result.serializePayload;
+        if (!encodedPayloads.has(payloadIdentity)) {
+          encodedPayloads.add(payloadIdentity);
           envelopeEncodings++;
         }
         return result;
@@ -404,9 +467,11 @@ async function publish(
   digest?: ReturnType<typeof createHash>,
   wireDigest?: ReturnType<typeof createHash>,
 ) {
-  key = `agent:main:stream-envelope-${index % sessions}`;
-  record.entry.sessionId = `synthetic-session-${index % sessions}`;
-  const source = materializedRows[index % sessions]!;
+  const mixed = values["mixed-events"];
+  const rowIndex = mixed && index % 5 !== 0 ? index % Math.min(12, sessions) : index % sessions;
+  key = `agent:main:stream-envelope-${rowIndex}`;
+  record.entry.sessionId = `synthetic-session-${rowIndex}`;
+  const source = materializedRows[rowIndex]!;
   record.materialized.publicationIdentity = source;
   record.materialized.row = values["source-revisions"]
     ? freezeTrustedJsonSnapshot({
@@ -446,7 +511,22 @@ async function publish(
   audienceRows = Array.from({ length: audiences }, (_, audience) =>
     freezeTrustedJsonSnapshot({ ...row, sharingRole: audience === 0 ? "owner" : "viewer" }),
   );
-  const payload = { ...fields, ...row, sessionKey: key, session: row, reason: "send" };
+  const event = mixed && index % 10 < 6 ? "session.message" : "sessions.changed";
+  includeAncestors = mixed && index % 3 === 0;
+  const payload = {
+    ...fields,
+    ...row,
+    sessionKey: key,
+    session: row,
+    ...(event === "session.message"
+      ? {
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "Synthetic tool result" }],
+          },
+        }
+      : { reason: mixed && index % 10 === 9 ? "activity-summary" : "send" }),
+  };
   if (values["encode-envelopes"] || wireDigest) {
     activeDigest = digest;
     activeWireDigest = wireDigest;
@@ -460,7 +540,7 @@ async function publish(
     const cpuBefore = process.threadCpuUsage();
     const started = performance.now();
     broadcaster.broadcastToConnIds(
-      "sessions.changed",
+      event,
       payload,
       new Set(
         peers.flatMap((peer, position) =>
@@ -492,12 +572,7 @@ async function publish(
     activeDigest = undefined;
     activeWireDigest = undefined;
   } else {
-    const project = prepare(
-      "sessions.changed",
-      payload,
-      { sessionKeys: [key], agentId: "main" },
-      context,
-    );
+    const project = prepare(event, payload, { sessionKeys: [key], agentId: "main" }, context);
     assert(project);
     for (const [position, peer] of peers.entries()) {
       if (index % 17 === (position % 7 < 4 ? 0 : position % 7 < 6 ? 1 : 2)) {
@@ -575,12 +650,7 @@ try {
   global.gc?.();
   const inspector = new Session();
   if (values.allocations) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 16384,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 16384);
   }
   if (values["cpu-profile"] && !values.allocations) {
     inspector.connect();
@@ -652,6 +722,30 @@ try {
   const wireDigest = createHash("sha256");
   const utf8 = { encodings: 0, bytes: 0, sessionEncodings: 0, sessionBytes: 0 };
   const ownedCopies = { calls: 0, bytes: 0 };
+  const patchEncoding = { calls: 0, bytes: 0, distinctSets: 0 };
+  const patchSets = new WeakSet<object>();
+  const stringify = JSON.stringify;
+  JSON.stringify = new Proxy(stringify, {
+    apply(target, thisArg, args) {
+      const encoded: unknown = Reflect.apply(target, thisArg, args);
+      const value: unknown = args[0];
+      if (
+        typeof encoded === "string" &&
+        value &&
+        typeof value === "object" &&
+        "set" in value &&
+        "remove" in value
+      ) {
+        patchEncoding.calls++;
+        patchEncoding.bytes += Buffer.byteLength(encoded);
+        if (value.set && typeof value.set === "object" && !patchSets.has(value.set)) {
+          patchSets.add(value.set);
+          patchEncoding.distinctSets++;
+        }
+      }
+      return encoded;
+    },
+  });
   const ownedDescriptor = Object.getOwnPropertyDescriptor(Buffer, "allocUnsafeSlow");
   assert(ownedDescriptor);
   const ownedAllocate = Buffer.allocUnsafeSlow.bind(Buffer);
@@ -691,6 +785,7 @@ try {
       await setImmediate();
     }
   }
+  JSON.stringify = stringify;
   Object.defineProperty(Buffer, "from", fromDescriptor);
   Object.defineProperty(Buffer, "allocUnsafeSlow", ownedDescriptor);
   let received: CompressionPeerReport | undefined;
@@ -715,6 +810,7 @@ try {
       broadcastCpuMs,
       utf8,
       ownedCopies,
+      patchEncoding,
       sessionEncodeHistogram,
       clients,
       audiences,
@@ -732,9 +828,11 @@ try {
       publicationSamples: publicationMs.length,
       publicationP99Ms: sortedPublicationMs[Math.floor(publicationMs.length * 0.99)],
       publicationP50Ms: sortedPublicationMs[Math.floor(publicationMs.length * 0.5)],
+      publicationP95Ms: sortedPublicationMs[Math.floor(publicationMs.length * 0.95)],
       publicationsOver180Ms: sortedPublicationMs.filter((ms) => ms > 180).length,
       publicationMaxMs: sortedPublicationMs.at(-1),
       sampledBytes,
+      presentationCounts,
       payloadDigest: digest.digest("hex"),
       wireDigest: wireDigest.digest("hex"),
       hostLoadBefore,

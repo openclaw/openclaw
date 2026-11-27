@@ -251,7 +251,7 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
   }
 
   if (isCloudflareOrHtmlErrorPage(trimmed)) {
-    return "Couldn't reach the AI service. Try again in a moment. If it continues, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
+    return "Couldn't reach the AI service. Try again in a moment. If it continues, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.";
   }
 
   const httpMatch = extractHttpStatusMatch(trimmed.match(HTTP_STATUS_PREFIX_RE));
@@ -272,7 +272,7 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
 }
 
 const CONNECTION_FAILED_MESSAGE =
-  "Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
+  "Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.";
 const TRANSPORT_ERRORS = [
   {
     code: /\beconnrefused\b/i,
@@ -283,7 +283,7 @@ const TRANSPORT_ERRORS = [
     code: /\beconnreset\b|\beconnaborted\b|\benetreset\b|\bepipe\b/i,
     phrases: /socket hang up|connection reset|connection aborted/i,
     message:
-      "Lost the connection to the AI service. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+      "Lost the connection to the AI service. Check the conversation before trying again. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.",
   },
   {
     code: /\benotfound\b|\beai_again\b|\benetunreach\b|\behostunreach\b|\behostdown\b/i,

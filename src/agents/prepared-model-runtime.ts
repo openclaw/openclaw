@@ -365,6 +365,8 @@ const preparedModelRuntimeLeaseContext = {
   getBuildTimeoutMs: () => modelRuntimeBuildTimeoutMs,
   getGatewayLifecycleActive: isPreparedModelRuntimeGatewayLifecycleActive,
   getPendingReplacement: getAdmissionReplacement,
+  ensureReady: (params: { agentId: string; abortSignal?: AbortSignal }) =>
+    ensureGatewayPreparedModelRuntimeReady(params),
 };
 const publishedModelRuntime = createPublishedModelRuntimeAccess(
   preparedModelRuntimeLeaseContext,

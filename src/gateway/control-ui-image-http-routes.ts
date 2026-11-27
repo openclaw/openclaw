@@ -33,6 +33,13 @@ export const CONTROL_UI_IMAGE_HTTP_ROUTES = [
     ),
   ],
   [
+    ["projectIcon"],
+    createLazyRuntimeNamedExport(
+      () => import("./workspace-icon-http.js"),
+      "handleProjectIconHttpRequest",
+    ),
+  ],
+  [
     ["channelAvatar"],
     createLazyRuntimeNamedExport(
       () => import("./channel-avatar-http.js"),

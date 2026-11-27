@@ -15,7 +15,7 @@ import { MenuNavigationError } from "./menu-navigation-error.tsx";
 import { useOverlayControl } from "./overlay-control.ts";
 import { retainShadowStyles } from "./shadow-styles.ts";
 import kbdStyles from "../kbd.css?inline";
-import overlayStyles from "./overlay.css?inline";
+import overlayStyles from "./overlay-shadow.css?inline";
 import "./overlay.css";
 
 export { createMenuControls, type MenuControls } from "./menu-machine.ts";

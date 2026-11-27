@@ -143,3 +143,13 @@ export function parseExtensionMessage(raw: string): ExtensionToRelayMessage | nu
   }
   return isExtensionMessage(parsed) ? parsed : null;
 }
+
+/** CDP error frame sent to a relay client. */
+export function toErrorPayload(
+  id: number | null,
+  sessionId: string | undefined,
+  message: string,
+  code = -32000,
+): string {
+  return JSON.stringify({ id, ...(sessionId ? { sessionId } : {}), error: { code, message } });
+}

@@ -1,4 +1,4 @@
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { createServer, ServerResponse, type IncomingMessage } from "node:http";
 import { setImmediate as nextImmediate } from "node:timers/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -169,7 +169,12 @@ it.each([true, false])("setSseHeaders supports flushHeaders available: %s", (ava
 
 it.each(["destroyed", "buffered"])("retains only unfinished response work: %s", async (state) => {
   const before = getActiveGatewayRootWorkCount();
-  const res = new ServerResponse({ method: "POST" } as IncomingMessage);
+  let finishResponse: (() => void) | undefined;
+  const { res } = makeMockHttpResponse({
+    final(callback) {
+      finishResponse = callback;
+    },
+  });
   let release: (() => void) | undefined;
   try {
     await runWithGatewayRootWorkAdmissionForTest(async () => {
@@ -183,7 +188,12 @@ it.each(["destroyed", "buffered"])("retains only unfinished response work: %s", 
       release = retainGatewayHttpResponseWork(res);
     });
     expect(getActiveGatewayRootWorkCount()).toBe(before + (state === "buffered" ? 1 : 0));
-    res.emit("finish");
+    if (state === "buffered") {
+      const finished = once(res, "finish");
+      expect(finishResponse).toBeDefined();
+      finishResponse!();
+      await finished;
+    }
     expect(getActiveGatewayRootWorkCount()).toBe(before);
   } finally {
     release?.();

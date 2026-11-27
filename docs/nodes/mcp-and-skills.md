@@ -47,6 +47,8 @@ on the same node as the MCP client, it can call an admitted tool through the
 node host even if the server is remote. The Gateway routes calls through
 `mcp.tools.call.v1` for other placements, older workers, and tools that require
 Gateway-side call policy or hooks.
+An MCP node-invoke policy may explicitly admit individual tools to same-node
+execution; tools it does not admit continue through the Gateway.
 
 For a remote server protected by OAuth, supply an externally obtained bearer
 token through the `Authorization` header, as in `internalApi`. The node host
