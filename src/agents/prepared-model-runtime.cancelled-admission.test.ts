@@ -320,6 +320,7 @@ describe("prepared model runtime automatic selections", () => {
         getBuildTimeoutMs: () => 120_000,
         getGatewayLifecycleActive: () => true,
         getPendingReplacement: () => replacement,
+        ensureReady: async () => {},
       }),
     ).rejects.toThrow("lease admission made no publication progress");
   });
@@ -346,6 +347,7 @@ describe("prepared model runtime automatic selections", () => {
             }
             return replacement;
           },
+          ensureReady: async () => {},
         },
         { waitForReplacementPublication: true },
       ),
@@ -377,6 +379,7 @@ describe("prepared model runtime automatic selections", () => {
           getBuildTimeoutMs: () => 120_000,
           getGatewayLifecycleActive: () => false,
           getPendingReplacement: () => gates[reads++],
+          ensureReady: async () => {},
         },
         { waitForReplacementPublication },
       ).then(
