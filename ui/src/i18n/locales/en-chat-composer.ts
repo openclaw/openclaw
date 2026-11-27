@@ -185,6 +185,8 @@ const catalog = {
     },
     queue: {
       storageFailed: "Couldn’t save this message. Free browser storage or reconnect to send it.",
+      removeFailed:
+        "Couldn’t confirm that your browser removed this message. If Remove or Discard is still available, try it again.",
       draftStorageFailed:
         "Couldn’t save the previous draft. Keep this tab open or copy it before reloading.",
       reviewEdit: "Review edit",

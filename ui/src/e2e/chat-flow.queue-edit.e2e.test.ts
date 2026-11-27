@@ -227,7 +227,8 @@ suite.define(() => {
 
       await page
         .getByRole("alert")
-        .getByText("Couldn’t save this message.", { exact: false })
+        .filter({ hasText: "Couldn’t confirm that your browser removed this message." })
+        .getByText("If Remove or Discard is still available, try it again.", { exact: true })
         .waitFor({ timeout: 10_000 });
       await row.waitFor();
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
