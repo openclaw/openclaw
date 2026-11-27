@@ -267,6 +267,97 @@ describe("renderUsage", () => {
     },
   );
 
+  it("explains the full session-span denominator when selected days narrow usage", () => {
+    const day1 = usageTotals(96_000, 0.96);
+    const day2 = usageTotals(191_900, 1.919);
+    const otherDay2 = usageTotals(144_000, 1.44);
+    const firstSpanMs = (2 * 24 * 60 - 1) * 60_000;
+    const secondSpanMs = 12 * 60 * 60_000;
+    const sessions = [
+      {
+        key: "agent:main:two-days",
+        agentId: "main",
+        updatedAt: Date.parse("2026-05-15T12:00:00Z"),
+        usage: {
+          ...usageTotals(287_900, 2.879),
+          firstActivity: Date.parse("2026-05-14T00:00:00Z"),
+          lastActivity: Date.parse("2026-05-15T23:59:00Z"),
+          durationMs: firstSpanMs,
+          activityDates: ["2026-05-14", "2026-05-15"],
+          dailyBreakdown: [
+            { ...day1, date: "2026-05-14", tokens: day1.totalTokens, cost: day1.totalCost },
+            { ...day2, date: "2026-05-15", tokens: day2.totalTokens, cost: day2.totalCost },
+          ],
+          messageCounts: usageMessages(),
+        },
+      },
+      {
+        key: "agent:main:second-day-only",
+        agentId: "main",
+        updatedAt: Date.parse("2026-05-15T12:00:00Z"),
+        usage: {
+          ...otherDay2,
+          firstActivity: Date.parse("2026-05-15T00:00:00Z"),
+          lastActivity: Date.parse("2026-05-15T12:00:00Z"),
+          durationMs: secondSpanMs,
+          activityDates: ["2026-05-15"],
+          dailyBreakdown: [
+            {
+              ...otherDay2,
+              date: "2026-05-15",
+              tokens: otherDay2.totalTokens,
+              cost: otherDay2.totalCost,
+            },
+          ],
+          messageCounts: usageMessages(),
+        },
+      },
+    ];
+    const allDays = projectUsageData(sessions);
+    const props = usageFixture(allDays, {
+      startDate: "2026-05-14",
+      endDate: "2026-05-15",
+    });
+    const { container, setData, setFilters } = mountReactiveUsage(props);
+    const summary = () => {
+      const button = container.querySelector("#usage-summary-hint-throughput")!;
+      const card = button.closest(".usage-summary-card")!;
+      return {
+        value: textAt(card, ".usage-summary-value"),
+        hint: button.parentElement?.querySelector('[slot="content"]')?.textContent?.trim(),
+      };
+    };
+
+    expect(allDays.totals?.totalTokens).toBe(431_900);
+    expect(allDays.overview?.durationMs).toBe(firstSpanMs + secondSpanMs);
+    expect(summary().value).toBe("120 tok/session-min");
+    expect(summary().hint).toContain("matching sessions' spans within the report range");
+    expect(summary().hint).toContain(
+      "Selected days limit usage, not the full spans of matching sessions.",
+    );
+
+    const selected = { ...props.filters, selectedDays: ["2026-05-14"] };
+    const selectedData = projectUsageData(sessions, selected);
+    expect(selectedData.totals?.totalTokens).toBe(96_000);
+    expect(selectedData.overview?.durationMs).toBe(firstSpanMs);
+    setFilters(selected);
+    setData({ ...props.data, ...selectedData });
+    flush();
+    expect(summary().value).toBe("33 tok/session-min");
+    expect(summary().hint).toContain("matching sessions' spans within the report range");
+    expect(summary().hint).toContain(
+      "Selected days limit usage, not the full spans of matching sessions.",
+    );
+
+    setFilters(props.filters);
+    const restoredData = projectUsageData(sessions, props.filters);
+    expect(restoredData.totals?.totalTokens).toBe(431_900);
+    expect(restoredData.overview?.durationMs).toBe(firstSpanMs + secondSpanMs);
+    setData({ ...props.data, ...restoredData });
+    flush();
+    expect(summary().value).toBe("120 tok/session-min");
+  });
+
   it("surfaces a provider-usage failure instead of hiding the panel", () => {
     const container = mountFixture({ providerUsageUnavailable: true });
 

@@ -136,6 +136,57 @@ describe("UsageInsights", () => {
     expect(provider?.textContent).not.toContain("$0.00");
   });
 
+  it("distinguishes unpriced, partially priced, and free usage rates", () => {
+    const [currentTotals, setCurrentTotals] = createSignal(
+      usageTotals(100, 0, { missingCostEntries: 1 }),
+    );
+    const [costRate, setCostRate] = createSignal(0);
+    const { container } = mountView(() =>
+      UsageInsights({
+        get totals() {
+          return currentTotals();
+        },
+        aggregates,
+        get stats() {
+          return {
+            durationCount: 1,
+            avgDurationMs: 60_000,
+            errorRate: 0,
+            throughputTokensPerMin: 100,
+            throughputCostPerMin: costRate(),
+          };
+        },
+        get showCostHint() {
+          return currentTotals().missingCostEntries > 0;
+        },
+        errorHours: [],
+        sessionCount: 1,
+        totalSessions: 1,
+      }),
+    );
+    const card = container
+      .querySelector("#usage-summary-hint-throughput")!
+      .closest(".usage-summary-card")!;
+    expect(text(card, ".usage-summary-sub")).toBe("Unpriced");
+    expect(text(card, ".usage-summary-value")).toBe("100 tok/session-min");
+    expect(card.querySelector('[slot="content"]')?.textContent).toContain(
+      "Some cost data may be missing.",
+    );
+
+    setCurrentTotals(usageTotals(100, 2, { missingCostEntries: 1 }));
+    setCostRate(2);
+    flush();
+    expect(text(card, ".usage-summary-sub")).toBe("$2.00 / session-min");
+    expect(card.querySelector('[slot="content"]')?.textContent).toContain(
+      "Some cost data may be missing.",
+    );
+
+    setCurrentTotals(usageTotals(100, 0));
+    setCostRate(0);
+    flush();
+    expect(text(card, ".usage-summary-sub")).toBe("$0.00 / session-min");
+  });
+
   it("names the provider of each top model so same-named models stay distinct", () => {
     const container = document.createElement("div");
     const used = { ...totals, totalTokens: 100, totalCost: 1 };
