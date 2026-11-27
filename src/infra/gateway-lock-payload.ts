@@ -1,10 +1,13 @@
 import fs from "node:fs";
 import os from "node:os";
+import { sql } from "kysely";
 import { z } from "zod";
+import type { DB } from "../state/openclaw-state-db.generated.js";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
 import { isContainerEnvironment } from "./container-environment.js";
 import { readProcessMachineIdentity } from "./current-machine-identity.js";
 import { isTruthyEnvValue } from "./env.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { openNodeSqliteDatabase, resolveReadOnlyShmSqliteFileUri } from "./node-sqlite.js";
 import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
 import { managedHandoffBootSchema } from "./update-managed-service-handoff-boot-schema.js";
@@ -190,11 +193,15 @@ export function classifyGatewayLockProcessNamespace(
         readOnly: true,
       });
       try {
-        // A table scan cannot mistake a damaged lease index for an absent owner.
-        const rows = db
-          .prepare("SELECT expires_at FROM state_leases NOT INDEXED WHERE scope = ? AND owner = ?")
-          .all("gateway-owner", holder.ownerId);
-        return rows.every((row) => typeof row.expires_at === "number" && row.expires_at <= now)
+        const stateDb = getNodeSqliteKysely<Pick<DB, "state_leases">>(db);
+        const { rows } = executeSqliteQuerySync(db, {
+          compile: () =>
+            /* kysely-allow-raw: lock recovery must not trust a damaged lease lookup index. */
+            sql<{ expiresAt: number | null }>`SELECT expires_at AS expiresAt
+              FROM ${sql`state_leases NOT INDEXED`}
+              WHERE scope = ${"gateway-owner"} AND owner = ${holder.ownerId}`.compile(stateDb),
+        });
+        return rows.every((row) => typeof row.expiresAt === "number" && row.expiresAt <= now)
           ? "dead"
           : "unknown";
       } finally {
