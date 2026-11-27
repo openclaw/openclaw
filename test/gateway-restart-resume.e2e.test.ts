@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, stat, writeFile } from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -40,7 +40,21 @@ import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 
 const RESUME =
   "The Gateway restarted while you were working. Resume your work: check the current state of anything that was in progress (files, processes, subagents, external actions) before repeating it, then continue.";
+const SHELL_CHECKPOINT = "no saved terminal result";
+const shellCases = [
+  { cycle: 30, effect: "committed", expected: "Verified the file; no repeat." },
+  { cycle: 31, effect: "absent", expected: "The expected file is absent; no repeat." },
+  {
+    cycle: 32,
+    effect: "unknown",
+    expected: "The job outcome is unknown. Independent work checked.",
+  },
+  { cycle: 33, effect: "saved", expected: "Reused the saved shell result." },
+] as const;
+const shellEffectFile = (cycle: number) => `shell-effect-${cycle}.txt`;
 const UNKNOWN_SHELL = "Its effect is unknown. I paused this turn without retrying the command.";
+const INDEPENDENT_FILE = "independent.txt";
+const INDEPENDENT_CONTENT = "INDEPENDENT_WORK_AVAILABLE";
 const CASES = ["stream", "tool", "parent", "background", "idle", "compact"] as const;
 type Case = (typeof CASES)[number];
 const agent = (name: Case) => (name === "stream" || name === "tool" ? "other" : "main");
@@ -111,6 +125,7 @@ async function providerFixture(signal: AbortSignal, childTimer = false) {
   let ordinal = 0;
   let restarting = false;
   let origin = "";
+  let shellWorkspace: string | undefined;
   const gate = (name: string) => {
     let deferred = ready.get(name);
     if (!deferred) {
@@ -233,6 +248,63 @@ async function providerFixture(signal: AbortSignal, childTimer = false) {
               requestOrdinal,
             );
           };
+          const shellCase = shellCases.find((test) => test.cycle === cycle && name === "tool");
+          if (shellCase && shellWorkspace) {
+            const { effect, expected } = shellCase;
+            const file = path.join(shellWorkspace, shellEffectFile(cycle));
+            if (current.includes(queued(cycle, 1))) {
+              text(`HANDLED_${queued(cycle, 1)}`);
+            } else if (hasNewResumeInput(body)) {
+              if (effect === "saved") {
+                expect(toolOutput.output).toContain("SAVED_SHELL_RESULT");
+                expect(current).not.toContain(SHELL_CHECKPOINT);
+                text(expected);
+                return;
+              }
+              expect(current).toContain(SHELL_CHECKPOINT);
+              expect(input).toContain(
+                effect === "unknown" ? `/tool/${cycle}/tool` : shellEffectFile(cycle),
+              );
+              tool(
+                effect === "unknown" ? "process" : "read",
+                effect === "unknown" ? { action: "list" } : { path: file },
+              );
+            } else if (restarting && typeof toolOutput.output === "string") {
+              const result = toolOutput.output;
+              if (effect === "unknown" && !issued.has(`independent:${cycle}`)) {
+                expect(result).toMatch(/No running|No active|No sessions/i);
+                issued.add(`independent:${cycle}`);
+                tool("read", { path: path.join(shellWorkspace, INDEPENDENT_FILE) });
+                return;
+              }
+              expect(result).toContain(
+                effect === "unknown"
+                  ? INDEPENDENT_CONTENT
+                  : effect === "committed"
+                    ? "COMMITTED_SHELL_EFFECT"
+                    : `File not found: ${file}`,
+              );
+              text(expected);
+            } else if (!restarting && effect === "saved" && toolOutput.output !== undefined) {
+              expect(toolOutput.output).toContain("SAVED_SHELL_RESULT");
+              gate(`shell-saved:${cycle}`).resolve();
+            } else if (current.includes(marker(cycle, "tool"))) {
+              const callback = `${origin}/tool/${cycle}/tool`;
+              const write = `require("node:fs").appendFileSync(${JSON.stringify(file)}, ${JSON.stringify("COMMITTED_SHELL_EFFECT\n")})`;
+              const script =
+                effect === "saved"
+                  ? 'console.log("SAVED_SHELL_RESULT")'
+                  : `${effect === "committed" ? `${write};` : ""}fetch(${JSON.stringify(callback)},{method:"POST",body:"{}"}).then(()=>{${effect === "absent" ? `setTimeout(()=>${write},600000)` : "setInterval(()=>{},1000)"}})`;
+              tool("exec", {
+                command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}`,
+                yieldMs: 120_000,
+                timeoutSeconds: 600,
+              });
+            } else {
+              throw new Error(`Unexpected shell checkpoint model input: ${current}`);
+            }
+            return;
+          }
           if (restarting) {
             if (hasNewResumeInput(body)) {
               if (name === "stream") {
@@ -342,6 +414,9 @@ async function providerFixture(signal: AbortSignal, childTimer = false) {
     baseUrl: `${origin}/v1`,
     finalizerUrl: `${origin}/finalize`,
     timerUrl: `${origin}/timer`,
+    useShellWorkspace: (workspace: string) => {
+      shellWorkspace = workspace;
+    },
     finalizerAdmission: () => finalizerAdmission,
     releaseFinalizer: () => {
       finalizer?.writeHead(204).end();
@@ -1230,54 +1305,77 @@ it.skipIf(process.platform === "win32").for([
 // A shell interrupted before its result is saved must not replay its input or tool.
 // A separate queued message keeps its own admission after the Gateway restarts.
 it.skipIf(process.platform === "win32")(
-  "pauses a turn stopped mid-shell and drains its queued input without replay",
+  "resumes from a shell checkpoint without rerunning the interrupted command",
   { timeout: 180_000 },
   async ({ signal, onTestFailed }) => {
     const provider = await providerFixture(signal);
-    const model = buildMockOpenAiResponsesProvider(provider.baseUrl);
+    const config = restartResumeConfig(buildMockOpenAiResponsesProvider(provider.baseUrl));
+    config.tools?.allow?.push("read");
     const instance = await createOpenClawTestInstance({
-      name: "gateway-mid-tool-restart",
+      name: "gateway-shell-checkpoint",
       signal,
       gracefulShutdownTimeoutMs: 60_000,
-      config: restartResumeConfig(model),
+      config,
       env: { ...restartEnv, OPENCLAW_NO_RESPAWN: "1" },
     });
-    onTestFailed(() => {
-      process.stderr.write(`${instance.logs()}\n`);
-    });
-    const sessionKey = key(3, "tool");
-    const independent = queued(3, 1);
-    const inputKey = randomUUID();
+    onTestFailed(() => process.stderr.write(instance.logs()));
+    const workspace = instance.state.workspaceDir;
+    provider.useShellWorkspace(workspace);
+    const queuedCycle = 30;
+    const independent = queued(queuedCycle, 1);
     let client: GatewayClient | undefined;
-    const history = () =>
+    const history = (cycle: number) =>
       client!.request<{
         messages: unknown[];
         pendingInputs?: { items: Array<{ state: string; message: unknown }> };
+        sessionId: string;
         sessionInfo: { hasActiveRun: boolean };
-      }>("chat.history", { sessionKey, limit: 100 });
+      }>("chat.history", { sessionKey: key(cycle, "tool"), limit: 100 });
     await runQaGatewayFixture(
       async () => {
+        await writeFile(path.join(workspace, INDEPENDENT_FILE), INDEPENDENT_CONTENT);
         await instance.startGateway();
         client = await connectRestartClient(instance, {}, signal);
+        const sessionIds = new Map<number, string>();
+        for (const { cycle, effect } of shellCases) {
+          await client.request(
+            effect === "committed" ? "agent" : "chat.send",
+            {
+              sessionKey: key(cycle, "tool"),
+              message: marker(cycle, "tool"),
+              idempotencyKey: randomUUID(),
+              ...(effect === "committed" ? { createSessionIfMissing: true, deliver: false } : {}),
+            },
+            { expectFinal: false },
+          );
+          await provider.wait(effect === "saved" ? `shell-saved:${cycle}` : `/tool/${cycle}/tool`);
+          const { sessionId } = await history(cycle);
+          expect(sessionId).toBeTruthy();
+          sessionIds.set(cycle, sessionId);
+        }
+        const committed = path.join(workspace, shellEffectFile(30));
+        const absent = path.join(workspace, shellEffectFile(31));
+        expect(await readFile(committed, "utf8")).toBe("COMMITTED_SHELL_EFFECT\n");
+        await expect(stat(absent)).rejects.toMatchObject({ code: "ENOENT" });
         await client.request(
           "chat.send",
-          { sessionKey, message: marker(3, "tool"), idempotencyKey: inputKey },
-          { expectFinal: false },
-        );
-        await provider.wait("/tool/3/tool");
-        await client.request(
-          "chat.send",
-          { sessionKey, message: independent, queueMode: "followup", idempotencyKey: randomUUID() },
+          {
+            sessionKey: key(queuedCycle, "tool"),
+            message: independent,
+            queueMode: "followup",
+            idempotencyKey: randomUUID(),
+          },
           { expectFinal: false },
         );
         await vi.waitFor(
-          async () =>
+          async () => {
             expect(
-              (await history()).pendingInputs?.items.some(
-                (input) =>
-                  input.state === "queued" && JSON.stringify(input.message).includes(independent),
+              (await history(queuedCycle)).pendingInputs?.items.some(
+                ({ state, message }) =>
+                  state === "queued" && JSON.stringify(message).includes(independent),
               ),
-            ).toBe(true),
+            ).toBe(true);
+          },
           { timeout: 5_000 },
         );
         const child = instance.child;
@@ -1291,52 +1389,54 @@ it.skipIf(process.platform === "win32")(
         await instance.stopGateway();
         await instance.startGateway();
         client = await connectRestartClient(instance, {}, signal);
-        await vi.waitFor(
-          async () => {
-            const { messages, sessionInfo } = await history();
-            expect(JSON.stringify(messages)).toContain(UNKNOWN_SHELL);
-            expect(JSON.stringify(messages)).toContain(`HANDLED_${independent}`);
-            expect(sessionInfo.hasActiveRun).toBe(false);
-          },
-          { timeout: 30_000 },
-        );
-        const { messages } = await history();
-        const userEntries = messages.filter(
-          (message) =>
-            isRecord(message) &&
-            message.role === "user" &&
-            JSON.stringify(message).includes(marker(3, "tool")),
-        );
-        expect(userEntries).toHaveLength(1);
-        expect(
-          messages.filter(
-            (message) =>
-              isRecord(message) &&
-              message.role === "assistant" &&
-              JSON.stringify(message.content).includes(UNKNOWN_SHELL),
+        await Promise.race([
+          provider.failed,
+          vi.waitFor(
+            async () => {
+              for (const { cycle, expected } of shellCases) {
+                const { messages, sessionId, sessionInfo } = await history(cycle);
+                expect(JSON.stringify(messages)).not.toContain(UNKNOWN_SHELL);
+                expect(
+                  messages.filter(
+                    (message) =>
+                      isRecord(message) &&
+                      message.role === "assistant" &&
+                      JSON.stringify(message.content).includes(expected),
+                  ),
+                ).toHaveLength(1);
+                expect(sessionId).toBe(sessionIds.get(cycle));
+                expect(sessionInfo.hasActiveRun).toBe(false);
+                expect(
+                  messages.filter(
+                    (message) =>
+                      isRecord(message) &&
+                      message.role === "user" &&
+                      JSON.stringify(message).includes(marker(cycle, "tool")),
+                  ),
+                ).toHaveLength(1);
+              }
+              expect(JSON.stringify((await history(queuedCycle)).messages)).toContain(
+                `HANDLED_${independent}`,
+              );
+            },
+            { timeout: 30_000 },
           ),
-        ).toHaveLength(1);
-        const toolCalls = provider.calls.filter((call) => call.cycle === 3 && call.name === "tool");
-        expect(toolCalls.filter((call) => call.resumeInput)).toHaveLength(0);
-        expect(toolCalls.filter((call) => call.current.includes(independent))).toHaveLength(1);
-        expect(JSON.stringify(messages)).not.toContain("HANDLED_NEW_INPUT");
-        expect(provider.callbacks("/tool/3/tool")).toBe(1);
-        await client.stopAndWait();
-        client = undefined;
-        await instance.stopGateway();
-        await closeOpenClawAgentDatabasesAsync();
-        await closeOpenClawStateDatabaseAsync();
-        using database = new DatabaseSync(
-          resolveOpenClawAgentSqlitePath({ agentId: "other", env: instance.env }),
-          { readOnly: true },
+        ]);
+        for (const { cycle, effect } of shellCases) {
+          const calls = provider.calls.filter(
+            (call) => call.cycle === cycle && call.name === "tool",
+          );
+          expect(calls.filter((call) => call.resumeInput)).toHaveLength(1);
+          expect(provider.callbacks(`/tool/${cycle}/tool`)).toBe(effect === "saved" ? 0 : 1);
+        }
+        const queuedCalls = provider.calls.filter(
+          (call) => call.cycle === queuedCycle && call.name === "tool",
         );
         expect(
-          database
-            .prepare(
-              "SELECT state, end_cause FROM session_pending_inputs WHERE idempotency_key LIKE ?",
-            )
-            .all(`${inputKey}%`),
-        ).toEqual([]);
+          queuedCalls.find((call) => call.current.includes(independent))?.ordinal,
+        ).toBeGreaterThan(queuedCalls.find((call) => call.resumeInput)!.ordinal);
+        expect(await readFile(committed, "utf8")).toBe("COMMITTED_SHELL_EFFECT\n");
+        await expect(stat(absent)).rejects.toMatchObject({ code: "ENOENT" });
       },
       () => client?.stopAndWait(),
       () => instance.cleanup(),
