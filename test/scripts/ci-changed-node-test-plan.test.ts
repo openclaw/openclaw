@@ -322,7 +322,15 @@ it.each([
   expect(
     hasImportGraphImpactOnTargets([target], (file) => file !== target, cwd, { tooling: true }),
   ).toBe(!/\/(?:\.cache|\.artifacts|dist|node_modules)\//u.test(consumer));
-  expect(hasUiE2eAffectingChange([target], { cwd })).toBe(expected);
+  // Boolean owner selection must not load the advisory timing inventory.
+  const timings = vi.spyOn(testTimings, "readUiE2eFileTimings");
+  try {
+    expect(hasUiE2eAffectingChange([target], { cwd })).toBe(expected);
+    hasUiE2eAffectingChange([target], { cwd, family: "real-gateway" });
+    expect(timings).not.toHaveBeenCalled();
+  } finally {
+    timings.mockRestore();
+  }
 });
 
 it.each(["archive", "untracked", "symlink"])(
