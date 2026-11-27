@@ -381,23 +381,39 @@ describe("session navigation intent prefetch", () => {
 
   it("coalesces pointer sweeps into the latest intent", async () => {
     const request = historyRequest();
-    updatePrefetch(
-      prefetchState(request, [row("agent:main:swept", NOW), row("agent:main:intended", NOW - 1)], {
-        hiddenConversationSessionKeys: ["agent:main:foreground"],
-      }),
+    const state = prefetchState(
+      request,
+      [row("agent:main:swept", NOW), row("agent:main:intended", NOW - 1)],
+      { hiddenConversationSessionKeys: ["agent:main:foreground"] },
     );
+    updatePrefetch(state);
     await advancePrefetch(300);
     const target = document.createElement("a");
     fixture.shell.append(target);
     target.dataset.sessionKey = "agent:main:swept";
     target.dispatchEvent(new Event("pointerover", { bubbles: true }));
     await advancePrefetch(30);
+    updatePrefetch({ ...state, listRevision: 2 });
     target.dataset.sessionKey = "agent:main:intended";
     target.dispatchEvent(new Event("pointerover", { bubbles: true }));
     await advancePrefetch(44);
     expect(request).not.toHaveBeenCalled();
     await advancePrefetch(1);
     expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(["agent:main:intended"]);
+    const newer = {
+      ...state,
+      listRevision: 3,
+      rows: [row("agent:main:swept", NOW), row("agent:main:intended", Date.now() + 1)],
+    };
+    updatePrefetch(newer);
+    updatePrefetch({ ...newer, listRevision: 4 });
+    await advancePrefetch(29_999);
+    expect(request).toHaveBeenCalledOnce();
+    await advancePrefetch(1);
+    expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([
+      "agent:main:intended",
+      "agent:main:intended",
+    ]);
   });
 
   it("rewarms complete stored history after an interleaved append miss", async () => {

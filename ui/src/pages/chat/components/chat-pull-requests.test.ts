@@ -507,6 +507,13 @@ describe("CI job details", () => {
     await refresh(h);
     expect(text('.chat-ci__job[data-check-id="5"]')).toContain("Build rerun");
     expect(query('.chat-ci__job[data-check-id="1"]')).toBeNull();
+    h.element.presented = false;
+    await settle(h.element);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(h.request).toHaveBeenCalledTimes(3);
+    h.element.presented = true;
+    await settle(h.element);
+    expect(h.request).toHaveBeenCalledTimes(4);
   });
 
   it.each(["closed", "session", "gateway"] as const)(
