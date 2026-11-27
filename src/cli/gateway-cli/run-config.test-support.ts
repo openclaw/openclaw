@@ -1,12 +1,14 @@
-import { expect, it, vi } from "vitest";
+import { expect, it, vi, type Mock } from "vitest";
 import { createTestConfigSnapshot } from "../../commands/test-runtime-config-helpers.js";
 import type {
   ConfigFileSnapshot,
   ConfigValidationIssue,
   OpenClawConfig,
 } from "../../config/types.js";
+import type { GatewayServerOptions } from "../../gateway/server-public.js";
 import { OpenClawStateOwnershipMetadataError } from "../../infra/sqlite-lifecycle-errors.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import type { GatewayLoopParams } from "./run-cleanup-receipt.test-support.js";
 
 export type RuntimeDotEnvLoadResult = {
   dotenvPresentKeys: string[];
@@ -75,9 +77,48 @@ export function completeGatewayRunSnapshot(
   } satisfies ConfigFileSnapshot;
 }
 
-export function registerInvalidConfigResetTests(configState: {
-  snapshot: Record<string, unknown>;
+export function registerGatewayRunConfigGuardTests({
+  configState,
+  runGatewayLoop,
+  runUnconfigured,
+  startGatewayServer,
+}: {
+  configState: { snapshot: Record<string, unknown> };
+  runGatewayLoop: Mock<(params: GatewayLoopParams) => Promise<void>>;
+  runUnconfigured: (...args: string[]) => Promise<void>;
+  startGatewayServer: { mock: { calls: [number, unknown?][] } };
 }) {
+  it.each([19772, undefined])("refreshes the configured restart port (%s)", async (nextPort) => {
+    await withEnvAsync(
+      { OPENCLAW_GATEWAY_PORT: undefined, OPENCLAW_PROFILE: undefined },
+      async () => {
+        configState.snapshot = completeGatewayRunSnapshot({
+          gateway: { mode: "local", port: 19771 },
+        });
+        runGatewayLoop.mockImplementationOnce(async (params: GatewayLoopParams) => {
+          await params.start();
+          process.env.OPENCLAW_GATEWAY_PORT = "19771";
+          configState.snapshot = completeGatewayRunSnapshot({
+            gateway: { mode: "local", port: nextPort },
+          });
+          await params.resolveRestartPort?.();
+          await params.start();
+        });
+
+        await runUnconfigured();
+
+        expect(startGatewayServer.mock.calls.map(([port]) => port)).toEqual([
+          19771,
+          nextPort ?? 18789,
+        ]);
+        expect(
+          (startGatewayServer.mock.calls[1]?.[1] as GatewayServerOptions | undefined)
+            ?.startupConfigSnapshotRead?.snapshot.config,
+        ).toEqual(configState.snapshot.config);
+      },
+    );
+  });
+
   it.each([null, "raw", "path"] as const)("guards invalid-config dev reset: %s", async (change) => {
     const { clearGatewayRunConfigEnvironment, prepareGatewayRunBootstrap, recheckGatewayRunReset } =
       await import("./pre-bootstrap.js");
