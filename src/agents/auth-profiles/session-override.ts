@@ -198,7 +198,7 @@ function isProfileForProvider(params: {
 }
 
 /** Shared compatibility decision; callers decide whether to persist a cleared pin. */
-export function resolveSessionAuthProfileOverrideCompatibility(params: {
+function resolveSessionAuthProfileOverrideCompatibility(params: {
   cfg: OpenClawConfig;
   agentDir: string;
   entry: SessionEntry;

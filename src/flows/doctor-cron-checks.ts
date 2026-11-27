@@ -26,17 +26,24 @@ export const cronInferenceCheck: CoreHealthCheck = {
       env: ctx.env,
       shouldRepair: false,
     });
-    const path = resolveOpenClawStateSqlitePath(ctx.env);
-    return [...warnings, ...notices].map((message, index): HealthFinding => ({
+    const common = {
       checkId: "core/doctor/cron-inference-accounts",
       severity: "warning",
-      category: index < warnings.length ? "fix-now" : "recommended",
-      message,
-      path,
+      path: resolveOpenClawStateSqlitePath(ctx.env),
       requirement: "cron-inference-account",
-      ...(index < warnings.length
-        ? { fixHint: "Run openclaw doctor --fix to convert saved automation accounts." }
-        : {}),
-    }));
+    } as const;
+    const findings: HealthFinding[] = [];
+    for (const message of warnings) {
+      findings.push({
+        ...common,
+        category: "fix-now",
+        message,
+        fixHint: "Run openclaw doctor --fix to convert saved automation accounts.",
+      });
+    }
+    for (const message of notices) {
+      findings.push({ ...common, category: "recommended", message });
+    }
+    return findings;
   },
 };

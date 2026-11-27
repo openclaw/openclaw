@@ -33,9 +33,9 @@ import { cronHandlers } from "./cron.js";
 import type { GatewayClient, RespondFn } from "./types.js";
 
 const { seedRoot, apiKey } = createAuthOwnerTestFixtures();
-export const platformId = "openai:platform";
-export const subscriptionId = "openai:subscription";
-export const sessionKey = "agent:main:binding-creator";
+const platformId = "openai:platform";
+const subscriptionId = "openai:subscription";
+const sessionKey = "agent:main:binding-creator";
 
 export async function withFixture(
   run: (fixture: Awaited<ReturnType<typeof createFixture>>) => Promise<void>,
@@ -391,17 +391,5 @@ async function createFixture(stateDir: string, agentDir: string) {
       });
       await setAuthProfileOrder({ agentDir, provider: "openai", order: [profileId] });
     },
-  };
-}
-
-export function createParams() {
-  return {
-    name: "Durable inference binding",
-    enabled: false,
-    schedule: { kind: "every", everyMs: 60_000 },
-    sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
-    payload: { kind: "agentTurn", message: "Synthetic scheduled prompt", toolsAllow: [] },
-    delivery: { mode: "none" },
   };
 }
