@@ -11,6 +11,10 @@ import {
   resolveRequesterPrincipalKey,
   requesterCreatorProfileId,
 } from "../../agents/requester-origin.js";
+import {
+  isSubagentEnvelopeSession,
+  isVisibleSpawnedSession,
+} from "../../agents/subagents/spawn/subagent-capabilities.js";
 import { createRuntimeToolMatcher } from "../../agents/tool-policy-match.js";
 import {
   attachToolAllowlistIntersection,
@@ -249,6 +253,13 @@ export async function captureSessionEventTargetForHost(
       assertCurrent: options.assertCurrent,
       // Empty identity pins absence until normal admission creates the first session.
       sessionId: entry?.sessionId ?? "",
+      // Hidden workers report through the announce chain; their inherited chat route is the
+      // requester's, so a wake turn must not reply there directly. Visible spawns stay interactive.
+      ...(deliver === undefined &&
+      isSubagentEnvelopeSession(sessionKey, { entry }) &&
+      !isVisibleSpawnedSession(sessionKey, { entry })
+        ? { deliver: false as const }
+        : {}),
       lifecycleRevision: entry?.lifecycleRevision,
       generation,
       deliveryContext: structuredClone(deliveryContextFromSession(entry)),
