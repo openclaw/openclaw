@@ -31,7 +31,6 @@ import {
   type MemoryEmbeddingBootstrapDebug,
   type MemoryEmbeddingProviderRequirement,
 } from "./manager-embedding-refusal-ops.js";
-import { formatMemoryEmbeddingRefusal } from "./manager-embedding-refusal.js";
 import {
   resolveMemoryPrimaryProviderRequest,
   resolveMemoryProviderLifecycle,
@@ -417,16 +416,10 @@ export abstract class MemoryProviderLifecycle extends MemoryEmbeddingRefusalOps 
         if (this.closed) {
           return;
         }
-        const providerResult = await this.createConfiguredEmbeddingProvider();
-        const refusal = await this.recordedEmbeddingRefusal(
-          providerResult.runtime,
-          options?.recheckRefusal,
+        const providerResult = await this.createConfiguredEmbeddingProvider(
+          undefined,
+          this.refusalCheckedProviderFactory(options?.recheckRefusal),
         );
-        if (refusal) {
-          // Same contract as a missing credential: no provider, so no embedding calls.
-          await this.retireProvider(providerResult.provider);
-          throw new Error(formatMemoryEmbeddingRefusal(refusal));
-        }
         this.applyProviderResult(providerResult);
       })();
     }
@@ -484,7 +477,7 @@ export abstract class MemoryProviderLifecycle extends MemoryEmbeddingRefusalOps 
     return this.retireProvider(provider);
   }
 
-  private retireProvider(provider: MemoryEmbeddingProvider | null): Promise<void> {
+  protected retireProvider(provider: MemoryEmbeddingProvider | null): Promise<void> {
     if (provider) {
       this.providersPendingRetirement.add(provider);
     }

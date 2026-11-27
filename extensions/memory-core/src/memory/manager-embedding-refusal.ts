@@ -4,7 +4,12 @@ import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 export const EMBEDDING_REFUSAL_META_KEY = "memory_embedding_refusal_v1";
 
 /** The endpoint an implicit embedding provider calls. */
-export type MemoryEmbeddingEndpoint = { provider: string; baseUrl: string; model: string };
+export type MemoryEmbeddingEndpoint = {
+  provider: string;
+  baseUrl: string;
+  model: string;
+  headers?: Record<string, unknown>;
+};
 
 /** An endpoint that answered "no embeddings here" for one embedding identity. */
 export type MemoryEmbeddingRefusal = MemoryEmbeddingEndpoint & {
@@ -23,8 +28,10 @@ export function readMemoryEmbeddingEndpoint(value: unknown): MemoryEmbeddingEndp
   const provider = record?.provider;
   const baseUrl = record?.baseUrl;
   const model = record?.model;
+  // Routing headers (tenant, deployment) pick the endpoint as much as the URL does.
+  const headers = asNullableRecord(record?.headers) ?? undefined;
   return typeof provider === "string" && typeof baseUrl === "string" && typeof model === "string"
-    ? { provider, baseUrl, model }
+    ? { provider, baseUrl, model, ...(headers ? { headers } : {}) }
     : undefined;
 }
 
@@ -47,12 +54,22 @@ export function parseMemoryEmbeddingRefusal(value: unknown): MemoryEmbeddingRefu
     : null;
 }
 
+/** Header order is not identity; values are already credential-free in the adapter's cache key. */
+function headerIdentity(endpoint: MemoryEmbeddingEndpoint): string {
+  return JSON.stringify(
+    Object.entries(endpoint.headers ?? {}).toSorted(([a], [b]) => (a < b ? -1 : 1)),
+  );
+}
+
 export function isSameMemoryEmbeddingEndpoint(
   left: MemoryEmbeddingEndpoint,
   right: MemoryEmbeddingEndpoint,
 ): boolean {
   return (
-    left.provider === right.provider && left.baseUrl === right.baseUrl && left.model === right.model
+    left.provider === right.provider &&
+    left.baseUrl === right.baseUrl &&
+    left.model === right.model &&
+    headerIdentity(left) === headerIdentity(right)
   );
 }
 

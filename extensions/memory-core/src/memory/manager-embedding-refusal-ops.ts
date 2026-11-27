@@ -1,6 +1,9 @@
 // Memory Core plugin module owns the remembered refusal of an implicit embeddings endpoint.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type { MemoryEmbeddingProviderRuntime } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import type {
+  MemoryEmbeddingProvider,
+  MemoryEmbeddingProviderRuntime,
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type { MemorySearchRuntimeDebug } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveEmbeddingProviderAdapterTransport } from "./embeddings.js";
@@ -13,6 +16,7 @@ import {
   type MemoryEmbeddingEndpoint,
   type MemoryEmbeddingRefusal,
 } from "./manager-embedding-refusal.js";
+import type { MemoryManagerProviderFactory } from "./manager-registry.js";
 
 const log = createSubsystemLogger("memory");
 
@@ -41,6 +45,25 @@ export abstract class MemoryEmbeddingRefusalOps extends MemoryManagerEmbeddingOp
     failure: MemoryEmbeddingBootstrapDebug,
   ): MemoryEmbeddingBootstrapDebug;
   protected abstract ensureProviderInitialized(): Promise<void>;
+  protected abstract retireProvider(provider: MemoryEmbeddingProvider | null): Promise<void>;
+
+  /**
+   * A recorded refusal fails the primary provider like a missing credential: no embedding
+   * calls, and createEmbeddingProvider's configured fallback, if any, takes over.
+   */
+  protected refusalCheckedProviderFactory(recheck?: boolean): MemoryManagerProviderFactory {
+    let primary = true;
+    return async (adapter, create) => {
+      const result = await this.createProvider(adapter, create);
+      const refusal = primary && (await this.recordedEmbeddingRefusal(result.runtime, recheck));
+      primary = false;
+      if (refusal) {
+        await this.retireProvider(result.provider);
+        throw new Error(formatMemoryEmbeddingRefusal(refusal));
+      }
+      return result;
+    };
+  }
 
   /** The remote endpoint an implicit (unset or auto) provider calls, from its cache identity. */
   private implicitEmbeddingEndpoint(cacheKeyData: unknown): MemoryEmbeddingEndpoint | undefined {
@@ -93,7 +116,7 @@ export abstract class MemoryEmbeddingRefusalOps extends MemoryManagerEmbeddingOp
   }
 
   /** A remembered refusal for the endpoint this provider would call; a changed endpoint forgets it. */
-  protected async recordedEmbeddingRefusal(
+  private async recordedEmbeddingRefusal(
     runtime: MemoryEmbeddingProviderRuntime | undefined,
     recheck = false,
   ): Promise<MemoryEmbeddingRefusal | undefined> {
