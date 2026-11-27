@@ -5,6 +5,7 @@ import { buildPreparedCliRunContext } from "../agents/cli-runner.test-helpers.js
 import { ensureCliLiveSessionMemory } from "../agents/cli-runner/cli-live-session-registry.js";
 import {
   captureCgroupV2WorkingSetReader,
+  captureDelegatedMemoryPressureReader,
   isMemoryPressureHigh,
   readCgroupV2MemoryLimits,
   readEffectiveMemoryLimit,
@@ -383,3 +384,91 @@ it("keeps a delegated leaf and its controller files in the same cgroup view", ()
   files.set("/proc/self/cgroup", "0::/pod-other");
   expect(readCgroupV2MemoryLimits(controllers)).toEqual({});
 });
+
+it("follows the delegated leaf's raw charge across moves without consulting a second controller", () => {
+  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+  delete (process.versions as { bun?: string }).bun;
+  const nativeLimit = vi.spyOn(process, "constrainedMemory").mockReturnValue(1000);
+  const nativeAvailable = vi.spyOn(process, "availableMemory").mockReturnValue(10);
+  vi.spyOn(os, "freemem").mockReturnValue(8 * GiB);
+  vi.spyOn(os, "totalmem").mockReturnValue(16 * GiB);
+  const mount = "/sys/fs/cgroup";
+  const mountinfo = `30 1 0:27 /pod ${mount} rw - cgroup2 cgroup rw`;
+  const files = new Map([
+    ["/proc/self/cgroup", "0::/pod/service"],
+    ["/proc/self/mountinfo", mountinfo],
+    [
+      "/proc/self/limits",
+      "Max address space   900 unlimited bytes\nMax data size   850 unlimited bytes",
+    ],
+    [`${mount}/service/memory.max`, "1000"],
+    [`${mount}/service/memory.high`, "max"],
+    [`${mount}/service/memory.current`, "10"],
+    [`${mount}/other/memory.max`, "1100"],
+    [`${mount}/other/memory.high`, "1000"],
+    [`${mount}/other/memory.current`, "950"],
+    [`${mount}/other/memory.stat`, "inactive_file 945"],
+  ]);
+  const reads = mockCgroupFiles(files);
+  const read = captureDelegatedMemoryPressureReader();
+  expect(read?.().availableBytes).toBe(990);
+  expect(isMemoryPressureHigh()).toBe(false);
+  files.set("/proc/self/cgroup", "0::/pod/other");
+  nativeAvailable.mockReturnValue(990);
+  expect(read?.().availableBytes).toBe(50);
+  expect(isMemoryPressureHigh()).toBe(true);
+  files.set(
+    "/proc/self/mountinfo",
+    `${mountinfo}\n31 30 0:28 / ${mount}/other/memory.current ro - tmpfs tmpfs rw`,
+  );
+  expect(read?.().availableBytes).toBeUndefined();
+  expect(isMemoryPressureHigh()).toBe(false);
+  expect(nativeLimit).not.toHaveBeenCalled();
+  expect(nativeAvailable).not.toHaveBeenCalled();
+  expect(reads.mock.calls.some(([file]) => String(file).startsWith(`${mount}/pod/`))).toBe(false);
+  files.set("/proc/self/cgroup", "0::/");
+  expect(read?.().availableBytes).toBeUndefined();
+  files.delete("/proc/self/mountinfo");
+  expect(read?.().availableBytes).toBeUndefined();
+  expect(captureDelegatedMemoryPressureReader()).toBeUndefined();
+  files.set("/proc/self/mountinfo", `30 1 0:27 / ${mount} rw - cgroup2 cgroup rw`);
+  expect(captureDelegatedMemoryPressureReader()).toBeUndefined();
+});
+
+it.each([
+  ["1.52.0", 1000, true],
+  ["1.52.1", 500, false],
+  ["1.53.0", 500, false],
+] as const)(
+  "preserves libuv %s soft memory limits on the translated leaf",
+  (uv, limit, pressured) => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    delete (process.versions as { bun?: string }).bun;
+    vi.spyOn(os, "freemem").mockReturnValue(8 * GiB);
+    vi.spyOn(os, "totalmem").mockReturnValue(16 * GiB);
+    const original = Object.getOwnPropertyDescriptor(process.versions, "uv")!;
+    Object.defineProperty(process.versions, "uv", { configurable: true, value: uv });
+    try {
+      const leaf = "/sys/fs/cgroup/service";
+      const files = new Map([
+        ["/proc/self/cgroup", "0::/pod/service"],
+        ["/proc/self/mountinfo", "30 1 0:27 /pod /sys/fs/cgroup rw - cgroup2 cgroup rw"],
+        [
+          "/proc/self/limits",
+          "Max address space   600 unlimited bytes\nMax data size   500 unlimited bytes",
+        ],
+        [`${leaf}/memory.high`, "1000"],
+        [`${leaf}/memory.max`, "2000"],
+        [`${leaf}/memory.current`, "820"],
+      ]);
+      mockCgroupFiles(files);
+      expect(captureDelegatedMemoryPressureReader()?.()).toEqual({
+        limitBytes: limit,
+        availableBytes: 180,
+      });
+      expect(isMemoryPressureHigh()).toBe(pressured);
+    } finally {
+      Object.defineProperty(process.versions, "uv", original);
+    }
+  },
+);
