@@ -105,7 +105,8 @@ async function readRecordedStatus(cfg: OpenClawConfig) {
   const { manager } = await getMemorySearchManager({ cfg, agentId: "main", purpose: "status" });
   try {
     const refusal = (await readMemorySearchManagerStatus(manager!)).custom?.embeddingRefusal;
-    return { refusal, probe: await manager!.probeEmbeddingAvailability() };
+    const probe = await manager!.probeEmbeddingAvailability();
+    return { refusal, probe, vectors: await manager!.probeVectorAvailability() };
   } finally {
     await closeAllMemorySearchManagers();
   }
@@ -146,10 +147,15 @@ it("remembers an endpoint without embeddings and keeps keyword search working", 
   const status = await readRecordedStatus(cfg);
   expect(status.refusal).toContain("refused embeddings for text-embedding-3-small (404)");
   expect(status.probe).toMatchObject({ ok: false, error: status.refusal });
+  expect(status.vectors).toBe(false);
   expect(endpoint.statuses).toHaveLength(refusedByFirstProcess);
-  // A changed configuration is no longer covered by the old endpoint's refusal.
+  // A changed model or endpoint is no longer covered by the old endpoint's refusal.
   const changed = implicitConfig(endpoint.baseUrl, "text-embedding-3-large");
   expect((await readRecordedStatus(changed)).refusal).toBeUndefined();
+  const moved = await startChatEndpoint("serve");
+  const movedStatus = await readRecordedStatus(implicitConfig(moved.baseUrl));
+  expect(movedStatus.refusal).toBeUndefined();
+  expect(movedStatus.probe).toMatchObject({ ok: true });
 });
 
 it("keeps semantic search through an implicit endpoint that serves embeddings", async () => {

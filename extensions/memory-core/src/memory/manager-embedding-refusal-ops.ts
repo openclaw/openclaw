@@ -38,6 +38,7 @@ export abstract class MemoryEmbeddingRefusalOps extends MemoryManagerEmbeddingOp
   protected abstract refreshEmbeddingBootstrapFailure(
     failure: MemoryEmbeddingBootstrapDebug,
   ): MemoryEmbeddingBootstrapDebug;
+  protected abstract ensureProviderInitialized(): Promise<void>;
 
   /** The remote endpoint an implicit (unset or auto) provider calls, from its cache identity. */
   private implicitEmbeddingEndpoint(cacheKeyData: unknown): MemoryEmbeddingEndpoint | undefined {
@@ -118,6 +119,18 @@ export abstract class MemoryEmbeddingRefusalOps extends MemoryManagerEmbeddingOp
     }
   }
 
+  /** Probes that only describe readiness treat a recorded refusal as unavailable, not fatal. */
+  protected async ensureProviderInitializedOrRefused(): Promise<void> {
+    try {
+      await this.ensureProviderInitialized();
+    } catch (err) {
+      if (this.providerRequirement.mode !== "optional") {
+        throw err;
+      }
+      this.markEmbeddingBootstrapFailure(err);
+    }
+  }
+
   /**
    * Status reads the stored refusal before any provider exists. It applies only while the
    * configuration still resolves to that implicit endpoint; a read-only status probe reports
@@ -126,11 +139,16 @@ export abstract class MemoryEmbeddingRefusalOps extends MemoryManagerEmbeddingOp
   protected projectStatusEmbeddingRefusal(
     refusal: MemoryEmbeddingRefusal | null | undefined,
   ): string | undefined {
+    // Without a provider, the current destination is what memory.search or the provider entry
+    // configures now; an endpoint that names none is not one a refusal was recorded for.
+    const configuredBaseUrl = (
+      this.settings.remote?.baseUrl || this.cfg.models?.providers?.[this.settings.provider]?.baseUrl
+    )?.replace(/\/+$/, "");
     const endpoint = refusal
       ? this.implicitEmbeddingEndpoint(
           this.providerRuntime?.cacheKeyData ?? {
             provider: this.settings.provider,
-            baseUrl: refusal.baseUrl,
+            baseUrl: configuredBaseUrl,
             model: this.settings.model,
           },
         )

@@ -665,7 +665,7 @@ export abstract class MemoryProviderLifecycle extends MemoryEmbeddingRefusalOps 
         this.vector.semanticAvailable = false;
         return false;
       }
-      await this.ensureProviderInitialized();
+      await this.ensureProviderInitializedOrRefused();
       // FTS-only mode: vector search not available
       if (!this.provider) {
         this.vector.semanticAvailable = false;
