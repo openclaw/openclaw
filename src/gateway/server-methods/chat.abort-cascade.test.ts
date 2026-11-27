@@ -4,7 +4,7 @@
 import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -17,6 +17,7 @@ import { releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { registerInternalHook, unregisterInternalHook } from "../../hooks/internal-hooks.js";
 import {
   captureExecRequestCustody,
   captureExecRequestOwners,
@@ -28,6 +29,11 @@ import {
   consumeSelectedSystemEventEntries,
   enqueueSystemEventEntry,
 } from "../../infra/system-events.js";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../../plugins/hook-runner-global.js";
+import { createMockPluginRegistry } from "../../plugins/hooks.test-helpers.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
@@ -211,6 +217,11 @@ describe("descendant cascade ownership", () => {
         expectDefined(captureExecRequestOwners(identity), "original command owners"),
       );
       const owner = expectDefined(owners[0], "original command owner");
+      const runStopped = vi.fn();
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([{ hookName: "run_stopped", handler: runStopped }]),
+      );
+      onTestFinished(resetGlobalHookRunner);
       await withExecRequestTurn(
         {
           identity: {
@@ -234,6 +245,7 @@ describe("descendant cascade ownership", () => {
           });
           expect(requireLastRespondCall(foreign)[0]).toBe(false);
           expect(owner.signal.aborted).toBe(false);
+          expect(runStopped).not.toHaveBeenCalled();
           const response = await stop({
             context,
             request,
@@ -247,10 +259,62 @@ describe("descendant cascade ownership", () => {
             { ok: true, aborted: true, runIds: [] },
           ]);
           expect(owner.signal.aborted).toBe(true);
+          // The stopped turn runs in the requested session, not where its command owner began.
+          expect(runStopped.mock.calls).toEqual([
+            [
+              {
+                source: "client",
+                sessions: [{ agentId: "main", sessionKey }],
+                runIds: ["continued-command"],
+              },
+              { agentId: "main", sessionKey },
+            ],
+          ]);
         },
       );
     },
   );
+
+  it("announces an exec-only Stop only once its command cancellation is accepted", async () => {
+    const sessionKey = "agent:main:command-stop";
+    await writeSession(sessionKey, "command-session");
+    const identity: ExecRequestIdentity = {
+      ...mainIdentity,
+      runId: "command-run",
+      sessionKey,
+      sessionId: "command-session",
+      ownerConnId: "command-owner",
+    };
+    let hooksCompleted = 0;
+    let owner: { signal: AbortSignal } | undefined;
+    // At the notice: every command:stop hook has finished and the command is not yet cancelled.
+    const runStopped = vi.fn(() => ({ hooksCompleted, aborted: owner?.signal.aborted }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "run_stopped", handler: runStopped }]),
+    );
+    onTestFinished(resetGlobalHookRunner);
+    const commandStop = vi.fn(async () => {
+      await Promise.resolve();
+      hooksCompleted++;
+    });
+    registerInternalHook("command:stop", commandStop);
+    onTestFinished(() => unregisterInternalHook("command:stop", commandStop));
+    await withExecRequestTurn({ identity }, async () => {
+      owner = expectDefined(captureExecRequestOwners(identity)?.[0], "command owner");
+      const context = createChatAbortContext();
+      const request = { sessionKey, runId: "command-run" };
+      const client = { connId: "command-owner", connect: { scopes: ["operator.write"] } };
+      const handler: Parameters<typeof stop>[0]["handler"] = handleChatAbortRequestWithLifecycle;
+      expect(
+        requireLastRespondCall(await stop({ context, request, client, handler })),
+      ).toMatchObject([true, { ok: true, aborted: true, runIds: [] }]);
+      expect(commandStop).toHaveBeenCalledOnce();
+      expect(owner.signal.aborted).toBe(true);
+      expect(runStopped.mock.results).toEqual([
+        { type: "return", value: { hooksCompleted: 1, aborted: false } },
+      ]);
+    });
+  });
 
   it("keeps foreign, protected, and side-run native work during session-wide Stop", async () => {
     const sessionKey = "agent:main:main";
