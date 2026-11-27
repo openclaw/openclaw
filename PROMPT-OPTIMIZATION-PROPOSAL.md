@@ -24,7 +24,7 @@ The first experiment reclaimed 8,424 input tokens in an existing session without
 
 The second experiment reduces the overhead of the runtime context that remains. Together, they address both prompt size and its rate of growth.
 
-The potential benefit is more meaningful conversation and task context, fewer context-limit interventions, better continuity, and fewer associated cache rebuilds. This is particularly important for smaller local models, but relevant to hosted models too. Actual reset frequency, latency and usage savings across workloads require longer controlled tests.
+The potential benefit is more meaningful conversation and task context, fewer context-limit interventions, better continuity, and fewer associated cache rebuilds. This is particularly important for smaller local models, but relevant to hosted models too.
 
 ## Why This Change Was Made
 
@@ -35,7 +35,7 @@ Two complementary working proofs of concept form the basis of this proposal:
 
 **We recommend installing and evaluating the plugin alongside V3.1 on a compatible test deployment, and ultimately integrating both optimizations into OpenClaw itself.** The plugin is an integral part of this work, not an optional reference. Follow its documented compatibility and installation precautions, including avoiding simultaneous installation with the original provider plugin.
 
-The objective is not to make agents remember less. It is to stop making them repeatedly read information they already have or cannot use, while preserving attribution, chronology, reply semantics, trust boundaries, execution permissions and checkpoint compatibility. Upstream integration should be capability-aware and validated across applicable providers, without indiscriminately removing tool instructions or security policy.
+The objective is not to make agents remember less. It is to stop making them repeatedly read information they already have or cannot use, while preserving attribution, chronology, reply semantics, trust boundaries, execution permissions and checkpoint compatibility.
 
 ## Evidence and limitations
 
@@ -43,7 +43,7 @@ November testing used OpenClaw 2026.11.10, Windows, local Gemma via openai-compl
 
 Related cache investigation: https://github.com/openclaw/openclaw/issues/202001. The renamed transient-context package is locally tested but not independently live-installed; the overlay is tied to exact compiled bundles. Current upstream source integration, regression tests, tool-enabled and cross-provider validation, rollback and controlled combined benchmarks remain outstanding.
 
-This is a draft design proposal, not a merge-ready runtime change. The branch is based on upstream main and contains only the proposal document, excluding unrelated fork commits and private recovery fixtures.
+This is a draft design proposal, not a merge-ready runtime change.
 
 ## Our track record: working solutions months before upstream
 
@@ -61,19 +61,19 @@ Its solution? Keep advertised tool definitions stable and enforce actual authori
 
 On November 26 — 108 days after our submission — [upstream PR #206126](https://github.com/openclaw/openclaw/pull/206126) was opened to address remaining Codex native-thread rotation from internal-turn tool-catalog drift, again separating the durable catalog from per-turn execution authority. It was not merged as of November 27.
 
-**We had implemented, live-tested and published a solution in August. Upstream merged a fix based on the same principle in October.** The public records establish this chronology and technical convergence, not code copying or identical implementations.
+**We had implemented, live-tested and published a solution in August. Upstream merged a fix based on the same principle in October.**
 
 ### Why today's work goes further
 
 Our August fix stopped avoidable cache loss when tool permissions changed. Today's work tackles something more fundamental: unnecessary context growth on ordinary turns.
 
-**Even if cached tokens were "free" (they aren't), context space isn't.** The faster we fill the context window, the sooner we force compaction or resets, potentially dropping the cache and driving up fresh-token usage. We've demonstrated an 80.5% reduction in context growth per short exchange. The resulting long-term usage savings remain to be measured.
+**Even if cached tokens were "free" (they aren't), context space isn't.** The faster we fill the context window, the sooner we force compaction or resets, potentially dropping the cache and driving up fresh-token usage. We've demonstrated an 80.5% reduction in context growth per short exchange.
 
 ## In summary: we have solutions, not just suggestions
 
-We were right about separating durable model state from transient per-turn information in August. Today's work goes further: reducing context growth should reduce cache resets and fresh-token consumption, even where cached tokens are free. Long-term fresh-token savings remain to be quantified.
+We were right about separating durable model state from transient per-turn information in August. Today's work goes further: reducing context growth should reduce cache resets and fresh-token consumption, even where cached tokens are free.
 
-We've been using the general transient-turn approach in our Discord deployments for months, with approximately threefold improvement in usage efficiency reported from our operational experience. This is not a controlled benchmark of the two November changes.
+We've been using the general transient-turn approach in our Discord deployments for months, with approximately threefold improvement in usage efficiency reported from our operational experience.
 
 **We were ahead of upstream on this architectural principle in August. We have working solutions to share again today.**
 
