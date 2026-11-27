@@ -38,6 +38,7 @@ import {
 } from "./managed-npm-retention.js";
 import { preparePluginSourceSnapshot } from "./plugin-generation-worker.js";
 import { withPluginLifecycleLeaseAsync } from "./plugin-lifecycle-lease.js";
+import { acquirePluginSourceSnapshot } from "./plugin-source-snapshot-artifact.js";
 import { collectInstalledPluginSourceSnapshots } from "./plugin-source-snapshot-collection.js";
 import type { PluginSourceSnapshotDescriptor } from "./plugin-source-snapshot.types.js";
 import { seedInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
@@ -270,7 +271,32 @@ it.each(["records", "same-record", "successor"] as const)(
           ...descriptor(f.latest, 3),
           installedRevision: current.revision,
         };
-        const originalDescriptor = descriptor(mode === "same-record" ? f.latest : f.original, 1);
+        let originalDescriptor = descriptor(mode === "same-record" ? f.latest : f.original, 1);
+        if (mode === "records") {
+          const snapshot = await preparePluginSourceSnapshot({
+            stateDir: state.stateDir,
+            rootDir: f.original.packageDir,
+          });
+          try {
+            f.original.record.sourceSnapshotDigests = {
+              fixture: {
+                contentDigest: snapshot.contentDigest,
+                dependencyClosureDigest: snapshot.dependencyClosureDigest,
+              },
+            };
+            originalDescriptor = {
+              ...(await snapshot.publish({
+                installRecordHash: recordHash(f.original.record),
+                contentDigest: snapshot.contentDigest,
+                dependencyClosureDigest: snapshot.dependencyClosureDigest,
+                buildResolutionDigest: "build-resolution",
+              })),
+              installedRevision: 1,
+            };
+          } finally {
+            await snapshot.disposeAsync();
+          }
+        }
         const metadata = (
           installed: typeof f.original,
           sourceSnapshot: PluginSourceSnapshotDescriptor,
@@ -325,6 +351,18 @@ it.each(["records", "same-record", "successor"] as const)(
                 },
               ];
         f.begin();
+        if (mode === "records") {
+          await withPluginCohortConfigCapture(
+            {
+              runId: f.runId,
+              installKey: f.cohort.installKey,
+              env: state.env,
+              assertCurrent: () => fence.assertCurrent(),
+            },
+            () => collectInstalledPluginSourceSnapshots(state.stateDir),
+          );
+          expect(fs.existsSync(originalDescriptor.artifact.path)).toBe(true);
+        }
         if (mode === "successor") {
           await refreshPersistedInstalledPluginIndexWithReceipt({
             reason: "source-changed",
@@ -363,6 +401,20 @@ it.each(["records", "same-record", "successor"] as const)(
               (plugin) => plugin.pluginId === "fixture",
             )?.sourceSnapshot,
           ).toEqual(originalDescriptor);
+          if (mode === "records") {
+            const reader = await acquirePluginSourceSnapshot({
+              stateDir: state.stateDir,
+              descriptor: originalDescriptor,
+              assertCurrent: () => fence.assertCurrent(),
+            });
+            try {
+              expect(
+                JSON.parse(fs.readFileSync(path.join(reader.rootDir, "package.json"), "utf8")),
+              ).toMatchObject({ version: "1.0.0" });
+            } finally {
+              await reader.release();
+            }
+          }
         }
       },
     );

@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { pluginCohortPublicationContext } from "../infra/update-plugin-cohort-context.js";
 import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import { updateInstalledPluginSourceSnapshots } from "./installed-plugin-index-store-write.js";
 import { readCurrentInstalledPluginIndex } from "./installed-plugin-index-store.js";
@@ -16,7 +17,7 @@ export async function collectInstalledPluginSourceSnapshots(
   stateDir: string,
   unpublished: readonly Omit<PluginSourceSnapshotDescriptor, "installedRevision">[] = [],
 ): Promise<void> {
-  if (isArtifactPreservingStateRead()) {
+  if (isArtifactPreservingStateRead() || pluginCohortPublicationContext.getStore()) {
     return;
   }
   try {
