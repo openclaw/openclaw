@@ -61,10 +61,6 @@ import {
   isSubagentAnnounceCompletionHandoff,
   isTrustedSubagentCompletionHandoffForRun,
 } from "../subagents/announce/subagent-announce-handoff.js";
-import {
-  toRelayOnlyCompletionInternalEvents,
-  toRelayOnlyCompletionText,
-} from "../subagents/completion/subagent-completion-instructions.js";
 import { withPreparedSessionCapabilityRead } from "../subagents/spawn/subagent-session-store.js";
 import { isRuntimeToolAllowed, isToolAllowedByPolicies } from "../tool-policy-match.js";
 import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "../tool-result-limits.js";
@@ -226,9 +222,10 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     sessionAgentId: params.sessionAgentId,
     sessionEntry: params.sessionEntry,
   });
-  const { completionRetainsRequesterTools, runtimeToolsAllow, disableTools } =
+  const { completionRetainsRequesterTools, runtimeToolsAllow, disableTools, relay } =
     resolveCompletionToolPolicy({
       run: params,
+      prompt: effectivePrompt,
       trustedSubagentAnnounceHandoff,
       isSubagentAnnounceHandoff,
       isRawModelRun,
@@ -236,18 +233,6 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
       cliExecutionProvider,
       completionNeedsMessageDelivery,
     });
-  // A restricted completion relay runs without an execution surface (tools
-  // disabled or a message-only allowlist). The shared continuation guidance in
-  // the announce prompt would then invite blocked tool attempts and let the model
-  // launder this turn's authority loss into a reported child failure, so rescope
-  // it to relay-only wording that keeps the child outcome and records follow-up.
-  const completionRelayOnly = isSubagentAnnounceHandoff && !completionRetainsRequesterTools;
-  const relayPrompt = completionRelayOnly
-    ? toRelayOnlyCompletionText(effectivePrompt)
-    : effectivePrompt;
-  const relayInternalEvents = completionRelayOnly
-    ? toRelayOnlyCompletionInternalEvents(params.opts.internalEvents)
-    : params.opts.internalEvents;
   // Collector output is mandatory result transport, even on a narrowed tool
   // surface. The CLI grant is minted from this list and enforced exactly on the
   // loopback server, so a plugin-launched or cron-continued collector needs the
@@ -403,7 +388,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
           : resolvedPrompt;
         const cliEffectivePrompt = params.opts.execApprovalContinuationPromptRange
           ? annotateInterSessionPromptText(cliResolvedPrompt, params.opts.inputProvenance)
-          : relayPrompt;
+          : relay.prompt;
         const cliTranscriptPrompt =
           continuationTranscriptBody === undefined || !continuationTranscriptPromptRange
             ? continuationTranscriptBody
@@ -478,7 +463,6 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
             params.sessionAgentId,
           );
         await prepareCliSessionBinding();
-        const internalEvents = relayInternalEvents;
         const { runtimeContextFragments: supplementalContext } = params.opts;
         // Retain the cleared binding as the preparation candidate so missing-transcript
         // recovery can reseed history without resuming the stale CLI session.
@@ -507,7 +491,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
             persistAssistantTranscript:
               params.storePath !== undefined && params.sessionStore !== undefined,
             prompt: cliPrompt,
-            runtimeContextFragments: buildEventContext(internalEvents, supplementalContext),
+            runtimeContextFragments: buildEventContext(relay.internalEvents, supplementalContext),
             transcriptPrompt: cliTranscriptPrompt,
             modelProvider: params.providerOverride,
             requesterModel: { provider: params.providerOverride, model: params.modelOverride },
@@ -677,7 +661,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     agentHarnessRuntimeOverride: embeddedAgentHarnessOverride,
     agentHarnessRuntimePreparationHint:
       agentHarnessPolicy.runtimeSource !== "implicit" ? agentHarnessPolicy.runtime : undefined,
-    prompt: relayPrompt,
+    prompt: relay.prompt,
     transcriptPrompt: continuationTranscriptBody,
     // CLI retries cannot replay a persisted turn after orphan-user repair removes it.
     images: shouldForwardImagesToEmbedded ? params.opts.images : undefined,
@@ -707,7 +691,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
       ? params.opts.trustedInternalHandoff
       : undefined,
     cronCreatorAuthorityCapability: params.opts.cronCreatorAuthorityCapability,
-    internalEvents: relayInternalEvents,
+    internalEvents: relay.internalEvents,
     runtimeContextFragments: params.opts.runtimeContextFragments,
     requireExplicitMessageTarget: params.opts.requireExplicitMessageTarget,
     disableMessageTool: params.opts.disableMessageTool,
