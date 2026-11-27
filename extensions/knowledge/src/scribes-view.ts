@@ -8,6 +8,7 @@ import {
   pluginStateText,
   scribeTile,
 } from "./scribe-dialog.js";
+import { importProgressValue } from "./scribe-import-progress.js";
 import { openScheduleDialog } from "./scribe-schedule-dialog.js";
 import { settingsValue } from "./scribe-settings-dialog.js";
 import {
@@ -128,10 +129,6 @@ function scheduleText(schedule: ScribeJob["schedule"]) {
   }
   return schedule.kind === "event" ? "When Knowledge maintenance asks" : schedule.kind;
 }
-
-// "40 of 122 files imported" from an import's checkpoint.
-const progressText = ({ files, done }: NonNullable<ScribeSnapshot["progress"]>) =>
-  files ? `${done.toLocaleString()} of ${plural(files, "file")} imported` : "No files listed yet";
 
 // One-line state for an "On" row.
 function activeMeta(snapshot: ScribeSnapshot) {
@@ -453,7 +450,7 @@ function detail(
   detection: ScribeDetection,
   runError?: string,
 ) {
-  const { scribe, job, session, status } = snapshot;
+  const { scribe, job, session, status, progress } = snapshot;
   const host = ui.s.context.host;
   const { agentId, agentName, storeName } = pageNames(ui);
   // Every automation control is an administrator's write.
@@ -570,7 +567,8 @@ function detail(
   }
   // An import that saved its progress and stopped short continues from its checkpoint. Without
   // an automation, no other control shares the group.
-  const continues = !job && snapshot.progress !== undefined && status === "attention";
+  const retryProgress = !job && progress === "unavailable";
+  const continues = !job && progress && progress !== "unavailable" && status === "attention";
   if (continues) {
     const attempt = crypto.randomUUID();
     const run = () => continueScribe(host, snapshot, agentId, attempt);
@@ -580,9 +578,9 @@ function detail(
   }
   if (!job && status !== "starting") {
     const again = button(
-      status === "failing" || continues ? "Start again…" : scribe.startLabel,
+      status === "failing" || continues || retryProgress ? "Start again…" : scribe.startLabel,
       () => start(ui, snapshot, detection),
-      `knowledge-button${continues ? "" : " knowledge-primary"} knowledge-small`,
+      `knowledge-button${continues || retryProgress ? "" : " knowledge-primary"} knowledge-small`,
     );
     again.disabled = !canStart(ui, scribe);
     actions.append(again);
@@ -655,8 +653,8 @@ function detail(
   } else if (status === "done") {
     facts.push(["Schedule", "Once, nothing scheduled"]);
   }
-  if (snapshot.progress) {
-    facts.push(["Progress", progressText(snapshot.progress)]);
+  if (progress) {
+    facts.push(["Progress", importProgressValue(progress, () => void ui.load())]);
   }
   facts.push(
     [

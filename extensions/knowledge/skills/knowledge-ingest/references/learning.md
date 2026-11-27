@@ -82,8 +82,8 @@ agent workspace.
 #### Saved progress
 
 When the prompt says progress is saved, keep the note page it names as the
-import's checkpoint, so an interrupted import continues instead of starting
-over:
+import's checkpoint so an interrupted import continues where it stopped
+([#205796](https://github.com/openclaw/openclaw/issues/205796)).
 
 1. **List.** Before reading any file, `ls` the named files. On a new import,
    save the page with `knowledge_save_page` (type `note`), replacing any earlier

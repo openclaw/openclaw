@@ -11,15 +11,15 @@ const statusLine = (state: string, summary: string) => ({
   role: "assistant",
   content: `Done.\nScribe status: ${state} — ${summary}`,
 });
+const label = "Scribe · Learn from Memory";
+const setup = scribeSetup(
+  "memory",
+  "once",
+  { sources: ["memory-md", "daily-notes"], progress: true },
+  "UTC",
+);
 
 it("continues a Memory import with saved progress until every file on its checkpoint is done", async () => {
-  const label = "Scribe · Learn from Memory";
-  const setup = scribeSetup(
-    "memory",
-    "once",
-    { sources: ["memory-md", "daily-notes"], progress: true },
-    "UTC",
-  );
   const checkpoint = [
     "- MEMORY.md: done (3 saved, 1 known, 0 skipped)",
     "- memory/2026-11-01.md: done (2 saved, 0 known, 1 skipped)",
@@ -75,4 +75,55 @@ it("continues a Memory import with saved progress until every file on its checkp
   expect(done.querySelector(".scribe-chip-on")?.textContent).toBe("Done");
   expect(done.textContent).toContain("3 of 3 files imported");
   expect(buttonNamed(done, "Continue")).toBeUndefined();
+});
+
+it("offers Continue when the start message has scrolled out of chat history", async () => {
+  const { render, ui } = fixture({
+    sessions: { [label]: { key: "s-mem", displayName: label, status: "interrupted" } },
+    history: {
+      "s-mem": [
+        userText(setupPrompt(setup)),
+        ...Array.from({ length: 101 }, () => ({ role: "toolResult", content: "Read daily note" })),
+      ],
+    },
+    checkpoint: "- MEMORY.md: done\n- memory/2026-11-02.md: pending",
+  });
+  ui.s.scribe = "memory";
+  expect(buttonNamed(await render(), "Continue")).toBeDefined();
+});
+
+it("checks the later windows of a checkpoint before offering Continue or showing Done", async () => {
+  const firstWindow = "- MEMORY.md: done\n- memory/2026-11-01.md: done\n- memory/2026-11-02.md: ";
+  const world = {
+    sessions: { [label]: { key: "s-mem", displayName: label } },
+    history: { "s-mem": [userText(continuePrompt()), statusLine("done", "Saved 5 items")] },
+    checkpoint: `${firstWindow}pending`,
+    checkpointWindow: firstWindow.length,
+  };
+  const { render, ui } = fixture(world);
+  ui.s.scribe = "memory";
+  const view = await render();
+  expect(buttonNamed(view, "Continue")).toBeDefined();
+  expect(view.textContent).toContain("2 of 3 files imported");
+
+  world.checkpoint = `${firstWindow}done`;
+  const done = await render();
+  expect(done.textContent).toContain("3 of 3 files imported");
+  expect(buttonNamed(done, "Continue")).toBeUndefined();
+});
+
+it("lets the user retry a checkpoint read before trusting a done result", async () => {
+  const { render, ui, load, feature } = fixture({
+    sessions: { [label]: { key: "s-mem", displayName: label } },
+    history: { "s-mem": [userText(continuePrompt()), statusLine("done", "Saved 5 items")] },
+    checkpoint: "- MEMORY.md: done\n- memory/2026-11-02.md: pending",
+  });
+  ui.s.scribe = "memory";
+  feature.invoke.mockRejectedValueOnce(new Error("Knowledge store unavailable"));
+  const view = await render();
+  expect(view.textContent).toContain("Couldn’t read saved progress");
+  expect(view.querySelector(".scribe-chip-warn")?.textContent).toBe("Needs attention");
+  buttonNamed(view, "Retry").click();
+  expect(load).toHaveBeenCalledOnce();
+  expect(buttonNamed(await render(), "Continue")).toBeDefined();
 });

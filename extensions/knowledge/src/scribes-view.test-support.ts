@@ -31,6 +31,7 @@ export function fixture(world: {
   granola?: { installed: boolean; enabled: boolean; authorized?: boolean };
   /** Body of the Memory import checkpoint page in the viewed store; absent when there is none. */
   checkpoint?: string;
+  checkpointWindow?: number;
 }) {
   // HTMLDialogElement is incomplete in jsdom.
   Object.assign(HTMLDialogElement.prototype, {
@@ -59,13 +60,15 @@ export function fixture(world: {
           session:
             Object.values(world.sessions ?? {}).find((row) => row.key === params?.key) ?? null,
         };
-      case "chat.history":
+      case "chat.history": {
+        const history = world.history?.[String(params?.sessionKey)] ?? [];
+        const end = typeof params?.cursor === "string" ? Number(params.cursor) : history.length;
+        const start = Math.max(0, end - Number(params?.limit ?? history.length));
         return {
-          messages:
-            typeof params?.sessionKey === "string"
-              ? (world.history?.[params.sessionKey] ?? [])
-              : [],
+          messages: history.slice(start, end),
+          olderCursor: start ? String(start) : undefined,
         };
+      }
       case "cron.runs":
         return {
           entries: world.runs ?? [
@@ -120,13 +123,20 @@ export function fixture(world: {
   const load = vi.fn(async () => true);
   const scribesTab = document.createElement("button");
   const feature = {
-    invoke: vi.fn(async (operation: string) =>
-      operation === "lookup"
-        ? world.checkpoint === undefined
+    invoke: vi.fn(async (operation: string, input?: { offset?: number }) => {
+      if (operation === "lookup") {
+        return world.checkpoint === undefined
           ? { outcome: "missing", hits: [] }
-          : { outcome: "found", hits: [{ record: { id: "page-checkpoint" } }] }
-        : { record: { body: world.checkpoint } },
-    ),
+          : { outcome: "found", hits: [{ record: { id: "page-checkpoint" } }] };
+      }
+      const body = world.checkpoint ?? "";
+      const offset = input?.offset ?? 0;
+      const end = offset + (world.checkpointWindow ?? body.length);
+      return {
+        record: { body: body.slice(offset, end), hash: "checkpoint-version" },
+        content: { nextOffset: end < body.length ? end : null },
+      };
+    }),
   };
   const ui = {
     s: { context: { host }, scribe: "", storesSnapshot: undefined, tab: "scribes" },
@@ -148,7 +158,7 @@ export function fixture(world: {
     page.replaceChildren(target);
     return target;
   };
-  return { ui, calls, request, create, open, load, render, page, scribesTab };
+  return { ui, calls, request, create, open, load, render, page, scribesTab, feature };
 }
 export const reviewSession = {
   "Scribe · Knowledge Consolidation": {

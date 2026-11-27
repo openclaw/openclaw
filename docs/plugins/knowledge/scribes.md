@@ -64,7 +64,9 @@ which can be started again.
   `Knowledge scribe checkpoint · Learn from Memory`, and marks each one done as
   it finishes. An import that stops partway shows **Needs attention** with how
   many files are imported, and **Continue** picks it up with the files still
-  pending. It shows **Done** only when every file on the checkpoint is done.
+  pending. It shows **Done** only when it can verify every file on the
+  checkpoint is done. If saved progress can't be read, select **Retry** to
+  check it again.
 - **Learn from Slack** reads Slack channels through the
   [Slack plugin](#the-slack-plugin) and saves the decisions, commitments, and
   project news discussed there, updating the people, companies, and projects

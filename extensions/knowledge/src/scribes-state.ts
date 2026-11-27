@@ -3,6 +3,7 @@ import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
 import type { FeatureClient } from "openclaw/plugin-sdk/feature-contract";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { FullOutputContract } from "./contract.js";
+import type { RecordOutput } from "./inspection-contract.js";
 import {
   checkRunMessage,
   MEMORY_CHECKPOINT,
@@ -111,11 +112,11 @@ export type ScribeSnapshot = {
   /** How the automation's run message compares with the one Knowledge generates now. */
   runMessage?: RunMessageCheck;
   /** A Memory import with saved progress: the files its checkpoint lists, and how many are done. */
-  progress?: ImportProgress;
+  progress?: ImportProgress | "unavailable";
 };
 
 /** The files a Memory import's checkpoint lists and how many of them are done. */
-export type ImportProgress = { files: number; done: number };
+type ImportProgress = { files: number; done: number };
 
 /**
  * Whether a plugin a scribe needs can be used: not installed, turned off, installed but not
@@ -238,7 +239,7 @@ function deriveStatus(input: {
   result?: ScribeResult;
   /** The conversation received a message: the page's start prompt at least. */
   setupSent: boolean;
-  progress?: ImportProgress;
+  progress?: ScribeSnapshot["progress"];
 }): ScribeStatus {
   const { session, job, result, setupSent, progress } = input;
   if (!session || session.archived) {
@@ -264,7 +265,7 @@ function deriveStatus(input: {
   // An import with saved progress is done only when its checkpoint has every file done, whatever
   // its last turn said; one that stopped short needs attention, and can continue.
   if (progress && (result || ended)) {
-    if (progress.files === 0 || progress.done < progress.files) {
+    if (progress === "unavailable" || progress.files === 0 || progress.done < progress.files) {
       return "attention";
     }
     return result?.state === "failed" ? "failing" : "done";
@@ -370,16 +371,21 @@ async function findJobs(host: ScribeReader, agentId: string) {
   return jobs;
 }
 
-/** Recent messages of a scribe conversation; empty when the transcript can't be read. */
-async function readMessages(host: ScribeReader, session: ScribeSession, agentId: string) {
-  const history = await host
-    .request<{ messages?: unknown[] }>("chat.history", {
-      sessionKey: session.key,
-      agentId,
-      limit: 100,
-    })
+/** One page of a scribe's transcript, starting from the most recent messages. */
+function readHistory(
+  host: ScribeReader,
+  session: ScribeSession,
+  agentId: string,
+  page?: { cursor: string } | { offset: number },
+) {
+  return host
+    .request<{
+      messages?: unknown[];
+      olderCursor?: string;
+      nextOffset?: number;
+      windowReset?: boolean;
+    }>("chat.history", { sessionKey: session.key, agentId, limit: 100, ...page })
     .catch(() => undefined);
-  return history?.messages ?? [];
 }
 
 // When a message was written, when the transcript records it.
@@ -436,26 +442,72 @@ function checkpointProgress(body: string): ImportProgress {
 }
 
 /**
- * The Memory import checkpoint in the viewed store: no files when the page is missing, undefined
- * when it can't be read.
+ * The Memory import checkpoint in the viewed store: no files when the page is missing,
+ * unavailable when it can't be read.
  */
-async function readImportProgress(feature: FeatureClient<FullOutputContract>) {
+async function readImportProgress(
+  feature: FeatureClient<FullOutputContract>,
+): Promise<NonNullable<ScribeSnapshot["progress"]>> {
   try {
     const found = await feature.invoke("lookup", { query: MEMORY_CHECKPOINT, kind: "page" });
     const id = found.outcome === "found" ? found.hits[0]?.record.id : undefined;
     if (!id) {
-      return found.outcome === "missing" ? { files: 0, done: 0 } : undefined;
+      return found.outcome === "missing" ? { files: 0, done: 0 } : "unavailable";
     }
-    // One window holds a checkpoint of about a thousand files; a longer one reads as unfinished.
-    const detail = await feature.invoke("record_detail", {
-      id,
-      metadataView: "none",
-      maxChars: 65536,
-    });
-    return checkpointProgress(detail.record?.body ?? "");
+    let body = "";
+    let hash: string | undefined;
+    let offset: number | null = 0;
+    do {
+      const { record, content }: RecordOutput = await feature.invoke("record_detail", {
+        id,
+        metadataView: "none",
+        maxChars: 65536,
+        offset,
+      });
+      // A save between windows can change line lengths and invalidate the offset.
+      if (record?.body === undefined || (hash !== undefined && hash !== record.hash)) {
+        return "unavailable";
+      }
+      hash = record.hash;
+      body += record.body;
+      offset = content.nextOffset;
+    } while (offset !== null);
+    return checkpointProgress(body);
   } catch {
-    return undefined;
+    return "unavailable";
   }
+}
+
+async function readMemoryProgress(
+  host: ScribeReader,
+  session: ScribeSession,
+  agentId: string,
+  feature: FeatureClient<FullOutputContract>,
+  recent: Awaited<ReturnType<typeof readHistory>>,
+): Promise<ScribeSnapshot["progress"]> {
+  let history = recent;
+  while (history) {
+    // The latest start or Continue opts in. CLI tool results may have role user without text.
+    const sent = history.messages?.findLast(
+      (message) => isRecord(message) && message.role === "user" && messageText(message) !== "",
+    );
+    if (sent) {
+      return messageText(sent).includes(MEMORY_CHECKPOINT)
+        ? readImportProgress(feature)
+        : undefined;
+    }
+    if (history.olderCursor) {
+      history = await readHistory(host, session, agentId, { cursor: history.olderCursor });
+    } else if (history.nextOffset !== undefined) {
+      history = await readHistory(host, session, agentId, { offset: history.nextOffset });
+    } else {
+      return undefined;
+    }
+    if (history?.windowReset) {
+      return "unavailable";
+    }
+  }
+  return "unavailable";
 }
 
 /**
@@ -472,7 +524,8 @@ export async function loadScribes(
     SCRIBES.map(async (scribe) => {
       const keyed = jobs.get(scribeDeclarationKey(scribe.id)) ?? [];
       const { session, job } = await pairScribe(host, agentId, scribe, keyed);
-      const messages = session ? await readMessages(host, session, agentId) : [];
+      const history = session ? await readHistory(host, session, agentId) : undefined;
+      const messages = history?.messages ?? [];
       const { result: said, index: resultIndex } = parseScribeResult(messages);
       const sentIndex = lastSent(messages);
       // A status line older than the latest message sent answers an earlier turn.
@@ -491,13 +544,10 @@ export async function loadScribes(
           current = run.result;
         }
       }
-      // The latest start or continue message says whether this import saves its progress. A CLI
-      // runtime records tool results as user messages without text; they are not sent messages.
-      const sent = messages.findLast(
-        (message) => isRecord(message) && message.role === "user" && messageText(message) !== "",
-      );
-      const tracked = scribe.id === "memory" && messageText(sent).includes(MEMORY_CHECKPOINT);
-      const progress = tracked && feature ? await readImportProgress(feature) : undefined;
+      const progress =
+        scribe.id === "memory" && session && feature
+          ? await readMemoryProgress(host, session, agentId, feature, history)
+          : undefined;
       const snapshot: ScribeSnapshot = {
         scribe,
         status: deriveStatus({
