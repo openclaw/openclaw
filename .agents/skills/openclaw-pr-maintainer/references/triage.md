@@ -12,7 +12,7 @@
 
 If a small PR shows thousands of changed files, record its head SHA, base repository, base branch, and draft status. Resolve the current tip of that branch, including for stacked PRs. Compare the two commits locally with `git diff --name-status --find-renames "$base_sha...$head_sha"`. GitHub's [PR files endpoint](https://docs.github.com/en/rest/pulls/pulls#list-pull-requests-files) returns at most 3,000 files. Keep the incomplete-file check blocked for a genuinely larger diff.
 
-Use this recovery when the PR reports an older base SHA and its file list disagrees with Git.
+Use this recovery when the PR reports an older base SHA and its file list disagrees with Git, as in the [locale automation PR](https://github.com/openclaw/openclaw/pull/147905).
 
 1. Recheck the head and base branch. With authority to edit the PR, refresh its existing base with `ghx --no-cache api -X PATCH "repos/$repo/pulls/$number" -f "base=$base_branch"`.
 2. Read the PR back and list its files with `ghx --no-cache api --paginate "repos/$repo/pulls/$number/files"`. Verify the head, base branch, and draft status stayed the same. Check the returned base SHA, file count, and paths against the Git comparison. If either commit moved, compare again.
