@@ -2,7 +2,12 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { escapeRegExp } from "../../shared/regexp.js";
-import type { TextProjection, TextProjector } from "../../shared/text/text-projection.js";
+import {
+  createConditionalTextProjector,
+  type TextFilter,
+  type TextProjection,
+  type TextProjector,
+} from "../../shared/text/text-projection.js";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "./delivery-hints.js";
 import { INBOUND_CONTEXT_MARKER } from "./inbound-context-marker.js";
 
@@ -21,7 +26,7 @@ type TextLine = { start: number; end: number; next: number; trimmed: string };
 type LineSpan = { start: number; next: number };
 
 function readTextLine(text: string, start: number): TextLine | undefined {
-  if (start > text.length) {
+  if (start >= text.length) {
     return undefined;
   }
   const newline = text.indexOf("\n", start);
@@ -140,7 +145,10 @@ function trimInboundStreamBoundary(text: string): string {
  * unfinished block that can still change. The canonical stream can otherwise rescan
  * every preceding byte after its first metadata marker appears.
  */
-export function createInboundMetadataStreamProjector(): TextProjector {
+export function createInboundMetadataStreamProjector(options?: {
+  preserveBoundaryWhitespace?: boolean;
+  withholdUnclosedActiveMemory?: boolean;
+}): TextProjector {
   let body = "";
   let cursor = 0;
   let lineStart = 0;
@@ -156,6 +164,9 @@ export function createInboundMetadataStreamProjector(): TextProjector {
   let activeMemorySourceStart: number | null = null;
   let activeMemoryOutputStart: number | null = null;
   let activeMemoryOpen = false;
+  let unclosedActiveMemorySourceStart: number | null = null;
+  let provisionalActiveMemoryCloseStart: number | null = null;
+  let provisionalActiveMemorySourceStart: number | null = null;
   let appendOnly = true;
 
   const reset = () => {
@@ -174,6 +185,9 @@ export function createInboundMetadataStreamProjector(): TextProjector {
     activeMemorySourceStart = null;
     activeMemoryOutputStart = null;
     activeMemoryOpen = false;
+    unclosedActiveMemorySourceStart = null;
+    provisionalActiveMemoryCloseStart = null;
+    provisionalActiveMemorySourceStart = null;
     appendOnly = true;
   };
 
@@ -190,9 +204,20 @@ export function createInboundMetadataStreamProjector(): TextProjector {
     }
   };
   const currentText = (text: string) => {
+    if (
+      options?.withholdUnclosedActiveMemory &&
+      activeMemorySourceStart !== null &&
+      activeMemoryOutputStart !== null
+    ) {
+      const prefix =
+        passthroughStart !== null
+          ? text.slice(passthroughStart, activeMemorySourceStart)
+          : body.slice(0, activeMemoryOutputStart);
+      return prefix.replace(/^(?:\r?\n)+/u, "");
+    }
     const projected =
       body.length === 0 && passthroughStart !== null ? text.slice(passthroughStart) : body;
-    return trimInboundStreamBoundary(projected);
+    return options?.preserveBoundaryWhitespace ? projected : trimInboundStreamBoundary(projected);
   };
   const startNextLine = (next: number) => {
     cursor = next;
@@ -286,7 +311,7 @@ export function createInboundMetadataStreamProjector(): TextProjector {
       activeMemorySourceStart = null;
     }
 
-    if (trimmed === ACTIVE_MEMORY_CONTEXT_HEADER) {
+    if (trimmed === ACTIVE_MEMORY_CONTEXT_HEADER && lineStart !== unclosedActiveMemorySourceStart) {
       activeMemorySourceStart = lineStart;
       activeMemoryOutputStart = body.length;
       advanceRaw(text, next);
@@ -341,6 +366,8 @@ export function createInboundMetadataStreamProjector(): TextProjector {
       activeMemoryOpen &&
       text.slice(lineStart).trim() === ACTIVE_MEMORY_CLOSE_TAG
     ) {
+      const closeLineStart = lineStart;
+      const activeMemorySource = activeMemorySourceStart;
       if (passthroughStart !== null) {
         materializeTo(text, activeMemorySourceStart);
       } else if (activeMemoryOutputStart !== null) {
@@ -355,6 +382,8 @@ export function createInboundMetadataStreamProjector(): TextProjector {
       resumePassthrough(cursor);
       lineStart = cursor;
       lineBodyStart = body.length;
+      provisionalActiveMemoryCloseStart = closeLineStart;
+      provisionalActiveMemorySourceStart = activeMemorySource;
       skipBlankLines = true;
       return;
     }
@@ -476,6 +505,35 @@ export function createInboundMetadataStreamProjector(): TextProjector {
     if (input.delta === "") {
       return { text: currentText(input.text), delta: "" };
     }
+    if (
+      input.delta !== null &&
+      provisionalActiveMemoryCloseStart !== null &&
+      input.text.length === sourceLength + input.delta.length
+    ) {
+      const closeLine = input.text.slice(provisionalActiveMemoryCloseStart);
+      const newline = closeLine.indexOf("\n");
+      const settledLine = newline < 0 ? closeLine : closeLine.slice(0, newline);
+      const validClose = settledLine.trim() === ACTIVE_MEMORY_CLOSE_TAG;
+      if (!validClose) {
+        const unclosedSourceStart = provisionalActiveMemorySourceStart;
+        provisionalActiveMemoryCloseStart = null;
+        provisionalActiveMemorySourceStart = null;
+        reset();
+        unclosedActiveMemorySourceStart = unclosedSourceStart;
+        sourceLength = input.text.length;
+        process(input.text);
+        return result(input, currentText(input.text), input.delta);
+      }
+      provisionalActiveMemoryCloseStart = null;
+      provisionalActiveMemorySourceStart = null;
+      sourceLength = input.text.length;
+      if (newline >= 0) {
+        process(input.text);
+      } else {
+        cursor = input.text.length;
+      }
+      return result(input, currentText(input.text), input.delta);
+    }
     if (input.delta === null) {
       reset();
       sourceLength = input.text.length;
@@ -494,6 +552,18 @@ export function createInboundMetadataStreamProjector(): TextProjector {
 }
 
 /** Probe appended bytes only until canonical metadata can affect the visible text. */
+export function inboundMetadataTextFilter(
+  streaming = false,
+  options?: Parameters<typeof createInboundMetadataStreamProjector>[0],
+): TextFilter {
+  return {
+    transform: stripInboundMetadata,
+    create: streaming
+      ? () => createInboundMetadataStreamProjector(options)
+      : () => createConditionalTextProjector(stripInboundMetadata, createInboundMetadataProbe()),
+  };
+}
+
 export function createInboundMetadataProbe(): (input: TextProjection) => boolean {
   const scanOverlap = Math.max(...INBOUND_METADATA_SENTINELS.map((token) => token.length - 1));
   let active = false;

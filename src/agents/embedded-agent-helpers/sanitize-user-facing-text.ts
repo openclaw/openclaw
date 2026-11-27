@@ -4,11 +4,7 @@ import {
   HISTORY_CONTEXT_MARKER,
   RECENT_HISTORY_CONTEXT_MARKER,
 } from "../../auto-reply/reply/history.js";
-import {
-  createInboundMetadataProbe,
-  createInboundMetadataStreamProjector,
-  stripInboundMetadata,
-} from "../../auto-reply/reply/strip-inbound-meta.js";
+import { inboundMetadataTextFilter } from "../../auto-reply/reply/strip-inbound-meta.js";
 import { RUNTIME_CONTEXT_HEADER } from "../../llm/types.js";
 import { coerceChatContentText } from "../../shared/chat-content.js";
 import { escapeRegExp } from "../../shared/regexp.js";
@@ -484,12 +480,7 @@ export function userFacingTextFilters(
           // The canonical preflight also recognizes reflowed whitespace in carrier notices.
           create: () => createConditionalTextProjector(stripInternalRuntimeContext, () => true),
         },
-    {
-      transform: stripInboundMetadata,
-      create: streaming
-        ? createInboundMetadataStreamProjector
-        : () => createConditionalTextProjector(stripInboundMetadata, createInboundMetadataProbe()),
-    },
+    inboundMetadataTextFilter(streaming),
     minimaxToolCallTextFilter(streaming),
     toolCallXmlTextFilter({ stripFunctionCallsXmlPayloads: true }),
     internalPlaceholderLinesTextFilter,

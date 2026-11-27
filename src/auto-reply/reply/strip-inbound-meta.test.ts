@@ -4,10 +4,12 @@ import {
   MESSAGE_TOOL_DELIVERY_HINTS,
   MESSAGE_TOOL_ONLY_DELIVERY_HINT,
 } from "../../plugin-sdk/message-tool-delivery-hints.js";
+import { createTextProjection } from "../../shared/text/text-projection.js";
 import type { TemplateContext } from "../templating.js";
 import { markInboundContextLabel } from "./inbound-context-marker.js";
 import { buildInboundUserContextPrefix } from "./inbound-meta.js";
 import {
+  createInboundMetadataStreamProjector,
   extractInboundSenderLabel,
   hasInboundMetadataSentinel,
   stripInboundMetadata,
@@ -184,6 +186,22 @@ describe("stripInboundMetadata", () => {
       expect(strip(input)).toBe("Queued earlier user turn\n\nWhat should I grab on the way?");
     },
   );
+
+  it("restores an active-memory block when a later character invalidates an EOF closer", () => {
+    const source = "Context:\n<active_memory_plugin>\nsecret\n</active_memory_plugin>";
+    const projection = createTextProjection([
+      {
+        transform: stripInboundMetadata,
+        create: createInboundMetadataStreamProjector,
+      },
+    ]);
+
+    expect(projection.append(source).text).toBe("");
+    const result = projection.append("x");
+
+    expect(result.text).toBe(stripInboundMetadata(`${source}x`));
+    expect(result.text).toContain("secret");
+  });
 
   it.each([
     "Conversation info: please ignore",

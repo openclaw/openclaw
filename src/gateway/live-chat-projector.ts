@@ -5,18 +5,18 @@ import {
   stripInternalRuntimeContext,
 } from "../agents/internal-runtime-context.js";
 import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives.js";
+import { inboundMetadataTextFilter } from "../auto-reply/reply/strip-inbound-meta.js";
 import { isRelativeAssistantMediaReference, splitMediaOutput } from "../media/parse-output.js";
 import { resolveAssistantEventPhase } from "../shared/chat-message-content.js";
+import { assistantVisibleTextFilters } from "../shared/text/assistant-visible-text.js";
 import {
+  applyTextFilters,
   createConditionalTextProjector,
   createTextProjection,
   type TextFilter,
   type TextProjection,
 } from "../shared/text/text-projection.js";
-import {
-  inlineDirectiveDisplayTextFilter,
-  stripInlineDirectiveTagsForDisplay,
-} from "../utils/directive-tags.js";
+import { inlineDirectiveDisplayTextFilter } from "../utils/directive-tags.js";
 import type { AssistantTextSnapshot } from "./agent-event-assistant-text.js";
 import { stripAssistantMediaDirectivesForDisplay } from "./chat-display-projection.helpers.js";
 
@@ -52,11 +52,7 @@ export function normalizeLiveAssistantBufferedText(
     managedMediaUrls?: readonly string[];
   },
 ): string {
-  const normalized = stripInternalRuntimeContext(stripInlineDirectiveTagsForDisplay(text).text);
-  return stripAssistantMediaDirectivesForDisplay(
-    options?.final ? normalized : stripPendingLiveAssistantTail(normalized),
-    options?.managedMediaUrls ?? [],
-  );
+  return applyTextFilters(text, createLiveAssistantTextFilters(options));
 }
 
 function stripPendingLiveAssistantTail(text: string): string {
@@ -109,13 +105,13 @@ const pendingLiveAssistantTailFilter: TextFilter = {
   },
 };
 
-/** One run-owned display chain; replacements rebuild every syntax and visibility probe. */
-export function createLiveAssistantTextProjection(options?: {
+function createLiveAssistantTextFilters(options?: {
   managedMediaUrls?: readonly string[];
   final?: boolean;
-}) {
+}): readonly TextFilter[] {
+  const streaming = options?.final !== true;
   const managedMediaUrls = [...(options?.managedMediaUrls ?? [])];
-  const projection = createTextProjection([
+  return [
     inlineDirectiveDisplayTextFilter,
     {
       activationTokens: [
@@ -125,17 +121,30 @@ export function createLiveAssistantTextProjection(options?: {
       ],
       transform: stripInternalRuntimeContext,
     },
-    ...(options?.final ? [] : [pendingLiveAssistantTailFilter]),
+    ...assistantVisibleTextFilters("live-chat", streaming),
+    inboundMetadataTextFilter(streaming, {
+      preserveBoundaryWhitespace: true,
+      withholdUnclosedActiveMemory: streaming,
+    }),
+    ...(streaming ? [pendingLiveAssistantTailFilter] : []),
     ...(managedMediaUrls.length
       ? [
           {
             activationTokens: ["MEDIA:"],
             transform: (text: string) =>
               stripAssistantMediaDirectivesForDisplay(text, managedMediaUrls),
-          },
+          } satisfies TextFilter,
         ]
       : []),
-  ]);
+  ];
+}
+
+/** One run-owned display chain; replacements rebuild every syntax and visibility probe. */
+export function createLiveAssistantTextProjection(options?: {
+  managedMediaUrls?: readonly string[];
+  final?: boolean;
+}) {
+  const projection = createTextProjection(createLiveAssistantTextFilters(options));
   const present = (result: TextProjection, replace = false) => {
     return {
       text: result.text,

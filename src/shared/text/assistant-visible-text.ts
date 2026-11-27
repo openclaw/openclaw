@@ -17,7 +17,9 @@ import {
   INTERNAL_TRACE_LINE_RE,
 } from "./assistant-text-transforms.js";
 import {
+  canReuseMarkdownOwnershipForAppend,
   findCodeRegions,
+  findCodeOwnership,
   isInsideSettledBlockCode,
   projectLinesOutsideCode,
 } from "./code-regions.js";
@@ -43,6 +45,7 @@ export type AssistantVisibleTextSanitizerProfile =
   | "final-answer-delivery"
   | "history"
   | "internal-scaffolding"
+  | "live-chat"
   | "tool-progress";
 
 const invisibleTextFilter: TextFilter = {
@@ -103,13 +106,17 @@ function createBoundedTagProjector(
   let rescanWhileSuppressed = false;
   let codeSyntax = false;
   let sourceTail = "";
-  const runCanonical = (source: string) => {
-    const projected = scan?.(source) ?? { text: transform(source) };
+  let rawSource = "";
+  let ownership: ReturnType<typeof findCodeOwnership> | undefined;
+  const runCanonical = (sourceText: string) => {
+    const projected = scan?.(sourceText) ?? { text: transform(sourceText) };
     text = projected.text;
     suppressRawAppends = projected.suppressRawAppends ?? false;
     rescanWhileSuppressed = projected.rescanWhileSuppressed ?? false;
-    codeSyntax ||= /[`~]|\t| {4}/u.test(source);
-    sourceTail = source.slice(-3);
+    codeSyntax ||= /[`~]|\t| {4}/u.test(sourceText);
+    sourceTail = sourceText.slice(-3);
+    rawSource = sourceText;
+    ownership = undefined;
   };
   const observe = (source: string) => {
     const joined = (probeTail + source).toLowerCase().replace(/\s+/g, " ");
@@ -143,6 +150,8 @@ function createBoundedTagProjector(
         rescanWhileSuppressed = false;
         codeSyntax = /[`~]|\t| {4}/u.test(input.text);
         sourceTail = input.text.slice(-3);
+        rawSource = input.text;
+        ownership = undefined;
         return input;
       }
       runCanonical(input.text);
@@ -152,6 +161,8 @@ function createBoundedTagProjector(
       observe(input.delta);
       if (!active) {
         text = input.text;
+        rawSource = input.text;
+        ownership = undefined;
         return input;
       }
       runCanonical(input.text);
@@ -160,17 +171,32 @@ function createBoundedTagProjector(
         /[`~]|\t| {4}/u.test(sourceTail + input.delta) ||
         (codeSyntax && /[\x5b\x5d()<>"'\\]/u.test(input.delta));
       codeSyntax ||= /[`~]|\t| {4}/u.test(sourceTail + input.delta);
+      const sourceChanged =
+        input.text.length !== rawSource.length + input.delta.length ||
+        !input.text.startsWith(rawSource);
+      const ownershipChanged =
+        sourceChanged ||
+        !canReuseMarkdownOwnershipForAppend(rawSource, input.delta) ||
+        (codeSyntax &&
+          !canReuseMarkdownOwnershipForAppend(
+            rawSource,
+            input.delta,
+            (ownership ??= findCodeOwnership(rawSource)),
+          ));
       if (
         rescanWhileSuppressed ||
         input.delta.includes("<") ||
         input.delta.includes(">") ||
-        codeChanged
+        codeChanged ||
+        ownershipChanged
       ) {
         runCanonical(input.text);
       } else if (!suppressRawAppends) {
         text += input.delta;
+        rawSource = input.text;
         sourceTail = input.text.slice(-3);
       } else {
+        rawSource = input.text;
         sourceTail = input.text.slice(-3);
       }
     }
@@ -208,16 +234,18 @@ export function assistantVisibleTextFilters(
     return cached;
   }
   const preserve = profile === "internal-scaffolding";
-  const preserveCodeIndentation = profile === "delivery" || profile === "final-answer-delivery";
+  const preserveCodeIndentation =
+    profile === "delivery" || profile === "final-answer-delivery" || profile === "live-chat";
   const trim =
-    preserve || profile === "history"
+    preserve || profile === "history" || profile === "live-chat"
       ? "none"
       : options?.preserveTrailingWhitespace
         ? "start"
         : "both";
+  const leadingDelivery = profile === "final-answer-delivery" || profile === "live-chat";
   const reasoning = reasoningTagTextFilter({
     mode: preserve ? "preserve" : "strict",
-    scope: profile === "final-answer-delivery" ? "leading" : "all",
+    scope: leadingDelivery ? "leading" : "all",
     // An unfinished stream cannot use terminal malformed-output recovery.
     recoverUnclosed: !streaming,
   });
@@ -243,8 +271,7 @@ export function assistantVisibleTextFilters(
     toolCallXmlTextFilter(
       {
         stripFunctionCallsXmlPayloads: profile === "tool-progress",
-        stripFunctionResponseAfterPluralToolCalls:
-          profile === "delivery" || profile === "final-answer-delivery",
+        stripFunctionResponseAfterPluralToolCalls: profile === "delivery" || leadingDelivery,
       },
       streaming,
     ),
@@ -254,7 +281,10 @@ export function assistantVisibleTextFilters(
     downgradedToolCallTextFilter(options),
   ];
   filters.push(reasoning);
-  filters.push(trimTextFilter(trim, { preserveCodeIndentation }), invisibleTextFilter);
+  filters.push(trimTextFilter(trim, { preserveCodeIndentation }));
+  if (profile !== "live-chat") {
+    filters.push(invisibleTextFilter);
+  }
   profileFilters.set(key, filters);
   return filters;
 }
