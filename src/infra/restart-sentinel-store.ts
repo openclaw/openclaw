@@ -13,6 +13,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { buildRestartSentinelRow } from "./restart-sentinel-row.js";
 import type { EngineConnection } from "./sql-connection.js";
 import { updateRecoverySchema } from "./update-recovery.js";
 import { UpdateFailureFactSchema } from "./update-run-schema.js";
@@ -234,7 +235,7 @@ function decodeRestartSentinelRowState(
   return sentinel ? { kind: "valid", sentinel } : { kind: "invalid", revision: row.updated_at_ms };
 }
 
-export function readRestartSentinelRowForKeySync(
+function readRestartSentinelRowForKeySync(
   db: EngineConnection,
   sentinelKey: string,
 ): RestartSentinelRowState {
@@ -263,7 +264,7 @@ function requireValidPayload(payload: RestartSentinelPayload): RestartSentinelPa
   return parsed;
 }
 
-export function nextRevision(currentRevision: number | null): number {
+function nextRevision(currentRevision: number | null): number {
   if (currentRevision !== null && !Number.isSafeInteger(currentRevision)) {
     throw new Error("Restart sentinel revision is outside the safe integer range");
   }
@@ -308,32 +309,6 @@ function maxRevision(left: number | null, right: number | null): number | null {
   return Math.max(left, right);
 }
 
-export function buildRestartSentinelRow(
-  payload: RestartSentinelPayload,
-  revision: number,
-  sentinelKey = RESTART_SENTINEL_KEY,
-) {
-  return {
-    sentinel_key: sentinelKey,
-    version: 1,
-    kind: payload.kind,
-    status: payload.status,
-    ts: payload.ts,
-    session_key: payload.sessionKey ?? null,
-    thread_id: payload.threadId ?? null,
-    delivery_channel: payload.deliveryContext?.channel ?? null,
-    delivery_to: payload.deliveryContext?.to ?? null,
-    delivery_account_id: payload.deliveryContext?.accountId ?? null,
-    message: payload.message ?? null,
-    continuation_json: payload.continuation ? JSON.stringify(payload.continuation) : null,
-    doctor_hint: payload.doctorHint ?? null,
-    stats_json: payload.stats ? JSON.stringify(payload.stats) : null,
-    // Debug shadow only. Reads reconstruct exclusively from typed columns above.
-    payload_json: JSON.stringify(payload),
-    updated_at_ms: revision,
-  };
-}
-
 function upsertRestartSentinelRowSync(
   db: EngineConnection,
   row: ReturnType<typeof buildRestartSentinelRow>,
@@ -366,7 +341,7 @@ export function writeRestartSentinelRowSync(
 ): RestartSentinel {
   const payload = requireValidPayload(rawPayload);
   const revision = nextRevision(previousRevision);
-  const row = buildRestartSentinelRow(payload, revision);
+  const row = buildRestartSentinelRow(payload, revision, RESTART_SENTINEL_KEY);
   upsertRestartSentinelRowSync(db, row);
   advanceRestartSentinelRevisionFloorSync(db, revision);
   return { version: 1, payload, revision };
@@ -568,7 +543,7 @@ export function writeRestartSentinelRowIfRevisionSync(
 ): RestartSentinel | null {
   const payload = requireValidPayload(rawPayload);
   const revision = nextRevision(maxRevision(expectedRevision, previousRevision));
-  const row = buildRestartSentinelRow(payload, revision);
+  const row = buildRestartSentinelRow(payload, revision, RESTART_SENTINEL_KEY);
   const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
   const result = executeSqliteQuerySync(
     db,

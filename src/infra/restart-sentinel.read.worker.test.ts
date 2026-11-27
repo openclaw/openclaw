@@ -4,7 +4,7 @@ import type { DB } from "../state/openclaw-state-db.generated.js";
 import { getOpenClawStateFeatureSchemaSql } from "../state/openclaw-state-feature-schema.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
-import { buildRestartSentinelRow } from "./restart-sentinel-store.js";
+import { buildRestartSentinelRow } from "./restart-sentinel-row.js";
 import { restartSentinelReadOperations } from "./restart-sentinel.read.worker.js";
 
 it.each([
