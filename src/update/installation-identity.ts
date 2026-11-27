@@ -14,9 +14,8 @@ import { resolveUpdateInstallKind } from "../infra/update-check.js";
 import { readBuiltGatewayBuildId } from "../infra/update-git-runtime.js";
 import { detectGlobalInstallManagerForRoot } from "../infra/update-global.js";
 import { resolveUpdateInstallRoot } from "../infra/update-install-root.js";
-import { captureManagedUpdateLeaseDatabaseIdentity } from "../infra/update-managed-service-handoff-database.js";
 import {
-  createManagedHandoffLeaseStore,
+  prepareManagedHandoffLeaseStore,
   resolveManagedUpdateLeaseDatabasePath,
 } from "../infra/update-managed-service-handoff-lease.js";
 import { resolveLegacyGatewayManagedUpdateLeaseDatabasePath } from "../infra/update-managed-service-handoff-legacy-store.js";
@@ -139,21 +138,19 @@ export async function checkUpdateInstallationSlot(
     if (!databasePath) {
       continue;
     }
-    let existingIdentity;
+    const store = await prepareManagedHandoffLeaseStore({
+      databasePath,
+      serviceManagerEnv: resolveServiceManagerEnv(env),
+    });
+    let observed;
     try {
-      existingIdentity = captureManagedUpdateLeaseDatabaseIdentity(databasePath);
+      observed = store.read(key);
     } catch (error) {
       if (hasErrnoCode(error, "ENOENT")) {
         continue;
       }
       throw error;
     }
-    const store = createManagedHandoffLeaseStore({
-      databasePath,
-      existingIdentity,
-      serviceManagerEnv: resolveServiceManagerEnv(env),
-    });
-    const observed = store.read(key);
     if (observed.kind === "absent") {
       continue;
     }

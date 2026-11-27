@@ -21,6 +21,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { VERSION } from "../version.js";
+import { checkUpdateInstallationSlot } from "./installation-identity.js";
 import { node, repository, root } from "./prepare.test-support.js";
 import { prepareUpdate } from "./run.js";
 import { createTrialPending, readTrial, resolvePrefix, switchLink, writeTrial } from "./store.js";
@@ -191,60 +192,77 @@ it("retires all foreign unfinished runs while preserving the serving trial's han
   }
 });
 
-it.each(["live-lease", "restore-directory"] as const)(
-  "leaves foreign runs untouched when %s refuses admission",
-  async (guard) => {
-    vi.stubEnv("HOME", root);
-    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
-    const { checkout } = await repository();
-    const target = vi
-      .spyOn(targets, "resolveTarget")
-      .mockRejectedValue(new Error("must not reach staging"));
-    let lease: ManagedHandoffLease | undefined;
-    let store: Awaited<ReturnType<typeof prepareManagedHandoffLeaseStore>> | undefined;
-    try {
-      const state = openOpenClawStateDatabase({ env: process.env });
-      const foreign = await createUpdateRunAsync({ trigger: "cli" });
-      const run = await createUpdateRunAsync({ trigger: "cli" });
-      if (guard === "restore-directory") {
-        await fs.mkdir(path.join(path.dirname(state.path), ".openclaw-restore-fixture"));
-      } else {
-        store = await prepareManagedHandoffLeaseStore({
-          databasePath: resolveManagedUpdateLeaseDatabasePath(),
-          serviceManagerEnv: resolveServiceManagerEnv(),
-        });
-        const acquired = store.acquire(resolveUpdateInstallRoot(checkout), "live-updater", {
+it.each([
+  "live-lease",
+  ...(process.platform === "win32" ? [] : (["readable-idle-lease"] as const)),
+  "restore-directory",
+] as const)("preserves foreign runs during slot admission with %s", async (guard) => {
+  vi.stubEnv("HOME", root);
+  vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+  const { checkout } = await repository();
+  const target = vi
+    .spyOn(targets, "resolveTarget")
+    .mockRejectedValue(new Error("must not reach staging"));
+  let lease: ManagedHandoffLease | undefined;
+  let store: Awaited<ReturnType<typeof prepareManagedHandoffLeaseStore>> | undefined;
+  try {
+    const state = openOpenClawStateDatabase({ env: process.env });
+    const foreign = await createUpdateRunAsync({ trigger: "cli" });
+    const run = await createUpdateRunAsync({ trigger: "cli" });
+    if (guard === "restore-directory") {
+      await fs.mkdir(path.join(path.dirname(state.path), ".openclaw-restore-fixture"));
+    } else {
+      store = await prepareManagedHandoffLeaseStore({
+        databasePath: resolveManagedUpdateLeaseDatabasePath(),
+        serviceManagerEnv: resolveServiceManagerEnv(),
+      });
+      if (guard === "readable-idle-lease") {
+        const databasePath = resolveManagedUpdateLeaseDatabasePath();
+        const acquired = store.acquire(resolveUpdateInstallRoot(checkout), "idle-updater", {
           kind: "update",
         });
         if (acquired.kind !== "acquired") {
-          throw new Error("The fixture did not acquire its live in-place lease");
+          throw new Error("The fixture did not initialize its in-place lease store");
         }
-        lease = acquired.lease;
+        expect(store.release(acquired.lease)).toBe(true);
+        await fs.chmod(databasePath, 0o644);
+        await expect(checkUpdateInstallationSlot(checkout, process.env)).resolves.toBeUndefined();
+        expect((await fs.stat(databasePath)).mode & 0o777).toBe(0o600);
+        expect(target).not.toHaveBeenCalled();
+        expect(await getUpdateRunAsync(foreign.runId)).toMatchObject({ status: "running" });
+        return;
       }
-      expect(
-        await prepareUpdate({
-          runId: run.runId,
-          runningRoot: checkout,
-          runningVersion: VERSION,
-          channel: "dev",
-          node,
-        }),
-      ).toMatchObject({ status: "failed" });
-      expect(target).not.toHaveBeenCalled();
-      expect(await getUpdateRunAsync(foreign.runId)).toMatchObject({ status: "running" });
-      expect(
-        (await getUpdateRunAsync(run.runId))?.steps.find((step) => step.step === "outcome")?.detail,
-      ).toContain(
-        guard === "live-lease"
-          ? "An in-place updater is still using this installation"
-          : "Interrupted shared-database publication",
-      );
-    } finally {
-      if (store && lease) {
-        expect(store.release(lease)).toBe(true);
+      const acquired = store.acquire(resolveUpdateInstallRoot(checkout), "live-updater", {
+        kind: "update",
+      });
+      if (acquired.kind !== "acquired") {
+        throw new Error("The fixture did not acquire its live in-place lease");
       }
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
+      lease = acquired.lease;
     }
-  },
-);
+    expect(
+      await prepareUpdate({
+        runId: run.runId,
+        runningRoot: checkout,
+        runningVersion: VERSION,
+        channel: "dev",
+        node,
+      }),
+    ).toMatchObject({ status: "failed" });
+    expect(target).not.toHaveBeenCalled();
+    expect(await getUpdateRunAsync(foreign.runId)).toMatchObject({ status: "running" });
+    expect(
+      (await getUpdateRunAsync(run.runId))?.steps.find((step) => step.step === "outcome")?.detail,
+    ).toContain(
+      guard === "live-lease"
+        ? "An in-place updater is still using this installation"
+        : "Interrupted shared-database publication",
+    );
+  } finally {
+    if (store && lease) {
+      expect(store.release(lease)).toBe(true);
+    }
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+  }
+});
