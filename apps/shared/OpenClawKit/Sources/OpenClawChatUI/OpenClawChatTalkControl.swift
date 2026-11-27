@@ -8,11 +8,6 @@ public struct OpenClawChatAudioInputDevice: Equatable, Identifiable, Sendable {
     }
 }
 
-public enum OpenClawCameraFacingSelection: String, Equatable, Sendable {
-    case back
-    case front
-}
-
 /// Where a live voice conversation is. The app's Talk owner decides it; the composer only shows it.
 public enum OpenClawChatTalkPhase: Equatable, Sendable {
     /// Talk is on but not listening yet: permissions, setup, reconnecting.
@@ -54,8 +49,6 @@ public struct OpenClawChatTalkControl {
     public var inputDevices: [OpenClawChatAudioInputDevice]
     public var selectedInputDeviceID: String?
     public var selectInputDevice: (@MainActor (_ deviceID: String?) -> Void)?
-    public var cameraFacing: OpenClawCameraFacingSelection?
-    public var flipCamera: (@MainActor () -> Void)?
     /// Opens the app's page in Settings, offered when an access issue stops Talk.
     public var openSettings: (@MainActor () -> Void)?
     public var toggle: @MainActor (_ sessionKey: String) -> Void
@@ -80,8 +73,6 @@ public struct OpenClawChatTalkControl {
         inputDevices: [OpenClawChatAudioInputDevice] = [],
         selectedInputDeviceID: String? = nil,
         selectInputDevice: (@MainActor (_ deviceID: String?) -> Void)? = nil,
-        cameraFacing: OpenClawCameraFacingSelection? = nil,
-        flipCamera: (@MainActor () -> Void)? = nil,
         openSettings: (@MainActor () -> Void)? = nil,
         toggle: @escaping @MainActor (_ sessionKey: String) -> Void)
     {
@@ -101,8 +92,6 @@ public struct OpenClawChatTalkControl {
         self.inputDevices = inputDevices
         self.selectedInputDeviceID = selectedInputDeviceID
         self.selectInputDevice = selectInputDevice
-        self.cameraFacing = cameraFacing
-        self.flipCamera = flipCamera
         self.openSettings = openSettings
         self.toggle = toggle
     }

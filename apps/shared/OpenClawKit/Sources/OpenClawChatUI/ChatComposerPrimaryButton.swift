@@ -151,7 +151,7 @@ extension OpenClawChatComposer {
     }
     #endif
 
-    private var isLocalVoiceCaptureActive: Bool {
+    var isLocalVoiceCaptureActive: Bool {
         self.dictationTask != nil ||
             self.dictationControl?.isActive == true ||
             self.voiceNoteControl?.recorder.isRecording == true ||

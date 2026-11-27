@@ -528,17 +528,15 @@ struct ChatProTab: View {
             selectInputDevice: { deviceID in
                 appModel.talkMode.selectInputDevice(deviceID)
             },
-            cameraFacing: appModel.preferredCameraFacing == .front ? .front : .back,
-            flipCamera: {
-                appModel.flipPreferredCameraFacing()
-            },
             openSettings: {
                 if let url = URL(string: UIApplication.openSettingsURLString) {
                     UIApplication.shared.open(url)
                 }
             },
             toggle: { sessionKey in
-                appModel.focusChatSession(sessionKey)
+                if !appModel.talkMode.isEnabled {
+                    appModel.focusChatSession(sessionKey)
+                }
                 appModel.setTalkEnabled(!appModel.talkMode.isEnabled)
             })
     }

@@ -135,15 +135,16 @@ extension OpenClawChatComposer {
     var cleanTrailingControls: some View {
         #if os(iOS)
         // Larger accessibility text gets its own row; at standard sizes only the name truncates.
-        if self.dynamicTypeSize.isAccessibilitySize, !self.cleanShowsCameraFlip {
+        if self.dynamicTypeSize.isAccessibilitySize {
             self.cleanStackedControls
         } else {
-            self.cleanInlineControls(compactModel: false)
+            self.cleanInlineControls(compactModel: false, showsSessionSettings: true)
         }
         #else
         ViewThatFits(in: .horizontal) {
-            self.cleanInlineControls(compactModel: false)
-            self.cleanInlineControls(compactModel: true)
+            self.cleanInlineControls(compactModel: false, showsSessionSettings: true)
+            self.cleanInlineControls(compactModel: true, showsSessionSettings: true)
+            self.cleanInlineControls(compactModel: true, showsSessionSettings: false)
         }
         #endif
     }
@@ -174,20 +175,21 @@ extension OpenClawChatComposer {
     }
     #endif
 
-    private func cleanInlineControls(compactModel: Bool) -> some View {
+    private func cleanInlineControls(compactModel: Bool, showsSessionSettings: Bool) -> some View {
         // Each control owns its visual padding and touch target; only the model name can compress.
         HStack(spacing: 0) {
             #if !os(iOS)
             self.cleanContextUsageMenu
             #endif
-            // Camera switching only displaces settings in the compact iOS footer.
             #if os(iOS)
-            if !self.cleanShowsCameraFlip { self.cleanPhoneModelControls }
+            self.cleanPhoneModelControls
             #elseif os(macOS)
-            self.cleanInlineModelPicker(compact: compactModel)
-            self.cleanInlineEffortMenu
+            if showsSessionSettings {
+                self.cleanInlineModelPicker(compact: compactModel)
+                self.cleanInlineEffortMenu
+            }
             #else
-            if !self.cleanShowsCameraFlip {
+            if showsSessionSettings {
                 self.cleanInlineModelPicker(compact: compactModel)
                 self.cleanInlineEffortMenu.padding(.trailing, -CleanChatComposerMetrics.effortTrailingPadding)
             }
@@ -537,19 +539,23 @@ extension OpenClawChatComposer {
                 })
         }
 
-        if let talkControl, self.cleanShowsCameraFlip {
-            ChatCameraFlipButton(
+        if let talkControl,
+           Self.showsSeparateActiveTalkControl(
+               isTalkEnabled: talkControl.isEnabled,
+               hasDraftToSend: self.viewModel.hasDraftToSend,
+               hasBlockingRunActivity: self.viewModel.hasBlockingRunActivity,
+               isLocalVoiceCaptureActive: self.isLocalVoiceCaptureActive)
+        {
+            ChatTalkButton(
                 control: talkControl,
-                controlHeight: self.cleanControlHeight,
-                visualSize: self.cleanIconControlSize)
+                sessionKey: self.viewModel.sessionKey,
+                helpText: self.talkHelpText(talkControl),
+                style: .compact(
+                    controlHeight: self.cleanControlHeight,
+                    iconControlSize: self.cleanIconControlSize))
         }
 
         self.cleanTrailingControl
-    }
-
-    private var cleanShowsCameraFlip: Bool {
-        guard let talkControl = self.talkControl else { return false }
-        return ChatCameraFlipButton.isAvailable(for: talkControl)
     }
 }
 

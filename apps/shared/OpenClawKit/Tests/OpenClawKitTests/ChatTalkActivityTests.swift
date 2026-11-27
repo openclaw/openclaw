@@ -19,13 +19,10 @@ struct ChatTalkControlTests {
         #expect(control.inputDevices.isEmpty)
         #expect(control.selectedInputDeviceID == nil)
         #expect(control.selectInputDevice == nil)
-        #expect(control.cameraFacing == nil)
-        #expect(control.flipCamera == nil)
     }
 
     @Test func `feedback and input selection fields preserve supplied values`() {
         var selectedID: String? = "unchanged"
-        var flipCount = 0
         let devices = [OpenClawChatAudioInputDevice(id: "mic-1", name: "Desk Mic")]
         var control = OpenClawChatTalkControl(
             isEnabled: true,
@@ -40,12 +37,9 @@ struct ChatTalkControlTests {
             inputDevices: devices,
             selectedInputDeviceID: "mic-1",
             selectInputDevice: { selectedID = $0 },
-            cameraFacing: .back,
-            flipCamera: { flipCount += 1 },
             toggle: { _ in })
 
         control.selectInputDevice?(nil)
-        control.flipCamera?()
 
         #expect(control.level == 0.6)
         #expect(control.partialTranscript == "hello")
@@ -53,8 +47,6 @@ struct ChatTalkControlTests {
         #expect(control.inputDevices == devices)
         #expect(control.selectedInputDeviceID == "mic-1")
         #expect(selectedID == nil)
-        #expect(control.cameraFacing == .back)
-        #expect(flipCount == 1)
         #expect(control.resolvedLevel == 0.6)
         control.level = 0.3
         #expect(control.resolvedLevel == 0.3)

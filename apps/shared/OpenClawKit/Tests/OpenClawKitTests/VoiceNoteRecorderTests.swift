@@ -385,6 +385,27 @@ final class VoiceNoteRecorderTests: XCTestCase {
             hasDraftToSend: false,
             hasBlockingRunActivity: true,
             isLocalVoiceCaptureActive: false))
+
+        XCTAssertFalse(OpenClawChatComposer.showsSeparateActiveTalkControl(
+            isTalkEnabled: false,
+            hasDraftToSend: false,
+            hasBlockingRunActivity: true,
+            isLocalVoiceCaptureActive: false))
+        XCTAssertFalse(OpenClawChatComposer.showsSeparateActiveTalkControl(
+            isTalkEnabled: true,
+            hasDraftToSend: false,
+            hasBlockingRunActivity: false,
+            isLocalVoiceCaptureActive: false))
+        XCTAssertTrue(OpenClawChatComposer.showsSeparateActiveTalkControl(
+            isTalkEnabled: true,
+            hasDraftToSend: false,
+            hasBlockingRunActivity: true,
+            isLocalVoiceCaptureActive: false))
+        XCTAssertTrue(OpenClawChatComposer.showsSeparateActiveTalkControl(
+            isTalkEnabled: true,
+            hasDraftToSend: true,
+            hasBlockingRunActivity: false,
+            isLocalVoiceCaptureActive: false))
     }
 
     @MainActor

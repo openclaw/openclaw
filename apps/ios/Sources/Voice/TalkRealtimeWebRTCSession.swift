@@ -270,6 +270,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
         self.assistantAudioFinishTask?.cancel()
         self.assistantAudioFinishTask = nil
         self.stopped = false
+        self.preserveRunsOnStop = false
         self.peerReady = false
         self.liveCaptionBuffer.reset()
         self.resetTranscriptOrder()
@@ -346,10 +347,12 @@ final class TalkRealtimeWebRTCSession: NSObject {
         self.observeReadiness()
     }
 
-    func stop(preserveRuns: Bool = false) {
+    func stop(preserveRuns: Bool = true) {
         let shouldNotify = !self.stopped
+        if !self.stopped {
+            self.preserveRunsOnStop = preserveRuns
+        }
         self.stopped = true
-        self.preserveRunsOnStop = self.preserveRunsOnStop || preserveRuns
         self.peerReady = false
         self.finishReadiness(error: CancellationError())
         self.liveCaptionBuffer.reset()
@@ -408,7 +411,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
         }
     }
 
-    private func cancelActiveToolCalls(preserveRuns: Bool = false) {
+    private func cancelActiveToolCalls(preserveRuns: Bool = true) {
         let runs = Array(activeToolRuns.values)
         for task in self.activeToolTasks.values {
             task.cancel()
