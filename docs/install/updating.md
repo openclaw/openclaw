@@ -427,6 +427,13 @@ database objects, catalog snapshots, or queried row values.
 Add a note here when a change alters a contract. A note about the in-place update
 flow names the shipped-updater contract or unmoved route that it serves.
 
+The release CLI uses one client deadline for Gateway requests, status polling,
+restart requests, and a capability-consent retry through a replacement Gateway.
+Expiry stops client work and joins connection cleanup; it does not cancel an
+accepted server update or invalidate a published trial. Run `openclaw update status`
+before retrying an unconfirmed request. Preparation and installed-package delegation
+retain their own lifecycle budgets. The installed CLI must contain this repair.
+
 Gateway post-ready maintenance and `openclaw update repair` refresh the known
 legacy Git launcher from development build `d44f263`, which incorrectly counted
 `gateway status` as a start. The candidate must contain this repair. It applies
