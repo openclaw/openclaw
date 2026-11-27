@@ -52,6 +52,7 @@ export type ResolvedOpenAICompletionsCompat = Omit<
   | "sendSessionAffinityHeaders"
   | "reasoningEffortMap"
   | "supportedReasoningEfforts"
+  | "seedField"
 > &
   Pick<OpenAICompletionsCompat, "reasoningEffortMap" | "supportedReasoningEfforts"> & {
     cacheControlFormat?: OpenAICompletionsCompat["cacheControlFormat"];
@@ -60,6 +61,8 @@ export type ResolvedOpenAICompletionsCompat = Omit<
     visibleReasoningDetailTypes: string[];
     configuredSupportsLongCacheRetention?: boolean;
     thinkingOffControlUndeclared: boolean;
+    /** Absent means `seed`. */
+    seedField?: OpenAICompletionsSeedField;
   };
 
 function isDefaultRouteProvider(provider: string | undefined, ...ids: string[]) {
