@@ -1,6 +1,6 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import {
