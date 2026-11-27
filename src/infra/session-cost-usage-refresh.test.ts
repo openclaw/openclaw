@@ -492,6 +492,7 @@ test.for(["completes", "slow", "cancelled", "rollback"] as const)(
 );
 
 test("returns the committed overview while its refresh is still pending", async ({
+  signal,
   usage: { agentId, files, refresh, hold, request, newScope },
 }) => {
   const refreshOwner = newScope();
@@ -499,7 +500,6 @@ test("returns the committed overview while its refresh is still pending", async 
   refresh.mockReturnValue(release.promise);
   request({ sessionFiles: [files[0]] }, refreshOwner);
   await tick(0, 1);
-  const settled = vi.fn();
   const reading = newScope().track(() =>
     loadOverview({
       config,
@@ -509,14 +509,13 @@ test("returns the committed overview while its refresh is still pending", async 
       endMs: Date.UTC(2026, 8, 19) - 1,
     }),
   );
-  void reading.then(settled, settled);
-  // A report must return its explicit partial state without waiting for a transcript scan.
-  await vi.waitFor(() => expect(settled).toHaveBeenCalled(), { timeout: 1_000 });
-  expect(await reading).toMatchObject({
+  // Wait for the real worker without advancing fake time. The scan stays held until teardown.
+  expect(await withinTest(reading, signal)).toMatchObject({
     computing: [true],
     summarizing: 1,
     cacheStatus: { status: "refreshing", pendingFiles: 1 },
   });
+  expect(refreshOwner.hasPendingWork).toBe(true);
   expect(refreshOwner.signal.aborted).toBe(false);
 });
 
