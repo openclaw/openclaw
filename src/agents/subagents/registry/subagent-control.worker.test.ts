@@ -19,7 +19,6 @@ import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../../conf
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import * as sessions from "../../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
-import { abortControlledSubagents } from "../../../gateway/server-methods/chat-abort-descendants.js";
 import { emitAgentEvent } from "../../../infra/agent-events.js";
 import { resetSystemEventsForTest } from "../../../infra/system-events.js";
 import * as pluginHooks from "../../../plugins/hook-runner-global.js";
@@ -43,6 +42,7 @@ import {
   setSubagentAnnounceDeliveryDepsForTest,
   type SubagentAnnounceDeliveryTestDeps,
 } from "../announce/subagent-announce-overrides.test-support.js";
+import { abortControlledSubagents } from "../cancel-descendants.js";
 import { resolveStoredSubagentCapabilities } from "../spawn/subagent-capabilities.js";
 import { withPreparedSessionCapabilityRead } from "../spawn/subagent-session-store.js";
 import { holdQueuedSwarmRun, releaseSwarmRun, reserveSwarmRun } from "../swarm/swarm-scheduler.js";

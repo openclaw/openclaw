@@ -8,6 +8,10 @@ import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.
 import { reserveSubagentCompletionControllerSource } from "../announce/subagent-announce-controller-source.js";
 import { loadSessionEntryByKey } from "../announce/subagent-announce-delivery.runtime.js";
 import {
+  acceptsAnnounceDeliveryResult,
+  resolveAnnounceCleanupOutcome,
+} from "../announce/subagent-announce-obligation.js";
+import {
   matchesSubagentChildSessionOwner,
   resolveRecordedRequester,
   resolveSubagentChildAgentId,
@@ -50,6 +54,7 @@ import {
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { observeSubagentRequesterDelivery } from "./subagent-requester-delivery.js";
 import { hasRequesterCompletionCohort } from "./subagent-requester-settle-identity.js";
+import { hasRequesterTurnYielded } from "./subagent-requester-turn-custody.js";
 import { isClaimedByLiveRequesterTurn } from "./subagent-requester-turn-liveness.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
@@ -322,11 +327,11 @@ export const startSubagentAnnounceCleanupFlow = (
   const requesterSettleGeneration = entry.requesterSettleWake?.rearmGeneration;
   const requesterOwnsCompletion = () => {
     assertCurrent();
-    return entry.requesterTurnYielded === true || hasRequesterCompletionCohort(entry);
+    return hasRequesterTurnYielded(entry) || hasRequesterCompletionCohort(entry);
   };
   // Existing cohort ownership blocks competing sends but does not settle this attempt's delivery.
   const requesterTookCompletion = (current: SubagentRunRecord) =>
-    current.requesterTurnYielded === true ||
+    hasRequesterTurnYielded(current) ||
     (current.completionTarget === "parent" &&
       current.requesterSettleWake?.requesterYieldBatch === true) ||
     current.requesterSettleWake?.rearmGeneration !== requesterSettleGeneration;
@@ -383,7 +388,10 @@ export const startSubagentAnnounceCleanupFlow = (
       context,
       entry,
       cleanup,
-      shouldCreditPriorDelivery ? "delivered" : handedOff ? "requester_waiting" : announceOutcome,
+      resolveAnnounceCleanupOutcome(announceOutcome, {
+        delivered: shouldCreditPriorDelivery,
+        handedOff,
+      }),
       cleanupGeneration,
       stateContext,
     );
@@ -455,21 +463,22 @@ export const startSubagentAnnounceCleanupFlow = (
         return;
       }
       assertCurrent();
-      // A stale announce cannot replace a delivery already committed by requester-settle.
-      if (entry.delivery?.status === "delivered") {
-        return;
-      }
       const delivery = resolveRequesterDeliveryOutcome([entry], observedDelivery);
-      // A late failure cannot rearm an announcement transferred to the batch.
-      // Committed sends still retain their delivery evidence.
-      if (!delivery.delivered && requesterTookCompletion(entry)) {
+      if (
+        !acceptsAnnounceDeliveryResult(delivery, {
+          delivered: entry.delivery?.status === "delivered",
+          handedOff: requesterTookCompletion(entry),
+        })
+      ) {
         return;
       }
       await commit(
         (draft, previous) => {
           if (
-            draft.delivery?.status === "delivered" ||
-            (!delivery.delivered && requesterTookCompletion(draft))
+            !acceptsAnnounceDeliveryResult(delivery, {
+              delivered: draft.delivery?.status === "delivered",
+              handedOff: requesterTookCompletion(draft),
+            })
           ) {
             return false;
           }

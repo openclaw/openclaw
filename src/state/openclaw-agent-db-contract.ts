@@ -66,6 +66,14 @@ export type OpenClawAgentDatabaseRepairAdmission = {
   assertCurrent?: () => void;
 };
 
+export type AgentLeaseRowIdentity = {
+  leaseId: string;
+  agentId: string;
+  path: string;
+  ownerPid: number;
+  ownerStartTime: number | null;
+};
+
 /** Shared-state registry row describing an agent database seen by this process. */
 export type OpenClawRegisteredAgentDatabase = {
   agentId: string;

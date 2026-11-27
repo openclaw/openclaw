@@ -300,6 +300,15 @@ export async function prepareDoctorStateSchema(
   return receipt;
 }
 
+/** Read-only: whether {@link repairDoctorStateDatabase} would change the state database. */
+export async function checkDoctorStateDatabaseRepairPending(
+  integrityCheck: "quick" | "full",
+): Promise<DoctorMaintenancePending> {
+  const { checkOpenClawStateDatabaseRepairPending } =
+    await import("../state/openclaw-state-db-repair-pending.js");
+  return checkOpenClawStateDatabaseRepairPending({ env: process.env, integrityCheck });
+}
+
 export async function repairDoctorStateDatabase(
   runtime: RuntimeEnv,
   integrityCheck: "quick" | "full",
@@ -324,6 +333,48 @@ export async function repairDoctorStateDatabase(
     }
   }
   return repairedState;
+}
+
+/**
+ * Read-only: whether {@link prepareDoctorRuntimeChecks} would write. Its notes (source
+ * install, plugin runtime links, NOCOW inspection, startup hints) never write; the
+ * deletion journal, Control UI assets and the Bun and pnpm launchers answer for themselves.
+ * Under an updater's migration capture it reopens the state database for Doctor.
+ */
+export async function checkDoctorRuntimeChecksPending(
+  preflight: DoctorDatabasePreflight,
+  root: string | null,
+  prompter: Pick<DoctorPrompter, "repairMode">,
+): Promise<DoctorMaintenancePending> {
+  const [{ getOpenClawDatabaseMaintenanceScope }, { hasUpdateDoctorMigrationCapture }] =
+    await Promise.all([
+      import("../state/openclaw-state-maintenance-context.js"),
+      import("../infra/update-doctor-migration-context.js"),
+    ]);
+  if (
+    getOpenClawDatabaseMaintenanceScope()?.ownsSchemaMaintenance &&
+    hasUpdateDoctorMigrationCapture()
+  ) {
+    return "undecidable";
+  }
+  const [
+    { checkDoctorAgentDeletionJournalPending },
+    { checkUiProtocolFreshnessPending },
+    { checkBunCliLauncherPending },
+    { hasPublishedPnpmLauncherRepairWork },
+  ] = await Promise.all([
+    import("../commands/doctor-agent-deletion-journal.js"),
+    import("../commands/doctor-ui.js"),
+    import("../commands/doctor-bun-cli-launcher.js"),
+    import("../infra/update-launcher-repair.js"),
+  ]);
+  const answers = new Set<DoctorMaintenancePending>([
+    checkDoctorAgentDeletionJournalPending({ preflight, env: process.env }),
+    await checkUiProtocolFreshnessPending(prompter.repairMode),
+    checkBunCliLauncherPending({ root, prompter }),
+    root && (await hasPublishedPnpmLauncherRepairWork({ root })) ? "work" : "none",
+  ]);
+  return answers.has("work") ? "work" : answers.has("undecidable") ? "undecidable" : "none";
 }
 
 export async function prepareDoctorRuntimeChecks(

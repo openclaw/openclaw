@@ -28,10 +28,12 @@ it("publishes mutable agent state", async () => {
   const original = state.read();
   expect(original.agentsList).toBeNull();
   source.publish({ ...source.gateway.snapshot, client, phase: "connected" });
-  await agents.ensureList();
+  const loading = agents.ensureList();
+  changed.mockClear();
+  await loading;
   expect(state.read()).toBe(original);
   expect(state.read().agentsList?.agents).toEqual([{ id: "main" }]);
-  expect(changed).toHaveBeenCalled();
+  expect(changed).toHaveBeenCalledOnce();
 });
 
 it("invalidates channel state on the real connection boundary", () => {

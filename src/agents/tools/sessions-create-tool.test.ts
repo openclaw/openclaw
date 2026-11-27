@@ -73,6 +73,7 @@ describe("sessions_create", () => {
     expect(params).toMatchObject({ task: "draft the notes", parentSessionKey: channelKey });
     expect(creation).toMatchObject({
       via: "spawn",
+      createdIndependently: true,
       actor: { type: "agent", id: "main" },
       requesterSessionKey: channelKey,
     });

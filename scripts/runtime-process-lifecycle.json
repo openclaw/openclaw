@@ -37,6 +37,46 @@
       "memory": { "scope": "worker-heap", "expectedMiB": null }
     }
   },
+  "pluginModelCatalogRead": {
+    "pooledReads": {
+      "owner": "src/agents/plugin-model-catalog-read.ts",
+      "start": "lazy",
+      "retire": "Retire after one idle minute, extended to five minutes after adaptive reuse. Memory pressure can retire idle workers sooner. Close the pool when its source generation retires or the process shuts down.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    },
+    "leanHosted": {
+      "owner": "src/infra/shared-worker-host.ts",
+      "start": "lazy",
+      "retire": "Follow the read pool's retirement policy and await endpoint cleanup. The last endpoint joins the host. Failed stops or missed acknowledgements force host retirement.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    },
+    "startupPublication": {
+      "owner": "src/gateway/server-startup-model-runtime.ts",
+      "start": "eager",
+      "retire": "Read existing plugin catalogs during configured startup publication when needed. Use the same pooled or lean-hosted reader and its retirement policy.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    }
+  },
+  "preparedModelCatalog": {
+    "gatewayShared": {
+      "owner": "src/agents/prepared-model-catalog-worker.ts",
+      "start": "lazy",
+      "retire": "Retain the singleton for the Gateway plugin generation with no idle timeout. Drain retiring borrowers independently. Close the worker on generation retirement, worker failure, or shutdown.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    },
+    "gatewayConfiguredRefresh": {
+      "owner": "src/agents/prepared-model-runtime.refresh-scope.ts",
+      "start": "eager",
+      "retire": "Reuse the Gateway singleton for due provider discovery after configured owners publish. Headless startup defers its first discovery until demand. Follow the shared pool's retirement policy.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    },
+    "ownerScoped": {
+      "owner": "src/agents/prepared-model-catalog-worker.ts",
+      "start": "lazy",
+      "retire": "Retain the worker without an idle timeout. On owner retirement or shutdown, drain pending captures, join the worker, and release its watch channel and captured source.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    }
+  },
   "sessionTranscript": {
     "pooledRequests": {
       "owner": "src/config/sessions/session-transcript-worker-resources.ts",
