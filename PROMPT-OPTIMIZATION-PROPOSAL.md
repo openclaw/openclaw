@@ -51,12 +51,15 @@ We've been using the general transient-turn approach in our Discord deployments 
 
 If upstream chooses not to adopt them, that's fine. We will continue benefiting from and developing them ourselves. We're sharing this work because the wider OpenClaw community could benefit too.
 
-## Our manifesto: human-level intelligence and memory on a 32k context window
+## Our manifesto: human-level conversational intelligence and memory within 32k
 
-Our ambition is to build an OpenClaw agent capable of human-level conversational intelligence, useful long-term memory and sound judgment within a 32,768-token context window, running on consumer hardware.
+Our goal is a capable OpenClaw agent running on consumer hardware, with the following engineering targets:
 
-Why should an intelligent agent need hundreds of thousands of tokens of continuously replayed history merely to hold a coherent conversation? Humans do not keep every past interaction in their immediate working memory. They retain what matters, recall relevant information when needed and discard irrelevant detail. An effective agent should aspire to the same principles: durable memory, selective retrieval, compact current context and stable model state.
+- **32,768-token context window:** remain useful within this budget, rather than relying on ever-larger windows.
+- **Under 100 tokens of average net prompt growth per ordinary short chat exchange:** preserve genuine conversation, not repeated bookkeeping.
+- **Under 500 fresh input tokens per typical warm short-chat request:** reuse stable context and minimize unnecessary prefill.
+- **Under 4,096 tokens of fixed system/bootstrap context for a lightweight conversational agent:** retain applicable instructions and security boundaries.
+- **Long-term memory:** retrieve relevant facts and past interactions on demand rather than replaying the entire conversation.
+- **Human-level conversational judgment:** remember relevant details, distinguish speakers, and know when to speak or stay silent.
 
-A larger context window is a useful capability, not a substitute for good context engineering. Our goal is to make smaller models genuinely useful, make larger models more efficient and make capable agents accessible without requiring expensive infrastructure or constantly expanding inference budgets.
-
-32k is our engineering target, not a claim that human-level intelligence or memory has already been achieved.
+These are proposed targets, not achieved benchmarks. Bigger context windows are not a substitute for better context engineering.
