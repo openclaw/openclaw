@@ -71,20 +71,25 @@ const descriptions = async (input = request(), watch = true) =>
   );
 const write = (description: string, dir = workspace, relative = "skills/guide") =>
   writeSkill({ dir: path.join(dir, relative), name: path.basename(relative), description });
-async function waitForLiveWatch(skillDirectory: string, workspaceDir = workspace) {
-  const version = getSkillsResourceVersion(workspaceDir);
-  const marker = path.join(skillDirectory, ".watch-ready");
+async function waitForLiveWatch(directory: string, workspaceDir = workspace) {
+  const tasks = vi.spyOn(WorkerTaskPool.prototype, "run");
+  const marker = path.join(directory, ".watch-ready");
   // Native registration can miss startup writes. Establish the live stream before
   // the single edit under test; missed events are covered by safety reconciliation.
-  // Only changed synced bytes publish a resource revision, so each pulse differs.
-  let pulses = 0;
-  const pulse = setInterval(() => writeFileSync(marker, String(++pulses)), 100);
+  // A marker changes no synced skill bytes, so wait for this workspace's passive scan.
+  const scanned = () =>
+    tasks.mock.calls.some(([input]) => {
+      const serialized = JSON.stringify(input);
+      return (
+        serialized.includes('"kind":"scan"') && serialized.includes(JSON.stringify(workspaceDir))
+      );
+    });
+  const pulse = setInterval(() => writeFileSync(marker, "ready"), 100);
   try {
-    await expect
-      .poll(() => getSkillsResourceVersion(workspaceDir), { timeout: 10_000 })
-      .toBeGreaterThan(version);
+    await expect.poll(scanned, { timeout: 10_000 }).toBe(true);
   } finally {
     clearInterval(pulse);
+    tasks.mockRestore();
     await fs.rm(marker, { force: true });
   }
 }
@@ -206,8 +211,8 @@ it("discovers external edits without waiting for a periodic scan and shares one 
   await write("Other original", other);
   expect(await descriptions()).toEqual(["Original"]);
   expect(await descriptions(request(other))).toEqual(["Other original"]);
-  await waitForLiveWatch(path.join(workspace, "skills", "guide"));
-  await waitForLiveWatch(path.join(other, "skills", "guide"), other);
+  await waitForLiveWatch(path.join(workspace, "skills"));
+  await waitForLiveWatch(path.join(other, "skills"), other);
   expect(discoveryPools()).toEqual([expect.objectContaining({ workerCount: 1 })]);
   await write("First");
   await write("Final");
