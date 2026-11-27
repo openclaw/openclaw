@@ -56,12 +56,13 @@ import {
   recordUpdateRunDiagnostics,
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
+import { withUpdateRunRead } from "../../infra/update-run-read-admission.js";
 import type { UpdateRunRecord, UpdateRunStep } from "../../infra/update-run-record.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
-import { isUpdateRecoveryPending } from "../../infra/update-run-recovery-schema.js";
+import { UPDATE_RECOVERY_KEY_PREFIX } from "../../infra/update-run-recovery-keys.js";
+import { inspectUpdateRecovery } from "../../infra/update-run-recovery-schema.js";
 import { loadPluginCohortRecovery } from "../../infra/update-run-recovery-store.js";
 import {
-  inspectUpdateRecoveries,
   assertPluginCohortRecoveryContinuation,
   loadUpdateRecovery,
   type UpdateRecoveryFence,
@@ -80,6 +81,7 @@ import {
 } from "../../infra/update-system-package-ownership.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { defaultRuntime } from "../../runtime.js";
+import { readConfigMachineStateRowInDatabase } from "../../state/config-machine-state-row.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership-preflight.js";
 import { VERSION } from "../../version.js";
@@ -429,8 +431,13 @@ export function completeUpdateCommandRun(
   }
   // A process-local result cannot complete an operationally pending update or
   // authorize package retirement. Only the durable finalizer may close it.
-  const recoveries = inspectUpdateRecoveries({ env: run.env });
-  const inspected = recoveries.find((entry) => entry.record.runId === run.runId);
+  const inspected = withUpdateRunRead(
+    ({ db }) => {
+      const row = readConfigMachineStateRowInDatabase(db, UPDATE_RECOVERY_KEY_PREFIX + run.runId);
+      return row ? inspectUpdateRecovery(row.value_json, run.runId) : undefined;
+    },
+    { env: run.env },
+  );
   // A matching historical record only projects its saved outcome. Execution
   // remains strict, while unrelated completed history grants no authority.
   const recovery =
@@ -455,9 +462,6 @@ export function completeUpdateCommandRun(
           : (result.reason ?? "update-recovery-pending"),
       runId: run.runId,
     });
-  }
-  if (!ownPluginCohortPending && recoveries.some(({ record }) => isUpdateRecoveryPending(record))) {
-    return { ...result, status: "error", reason: "update-recovery-pending", runId: run.runId };
   }
   const recordOptions = { ...run, redactPaths: result.root ? [result.root] : [] };
   // Both finalization and outer CLI unwind come here. A verified restored generation

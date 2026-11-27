@@ -20,7 +20,6 @@ import {
 import { createUpdateRun, finishUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { legacyRecord } from "../../infra/update-run-recovery-legacy.test-support.js";
 import {
-  inspectUpdateRecoveries,
   loadUpdateRecovery,
   UpdateRecoveryRequiredError,
 } from "../../infra/update-run-recovery.js";
@@ -250,21 +249,6 @@ describe("historical terminal completion diagnostics", () => {
       }
     },
   );
-
-  it("keeps pending legacy history separate from fallback completion", async () => {
-    const f = await historical(false, false);
-    const other = createUpdateRun({ trigger: "cli" }, f.options);
-    closeOpenClawStateDatabaseForTest();
-    const before = await f.family();
-    const result = completeUpdateCommandRun(resultFixture(undefined, { durationMs: 1 }), {
-      runId: other.runId,
-      env: f.run.env,
-    });
-    expect(result).toMatchObject({ status: "error", reason: "update-recovery-pending" });
-    await f.expectUnchanged(before);
-    expect(getUpdateRun(other.runId, f.options)?.status).toBe("running");
-    expect(inspectUpdateRecoveries(f.options)[0]?.raw).toBe(f.saved);
-  });
 });
 
 async function readPreviousConfig(env: NodeJS.ProcessEnv) {
@@ -513,15 +497,11 @@ it("refuses checkpoint recovery before package mutation and preserves the primar
   expect(getUpdateRun(f.run.runId, f.options)?.status).toBe("running");
 });
 
-it.each(["lost context", "lost run", "interrupted displacement"] as const)(
+it.each(["lost context", "interrupted displacement"] as const)(
   "does not reinterpret %s as permission for package rollback",
   async (change) => {
     const f = await checkpointRollbackFixture();
     f.opts.recovery = undefined;
-    if (change === "lost run") {
-      f.opts.run = undefined;
-      vi.stubEnv("OPENCLAW_STATE_DIR", f.root);
-    }
     if (change === "interrupted displacement") {
       f.displace();
       await f.invoke(undefined, [f.displaced]);

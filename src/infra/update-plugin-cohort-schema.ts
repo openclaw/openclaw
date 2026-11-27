@@ -6,7 +6,6 @@ import { PluginSourceSnapshotIndexChangeSchema } from "../plugins/plugin-source-
 import type { UpdateRecoveryRecord } from "./update-run-recovery-schema.js";
 
 export const PLUGIN_COHORT_RECOVERY_KEY_PREFIX = "update.pluginCohort.";
-export const PLUGIN_COHORT_RECOVERY_KEY_END = "update.pluginCohort/";
 const MAX_PLUGIN_COHORT_BYTES = 1024 * 1024;
 const text = z.string().min(1).max(32_768);
 const absolutePath = text.refine((value) => path.isAbsolute(value));

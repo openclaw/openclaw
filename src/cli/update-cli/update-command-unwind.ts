@@ -11,6 +11,7 @@ import type { UpdateCommandOptions } from "./shared.js";
 import { UpdateActivationTimeoutError } from "./update-command-activation.js";
 import { runMutableUpdateRecovery } from "./update-command-mutable-signals.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
+import { assertUpdateCommandRecoveryState } from "./update-command-recovery.js";
 import {
   createUpdateCommandFailureResult,
   UpdateCommandFailure,
@@ -171,6 +172,10 @@ export async function withUpdateCommandRecoveryUnwind(
         }
         paths.add(file);
         await assertUpdateRecoveryAdmission({ env, pluginCohort });
+        const current = assertUpdateCommandRecoveryState({ ...opts, run: { ...run, env } });
+        if (current && !pluginCohort) {
+          throw new UpdateRecoveryRequiredError(current.pair.reservation);
+        }
       }
     };
     try {

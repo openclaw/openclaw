@@ -1,3 +1,4 @@
+import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { verifyPackageUpdateRecovery } from "../../infra/update-global.js";
 import type { PluginCohortRecoveryPair } from "../../infra/update-plugin-cohort-schema.js";
@@ -126,15 +127,22 @@ export async function assertUpdateCommandPackageFinalization(
         "Full-state checkpoint recovery is deferred; retained state was left unchanged.",
       );
     }
-    const env = params.ownedManagedUpdateEnv ?? params.opts.run?.env;
+    const env = cloneEnvWithPlatformSemantics(
+      params.ownedManagedUpdateEnv ?? params.opts.run?.env ?? process.env,
+    );
     // Keep the first target stable if selectors change during admission.
     const targetPath = resolveOpenClawStateSqlitePath(env);
     const pluginCohort = run && executor ? { runId: run.runId, fence: executor } : undefined;
     await assertUpdateRecoveryAdmission({ env, path: targetPath, pluginCohort });
     assertCurrent();
+    if (run) {
+      assertUpdateCommandRecoveryState({ ...params.opts, run: { ...run, env } });
+    }
     if (run && resolveOpenClawStateSqlitePath(run.env) !== targetPath) {
-      await assertUpdateRecoveryAdmission({ env: run.env, pluginCohort });
+      const historyEnv = cloneEnvWithPlatformSemantics(run.env ?? process.env);
+      await assertUpdateRecoveryAdmission({ env: historyEnv, pluginCohort });
       assertCurrent();
+      assertUpdateCommandRecoveryState({ ...params.opts, run: { ...run, env: historyEnv } });
     }
   } catch (cause) {
     throw new UpdateCommandPendingRecoveryFailure(params.result, formatErrorMessage(cause), {

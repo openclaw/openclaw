@@ -206,7 +206,8 @@ it("collects unpublished snapshots without retiring an unrelated saved cohort", 
         await collectInstalledPluginSourceSnapshots(state.stateDir, [descriptor]);
         expect(fs.existsSync(descriptor.artifact.path)).toBe(false);
         expect(
-          (await readPersistedInstalledPluginIndex({ env: state.env }))?.retiredSourceSnapshots,
+          (await readPersistedInstalledPluginIndex({ env: state.env }))?.retiredSourceSnapshots ??
+            [],
         ).not.toContainEqual({ ...descriptor, installedRevision: 0 });
         expect(recoveryStore.loadPluginCohortRecovery(f.runId, { env: state.env })).toEqual(pair);
       } finally {

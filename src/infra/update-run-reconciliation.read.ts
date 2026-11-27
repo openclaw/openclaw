@@ -24,9 +24,10 @@ export function inspectUpdateRunReconciliation(
   record: UpdateRunRecord,
   input: UpdateRunReconciliationInput,
 ): UpdateRunReconciliationCandidate {
-  const rule = hasStoredUpdateRecovery(db, record.runId)
-    ? undefined
-    : inspectUpdateRunAbandonment(record, input);
+  const rule =
+    !input.explicit && hasStoredUpdateRecovery(db, record.runId)
+      ? undefined
+      : inspectUpdateRunAbandonment(record, input);
   if (
     rule &&
     !input.explicit &&
