@@ -172,7 +172,7 @@ export function ChatVoiceStatus(props: {
 const ActiveDictationStatus = lazy(() => import("./composer-dictation-status.tsx"), {
   export: "ActiveDictationStatus",
 });
-const DictationCleanupDialog = lazy(() => import("./dictation-cleanup-dialog.tsx"), {
+export const DictationCleanupDialog = lazy(() => import("./dictation-cleanup-dialog.tsx"), {
   export: "DictationCleanupDialog",
 });
 
@@ -180,10 +180,7 @@ export function ComposerDictationStatus(props: {
   readDictation: () => ComposerDictationOwner | undefined;
 }) {
   const [cleanupOpen, setCleanupOpen] = createSignal(false);
-  const cleanupLabel = () =>
-    props.readDictation()?.cleanupReview
-      ? t("chat.composer.reviewDictation")
-      : t("chat.composer.dictationCleanup");
+  const review = () => props.readDictation()?.cleanupReview;
   return (
     <>
       <Show when={props.readDictation()?.active || props.readDictation()?.transcribing}>
@@ -191,19 +188,18 @@ export function ComposerDictationStatus(props: {
           <ActiveDictationStatus readDictation={props.readDictation} />
         </ChatLazyBoundary>
       </Show>
-      <Show when={props.readDictation()}>
+      <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {review() ? t("chat.composer.reviewDictation") : null}
+      </span>
+      <Show when={review() || cleanupOpen()}>
         <button
           type="button"
-          class={["btn", "btn--sm", { primary: Boolean(props.readDictation()?.cleanupReview) }]}
+          class="btn btn--sm primary"
           aria-haspopup="dialog"
-          aria-label={cleanupLabel()}
-          title={cleanupLabel()}
           onClick={() => setCleanupOpen(true)}
         >
           <Icon name="wandSparkles" />
-          <span aria-live="polite" aria-atomic="true">
-            {props.readDictation()?.cleanupReview ? cleanupLabel() : null}
-          </span>
+          {t("chat.composer.reviewDictation")}
         </button>
         <Show when={cleanupOpen()}>
           <ChatLazyBoundary>

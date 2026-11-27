@@ -301,6 +301,7 @@ export function SessionRailComposer(props: {
             menu={{
               attachments: props.attachmentProps,
               inputHandle,
+              readDictation: () => dictation.read().dictation,
               disabled: !props.connected || dictationActive(),
               open: plusMenuOpen(),
               view: "root",

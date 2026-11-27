@@ -1,7 +1,8 @@
-import { createUniqueId, Show } from "solid-js";
+import { Show } from "solid-js";
 import { ModalDialog } from "../../../components/modal-dialog.tsx";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { DialogHeader } from "../../../components/solid/dialog-header.tsx";
+import { SettingsSegmented } from "../../../components/solid/settings-ui.tsx";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerChatDictationEnglish } from "../../../i18n/locales/en-chat-dictation.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -12,9 +13,11 @@ registerEnglishCatalog(registerChatDictationEnglish);
 
 export function DictationCleanupDialog(props: {
   readDictation: () => ComposerDictationOwner | undefined;
+  returnFocus?: () => HTMLElement | null;
   onClose: () => void;
 }) {
-  const modeId = createUniqueId();
+  const modeInputs: Partial<Record<"off" | "conservative", HTMLInputElement>> = {};
+  const mode = () => props.readDictation()?.cleanupPolicy.mode ?? "off";
   const review = () => props.readDictation()?.cleanupReview;
   const reviewMessage = () => {
     const current = review();
@@ -41,6 +44,12 @@ export function DictationCleanupDialog(props: {
     <ModalDialog
       label={t("chat.composer.dictationCleanup")}
       description={t("chat.dictation.cleanupDescription")}
+      prop:initialFocus={() => modeInputs[mode()] ?? null}
+      ref={(element) => {
+        if (props.returnFocus) {
+          element.setReturnFocusTarget(props.returnFocus());
+        }
+      }}
       onModal-cancel={() => props.onClose()}
     >
       <section class="oc-dialog">
@@ -50,23 +59,25 @@ export function DictationCleanupDialog(props: {
         />
         <div class="oc-dialog__body">
           <div class="field">
-            <label for={modeId}>{t("chat.dictation.cleanupMode")}</label>
-            <select
-              id={modeId}
-              value={props.readDictation()?.cleanupPolicy.mode ?? "off"}
-              onChange={(event) =>
+            <span>{t("chat.dictation.cleanupMode")}</span>
+            <SettingsSegmented<"off" | "conservative">
+              ariaLabel={t("chat.dictation.cleanupMode")}
+              value={mode()}
+              options={[
+                { value: "off", label: t("chat.dictation.cleanupOff") },
+                { value: "conservative", label: t("chat.dictation.cleanupConservative") },
+              ]}
+              inputRef={(value, input) => (modeInputs[value] = input)}
+              onChange={(value) =>
                 props
                   .readDictation()
                   ?.setCleanupPolicy(
-                    event.currentTarget.value === "conservative"
+                    value === "conservative"
                       ? { mode: "conservative", locale: "en" }
                       : { mode: "off", locale: null },
                   )
               }
-            >
-              <option value="off">{t("chat.dictation.cleanupOff")}</option>
-              <option value="conservative">{t("chat.dictation.cleanupConservative")}</option>
-            </select>
+            />
           </div>
           <p class="muted">{t("chat.dictation.cleanupPolicyHelp")}</p>
           <p class="muted">{t("chat.dictation.cleanupOffHelp")}</p>

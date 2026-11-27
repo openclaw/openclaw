@@ -449,6 +449,7 @@ export class NewSessionPageOwner {
       canSubmit: !submission.submitting && !dictationLocked && submission.canSubmit(),
       submitDisabledReason: submission.submitDisabledReason(),
       onBlockedSubmit: () => submission.noteBlockedSubmitAttempt(),
+      readDictation: () => dictation.dictation,
       get dictationActive() {
         return dictation.active;
       },

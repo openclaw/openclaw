@@ -19,6 +19,10 @@ const raw = "um please call me tomorrow";
 const sessionId = "cleanup-dictation-fixture";
 const button = (page: Page, name: string) => page.getByRole("button", { name, exact: true });
 const dialog = (page: Page) => page.getByRole("dialog", { name: "Dictation cleanup", exact: true });
+const cleanupModes = (page: Page) => dialog(page).getByRole("radiogroup", { name: "Cleanup mode" });
+const cleanupMode = (page: Page, name: "Off" | "Conservative — English (unavailable)") =>
+  cleanupModes(page).getByRole("radio", { name, exact: true });
+const conservative = "Conservative — English (unavailable)";
 const focused = (locator: Locator) => locator.evaluate((element) => element.matches(":focus"));
 const expectDraft = async (textarea: Locator, value: string) => {
   await expect.poll(() => textarea.inputValue()).toBe(value);
@@ -95,20 +99,23 @@ async function openFixture(page: Page, route: "chat" | "new" = "chat") {
 }
 
 async function openCleanupByKeyboard(page: Page, review = false) {
-  const trigger = button(page, review ? "Review dictation" : "Dictation cleanup");
-  await trigger.focus();
-  await page.keyboard.press("Enter");
+  const trigger = button(page, review ? "Review dictation" : "Add attachment");
+  await trigger.press("Enter");
+  if (!review) {
+    const item = page.getByRole("menuitem", { name: "Dictation cleanup", exact: true });
+    await item.press("Enter");
+  }
   await dialog(page).waitFor();
   return trigger;
 }
 
 async function enableCleanup(page: Page) {
   const trigger = await openCleanupByKeyboard(page);
-  const mode = page.getByLabel("Cleanup mode", { exact: true });
-  expect(await mode.inputValue()).toBe("off");
-  await mode.focus();
+  const off = cleanupMode(page, "Off");
+  expect(await off.isChecked()).toBe(true);
+  await expect.poll(() => focused(off)).toBe(true);
   await page.keyboard.press("ArrowDown");
-  await expect.poll(() => mode.inputValue()).toBe("conservative");
+  await expect.poll(() => cleanupMode(page, conservative).isChecked()).toBe(true);
   await page.keyboard.press("Tab");
   await page.keyboard.press("Escape");
   await dialog(page).waitFor({ state: "detached" });
@@ -116,9 +123,8 @@ async function enableCleanup(page: Page) {
 }
 
 async function tabToOriginalChoice(page: Page) {
-  const mode = page.getByLabel("Cleanup mode", { exact: true });
   const choose = button(page, "Use original");
-  await mode.focus();
+  await cleanupMode(page, conservative).focus();
   for (let index = 0; index < 14 && !(await focused(choose)); index++) {
     await page.keyboard.press("Tab");
   }
@@ -130,6 +136,7 @@ suite.define(() => {
   it("preserves recognized output by default and persists only an explicit cleanup opt-in", () =>
     suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
       const { gateway, textarea, finishRecording } = await openFixture(page);
+      expect(await button(page, "Dictation cleanup").count()).toBe(0);
       await finishRecording();
       await expectDraft(textarea, raw);
       expect(await button(page, "Review dictation").count()).toBe(0);
@@ -137,14 +144,14 @@ suite.define(() => {
       await enableCleanup(page);
       await page.reload();
       await openCleanupByKeyboard(page);
-      expect(await page.getByLabel("Cleanup mode", { exact: true }).inputValue()).toBe(
-        "conservative",
-      );
-      await page.getByLabel("Cleanup mode", { exact: true }).selectOption("off");
+      const selected = cleanupMode(page, conservative);
+      expect(await selected.isChecked()).toBe(true);
+      await selected.press("ArrowUp");
+      await expect.poll(() => cleanupMode(page, "Off").isChecked()).toBe(true);
       await page.keyboard.press("Escape");
       await page.reload();
       await openCleanupByKeyboard(page);
-      expect(await page.getByLabel("Cleanup mode", { exact: true }).inputValue()).toBe("off");
+      expect(await cleanupMode(page, "Off").isChecked()).toBe(true);
     }));
 
   it("lets a ready review own Escape and keeps the original recoverable", () =>

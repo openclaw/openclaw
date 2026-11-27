@@ -25,8 +25,8 @@ not gain a cleanup policy. Speech recognition still uses the existing
 
 ## Choose a policy
 
-Open **Dictation cleanup** in the composer toolbar. The compact control has the
-same accessible name.
+Open the composer’s **+** menu and choose **Dictation cleanup** before recording.
+With **Cleanup mode** focused, use the arrow keys to change the selected mode.
 
 | Mode                             | Behavior                                                               |
 | -------------------------------- | ---------------------------------------------------------------------- |

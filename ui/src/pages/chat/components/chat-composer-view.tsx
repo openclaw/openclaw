@@ -604,6 +604,7 @@ export function renderChatComposerView(
                     pluginActions: readPluginActions()?.(),
                     inputHandle,
                     capabilityMenu: props.capabilityMenu,
+                    readDictation: () => context().dictation,
                     disabled: !context().canCompose || props.suggestionComposer === true,
                     open: capabilityOpen(),
                     view: capabilityView(),
