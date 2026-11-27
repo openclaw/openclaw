@@ -67,7 +67,7 @@ On November 26 — 108 days after our submission — [upstream PR #206126](https
 
 Our August fix stopped avoidable cache loss when tool permissions changed. Today's work tackles something more fundamental: unnecessary context growth on ordinary turns.
 
-**Even if cached tokens are free, context space isn't.** The faster we fill the context window, the sooner we force compaction or resets, potentially dropping the cache and driving up fresh-token usage. We've demonstrated an 80.5% reduction in context growth per short exchange. The resulting long-term usage savings remain to be measured.
+**Even if cached tokens were "free" (they aren't), context space isn't.** The faster we fill the context window, the sooner we force compaction or resets, potentially dropping the cache and driving up fresh-token usage. We've demonstrated an 80.5% reduction in context growth per short exchange. The resulting long-term usage savings remain to be measured.
 
 ## In summary: we have solutions, not just suggestions
 
