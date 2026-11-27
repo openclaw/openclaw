@@ -294,7 +294,7 @@ final class RootSidebarModel {
             !$0.isArchived && !$0.isSnoozed(at: now) && (isSearching || $0.key == selectedSessionKey ||
                 !OpenClawChatSessionListVisibility.isAutomationSession($0))
         }
-        return ChatSessionSidebarModel.sections(
+        let sections = ChatSessionSidebarModel.sections(
             sessions: browsingSessions,
             // Keep missing-selection placeholders only until the active roster is complete.
             currentSessionKey: selectedIsHidden ? "" : currentSessionKey,
@@ -306,6 +306,9 @@ final class RootSidebarModel {
             includeEmptyGroups: !isSearching,
             query: query,
             sessionRoutingContract: sessionRoutingContract)
+        // As on macOS, browsing folds subagent runs into the conversation that owns them;
+        // search still lists a matching run.
+        return isSearching ? sections : ChatSessionSidebarModel.foldingSubagentRuns(sections)
     }
 
     func setSnoozeWakeUpdatesActive(_ active: Bool) {

@@ -407,7 +407,7 @@ struct RootSidebar: View {
                             },
                             accessory: {
                                 self.attentionBadges(
-                                    for: Self.flattened(section.nodes).map(\.session),
+                                    for: section.nodes.flatMap(\.previewSessions),
                                     targetID: "section:\(section.id)")
                             })
                             .foregroundStyle(OpenClawSidebarPalette.muted)
@@ -418,7 +418,7 @@ struct RootSidebar: View {
                             self.sectionTitle(title)
                             Spacer(minLength: 0)
                             self.attentionBadges(
-                                for: Self.flattened(section.nodes).map(\.session), targetID: "section:\(section.id)")
+                                for: section.nodes.flatMap(\.previewSessions), targetID: "section:\(section.id)")
                         }
                     }
                     if !section.id.hasPrefix("group:") ||
@@ -492,6 +492,11 @@ struct RootSidebar: View {
         let isSelected = self.selectedDestination == .chat &&
             self.resolvedSelectedSessionKey.caseInsensitiveCompare(mainKey) == .orderedSame
         let mainSession = self.mainSessionEntry
+        // Runs Home started have no row of their own; their status and attention belong here.
+        let homeRuns = ChatSessionSidebarModel.foldedRuns(in: self.model.sessions, under: mainKey)
+        let homeSessions = (mainSession.map { [$0] } ?? []) + homeRuns
+        let homeUnreadKeys = ChatSessionSidebarModel.unreadSessionKeys(in: homeSessions)
+        let isUnread = !homeUnreadKeys.isEmpty
         return HStack(spacing: 0) {
             Button {
                 self.appModel.openChat(sessionKey: mainKey)
@@ -501,15 +506,23 @@ struct RootSidebar: View {
                     Image(systemName: "house")
                         .font(OpenClawType.subheadSemiBold)
                         .frame(width: 18)
-                    Text(String(localized: "Home"))
-                        .font(OpenClawType.subheadSemiBold)
-                        .lineLimit(1)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(String(localized: "Home"))
+                            .font(OpenClawType.subheadSemiBold)
+                            .lineLimit(1)
+                        if let failure = ChatSessionSidebarModel.childFailureSummary(in: homeRuns) {
+                            Text(verbatim: failure)
+                                .font(OpenClawType.caption2Medium)
+                                .foregroundStyle(OpenClawSidebarPalette.muted)
+                                .lineLimit(1)
+                        }
+                    }
                     Spacer(minLength: 4)
-                    if mainSession?.hasActiveRun == true {
+                    if homeSessions.contains(where: { $0.hasActiveRun == true || $0.hasActiveSubagentRun == true }) {
                         ProgressView()
                             .controlSize(.mini)
                             .tint(OpenClawSidebarPalette.accent)
-                    } else if mainSession?.unread == true {
+                    } else if isUnread {
                         Circle()
                             .fill(OpenClawSidebarPalette.accent)
                             .frame(width: 7, height: 7)
@@ -529,8 +542,20 @@ struct RootSidebar: View {
             .overlay(alignment: .leading) {
                 OpenClawSessionColorStripe(color: mainSession?.color)
             }
-            .accessibilityValue(mainSession?.unread == true ? String(localized: "Unread") : "")
-            self.attentionBadges(for: mainSession.map { [$0] } ?? [], targetID: "home")
+            .contextMenu {
+                // Folded runs have no row of their own; Home clears them as a session row's menu does.
+                if isUnread {
+                    Button {
+                        self.performSessionMutation(
+                            resetActiveSessionKey: nil,
+                            CommandSessionActionsModifier.markingRead(homeUnreadKeys))
+                    } label: {
+                        Label(String(localized: "Mark as Read"), systemImage: "envelope.open")
+                    }
+                }
+            }
+            .accessibilityValue(isUnread ? String(localized: "Unread") : "")
+            self.attentionBadges(for: homeSessions, targetID: "home")
         }
     }
 
@@ -627,16 +652,12 @@ struct RootSidebar: View {
         self.appModel.sessionGroups.names(for: self.model.sessions)
     }
 
-    private static func flattened(_ nodes: [ChatSessionSidebarModel.Node]) -> [ChatSessionSidebarModel.Node] {
-        nodes.flatMap { [$0] + self.flattened($0.children) }
-    }
-
     private func sessionNodes(for section: ChatSessionSidebarModel.Section) -> [ChatSessionSidebarModel.Row] {
-        let nodes = self.displayRows(section.nodes)
+        // The cap counts top-level chats; an open parent never pushes another chat out.
         guard section.id == "recent", let limit = Self.recentSessionCap(searchText: self.searchText) else {
-            return nodes
+            return self.displayRows(section.nodes)
         }
-        return Array(nodes.prefix(limit))
+        return self.displayRows(Array(section.nodes.prefix(limit)))
     }
 
     static func recentSessionCap(searchText: String) -> Int? {
@@ -699,7 +720,7 @@ struct RootSidebar: View {
                 performMutation: self.performSessionMutation,
                 fork: self.forkSession)
                 .equatable()
-            self.attentionBadges(for: Self.flattened([node]).map(\.session), targetID: "session:\(session.key)")
+            self.attentionBadges(for: node.previewSessions, targetID: "session:\(session.key)")
         }
     }
 

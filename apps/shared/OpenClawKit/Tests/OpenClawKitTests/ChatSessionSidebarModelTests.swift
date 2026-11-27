@@ -920,6 +920,118 @@ struct ChatSessionSidebarModelTests {
         #expect(nodes.map(\.id) == ["orphan", "root"])
     }
 
+    @Test func `subagent runs fold into their owner and hand over the chats they start`() {
+        let roster = [
+            self.entry(key: "agent:main:main", childSessions: ["agent:main:subagent:home-run"]),
+            self.entry(key: "agent:main:subagent:home-run", spawnedBy: "agent:main:main"),
+            self.entry(key: "agent:main:parent", updatedAt: 500, childSessions: ["agent:main:subagent:run"]),
+            self.entry(
+                key: "agent:main:subagent:run",
+                updatedAt: 400,
+                spawnedBy: "agent:main:parent",
+                childSessions: ["agent:main:child"],
+                status: "running"),
+            self.entry(key: "agent:main:child", updatedAt: 300, parentSessionKey: "agent:main:subagent:run"),
+            self.entry(key: "agent:main:subagent:orphan", updatedAt: 200),
+        ]
+        let nodes = ChatSessionSidebarModel.foldingSubagentRuns(ChatSessionSidebarModel.sections(
+            sessions: roster,
+            currentSessionKey: "agent:main:parent",
+            mainSessionKey: "agent:main:main",
+            excludesMainSession: true,
+            query: "")).flatMap(\.nodes)
+
+        #expect(nodes.map(\.id) == ["agent:main:parent"])
+        #expect(nodes[0].children.map(\.id) == ["agent:main:child"])
+        #expect(nodes[0].foldedSessions.map(\.key) == ["agent:main:subagent:run"])
+        #expect(nodes[0].badges.runningCount == 1)
+        #expect(ChatSessionSidebarModel.foldedRuns(in: roster, under: "agent:main:main").map(\.key) == [
+            "agent:main:subagent:home-run",
+        ])
+    }
+
+    @Test func `a folded run's badges reach every ancestor that survives the fold`() throws {
+        // The parent never lists the run; only the run's spawnedBy names its owner.
+        let nodes = ChatSessionSidebarModel.foldingSubagentRuns(ChatSessionSidebarModel.sections(
+            sessions: [
+                self.entry(key: "agent:main:grand", updatedAt: 300, childSessions: ["agent:main:parent"]),
+                self.entry(key: "agent:main:parent", updatedAt: 200, parentSessionKey: "agent:main:grand"),
+                self.entry(
+                    key: "agent:main:subagent:run",
+                    label: "Research",
+                    updatedAt: 100,
+                    unread: true,
+                    spawnedBy: "agent:main:parent",
+                    status: "failed",
+                    lastRunError: "Timed out"),
+            ],
+            currentSessionKey: "agent:main:grand",
+            query: "")).flatMap(\.nodes)
+
+        #expect(nodes.map(\.id) == ["agent:main:grand"])
+        let grand = try #require(nodes.first)
+        let parent = try #require(grand.children.first)
+        #expect(parent.foldedSessions.map(\.key) == ["agent:main:subagent:run"])
+        for row in [grand, parent] {
+            #expect(row.badges.failedCount == 1)
+            #expect(row.badges.hasUnread)
+        }
+        #expect(ChatSessionSidebarModel.subtitle(for: grand) == "Child session Research failed: Timed out")
+    }
+
+    @Test func `mark as read covers an unread run folded into its parent`() {
+        func parent(runUnread: Bool) -> ChatSessionSidebarModel.Node? {
+            ChatSessionSidebarModel.foldingSubagentRuns(ChatSessionSidebarModel.sections(
+                sessions: [
+                    self.entry(key: "agent:main:parent", childSessions: ["agent:main:subagent:run"]),
+                    self.entry(
+                        key: "agent:main:subagent:run",
+                        unread: runUnread,
+                        spawnedBy: "agent:main:parent"),
+                ],
+                currentSessionKey: "agent:main:parent",
+                query: "")).flatMap(\.nodes).first
+        }
+
+        #expect(parent(runUnread: true)?.id == "agent:main:parent")
+        #expect(parent(runUnread: true)?.unreadSessionKeys == ["agent:main:subagent:run"])
+        #expect(parent(runUnread: false)?.unreadSessionKeys == [])
+    }
+
+    @Test func `a collapsed ancestor shows a folded run's unread while mark as read stays on its row`() throws {
+        // A completed run brings no spinner or failure subtitle; only the unread dot can reach grand.
+        let nodes = ChatSessionSidebarModel.foldingSubagentRuns(ChatSessionSidebarModel.sections(
+            sessions: [
+                self.entry(key: "agent:main:grand", updatedAt: 300, childSessions: ["agent:main:parent"]),
+                self.entry(key: "agent:main:parent", updatedAt: 200, parentSessionKey: "agent:main:grand"),
+                self.entry(
+                    key: "agent:main:subagent:run",
+                    updatedAt: 100,
+                    unread: true,
+                    spawnedBy: "agent:main:parent"),
+            ],
+            currentSessionKey: "agent:main:grand",
+            query: "")).flatMap(\.nodes)
+
+        let grand = try #require(nodes.first)
+        let parent = try #require(grand.children.first)
+        #expect(grand.showsUnread)
+        #expect(grand.unreadSessionKeys == [])
+        #expect(parent.showsUnread)
+        #expect(parent.unreadSessionKeys == ["agent:main:subagent:run"])
+    }
+
+    @Test func `mark as read on Home covers the runs folded into Home`() {
+        let roster = [
+            self.entry(key: "agent:main:main"),
+            self.entry(key: "agent:main:subagent:digest", unread: true, spawnedBy: "agent:main:main"),
+            self.entry(key: "agent:main:subagent:seen", spawnedBy: "agent:main:main"),
+        ]
+        let home = [roster[0]] + ChatSessionSidebarModel.foldedRuns(in: roster, under: "agent:main:main")
+
+        #expect(ChatSessionSidebarModel.unreadSessionKeys(in: home) == ["agent:main:subagent:digest"])
+    }
+
     @Test func `sessions without hierarchy data keep flat ordering`() {
         let nodes = ChatSessionSidebarModel.tree(from: [
             self.entry(key: "a"),

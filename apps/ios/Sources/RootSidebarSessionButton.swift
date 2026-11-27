@@ -25,6 +25,9 @@ struct RootSidebarSessionButton: View, Equatable {
     var body: some View {
         let session = self.node.session
         let isSelected = self.isSelected
+        // A folded run's unread state belongs to the row that replaces it and to every
+        // ancestor, so a collapsed parent still shows it. Mark as Read stays row-scoped.
+        let isUnread = self.node.showsUnread
         Button {
             self.open(session)
         } label: {
@@ -53,10 +56,7 @@ struct RootSidebarSessionButton: View, Equatable {
                         .lineLimit(1)
                     // Web-parity subtitle: the work line (repo/branch) names the
                     // session; recency moves to the trailing metadata slot.
-                    if let subtitle = ChatSessionSidebarModel.subtitle(
-                        for: session,
-                        workSubtitle: ChatSessionSidebarModel.workSubtitle(for: session))
-                    {
+                    if let subtitle = ChatSessionSidebarModel.subtitle(for: self.node) {
                         Text(verbatim: subtitle)
                             .font(OpenClawType.caption2Medium)
                             .foregroundStyle(OpenClawSidebarPalette.muted)
@@ -75,7 +75,7 @@ struct RootSidebarSessionButton: View, Equatable {
                     .font(OpenClawType.caption2Medium)
                     .foregroundStyle(OpenClawSidebarPalette.muted)
                     .lineLimit(1)
-                if session.unread == true {
+                if isUnread {
                     Circle()
                         .fill(OpenClawSidebarPalette.accent)
                         .frame(width: 7, height: 7)
@@ -104,10 +104,11 @@ struct RootSidebarSessionButton: View, Equatable {
             canDelete: ChatSessionSidebarModel.canDeleteSession(
                 key: session.key,
                 mainSessionKey: self.mainSessionKey),
+            unreadSessionKeys: self.node.unreadSessionKeys,
             performMutation: self.performMutation,
             fork: { self.fork(session) })
         .accessibilityValue(RootSidebar.sessionAccessibilityValue(
             isPinned: session.pinned == true,
-            isUnread: session.unread == true))
+            isUnread: isUnread))
     }
 }
