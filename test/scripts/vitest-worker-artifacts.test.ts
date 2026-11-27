@@ -397,8 +397,9 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
       export async function build(options) {
         const result=await compile(options);
         if(mode==='cancel while compiling') {
+          const waiting=gate();
           record('compiling',String(process.pid));
-          await gate();
+          await waiting;
         } else if((mode==='terminated group' || mode==='uncertain output') && !leafSpawned) {
           leafSpawned=true;
           const leaf=spawn(process.execPath,['--input-type=module','--eval',\`

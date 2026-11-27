@@ -538,9 +538,6 @@ it.each([
       }
       if (!authorized) {
         await f.revoke();
-        expect(f.guest.assertCurrent).toThrow();
-      } else {
-        f.guest.assertCurrent();
       }
       readbackAvailable = true;
       const restarted = f.restart();

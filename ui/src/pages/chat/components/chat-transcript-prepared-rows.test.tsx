@@ -189,7 +189,7 @@ async function transcriptFixture(
   });
   let renderer = renderRow;
   const draw = vi.fn(() => {
-    const root = host.render(rows, renderer, null, false, null, null, presented);
+    const root = host.render(rows, renderer, null, false, null, presented);
     if (root.parentElement !== container) {
       container.append(root);
     }

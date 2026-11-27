@@ -30,6 +30,9 @@ export function hasKeyboardIcon(symbol: string): symbol is KeyboardIconSymbol {
   return Object.hasOwn(keyboardIconData, symbol);
 }
 
+const macosSidebarFrame =
+  "M6 4.25h12a3 3 0 0 1 3 3v9.5a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3v-9.5a3 3 0 0 1 3-3Z";
+
 export const toolIconData = {
   codeXml: strokePathData("m18 16 4-4-4-4", "m6 8-4 4 4 4", "m14.5 4-5 16"),
   bookOpenText: strokePathData(
@@ -222,6 +225,12 @@ export const toolIconData = {
     ["path", { d: "m7 11 2-2-2-2M11 13h4" }],
     ["rect", { width: "18", height: "18", x: "3", y: "3", rx: "2", ry: "2" }],
   ]),
+  // Lucide list-collapse (ISC), with a half-pixel optical lift at 16px for chat labels.
+  listCollapse: strokePathData(
+    "M10 4.25h11M10 11.25h11M10 18.25h11",
+    "m3 9.25 3-3-3-3",
+    "m3 19.25 3-3-3-3",
+  ),
   listTree: strokePathData(
     "M21 12h-8M21 6H8M21 18h-8M3 6v4c0 1.1.9 2 2 2h3M3 10v6c0 1.1.9 2 2 2h3",
   ),
@@ -395,6 +404,25 @@ export const toolIconData = {
   sidebarPanel: strokeIconData([
     ["rect", { x: "3", y: "3", width: "18", height: "18", rx: "3", "stroke-width": "1.8" }],
     ["path", { d: "M9 3v18", "stroke-width": "1.8", "stroke-linecap": "butt" }],
+  ]),
+  macosTitlebarSidebar: strokeIconData([
+    // Paint the frame and divider in one stroke so their translucent color does not stack.
+    [
+      "path",
+      {
+        class: "macos-sidebar-open",
+        d: `${macosSidebarFrame}M15.5 4.75v14.5`,
+        "stroke-width": "1.6",
+      },
+    ],
+    [
+      "path",
+      {
+        class: "macos-sidebar-closed",
+        d: `${macosSidebarFrame}M15.5 8.375v7.25`,
+        "stroke-width": "1.6",
+      },
+    ],
   ]),
   // Dock is a destination action, so it has no open/close chevron or active fill.
   sessionPanelDockBottom: strokeIconData([

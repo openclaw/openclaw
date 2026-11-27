@@ -26,6 +26,7 @@ import {
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const script = fileURLToPath(import.meta.url);
 const root = path.resolve(path.dirname(script), "../..");
@@ -234,12 +235,7 @@ async function measure() {
     observer.observe({ entryTypes: ["gc"] });
     loop.enable();
     if (values.phase === "allocation") {
-      session.connect();
-      await session.post("HeapProfiler.startSampling", {
-        samplingInterval: 32768,
-        includeObjectsCollectedByMajorGC: true,
-        includeObjectsCollectedByMinorGC: true,
-      });
+      await startCollectedHeapSampling(session, 32768);
     }
     const hostLoad = loadavg();
     const utilization = performance.eventLoopUtilization();

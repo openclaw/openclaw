@@ -52,6 +52,7 @@ it.each([
   ["excludeCron", "cron:scheduled", { excludeCron: true }],
   ["excludeSystem", "system:maintenance", { excludeSystem: true }],
   ["dock-inclusive", "board-agent", { excludeDock: false }],
+  ["title-only", "metadata-only", { search: "needle", searchTitlesOnly: true }],
 ] as const)("keeps list and subscription membership scoped for %s", async (name, key, filter) => {
   const ordinary = row("ordinary", { agentId: "main" });
   const dock = name === "dock-inclusive";
@@ -105,4 +106,115 @@ it.each([
     expect(updates).not.toHaveBeenCalled();
     expect(sessions.listSnapshot(query).result?.sessions).toEqual(expectedRows);
   }
+});
+
+it("replaces the retained filtered window when a remote personal pin enters or leaves it", async () => {
+  vi.useFakeTimers();
+  const query = { source: "sessions-page", agentId: "main", search: "review", limit: 2 } as const;
+  const recent = ["newest", "second", "third", "fourth", "oldest"].map((name, i) =>
+    row(name, { label: `Review ${name}`, updatedAt: 10 - i }),
+  );
+  const outside = recent[4]!;
+  let pinned = false;
+  const windowReads: number[] = [];
+  const { sessions, watch, listRows, emitEvent } = rosterReadFixture((params) => {
+    if (params.agentId !== query.agentId || params.search !== query.search) {
+      return sessionsResult([row("unfiltered-only")]);
+    }
+    const offset = params.offset ?? 0;
+    const limit = params.limit!;
+    windowReads.push(limit);
+    const ordered = pinned ? [{ ...outside, pinned: true }, ...recent.slice(0, 4)] : recent;
+    return {
+      ...sessionsResult(ordered.slice(offset, offset + limit)),
+      totalCount: 5,
+      hasMore: offset + limit < 5,
+      nextOffset: offset + limit < 5 ? offset + limit : null,
+    };
+  }, "viewer-alias");
+  const notify = (key: string) =>
+    emitEvent({
+      type: "event",
+      event: "users.prefs.changed",
+      payload: { profileId: "viewer", keys: [key] },
+    });
+  watch(query);
+  await sessions.refreshList(query);
+  await sessions.refreshList({ ...query, append: true, offset: 2 });
+  const initial = recent.slice(0, 4);
+  expect(listRows(query)).toEqual(initial);
+
+  notify("ui.theme");
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(windowReads).toEqual([2, 2]);
+  pinned = true;
+  notify("ui.railShortcuts");
+  notify("ui.railShortcuts");
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(listRows(query)).toEqual([{ ...outside, pinned: true }, ...initial.slice(0, 3)]);
+  pinned = false;
+  notify("ui.railShortcuts");
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(listRows(query)).toEqual(initial);
+  expect(windowReads).toEqual([2, 2, 4, 4]);
+});
+
+it.each([
+  ["sidebar", {}],
+  ["sessions-page", { search: "review" }],
+] as const)(
+  "admits an off-window pin on the %s Gateway deadline without an event",
+  async (source, filter) => {
+    vi.useFakeTimers();
+    const query = { source, agentId: "main", limit: 2, ...filter };
+    const saved = row("saved", { pinned: true });
+    const active = row("recent");
+    const returning = row("old-review", { pinned: true });
+    const reads: number[] = [];
+    const { sessions, watch, listRows } = rosterReadFixture((params) => {
+      if (
+        params.agentId !== query.agentId ||
+        params.search !== ("search" in filter ? filter.search : undefined)
+      ) {
+        return sessionsResult([]);
+      }
+      reads.push(params.limit!);
+      const now = 10_000 + Math.floor(performance.now()); // Independent of the client's wall clock.
+      return {
+        ...sessionsResult(now > 10_100 ? [saved, returning] : [saved, active], now),
+        hasMore: true,
+        totalCount: 3,
+        ...(now <= 10_100 ? { activityExpiresAt: 10_100 } : {}),
+      };
+    });
+    watch(query);
+    await sessions.refreshList(query);
+    expect(listRows(query)).toEqual([saved, active]);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(reads).toEqual([2]); // Still valid at the inclusive boundary.
+    await vi.advanceTimersByTimeAsync(2);
+    expect(listRows(query)).toEqual([saved, returning]);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(reads).toEqual([2, 2]);
+  },
+);
+
+it("does not wake an unmounted query or reuse a retired primary deadline after a failed switch", async () => {
+  vi.useFakeTimers();
+  const { sessions, watch, request } = rosterReadFixture((params) => {
+    if (params.agentId === "other") {
+      throw new Error("New roster unavailable");
+    }
+    return { ...sessionsResult([row("held")], 1), hasMore: true, activityExpiresAt: 500 };
+  });
+  const primary = { agentId: "main" };
+  const filtered = { ...primary, search: "review" };
+  const stop = watch(filtered);
+  await sessions.refreshList(primary);
+  await sessions.refreshList(filtered);
+  stop();
+  await sessions.refreshList({ agentId: "other" });
+  expect(sessions.state.error).toContain("New roster unavailable");
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(request).toHaveBeenCalledTimes(3);
 });

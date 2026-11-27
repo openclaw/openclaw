@@ -501,7 +501,7 @@ it("rolls back claim fencing and never revives a retained approval after same-ID
     );
     expect(validate({ ...identity })).toBe(false);
     expect(validate(delayedIdentity)).toBe(false);
-    await expect(capability.run(() => "stale")).rejects.toThrow("worker turn authority changed");
+    await expect(capability.run(() => "stale")).rejects.toThrow("worker turn ended");
     expect(validateAgentRunDelegatedAuthority(delegated)).toBe(true);
     const next = await nextOwner.capability.run((owner) =>
       createAgentRuntimeIdentity({
@@ -541,7 +541,7 @@ it("rejects a prepared reader reply after an identical claim was released and re
     await store.releaseTurn(claim);
     const replacement = await store.claimTurn(input);
     resume.resolve();
-    await expect(preparing).rejects.toThrow("turn claim authority changed");
+    await expect(preparing).rejects.toThrow("turn ended");
     const current = await store.prepareTurnClaimAuthority(replacement);
     expect(current.isCurrent()).toBe(true);
     current.release();
@@ -588,13 +588,11 @@ it.each(["preparing", "bound", "final source check"] as const)(
         const { capability, takeFinishingOutcome } = await binding;
         await store.releaseTurn(claim);
         assertSourceCurrent.mockClear();
-        expect(capability.receiptAuthority).toThrow("worker turn authority changed");
-        expect(() => takeFinishingOutcome("synthetic-credential")).toThrow(
-          "worker turn authority changed",
-        );
+        expect(capability.receiptAuthority).toThrow("worker turn ended");
+        expect(() => takeFinishingOutcome("synthetic-credential")).toThrow("worker turn ended");
       } else {
         await expect(binding).rejects.toThrow(
-          phase === "preparing" ? "worker turn authority changed" : "run closed during binding",
+          phase === "preparing" ? "worker turn ended" : "run closed during binding",
         );
       }
       expect(getWorkerTurnExecutionIdentityCapability(store, claim)).toBeUndefined();
@@ -746,11 +744,7 @@ it.each(["binding replacement", "run admission"] as const)(
             preparedRunAdmission: admission,
           },
         }),
-      ).rejects.toThrow(
-        phase === "run admission"
-          ? "turn claim authority changed"
-          : "worker turn authority changed",
-      );
+      ).rejects.toThrow(phase === "run admission" ? "turn ended" : "worker turn ended");
       if (phase === "binding replacement") {
         const successor = getWorkerTurnExecutionIdentityCapability(store, claim);
         if (!successor) {

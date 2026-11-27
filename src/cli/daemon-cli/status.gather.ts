@@ -191,6 +191,7 @@ async function gatherDaemonStatusImpl(
         () => undefined,
       )
     : undefined;
+  let refusedRestartRecovery: string | undefined;
   if (opts.deep && !trimToUndefined(opts.rpc.url)) {
     const {
       preflightOpenClawDatabaseSchemas,
@@ -198,10 +199,8 @@ async function gatherDaemonStatusImpl(
       getOpenClawDatabaseReadinessFailure,
     } = await import("../../state/openclaw-database-preflight.js");
     // Diagnose a refused database before config and lifecycle readers try to open it.
-    const schemas = await preflightOpenClawDatabaseSchemas({
-      env: mergeGatewayServiceEnv(process.env, targetServiceCommand),
-      scope: "state",
-    });
+    const stateEnv = mergeGatewayServiceEnv(process.env, targetServiceCommand);
+    const schemas = await preflightOpenClawDatabaseSchemas({ env: stateEnv, scope: "state" });
     if (schemas.incompatible.length > 0) {
       throw new OpenClawDatabaseSchemaPreflightError(schemas.incompatible);
     }
@@ -217,6 +216,16 @@ async function gatherDaemonStatusImpl(
       );
       throw new Error(`${problem}. ${recovery}`);
     }
+    // A stopped Gateway left on another package by a refused update restart has a verified
+    // recovery; name it instead of the generic reinstall advice.
+    refusedRestartRecovery =
+      installationDrift && runtime?.status === "stopped"
+        ? await import("../update-cli/update-refused-restart-recovery.js")
+            .then(({ readRefusedRestartRecovery }) =>
+              readRefusedRestartRecovery({ activeRoot: activePackageRoot, stateEnv }),
+            )
+            .catch(() => undefined)
+        : undefined;
   }
   const restartHandoff = opts.deep ? readGatewayRestartHandoffSync(serviceEnv) : null;
   const configAudit: ServiceConfigAudit = await import("../../daemon/service-audit.js").then(
@@ -576,7 +585,7 @@ async function gatherDaemonStatusImpl(
             installationDrift: formatGatewayServiceInstallationDrift(
               installationDrift,
               process.env,
-              { command },
+              { command, nextStep: refusedRestartRecovery },
             ),
           }
         : {}),

@@ -30,15 +30,15 @@ function preparedTools() {
   });
 }
 
-it("keeps HTTP Responses strict decisions stable for the same tool set", () => {
+it("decides HTTP Responses strict per tool: one permissive tool no longer downgrades the rest", () => {
   const httpParams = responseParams([strictTool(), permissiveTool()] as never);
-  expect(httpParams.tools?.map((tool) => tool.strict)).toEqual([false, false]);
+  expect(httpParams.tools?.map((tool) => tool.strict)).toEqual([true, false]);
 });
 
-it("normalizes raw parameter-free schemas for HTTP Responses", () => {
+// A parameter-free tool is not closed as written, so it is sent non-strict and unchanged.
+it("keeps raw parameter-free schemas non-strict for HTTP Responses", () => {
   const tool = responseParams([createParameterFreeTool()] as never).tools?.[0];
-  expect(tool?.strict).toBe(true);
-  expect(tool?.parameters).toEqual(emptySchema());
+  expect(tool?.strict).toBe(false);
 });
 
 it("passes prepared executable schemas through compaction-triggered Responses requests", () => {
@@ -59,7 +59,7 @@ it("passes prepared executable schemas through compaction-triggered Responses re
 
   void streamFn(model, { systemPrompt: "system", messages: [], tools } as never, {});
 
-  expect(payload?.context_management).toEqual([{ type: "compaction", compact_threshold: 140_000 }]);
+  expect(payload?.context_management).toEqual([{ type: "compaction", compact_threshold: 170_000 }]);
   expect(payload?.tools?.[0]?.strict).toBe(true);
   expect(payload?.tools?.[0]?.parameters).toEqual(emptySchema());
 });

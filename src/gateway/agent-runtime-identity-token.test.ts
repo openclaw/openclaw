@@ -359,6 +359,7 @@ it.each(["run-1", "run-other"])(
       requesterProfileId: "profile-vito",
       requesterSenderIsOwner: false,
       completionOwnerSessionKey: "agent:main:discord:direct:alice",
+      createdIndependently: true,
       resolvedModel: { provider: "custom", model: "custom/model" },
       spawnModelAutoSelection: { model: "custom/custom/model", hasFallbackOrigin: true },
     };
@@ -516,7 +517,6 @@ it("round-trips scoped cron requester grants without promoting them to local aut
   const scope = grants.createCronCreatorAuthorityRunScope(
     run.operationalRunInstance.runId,
     { kind: "unknown" },
-    undefined,
     undefined,
     undefined,
     undefined,

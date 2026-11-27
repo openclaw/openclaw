@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../agents/admitted-run-context.test-support.js";
 import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { withOperatorToolGatewayAuthority } from "../gateway/server-plugin-in-process-dispatch.js";
@@ -8,16 +8,14 @@ import { applySessionModelSelection } from "../plugin-sdk/model-session-runtime.
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
   createModelSelectionInputs,
-  selectionMocks,
   useSelectionEffects,
 } from "./apply-session-model-selection.test-support.js";
 await vi.hoisted(() => import("./apply-session-model-selection.test-support.js"));
-const { prepareRuntime } = selectionMocks;
 const { expectNoSelectionEffects } = useSelectionEffects();
 const { createFixtureParams } = createModelSelectionInputs();
 const profile = { profileId: "limited", displayName: "Test", hasAvatar: false, updatedAt: 1 };
 
-function restrictedSelection(options: { empty?: boolean; assertCurrent?: () => void } = {}) {
+function restrictedSelection(options: { empty?: boolean } = {}) {
   const params = createFixtureParams(
     ["primary", "fallback", "manual"].map((id) => ({ provider: "fixture", id, name: id })),
     {
@@ -26,10 +24,9 @@ function restrictedSelection(options: { empty?: boolean; assertCurrent?: () => v
     },
   );
   const before = structuredClone(params.sessionEntry);
-  const operatorAuthority = createAdmittedRunOperatorAuthority({
+  const operatorAuthority = createTestOperatorAuthority({
     profileId: profile.profileId,
     scopes: ["operator.write"],
-    assertCurrent: options.assertCurrent ?? (() => {}),
     modelPolicy: prepareOperatorModelPolicy({
       cfg: params.cfg,
       policy: { allow: options.empty ? [] : ["fixture/fallback", "fixture/manual"] },
@@ -41,10 +38,7 @@ function restrictedSelection(options: { empty?: boolean; assertCurrent?: () => v
       expect(params.sessionEntry).toEqual(before);
       expectNoSelectionEffects();
     },
-    run: (
-      kind: "caller" | "profiled" | "unprofiled" | "unbound" | "request" = "caller",
-      assertCurrent?: () => void,
-    ) => {
+    run: (kind: "caller" | "profiled" | "unprofiled" | "unbound" | "request" = "caller") => {
       const run = () => applySessionModelSelection(params);
       if (kind === "caller") {
         return withGatewayToolCallerIdentity(
@@ -68,7 +62,6 @@ function restrictedSelection(options: { empty?: boolean; assertCurrent?: () => v
       return withOperatorToolGatewayAuthority(
         {
           scopes: ["operator.write"],
-          assertCurrent,
           ...(kind !== "unprofiled" ? { authenticatedUserProfile: profile } : {}),
           ...(kind === "profiled" ? { operatorRunAuthority: operatorAuthority } : {}),
         },
@@ -101,31 +94,6 @@ it.each([
       expect(result).toMatchObject({ status: "rejected", reason: "not-allowed" });
       expectUnchanged();
     }
-  },
-);
-
-it.each(["caller", "profiled"] as const)(
-  "rechecks %s authority after model preparation before mutation",
-  async (source) => {
-    let current = true;
-    const message =
-      source === "caller" ? "operator policy changed" : "direct invocation authority expired";
-    const assertCurrent = () => {
-      if (!current) {
-        throw new Error(message);
-      }
-    };
-    const { params, run, expectUnchanged } = restrictedSelection(
-      source === "caller" ? { assertCurrent } : {},
-    );
-    params.request.runtime = { kind: "set", runtime: "openclaw" };
-    prepareRuntime.mockImplementationOnce(async () => {
-      current = false;
-      return { kind: "ready", runtimeId: "openclaw", validate: () => undefined };
-    });
-    const result = await run(source, assertCurrent);
-    expect(result).toMatchObject({ status: "rejected", reason: "not-allowed", message });
-    expectUnchanged();
   },
 );
 

@@ -238,6 +238,13 @@ class RosterActivityStore {
     return this.binding && this.visible() ? this.refreshBinding(this.binding) : Promise.resolve();
   }
 
+  wake() {
+    this.synchronize();
+    if (this.binding) {
+      this.context.sessions.wakeList(this.binding.query);
+    }
+  }
+
   private refreshBinding(binding: RosterBinding): Promise<void> {
     if (binding.request) {
       return binding.request;

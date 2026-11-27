@@ -11,7 +11,7 @@ export function extractNodeFailedTests(log) {
   const files = new Map();
   const streams = new Map();
   for (const raw of stripVTControlCharacters(log).split("\n")) {
-    const line = raw.replace(/^\d{4}-\d{2}-\d{2}T\S+\s+/u, "").trim();
+    const line = raw.replace(/^\uFEFF?\d{4}-\d{2}-\d{2}T\S+\s+/u, "").trim();
     const shard = /^\[shard:([^\]]+)\]\s*(.*)$/u.exec(line);
     const stream = shard?.[1] ?? "";
     const text = (shard?.[2] ?? line).trim();
@@ -197,7 +197,7 @@ export function parseNodeFailureReport(log, requireComplete) {
   const rows = stripVTControlCharacters(log)
     .split("\n")
     .map((line) => {
-      const raw = line.replace(/^\d{4}-\d{2}-\d{2}T\S+\s/u, "");
+      const raw = line.replace(/^\uFEFF?\d{4}-\d{2}-\d{2}T\S+\s/u, "");
       const match = /^\[shard:([^\]]+)\]\s*(.*)$/u.exec(raw);
       return { stream: match?.[1] ?? "", text: (match?.[2] ?? raw).trim() };
     });

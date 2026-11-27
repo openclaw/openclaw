@@ -43,7 +43,6 @@ export async function prepareManagedServiceRuntimeFixture({
     | "interruptedUpdate"
     | "updaterStopped"
     | "operatorRestart"
-    | "pluginCohort"
     | "olderMark"
     | "finalizeFailure"
   >;
@@ -75,7 +74,6 @@ export async function prepareManagedServiceRuntimeFixture({
           cut: options.interruptedUpdate,
           updaterStopped: options.updaterStopped,
           operatorRestart: options.operatorRestart,
-          pluginCohort: options.pluginCohort,
           olderMark: options.olderMark,
           finalizeFailure: options.finalizeFailure,
         })
@@ -85,7 +83,7 @@ export async function prepareManagedServiceRuntimeFixture({
     if (options.requester.authorizationSource?.startsWith("profile:")) {
       await appendRuntime(`
         const requesterRuntime = await import(${JSON.stringify(resolveRuntimeWorkerUrl(triageTestRuntimeEntrypoints.requester).href)});
-        export const { prepareManagedUpdateRequesterIdentity } = requesterRuntime;
+        export const { prepareUpdateRequesterIdentity: prepareManagedUpdateRequesterIdentity } = requesterRuntime;
       `);
       return { sourceRuntimeImport, ledgerRuntimeImport, interrupted };
     }

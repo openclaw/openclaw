@@ -29,6 +29,11 @@ it.for(["native", "broker"] as const)(
     );
     expect(result.error, result.stderr).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual({ transport, collected: 6, reused: true });
+    expect(JSON.parse(result.stdout)).toEqual({
+      transport,
+      collected: 6,
+      retiredBrokersCollected: transport === "broker" ? 1 : 0,
+      reused: true,
+    });
   },
 );

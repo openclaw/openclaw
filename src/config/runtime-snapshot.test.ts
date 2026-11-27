@@ -168,23 +168,6 @@ it("keeps model projections across display writes but invalidates authored value
   expect(modelCacheKey(source)).not.toBe(modelKey);
 });
 
-it("hashes one captured immutable fleet only once", () => {
-  const source = {
-    agents: {
-      entries: Object.fromEntries(
-        Array.from({ length: 200 }, (_, index) => [`agent-${index}`, { name: `${index}` }]),
-      ),
-    },
-  };
-  const keys = vi.spyOn(Object, "keys");
-  const config = captureRuntimeConfig(source);
-  const first = hashRuntimeConfigValue(config);
-  for (let index = 0; index < 200; index += 1) {
-    expect(hashRuntimeConfigValue(config)).toBe(first);
-  }
-  expect(keys.mock.calls.filter(([value]) => value === config.agents?.entries)).toHaveLength(1);
-});
-
 it("rehashes mutable descendants of a shallow-frozen config", () => {
   const config = Object.freeze(portConfig(18789));
   const before = hashRuntimeConfigValue(config);

@@ -484,7 +484,7 @@ export function createInternalAgentTurnFacade(
               options.client,
               async () => {
                 retainRoot?.();
-                const { createAgentTurnService } = await import("./agent-turn-service.js");
+                const { prepareExactAgentTurnWait } = await import("./agent-wait.js");
                 if (prepareDispatchCurrent) {
                   await prepareDispatchCurrent();
                 }
@@ -492,10 +492,7 @@ export function createInternalAgentTurnFacade(
                 entry?.assertOpen();
                 options.assertContextCurrent?.();
                 entry?.release();
-                const observation = await createAgentTurnService({
-                  context,
-                  isWebchatConnect,
-                }).waitForTurn(params);
+                const observation = await prepareExactAgentTurnWait(context, params).wait();
                 return observation.result;
               },
               {

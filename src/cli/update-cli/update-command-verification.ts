@@ -7,6 +7,7 @@ import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { readGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
 import { settleGitReleaseTrial } from "../../infra/git-release.js";
+import { inspectPortUsage } from "../../infra/ports-inspect.js";
 import {
   normalizeUpdateFailureFacts,
   type UpdateFailureFact,
@@ -35,6 +36,7 @@ import {
 } from "../daemon-cli/restart-health.js";
 import { allListenersOwnedByRuntimePid } from "../daemon-cli/restart-port-ownership.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import {
   createPluginUpdateWarning,
   type PluginUpdateWarning,
@@ -113,6 +115,111 @@ export async function readFailedUpdateGatewayState(
   };
 }
 
+/**
+ * Positive evidence that the restarted service still runs the expected build: the native
+ * runtime still reports the process that answered as that version. Readiness facts are read
+ * before polling ends, so a candidate that exited since then is no evidence; neither is an
+ * accepted or queued restart.
+ */
+async function hasObservedGatewayLaunch(
+  params: Pick<FinishUpdateParams, "opts" | "preManagedServiceStop">,
+  result: UpdateRunResult,
+): Promise<boolean> {
+  const expectedVersion = result.after?.version;
+  const previousVersion = result.before?.version;
+  // An unknown or unchanged version cannot tell the candidate from the build it replaced.
+  if (!expectedVersion || !previousVersion || expectedVersion === previousVersion) {
+    return false;
+  }
+  const run = params.opts.run;
+  const env = params.preManagedServiceStop?.serviceEnv ?? run?.env ?? process.env;
+  let verified: UpdateRunResult["verification"];
+  try {
+    // Returns the recorded identity only while the same native process is still running.
+    verified = await readFailedUpdateGatewayState(run, env);
+  } catch (error) {
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
+    // An unreadable record or runtime is no evidence; the caller keeps its stronger refusal.
+    return false;
+  }
+  // Observations merge, so a match flag alone may describe an earlier process: require the
+  // recorded version itself, no build mismatch, and the candidate's build when it is known
+  // (an identity fallback can answer a version without a build).
+  const pid = verified?.pid;
+  const expectedBuildId = result.after?.buildId;
+  if (
+    verified?.serviceRunning !== true ||
+    typeof pid !== "number" ||
+    typeof verified.port !== "number" ||
+    verified.runningVersion !== expectedVersion ||
+    verified.versionMatch === false ||
+    (expectedBuildId && verified.runningBuildId !== expectedBuildId)
+  ) {
+    return false;
+  }
+  try {
+    // The version came from whatever answered on the port; only a port whose every listener
+    // the managed process owns ties that answer to it. Another owner on any bind address, or
+    // an unattributed listener, leaves the answer ambiguous.
+    const usage = await inspectPortUsage(verified.port, {
+      knownRuntimePid: pid,
+      signal: AbortSignal.timeout(GATEWAY_RESTART_PROBE_TIMEOUT_MS),
+    });
+    return allListenersOwnedByRuntimePid(usage.listeners, pid);
+  } catch (error) {
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
+    return false;
+  }
+}
+
+/**
+ * A migrated-state rollback block marks data at risk because no build may own that state.
+ * When the expected build is observed still running on it after a failed health check, that
+ * build owns it: the failure is restart health, not data risk. Releases the block and
+ * records the rollback outcome; rollback stays unattempted, since it would hand the
+ * migrated state to a build that cannot read it. A split-root update keeps its
+ * original-service compensation and the block.
+ */
+export async function releaseLaunchedState(
+  params: Pick<
+    FinishUpdateParams,
+    "opts" | "rollbackBlockedReason" | "originalManagedServiceRuntime" | "preManagedServiceStop"
+  >,
+  restarted: string,
+  result: UpdateRunResult,
+): Promise<boolean> {
+  const run = params.opts.run;
+  if (
+    !run ||
+    restarted !== "restart-health-failed" ||
+    params.rollbackBlockedReason !== "state-migrated-no-rollback" ||
+    params.originalManagedServiceRuntime ||
+    !(await hasObservedGatewayLaunch(params, result))
+  ) {
+    return false;
+  }
+  // The run keeps the migration fact for status and final recovery; an unrecorded fact keeps
+  // the block instead.
+  try {
+    recordUpdateRunVerification(
+      run.runId,
+      { rollbackOutcome: { status: "not-attempted", reason: "state-migrated-no-rollback" } },
+      run,
+    );
+  } catch (error) {
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
+    return false;
+  }
+  params.rollbackBlockedReason = undefined;
+  return true;
+}
+
 export async function recordFailedUpdateGatewayState(
   run: UpdateCommandOptions["run"],
   env: NodeJS.ProcessEnv,
@@ -188,7 +295,8 @@ function updateGatewayHealthFacts(
         : health.runtime.status === "stopped"
           ? false
           : undefined,
-    ...(typeof health.runtime.pid === "number" ? { pid: health.runtime.pid } : {}),
+    // Each observation names its own process; a PID from an earlier one must not survive.
+    pid: typeof health.runtime.pid === "number" ? health.runtime.pid : undefined,
     port,
     runningVersion: health.gatewayVersion ?? undefined,
     runningBuildId: health.gatewayBuildId ?? undefined,
@@ -268,6 +376,8 @@ export async function verifyUpdatedGateway(
     onVerified?: (verifiedAtMs: number) => void;
     unverifiedGitHandoff?: { incumbentPid?: number; waitStartedAtMs?: number };
     purpose?: "recovery" | "package-replacement";
+    /** A rollback refusal, so failure advice must not offer the old version. */
+    rollbackBlockedReason?: FinishUpdateParams["rollbackBlockedReason"];
   },
 ): Promise<{
   ok: boolean;
@@ -517,7 +627,16 @@ export async function verifyUpdatedGateway(
     `Recovery: run \`${restartCommand}\`; if the ${condition}, run \`${installCommand}\` from the ${session}, then rerun \`${statusCommand}\`.`,
   );
   const beforeVersion = normalizeOptionalString(params.result.before?.version);
-  if (isPackageManagerUpdateMode(params.result.mode) && beforeVersion) {
+  // Final recovery verifies again after rollback settled; its recorded refusal still holds.
+  const refusal = params.rollbackBlockedReason ?? params.result.rollbackOutcome?.reason;
+  if (refusal === "state-migrated-no-rollback" || refusal === "rollback-state-unverified") {
+    // Older code may not read this state; reinstalling it is not a recovery path.
+    diagnosticLines.push(
+      refusal === "state-migrated-no-rollback"
+        ? "Rollback: unavailable; update state was migrated, so keep this installation installed."
+        : "Rollback: unavailable; rollback safety could not be verified, so keep this installation installed.",
+    );
+  } else if (isPackageManagerUpdateMode(params.result.mode) && beforeVersion) {
     diagnosticLines.push(
       `Rollback: reinstall OpenClaw ${beforeVersion} with the same package manager, then rerun \`${installCommand}\`.`,
     );

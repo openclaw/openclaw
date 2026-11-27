@@ -136,15 +136,20 @@
   overflow: auto;
   padding: 16px;
 
-  &:has(.sidebar-file-toolbar) {
-    padding-top: 0;
+  /* Embedded viewers own their content insets; the panel must not inset the frame. */
+  &[data-flush] {
+    padding: 0;
   }
 
   &:has(.sidebar-pdf-preview) {
     display: flex;
     overflow: hidden;
-    padding: 0;
   }
+}
+
+.sidebar-content[data-flush] > .chat-tool-card__preview {
+  margin-top: 0;
+  border-radius: 0;
 }
 
 /* Full-height panel kinds need a bounded wrapper so their inner content can
@@ -316,12 +321,33 @@
   margin-top: 16px;
 }
 
+.sidebar-attachment-preview__csv :where(th),
+.sidebar-attachment-preview__csv :where(td) {
+  white-space: break-spaces;
+}
+
+.sidebar-attachment-preview__csv th {
+  text-transform: none;
+}
+
+/* Cards retain their inset; document rails and unframed readers fill the pane. */
+.sidebar-panel-host--fill:not(.sidebar-panel-host--mobile-reader) .sidebar-attachment-preview {
+  .sidebar-attachment-preview__markdown,
+  .chat-assistant-attachment-card,
+  openclaw-chat-text-attachment > [role="status"]:not(.sidebar-attachment-preview__loading) {
+    margin-inline: 16px;
+  }
+
+  .chat-assistant-attachment-card {
+    width: auto;
+    margin-block: 16px;
+  }
+}
+
 .sidebar-attachment-preview__text {
   min-width: 0;
-  margin: 16px 0 0;
+  margin: 0;
   padding: 16px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
   color: var(--text);
   font-family: var(--mono);
   font-size: 13px;
@@ -542,7 +568,7 @@
   gap: 10px;
   min-width: 0;
   flex: none;
-  padding: 6px 0;
+  padding: 6px 8px;
   border-bottom: 1px solid var(--border);
   color: var(--muted);
   font-size: var(--control-ui-text-sm);

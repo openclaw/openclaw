@@ -92,14 +92,16 @@ index**, or set the Boolean in config:
 
 The default is **off**; only explicit `true` enables it. The embedded OpenClaw
 runtime ranks the [Code Mode index](/tools/code-mode), the
-[Tool Search deferred-schema directory](/tools/tool-search), and the
+[Tool Search deferred tool directory](/tools/tool-search), and the
 [MCP tool directory](/tools/tool-search#mcp-tool-directory), including MCP
 servers installed as plugins. Codex-native surfaces
 are not ranked, and Claude CLI runs keep Claude's native `ToolSearch`. The lab
 does not enable Code Mode or Tool Search, authorize any tool, or change search
 results. Core coding tools retain their pinned places. Each surface reserves part
 of its existing budget for new tools, and selected entries render in canonical
-order.
+order. A tool counts as new for 14 days after the agent first offers it in a
+ranked prompt; tools already available when the agent first ranks are not new.
+Space new tools do not use goes to ranked tools.
 
 Successful calls contribute to a score with a 14-day half-life. Failed,
 cancelled, pending, client-delegated, and incognito calls do not count. Nested
@@ -468,13 +470,12 @@ Member role names use 1–64 lowercase letters, digits, `-`, or `_`, starting wi
 letter. Other configured names are shown as unavailable rather than renamed.
 Approving a request grants exactly the role named in its invite.
 
-From an approved owner browser, choose **Change role** on a member, select a defined
-role, and save. The browser signs the membership change with its owner device key, and the Gateway
-assigns that role to the linked profile. The member's connections and active work
-are cut off; reconnects use the new profile limits. A raised role reaches browsers
+To change a member's role later, an administrator uses **Settings → Team → Roles**,
+which assigns the role to the linked profile with `users.setRole`. The member's
+connections and active work are cut off; reconnects use the new profile limits. A raised role reaches browsers
 that were already approved without a new device approval. Members whose
-role was deleted are marked **Blocked** with the missing role's name; choose another
-role to restore access. Members who can load the Access plugin see their own role,
+role was deleted are marked **Blocked** with the missing role's name; assign another
+role in **Settings → Team → Roles** to restore access. Members who can load the Access plugin see their own role,
 not other people's access or owner controls. The plugin currently requires
 `operator.read`; session-read-only members, including the Viewer preset, cannot
 open it.
@@ -513,8 +514,9 @@ to restart the Gateway to finish turning on member roles. See [Named operator ro
 Labs only switches the feature on or off. Everything else lives outside Labs:
 
 - **Account menu** (your avatar, bottom left of the sidebar): **Sign in with
-  OpenClaw ID**, **Turn on remote access**, **Your devices**, **Copy claw link**
-  and **Sign out of OpenClaw ID**, depending on your connection and setup state.
+  OpenClaw ID**, **Turn on remote access**, **Your devices**, **Copy claw link**,
+  **Unlink from OpenClaw ID** and **Sign out of OpenClaw ID**, depending on your
+  connection and setup state.
 - **Access**, under **Pages**: the **Remote access** page from the bundled
   `openclaw-id-access` plugin (enabled by default). Turning OpenClaw ID on through
   Labs, the config CLI, or setup adds this plugin to an existing nonempty
@@ -562,6 +564,14 @@ Labs only switches the feature on or off. Everything else lives outside Labs:
   the account menu. Nodes and other devices are managed as before.
 - There is no owner reset in this version: a claw keeps the recovery kit it was
   linked with, so store the kit safely.
+- **Unlink from OpenClaw ID**, in the account menu on the computer that runs the
+  claw (never over the tunnel), or `openclaw id unlink`, takes the claw off
+  OpenClaw ID for good. The confirmation shows how many people and devices lose
+  access, and warns that the address stops working at once and that the claw's
+  name can never be used again, by any account. Every member and device is
+  removed; conversations and everything else on the computer stay. If Discovery
+  can't be reached, the claw is unlinked on the computer anyway and the Gateway
+  sends the unlink when Discovery answers ([CLI](/cli/id#unlink)).
 - To move a claw to new connection keys (a lost or leaked key file, a new computer
   without the key files, or routine rotation), run `openclaw id rebind` on the
   computer that runs it, with its recovery kit. Devices, people, nodes and invites

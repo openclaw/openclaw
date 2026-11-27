@@ -466,7 +466,7 @@
       {
         "provider": "openai",
         "model": "gpt-5.3-codex-spark",
-        "reason": "gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Run `openclaw models auth login --provider openai` and use openai/gpt-5.3-codex-spark with that OAuth profile; OpenAI API-key auth cannot use this model.",
+        "reason": "gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Sign in to OpenAI with ChatGPT in OpenClaw and use openai/gpt-5.3-codex-spark with that sign-in; OpenAI API-key auth cannot use this model.",
         "when": {
           "baseUrlHosts": ["api.openai.com"]
         }
@@ -474,7 +474,7 @@
       {
         "provider": "azure-openai-responses",
         "model": "gpt-5.3-codex-spark",
-        "reason": "gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Run `openclaw models auth login --provider openai` and use openai/gpt-5.3-codex-spark with that OAuth profile; Azure/OpenAI API-key auth cannot use this model."
+        "reason": "gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Sign in to OpenAI with ChatGPT in OpenClaw and use openai/gpt-5.3-codex-spark with that sign-in; Azure/OpenAI API-key auth cannot use this model."
       }
     ]
   },
@@ -492,30 +492,16 @@
       "method": "oauth",
       "personalAccount": true,
       "choiceId": "openai",
-      "appGuidedAuth": "oauth",
-      "credentialOnly": true,
-      "choiceLabel": "Codex login (browser)",
-      "choiceHint": "Sign in to Codex locally with your ChatGPT account",
-      "docsUrl": "https://docs.openclaw.ai/providers/openai/authentication",
-      "assistantPriority": -10,
-      "groupId": "openai",
-      "groupLabel": "OpenAI",
-      "groupHint": "Codex login, Sign in with ChatGPT, or API key"
-    },
-    {
-      "provider": "openai",
-      "method": "device-code",
-      "personalAccount": true,
-      "choiceId": "openai-device-code",
       "appGuidedAuth": "device-code",
       "credentialOnly": true,
       "channelLogin": {
         "aliases": ["codex"]
       },
-      "choiceLabel": "Codex login (device code)",
-      "choiceHint": "Use a browser code when OpenClaw runs on a remote VM",
+      "choiceLabel": "Codex login",
+      "choiceHint": "Sign in with your ChatGPT account using a one-time code",
       "docsUrl": "https://docs.openclaw.ai/providers/openai/authentication",
-      "assistantPriority": -40,
+      "assistantPriority": -10,
+      "deprecatedChoiceIds": ["openai-device-code"],
       "groupId": "openai",
       "groupLabel": "OpenAI",
       "groupHint": "Codex login, Sign in with ChatGPT, or API key",

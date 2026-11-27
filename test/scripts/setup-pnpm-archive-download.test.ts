@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { createServer } from "node:http";
-import { basename, delimiter, join } from "node:path";
+import { basename, delimiter, join, relative } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect } from "vitest";
 import { parse } from "yaml";
@@ -233,6 +233,77 @@ fi
 });
 
 describe("pnpm version output owns its failure", () => {
+  it("shares the store archive across hosted and Boat workspace layouts", async ({ command }) => {
+    const root = command.createTempDir("pnpm-portable-store-");
+    const workspaces = [
+      join(root, "home/runner/work/repo/repo"),
+      join(root, "boat/_work/repo/repo"),
+    ];
+    const resolve = action.runs.steps.find(
+      (step: { name: string }) => step.name === "Resolve pnpm store path",
+    );
+    const restore = action.runs.steps.find(
+      (step: { name: string }) => step.name === "Restore pnpm store cache",
+    );
+    const cachePaths: string[] = [];
+    for (const workspace of workspaces) {
+      fs.mkdirSync(workspace, { recursive: true });
+      const output = join(workspace, "outputs");
+      const envFile = join(workspace, "env");
+      const result = await command.run("bash", ["-eu", "-c", resolve.run], {
+        cwd: workspace,
+        env: {
+          PATH: process.env.PATH,
+          GITHUB_WORKSPACE: workspace,
+          GITHUB_OUTPUT: output,
+          GITHUB_ENV: envFile,
+        },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      const outputs = Object.fromEntries(
+        read(output)
+          .trim()
+          .split("\n")
+          .map((line) => {
+            const separator = line.indexOf("=");
+            return [line.slice(0, separator), line.slice(separator + 1)];
+          }),
+      );
+      cachePaths.push(
+        restore.with.path.replace(
+          /\$\{\{ steps\.pnpm-store\.outputs\.([^ ]+) \}\}/g,
+          (_: string, name: string) => expectDefined(outputs[name], "store cache path"),
+        ),
+      );
+      expect(read(envFile)).toContain(
+        "PNPM_CONFIG_STORE_DIR=" + join(workspace, ".cache/openclaw-pnpm-store") + "\n",
+      );
+    }
+    // Actions versions caches by the literal path input as well as the key.
+    expect(cachePaths[1]).toBe(cachePaths[0]);
+    const cachePath = cachePaths[0]!;
+    const publisher = parse(read(".github/workflows/vitest-cache-warm.yml"));
+    const save = publisher.jobs.dependencies.steps.find(
+      (step: { name: string }) => step.name === "Save pnpm store cache",
+    );
+    const setup = parse(read(".github/actions/setup-node-env/action.yml"));
+    expect(save.with.path).toBe("${{ steps.setup-node-env.outputs.pnpm-store-cache-path }}");
+    expect(setup.outputs["pnpm-store-cache-path"].value).toBe(
+      "${{ steps.setup-pnpm.outputs.store-cache-path }}",
+    );
+    expect(action.outputs["store-cache-path"].value).toBe(restore.with.path);
+    const entry = join(workspaces[0]!, cachePath, "entry");
+    fs.writeFileSync(entry, "cached package bytes\n");
+    const archive = join(root, "store.tar");
+    const pack = await command.run("tar", ["-cf", archive, "-C", workspaces[0]!, cachePath]);
+    expect(pack.status, pack.stderr).toBe(0);
+    const unpack = await command.run("tar", ["-xf", archive, "-C", workspaces[1]!]);
+    expect(unpack.status, unpack.stderr).toBe(0);
+    expect(read(join(workspaces[1]!, ".cache/openclaw-pnpm-store/entry"))).toBe(
+      "cached package bytes\n",
+    );
+  });
+
   it.for([false, true])(
     "restores the store root before pnpm runs (configured: %s)",
     async (configured, { command }) => {
@@ -259,7 +330,7 @@ describe("pnpm version output owns its failure", () => {
       });
       expect(result.error, "pnpm store action subprocess").toBeUndefined();
       expect(result.status, result.stderr).toBe(0);
-      expect(read(output)).toBe(`path=${store}\n`);
+      expect(read(output)).toBe(`path=${store}\ncache-path=${relative(root, store)}\n`);
       expect(read(envFile)).toBe(
         `PNPM_CONFIG_STORE_DIR=${store}\nPNPM_CONFIG_CACHE_DIR=${store}/cache\n`,
       );

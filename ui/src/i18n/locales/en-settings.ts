@@ -123,6 +123,11 @@ const enSettings = {
     },
     overview: {
       modelSelection: "Model selection",
+      modelSelectionHelp: "Choose overrides for this agent, or inherit the defaults from Models.",
+      inheritBehaviorHelp:
+        "Inherit default: use the shared setting, or the model’s own policy when no shared preference is set.",
+      editFallbackChain: "Edit fallback chain",
+      automaticFallbacks: "Default ({models})",
       primaryModel: "Primary model",
       primaryModelDefault: "Primary model (default)",
       notSet: "Not set",
@@ -134,6 +139,11 @@ const enSettings = {
       utilityModelInheritAutomatic: "Automatic",
       utilityModelDisabled: "Disabled for this agent",
       utilityModelFallbacks: "This agent's utility fallbacks: {models}",
+      subagentModel: "Subagent model",
+      subagentWithoutDefault:
+        "If neither this agent nor Models sets a subagent model, a child of the same agent keeps its starting session’s model. A child started under another agent uses that agent’s own model.",
+      subagentModelHelp:
+        "Runs subagents and agent-started sessions that run as this agent. Inherit the Models page default or choose one for this agent only.",
       inheritDefaultThinking: "Inherit default ({level})",
       fallbacks: "Fallbacks",
       addFallback: "Add fallback…",
@@ -766,6 +776,7 @@ const enSettings = {
     testProvider: "Test {provider}",
     testing: "Searching…",
     query: "Search query",
+    queryTooLong: "Shorten the search query to {limit} characters or fewer.",
     queryPlaceholder: "What would you like to find?",
     queryDefault: "OpenClaw documentation",
     success: "Search succeeded",
@@ -1097,7 +1108,7 @@ const enSettings = {
         "Sign in and enable this provider for this agent without changing the active model.",
       nativeDone: "Provider enabled. The active model has not changed.",
       setupDescription:
-        "Choose how to connect. Verifying an API key or token can also set this agent's active model.",
+        "Choose how to connect. Setup can also verify and select a model for this agent.",
       done: "Provider credentials saved.",
       statusRefreshFailed: "Sign-in saved, but refreshing status failed. Retry",
       startChat: "Start a new chat with {model}",
@@ -1115,15 +1126,28 @@ const enSettings = {
       sessionExpired:
         "This sign-in session ended. Close this dialog and refresh Models to check the result.",
     },
-    accessTitle: "Provider access",
-    accessDescription: "Accounts for {agent}. Defaults above apply to all agents.",
+    accessTitle: "Providers",
+    accessDescription: "Accounts for {agent}. Model defaults apply to all agents.",
     search: "Search providers…",
+    searchConnected: "Filter providers…",
+    catalog: {
+      firstTitle: "Connect a provider",
+      firstDescription:
+        "Sign in with your account or add an API key. Your agents use its models right away.",
+      title: "Add a provider",
+      description: "Sign in or add an API key for {agent}.",
+      browserSignIn: "Sign in with browser",
+      token: "Access token",
+      connect: "Connect",
+      connected: "Connected",
+      showAll: "Show all {count} providers",
+      showPopular: "Show popular providers",
+      discover: "Find local models",
+    },
     noMatches: "No providers match your search.",
     updated: "Updated {time}",
     refreshing: "Refreshing…",
     disconnected: "Connect to the gateway to see configured model providers.",
-    emptyTitle: "No model providers configured",
-    emptySubtitle: "Sign in to a provider or add an API key, then refresh.",
     status: {
       ok: "Signed in",
       ready: "Ready",
@@ -1229,6 +1253,14 @@ const enSettings = {
         "API key saved, but OpenClaw couldn’t check it. Use Test access to try again.",
       authModeBlocked: "API key changes aren’t available with the current sign-in method.",
     },
+    voice: {
+      title: "Talk, speech, and transcription",
+      detail:
+        "Sign in with ChatGPT doesn’t include {provider} voice. API usage is billed separately from your ChatGPT plan.",
+      providerDetail:
+        "Signing in with {provider} doesn’t include voice. Voice API usage is billed separately.",
+      status: "API key needed",
+    },
     probe: {
       test: "Test access",
       testing: "Testing…",
@@ -1247,14 +1279,8 @@ const enSettings = {
       },
     },
     readiness: {
-      title: "AI setup",
-      heading: "Set up a model",
       signedInNoModels:
         "You’re signed in, but this account has no usable models. Choose another provider or account.",
-      notConfigured: "Add a provider and test the model OpenClaw will use.",
-      noModels: "No models available",
-      modelRequired: "Model required",
-      chooseProvider: "Choose another provider",
     },
     logout: {
       action: "Sign out",
@@ -1264,6 +1290,18 @@ const enSettings = {
         "The saved sign-in for {provider} is removed from OpenClaw. You can add this account again later.",
       loggingOut: "Signing out…",
       done: "Signed out",
+      deviceAction: "Sign out on this device",
+      deviceActionFor: "Sign out {account} on this device",
+    },
+    disconnect: {
+      action: "Disconnect account",
+      actionFor: "{action}: {account}",
+      title: "{action}?",
+      confirm:
+        "OpenClaw asks the provider to revoke its access for {account}, then removes the saved sign-in from this Gateway. Other devices and agents that use this sign-in stop working. To remove it from this Gateway only, use Sign out on this device.",
+      failed: "Couldn’t disconnect {account}",
+      retry: "Try again",
+      manage: "Manage connected apps",
     },
     remove: {
       action: "Remove provider",
@@ -1315,6 +1353,13 @@ const enSettings = {
       automaticUnavailable: "No recommended small model",
       disabled: "Disabled",
       fallback: "Fallback model",
+      subagent: "Subagent model",
+      subagentHelpLabel: "About the subagent model",
+      subagentHelpPurpose:
+        "Runs subagents and the sessions agents start. An agent’s own subagent model, or a model named in the request, takes priority.",
+      subagentHelpInherit:
+        "Not set: a child of the same agent keeps the model of the session that started it. A child started under another agent uses that agent’s own model.",
+      subagentInherit: "Not set",
       utilityFallback: "Utility fallback model",
       utilityOverridesTitle: "Agents with their own utility settings:",
       utilityOverridesOthers: "Other agents use this default.",
@@ -1324,7 +1369,9 @@ const enSettings = {
       clearFallbacks: "No fallback model (remove all {count})",
       moreFallbackOne: "1 more fallback after this one",
       moreFallbacks: "{count} more fallbacks after this one",
-      selectModel: "Select a model",
+      selectModel: "Not set",
+      agentModel: "{agent} uses {model}, set on the agent.",
+      moreSettings: "More settings",
       discoveringMore: "Looking for more models in the background…",
       savedDiscoveringMore: "Saved. Looking for more models in the background…",
       discoverFailed: "Couldn’t load more models. Try again.",
@@ -1354,7 +1401,7 @@ const enSettings = {
       unverifiedHint:
         "Check this app’s custom launch command on the computer running OpenClaw, then check again.",
       notDetected:
-        "Not found on the computer running OpenClaw: {names}. Install one, then check again.",
+        "None found on the computer running OpenClaw. Supported apps: {names}. Install one, then check again.",
       disabledHint: "Enable this app to include its models in the picker.",
       signInHint:
         "Open {name} on the computer running OpenClaw and check its sign-in, then check again.",

@@ -5,6 +5,7 @@ import type {
   WizardStep,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
+import { formatCliCommand } from "../../cli/command-format.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import {
   createInvalidConfigError,
@@ -13,8 +14,14 @@ import {
 import type { GatewayRequestFunction } from "../../gateway/call.js";
 import { resolveManifestDeclaredProviderAuthChoices } from "../../plugins/provider-auth-choices.js";
 import {
+  isProviderAuthFailureReason,
+  resolveProviderAuthRecovery,
+  type ProviderAuthFailureReason,
+} from "../../plugins/provider-auth-failure.js";
+import {
   formatProviderLoginChoiceRef,
   isProviderCliLoginChoiceStartable,
+  matchesProviderLoginMethod,
 } from "../../plugins/provider-login-options.js";
 import { ExitError, type RuntimeEnv } from "../../runtime.js";
 import { sleep } from "../../utils/sleep.js";
@@ -48,7 +55,7 @@ export async function readGatewayLoginParams(
     (choice) =>
       isProviderCliLoginChoiceStartable(choice) &&
       (provider === undefined || choice.providerId === provider) &&
-      (!method || normalizeLowercaseStringOrEmpty(choice.methodId) === method),
+      (!method || matchesProviderLoginMethod(choice, method)),
   );
   if (!choices.length) {
     throw new Error(
@@ -76,6 +83,25 @@ export async function readGatewayLoginParams(
         });
   signal.throwIfAborted();
   return { sessionId, authChoice, agentId: opts.agent };
+}
+
+/** The CLI renderer for a typed sign-in failure: the only surface that prints a command. */
+export function formatProviderAuthFailureForCli(
+  reason: ProviderAuthFailureReason,
+  message: string,
+  provider?: string,
+): string {
+  const command = formatCliCommand(
+    `openclaw models auth login${provider ? ` --provider ${provider}` : ""}`,
+  );
+  const recovery = resolveProviderAuthRecovery(reason);
+  const next =
+    recovery === "admin"
+      ? "Ask your administrator to allow this sign-in."
+      : recovery === "wait"
+        ? `Wait a few minutes, then run ${command}.`
+        : `Run ${command} to start again.`;
+  return `${message}\n${next}`;
 }
 
 async function answerLoginStep(
@@ -214,7 +240,12 @@ export async function runGatewayLoginWizard(
       throw new WizardCancelledError(result.error);
     }
     if (result.status === "error") {
-      throw new Error(result.error ?? "Gateway provider login failed.");
+      const message = result.error ?? "Gateway provider login failed.";
+      throw new Error(
+        isProviderAuthFailureReason(result.reason)
+          ? formatProviderAuthFailureForCli(result.reason, message)
+          : message,
+      );
     }
     runtime.log("Provider sign-in saved and connection update confirmed by the Gateway.");
   } catch (error) {

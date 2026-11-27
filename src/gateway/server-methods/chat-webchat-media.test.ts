@@ -43,34 +43,24 @@ describe("webchat audio blocks through assistant messages", () => {
     return { audioPath, localRoot: tmpDir };
   }
 
-  it("preserves voice-note metadata on local audio attachments", async () => {
-    const { audioPath, localRoot } = writeAudioFixture();
-
-    const blocks = await localAudio(audioPath, localRoot, { audioAsVoice: true });
-    expect(blocks).toHaveLength(1);
-    expect(blocks[0]).toMatchObject({
-      type: "attachment",
-      attachment: { isVoiceNote: true },
-    });
-  });
-
   it("skips non-audio local files", async () => {
     const { audioPath, localRoot } = writeAudioFixture([0x89, 0x50, 0x4e, 0x47], ".png");
     const blocks = await localAudio(audioPath, localRoot);
     expect(blocks).toHaveLength(0);
   });
 
-  it("dedupes repeated paths", async () => {
+  it("dedupes repeated paths and preserves voice-note metadata", async () => {
     const { audioPath, localRoot } = writeAudioFixture([0x00]);
 
     const blocks = await buildWebchatAudioBlocks(
       [
-        { mediaUrl: audioPath, trustedLocalMedia: true },
+        { mediaUrl: audioPath, trustedLocalMedia: true, audioAsVoice: true },
         { mediaUrl: audioPath, trustedLocalMedia: true },
       ],
       { localRoots: [localRoot] },
     );
     expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({ type: "attachment", attachment: { isVoiceNote: true } });
   });
 
   it.each(["FiLe://", "FILE:"])(

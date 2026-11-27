@@ -555,6 +555,12 @@ untracked files and operator-staged changes remain outside the backup commit,
 even inside a backup scope. Already-committed unrelated files remain in Git;
 backup creation does not scrub their history or remove them from later trees.
 
+Repository Git hooks still run. Before reporting success or pushing, OpenClaw checks
+that the committed tree matches the prepared snapshot. If a hook unstages or
+changes an artifact, creation fails and the backup run is recorded as failed.
+The commit remains in the local repository for inspection; OpenClaw does not
+rewrite history. Correct the hook and create a new backup before relying on it.
+
 `--push` pushes the current branch to `origin`. A push failure after a successful local commit is a warning and does not discard or mark the local backup as failed.
 
 <Warning>
@@ -959,9 +965,10 @@ target resolves unambiguously to an archived regular file. Missing or ambiguous
 targets are rejected instead of selecting different recovery data.
 
 Installer-managed and rebuildable runtime roots under the state directory are
-also skipped: `dev/`, `git/`, `npm/`, legacy `npm-runtime/`, `tmp/`, and
-`tools/`. These contain managed checkouts, package trees, compiler caches,
-temporary files, and downloaded runtimes rather than authoritative user state;
+also skipped: `dev/`, `git/`, `npm/`, legacy `npm-runtime/` and
+`plugin-runtime-deps/`, `tmp/`, and `tools/`. These contain managed checkouts,
+package trees, compiler caches, temporary files, and downloaded runtimes rather
+than authoritative user state;
 reinstall or update the corresponding runtime or plugin after restore.
 Effectively activated, loadable plugins can declare additional durable or
 regenerable state- or agent-relative roots through

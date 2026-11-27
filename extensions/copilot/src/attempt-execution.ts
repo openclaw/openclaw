@@ -14,6 +14,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { normalizeAcceptedSessionSpawnResult } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { registerCopilotActiveRun } from "./attempt-active-run.js";
 import {
   deferBackgroundCompactionCleanup,
@@ -395,6 +396,20 @@ export async function runCopilotExecution(context: {
       nativeSessionHistoryValidated = true;
     }
     sessionRef.current = session;
+    if (settledToolFinalization) {
+      const remote = session.rpc?.remote;
+      if (!remote) {
+        throw new Error("[copilot] SDK cannot disable remote export for finalization");
+      }
+      await raceWithTimeout(
+        () => remote.disable(),
+        input.timeoutMs,
+        () => {
+          throw new Error("[copilot] timed out disabling remote export for finalization");
+        },
+        { signal: params.abortSignal },
+      );
+    }
     sdkSessionId =
       readNonEmptyString(session.sessionId) ??
       readNonEmptyString(session.id) ??

@@ -12,6 +12,7 @@ import { createVerifiedSqliteSnapshot } from "../infra/sqlite-snapshot.js";
 import { isSqlitePathOnBtrfs, setSqliteDirectoryNoCow } from "../infra/sqlite-wal-filesystem.js";
 import type { MigrationMessages } from "../infra/state-migrations.types.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
+import type { DoctorMaintenancePending } from "./doctor-maintenance-pending.js";
 import { assertDoctorSqliteMaintenancePathsNotAliased } from "./doctor-sqlite-maintenance-lock.js";
 import { reconcileNoCowRecoveryIdentities } from "./doctor-sqlite-nocow-recovery-identity.js";
 
@@ -59,6 +60,16 @@ export function inspectDoctorSqliteNoCow(paths: readonly string[]) {
     }
   }
   return result;
+}
+
+/** Every flagged path carries one note, so notes without paths are failed inspections. */
+export function checkDoctorSqliteNoCowPending(
+  inspection: ReturnType<typeof inspectDoctorSqliteNoCow>,
+): DoctorMaintenancePending {
+  if (inspection.paths.length > 0) {
+    return "work";
+  }
+  return inspection.notes.length > 0 ? "undecidable" : "none";
 }
 
 async function copyRegularFile(sourcePath: string, targetPath: string, assertCurrent: () => void) {

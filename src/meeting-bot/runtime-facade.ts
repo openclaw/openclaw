@@ -58,7 +58,6 @@ export function createMeetingRuntimeFacade<
     MeetingRuntimeSpeechBlockedReason<Health>
   > {
     readonly #defaultAgentId: string;
-    readonly #requesterSessionKeys = new Map<string, string>();
 
     constructor(private readonly params: MeetingRuntimeParams<Config>) {
       super({
@@ -76,18 +75,14 @@ export function createMeetingRuntimeFacade<
         ] as MeetingRuntimeSpeechBlockedReason<Health>[]),
         messages: options.messages.sessionRuntime,
         resolveJoin: (request) => this.#resolveJoin(request),
-        createSession: ({ request, resolved, createdAt }) => {
-          const session = createMeetingSession({
+        getRequesterSessionKey: (request) => request.requesterSessionKey,
+        createSession: ({ resolved, createdAt }) =>
+          createMeetingSession({
             platform: options.platform,
             config: params.config,
             resolved,
             createdAt,
-          }) as Session;
-          if (request.requesterSessionKey) {
-            this.#requesterSessionKeys.set(session.id, request.requesterSessionKey);
-          }
-          return session;
-        },
+          }) as Session,
         resolveSpeechInstructions: (request) =>
           request.message ?? params.config.realtime.introMessage,
         isBrowserTransport: () => true,
@@ -119,13 +114,26 @@ export function createMeetingRuntimeFacade<
         },
         joinTransport: async ({ request, session, context }) =>
           await this.#joinTransport(request, session, context),
-        releaseBrowserTab: async (session) => await this.#releaseBrowserTab(session),
+        releaseBrowserTab: (session) =>
+          this.releaseTrackedBrowserTab(session, {
+            messages: options.messages,
+            leave: (tab) =>
+              options.transport.leaveInBrowser({
+                runtime: params.runtime,
+                config: params.config,
+                meetingSessionId: session.id,
+                meetingUrl: session.url,
+                nodeId: session.chrome?.nodeId,
+                tab,
+              }),
+          }),
         refreshBrowserHealth: async (session, refreshOptions) =>
           await this.#refreshBrowserHealth(session, refreshOptions),
         refreshStatus: async (session) => await this.#refreshStatus(session),
         refreshReusableSession: async (session, request) =>
           await options.hooks?.refreshReusableSession?.(session, request, this.#hookContext()),
-        ensureRealtimeBridge: async (session) => await this.#ensureRealtimeBridge(session),
+        ensureRealtimeBridge: (session, requesterSessionKey) =>
+          this.#ensureRealtimeBridge(session, requesterSessionKey),
         captureTranscript: async (session, captureOptions) =>
           await this.#captureTranscript(session, captureOptions),
         speakViaTransport: async () => undefined,
@@ -145,27 +153,13 @@ export function createMeetingRuntimeFacade<
     }
 
     override async join(request: Request) {
-      try {
-        return await super.join(
-          options.hooks?.normalizeJoinRequest?.(request, this.#hookContext()) ?? request,
-        );
-      } catch (error) {
-        const activeIds = new Set(this.list().map((session) => session.id));
-        for (const sessionId of this.#requesterSessionKeys.keys()) {
-          if (!activeIds.has(sessionId)) {
-            this.#requesterSessionKeys.delete(sessionId);
-          }
-        }
-        throw error;
-      }
+      return await super.join(
+        options.hooks?.normalizeJoinRequest?.(request, this.#hookContext()) ?? request,
+      );
     }
 
     override async leave(sessionId: string) {
-      try {
-        return await super.leave(sessionId);
-      } finally {
-        this.#requesterSessionKeys.delete(sessionId);
-      }
+      return await super.leave(sessionId);
     }
 
     async statusForAgent(agentId: string, sessionId?: string) {
@@ -204,10 +198,9 @@ export function createMeetingRuntimeFacade<
 
     #hookContext(): MeetingRuntimeHookContext<Session, Request, Transport, Mode, Health> {
       return {
-        deleteRequesterSessionKey: (sessionId) => this.#requesterSessionKeys.delete(sessionId),
+        deleteRequesterSessionKey: (sessionId) => this.forgetMeetingRequesterSessionKey(sessionId),
         endSession: async (sessionId, leaveOptions) => {
           await super.leave(sessionId, leaveOptions);
-          this.#requesterSessionKeys.delete(sessionId);
         },
         noteSession: (session, note) => this.#noteSession(session, note),
         refreshBrowserHealth: async (session, refreshOptions) =>
@@ -301,6 +294,7 @@ export function createMeetingRuntimeFacade<
 
     async #ensureRealtimeBridge(
       session: Session,
+      requesterSessionKey?: string,
     ): Promise<MeetingSessionRuntimeHandles<Health> | undefined> {
       const audioBridgeActive =
         options.hooks?.isAudioBridgeActive?.(session) ?? Boolean(session.chrome?.audioBridge);
@@ -327,7 +321,7 @@ export function createMeetingRuntimeFacade<
         config: recoveryConfig,
         fullConfig: this.params.fullConfig,
         meetingSessionId: session.id,
-        requesterSessionKey: this.#requesterSessionKeys.get(session.id),
+        requesterSessionKey,
         mode: session.mode,
         trackedTargetId: session.chrome.browserTab?.targetId,
         url: session.url,
@@ -381,6 +375,10 @@ export function createMeetingRuntimeFacade<
           timeoutMs: refreshOptions.timeoutMs,
           url: session.url,
         });
+        // A status read can finish after leave. Its tab may now belong to a replacement.
+        if (!this.canObserveBrowser(session)) {
+          return;
+        }
         if (result.found && session.chrome) {
           if (result.tab?.targetId) {
             const currentTab = session.chrome.browserTab;
@@ -401,6 +399,9 @@ export function createMeetingRuntimeFacade<
           });
         }
       } catch (error) {
+        if (!this.canObserveBrowser(session)) {
+          return;
+        }
         const formattedError = formatErrorMessage(error);
         const message = options.messages.browserReadinessFailed?.(formattedError) ?? formattedError;
         if (options.hooks?.recordBrowserRecoveryFailure) {
@@ -431,58 +432,6 @@ export function createMeetingRuntimeFacade<
         nodeId: session.chrome?.nodeId,
         tab,
       });
-    }
-
-    async #releaseBrowserTab(session: Session): Promise<boolean | undefined> {
-      const tab = session.chrome?.browserTab;
-      if (!tab) {
-        this.#noteSession(session, options.messages.noTrackedTab);
-        session.browserLeft = false;
-        return false;
-      }
-      const shared = this.list().some(
-        (other) =>
-          other.id !== session.id &&
-          other.state === "active" &&
-          other.chrome?.browserTab?.targetId === tab.targetId &&
-          other.chrome?.nodeId === session.chrome?.nodeId,
-      );
-      if (shared) {
-        this.#noteSession(session, options.messages.sharedTab);
-        return undefined;
-      }
-      try {
-        const result = await options.transport.leaveInBrowser({
-          runtime: this.params.runtime,
-          config: this.params.config,
-          meetingSessionId: session.id,
-          meetingUrl: session.url,
-          nodeId: session.chrome?.nodeId,
-          tab,
-        });
-        this.#noteSession(session, result.note);
-        if (result.left && session.chrome) {
-          session.chrome.browserTab = undefined;
-          if (session.chrome.health) {
-            session.chrome.health = {
-              ...session.chrome.health,
-              captioning: false,
-              audioInputRouted: false,
-              audioOutputRouted: false,
-              providerConnected: false,
-              realtimeReady: false,
-              audioInputActive: false,
-              audioOutputActive: false,
-            };
-          }
-        }
-        session.browserLeft = result.left;
-        return result.left;
-      } catch (error) {
-        this.#noteSession(session, options.messages.leaveFailed(formatErrorMessage(error)));
-        session.browserLeft = false;
-        return false;
-      }
     }
 
     #withSessionAgentConfig(agentId: string): Config {

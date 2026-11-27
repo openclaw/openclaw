@@ -79,7 +79,11 @@ function* isRegisteredWorktree(repository: Repository): WorkspaceReads<boolean> 
   }
 }
 
-function* selectHostWorkspaceRoot(root: string, absolutePath: string): WorkspaceReads<string> {
+function* selectHostWorkspaceRoot(
+  root: string,
+  absolutePath: string,
+  strictWorkspaceRoot: boolean,
+): WorkspaceReads<string> {
   const resolvedRoot = path.resolve(root);
   const target = path.resolve(absolutePath);
   // Resolve parents without following the final entry: unlink may remove a symlink.
@@ -96,6 +100,7 @@ function* selectHostWorkspaceRoot(root: string, absolutePath: string): Workspace
     throw new Error(`Git metadata is outside the writable workspace: ${absolutePath}`);
   }
   if (
+    strictWorkspaceRoot ||
     isPathInside(resolvedRoot, target) ||
     !repository ||
     (repository.linked && !(yield* isRegisteredWorktree(repository)))
@@ -114,8 +119,12 @@ function* selectHostWorkspaceRoot(root: string, absolutePath: string): Workspace
 }
 
 /** Mutation effects require current registration inside fs-safe's synchronous guard. */
-export function resolveHostWorkspaceRoot(root: string, absolutePath: string): string {
-  const reads = selectHostWorkspaceRoot(root, absolutePath);
+export function resolveHostWorkspaceRoot(
+  root: string,
+  absolutePath: string,
+  strictWorkspaceRoot = false,
+): string {
+  const reads = selectHostWorkspaceRoot(root, absolutePath, strictWorkspaceRoot);
   let step = reads.next();
   while (!step.done) {
     let contents: string;
@@ -131,8 +140,12 @@ export function resolveHostWorkspaceRoot(root: string, absolutePath: string): st
 }
 
 /** Git contents are async here; stat, realpath and fs-safe prefix traversal remain sync. */
-export async function resolveHostRootAsync(root: string, absolutePath: string): Promise<string> {
-  const reads = selectHostWorkspaceRoot(root, absolutePath);
+export async function resolveHostRootAsync(
+  root: string,
+  absolutePath: string,
+  strictWorkspaceRoot = false,
+): Promise<string> {
+  const reads = selectHostWorkspaceRoot(root, absolutePath, strictWorkspaceRoot);
   let step = reads.next();
   while (!step.done) {
     let contents: string;

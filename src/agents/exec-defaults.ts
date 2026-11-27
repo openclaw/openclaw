@@ -16,15 +16,21 @@ import {
   resolveExecApprovalsFromFile,
   resolveExecModeFromPolicy,
   resolveExecModePolicy,
+  resolveExecPolicyForMode,
 } from "../infra/exec-approvals.js";
-import { applyExecPolicyLayer } from "../infra/exec-policy.js";
+import { intersectExecPolicyCeilings, applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { resolveAgentConfig, resolveSessionAgentId } from "./agent-scope.js";
 import { isRequestedExecTargetAllowed, resolveExecTarget } from "./bash-tools.exec-target.js";
+import { participationPermission, type ParticipationCeiling } from "./participation-ceiling.js";
 import {
   resolveSandboxRuntimeStatus,
   withSandboxRuntimeStatusInWorker,
 } from "./sandbox/runtime-status.js";
-import { resolveSessionPermissionExecPolicy } from "./session-permission-exec-mode.js";
+import {
+  applyExecModeCeiling,
+  resolveSessionPermissionExecMode,
+  resolveSessionPermissionExecPolicy,
+} from "./session-permission-exec-mode.js";
 
 /** Session-scoped exec fields that may be carried across an isolated runtime boundary. */
 export type ExecSessionDefaults = Pick<
@@ -108,6 +114,7 @@ export async function resolveNodeExecEligibilityAsync(
 }
 
 export type ResolveExecDefaultsParams = {
+  participationCeiling?: ParticipationCeiling;
   cfg?: OpenClawConfig;
   execApprovals?: ExecApprovalsFile;
   sessionEntry?: ExecSessionDefaults | null;
@@ -126,6 +133,7 @@ export type ResolvedExecDefaults = {
   mode: ExecMode;
   security: ExecSecurity;
   ask: ExecAsk;
+  denyMisses?: true;
   node?: string;
   canRequestNode: boolean;
 };
@@ -168,7 +176,9 @@ export function prepareExecDefaults(
     sandboxAvailable,
     sandboxRequired,
   });
-  const defaultSecurity = resolved.effectiveHost === "sandbox" ? "deny" : "full";
+  // Sandboxes enforce isolation themselves; their implicit deny is not a participant file ceiling.
+  const defaultSecurity =
+    resolved.effectiveHost === "sandbox" && !params.participationCeiling ? "deny" : "full";
   const sessionPermissionPolicy = params.sessionEntry?.permissionMode
     ? resolveSessionPermissionExecPolicy(
         { mode: params.sessionEntry.permissionMode },
@@ -178,7 +188,9 @@ export function prepareExecDefaults(
   // Full sessions bypass host floors only while effective security remains full;
   // ask-only tightening still applies without restoring those floors.
   const bypassHostApprovalFloors =
-    params.sessionEntry?.permissionMode === "full" && sessionPermissionPolicy?.security === "full";
+    !params.participationCeiling &&
+    params.sessionEntry?.permissionMode === "full" &&
+    sessionPermissionPolicy?.security === "full";
   const resolve = (
     approvalDefaults: ReturnType<typeof resolveExecApprovalsFromFile>["agent"] | undefined,
   ): ResolvedExecDefaults => {
@@ -193,17 +205,32 @@ export function prepareExecDefaults(
     }
     const modePolicy = resolveExecModePolicy(layeredPolicy);
     // Approval files bound every policy source except explicit admin-only full sessions.
-    const security =
+    let security =
       approvalDefaults?.security !== undefined
         ? minSecurity(modePolicy.security, approvalDefaults.security)
         : modePolicy.security;
-    const ask =
+    let ask =
       approvalDefaults?.ask !== undefined
         ? maxAsk(modePolicy.ask, approvalDefaults.ask)
         : modePolicy.ask;
+    const capped = params.participationCeiling
+      ? applyExecModeCeiling(
+          { ...modePolicy, security, ask },
+          resolveSessionPermissionExecMode({
+            mode: participationPermission(params.participationCeiling),
+          }),
+        )
+      : { ...modePolicy, security, ask };
+    const exact = intersectExecPolicyCeilings(
+      { security: capped.security ?? security, ask: capped.ask ?? ask },
+      params.participationCeiling?.execPolicy,
+    )!;
+    security = exact.security;
+    ask = exact.ask;
+    const cappedModePolicy = capped.mode ? resolveExecPolicyForMode(capped.mode) : undefined;
     const mode =
-      security === modePolicy.security && ask === modePolicy.ask
-        ? modePolicy.mode
+      capped.mode && cappedModePolicy?.security === security && cappedModePolicy.ask === ask
+        ? capped.mode
         : resolveExecModeFromPolicy({ security, ask });
     return {
       host: resolved.configuredTarget,
@@ -211,6 +238,7 @@ export function prepareExecDefaults(
       mode,
       security,
       ask,
+      ...(exact.denyMisses ? { denyMisses: true } : {}),
       node:
         params.execOverrides?.node ??
         params.sessionEntry?.execNode ??

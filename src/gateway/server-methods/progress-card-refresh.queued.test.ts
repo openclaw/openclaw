@@ -14,7 +14,6 @@ import { admitFollowupRunLifecycle } from "../../auto-reply/reply/queue/lifecycl
 import { clearFollowupQueue } from "../../auto-reply/reply/queue/state.js";
 import type { FollowupRun, QueueSettings } from "../../auto-reply/reply/queue/types.js";
 import type { AdmittedFollowupTurn } from "../../auto-reply/reply/reply-agent-turn-preparation.js";
-import { createMockTypingController } from "../../auto-reply/reply/test-helpers.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import {
   bindSessionControllerSource,
@@ -136,7 +135,6 @@ function fixture(options: { parkSteer?: boolean; onQueuedFollowupSettled?: () =>
     opts: { onQueuedFollowupSettled: options.onQueuedFollowupSettled },
     defaultModel: "test",
     typingMode: "never",
-    typing: createMockTypingController(),
   });
   // This bounded admission adapter replays the real Gateway dedupe map. It does
   // not implement queued completion: only the real runner/lifecycle may do that.

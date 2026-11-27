@@ -291,10 +291,7 @@ export async function controlTalkAgentRun(
           : await commands!.stopRealtimeVoiceSessionRun({
               sessionKey,
               sessionId,
-              assertCurrent: () => {
-                params.assertCurrent?.();
-                toolAuthorityOverlay?.operatorAuthority?.assertCurrent();
-              },
+              assertCurrent: params.assertCurrent,
             })
         : target !== null &&
           (params.cancelRun
@@ -354,7 +351,6 @@ export async function controlTalkAgentRun(
   };
   const canInject = () => {
     params.assertCurrent?.();
-    options.toolAuthorityOverlay?.operatorAuthority?.assertCurrent();
     return target
       ? !target.signal.aborted && target.isCurrent(sessionId)
       : legacyOwner?.isCurrent() === true;
@@ -368,8 +364,8 @@ export async function controlTalkAgentRun(
       },
       compatAssertCurrent: () => {
         params.assertCurrent?.();
-        // An asynchronous reader cannot repeat its read here; check the overlay it
-        // prepared for this admission while assertCurrent rechecks live operator authority.
+        // An asynchronous reader cannot repeat its read here; check the overlay
+        // prepared for this admission.
         const overlay = params.getToolAuthorityOverlayAsync
           ? options.toolAuthorityOverlay
           : params.getToolAuthorityOverlay?.();

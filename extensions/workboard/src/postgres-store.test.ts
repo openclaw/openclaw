@@ -336,7 +336,7 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
     );
     replaceAnchorForFreshAdmission(dbPath);
     expect(() => createWorkboardDatabase(dbPath, undefined, postgresInput)).toThrow(
-      new RegExp(`expected.*${SCHEMA_VERSION}`, "i"),
+      new RegExp(`supports.*${SCHEMA_VERSION}`, "i"),
     );
     expect(
       await rows<{ version: number }>(

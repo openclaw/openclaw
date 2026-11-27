@@ -10,7 +10,10 @@ import { withSetupCredentialAccess } from "../agents/auth-profiles/setup-access.
 import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
-import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
+import {
+  requireDefaultModelForAgent,
+  resolveDefaultModelForAgent,
+} from "../agents/model-selection-config.js";
 import { resolveOnboardingSetupTarget } from "../commands/onboard-agent-target.js";
 import type { OnboardOptions } from "../commands/onboard-types.js";
 import { applyImplicitAgentRosterDefaults } from "../config/implicit-agent-roster.js";
@@ -134,9 +137,10 @@ export async function offerLiveModelVerification(params: {
           )
         ).assertCurrent);
   const requiresCandidateVerification = (config: OpenClawConfig) => {
-    const provider = resolveDefaultModelForAgent({ cfg: config }).provider;
+    const provider = resolveDefaultModelForAgent({ cfg: config })?.provider;
     return (
       params.opts.nonInteractive !== true &&
+      provider !== undefined &&
       config.models?.providers?.[provider]?.localService !== undefined
     );
   };
@@ -185,7 +189,7 @@ export async function offerLiveModelVerification(params: {
           await import("../system-agent/setup-inference-credentials.js");
         const { projectSetupInferenceConfig } =
           await import("../system-agent/setup-model-selection.js");
-        const model = resolveDefaultModelForAgent({ cfg: config, agentId });
+        const model = requireDefaultModelForAgent({ cfg: config, agentId });
         const modelRef = `${model.provider}/${model.model}`;
         const profile = selectSetupCredential(candidate.authProfiles, modelRef, config);
         if (!profile) {

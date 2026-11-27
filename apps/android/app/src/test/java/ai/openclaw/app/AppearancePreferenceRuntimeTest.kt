@@ -1,9 +1,13 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.chat.ChatSessionPatch
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.node.ConnectionManager
+import ai.openclaw.app.ui.nextSessionPin
 import android.content.Context
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
@@ -61,6 +65,124 @@ private const val APPEARANCE_CONNECTION_TIMEOUT_MS = 8_000L
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class AppearancePreferenceRuntimeTest {
+  @Test
+  fun personalPinEditsRequireBothTheCurrentProfileAndThePinPatchGrant() =
+    runBlocking {
+      withAppearanceGateway {
+        // A display identity by itself does not prove a durable preference owner.
+        respond = { request ->
+          when {
+            request.method == "users.prefs.get" && request.profileId == "display-only" -> """{"status":"no_durable_identity"}"""
+            request.method != "users.self" -> null
+            request.profileId != null -> """{"profile":{"id":${JsonPrimitive(request.profileId)}}}"""
+            else -> throw GatewayRequestRejected(ErrorShape("FORBIDDEN", "Sign in"))
+          }
+        }
+        val methods = setOf("sessions.patch", "users.self", "users.prefs.get")
+        val caps = setOf("personal-session-pins")
+        connect(methods = methods, capabilities = caps)
+        withTimeout(APPEARANCE_CONNECTION_TIMEOUT_MS) { runtime.personalSessionPinAccess.first { it.canEdit("member") } }
+        connect(scopes = listOf("operator.sessions.write"), methods = methods, capabilities = caps, activityViewerId = "gateway-owner")
+        assertEquals(PersonalSessionPinAccess.ReadOnly, runtime.personalSessionPinAccess.value)
+        connect(scopes = listOf("operator.sessions.write"), methods = methods, capabilities = caps, sessionCap = "view")
+        withTimeout(APPEARANCE_CONNECTION_TIMEOUT_MS) { runtime.personalSessionPinAccess.first { it.canEdit("owner") } }
+        assertFalse(runtime.personalSessionPinAccess.value.canEdit("member"))
+        connect(scopes = listOf("operator.sessions.write"), methods = methods, capabilities = caps, activityViewerId = "profile-a")
+        withTimeout(APPEARANCE_CONNECTION_TIMEOUT_MS) { runtime.personalSessionPinAccess.first { it.canEdit("owner") } }
+        assertFalse(runtime.personalSessionPinAccess.value.canEdit(null))
+        connect(scopes = listOf("operator.read"), methods = methods, capabilities = caps)
+        assertEquals(PersonalSessionPinAccess.ReadOnly, runtime.personalSessionPinAccess.value)
+        connect(profileId = null, methods = methods, capabilities = caps)
+        assertEquals(PersonalSessionPinAccess.ReadOnly, runtime.personalSessionPinAccess.value)
+        connect(profileId = "display-only", methods = methods, capabilities = caps)
+        withTimeout(APPEARANCE_CONNECTION_TIMEOUT_MS) { runtime.chat.reactionViewerId.first { it == "display-only" } }
+        assertEquals(PersonalSessionPinAccess.ReadOnly, runtime.personalSessionPinAccess.value)
+        connect(methods = methods - "sessions.patch", capabilities = caps)
+        assertEquals(PersonalSessionPinAccess.ReadOnly, runtime.personalSessionPinAccess.value)
+        connect(methods = methods)
+        assertEquals(PersonalSessionPinAccess.Unsupported, runtime.personalSessionPinAccess.value)
+      }
+    }
+
+  @Test
+  fun profileRefreshRecoversSavedPinEditingWithoutWakingTheThread() =
+    runBlocking {
+      withAppearanceGateway {
+        respond = { request ->
+          if (request.method == "users.prefs.get") throw GatewayRequestRejected(ErrorShape("UNAVAILABLE", "Profile pending"))
+          null
+        }
+        connect(methods = setOf("sessions.patch", "users.prefs.get", "users.self"), capabilities = setOf("personal-session-pins"))
+        assertEquals(PersonalSessionPinAccess.ReadOnly, runtime.personalSessionPinAccess.value)
+        val connection = requests.last { it.method == "users.prefs.get" }.connection
+        val row = ChatSessionEntry(key = "agent:main:sleep", updatedAtMs = 0, pinned = false, snoozedUntil = 2000)
+        setProfilePreferences("profile-a", """{"ui.railShortcuts":["session:agent:main:sleep","session-rail:agent:main:other"]}""")
+        respond = { request ->
+          when (request.method) {
+            "config.get" -> throw GatewayRequestRejected(ErrorShape("FORBIDDEN", "No config access"))
+            "sessions.patch" -> """{"ok":true,"key":"agent:main:sleep","entry":{"updatedAt":1}}"""
+            else -> null
+          }
+        }
+        emitOperatorEvent("users.prefs.changed", "{}")
+        val verified = withTimeout(APPEARANCE_CONNECTION_TIMEOUT_MS) { runtime.personalSessionPinAccess.first { it.canEdit("member") } }
+        val requestedKeys = requests.last { it.method == "users.prefs.get" }.params["keys"] as JsonArray
+        assertTrue(JsonPrimitive("ui.railShortcuts") in requestedKeys)
+        assertEquals(null, verified.nextSessionPin(row.copy(key = "agent:main:other"), 1000))
+        val edit = verified.nextSessionPin(row, 1000)
+        assertEquals(false, edit)
+        assertTrue(requests.none { it.method == "sessions.patch" })
+        assertTrue(runtime.chat.patchSession(ChatSessionPatch(key = row.key, pinned = edit)))
+        val fields = requests.single { it.method == "sessions.patch" }.params
+        assertEquals(JsonPrimitive(false), fields["pinned"])
+        assertFalse("snoozedUntil" in fields)
+        setProfilePreferences("profile-a", """{"ui.railShortcuts":[]}""")
+        emitOperatorEvent("users.prefs.changed", "{}")
+        withTimeout(APPEARANCE_CONNECTION_TIMEOUT_MS) { runtime.personalSessionPinAccess.first { it.canEdit("member") && it.nextSessionPin(row, 1000) == null } }
+        respond = { request -> if (request.method == "users.prefs.get") """{"status":"no_durable_identity"}""" else null }
+        emitOperatorEvent("users.prefs.changed", "{}")
+        withTimeout(APPEARANCE_CONNECTION_TIMEOUT_MS) { runtime.personalSessionPinAccess.first { it == PersonalSessionPinAccess.ReadOnly } }
+        assertEquals(setOf(connection), requests.filter { it.method == "users.prefs.get" }.map { it.connection }.toSet())
+        assertTrue(writes.isEmpty())
+      }
+    }
+
+  @Test
+  fun replacementHelloRetiresPinEditingBeforeItsProfileResolves() =
+    runBlocking {
+      withAppearanceGateway {
+        val methods = setOf("sessions.patch", "users.self", "users.prefs.get")
+        val caps = setOf("personal-session-pins")
+        connect(methods = methods, capabilities = caps)
+        withTimeout(APPEARANCE_CONNECTION_TIMEOUT_MS) { runtime.personalSessionPinAccess.first { it.canEdit("owner") } }
+        val pending = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val oldAnswer = CompletableDeferred<Unit>()
+        respond = { request ->
+          if (request.method == "users.prefs.get" && request.profileId == "old-socket") {
+            pending.complete(Unit)
+            release.await()
+            oldAnswer.complete(Unit)
+          }
+          null
+        }
+        try {
+          connect(profileId = "old-socket", methods = methods, capabilities = caps, waitForBranding = false)
+          withTimeout(APPEARANCE_CONNECTION_TIMEOUT_MS) { pending.await() }
+          assertEquals(PersonalSessionPinAccess.ReadOnly, runtime.personalSessionPinAccess.value)
+          connect(profileId = null, methods = methods, capabilities = caps)
+          release.complete(Unit)
+          withTimeout(APPEARANCE_CONNECTION_TIMEOUT_MS) { oldAnswer.await() }
+          refresh()
+          assertEquals(PersonalSessionPinAccess.ReadOnly, runtime.personalSessionPinAccess.value)
+          disconnect()
+          assertFalse(runtime.personalSessionPinAccess.value.canEdit("owner"))
+        } finally {
+          release.complete(Unit)
+        }
+      }
+    }
+
   @Test
   fun textSizeNeverSyncsToProfilesAndSurvivesRuntimeReconstruction() =
     runBlocking {
@@ -189,7 +311,7 @@ class AppearancePreferenceRuntimeTest {
         setProfilePreferences("profile-b", """{"ui.theme":"rose","ui.themeMode":"light","ui.accent":"#E96CB7"}""")
         respond = { request ->
           if (request.method == "users.self") {
-            throw GatewayRequestRejected(GatewaySession.ErrorShape("UNAVAILABLE", "Profile lookup temporarily unavailable"))
+            throw GatewayRequestRejected(ErrorShape("UNAVAILABLE", "Profile lookup temporarily unavailable"))
           }
           null
         }
@@ -225,7 +347,7 @@ class AppearancePreferenceRuntimeTest {
               "users.self" -> {
                 profileLookupStarted.complete(Unit)
                 releaseProfileLookup.await()
-                throw GatewayRequestRejected(GatewaySession.ErrorShape("UNAVAILABLE", "Profile lookup temporarily unavailable"))
+                throw GatewayRequestRejected(ErrorShape("UNAVAILABLE", "Profile lookup temporarily unavailable"))
               }
             }
           }
@@ -277,7 +399,7 @@ class AppearancePreferenceRuntimeTest {
           val unsupportedMethods = if (catalogOmitsMethod) setOf("agents.list", "config.get") else null
           val unsupportedPreferences: suspend (AppearanceRpcRequest) -> String? = { request ->
             if (request.method == "users.prefs.get") {
-              throw GatewayRequestRejected(GatewaySession.ErrorShape("INVALID_REQUEST", "unknown method: users.prefs.get"))
+              throw GatewayRequestRejected(ErrorShape("INVALID_REQUEST", "unknown method: users.prefs.get"))
             }
             null
           }
@@ -851,6 +973,9 @@ private class AppearanceGatewayFixture(
     @Volatile var profileId: String?,
     val scopes: List<String>,
     val methods: Set<String>?,
+    val capabilities: Set<String> = emptySet(),
+    val sessionCap: String? = null,
+    val activityViewerId: String? = null,
   ) {
     val operatorHello = CompletableDeferred<Pair<Int, WebSocket>>()
   }
@@ -901,9 +1026,12 @@ private class AppearanceGatewayFixture(
     scopes: List<String> = listOf("operator.read", "operator.write"),
     methods: Set<String>? = appearanceMethods,
     waitForBranding: Boolean = true,
+    capabilities: Set<String> = emptySet(),
+    sessionCap: String? = null,
+    activityViewerId: String? = null,
   ) {
     if (!connected) stopStartupJobs()
-    val identity = Connection(profileId, scopes, methods)
+    val identity = Connection(profileId, scopes, methods, capabilities, sessionCap, activityViewerId)
     nextConnection = identity
     if (!connected) {
       ReflectionHelpers.setField(runtime, "connectedEndpoint", endpoint)
@@ -934,7 +1062,7 @@ private class AppearanceGatewayFixture(
     val previousRespond = respond
     respond = { request ->
       if (request.method == "connect") {
-        throw GatewayRequestRejected(GatewaySession.ErrorShape("UNAVAILABLE", "Gateway offline"))
+        throw GatewayRequestRejected(ErrorShape("UNAVAILABLE", "Gateway offline"))
       }
       previousRespond(request)
     }
@@ -1066,13 +1194,21 @@ private class AppearanceGatewayFixture(
         buildJsonObject {
           put("server", buildJsonObject { put("host", JsonPrimitive("appearance-" + request.connection)) })
           identity.methods?.let { methods ->
-            put("features", buildJsonObject { put("methods", JsonArray(methods.map(::JsonPrimitive))) })
+            put(
+              "features",
+              buildJsonObject {
+                put("methods", JsonArray(methods.map(::JsonPrimitive)))
+                put("capabilities", JsonArray(identity.capabilities.map(::JsonPrimitive)))
+              },
+            )
           }
           put(
             "auth",
             buildJsonObject {
               put("role", JsonPrimitive("operator"))
               put("scopes", JsonArray(identity.scopes.map(::JsonPrimitive)))
+              identity.sessionCap?.let { put("sessionCap", JsonPrimitive(it)) }
+              identity.activityViewerId?.let { put("profileActivityViewerId", JsonPrimitive(it)) }
             },
           )
           put("snapshot", json.parseToJsonElement("""{"sessionDefaults":{"mainSessionKey":"main"}}"""))
@@ -1119,7 +1255,7 @@ private class AppearanceGatewayFixture(
 
   private fun requireWriteScope(identity: Connection) {
     if ("operator.write" !in identity.scopes) {
-      throw GatewayRequestRejected(GatewaySession.ErrorShape("INVALID_REQUEST", "missing scope: operator.write"))
+      throw GatewayRequestRejected(ErrorShape("INVALID_REQUEST", "missing scope: operator.write"))
     }
   }
 

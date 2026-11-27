@@ -221,7 +221,11 @@ describe("typed feature plugins", () => {
         actionId: "inspect",
         payload: { value },
       });
-    expect(await invoke(4)).toMatchObject({ ok: false, code: "INVALID_INPUT" });
+    expect(await invoke(4)).toMatchObject({
+      ok: false,
+      code: "INVALID_INPUT",
+      error: expect.stringContaining("Use top-level input fields: { value: string }"),
+    });
     expect(execute).not.toHaveBeenCalled();
     expect(await invoke("valid")).toMatchObject({ ok: false, code: "INVALID_OUTPUT" });
     expect(execute).toHaveBeenCalledTimes(1);

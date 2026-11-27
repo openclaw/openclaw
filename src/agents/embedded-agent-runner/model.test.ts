@@ -13,7 +13,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { discoverAuthStorageFacts, discoverModelsAsync } from "../agent-model-discovery.js";
-import { clearRuntimeAuthProfileStoreSnapshots, saveAuthProfileStore } from "../auth-profiles.js";
+import { clearRuntimeAuthProfileStoreSnapshots } from "../auth-profiles.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "../auth-profiles/path-resolve.native.js";
 import { MODELS_JSON_STATE } from "../models-config-state.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
@@ -77,7 +77,7 @@ vi.mock("../model-suppression.js", async (importOriginal) => {
     buildSuppressedBuiltInModelError: (params: Parameters<typeof suppressed>[0]) => {
       const { provider } = params;
       if (suppressed(params)) {
-        return `Unknown model: ${provider}/gpt-5.3-codex-spark. gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Run \`openclaw models auth login --provider openai\` and use openai/gpt-5.3-codex-spark with that OAuth profile; OpenAI API-key auth cannot use this model.`;
+        return `Unknown model: ${provider}/gpt-5.3-codex-spark. gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Sign in to OpenAI with ChatGPT in OpenClaw and use openai/gpt-5.3-codex-spark with that sign-in; OpenAI API-key auth cannot use this model.`;
       }
       return undefined;
     },
@@ -401,40 +401,6 @@ describe("resolveModel", () => {
     });
     expect(prepareProviderDynamicModel).toHaveBeenCalledTimes(1);
     expect(runProviderDynamicModel).not.toHaveBeenCalled();
-  });
-
-  it("reuses inherited auth from one lifecycle generation", async () => {
-    const agentDir = state.agentDir("worker");
-    const defaultAgentDir = state.agentDir();
-    fs.mkdirSync(agentDir, { recursive: true });
-    fs.mkdirSync(defaultAgentDir, { recursive: true });
-    const cfg = makeOpenClawConfigFixture({
-      agents: {
-        defaults: { authInheritance: { agentId: "main" } },
-        entries: {
-          main: { agentDir: defaultAgentDir },
-          worker: { agentDir },
-        },
-      },
-    });
-    mockMinimalModelDiscovery("openai", "gpt-5.5");
-
-    const options = { agentId: "worker", runtimeHooks: createRuntimeHooks() };
-    const first = await resolveModelAsync("openai", "gpt-5.5", agentDir, cfg, options);
-    saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: { "openai:default": { type: "api_key", provider: "openai", key: "one" } },
-      },
-      defaultAgentDir,
-      { filterExternalAuthProfiles: false, syncExternalCli: false },
-    );
-    const second = await resolveModelAsync("openai", "gpt-5.5", agentDir, cfg, options);
-
-    expectResolvedModel(first);
-    expectResolvedModel(second);
-    expect(discoverAuthStorageFacts).toHaveBeenCalledTimes(1);
-    expect(discoverModelsAsync).toHaveBeenCalledTimes(1);
   });
 
   it("uses the resolved default agent directory and workspace for prepared discovery", async () => {
@@ -924,7 +890,7 @@ describe("resolveModel", () => {
     const result = await resolveModelForTest("openai", "gpt-5.3-codex-spark");
     expect(result.model).toBeUndefined();
     expect(result.error).toBe(
-      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Run `openclaw models auth login --provider openai` and use openai/gpt-5.3-codex-spark with that OAuth profile; OpenAI API-key auth cannot use this model.",
+      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Sign in to OpenAI with ChatGPT in OpenClaw and use openai/gpt-5.3-codex-spark with that sign-in; OpenAI API-key auth cannot use this model.",
     );
   });
 

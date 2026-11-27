@@ -1,5 +1,8 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { beforeEach, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   isDeliveredCurrentSourceReply,
   mirrorDeliveredSourceReplyToTranscript,
@@ -9,7 +12,11 @@ const channelPluginMocks = vi.hoisted(() => ({
   getChannelPlugin: vi.fn(),
   getLoadedChannelPlugin: vi.fn(),
 }));
-const transcriptMocks = vi.hoisted(() => ({ append: vi.fn(async () => ({ ok: true })) }));
+const transcriptMocks = vi.hoisted(() => ({
+  append: vi.fn(async (_params?: { prepareDisplayContent?: () => Promise<unknown> }) => ({
+    ok: true,
+  })),
+}));
 vi.mock("../../config/sessions.js", () => ({
   appendAssistantMessageToSessionTranscript: transcriptMocks.append,
 }));
@@ -192,3 +199,34 @@ it.each([
     expect.objectContaining({ sessionKey: params.sessionKey, text }),
   );
 });
+
+it.each([
+  ["with a platform receipt", { ok: true, messageId: "sent-1" }, true],
+  ["without a platform receipt", { ok: true }, false],
+] as const)("mirrors an untrusted local document %s", (_name, deliveredPayload, sent) =>
+  withOpenClawTestState({ label: "source-reply-document" }, async ({ workspaceDir }) => {
+    const report = path.join(workspaceDir, "report.pdf");
+    await fs.writeFile(report, "%PDF-1.4\n%%EOF\n");
+    await expect(
+      mirrorDeliveredSourceReplyToTranscript({
+        ...direct,
+        deliveredPayload,
+        deliveredPayloads: [{ mediaUrl: report }],
+        mediaAccess: { localRoots: [workspaceDir] },
+      }),
+    ).resolves.toBe(true);
+
+    const prepareDisplayContent = transcriptMocks.append.mock.lastCall?.[0]?.prepareDisplayContent;
+    await expect(prepareDisplayContent?.()).resolves.toMatchObject([
+      sent
+        ? {
+            type: "text",
+            text: "Attachment sent to the channel. Preview unavailable in chat history.",
+          }
+        : {
+            type: "attachment_error",
+            attachment: { code: "delivery-failed", label: "report.pdf" },
+          },
+    ]);
+  }),
+);

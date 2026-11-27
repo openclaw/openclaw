@@ -16,6 +16,7 @@ import {
   resumeGatewaySuspend,
 } from "./gateway-suspend-coordinator.js";
 import { inspectors } from "./gateway-suspend-coordinator.test-support.js";
+import { hasPendingGatewayRestart } from "./restart-pending.js";
 import {
   isGatewayRestartExternallyAllowed,
   setGatewayRestartPolicy,
@@ -124,7 +125,9 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
     });
     await vi.advanceTimersByTimeAsync(0);
     expect(isGatewayWorkAdmissionClosed()).toBe(false);
+    expect(hasPendingGatewayRestart()).toBe(true);
     handle.cancel();
+    expect(hasPendingGatewayRestart()).toBe(false);
     expect(isGatewayWorkAdmissionClosed()).toBe(false);
     pending = 0;
     preparation.resolve();
@@ -608,8 +611,10 @@ describe("scheduled restart during gateway suspension", () => {
     const preparation = schedulePreparingRestart(afterEmitRejected);
     await vi.advanceTimersByTimeAsync(0);
     expect(preparation.beforeEmit).toHaveBeenCalledOnce();
+    expect(hasPendingGatewayRestart()).toBe(true);
 
     resetGatewayRestartStateForInProcessRestart();
+    expect(hasPendingGatewayRestart()).toBe(false);
     resetGatewayWorkAdmission();
     preparation.release();
     await vi.advanceTimersByTimeAsync(0);
