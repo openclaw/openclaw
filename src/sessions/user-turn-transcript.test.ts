@@ -477,13 +477,15 @@ describe("user turn transcript persistence", () => {
       expect(replacement).toMatchObject({ content: "new turn" });
       expect(readModelPromptProjection(replacement)).toBeUndefined();
 
+      // A turn dispatched without a projection stays frozen as its transcript text.
       const sent = record({ text: "already sent" });
       await sent.persistApproved();
       sent.markSentToProvider?.();
-      await expect(sent.captureModelPromptProjection!("too late", () => {})).rejects.toThrow(
-        "before provider dispatch",
-      );
+      const unchanged = await sent.captureModelPromptProjection!("too late", () => {});
+      expect(unchanged).toMatchObject({ content: "already sent" });
+      expect(readModelPromptProjection(unchanged)).toBeUndefined();
       expect(readModelPromptProjection(sent.getPersistedMessage?.())).toBeUndefined();
+      expect(await sent.prepareModelPromptProjection!("too late", () => {})).toBeUndefined();
     });
 
     it("persists fallback user turns only once", async () => {
