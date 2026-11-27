@@ -12,8 +12,8 @@ import {
   checkAgentMemorySchemaPending,
   checkLegacyPluginManifestPending,
   checkConfiguredPluginInstallReleasePending,
-  checkLegacyPluginSourceCapturesPending,
-  checkLegacyRuntimeFilesPending,
+  checkLegacyPluginSourceCapturesContributionPending,
+  checkLegacyRuntimeFilesContributionPending,
   checkLegacyStatePending,
   runAgentMemorySchemaHealth,
   runCodexSessionRouteHealth,
@@ -362,7 +362,7 @@ export function resolveInitialDoctorHealthContributions(params: {
       "Legacy plugin captures",
       {
         updateWork: { kind: "startup" },
-        pending: checkLegacyPluginSourceCapturesPending,
+        pending: checkLegacyPluginSourceCapturesContributionPending,
         async run(ctx) {
           const { noteLegacyPluginSourceCaptures } =
             await import("../commands/doctor-plugin-source-captures.js");
@@ -596,7 +596,7 @@ export function resolveInitialDoctorHealthContributions(params: {
           return result.rewritten > 0 ? [configAuditScrubToRepairEffect(result)] : [];
         }, "legacy doctor config audit contribution owns cleanup"),
       },
-      pending: checkLegacyRuntimeFilesPending,
+      pending: checkLegacyRuntimeFilesContributionPending,
       async run(ctx) {
         const { maybeRepairLegacyRuntimeFiles } =
           await import("../commands/doctor-usage-cost-cache.js");

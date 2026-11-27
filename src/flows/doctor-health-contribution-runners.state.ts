@@ -173,15 +173,14 @@ export async function checkLegacyStatePending(
   return countStoredObsoleteGeneratedExecApprovals() > 0 ? "work" : "none";
 }
 
-export async function checkLegacyRuntimeFilesPending(
+export async function checkLegacyRuntimeFilesContributionPending(
   ctx: DoctorHealthFlowContext,
 ): Promise<DoctorMaintenancePending> {
   if (!ctx.prompter.shouldRepair) {
     return "none";
   }
-  const { checkLegacyRuntimeFilesPending: check } =
-    await import("../commands/doctor-usage-cost-cache.js");
-  return check(ctx.env);
+  const { checkLegacyRuntimeFilesPending } = await import("../commands/doctor-usage-cost-cache.js");
+  return checkLegacyRuntimeFilesPending(ctx.env);
 }
 
 function configuredPluginInstallReleaseInputs(ctx: DoctorHealthFlowContext) {
@@ -203,15 +202,15 @@ export async function checkConfiguredPluginInstallReleasePending(
   return checkConfiguredPluginInstallReleaseStepPending(configuredPluginInstallReleaseInputs(ctx));
 }
 
-export async function checkLegacyPluginSourceCapturesPending(
+export async function checkLegacyPluginSourceCapturesContributionPending(
   ctx: DoctorHealthFlowContext,
 ): Promise<DoctorMaintenancePending> {
   if (!ctx.prompter.shouldRepair) {
     return "none";
   }
-  const { checkLegacyPluginSourceCapturesPending: check } =
+  const { checkLegacyPluginSourceCapturesPending } =
     await import("../commands/doctor-plugin-source-captures.js");
-  return check(ctx.env ?? process.env);
+  return checkLegacyPluginSourceCapturesPending(ctx.env ?? process.env);
 }
 
 export async function runConfiguredPluginInstallReleaseHealth(
