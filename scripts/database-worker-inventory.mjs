@@ -3269,28 +3269,18 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/state/agent-provenance.ts",
-    [
-      {
-        tier: "W",
-        operations: ["deleteAgentProvenanceForAgent"],
-        evidence:
-          "Only completeAgentDeletionJournalInDatabase, reached from agent-deletion.worker.ts, deletes provenance; lifecycle incarnation readers retain synchronous live-authority checks",
-      },
-    ],
-  ],
-  [
     "src/state/agent-provenance.kernel.ts",
     [
       {
         tier: "W",
         operations: [
+          "deleteAgentProvenanceForAgent",
           "listAgentProvenanceInDatabase",
           "recordAgentProvenanceInDatabase",
           "readAgentProvenanceBatchInDatabase",
         ],
         evidence:
-          "agentProvenance.list/readBatch execute through agentProvenanceReadOperations in the read-only registry; record executes through agentProvenanceOperations in agent-provenance.worker.ts; native synchronous lifecycle guards use the joined projection in agent-lifecycle-read.kernel.ts",
+          "agentProvenance.list/readBatch execute through agentProvenanceReadOperations in the read-only registry; record executes through agentProvenanceOperations in agent-provenance.worker.ts; journal completion deletes provenance on its existing worker transaction; native synchronous lifecycle guards use the joined projection in agent-lifecycle-read.kernel.ts",
       },
     ],
   ],
