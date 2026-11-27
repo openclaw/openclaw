@@ -472,6 +472,7 @@ struct LocalFixtureChatTransport: OpenClawChatGoalTransport, OpenClawChildStopTr
             parentKey: self.fixture.sessionKey,
             stoppedAt: self.store.stoppedChildAt)
         if ScreenshotFixtureMode.groupControlsEnabled { sessions += await DrawerGroupFixture.store.sessions() }
+        if ScreenshotFixtureMode.sessionStatesEnabled { sessions += ScreenshotFixtureMode.sessionStateRows() }
         if ScreenshotFixtureMode.toolFailuresEnabled {
             sessions += ScreenshotFixtureMode.toolFailureChats.map { chat in
                 var entry = OpenClawChatSessionEntry(key: chat.key, parentSessionKey: self.fixture.sessionKey)

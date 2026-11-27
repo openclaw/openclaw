@@ -517,6 +517,7 @@ final class NodeAppModel {
     var gatewaySetupRequestID: Int = 0
     private(set) var pendingAgentDeepLinkPrompt: AgentDeepLinkPrompt?
     private var pendingGatewaySetupLink: GatewayConnectDeepLink?
+    private(set) var approvalInboxNavigationRequestID = 0
     private(set) var pendingExecApprovalPrompt: ExecApprovalPrompt?
     private(set) var pendingExecApprovalPromptResolving: Bool = false
     private(set) var pendingExecApprovalPromptErrorText: String?
@@ -573,8 +574,24 @@ final class NodeAppModel {
         }
     }
 
-    /// An uncertain resolution keeps approval actions frozen, but must not trap the
-    /// reviewer in a modal or Settings detail while canonical readback is unavailable.
+    func approvalTargetsSession(
+        sourceSessionKey: String?,
+        sourceAgentID: String?,
+        sessionKey: String,
+        agentID: String?) -> Bool
+    {
+        guard let sourceSessionKey else { return false }
+        return ChatSessionSidebarModel.attentionSourceMatchesSession(
+            source: sourceSessionKey,
+            sourceAgentID: sourceAgentID,
+            sessionKey: sessionKey,
+            mainSessionKey: self.mainSessionKey,
+            agentID: agentID,
+            sessionRoutingContract: self.chatSessionRoutingContract)
+    }
+
+    /// An uncertain resolution keeps approval actions frozen, but the reviewer can
+    /// still leave the request while canonical readback is unavailable.
     var pendingExecApprovalPromptCanDismiss: Bool {
         !self.pendingExecApprovalPromptResolving || self.pendingExecApprovalPromptErrorText != nil
     }
@@ -708,6 +725,7 @@ final class NodeAppModel {
     @ObservationIgnored private let pushRegistrationManager = PushRegistrationManager()
 
     let sessionGroups = SessionGroupModel()
+    var personalSidebarPins = IOSSidebarPins()
 
     var operatorSession: GatewayNodeSession {
         self.operatorGateway
@@ -816,9 +834,12 @@ final class NodeAppModel {
     let chatPresentation = IOSChatViewModelOwner()
     var agentAvatarImages: [String: UIImage] = [:]
     var loadedAgentAvatarRequest: IOSAgentAvatarRequest?
+    var resolvedAgentAvatarIDs: Set<String> = []
     /// `agent.identity.get` results by agent id for `agentIdentitiesOwnerID`'s Gateway.
     var agentIdentities: [String: IOSResolvedAgentIdentity] = [:]
     var agentIdentitiesOwnerID: String?
+    /// Last known agents for `chatViewModelOwnerID`, read once per owner from the Gateway cache.
+    @ObservationIgnored var cachedAgentIdentitiesMemo: IOSCachedAgentIdentities?
     /// Request admission only; the connection controller owns the later handoff.
     var isGatewayPickerRequestInFlight = false
 
@@ -1161,9 +1182,9 @@ final class NodeAppModel {
         mediaAuthorizationProvider: @escaping @MainActor () -> MediaAuthorizationSnapshot = { .current() })
     {
         if restoringSavedGatewayRoute, let stableID = GatewaySettingsStore.activeGatewayEntry()?.stableID {
+            // A cold launch opens this agent’s main chat. Only an in-app Gateway switch restores its focused chat.
             self.connectedGatewayID = stableID
             self.selectedAgentId = GatewaySettingsStore.loadGatewaySelectedAgentId(stableID: stableID)
-            self.focusedChatSessionKey = GatewaySettingsStore.loadGatewayFocusedChatSessionKey(stableID: stableID)
         }
         self.camera = camera
         self.preferredCameraFacing = Self.cameraFacingPreference(
@@ -1923,6 +1944,14 @@ final class NodeAppModel {
         guard shouldContinue(), let payload = evt.payload else { return }
         switch evt.event {
         case "config.changed", "users.prefs.changed":
+            if evt.event == "users.prefs.changed" {
+                struct Changed: Decodable { let keys: [String] }
+                if (try? GatewayPayloadDecoding.decode(payload, as: Changed.self))?.keys
+                    .contains(IOSSidebarPins.preferenceKey) == true
+                {
+                    await self.refreshPersonalSidebarPins()
+                }
+            }
             // Persisted config writes (accent, session routing) must reach an
             // already-connected app; the protocol directs clients to re-read via
             // config.get, which the guarded branding refresh already does.
@@ -3449,7 +3478,13 @@ extension NodeAppModel {
     }
 
     func chatAgentDisplayName(for agentID: String) -> String {
-        self.agentIdentityName(for: agentID) ?? self.agentDisplayName(for: agentID)
+        // A cold start can draw the main chat before its routing identity has restored.
+        let agentID = agentID.trimmedNonEmpty ?? self.cachedAgentIdentities.defaultAgentID ?? agentID
+        if let identityName = self.agentIdentityName(for: agentID) { return identityName }
+        if let rosterName = self.displayAgents.first(where: { $0.id == agentID })?.name?.trimmedNonEmpty {
+            return rosterName
+        }
+        return self.agentDisplayName(for: agentID)
     }
 
     var chatAgentAvatarURL: String? {
@@ -5074,6 +5109,7 @@ extension NodeAppModel {
         let current = self.connection.operator.connectedInfo
         guard previous != current else { return }
         self.operatorAuthorityGeneration &+= 1
+        self.personalSidebarPins = IOSSidebarPins()
         let connected = current != nil
         guard connected != (previous != nil) else { return }
         guard connected else {
@@ -7662,6 +7698,30 @@ extension NodeAppModel {
         let connected = await waitForGatewayConnection(timeoutMs: 5000, pollMs: 250)
         self.locationWakeLogger.info(
             "Location wake post-check wakeId=\(wakeId, privacy: .public) connected=\(connected, privacy: .public)")
+    }
+
+    var hasAPNsDeviceToken: Bool {
+        self.apnsDeviceTokenHex?.isEmpty == false
+    }
+
+    /// Submission is not proof of delivery or Gateway acceptance.
+    var hasSubmittedNotificationRegistration: Bool {
+        guard self.gatewayConnected,
+              let token = apnsDeviceTokenHex,
+              !token.isEmpty
+        else { return false }
+        let stableID = self.activeGatewayConnectConfig?.effectiveStableID ?? self.connectedGatewayID ?? ""
+        return !Self.shouldPublishDirectAPNsRegistration(
+            token: token,
+            gatewayStableID: stableID,
+            lastToken: self.apnsLastRegisteredTokenHex,
+            lastGatewayStableID: self.apnsLastRegisteredGatewayStableID)
+    }
+
+    func retryNotificationRegistration(
+        shouldContinue: @escaping @MainActor @Sendable () -> Bool) async
+    {
+        await self.registerAPNsTokenIfNeeded(shouldContinue: shouldContinue)
     }
 
     func updateAPNsDeviceToken(_ tokenData: Data) {

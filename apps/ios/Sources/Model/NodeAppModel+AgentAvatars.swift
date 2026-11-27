@@ -25,6 +25,32 @@ struct IOSResolvedAgentIdentity: Equatable {
     let avatarSource: String?
 }
 
+/// The last known agents of one Gateway owner, so a cold start draws the agent's name and avatar
+/// from its first frame instead of a placeholder that the network answer then replaces.
+struct IOSCachedAgentIdentities {
+    let ownerID: String
+    let agents: [OpenClawChatCachedAgentIdentity]
+    let images: [String: UIImage]
+
+    init(ownerID: String, agents: [OpenClawChatCachedAgentIdentity]) {
+        self.ownerID = ownerID
+        self.agents = agents
+        self.images = agents.reduce(into: [:]) { images, agent in
+            if let data = agent.avatar, let image = AgentIdentityPresentation.image(data: data) {
+                images[agent.agentID] = image
+            }
+        }
+    }
+
+    var defaultAgentID: String? {
+        self.agents.first(where: \.isDefault)?.agentID
+    }
+
+    func agent(_ agentID: String) -> OpenClawChatCachedAgentIdentity? {
+        self.agents.first { $0.agentID == agentID }
+    }
+}
+
 extension NodeAppModel {
     var agentAvatarRequest: IOSAgentAvatarRequest {
         IOSAgentAvatarRequest(
@@ -39,16 +65,56 @@ extension NodeAppModel {
             })
     }
 
+    /// Read on first use per Gateway owner: views ask for it while drawing the first frame.
+    var cachedAgentIdentities: IOSCachedAgentIdentities {
+        let ownerID = self.chatViewModelOwnerID
+        if let memo = self.cachedAgentIdentitiesMemo, memo.ownerID == ownerID { return memo }
+        let memo = IOSCachedAgentIdentities(
+            ownerID: ownerID,
+            agents: self.makeChatOfflineStore()?.loadAgentIdentities() ?? [])
+        self.cachedAgentIdentitiesMemo = memo
+        return memo
+    }
+
+    /// Selectable agents to draw: the live roster, or the last known one until `agents.list` answers.
+    var displayAgents: [AgentSummary] {
+        guard self.gatewayAgents.isEmpty else { return self.gatewayAgents.filter(\.isSelectableAgent) }
+        return self.cachedAgentIdentities.agents.map { agent in
+            AgentSummary(
+                id: agent.agentID,
+                name: agent.rosterName,
+                identity: agent.emoji.map { ["emoji": AnyCodable($0)] })
+        }
+    }
+
+    /// The live portrait once this connection resolved it; until then the last known one.
     func agentAvatarImage(for agentID: String) -> UIImage? {
-        guard self.loadedAgentAvatarRequest == self.agentAvatarRequest else { return nil }
-        return self.agentAvatarImages[agentID]
+        let live = self.loadedAgentAvatarRequest == self.agentAvatarRequest ? self.agentAvatarImages[agentID] : nil
+        if live != nil || self.hasResolvedAgentAvatar(for: agentID) { return live }
+        return self.cachedAgentIdentities.images[agentID]
+    }
+
+    func hasResolvedAgentAvatar(for agentID: String) -> Bool {
+        let request = self.agentAvatarRequest
+        return request.isConnected && self.loadedAgentAvatarRequest == request && self.resolvedAgentAvatarIDs
+            .contains(agentID)
+    }
+
+    /// Whether the avatar slot can draw this agent now: resolved live, or known from the last launch.
+    func knowsAgentAvatar(for agentID: String) -> Bool {
+        self.hasResolvedAgentAvatar(for: agentID) || self.cachedAgentIdentities.agent(agentID) != nil
     }
 
     /// The resolved identity name, kept across refreshes so chat never flickers back to the
-    /// roster name; another Gateway owner never sees it.
+    /// roster name; another Gateway owner never sees it. Until it resolves, the last known one.
     func agentIdentityName(for agentID: String) -> String? {
-        guard self.agentIdentitiesOwnerID == self.chatViewModelOwnerID else { return nil }
-        return self.agentIdentities[agentID.trimmingCharacters(in: .whitespacesAndNewlines)]?.name
+        let agentID = agentID.trimmingCharacters(in: .whitespacesAndNewlines)
+        if self.agentIdentitiesOwnerID == self.chatViewModelOwnerID,
+           let resolved = self.agentIdentities[agentID]
+        {
+            return resolved.name
+        }
+        return self.cachedAgentIdentities.agent(agentID)?.identityName
     }
 
     /// web `normalizeAssistantIdentity` name, except the Gateway's placeholder ("Assistant"):
@@ -60,6 +126,7 @@ extension NodeAppModel {
     func refreshAgentAvatars(_ request: IOSAgentAvatarRequest) async {
         guard request == self.agentAvatarRequest, !Task.isCancelled else { return }
         self.agentAvatarImages = [:]
+        self.resolvedAgentAvatarIDs = []
         self.loadedAgentAvatarRequest = request
         // Names stay until replacements arrive; only agents that left the roster lose theirs.
         if self.agentIdentitiesOwnerID != request.ownerID {
@@ -77,7 +144,8 @@ extension NodeAppModel {
                 customHeaders: GatewaySettingsStore.loadGatewayCustomHeaders(
                     gatewayStableID: config.effectiveStableID))
         }
-        let route = if let gatewayID = self.chatTranscriptCacheGatewayID {
+        let gatewayID = self.chatTranscriptCacheGatewayID
+        let route = if let gatewayID {
             await self.operatorSession.currentRoute(ifGatewayID: gatewayID)
         } else {
             nil as GatewayNodeSessionRoute?
@@ -123,9 +191,31 @@ extension NodeAppModel {
                 if let data, let image = AgentIdentityPresentation.image(data: data) {
                     self.agentAvatarImages[agentID] = image
                 }
+                self.resolvedAgentAvatarIDs.insert(agentID)
             }
         }
         guard !Task.isCancelled, request == self.agentAvatarRequest else { return }
+        if request.isConnected, route != nil, !request.entries.isEmpty, let store = self.makeChatOfflineStore(),
+           GatewayStableIdentifier.matches(store.gatewayID, gatewayID)
+        {
+            let previous = self.cachedAgentIdentities
+            let identities = request.entries.map { entry in
+                let emoji = self.gatewayAgents.first { $0.id == entry.agentID }?.identity?["emoji"]?.value as? String
+                // A portrait that failed to load this time keeps its last known image.
+                let source = entry.source ?? self.agentIdentities[entry.agentID]?.avatarSource
+                let avatar = self.agentAvatarImages[entry.agentID]?.pngData()
+                    ?? (source == nil ? nil : previous.agent(entry.agentID)?.avatar)
+                return OpenClawChatCachedAgentIdentity(
+                    agentID: entry.agentID,
+                    rosterName: entry.rosterName,
+                    identityName: self.agentIdentities[entry.agentID]?.name,
+                    emoji: emoji,
+                    isDefault: entry.agentID == self.gatewayDefaultAgentId,
+                    avatar: avatar)
+            }
+            self.cachedAgentIdentitiesMemo = IOSCachedAgentIdentities(ownerID: request.ownerID, agents: identities)
+            await store.storeAgentIdentities(identities)
+        }
         self.chatPresentation.sync(appModel: self)
     }
 }

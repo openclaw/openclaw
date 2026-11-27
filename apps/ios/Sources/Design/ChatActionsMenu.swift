@@ -51,7 +51,8 @@ struct ChatActionsMenu: View {
 
     private var session: OpenClawChatSessionEntry? {
         guard let viewModel, !viewModel.isNewChatDraft else { return nil }
-        return viewModel.currentSessionEntry()
+        guard let row = viewModel.currentSessionEntry() else { return nil }
+        return self.appModel.displayedSidebarPins?.project(row) ?? row
     }
 
     private var sections: [[Item]] {
@@ -130,7 +131,11 @@ struct ChatActionsMenu: View {
         case .pin:
             let isPinned = self.session?.pinned == true
             Button {
-                self.patch(pinned: !isPinned)
+                if let key = self.session?.key {
+                    self.perform(leavesChat: false) { _ in
+                        try await self.appModel.setPersonalSidebarPin(key, pinned: !isPinned)
+                    }
+                }
             } label: {
                 Label(
                     isPinned ? String(localized: "Unpin") : String(localized: "Pin"),
@@ -206,7 +211,7 @@ struct ChatActionsMenu: View {
         }
     }
 
-    private func patch(label: String?? = nil, category: String?? = nil, pinned: Bool? = nil, archived: Bool? = nil) {
+    private func patch(label: String?? = nil, category: String?? = nil, archived: Bool? = nil) {
         guard let session = self.session else { return }
         self.perform(leavesChat: archived == true) { transport in
             try await transport.patchSession(
@@ -215,7 +220,7 @@ struct ChatActionsMenu: View {
                 label: label,
                 category: category,
                 color: nil,
-                pinned: pinned,
+                pinned: nil,
                 archived: archived,
                 unread: nil)
         }

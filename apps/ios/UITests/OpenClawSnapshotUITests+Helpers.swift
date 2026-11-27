@@ -3,7 +3,7 @@ import Vision
 import XCTest
 
 extension OpenClawSnapshotUITests {
-    func verifyApprovalNotificationsNavigation(fromOverview: Bool) async throws {
+    func verifyApprovalNotificationsNavigation() async throws {
         try XCTSkipUnless(
             ProcessInfo.processInfo.environment["OPENCLAW_IOS_APPROVAL_FIXTURE_URL"] != nil,
             "Requires a task-owned synthetic Gateway approval fixture")
@@ -22,19 +22,12 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(app.buttons["Cancel"].waitForExistence(timeout: 8))
         app.buttons["Cancel"].tap()
 
-        if fromOverview {
-            try self.selectSidebarDestination("Overview")
-            let approvals = app.buttons.containing(.staticText, identifier: "Pending approvals").firstMatch
-            XCTAssertTrue(approvals.waitForExistence(timeout: 8))
-            approvals.tap()
-        } else {
-            try self.selectSidebarDestination("Settings")
-            let approvals = app.buttons.containing(.staticText, identifier: "Approvals").firstMatch
-            XCTAssertTrue(approvals.waitForExistence(timeout: 8))
-            approvals.tap()
-        }
+        try self.selectSidebarDestination("Settings")
+        let approvals = app.buttons.containing(.staticText, identifier: "Approvals").firstMatch
+        XCTAssertTrue(approvals.waitForExistence(timeout: 8))
+        approvals.tap()
 
-        let origin = fromOverview ? "overview" : "settings"
+        let origin = "settings"
         let review = app.buttons["Review exec approval"].firstMatch
         XCTAssertTrue(review.waitForExistence(timeout: 5))
         review.tap()
@@ -79,7 +72,6 @@ extension OpenClawSnapshotUITests {
         switch destination {
         case "overview": app.staticTexts["Agent session"]
         case "chat": app.otherElements["chat-composer-surface"]
-        case "agents": app.buttons["agent-status-filter-menu"]
         case "settings": app.descendants(matching: .any)["SettingsHub.Native"]
         case "gateway": app.navigationBars["Gateway"]
         default: self.readinessMarker(in: app)
@@ -315,8 +307,15 @@ extension OpenClawSnapshotUITests {
         self.waitForHittable(true, of: destination)
         destination.tap()
 
-        self.waitForHittable(false, of: hideSidebar)
-        XCTAssertTrue(app.buttons["RootTabs.Sidebar.Show"].waitForExistence(timeout: 5), file: file, line: line)
+        if title == "Settings" {
+            XCTAssertTrue(
+                app.descendants(matching: .any)["SettingsHub.Native"].waitForExistence(timeout: 5),
+                file: file,
+                line: line)
+        } else {
+            self.waitForHittable(false, of: hideSidebar)
+            XCTAssertTrue(app.buttons["RootTabs.Sidebar.Show"].waitForExistence(timeout: 5), file: file, line: line)
+        }
     }
 
     func startNewChatFromSidebar(

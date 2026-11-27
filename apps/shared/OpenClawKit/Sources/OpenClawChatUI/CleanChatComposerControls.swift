@@ -751,7 +751,9 @@ struct ChatAttachmentTile: View {
                         Color.black.opacity(0.5)
                     }
                     if case .preparing = self.tile.status {
-                        ChatAttachmentSpinner(onPhoto: self.tile.preview != nil)
+                        OpenClawRingSpinner(lineWidth: metrics.spinnerLineWidth)
+                            .foregroundStyle(self.tile.preview != nil ? Color.white : OpenClawChatTheme.muted)
+                            .frame(width: metrics.spinnerSize, height: metrics.spinnerSize)
                     }
                 }
             }
@@ -791,7 +793,9 @@ struct ChatAttachmentTile: View {
             // The spinner, or the failure control drawn over the tile, takes the icon's slot.
             ZStack {
                 if case .preparing = self.tile.status {
-                    ChatAttachmentSpinner(onPhoto: false)
+                    OpenClawRingSpinner(lineWidth: metrics.spinnerLineWidth)
+                        .foregroundStyle(OpenClawChatTheme.muted)
+                        .frame(width: metrics.spinnerSize, height: metrics.spinnerSize)
                 }
             }
             .frame(width: metrics.fileIconSize, height: metrics.fileIconSize)
@@ -891,29 +895,6 @@ struct ChatAttachmentTile: View {
         .offset(x: metrics.badgeOverhang, y: -metrics.badgeOverhang)
         .accessibilityLabel(String(
             format: String(localized: "Remove %@"), self.name))
-    }
-}
-
-/// Claude's attachment spinner: a quarter arc turning once a second on a faint ring, white over a dimmed photo.
-private struct ChatAttachmentSpinner: View {
-    let onPhoto: Bool
-
-    var body: some View {
-        let metrics = ChatAttachmentRailMetrics.self
-        let ink = self.onPhoto ? Color.white : OpenClawChatTheme.muted
-        TimelineView(.animation) { context in
-            let turn = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1)
-            ZStack {
-                Circle()
-                    .stroke(ink.opacity(0.3), lineWidth: metrics.spinnerLineWidth)
-                Circle()
-                    .trim(from: 0, to: 0.25)
-                    .stroke(ink, style: StrokeStyle(lineWidth: metrics.spinnerLineWidth, lineCap: .round))
-                    .rotationEffect(.degrees(turn * 360))
-            }
-        }
-        .frame(width: metrics.spinnerSize, height: metrics.spinnerSize)
-        .accessibilityHidden(true)
     }
 }
 #endif
