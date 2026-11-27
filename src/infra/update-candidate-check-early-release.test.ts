@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
@@ -12,8 +12,8 @@ import { refuseEarlyGitReleaseSchemaChange as refuse } from "./update-candidate-
 const roots: string[] = [];
 afterEach(() => cleanupTempDirs(roots));
 
-const POSIX_REBUILD =
-  "git pull --ff-only && openclaw gateway stop --force && pnpm install --frozen-lockfile && pnpm build && openclaw gateway install --force || { openclaw gateway start; false; }";
+const rebuild = (link: string) =>
+  `git pull --ff-only && openclaw gateway stop --force && pnpm install --frozen-lockfile && pnpm build && rm -f "${link}/git-install/lib/node_modules/openclaw" && openclaw gateway install --force || { openclaw gateway start; false; }`;
 
 function sqlite(file: string, version: number, setup = "") {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -76,32 +76,68 @@ function install(params: {
 }
 
 it("refuses a schema change for the early release updater and names the rebuild for the platform", () => {
-  const { root, env } = install({});
+  const { root, stateDir, env } = install({});
+  // The state directory under HOME, as the early updater runs the check; its output replaces
+  // that directory with a placeholder, so the link is spelled from $HOME.
+  const home = path.dirname(stateDir);
+  const homeEnv = { ...env, HOME: home };
   for (const platform of ["darwin", "linux"] as const) {
-    const lines = refuse(root, env, platform)!.split("\n");
+    const lines = refuse(root, homeEnv, platform)!.split("\n");
     expect(lines[0]).toContain(
       `state schema ${OPENCLAW_STATE_SCHEMA_VERSION - 1} to ${OPENCLAW_STATE_SCHEMA_VERSION}, agent schema ${OPENCLAW_AGENT_SCHEMA_VERSION - 1} to ${OPENCLAW_AGENT_SCHEMA_VERSION}`,
     );
     expect(lines).toContain(
       "The update stopped before switching releases; the Gateway was not touched. Running `openclaw update` again stops here the same way.",
     );
-    // The early updater redacts state and home paths out of this output; the step names none.
-    expect(lines.at(-1)).toBe(POSIX_REBUILD);
-    expect(lines.join("\n")).not.toMatch(/[\s~]\/|automatic|background|systemctl|launchctl/iu);
+    expect(lines.at(-1)).toBe(rebuild(`$HOME/${path.basename(stateDir)}`));
+    expect(lines.join("\n")).not.toContain(home);
+    expect(lines.join("\n")).not.toMatch(/automatic|background|systemctl|launchctl/iu);
   }
+  // Outside HOME the shell must supply the state directory, or the line stops at `rm`.
+  expect(
+    refuse(root, { ...env, HOME: "/nonexistent-home" }, "linux")!
+      .split("\n")
+      .at(-1),
+  ).toBe(rebuild("${OPENCLAW_STATE_DIR:?set it to the OpenClaw state directory}"));
   // PowerShell has no `{ ...; false; }` group, so Windows gets the steps one per line.
-  const windows = refuse(root, env, "win32")!.split("\n");
-  expect(windows.slice(-5)).toEqual([
+  const windows = refuse(root, homeEnv, "win32")!.split("\n");
+  expect(windows.slice(-4)).toEqual([
     "git pull --ff-only",
     "openclaw gateway stop --force",
     "pnpm install --frozen-lockfile",
     "pnpm build",
-    "openclaw gateway install --force",
   ]);
-  expect(windows.at(-6)).toContain("if one fails, run `openclaw gateway start`");
+  expect(windows.at(-5)).toContain(
+    "then remove the link git-install\\lib\\node_modules\\openclaw in the OpenClaw state directory and run `openclaw gateway install --force`",
+  );
   // A second update reads the same unchanged state and gets the same reason.
-  expect(refuse(root, env, "darwin")).toBe(refuse(root, env, "darwin"));
+  expect(refuse(root, homeEnv, "darwin")).toBe(refuse(root, homeEnv, "darwin"));
 });
+
+it.runIf(process.platform !== "win32")(
+  "names a link path the shell resolves to this state directory's link",
+  () => {
+    const { root, stateDir } = install({});
+    const home = makeTempDir(roots, "openclaw-early-release-home-");
+    const odd = path.join(home, 'state "$x" `y` \\z');
+    fs.renameSync(stateDir, odd);
+    const line = refuse(
+      root.replace(stateDir, odd),
+      { OPENCLAW_STATE_DIR: odd, HOME: home },
+      "linux",
+    )!
+      .split("\n")
+      .at(-1)!;
+    const word = /rm -f ("(?:[^"\\]|\\.)*")/u.exec(line)![1];
+    // The shell the user runs the line in expands the word to the real link.
+    const expanded = execFileSync("/bin/sh", ["-c", `printf %s ${word}`], {
+      env: { HOME: home, PATH: process.env.PATH },
+      encoding: "utf8",
+    });
+    expect(expanded).toBe(path.join(odd, "git-install", "lib", "node_modules", "openclaw"));
+    expect(fs.lstatSync(expanded).isSymbolicLink()).toBe(true);
+  },
+);
 
 it("refuses when one agent store is older, registered or not", () => {
   for (const registered of [true, false]) {

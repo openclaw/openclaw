@@ -18,28 +18,47 @@ import {
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
 import { collectRegisteredPaths } from "./update-candidate-state.shared.js";
 
-/** The rebuild steps, run from the checkout. They name no path, because the early updater
- * redacts the state and home directories out of this check's output before printing it. */
-const REBUILD_STEPS = [
-  "git pull --ff-only",
-  "openclaw gateway stop --force",
-  "pnpm install --frozen-lockfile",
-  "pnpm build",
-  "openclaw gateway install --force",
-];
+/** The early updater's release link, relative to the state directory. Its launcher serves the
+ * release this link names, and `openclaw gateway install` binds the service to that launcher
+ * while the link exists, so the rebuild removes it before reinstalling the service. */
+const EARLY_RELEASE_LINK = ["git-install", "lib", "node_modules", "openclaw"];
 
-/** One line for POSIX shells (proven with systemd and launchd services): a failed step starts
- * the previous service again and the line still exits non-zero. */
-function formatRebuild(platform: NodeJS.Platform): string[] {
+/** A double-quoted shell word for the link. The early updater replaces the state and home
+ * directories in this check's output with placeholders, so the path is spelled from `$HOME`, or
+ * from `$OPENCLAW_STATE_DIR` (which the shell then requires) for a state directory outside it. */
+function shellEarlyReleaseLink(stateDir: string, env: NodeJS.ProcessEnv): string {
+  const home = env.HOME?.trim();
+  const relative = home ? path.relative(home, stateDir) : "";
+  const base =
+    home && relative && !relative.startsWith("..") && !path.isAbsolute(relative)
+      ? `$HOME/${relative
+          .split(path.sep)
+          .join("/")
+          .replace(/["$`\\]/gu, "\\$&")}`
+      : "${OPENCLAW_STATE_DIR:?set it to the OpenClaw state directory}";
+  return `"${base}/${EARLY_RELEASE_LINK.join("/")}"`;
+}
+
+/** The one-time rebuild, run from the checkout. On POSIX shells (proven with systemd and launchd
+ * services) it is one line: a failed step starts the previous service again and the line still
+ * exits non-zero; running it again finishes a rebuild that stopped part way. */
+function formatRebuild(platform: NodeJS.Platform, stateDir: string, env: NodeJS.ProcessEnv) {
+  const build = [
+    "git pull --ff-only",
+    "openclaw gateway stop --force",
+    "pnpm install --frozen-lockfile",
+    "pnpm build",
+  ];
+  const install = "openclaw gateway install --force";
   if (platform === "win32") {
     return [
-      "Rebuild the checkout once from its directory, running these in order and stopping at the first failure (if one fails, run `openclaw gateway start` to start the previous Gateway again); later updates then run normally:",
-      ...REBUILD_STEPS,
+      `Rebuild the checkout once from its directory, running these in order and stopping at the first failure (if one fails, run \`openclaw gateway start\`), then remove the link ${EARLY_RELEASE_LINK.join("\\")} in the OpenClaw state directory and run \`${install}\`; later updates then run normally:`,
+      ...build,
     ];
   }
   return [
-    "Rebuild the checkout once from its directory; later updates then run normally:",
-    `${REBUILD_STEPS.join(" && ")} || { openclaw gateway start; false; }`,
+    "Rebuild the checkout once from its directory. It also removes this updater's release link, so the reinstalled Gateway runs the rebuilt checkout; later updates then run normally:",
+    `${[...build, `rm -f ${shellEarlyReleaseLink(stateDir, env)}`, install].join(" && ")} || { openclaw gateway start; false; }`,
   ];
 }
 
@@ -183,6 +202,6 @@ export function refuseEarlyGitReleaseSchemaChange(
     `OpenClaw ${VERSION} migrates your databases (${changes.join(", ")}).`,
     "The updater in this checkout (a main build from 2026-11-17 to 2026-11-19) cannot finish that: after the migration, neither it nor the checkout's `openclaw` command can open the migrated data.",
     "The update stopped before switching releases; the Gateway was not touched. Running `openclaw update` again stops here the same way.",
-    ...formatRebuild(platform),
+    ...formatRebuild(platform, resolveStateDir(env), env),
   ].join("\n");
 }

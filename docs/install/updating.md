@@ -2405,23 +2405,29 @@ check stops the update before the release is switched: the checkout and the Gate
 were, the release link names at most a release of the code that already serves (the first run
 creates one), and the output names the schema change and the rebuild below. Running
 `openclaw update` again stops at the same point with the same message until the checkout is
-rebuilt. Nothing rebuilds it automatically, on any platform. Run this once from the checkout
-(macOS and Linux; on Windows, run the same commands one at a time and stop at the first failure):
+rebuilt. Nothing rebuilds it automatically, on any platform. Run the printed line once from the
+checkout. With the default state directory it reads:
 
 ```sh
-git pull --ff-only && openclaw gateway stop --force && pnpm install --frozen-lockfile && pnpm build && openclaw gateway install --force || { openclaw gateway start; false; }
+git pull --ff-only && openclaw gateway stop --force && pnpm install --frozen-lockfile && pnpm build && rm -f "$HOME/.openclaw/git-install/lib/node_modules/openclaw" && openclaw gateway install --force || { openclaw gateway start; false; }
 ```
 
-The Gateway is down while the checkout builds. The reinstalled service starts the rebuilt
-Gateway, which migrates state at boot. If an earlier step fails, the command starts the previous
-service again and exits non-zero; a failed `pnpm build` can leave the checkout's build
-incomplete, so fix the reported error and run the line again. For this rebuild,
-PostgreSQL-backed stores still require the stopped-writer Doctor procedure in
+The printed line names your state directory relative to `$HOME`; for a state directory outside
+it, the line requires `OPENCLAW_STATE_DIR` in the shell. On Windows the update prints the same
+steps to run one at a time.
+
+The Gateway is down while the checkout builds. The older updater's release link
+(`git-install/lib/node_modules/openclaw`) is removed after the build, because while it exists
+`openclaw gateway install` binds the service to that updater's launcher, which keeps serving the
+old release. The reinstalled service then starts the rebuilt Gateway, which migrates state at
+boot. If an earlier step fails, the command starts the previous service again and exits
+non-zero; a failed `pnpm build` can leave the checkout's build incomplete, so fix the reported
+error and run the line again. For this rebuild, PostgreSQL-backed stores still require the
+stopped-writer Doctor procedure in
 [PostgreSQL updates and schema migrations](/gateway/postgresql#updates-and-schema-migrations).
-Later `openclaw update` runs use the rebuilt checkout's updater. The older layout's
-`git-install/lib/node_modules/openclaw` link and the release it names stay on disk (about
-4.6 GiB) and are no longer used. To free that space, remove the release directory the link names,
-then the link, then run `git worktree prune` in the checkout. Updates that change no schema still
+Later `openclaw update` runs use the rebuilt checkout's updater. The release the removed link
+named stays on disk (about 4.4 GiB under `git-install/releases`) and is no longer used. To free
+that space, remove that release directory, then run `git worktree prune` in the checkout. Updates that change no schema still
 go through the older updater; when its Gateway fails at startup (the web search case above), run
 them from a terminal with the checkout's `openclaw`, not from the Control UI. This check stays
 until there is evidence that those updaters can cross a schema change on their own; a published
