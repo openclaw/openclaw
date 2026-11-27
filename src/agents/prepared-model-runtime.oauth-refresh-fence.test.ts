@@ -19,6 +19,7 @@ import {
   refreshPreparedModelRuntimeSnapshots,
   registerPreparedModelRuntimePublicationListener,
 } from "./prepared-model-runtime.js";
+import type { AuthStorageData } from "./sessions/auth-storage.js";
 
 vi.mock("../logging/subsystem.js", async (importOriginal) => {
   const { createMockSubsystemLogger } = await import("../../test/helpers/mock-subsystem-logger.js");
@@ -59,12 +60,12 @@ function useAuth(credential: OAuthCredential) {
   const store: AuthProfileStore = { version: 1, profiles: { [profileId]: credential } };
   mocks.preparedAuthStore = store;
   // Refresh fences are inert markers, so the usable credential map omits them.
-  const usable =
+  const usable: AuthStorageData =
     credential.expires === 1
       ? {}
       : {
           [provider]: {
-            type: "oauth" as const,
+            type: "oauth",
             access: credential.access,
             refresh: credential.refresh,
             expires: credential.expires,
@@ -129,7 +130,8 @@ async function rebuildWith(credential: OAuthCredential, trigger: "reload" | "aut
     mocks.mutationListener?.({ affectsInheritedStores: true, profileSetChanged: false });
     await published;
   } else {
-    await refreshPreparedModelRuntimeSnapshots(config, { ...options, force: true });
+    // A config reload republishes every configured owner from the current auth store.
+    await refreshPreparedModelRuntimeSnapshots(config, options);
   }
   const snapshot = await prepareModelRuntimeSnapshot(fixture.agentInput("pro", config));
   // Publication starts its changed-provider reacquisition after commit; let it settle.
