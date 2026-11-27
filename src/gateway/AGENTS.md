@@ -38,7 +38,7 @@ Detail for the root rule [decide authority once](../../AGENTS.md#decide-authorit
 - Run and turn-claim liveness checks are fences, not authority. Multi-phase admission and mid-run "no longer active" refusals fall under the root ban. Revocation, removal and reload apply to the next request.
 - Refusals: `operatorRefusalText` or `OperatorRefusalError` with a cause from `operator-refusal.ts`. A new cause goes in that table with one next step; never inline refusal text.
 - New permission: add the fact to admission and the field in `decideTurnGrant`, then a cell per entry kind in `operator-admission.table.test.ts` (continuations: `owed-exec-requester.test.ts`). Same principal, same grant by every entry.
-- Lint: `openclaw-boundaries/no-operator-permission-read` and `no-turn-authority-derivation` (`scripts/lib/`). Their allowlists only shrink: fix a finding by reading the grant, never by adding a file.
+- Lint: `openclaw-boundaries/no-operator-permission-read` (live permission reads, run-authority minting, access re-checks; per-file counts) and `no-turn-authority-derivation` (`scripts/lib/`). Their lists only shrink: fix a finding by reading the grant, never by adding a file or raising a count.
 
 ## Run Authority And Worker Upgrades
 
