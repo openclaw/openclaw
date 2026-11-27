@@ -147,11 +147,26 @@ describe("cron protocol validators", () => {
   const agentPayload = { kind: "agentTurn", message: "tick" };
   const scheduledToolPolicy = { version: 1, mode: "trusted" };
   it.each([
+    ["isolated", true],
+    ["session:project-alpha", false],
+  ] as const)(
+    "accepts %s placement with includeRecentChat=%s on create and update",
+    (sessionTarget, includeRecentChat) => {
+      for (const [validate, input] of addAndUpdate({
+        sessionTarget,
+        includeRecentChat,
+        payload: agentPayload,
+      })) {
+        expect(validate(input)).toBe(true);
+      }
+    },
+  );
+
+  it.each([
     [{}, true],
     [{ scheduledToolPolicy }, false],
     [{ failureAlert }, false],
     [{ failureAlert: null }, false],
-    [{ sessionTarget: "isolated", includeRecentChat: true, payload: agentPayload }, true],
     [{ sessionTarget: "session:project-alpha", payload: agentPayload }, true],
     [
       {
