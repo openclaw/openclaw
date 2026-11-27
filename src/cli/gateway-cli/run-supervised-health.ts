@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createConfiguredGatewayLocalProbe } from "../../gateway/local-http-probe.js";
 
@@ -8,8 +9,8 @@ export function isGatewayHealthzResponse(statusCode: number | undefined, body: s
     return false;
   }
   try {
-    const payload = JSON.parse(body) as { ok?: unknown; status?: unknown };
-    return payload.ok === true && payload.status === "live";
+    const payload: unknown = JSON.parse(body);
+    return isRecord(payload) && payload.ok === true && payload.status === "live";
   } catch {
     return false;
   }
