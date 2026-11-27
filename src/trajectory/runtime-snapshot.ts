@@ -1,0 +1,217 @@
+import { hash, randomUUID } from "node:crypto";
+import {
+  TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES,
+  TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
+} from "./paths.js";
+import type { TrajectoryEvent } from "./types.js";
+
+export const TRAJECTORY_SNAPSHOT_FRAGMENT = "model.snapshot.fragment";
+
+type SerializedEvent = { event: TrajectoryEvent; line: string };
+
+/** Split only the prepared diagnostic snapshot; individual values keep their existing bounds. */
+export function fragmentTrajectorySnapshot(
+  event: TrajectoryEvent,
+  originalBytes: number,
+  maxCaptureBytes: number,
+): SerializedEvent[] | undefined {
+  const snapshot = event.data?.messagesSnapshot;
+  if (
+    event.type !== "model.completed" ||
+    !Array.isArray(snapshot) ||
+    snapshot.length === 0 ||
+    event.data?.truncated !== undefined ||
+    event.data?.droppedFields !== undefined
+  ) {
+    return undefined;
+  }
+  const id = randomUUID();
+  const sha256 = hash("sha256", JSON.stringify(snapshot));
+  const fragment = (messages: unknown[], index: number, count: number): TrajectoryEvent => ({
+    ...event,
+    type: TRAJECTORY_SNAPSHOT_FRAGMENT,
+    seq: event.seq + index,
+    sourceSeq: event.seq + index,
+    data: {
+      truncated: true,
+      reason: "trajectory-snapshot-fragment",
+      snapshotId: id,
+      index,
+      count,
+      sha256,
+      messagesSnapshot: messages,
+    },
+  });
+  const groups: unknown[][] = [];
+  let group: unknown[] = [];
+  // Reserve the longest numeric header while choosing groups; final headers are smaller.
+  const fits = (messages: unknown[]) =>
+    Buffer.byteLength(
+      JSON.stringify(fragment(messages, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER)),
+    ) <= TRAJECTORY_RUNTIME_EVENT_MAX_BYTES;
+  for (const message of snapshot) {
+    const next = [...group, message];
+    if (fits(next)) {
+      group = next;
+      continue;
+    }
+    if (group.length === 0 || !fits([message])) {
+      return undefined;
+    }
+    groups.push(group);
+    group = [message];
+  }
+  groups.push(group);
+  const data = { ...event.data };
+  delete data.messagesSnapshot;
+  const parent: TrajectoryEvent = {
+    ...event,
+    seq: event.seq + groups.length,
+    sourceSeq: event.seq + groups.length,
+    data: {
+      ...data,
+      truncated: true,
+      reason: "trajectory-event-size-limit",
+      originalBytes,
+      limitBytes: TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
+      droppedFields: ["messagesSnapshot"],
+      messagesSnapshotFragments: { id, count: groups.length, sha256 },
+    },
+  };
+  const records = [
+    ...groups.map((messages, index) => fragment(messages, index, groups.length)),
+    parent,
+  ].map((entry) => ({ event: entry, line: JSON.stringify(entry) }));
+  const sizes = records.map(({ line }) => Buffer.byteLength(line));
+  if (
+    sizes.some((bytes) => bytes > TRAJECTORY_RUNTIME_EVENT_MAX_BYTES) ||
+    sizes.reduce((total, bytes) => total + bytes + 1, 0) >
+      Math.min(maxCaptureBytes, TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES)
+  ) {
+    return undefined;
+  }
+  return records;
+}
+
+/** Restore only complete groups. Lost/evicted fragments keep their explicit partial markers. */
+export function restoreTrajectorySnapshots(events: TrajectoryEvent[]): TrajectoryEvent[] {
+  const groups = new Map<string, TrajectoryEvent[]>();
+  for (const event of events) {
+    if (event.type !== TRAJECTORY_SNAPSHOT_FRAGMENT || typeof event.data?.snapshotId !== "string") {
+      continue;
+    }
+    const group = groups.get(event.data.snapshotId) ?? [];
+    group.push(event);
+    groups.set(event.data.snapshotId, group);
+  }
+  const consumed = new Set<TrajectoryEvent>();
+  const replacements = new Map<TrajectoryEvent, TrajectoryEvent>();
+  const sameRun = (left: TrajectoryEvent, right: TrajectoryEvent) =>
+    left.source === "runtime" &&
+    right.source === "runtime" &&
+    left.sessionId === right.sessionId &&
+    left.sessionKey === right.sessionKey &&
+    left.traceId === right.traceId &&
+    left.runId === right.runId &&
+    left.ts === right.ts &&
+    left.workspaceDir === right.workspaceDir &&
+    left.provider === right.provider &&
+    left.modelId === right.modelId &&
+    left.modelApi === right.modelApi;
+  for (const event of events) {
+    const data = event.data;
+    const reference = data?.messagesSnapshotFragments;
+    if (
+      event.type !== "model.completed" ||
+      !data ||
+      !reference ||
+      typeof reference !== "object" ||
+      Array.isArray(reference) ||
+      data.truncated !== true ||
+      data.reason !== "trajectory-event-size-limit" ||
+      !Array.isArray(data.droppedFields) ||
+      !data.droppedFields.includes("messagesSnapshot")
+    ) {
+      continue;
+    }
+    const { id, count, sha256 } = reference as Record<string, unknown>;
+    const fragments = typeof id === "string" ? groups.get(id) : undefined;
+    if (
+      !fragments ||
+      !Number.isSafeInteger(count) ||
+      Number(count) < 1 ||
+      fragments.length !== count ||
+      typeof sha256 !== "string" ||
+      !/^[a-f0-9]{64}$/.test(sha256)
+    ) {
+      continue;
+    }
+    const ordered = [...fragments].sort(
+      (left, right) => Number(left.data?.index) - Number(right.data?.index),
+    );
+    const parentSeq = event.sourceSeq ?? event.seq;
+    if (
+      !ordered.every(
+        (part, index) =>
+          sameRun(part, event) &&
+          part.data?.truncated === true &&
+          part.data.reason === "trajectory-snapshot-fragment" &&
+          part.data?.index === index &&
+          part.data.count === count &&
+          part.data.sha256 === sha256 &&
+          (part.sourceSeq ?? part.seq) === parentSeq - Number(count) + index &&
+          Array.isArray(part.data.messagesSnapshot),
+      )
+    ) {
+      continue;
+    }
+    const messages = ordered.flatMap((part) => part.data!.messagesSnapshot as unknown[]);
+    if (hash("sha256", JSON.stringify(messages)) !== sha256) {
+      continue;
+    }
+    const restored: Record<string, unknown> = { ...data, messagesSnapshot: messages };
+    delete restored.messagesSnapshotFragments;
+    const droppedFields = data.droppedFields.filter((key) => key !== "messagesSnapshot");
+    if (droppedFields.length > 0) {
+      restored.droppedFields = droppedFields;
+    } else {
+      for (const key of ["truncated", "reason", "originalBytes", "limitBytes", "droppedFields"]) {
+        delete restored[key];
+      }
+    }
+    replacements.set(event, { ...event, data: restored });
+    for (const part of fragments) {
+      consumed.add(part);
+    }
+  }
+  const reportedOrphans = new Set<unknown>();
+  return events.flatMap((event) => {
+    if (consumed.has(event)) {
+      return [];
+    }
+    if (event.type === TRAJECTORY_SNAPSHOT_FRAGMENT) {
+      const id = event.data?.snapshotId;
+      if (reportedOrphans.has(id)) {
+        return [];
+      }
+      reportedOrphans.add(id);
+      return [
+        {
+          ...event,
+          type: "trace.truncated",
+          data: { truncated: true, reason: "incomplete-trajectory-snapshot" },
+        },
+      ];
+    }
+    const restored = replacements.get(event);
+    if (restored) {
+      return [restored];
+    }
+    if (event.type === "model.completed" && event.data?.messagesSnapshotFragments) {
+      const data = { ...event.data };
+      delete data.messagesSnapshotFragments;
+      return [{ ...event, data }];
+    }
+    return [event];
+  });
+}
