@@ -1,4 +1,4 @@
-import { createHash, createHmac } from "node:crypto";
+import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";
 import { sendJsonWithoutCharset as sendInteractionResponse } from "openclaw/plugin-sdk/http-response-runtime";
@@ -198,16 +198,16 @@ function generateInteractionToken(context: Record<string, unknown>, accountId?: 
 /**
  * Mattermost routes a click through `/api/v4/posts/{post_id}/actions/{action_id:[A-Za-z0-9]+}`,
  * so any other character in an action ID makes Mattermost answer 404 before the callback runs.
- * Other IDs (agent values, `question-0`, non-ASCII text) get a stable alphanumeric ID that the
- * button's index keeps unique on the post; the original value travels in the signed context.
+ * Other IDs (agent values, `question-0`, non-ASCII text) become `<alphanumerics>x<index>`: the
+ * index after the last `x` keeps them unique on the post; the original value travels in the
+ * signed context.
  * See: https://github.com/mattermost/mattermost/issues/25747
  */
 function toMattermostActionId(id: string, index: number): string {
   if (/^[A-Za-z0-9]+$/.test(id)) {
     return id;
   }
-  const digest = createHash("sha256").update(id).digest("hex").slice(0, 8);
-  return `${id.replace(/[^A-Za-z0-9]/g, "").slice(0, 16)}${index}${digest}`;
+  return `${id.replace(/[^A-Za-z0-9]/g, "").slice(0, 16)}x${index}`;
 }
 
 export function buildButtonAttachments(params: {
@@ -221,8 +221,13 @@ export function buildButtonAttachments(params: {
   }>;
   text?: string;
 }) {
+  const rawIds = new Set(params.buttons.map((btn) => btn.id));
   const actions = params.buttons.map((btn, index) => {
     const safeId = toMattermostActionId(btn.id, index);
+    // Mattermost sends a click to the first action with that id, so a clash would misroute it.
+    if (safeId !== btn.id && rawIds.has(safeId)) {
+      throw new Error(`Mattermost button id ${safeId} is used by two buttons in one post`);
+    }
     const context: Record<string, unknown> = {
       action_id: safeId,
       ...btn.context,
