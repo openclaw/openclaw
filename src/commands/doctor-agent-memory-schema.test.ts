@@ -94,8 +94,8 @@ it("decides pending schema work only beside held stores, without writing", async
   expect(changedStoreFiles(stopped, snapshotStoreFiles(root))).toEqual([]);
 
   {
-    using _state = holdStore(statePath);
-    using _agent = holdStore(databasePath);
+    using heldState = holdStore(statePath);
+    using heldAgent = holdStore(databasePath);
     const held = snapshotStoreFiles(root);
     expect(await check()).toBe("work");
     expect(await check(false)).toBe("none");
@@ -106,8 +106,8 @@ it("decides pending schema work only beside held stores, without writing", async
   const report = await repairMemory(env);
   expect(report.repaired).toHaveLength(1);
   expect(readMemoryChunkColumns(databasePath)).not.toContain("importance");
-  using _state = holdStore(statePath);
-  using _agent = holdStore(databasePath);
+  using heldState = holdStore(statePath);
+  using heldAgent = holdStore(databasePath);
   expect(await check()).toBe("none");
 });
 

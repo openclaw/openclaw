@@ -324,7 +324,7 @@ describe("legacy runtime file pending check", () => {
     await maybeRepairLegacyRuntimeFiles(true, env);
     await closeOpenClawAgentDatabasesAsync();
     {
-      using _held = holdStore(agent.path);
+      using heldAgent = holdStore(agent.path);
       await expect(checkLegacyRuntimeFilesPending(env)).resolves.toBe("none");
     }
 
@@ -342,7 +342,7 @@ describe("legacy runtime file pending check", () => {
         seeded.endsWith(".jsonl") ? preRedactorAudit : "x",
       );
     }
-    using _held = holdStore(agent.path);
+    using heldAgent = holdStore(agent.path);
     const before = snapshotStoreFiles(root);
     await expect(checkLegacyRuntimeFilesPending(env)).resolves.toBe("work");
     expect(changedStoreFiles(before, snapshotStoreFiles(root))).toEqual([]);
