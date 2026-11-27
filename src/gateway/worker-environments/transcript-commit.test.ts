@@ -882,6 +882,11 @@ describe("worker transcript commit application", () => {
     if (!Value.Check(WorkerTranscriptMessageSchema, carrier)) {
       throw new Error("Worker schema rejected the runtime-owned context message");
     }
+    const quoted = JSON.stringify(text);
+    const content = String(carrier.content);
+    expect(carrier.details).toMatchObject({
+      dataRanges: [{ start: content.indexOf(quoted), end: content.length }],
+    });
     const request = { runEpoch: 7, seq: 1, baseLeafId: null, messages: [message, carrier] };
     expect(Value.Check(WorkerTranscriptCommitParamsSchema, request)).toBe(true);
     expect(
