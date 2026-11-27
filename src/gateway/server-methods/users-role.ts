@@ -48,13 +48,10 @@ function sessionsNarrowed(before: RoleSessions, after: RoleSessions): boolean {
     return false;
   }
   if (before.others === "invited" && after.others === "invited") {
-    const was = before.maxInvitedAccess;
-    const now = after.maxInvitedAccess;
+    // No ceiling leaves each member's own level uncapped (resolveSessionMemberAccess).
     return (
-      was !== now &&
-      (was === undefined ||
-        now === undefined ||
-        INVITED_ORDER.indexOf(now) < INVITED_ORDER.indexOf(was))
+      INVITED_ORDER.indexOf(after.maxInvitedAccess ?? "send") <
+      INVITED_ORDER.indexOf(before.maxInvitedAccess ?? "send")
     );
   }
   if (before.others === "invited" || after.others === "invited") {

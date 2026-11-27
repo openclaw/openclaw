@@ -19,6 +19,7 @@ const cfg: OpenClawConfig = {
         writer: role({ others: "write" }),
         invitedSend: role({ others: "invited", maxInvitedAccess: "send" }),
         invitedRead: role({ others: "invited", maxInvitedAccess: "read" }),
+        invitedUncapped: role({ others: "invited" }),
         invitedSendExec: role({
           others: "invited",
           maxInvitedAccess: "send",
@@ -43,6 +44,8 @@ it.each([
   ["invitedSend", "writer", false],
   // Invited tool limits apply to the next request, in either direction.
   ["invitedSend", "invitedSendExec", false],
+  ["invitedSend", "invitedUncapped", false],
+  ["invitedUncapped", "invitedRead", true],
   ["viewer", "viewer", false],
   ["viewer", "none", true],
   ["invitedSend", "invitedRead", true],
