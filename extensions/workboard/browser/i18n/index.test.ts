@@ -14,3 +14,12 @@ it("falls back to English for an untranslated locale", () => {
   Object.assign(workboardTestHost().host, { locale: "unsupported-locale" });
   expect(t("workboard.newCard")).toBe("New card");
 });
+
+it("shows distinct Polish labels for the Ready and Done columns", async () => {
+  Object.assign(workboardTestHost().host, { locale: "pl" });
+  await loadMessages("pl");
+  expect(t("workboard.status.ready")).toBe("Gotowe do podjęcia");
+  expect(t("workboard.status.done")).toBe("Gotowe");
+  expect(t("workboard.status.ready")).not.toBe(t("workboard.status.done"));
+  expect(t("workboard.status.running")).toBe(t("workboard.viewRunning"));
+});
