@@ -502,4 +502,19 @@ describe("browser agent snapshot timeout routing", () => {
     expect(response.body).toEqual({ error: "timeoutMs must be a positive integer." });
     expect(cdp.captureScreenshot).not.toHaveBeenCalled();
   });
+
+  it("reports a crashed target before capturing a direct-CDP screenshot", async () => {
+    cdp.assertCdpTargetResponsive.mockRejectedValueOnce(new BrowserTargetCrashedError());
+    cdp.captureScreenshot.mockResolvedValueOnce(Buffer.from("png"));
+
+    await expect(screenshot()).rejects.toMatchObject({
+      name: "BrowserTargetCrashedError",
+      message: new BrowserTargetCrashedError().message,
+    });
+    expect(cdp.assertCdpTargetResponsive).toHaveBeenCalledWith(
+      expect.objectContaining({ wsUrl: "ws://127.0.0.1:18800/devtools/page/tab-1" }),
+    );
+    expect(isBrowserTargetCrashed("http://127.0.0.1:18800", "tab-1")).toBe(true);
+    expect(cdp.captureScreenshot).not.toHaveBeenCalled();
+  });
 });

@@ -295,6 +295,9 @@ export function registerBrowserAgentSnapshotRoutes(
             ? await pw.screenshotWithLabelsViaPlaywright({ ...screenshotOptions, refs: snap?.refs })
             : await pw.takeScreenshotViaPlaywright(screenshotOptions);
         } else {
+          // A dead renderer leaves Page.enable unanswered until the whole screenshot
+          // budget is spent; the bounded probe names the crashed tab instead.
+          await assertRouteTabResponsive({ profileCtx, tab, signal });
           capture = {
             buffer: await captureScreenshot({
               wsUrl: tab.wsUrl ?? "",
