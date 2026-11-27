@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -17,6 +18,7 @@ import {
   parseUpdateAdmissionVerdict,
   type UpdateAdmissionVerdict,
 } from "../../infra/update-run-schema.js";
+import { redactSupportString } from "../../logging/diagnostic-support-redaction.js";
 import { writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
 import { updateAdmitCommand } from "./update-command-admit.js";
 import { snapshotUpdateFixtureFiles } from "./update-command-filesystem-snapshot.test-support.js";
@@ -188,9 +190,21 @@ describe("candidate admission for a system unit run by another account", () => {
     );
     // The installed driver still writes its log and report there as root, and the service
     // account's backup refuses directories it cannot read, so ownership comes back first.
-    expect(verdict.reasons[0]?.nextAction).toContain(
-      `The package and the running Gateway were not changed, but this run writes its log and report into that state as root; give them back to openclaw first: sudo find ${stateDir} -xdev -user 0 -exec chown openclaw {} +. Update this system service by hand`,
-    );
+    // Drivers print the text with their state path rewritten, as redactSupportString does.
+    const shown = redactSupportString(verdict.reasons[0]?.nextAction ?? "", {
+      env: {},
+      stateDir,
+    });
+    expect(shown).not.toContain("$OPENCLAW_STATE_DIR");
+    const chown =
+      /give them back to openclaw first: sudo find (\S+) -xdev -user 0 -exec chown openclaw \{\} \+\./u.exec(
+        shown,
+      );
+    const backup = / OPENCLAW_STATE_DIR=(\S+) openclaw backup create --verify /u.exec(shown);
+    // What an operator's shell runs is the service's state path itself.
+    for (const word of [chown?.[1], backup?.[1]]) {
+      expect(execFileSync("sh", ["-c", `printf %s ${word}`], { encoding: "utf8" })).toBe(stateDir);
+    }
   });
 
   it("keeps the reinstall with the account and package manager that own the installation", async () => {

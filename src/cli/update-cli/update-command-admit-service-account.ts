@@ -89,11 +89,22 @@ async function formatRefusal(
     ? `would write that service's state as ${caller}`
     : `would back up and check ${caller}'s own state instead of the service's`;
   const message = `Gateway service ${unit} runs as ${user}, but this update runs as ${caller} and ${effect}.`;
-  const selectors = Object.entries(unitEnv).map(([key, value]) => `${key}=${quoteCliArg(value)}`);
+  // Shipped drivers print this text with their own state path rewritten to
+  // "$OPENCLAW_STATE_DIR", which a shell would expand to nothing. Quoting the last
+  // component keeps the same path out of that rewrite.
+  const shellPath = (value: string) => {
+    const at = value.indexOf(callerState);
+    if (at < 0) {
+      return quoteCliArg(value);
+    }
+    const cut = value.lastIndexOf("/", at + callerState.length - 1) + 1;
+    return `${quoteCliArg(value.slice(0, cut))}'${value.slice(cut).replaceAll("'", "'\\''")}'`;
+  };
+  const selectors = Object.entries(unitEnv).map(([key, value]) => `${key}=${shellPath(value)}`);
   const backup =
     mismatch.selectorsIncomplete || !home
       ? `sudo -u ${sudoUser} env <the unit's HOME, OPENCLAW_HOME, OPENCLAW_STATE_DIR, OPENCLAW_CONFIG_PATH and OPENCLAW_PROFILE> openclaw backup create --verify --output <directory>`
-      : `sudo -u ${sudoUser} env ${selectors.join(" ")} openclaw backup create --verify --output ${quoteCliArg(home)}`;
+      : `sudo -u ${sudoUser} env ${selectors.join(" ")} openclaw backup create --verify --output ${shellPath(home)}`;
   const spec = quoteCliArg(`openclaw@${params.candidateVersion}`);
   // The package stays with the account that ran this update, and its global directory.
   const owner = uid === 0 ? "sudo " : "";
@@ -107,7 +118,7 @@ async function formatRefusal(
   // this account; the service account's backup refuses directories it cannot read.
   const chownTo = serviceUser === "" ? "root" : quoteCliArg(serviceUser);
   const unchanged = sameState
-    ? `The package and the running Gateway were not changed, but this run writes its log and report into that state as ${caller}; give them back to ${user} first: sudo find ${quoteCliArg(callerState)} -xdev -user ${uid} -exec chown ${chownTo} {} +.`
+    ? `The package and the running Gateway were not changed, but this run writes its log and report into that state as ${caller}; give them back to ${user} first: sudo find ${shellPath(callerState)} -xdev -user ${uid} -exec chown ${chownTo} {} +.`
     : "Nothing was changed: the package, the service state and the running Gateway are as they were.";
   // Shipped drivers keep at most 200 characters of the reason; the next action is shown whole.
   const nextAction = `${unchanged} Update this system service by hand (${SYSTEM_SERVICE_UPDATE_DOCS}). First make a verified backup of its state as ${user}: ${backup}. Then run ${install} and sudo systemctl restart ${quoteCliArg(unit)}.`;
