@@ -1,5 +1,6 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.voice.TalkChime
 import android.content.Context
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -18,6 +19,23 @@ class SecurePrefsTest {
       context,
       context.getSharedPreferences("secure-prefs-test-${UUID.randomUUID()}", Context.MODE_PRIVATE),
     )
+
+  @Test
+  fun talkChimesDefaultOnWithoutWritingAndPersistIndependently() {
+    val context = RuntimeEnvironment.getApplication()
+    val plain = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    val original = testPrefs(context)
+    for (cue in TalkChime.entries) {
+      assertTrue(original.talkChimeEnabled(cue).value)
+      assertFalse(plain.contains(cue.key))
+    }
+    original.setTalkChimeEnabled(TalkChime.ReadyForReply, false)
+    val restored = testPrefs(context)
+    assertTrue(restored.talkChimeEnabled(TalkChime.Listening).value)
+    assertTrue(restored.talkChimeEnabled(TalkChime.CallEnd).value)
+    assertFalse(restored.talkChimeEnabled(TalkChime.ReadyForReply).value)
+    assertFalse(plain.contains(TalkChime.CallEnd.key))
+  }
 
   @Test
   fun textSizeDefaultsTo100AndEveryWebStopSurvivesReconstruction() {

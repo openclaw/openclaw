@@ -23,6 +23,7 @@ import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NotificationPackageFilterMode
 import ai.openclaw.app.SensitiveFeatureConfig
+import ai.openclaw.app.TalkLaunchRoute
 import ai.openclaw.app.VoiceCaptureMode
 import ai.openclaw.app.appLanguageRowSubtitle
 import ai.openclaw.app.appearanceAccentPalette
@@ -70,6 +71,7 @@ import ai.openclaw.app.ui.design.agentAvatarSource
 import ai.openclaw.app.ui.design.badgeInitials
 import ai.openclaw.app.uppercaseFirstGraphemeOrNull
 import ai.openclaw.app.voice.AudioInputDeviceOption
+import ai.openclaw.app.voice.TalkChime
 import ai.openclaw.app.voice.VoiceWakePreferences
 import ai.openclaw.app.voice.audioInputDeviceOptionFromKey
 import android.Manifest
@@ -774,6 +776,27 @@ private fun VoiceSettingsScreen(
         VoiceSetupReadinessRow(title = nativeString("Realtime Talk"), state = talkSetupReadiness.realtimeTalk, icon = Icons.Default.GraphicEq)
         VoiceSetupReadinessRow(title = nativeString("Dictation"), state = talkSetupReadiness.dictation, icon = Icons.Default.Mic)
       }
+      Text(text = nativeString("Status chimes"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+      SettingsTogglePanel(
+        rows =
+          TalkChime.entries.map { cue ->
+            val checked by viewModel.talkChimeEnabled(cue).collectAsState()
+            val (title, subtitle) =
+              when (cue) {
+                TalkChime.Listening -> nativeString("Listening") to nativeString("When Talk first opens the microphone.")
+                TalkChime.CallEnd -> nativeString("Call end") to nativeString("When a call ends normally.")
+                TalkChime.ReadyForReply -> nativeString("Ready for reply") to nativeString("After a spoken reply in turn-based Talk. Realtime Talk is always listening.")
+              }
+            SettingsToggleRow(
+              title = title,
+              subtitle = subtitle,
+              icon = Icons.AutoMirrored.Filled.VolumeUp,
+              checked = checked,
+              onCheckedChange = { viewModel.setTalkChimeEnabled(cue, it) },
+              enabled = cue != TalkChime.ReadyForReply || talkSetupReadiness.talkLaunchRoute != TalkLaunchRoute.Realtime,
+            )
+          },
+      )
       Text(text = nativeString("Microphone"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
       AudioInputDevicePanel(
         devices = audioInputDevices,

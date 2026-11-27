@@ -1092,6 +1092,73 @@ class TalkModeManagerTest {
     }
 
   @Test
+  fun nativeChimesGateRecognitionAndFollowOnlyCompletedSpeech() =
+    runBlocking {
+      val cues = mutableListOf<TalkChime>()
+      val releaseListening = CompletableDeferred<Unit>()
+      withNativeTalk(playChime = { cue, realtime ->
+        assertFalse(realtime)
+        cues += cue
+        if (cue == TalkChime.Listening) releaseListening.await()
+      }) { proof, sends ->
+        val first = currentRecognizer()
+        first.triggerOnReadyForSpeech(Bundle())
+        awaitTalkWork(proof) { cues.isNotEmpty() }
+        assertTrue(first.isDestroyed)
+        first.triggerOnResults(recognitionResults("Chime is not speech"))
+        assertFalse(proof.manager.isListening.value)
+        releaseListening.complete(Unit)
+        awaitTalkWork(proof) { proof.manager.isListening.value }
+        val live = currentRecognizer()
+        live.triggerOnReadyForSpeech(Bundle())
+        assertEquals(listOf(TalkChime.Listening), cues)
+        live.triggerOnResults(recognitionResults("A real turn"))
+        advanceTalkSilence(proof)
+        awaitTalkWork(proof) { proof.synthesizer.requested.isCompleted }
+        completeRemoteSynthesis(proof.synthesizer)
+        awaitTalkWork(proof) { proof.player.playCalls == 1 }
+        assertEquals(listOf(TalkChime.Listening), cues)
+        proof.player.finished.complete(Unit)
+        awaitTalkWork(proof) { proof.manager.isListening.value }
+        currentRecognizer().triggerOnReadyForSpeech(Bundle())
+        awaitTalkWork(proof) { cues.size == 2 && proof.manager.isListening.value }
+        currentRecognizer().triggerOnReadyForSpeech(Bundle())
+        assertEquals(1, sends.size)
+        assertEquals(
+          "A real turn",
+          sends
+            .single()
+            .getValue("message")
+            .jsonPrimitive.content,
+        )
+        proof.manager.stopAllCapture(userEndedTalk = true)
+        awaitTalkWork(proof) { cues.size == 3 }
+        assertEquals(listOf(TalkChime.Listening, TalkChime.ReadyForReply, TalkChime.CallEnd), cues)
+      }
+    }
+
+  @Test
+  fun failedNativePlaybackAndInvoluntaryStopDoNotChime() =
+    runBlocking {
+      val cues = mutableListOf<TalkChime>()
+      withNativeTalk(playChime = { cue, _ -> cues += cue }) { proof, _ ->
+        currentRecognizer().triggerOnReadyForSpeech(Bundle())
+        awaitTalkWork(proof) { cues.size == 1 && proof.manager.isListening.value }
+        currentRecognizer().triggerOnResults(recognitionResults("Failed speech"))
+        advanceTalkSilence(proof)
+        awaitTalkWork(proof) { proof.synthesizer.requested.isCompleted }
+        completeRemoteSynthesis(proof.synthesizer)
+        awaitTalkWork(proof) { proof.player.playCalls == 1 }
+        proof.player.finished.completeExceptionally(IllegalStateException("Playback failed"))
+        awaitTalkWork(proof) { proof.manager.isListening.value }
+        currentRecognizer().triggerOnReadyForSpeech(Bundle())
+        proof.manager.stopAllCapture()
+        proof.scheduler.runCurrent()
+        assertEquals(listOf(TalkChime.Listening), cues)
+      }
+    }
+
+  @Test
   fun publishedGatewayRelayContractsStartTheAdvertisedTransport() =
     runBlocking {
       installSpeechRecognitionService()
@@ -1604,12 +1671,14 @@ class TalkModeManagerTest {
     history: () -> String = { """{"messages":[{"role":"assistant","content":[{"type":"text","text":"Synthetic native reply"}]}]}""" },
     interceptRequest: (JsonObject, WebSocket) -> Boolean = { _, _ -> false },
     chatAck: String = """{"runId":"native-talk-turn","status":"ok"}""",
+    playChime: (suspend (TalkChime, Boolean) -> Unit)? = null,
     block: suspend (RealtimePlaybackProof, ConcurrentLinkedQueue<JsonObject>) -> Unit,
   ) {
     installSpeechRecognitionService()
     val sends = ConcurrentLinkedQueue<JsonObject>()
     val relayCreates = ConcurrentLinkedQueue<JsonObject>()
     withStartedTalk(
+      playChime = playChime,
       interceptRequest = interceptRequest,
       responseForRequest = { request, _ ->
         when (request.getValue("method").jsonPrimitive.content) {
@@ -3261,6 +3330,7 @@ class TalkModeManagerTest {
   private suspend fun withStartedTalk(
     sessionKey: String = "main",
     workDispatcher: CoroutineDispatcher? = null,
+    playChime: (suspend (TalkChime, Boolean) -> Unit)? = null,
     captureRelayStopNotification: () -> ((() -> Boolean) -> Unit) = { {} },
     responseForRequest: (JsonObject, WebSocket) -> String? = { _, _ -> null },
     interceptRequest: (JsonObject, WebSocket) -> Boolean = { _, _ -> false },
@@ -3304,6 +3374,8 @@ class TalkModeManagerTest {
         isConnected = { connected.isCompleted },
         talkSpeakClient = synthesizer,
         talkAudioPlayer = player,
+        isChimeEnabled = { playChime != null },
+        playChime = playChime ?: { _, _ -> error("Unexpected chime") },
         onBeforeSpeak = { callbackDepth += 1 },
         onAfterSpeak = { callbackDepth -= 1 },
         realtimeCaptureDispatcher = captureDispatcher,
@@ -3604,6 +3676,94 @@ class TalkModeManagerTest {
             capture?.join(5_000)
             assertFalse("Capture worker must terminate", capture?.isAlive == true)
             proof.drainCancelledCapture()
+          }
+        }
+      } finally {
+        org.robolectric.shadows.ShadowAudioRecord
+          .clearSource()
+      }
+    }
+
+  @Test
+  fun realtimeChimeWaitsForCaptureAndNeverEntersTheRelay() =
+    runBlocking {
+      val frames = java.util.concurrent.LinkedBlockingQueue<ByteArray>()
+      val reading = java.util.concurrent.LinkedBlockingQueue<Unit>()
+      val cues = ConcurrentLinkedQueue<TalkChime>()
+      val communicationCues = ConcurrentLinkedQueue<TalkChime>()
+      val cueFinished = CompletableDeferred<Unit>()
+      val received = ConcurrentLinkedQueue<String>()
+      org.robolectric.shadows.ShadowAudioRecord.setSourceProvider {
+        object : org.robolectric.shadows.ShadowAudioRecord.AudioRecordSource {
+          override fun readInByteArray(
+            bytes: ByteArray,
+            offset: Int,
+            size: Int,
+            blocking: Boolean,
+          ): Int {
+            reading.put(Unit)
+            val frame = checkNotNull(frames.poll(5, TimeUnit.SECONDS))
+            frame.copyInto(bytes, destinationOffset = offset)
+            return frame.size
+          }
+        }
+      }
+      try {
+        withStartedTalk(
+          playChime = { cue, realtime ->
+            if (realtime) communicationCues.add(cue)
+            cues.add(cue)
+            if (cue == TalkChime.Listening) {
+              assertTrue(realtime)
+              cueFinished.await()
+            }
+          },
+          interceptRequest = { request, _ ->
+            if (request.getValue("method").jsonPrimitive.content == "talk.session.appendAudio") {
+              received +=
+                request
+                  .getValue("params")
+                  .jsonObject
+                  .getValue("audioBase64")
+                  .jsonPrimitive.content
+            }
+            false
+          },
+        ) { proof ->
+          proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"ready"}""")
+          assertTrue("Provider readiness alone is not a working microphone", cues.isEmpty())
+          val capture = Thread { proof.drainCancelledCapture() }.also { it.start() }
+          try {
+            fun feed(marker: Int) {
+              checkNotNull(reading.poll(5, TimeUnit.SECONDS))
+              frames.put(byteArrayOf(marker.toByte(), 0))
+            }
+            feed(1)
+            awaitTalkWork(proof) { cues.isNotEmpty() }
+            feed(2) // Entire read during the listening cue.
+            checkNotNull(reading.poll(5, TimeUnit.SECONDS))
+            cueFinished.complete(Unit)
+            proof.scheduler.runCurrent()
+            frames.put(byteArrayOf(3, 0)) // Read spanning cue completion.
+            feed(4) // First clean post-cue frame.
+            checkNotNull(reading.poll(5, TimeUnit.SECONDS))
+            proof.drainCancelledCapture()
+            awaitTalkWork(proof) { received.isNotEmpty() }
+            assertEquals(listOf(Base64.encodeToString(byteArrayOf(4, 0), Base64.NO_WRAP)), received.toList())
+            val track = startRealtimeAudio(proof)
+            finishRealtimeAudio(proof, track, clear = false)
+            proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"ready"}""")
+            proof.manager.stopAllCapture(userEndedTalk = true)
+            frames.offer(byteArrayOf())
+            capture.join(5_000)
+            proof.drainCancelledCapture()
+            awaitTalkWork(proof) { TalkChime.CallEnd in cues }
+            assertEquals(listOf(TalkChime.Listening, TalkChime.CallEnd), cues.toList())
+            assertEquals(cues.toList(), communicationCues.toList())
+          } finally {
+            proof.manager.stopAllCapture()
+            frames.offer(byteArrayOf())
+            capture.join(5_000)
           }
         }
       } finally {

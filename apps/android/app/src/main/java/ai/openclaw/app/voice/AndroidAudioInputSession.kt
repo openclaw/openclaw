@@ -125,6 +125,7 @@ internal class AndroidAudioInputSession private constructor(
   private val communicationRouteOwner = bluetoothCommunicationRoute.newOwner()
   private val callbackHandler = Handler(Looper.getMainLooper())
   private var closed = false
+  private var keepCommunicationForChime = false
   private var callbackRegistered = false
   private var routingListenerRegistered = false
   private var requestedInput: AudioDeviceInfo? = null
@@ -280,6 +281,31 @@ internal class AndroidAudioInputSession private constructor(
     }
   }
 
+  // A normal hangup can release the recorder immediately while keeping the call's output
+  // route and focus until its chime ends. This never opens a route or restarts the mic.
+  fun retainCommunicationForChime(): EndingChimeAudio? =
+    synchronized(lock) {
+      val audio = communicationAudio ?: return@synchronized null
+      if (closed || keepCommunicationForChime || !audio.eligible) return@synchronized null
+      keepCommunicationForChime = true
+      EndingChimeAudio(audio, ::releaseCommunication)
+    }
+
+  class EndingChimeAudio(
+    private val audio: RealtimeCommunicationAudio,
+    private val release: () -> Unit,
+  ) : AutoCloseable {
+    val eligible: Boolean
+      get() = audio.eligible
+
+    override fun close() = release()
+  }
+
+  private fun releaseCommunication() {
+    bluetoothCommunicationRoute.close(audioManager, communicationRouteOwner)
+    communicationAudio?.close()
+  }
+
   override fun close() {
     synchronized(lock) {
       if (closed) return
@@ -306,8 +332,7 @@ internal class AndroidAudioInputSession private constructor(
         runCatching { audioRecord.stop() }
       }
       runCatching { audioRecord.release() }
-      bluetoothCommunicationRoute.close(audioManager, communicationRouteOwner)
-      communicationAudio?.close()
+      if (!keepCommunicationForChime) releaseCommunication()
       requestedCommunicationDevice = null
     }
   }
