@@ -379,17 +379,16 @@ android {
     buildConfigField("String", "GIT_COMMIT", "\"$openClawBuildCommit\"")
     buildConfigField("String", "BUILD_TIMESTAMP", "\"$openClawBuildTimestamp\"")
     ndk {
-      // Android Lint reads the literal ABI names when it checks ChromeOS support.
       abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
     }
   }
 
-  val releaseApkAbis = defaultConfig.ndk.abiFilters.toTypedArray()
   splits {
     abi {
       isEnable = true
       reset()
-      include(*releaseApkAbis)
+      // Keep these in sync with ndk.abiFilters. ChromeOS lint scans both declarations for literals.
+      include("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
       isUniversalApk = true
     }
   }
