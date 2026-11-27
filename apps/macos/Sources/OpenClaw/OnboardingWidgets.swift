@@ -10,6 +10,7 @@ struct GlowingOpenClawIcon: View {
     var size: CGFloat = 148
     var mood: OpenClawMascotMood = .idle
     var accessory: OpenClawMascotAccessory = .none
+    var eyeGlow = true
 
     var body: some View {
         // The large vector hero is decorative; 30 fps burns a core while setup sits idle.
@@ -17,7 +18,8 @@ struct GlowingOpenClawIcon: View {
             mood: self.mood,
             accessory: self.accessory,
             interactive: true,
-            minimumFrameInterval: 1.0 / 12.0)
+            minimumFrameInterval: 1.0 / 12.0,
+            eyeGlow: self.eyeGlow)
             .frame(width: self.size, height: self.size)
             .shadow(
                 color: OpenClawMascotView.heroGlowColor(for: self.colorScheme),

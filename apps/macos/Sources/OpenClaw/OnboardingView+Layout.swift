@@ -6,10 +6,12 @@ extension OnboardingView {
         GeometryReader { windowGeometry in
             let contentHeight = Self.contentHeight(for: windowGeometry.size.height)
             VStack(spacing: 0) {
+                // Setup shows plain dark eyes; the teal highlights glare at this size.
                 GlowingOpenClawIcon(
                     size: 130,
                     mood: self.mascotMood,
-                    accessory: self.mascotAccessory)
+                    accessory: self.mascotAccessory,
+                    eyeGlow: false)
                     .offset(y: 10)
                     .frame(height: 145)
 
@@ -325,6 +327,10 @@ extension OnboardingView {
         let cliLockIndex = pageOrder.firstIndex(of: cliPageIndex)
         let aiLockIndex = pageOrder.firstIndex(of: aiPageIndex)
         let remoteGatewayDecision = self.findPageAdvanceDecision
+        // A provider wizard can wait for input without being busy.
+        let isProviderSetupOpen = self.aiSetup.activeAuthOption != nil
+        let isNavigationLocked = self.installingCLI || self.updatingGatewayHosting ||
+            self.aiSetup.isBusy || isProviderSetupOpen
         return HStack(spacing: 20) {
             ZStack(alignment: .leading) {
                 Color.clear
@@ -341,7 +347,7 @@ extension OnboardingView {
                     .buttonStyle(.plain)
                     .foregroundColor(.secondary)
                     .opacity(0.8)
-                    .disabled(self.installingCLI || self.updatingGatewayHosting || self.aiSetup.isBusy)
+                    .disabled(isNavigationLocked)
                     .transition(.opacity.combined(with: .scale(scale: 0.9)))
                 }
             }
@@ -351,8 +357,7 @@ extension OnboardingView {
 
             HStack(spacing: 0) {
                 ForEach(0..<self.pageCount, id: \.self) { index in
-                    let isInstallLocked = (self.installingCLI || self.updatingGatewayHosting || self.aiSetup.isBusy) &&
-                        index != self.currentPage
+                    let isPageJumpLocked = isNavigationLocked && index != self.currentPage
                     let isConnectionLocked = self.isConnectionSelectionBlocking &&
                         index > (connectionLockIndex ?? 0)
                     let isCLILocked = cliLockIndex != nil && !self.cliInstalled && index > (cliLockIndex ?? 0)
@@ -365,7 +370,7 @@ extension OnboardingView {
                     let isFindLocked = findLockIndex != nil &&
                         (!self.canAdvanceFromFind || !remoteGatewayDecision.canAdvance) &&
                         index > (findLockIndex ?? 0)
-                    let isLocked = isInstallLocked || isConnectionLocked || isFindLocked || isCLILocked || isAILocked
+                    let isLocked = isPageJumpLocked || isConnectionLocked || isFindLocked || isCLILocked || isAILocked
                     Button {
                         withAnimation { self.currentPage = index }
                     } label: {
@@ -393,7 +398,7 @@ extension OnboardingView {
             // KeyEquivalent.return defaults to Command-Return; defaultAction is plain Return.
             .keyboardShortcut(.defaultAction)
             .buttonStyle(.borderedProminent)
-            .disabled(!self.canAdvance)
+            .disabled(!self.canAdvance || isProviderSetupOpen)
         }
         .padding(.horizontal, 28)
         .padding(.bottom, 13)

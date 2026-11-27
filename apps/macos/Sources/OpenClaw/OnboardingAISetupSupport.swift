@@ -359,8 +359,9 @@ extension OnboardingAISetupModel {
         }
     }
 
-    var selectedManualProvider: ManualProvider? {
-        self.manualProviders.first { $0.id == self.manualProviderID }
+    func manualProvider(id: String? = nil) -> ManualProvider? {
+        let providerID = id ?? self.manualProviderID
+        return self.manualProviders.first { $0.id == providerID }
     }
 
     var prepareOptions: [PrepareOption] {

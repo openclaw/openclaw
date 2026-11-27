@@ -128,9 +128,17 @@ a new workspace. Git is optional; setup continues without it. Install the tools
 if you want to use Git.
 </Step>
 <Step title="Connect your AI">
-Choose a detected connection, sign in to a provider, or enter an API key or
-token. The manual picker waits for your choice before testing, installing,
-or saving anything. Setup must pass a live AI test before you can continue.
+Pick one entry from the list: **ChatGPT**, **Claude**, **Gemini**, **API key**,
+or **A model on your own computer** (Ollama or LM Studio). Logins OpenClaw
+finds on the Gateway host are tagged **On this Mac**, or **On your Gateway**
+when the Gateway runs elsewhere. Nothing is tested,
+installed, or saved until you pick an entry. Picking an entry, or a sign-in
+under **More providers**, replaces the list with that provider's card: its
+sign-in steps, key form, and live AI test. The **A model on your own computer**
+card also links to Ollama and LM Studio downloads, with **Check again** for
+after you install one. **Choose another AI** returns to the list. **More
+providers** lists every other supported sign-in. Setup must pass a live AI test
+before you can continue.
 
 See [AI connection options](/start/onboarding#ai-connection-options) below for login reuse,
 local models, and custom endpoints.
