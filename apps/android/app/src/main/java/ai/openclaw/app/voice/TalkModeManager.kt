@@ -3105,11 +3105,18 @@ class TalkModeManager internal constructor(
             (error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED || error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE)
           ) {
             // Restarting cannot install a language, so end Talk with the reason instead of looping.
+            val language = resolvedSpeechLocaleTag()
             val failure =
               if (error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED) {
-                nativeText("Device language not supported")
+                nativeText(
+                  "Speech recognition on this phone doesn’t support \$language. In the Control UI, set Settings → Talk → Speech locale to a supported language, then start Talk again.",
+                  language,
+                )
               } else {
-                nativeText("On-device language model unavailable")
+                nativeText(
+                  "Speech recognition on this phone hasn’t downloaded \$language. In the Control UI, set Settings → Talk → Speech locale to a downloaded language, then start Talk again.",
+                  language,
+                )
               }
             val generation = startGeneration.get()
             // The owner notification takes runtime locks, so it runs after this callback releases ours.
@@ -3149,7 +3156,7 @@ class TalkModeManager internal constructor(
             )
             return@withCurrentRecognition
           }
-          scheduleRestart(delayMs = if (error == SpeechRecognizer.ERROR_TOO_MANY_REQUESTS) 15_000 else 600)
+          scheduleRestart(delayMs = 600)
         }
 
       override fun onResults(results: Bundle?) =
