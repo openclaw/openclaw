@@ -13,8 +13,31 @@ export type EffectiveModelAlias = {
   qualifiedOnly: boolean;
 };
 
+export type ModelAliasIndex = {
+  byAlias: Map<string, { alias: string; ref: ModelRef }>;
+  byProviderAlias?: Map<string, { alias: string; ref: ModelRef }>;
+  byKey: Map<string, string[]>;
+  disabledKeys?: Set<string>;
+};
+
 export function providerAliasKey(provider: string, alias: string): string {
   return `${normalizeProviderId(provider)}/${normalizeLowercaseStringOrEmpty(alias)}`;
+}
+
+export function findIndexedModelAlias(index: ModelAliasIndex, raw: string, model: string) {
+  const match = index.byAlias.get(normalizeLowercaseStringOrEmpty(model));
+  if (match) {
+    return match;
+  }
+  const slash = model.indexOf("/");
+  if (slash <= 0 || !index.byProviderAlias) {
+    return undefined;
+  }
+  const provider = model.slice(0, slash);
+  return (
+    index.byProviderAlias.get(providerAliasKey(provider, raw.trim().slice(slash + 1))) ??
+    index.byProviderAlias.get(providerAliasKey(provider, model.slice(slash + 1)))
+  );
 }
 
 export function findModelAliasCandidate(

@@ -28,7 +28,9 @@ import type {
   inspectPluginSourceDependencies,
 } from "./plugin-generation-source-inspection.js";
 import {
+  receivePluginSourceCustody,
   retainPreparedPluginGenerationSource,
+  type PluginSourceCustodyTransfer,
   type PluginSourceCustodyFork,
 } from "./plugin-generation-source-lookup.js";
 import { GenerationCodec } from "./plugin-generation-worker-codec.js";
@@ -69,6 +71,7 @@ type PreparationParameters = {
   rootDir: string;
   source: string | readonly string[];
   standalone?: boolean;
+  independentOperationSource?: true;
   bundledReload?: boolean;
   sourceSnapshot?: { descriptor: PluginSourceSnapshotDescriptor; stateDir: string };
 };
@@ -129,25 +132,35 @@ export async function preparePluginGenerationArtifact(
   });
   // The worker transfers retained bytes, not an executable graph of RPC methods.
   // Resolution, lazy acquisition and host aliases all stay in the consuming isolate.
-  // SAFETY: The artifact preparation command returns its retained source custody fork.
-  const retained = prepared.value as PluginSourceCustodyFork;
-  prepared.retainNative(retained.source.native);
-  const sourceCapture = createPluginSourceCaptureState({
-    directory: retained.source.sourceCapture.directory,
-    outputRoot: retained.source.sourceCapture.outputRoot,
-    assertAvailable: prepared.assertAvailable,
-    dispose: retained.source.dispose,
-    disposeAsync: retained.source.disposeAsync,
-  });
-  const custody: PluginSourceCustodyFork = {
-    ...retained,
-    source: {
-      ...retained.source,
-      sourceCapture,
-      dispose: sourceCapture.dispose,
-      disposeAsync: sourceCapture.disposeAsync,
-    },
-  };
+  const assertAvailable = params.independentOperationSource ? undefined : prepared.assertAvailable;
+  let custody: PluginSourceCustodyFork;
+  if (params.independentOperationSource) {
+    custody = await receivePluginSourceCustody(
+      // SAFETY: The operation capture command returns the live artifact's transfer descriptor.
+      prepared.value as PluginSourceCustodyTransfer,
+      prepared,
+    );
+  } else {
+    // SAFETY: Ordinary artifacts retain their preparation session's returned custody fork.
+    const retained = prepared.value as PluginSourceCustodyFork;
+    prepared.retainNative(retained.source.native);
+    const sourceCapture = createPluginSourceCaptureState({
+      directory: retained.source.sourceCapture.directory,
+      outputRoot: retained.source.sourceCapture.outputRoot,
+      assertAvailable,
+      dispose: retained.source.dispose,
+      disposeAsync: retained.source.disposeAsync,
+    });
+    custody = {
+      ...retained,
+      source: {
+        ...retained.source,
+        sourceCapture,
+        dispose: sourceCapture.dispose,
+        disposeAsync: sourceCapture.disposeAsync,
+      },
+    };
+  }
   const { captureRoot, entryFile, bundledReloadSource } = prepared.captureInput;
   let moduleSource: ((filename: string) => string) | undefined;
   const create = (resolveInput?: (filename: string) => string) =>
@@ -180,7 +193,7 @@ export async function preparePluginGenerationArtifact(
     let step = advance();
     while (!step.done) {
       await nextTurn();
-      prepared.assertAvailable();
+      assertAvailable?.();
       step = advance();
     }
     await settlePluginNativeAdmissionState(admission);
@@ -576,6 +589,7 @@ async function prepareOwnedPluginGeneration(params: OwnedPreparationParameters) 
       installRoots,
       readOnly,
       retainSourceCustody: params.retainSourceCustody,
+      independentOperationSource: params.independentOperationSource,
       sourceCustodyId: params.sourceCustodyId,
       sourceCustodyDigest: params.sourceCustodyDigest,
       inspection: params.inspection,

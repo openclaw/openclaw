@@ -5,11 +5,11 @@ import type { UpdateRunStep } from "../infra/update-run-record.js";
 import { updateRunStepsFromResultStep } from "../infra/update-run-step.js";
 import {
   finishUpdateRunAsync,
+  recordUpdateRunPhaseAsync,
   recordUpdateRunStepAsync,
   recordUpdateRunVerificationAsync,
 } from "../infra/update-run-write.async.js";
 import { redactSensitiveText } from "../logging/redact.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
@@ -22,10 +22,8 @@ import {
   type Trial,
 } from "./store.js";
 
-const log = createSubsystemLogger("gateway/update-run");
-
 /** The committed core keeps serving while its own code updates and reloads installed plugins. */
-async function maintainTrialPlugins(trial: Trial): Promise<void> {
+async function maintainTrialPlugins(trial: Trial): Promise<{ nextAction?: string } | undefined> {
   let pluginIds: string[] = [];
   let step: UpdateRunStep | undefined;
   try {
@@ -83,29 +81,30 @@ async function maintainTrialPlugins(trial: Trial): Promise<void> {
     getAsyncWorkSignal()?.throwIfAborted();
     step.endedAtMs = Date.now();
     await recordUpdateRunStepAsync(trial.runId, step);
+    return result;
   } catch (error) {
     if (getAsyncWorkSignal()?.aborted) {
-      return;
+      return undefined;
     }
+    const nextAction =
+      pluginIds.length > 0
+        ? `openclaw plugins reload ${pluginIds.join(" ")}`
+        : "openclaw plugins update --all";
     const detail = redactSensitiveText(
-      [
-        step?.detail,
-        String(error),
-        pluginIds.length > 0
-          ? `Run \`openclaw plugins reload ${pluginIds.join(" ")}\` to retry activation.`
-          : "Run `openclaw plugins update --all` to retry.",
-      ]
+      [step?.detail, String(error), `Run \`${nextAction}\` to retry activation.`]
         .filter(Boolean)
         .join("\n"),
       { mode: "tools" },
     );
-    await recordUpdateRunStepAsync(trial.runId, {
+    step = {
       ...step,
       step: "plugins",
       status: "failed",
       endedAtMs: Date.now(),
       detail,
-    });
+    };
+    await recordUpdateRunStepAsync(trial.runId, step);
+    return { nextAction };
   }
 }
 
@@ -129,12 +128,31 @@ export async function settleRunFromTrial(
   trial: Trial | null,
   prefix = resolvePrefix(),
 ): Promise<void> {
-  if (trial?.outcome && !trial.reported && trial.runId) {
+  if (
+    trial?.outcome &&
+    trial.runId &&
+    (!trial.reported || (await getUpdateRunAsync(trial.runId))?.status === "running")
+  ) {
     const outcome = trial.outcome;
     const buildId = resolveRuntimeServiceBuildId();
     // Only the release that actually booted may claim successful activation.
     if (outcome.status === "succeeded" && trial.buildId && buildId !== trial.buildId) {
       return;
+    }
+    if (!trial.reported) {
+      trial.reported = true;
+      await writeTrial(trial, prefix);
+    }
+    // The terminal trial handed ownership to this Gateway, not its expired preparer.
+    const preparationLock = await readUpdateLock(prefix);
+    if (preparationLock?.dead) {
+      await releaseUpdateLock(prefix);
+    }
+    if (outcome.status === "succeeded") {
+      await recordUpdateRunPhaseAsync(trial.runId, "verifying", {
+        after: { version: VERSION, ...(buildId ? { buildId } : {}) },
+        step: { step: "plugins", status: "in_progress", startedAtMs: Date.now() },
+      });
     }
     await recordUpdateRunVerificationAsync(trial.runId, {
       runningVersion: VERSION,
@@ -160,30 +178,39 @@ export async function settleRunFromTrial(
         stderrTail,
       });
     }
-    const finished = await finishUpdateRunAsync(
-      trial.runId,
-      outcome.status === "succeeded"
-        ? { status: "succeeded", after: { version: VERSION, buildId } }
-        : {
-            status: "failed",
-            reason: `${outcome.reason ?? "The new version did not start"}; v${VERSION} is still running`,
-          },
-    );
+    const finish = async (nextAction?: string) => {
+      const finished = await finishUpdateRunAsync(
+        trial.runId,
+        outcome.status === "succeeded"
+          ? {
+              status: "succeeded",
+              after: { version: VERSION, buildId },
+              ...(nextAction ? { nextAction } : {}),
+            }
+          : {
+              status: "failed",
+              reason: `${outcome.reason ?? "The new version did not start"}; v${VERSION} is still running`,
+            },
+      );
+      if (
+        finished.steps.some((step) => step.step === "notice:ack" && step.status === "completed")
+      ) {
+        const { createUpdateRunNotifier } = await import("../gateway/update-run-notice.runtime.js");
+        await (
+          await createUpdateRunNotifier(finished)
+        )(finished, "finished");
+      }
+    };
     if (outcome.status === "succeeded") {
-      const step = "post-activation doctor inspections";
-      // Advisory work never holds the committed trial handshake open; the watcher logs its failures.
+      // The launcher committed already; only the aggregate result waits for required plugins.
       const accepted = wakeUpdateRunWatcher(trial.runId, () =>
         withCommandProcessScope(async () => {
-          try {
-            await maintainTrialPlugins(trial);
-          } catch (error) {
-            log.warn(
-              `update run ${trial.runId} plugin result could not be recorded: ${String(error)}`,
-            );
-          }
-          if (getAsyncWorkSignal()?.aborted) {
+          const step = "post-activation doctor inspections";
+          const plugins = await maintainTrialPlugins(trial);
+          if (getAsyncWorkSignal()?.aborted || !plugins) {
             return;
           }
+          await finish(plugins.nextAction);
           try {
             const [{ runPostActivationInspections }, { resolvePostActivationInspectionCheckIds }] =
               await Promise.all([
@@ -212,7 +239,7 @@ export async function settleRunFromTrial(
             if (getAsyncWorkSignal()?.aborted) {
               return;
             }
-            // The update stays successful; the skipped inspections are reported with a next step.
+            // Advisory inspections cannot change the settled aggregate result.
             const detail = redactSensitiveText(
               `Doctor inspections did not run after the update (${String(error)}). Run \`openclaw doctor --lint --all\` to check this install.`,
               { mode: "tools" },
@@ -227,20 +254,20 @@ export async function settleRunFromTrial(
         }, getAsyncWorkSignal()),
       );
       if (!accepted) {
-        log.warn(
-          `update run ${trial.runId} post-update maintenance skipped: no Gateway update watcher`,
-        );
+        const nextAction = "openclaw plugins update --all";
+        const step: UpdateRunStep = {
+          step: "plugins",
+          status: "failed",
+          endedAtMs: Date.now(),
+          detail: `Plugin activation did not run because the Gateway update watcher is unavailable. Run \`${nextAction}\`.`,
+        };
+        await recordUpdateRunStepAsync(trial.runId, step);
+        await finish(nextAction);
       }
+    } else {
+      await finish();
     }
-    trial.reported = true;
-    await writeTrial(trial, prefix);
-    // A requester that received the start notice also hears the outcome (same rule as the run watcher).
-    if (finished.steps.some((step) => step.step === "notice:ack" && step.status === "completed")) {
-      const { createUpdateRunNotifier } = await import("../gateway/update-run-notice.runtime.js");
-      await (
-        await createUpdateRunNotifier(finished)
-      )(finished, "finished");
-    }
+    return;
   }
   // Preparation refuses an active trial after taking its lock.
   switch (trial?.phase) {

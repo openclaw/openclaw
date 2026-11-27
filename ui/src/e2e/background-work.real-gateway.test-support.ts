@@ -304,6 +304,7 @@ export function observeBackgroundWorkRpc(page: Page, signal: AbortSignal) {
   const completed: BackgroundWorkRpc[] = [];
   const changed = new Set<() => void>();
   const methods = new Set([
+    "chat.startup",
     "chat.send",
     "chat.steerNow",
     "chat.history",

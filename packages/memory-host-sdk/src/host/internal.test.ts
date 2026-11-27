@@ -5,8 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import * as concurrency from "./concurrency.js";
+import * as fsUtils from "./fs-utils.js";
 import {
   buildFileEntry,
   buildMultimodalChunkForIndexing,
@@ -82,6 +85,31 @@ describe("memory host SDK package internals", () => {
       ).rejects.toThrow("path is not an allowed Markdown memory file");
     },
   );
+
+  it("lists a directory larger than the function argument limit in path order", async () => {
+    const workspaceDir = getTmpDir();
+    const memoryDir = path.join(workspaceDir, "memory");
+    await fs.mkdir(memoryDir);
+    await fs.writeFile(path.join(memoryDir, "sample.md"), "");
+    const scan = await fsUtils.walkDirectory(memoryDir);
+    const sample = expectDefined(scan.entries[0], "sample file");
+    // Vitest workers can have a larger stack than the CLI. Share fixture entries
+    // to exercise the transfer limit without allocating a million files or doing I/O.
+    const count = 1_100_000;
+    const first = { ...sample, path: path.join(memoryDir, "first.md") };
+    const entries = Array<(typeof scan.entries)[number]>(count).fill(sample);
+    entries[entries.length - 1] = first;
+    vi.spyOn(fsUtils, "walkDirectory").mockResolvedValue({
+      ...scan,
+      entries,
+      scannedEntryCount: count,
+    });
+    const canonical = Array<string>(count).fill(sample.path);
+    canonical[0] = first.path;
+    vi.spyOn(concurrency, "runWithConcurrency").mockResolvedValue(canonical);
+
+    await expect(listMemoryFiles(workspaceDir)).resolves.toEqual([first.path, sample.path]);
+  });
 
   it("bounds canonical reads and preserves discovery order when aliases settle out of order", async () => {
     const workspaceDir = getTmpDir();
@@ -556,6 +584,17 @@ describe("memory host SDK package internals", () => {
     expect(imageEntry.modality).toBe("image");
     expect(imageEntry.mimeType).toBe("image/png");
     expect(imageEntry.contentText).toBe("Image file: diagram.png");
+  });
+
+  it.each([
+    { name: "valid UTF-8 with BOM", bytes: Buffer.from("\uFEFFcafé 🦊"), text: "\uFEFFcafé 🦊" },
+    { name: "invalid UTF-8", bytes: Buffer.from([0xe2, 0x82, 0x61, 0xff]), text: "\uFFFDa\uFFFD" },
+  ])("preserves the decoded Markdown digest for $name", async ({ bytes, text }) => {
+    const workspace = getTmpDir();
+    const file = path.join(workspace, "note.md");
+    await fs.writeFile(file, bytes);
+    const entry = await buildFileEntry(file, workspace);
+    expect(entry?.hash).toBe(sha256Hex(text));
   });
 
   it("retries transient markdown reads while building file entries", async () => {

@@ -1228,6 +1228,7 @@ src/infra/package-update-activation-schema.ts
 src/infra/package-update-activation-settlement.ts
 src/infra/package-update-activation-status.ts
 src/infra/package-update-filesystem.ts
+src/infra/package-update-integrity-drift.ts
 src/infra/package-update-integrity-hasher.ts
 src/infra/package-update-integrity-hasher.worker.ts
 src/infra/package-update-integrity.ts
@@ -1501,6 +1502,7 @@ src/infra/update-run-admission.types.ts
 src/infra/update-run-admission.ts
 src/infra/update-run-cause.ts
 src/infra/update-run-codec.ts
+src/infra/update-run-omission.ts
 src/infra/update-run-owed-step.ts
 src/infra/update-run-gateway-stop.ts
 src/infra/update-run-legacy-expiry.ts
@@ -3068,6 +3070,7 @@ src/infra/sqlite-readonly-inspection.ts
 src/infra/sqlite-readonly-native-resource.ts
 src/infra/sqlite-snapshot-staging-runtime.ts
 src/infra/sqlite-snapshot-staging.worker.ts
+src/process/spawn-broker/command-handlers.ts
 src/process/spawn-broker/execa-worker.ts
 src/process/spawn-broker/resource-server.ts
 src/process/spawn-broker/worker-sender.ts

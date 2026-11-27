@@ -467,6 +467,9 @@ export async function readDurableComposerDraft(
       status: "found",
       draft: {
         revision: current.revision,
+        ...(current.attachmentVersion !== undefined
+          ? { attachmentVersion: current.attachmentVersion }
+          : {}),
         writeId: current.writeId,
         text: current.text,
         ...(current.mentions?.length ? { mentions: current.mentions } : {}),
@@ -537,6 +540,9 @@ export async function writeDurableComposerDraft(
       recoveryScope: scope.recoveryScope,
       scopeKey: scope.scopeKey,
       revision: draft.revision,
+      ...(draft.attachmentVersion !== undefined
+        ? { attachmentVersion: draft.attachmentVersion }
+        : {}),
       text: draft.text,
       ...(draft.mentions?.length ? { mentions: draft.mentions } : {}),
       ...(draft.goalMode ? { goalMode: draft.goalMode } : {}),

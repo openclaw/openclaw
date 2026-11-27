@@ -164,7 +164,11 @@ async function captureManagedUpdateRequester(
         import("../plugins/loader-shared.js"),
       ]);
       const doctor = options.projectDoctorConfig
-        ? await import("../commands/doctor/legacy-config-repair.js")
+        ? await Promise.all([
+            import("../commands/doctor/legacy-config-repair.js"),
+            import("../plugins/doctor-contract-registry.js"),
+            import("../plugins/plugin-setup-module.js"),
+          ])
         : undefined;
       const readCurrentConfig = () =>
         readCurrentConfigForPolicyCheck({
@@ -175,11 +179,32 @@ async function captureManagedUpdateRequester(
                 if (!isRecord(snapshot.parsed)) {
                   return undefined;
                 }
-                const plan = doctor.planLegacyConfigForUpdateChannel(snapshot);
-                return plan?.changes.length ? plan.config : undefined;
+                const [repair, registry, setup] = doctor;
+                // Doctor defers repairs of plugins whose source is unavailable, such as during a
+                // pending state migration. Plan the same way: owners are core config.
+                const deferred: string[] = [];
+                for (;;) {
+                  try {
+                    const plan = deferred.length
+                      ? registry.withDeferredPluginDoctorMigrations(deferred, () =>
+                          repair.planLegacyConfigForUpdateChannel(snapshot),
+                        )
+                      : repair.planLegacyConfigForUpdateChannel(snapshot);
+                    return plan?.changes.length ? plan.config : undefined;
+                  } catch (error) {
+                    if (
+                      !(error instanceof setup.PluginSetupPreparationRequiredError) ||
+                      deferred.includes(error.record.id)
+                    ) {
+                      throw error;
+                    }
+                    deferred.push(error.record.id);
+                  }
+                }
               }
             : undefined,
         });
+      let migrationDeferredChannels: string[] = [];
       await ensureCliPluginRegistryLoaded({
         scope: "configured-channels",
         routeLogsToStderr: true,
@@ -190,6 +215,9 @@ async function captureManagedUpdateRequester(
         if (!(error instanceof PluginLoadFailureError && error.onlyPendingStateMigrations)) {
           throw error;
         }
+        migrationDeferredChannels = error.registry.plugins
+          .filter((plugin) => plugin.status === "error")
+          .flatMap((plugin) => plugin.channelIds);
       });
       const authority =
         authorizationSource === "configured-owner"
@@ -210,7 +238,7 @@ async function captureManagedUpdateRequester(
             () => {
               const config = readCurrentConfig();
               return authorizationSource === "configured-owner"
-                ? isConfiguredCommandOwner(config, admittedRequester)
+                ? isConfiguredCommandOwner(config, admittedRequester, { migrationDeferredChannels })
                 : authority?.source === authorizationSource && authority.isCurrent(config);
             },
             { current: { env: authorityEnv } },

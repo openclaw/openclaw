@@ -51,6 +51,7 @@ import { resolveProjectedRequestPressure } from "../../src/agents/embedded-agent
 import { transformTransportMessages } from "../../src/agents/transport-message-transform.js";
 import { createOpenAIResponsesContextManagementWrapper } from "../../src/llm/providers/stream-wrappers/openai.js";
 import { freezeJsonSnapshot, isDeeplyFrozenPlainData } from "../../src/shared/immutable-data.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 
 const iterations = Number(process.argv[process.argv.indexOf("--iterations") + 1]) || 2000;
@@ -382,12 +383,7 @@ const observer = new PerformanceObserver((list) =>
 observer.observe({ entryTypes: ["gc"] });
 const inspector = new Session();
 if (allocation) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 8192,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 8192);
 }
 const hostLoadBefore = loadavg();
 const cpu = process.cpuUsage();

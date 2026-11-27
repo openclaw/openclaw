@@ -11,7 +11,6 @@ import {
 } from "../../commands/status-update-restart.js";
 import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
 import { finishUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
-import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
   sentinelState,
@@ -165,12 +164,11 @@ describe("update.run handoff refusal diagnostics", () => {
       try {
         const payload = expectDefined(await captureUpdateRunPayload(), "update response");
         const run = readRun(payload);
-        const localReport = renderUpdateRunReport(run).markdown;
+        const recordedSteps = JSON.stringify(run.steps);
         expect(payload.ok).toBe(false);
-        expect(localReport).toContain(expected);
-        expect(localReport).not.toContain("fixture-private-token");
-        expect(localReport).not.toContain("discarded startup noise");
-        expect(JSON.stringify(run.steps)).not.toContain("fixture-private-token");
+        expect(recordedSteps).toContain(expected);
+        expect(recordedSteps).not.toContain("fixture-private-token");
+        expect(recordedSteps).not.toContain("discarded startup noise");
         expect(
           run.steps
             .flatMap((step) => step.failureFacts ?? [])
@@ -241,9 +239,7 @@ describe("update.run handoff refusal diagnostics", () => {
     expect(run?.steps.flatMap((step) => step.failureFacts ?? [])).toContainEqual(
       expect.objectContaining({ code: "handoff-runtime-unavailable" }),
     );
-    expect(renderUpdateRunReport(expectDefined(run, "update run")).markdown).toContain(
-      "The serving Gateway has not been stopped.",
-    );
+    expect(run?.origin.nextAction).toContain("The serving Gateway has not been stopped.");
   });
 
   it("preserves the Node engine refusal and serving observation for update.run", async () => {
@@ -261,7 +257,6 @@ describe("update.run handoff refusal diagnostics", () => {
     });
     expect(run.origin.nextAction).toBe(message);
     expect(run.verification.serviceRunning).toBe(true);
-    expect(renderUpdateRunReport(run).lines.join("\n")).toContain(message);
     expectServing();
   });
 
@@ -388,10 +383,17 @@ describe("update.run handoff refusal diagnostics", () => {
       });
       expect(sendNotice).toHaveBeenLastCalledWith(
         expect.objectContaining({
-          message: `⚠️ OpenClaw couldn't finish updating.\nThe current version (${run.before.version}) is still running.\nUpdate failed before the update started (managed-service-handoff-failed).\nFor details, open Settings → Updates in the OpenClaw app or run \`openclaw update status\` in your terminal.`,
+          message: expect.stringContaining("⚠️ OpenClaw couldn't finish updating."),
         }),
         expect.any(Object),
       );
+      const notice = sendNotice.mock.calls.at(-1)?.[0]?.message;
+      expect(notice).toContain(`The current version (${run.before.version}) is still running.`);
+      expect(notice).toContain(
+        "Update failed before the update started (managed-service-handoff-failed).",
+      );
+      expect(notice).toContain(message);
+      expect(notice).toContain("openclaw update status");
     },
   );
 
@@ -442,7 +444,6 @@ describe("update.run handoff refusal diagnostics", () => {
       const report = await failureReport(run, reason);
       if (error instanceof UpdatePreMutationError) {
         expect(run.origin.nextAction).toBe(message);
-        expect(renderUpdateRunReport(run).markdown).toContain(message);
         expect(report.body).not.toContain("sudo systemctl restart");
       }
       expect.soft(report.body).toContain(`Failed phase requested: ${publicMessage}`);

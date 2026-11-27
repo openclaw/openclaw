@@ -57,6 +57,7 @@ import { captureAgentWorkspaceReadiness } from "../../workspace-readiness.js";
 import { log } from "../logger.js";
 import { createAttemptNestedToolActivityState } from "./attempt-nested-tool-activity.js";
 import type { EmbeddedAttemptSetup } from "./attempt-setup.js";
+import { createShellCallAdmission } from "./attempt-shell-call.js";
 import { resolveAttemptSpawnWorkspaceDir } from "./attempt-thread-helpers.js";
 import {
   applyEmbeddedAttemptToolsAllow,
@@ -368,6 +369,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         ...buildConversationContext(),
         exec: {
           ...attempt.execOverrides,
+          admitShellCall: createShellCallAdmission(attempt),
           ...(sessionPermissionPolicy
             ? { mode: resolveSessionPermissionExecMode(sessionPermissionPolicy) }
             : {}),

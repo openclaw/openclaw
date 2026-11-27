@@ -152,13 +152,6 @@ function buildVoiceTestHarness() {
       providerConfig: { model: "gpt-realtime-2", voice: "cedar" },
     });
     mocks.decodeOpusStreamChunksMock.mockReset().mockResolvedValue(undefined);
-    mocks.resolveAudioInputBudgetMock
-      .mockReset()
-      .mockImplementation(async ({ cfg }) =>
-        cfg.tools?.media?.audio?.enabled === false
-          ? { enabled: false }
-          : { enabled: true, maxBytes: cfg.tools?.media?.audio?.maxBytes ?? 20 * 1024 * 1024 },
-      );
   });
 
   const createManager = (

@@ -1,6 +1,83 @@
 import { describe, expect, it, vi } from "vitest";
 import type { CommandOptions } from "../process/exec.js";
 import { createUpdateDoctorSectionTiming } from "./update-doctor-section-timing.js";
+import { UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
+
+const traceLine = (name: string, milliseconds: number, detail = "") =>
+  `[gateway] startup trace: doctor.${name} ${milliseconds.toFixed(1)}ms total=1.0ms${detail}`;
+
+async function replayDoctorStderr(stderr: string, parentEnv: NodeJS.ProcessEnv = {}) {
+  const timing = createUpdateDoctorSectionTiming(parentEnv);
+  const run = timing.wrap(async (_argv: string[], options: CommandOptions) => {
+    options.onOutputChunk?.(Buffer.from(stderr), "stderr");
+    return { stderr };
+  });
+  const result = await run([], {});
+  return {
+    stderr: result.stderr,
+    diagnostics: timing.annotate({ diagnostics: [] as string[] }).diagnostics,
+  };
+}
+
+describe("Doctor sections diagnostic", () => {
+  // Order and names follow a captured `doctor --fix` trace: every step is preceded by its
+  // `doctor.pending.<step>` decision, so decisions outnumber timed sections.
+  const sections = [
+    ["retained-runtimes", 200],
+    ["maintenance.begin", 400],
+    ["database-migrations", 20_700],
+    ["state-schema", 200],
+    ["config-flow", 2700],
+  ] as const;
+  const contributions = Array.from({ length: 40 }, (_, index) => `doctor:check-${index + 10}`);
+  const lateSections = [
+    ["contributions", 5500],
+    ["external-config", 0],
+    ["maintenance-ready", 500],
+    ["sqlite-reclamation", 200],
+    ["maintenance.release", 0],
+  ] as const;
+  const pending = (step: string) => traceLine(`pending.${step}`, 0, " pending=work check=default");
+  const stderr = [
+    traceLine("startup", 0),
+    ...sections.flatMap(([name, ms]) => [pending(name), traceLine(name, ms)]),
+    ...contributions.flatMap((id, index) => [
+      pending(`contribution.${id}`),
+      traceLine(`contribution.${id}`, (index + 1) * 100),
+    ]),
+    ...lateSections.flatMap(([name, ms]) => [pending(name), traceLine(name, ms)]),
+    "",
+  ].join("\n");
+
+  it("reports timed sections without the pending decisions that precede them", async () => {
+    const { diagnostics } = await replayDoctorStderr(stderr);
+    expect(diagnostics).toEqual([
+      "Doctor sections: startup 0.0 s, retained-runtimes 0.2 s, maintenance.begin 0.4 s, " +
+        "database-migrations 20.7 s, state-schema 0.2 s, config-flow 2.7 s, contributions 5.5 s, " +
+        "external-config 0.0 s, maintenance-ready 0.5 s, sqlite-reclamation 0.2 s, " +
+        "maintenance.release 0.0 s; slowest contributions: check-49 4.0 s, check-48 3.9 s, " +
+        "check-47 3.8 s, check-46 3.7 s, check-45 3.6 s",
+    ]);
+  });
+
+  it("leaves every pending decision in an operator-enabled trace", async () => {
+    const result = await replayDoctorStderr(stderr, { OPENCLAW_GATEWAY_STARTUP_TRACE: "1" });
+    expect(result.stderr).toBe(stderr);
+    expect(result.stderr.match(/startup trace: doctor\.pending\./gu)).toHaveLength(
+      sections.length + contributions.length + lateSections.length,
+    );
+  });
+
+  it("still bounds a genuinely long list of timed sections", async () => {
+    const names = Array.from({ length: 80 }, (_, index) => `maintenance.section-${index}`);
+    const { diagnostics } = await replayDoctorStderr(
+      `${names.map((name) => traceLine(name, 1500)).join("\n")}\n`,
+    );
+    const [line] = diagnostics;
+    expect(line).toHaveLength(UPDATE_RUN_TEXT_LIMIT);
+    expect(line).toMatch(/^Doctor sections: maintenance\.section-0 1\.5 s, .*…$/u);
+  });
+});
 
 describe("delegated Doctor phase output", () => {
   it.each([1, 7, 65_536])("bounds and decodes stderr with %i-byte chunks", async (size) => {
