@@ -300,14 +300,13 @@ export async function speak(
     }
 
     const numberRouteKey = resolveVoiceCallNumberRouteKeyForCall(call);
-    const voice = resolvePreferredTtsVoice(
-      resolveVoiceCallEffectiveConfig(ctx.config, numberRouteKey).config,
-    );
+    const callConfig = resolveVoiceCallEffectiveConfig(ctx.config, numberRouteKey).config;
     await provider.playTts({
       callId,
       providerCallId: call.providerCallId ?? providerCallId,
       text,
-      voice,
+      voice: resolvePreferredTtsVoice(callConfig),
+      tts: callConfig.tts,
       ...(options?.listenAfterPlayback ? { listenAfterPlayback: true } : {}),
       ...(options?.turnToken ? { turnToken: options.turnToken } : {}),
     });

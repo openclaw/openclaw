@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { CallBrief } from "./call-brief-schema.js";
-import type { CallMode, VoiceCallConfig } from "./config.js";
+import type { CallMode, VoiceCallConfig, VoiceCallTtsConfig } from "./config.js";
 
 const ProviderNameSchema = z.enum(["telnyx", "twilio", "plivo", "mock"]);
 export type ProviderName = z.infer<typeof ProviderNameSchema>;
@@ -184,6 +184,8 @@ export type AnswerCallInput = CallControlInput & {
 export type PlayTtsInput = CallControlInput & {
   text: string;
   voice?: string;
+  /** The call's TTS config, with any number route merged over the global voice-call TTS. */
+  tts?: VoiceCallTtsConfig;
   locale?: string;
   /** Keep collecting speech after playback when the provider owns the listening XML. */
   listenAfterPlayback?: boolean;
