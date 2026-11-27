@@ -396,9 +396,11 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
         // Before a pin the first request chose direct MCP tools by size; the pin now owns that set.
         catalogRef.sessionPinnedToolNames = pinnedNames;
         const pinnedMcp = selectDirectMcpToolNames(tools, pinnedNames);
-        const sizedMcp = selectDirectMcpToolNames(tools, undefined);
+        const builtMcp = current.effectiveTools.filter(
+          (tool) => classifyAgentToolSource(tool).source === "mcp",
+        );
         mcpChanged =
-          pinnedMcp.size !== sizedMcp.size || [...pinnedMcp].some((name) => !sizedMcp.has(name));
+          pinnedMcp.size !== builtMcp.length || builtMcp.some((tool) => !pinnedMcp.has(tool.name));
       }
       if (catalogRef && promoted.length > 0) {
         catalogRef.promotedToolNames = new Set(promoted);

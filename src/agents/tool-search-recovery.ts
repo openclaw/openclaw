@@ -89,7 +89,7 @@ export function formatUnknownToolIdError(
   const recoveryText =
     options.recoverySurface === "catalog"
       ? "Use catalog.search to find a callable tool handle, then call the handle or use its describe method."
-      : "Use tool_search to find a tool, tool_describe to inspect it, then dispatch_action with the exact id or name.";
+      : "Use tool_search to find a tool, then dispatch_action with the exact id or name.";
   if (suggestions.length === 0) {
     return `Unknown tool id: ${needle}. ${recoveryText}`;
   }

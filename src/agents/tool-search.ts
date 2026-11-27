@@ -221,7 +221,7 @@ function formatToolSearchBatchResponse(
 }
 
 const TOOL_SEARCH_DESCRIPTION =
-  "Search the effective Tool Search catalog. Pass query for one search or queries for several independent searches in one call; a non-empty query joins a non-empty batch first, with its own limit. Batch results stay grouped in request order. Queries must be in English: matching is lexical against tool names and descriptions, which are written in English, so another language will usually match nothing. Pass an exact result id or name to dispatch_action. Use tool_describe when you need its input schema or when a result includes instructionsHint; call it before dispatch_action to load the complete server instructions.";
+  "Search the effective Tool Search catalog. Pass query for one search or queries for several independent searches in one call; a non-empty query joins a non-empty batch first, with its own limit. Batch results stay grouped in request order. Queries must be in English: matching is lexical against tool names and descriptions, which are written in English, so another language will usually match nothing. Pass an exact result id or name to dispatch_action. When a result includes instructionsHint, call tool_describe before dispatch_action to load the complete server instructions.";
 
 function shouldExposeControlTool(name: string, mode: ToolSearchMode): boolean {
   return mode === "tools" && TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES.has(name);
@@ -238,10 +238,11 @@ export function applyToolSearchCatalog(params: {
 }) {
   const config = resolveToolSearchConfig(params.config);
   const directToolNames = new Set(normalizeStringEntries(Array.from(params.directToolNames ?? [])));
-  const directMcpToolNames = selectDirectMcpToolNames(
-    params.tools,
-    params.catalogRef?.sessionPinnedToolNames,
-  );
+  // Configured selectors already choose which MCP tools are deferred.
+  const directMcpToolNames =
+    config.include || config.exclude
+      ? new Set<string>()
+      : selectDirectMcpToolNames(params.tools, params.catalogRef?.sessionPinnedToolNames);
   // The MCP directory goes in the system prompt's deferred-tool section, so a server
   // that connects later changes an appended prompt update, never this definition.
   return applyToolCatalogCompaction({
@@ -382,7 +383,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       name: TOOL_CALL_RAW_TOOL_NAME,
       label: "Tool Call",
       description:
-        "Call an exact Tool Search result id or name through OpenClaw. If arguments are not already clear, call tool_describe with the same id for the full description and schema; do not guess omitted fields from compact input hints.",
+        "Call an exact Tool Search result id or name through OpenClaw. Invalid arguments return the tool's input schema; retry from that error. Use tool_describe for a full description; do not invent values the task does not supply.",
       parameters: callParameters,
       prepareArguments: prepareToolSearchDispatcherArguments,
       execute: async (

@@ -261,13 +261,20 @@ const MAX_DIRECT_MCP_SCHEMA_BYTES = 8_192;
 /**
  * MCP tools declared directly. A series' first request decides from the catalog's schema
  * bytes; later turns keep exactly the MCP tools the session pin already sends, so the
- * provider tool list stays fixed while server inventory changes reach the directory.
+ * provider tool list stays fixed while server inventory changes reach the directory. A name
+ * another tool also uses stays deferred: a lookalike never shadows a trusted direct tool.
  */
 export function selectDirectMcpToolNames(
   tools: readonly AnyAgentTool[],
   pinnedToolNames: ReadonlySet<string> | undefined,
 ): ReadonlySet<string> {
-  const mcpTools = tools.filter((tool) => classifyAgentToolSource(tool).source === "mcp");
+  const nameCounts = new Map<string, number>();
+  for (const tool of tools) {
+    nameCounts.set(tool.name, (nameCounts.get(tool.name) ?? 0) + 1);
+  }
+  const mcpTools = tools.filter(
+    (tool) => classifyAgentToolSource(tool).source === "mcp" && nameCounts.get(tool.name) === 1,
+  );
   if (pinnedToolNames) {
     return new Set(
       mcpTools.filter((tool) => pinnedToolNames.has(tool.name)).map((tool) => tool.name),
