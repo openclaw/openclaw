@@ -240,7 +240,7 @@ describe("Matrix live encrypted room ownership", () => {
     expect(message).toHaveBeenCalledOnce();
   });
 
-  it("sends reactions while an encrypted message waits for live sync", async () => {
+  it("keeps reactions ordered behind an encrypted message waiting for live sync", async () => {
     const message = vi.spyOn(sdk, "sendMessage").mockResolvedValue({ event_id: "$sent" });
     const event = vi.spyOn(sdk, "sendEvent").mockResolvedValue({ event_id: "$reaction" });
     const sent = client.sendMessage(roomId, { msgtype: "m.text", body: "waiting" });
@@ -252,11 +252,12 @@ describe("Matrix live encrypted room ownership", () => {
     });
     pending.push(Promise.allSettled([reaction]));
     await vi.advanceTimersByTimeAsync(0);
-    expect(event).toHaveBeenCalledOnce();
+    expect(event).not.toHaveBeenCalled();
     expect(message).not.toHaveBeenCalled();
-    await expect(reaction).resolves.toBe("$reaction");
     liveSync();
     await expect(sent).resolves.toBe("$sent");
+    await expect(reaction).resolves.toBe("$reaction");
+    expect(message).toHaveBeenCalledBefore(event);
   });
 
   it.each(["room replacement", "missing room", "membership", "encryption", "offline"])(

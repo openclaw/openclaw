@@ -301,8 +301,7 @@ export abstract class MatrixClientCore extends MatrixClientBase {
     eventType: string,
     content: Record<string, unknown>,
   ): Promise<string> {
-    const queueKey = eventType === MATRIX_REACTION_EVENT_TYPE ? `reaction:${roomId}` : roomId;
-    return await this.sendQueue.enqueue(queueKey, async () => {
+    return await this.sendQueue.enqueue(roomId, async () => {
       // SDK encryption trusts these wire event types without inspecting their
       // payload; only SDK encryption and the dedicated redaction owner may emit them.
       if (
