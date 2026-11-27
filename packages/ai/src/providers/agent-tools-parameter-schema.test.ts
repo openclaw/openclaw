@@ -451,7 +451,11 @@ describe("schema depth", () => {
     }
     let materialized: unknown = parameters;
     const tools = [tool("mutable_reference_tool", { toJSON: () => materialized })];
-    const freshSchema: unknown = structuredClone(parameters);
+    // A fresh copy carries no truncation marker; its placeholder is typed so it is strict-eligible.
+    const freshSchema: unknown = {
+      ...structuredClone(parameters),
+      properties: { value: { type: "string" } },
+    };
     for (const next of [parameters, freshSchema, parameters, freshSchema]) {
       materialized = next;
       expect(convertTools(tools, { strict: true })[0]?.strict).toBe(next === freshSchema);

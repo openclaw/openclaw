@@ -5,7 +5,6 @@ import {
   reconcileOpenAICompletionsToolChoice,
   reconcileOpenAIResponsesToolChoice,
 } from "./openai-tool-projection.js";
-import { findOpenAIStrictToolProjectionDiagnostics } from "./openai-tool-schema.js";
 
 const lookup = projectOpenAITools([{ name: "lookup", parameters: {} }]);
 const responseFunction = (name: string) => ({ type: "function" as const, name });
@@ -41,7 +40,7 @@ it("keeps healthy tools when sibling descriptors or schemas are unreadable", () 
   ]);
 
   expect(projection.tools).toEqual([{ toolIndex: 2, name: "lookup", parameters: {} }]);
-  expect(findOpenAIStrictToolProjectionDiagnostics(projection)).toEqual([
+  expect(projection.diagnostics).toEqual([
     { toolIndex: 0, violations: ["tool[0].name is unreadable"] },
     {
       toolIndex: 1,
