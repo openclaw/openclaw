@@ -171,6 +171,8 @@ it("sends an immediate script follow-up to the captured session while scheduling
 
 it("attaches deferred script follow-up only to an enabled ordinary scheduled session job", async () => {
   const { state, job, execute } = scriptFixture("next-heartbeat");
+  job.sessionTarget = "session:agent:finn:main";
+  job.sessionKey = "agent:finn:dashboard:creator";
   const receiver = {
     ...job,
     id: "ordinary-receiver",

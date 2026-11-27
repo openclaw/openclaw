@@ -252,11 +252,13 @@ describe("cron service timer seam coverage", () => {
 
   it.each([
     { target: "isolated", notify: "queue changed", wake: "now" },
-    { target: "session:main", notify: undefined, wake: "now" },
+    { target: "session:agent:ops:reports", notify: undefined, wake: "now" },
+    { target: "session:agent:ops:reports", notify: "queue changed", wake: undefined },
   ] as const)(
     "routes $target script side effects (notify=$notify, wake=$wake)",
     async ({ target, notify, wake }) => {
-      const sessionKey = "agent:ops:telegram:group:42:topic:77";
+      const creatorKey = "agent:ops:dashboard:creator";
+      const sessionKey = target === "isolated" ? creatorKey : "agent:ops:reports";
       const deliveryContext = {
         channel: "telegram",
         to: "telegram:42",
@@ -269,22 +271,34 @@ describe("cron service timer seam coverage", () => {
         sessionKey,
         sessionId: "ops-telegram-session",
         generation: "original",
-        deliveryContext,
+        deliveryContext: wake ? deliveryContext : undefined,
       };
       const { state } = scriptFixture(
         { status: "ok", notify, wake },
         {
           resolveDefaultAgentId: () => "other",
           captureSessionEventTarget: async () => expectedTarget,
+          resolveOriginDeliveryContext: ({ sessionKey: key }) =>
+            key === sessionKey ? deliveryContext : undefined,
           enqueueSessionEvent,
         },
       );
       const job = {
         ...createDueScriptJob({ now, sessionTarget: target }),
         agentId: undefined,
-        sessionKey,
+        sessionKey: creatorKey,
       };
       await expect(executeJobCore(state, job)).resolves.toMatchObject({ status: "ok" });
+      if (!wake) {
+        expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(notify, {
+          agentId: "ops",
+          sessionKey,
+          contextKey: `cron:${job.id}:script`,
+          deliveryContext,
+        });
+        expect(enqueueSessionEvent).not.toHaveBeenCalled();
+        return;
+      }
       expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
         notify ?? "script job script job completed",
         expect.objectContaining({ agentId: "ops", sessionKey, expectedTarget, deliveryContext }),

@@ -54,7 +54,6 @@ suite.define(() => {
           },
         });
         await page.goto(suite.server.baseUrl + "cron?new");
-        await page.locator("#cron-name").fill("Weekly garden handoff");
         await page
           .locator("#cron-payload-text")
           .fill("Summarize this week’s garden notes for the volunteer handoff.");
