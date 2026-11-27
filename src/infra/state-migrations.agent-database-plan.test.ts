@@ -9,6 +9,7 @@ import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { installDeletedAgentDatabaseFences } from "./agent-database-readers.js";
+import { listDirectoryTreeStrictSync } from "./directory-walk.js";
 import * as nodeSqlite from "./node-sqlite.js";
 import { compareValidSemver } from "./semver.js";
 import { corruptSqliteIndexKey } from "./sqlite-index-corruption.test-support.js";
@@ -23,7 +24,7 @@ import {
 import { MEDIA_ARCHIVE_VERIFICATION_KEY } from "./state-migrations.transcript-directives-archives.js";
 
 type Plan = Awaited<ReturnType<typeof planAgentDatabaseMigration>>;
-type Fixture = { env: NodeJS.ProcessEnv; databasePath: string };
+type Fixture = { env: NodeJS.ProcessEnv; stateDir: string; databasePath: string };
 
 const tempDirs: string[] = [];
 afterEach(() => {
@@ -42,12 +43,13 @@ const event = (id: string) => createEvent({ id, parentId: null, timestamp: 1, me
 
 /** A real agent database after explicit Doctor migrated it: the state a healthy install keeps. */
 async function healthyInstall(): Promise<Fixture> {
-  const env = { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "agent-db-plan-") };
+  const stateDir = makeTempDir(tempDirs, "agent-db-plan-");
+  const env = { OPENCLAW_STATE_DIR: stateDir };
   const databasePath = createLegacyDatabaseFixture({ env, eventsBySession: { s: [event("e1")] } });
   expect((await migrate({ env })).warnings).toEqual([]);
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
-  return { env, databasePath };
+  return { env, stateDir, databasePath };
 }
 
 /**
@@ -55,12 +57,11 @@ async function healthyInstall(): Promise<Fixture> {
  * state database may add its empty WAL index; a written frame would not be empty.
  */
 function fileFacts(root: string, all = false): string[] {
-  return fs
-    .readdirSync(root, { recursive: true, withFileTypes: true })
-    .filter((entry) => entry.isFile())
-    .map((entry) => {
-      const stat = fs.statSync(path.join(entry.parentPath, entry.name), { bigint: true });
-      return `${path.relative(root, path.join(entry.parentPath, entry.name))} ${stat.size} ${stat.ino} ${stat.mtimeNs}`;
+  return listDirectoryTreeStrictSync(root)
+    .filter(({ dirent }) => dirent.isFile())
+    .map(({ relativePath }) => {
+      const stat = fs.statSync(path.join(root, relativePath), { bigint: true });
+      return `${relativePath} ${stat.size} ${stat.ino} ${stat.mtimeNs}`;
     })
     .filter((fact) => all || !/^state\/openclaw\.sqlite-(?:shm \d+|wal 0) /u.test(fact))
     .toSorted();
@@ -81,12 +82,12 @@ async function conditionsOf(env: NodeJS.ProcessEnv) {
 }
 
 it("plans a healthy database as none, and a Doctor rerun leaves it unleased and untouched", async () => {
-  const { env, databasePath } = await healthyInstall();
-  const agentDir = path.join(env.OPENCLAW_STATE_DIR, "agents");
+  const { env, stateDir, databasePath } = await healthyInstall();
+  const agentDir = path.join(stateDir, "agents");
   const agentFiles = fileFacts(agentDir, true);
   // The first read closes and seals the earlier pass's shared state handle.
   await planAgentDatabaseMigration({ env, configuredAgentDatabaseTargets: [] });
-  const before = fileFacts(env.OPENCLAW_STATE_DIR);
+  const before = fileFacts(stateDir);
   const opens = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
   const leases = vi.spyOn(maintenanceLease, "withAgentDatabaseMaintenanceLease");
 
@@ -108,15 +109,12 @@ it("plans a healthy database as none, and a Doctor rerun leaves it unleased and 
     expect(reported).toEqual([[databasePath], [databasePath]]);
   }
   expect(opens.mock.calls.filter(([, options]) => options?.readOnly !== true)).toEqual([]);
-  expect(fileFacts(env.OPENCLAW_STATE_DIR)).toEqual(before);
+  expect(fileFacts(stateDir)).toEqual(before);
   expect(fileFacts(agentDir, true)).toEqual(agentFiles);
 });
 
 const archiveFile = (f: Fixture) =>
-  path.join(
-    f.env.OPENCLAW_STATE_DIR!,
-    "agents/main/sessions/legacy.jsonl.deleted.2026-07-24T01-02-03.000Z",
-  );
+  path.join(f.stateDir, "agents/main/sessions/legacy.jsonl.deleted.2026-07-24T01-02-03.000Z");
 const firstIndex =
   "SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'session_nodes'";
 let dropped = "";
