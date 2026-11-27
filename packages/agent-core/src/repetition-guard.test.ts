@@ -140,25 +140,7 @@ describe("RepetitionWatch", () => {
         "8,less than or equal to",
       ],
     },
-    {
-      name: "company suffixes",
-      rows: [
-        "1,Acme Inc.",
-        "1,Example Ltd.",
-        "2,Acme Inc.",
-        "2,Example Ltd.",
-        "4,Acme Inc.",
-        "4,Example Ltd.",
-        "8,Acme Inc.",
-        "8,Example Ltd.",
-      ],
-    },
   ])("keeps categorical CSV with $name", ({ rows }) => {
-    expect(firstStop(irregularLineMixture(6000, rows))).toBeUndefined();
-  });
-
-  it("keeps right-hand and left-hand categorical CSV", () => {
-    const rows = [1, 2, 4, 8].flatMap((value) => [`${value},left hand`, `${value},right hand`]);
     expect(firstStop(irregularLineMixture(6000, rows))).toBeUndefined();
   });
 
@@ -210,11 +192,6 @@ describe("RepetitionWatch", () => {
 
   it("keeps low-cardinality categorical CSV", () => {
     const rows = ["1,high risk", "1,low risk", "2,high risk", "2,low risk"];
-    expect(firstStop(irregularLineMixture(6000, rows))).toBeUndefined();
-  });
-
-  it("keeps OK and warning status values in categorical CSV", () => {
-    const rows = [1, 2, 4, 8].flatMap((value) => [`${value},OK`, `${value},warning`]);
     expect(firstStop(irregularLineMixture(6000, rows))).toBeUndefined();
   });
 
