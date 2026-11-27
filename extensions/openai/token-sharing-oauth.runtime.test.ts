@@ -26,8 +26,8 @@ const accountId = (subject: string) =>
   createHash("sha256").update(`${TOKEN_SHARING_ISSUER}\0${clientId}\0${subject}`).digest("hex");
 const jwt = (payload: Record<string, unknown>) =>
   `eyJhbGciOiJub25lIn0.${Buffer.from(JSON.stringify(payload)).toString("base64url")}.synthetic`;
-const oauthResponse = (body: unknown, status = 200) => ({
-  response: Response.json(body, { status }),
+const oauthResponse = (body: unknown, status = 200, headers?: Record<string, string>) => ({
+  response: Response.json(body, { status, headers }),
   release: vi.fn(async () => undefined),
 });
 const exchangeForm = () =>
@@ -560,5 +560,37 @@ describe("ChatGPT token-sharing authorization", () => {
       message: "ChatGPT connection expired or was revoked. Sign in again to reconnect.",
       oauthRefreshFailure: { reason: "invalid_grant" },
     });
+  });
+
+  it("reports OAuth stage and bounded upstream request ID on HTTP 403 without leaking body text", async () => {
+    request.mockResolvedValueOnce(
+      oauthResponse({ error: "access_denied", error_description: "secret-upstream-detail" }, 403, {
+        "x-request-id": "req_403_trace_01",
+      }),
+    );
+    await expect(loginCredential()).rejects.toThrow(
+      "ChatGPT authentication request failed during token exchange (HTTP 403, access_denied, x-request-id=req_403_trace_01). Retry sign-in later.",
+    );
+  });
+
+  it("reports signing key fetch stage and cf-ray when JWKS returns HTTP 403", async () => {
+    const idToken = await identityToken();
+    request
+      .mockResolvedValueOnce(
+        oauthResponse({
+          access_token: "opaque-test-access",
+          refresh_token: "opaque-test-refresh",
+          token_type: "Bearer",
+          scope: TOKEN_SHARING_SCOPE,
+          id_token: idToken,
+          expires_in: 3600,
+        }),
+      )
+      .mockResolvedValueOnce(
+        oauthResponse({ detail: "secret-jwks-error" }, 403, { "cf-ray": "8f1234567890-SJC" }),
+      );
+    await expect(loginCredential()).rejects.toThrow(
+      "ChatGPT authentication request failed during signing key fetch (HTTP 403, cf-ray=8f1234567890-SJC). Retry sign-in later.",
+    );
   });
 });
