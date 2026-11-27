@@ -1,10 +1,6 @@
 import { isExecToolName } from "./embedded-agent-subscribe.handlers.tools.start.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
-import {
-  capLiveExecResult,
-  sanitizeToolArgs,
-  sanitizeToolResult,
-} from "./embedded-agent-tool-results.js";
+import { capLiveExecResult } from "./embedded-agent-tool-results.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import { isToolResultError } from "./tool-result-error.js";
@@ -12,6 +8,7 @@ import { isToolResultError } from "./tool-result-error.js";
 export function recordEmbeddedToolTrajectoryEvent(
   ctx: Pick<EmbeddedAgentSubscribeContext, "params" | "log">,
   event: AgentSessionEvent,
+  readResult: (() => unknown) | undefined,
 ): void {
   const recorder = ctx.params.trajectoryRecorder;
   if (!recorder) {
@@ -22,11 +19,11 @@ export function recordEmbeddedToolTrajectoryEvent(
       recorder.recordEvent("tool.call", {
         toolCallId: event.toolCallId,
         name: normalizeToolPolicyName(event.toolName),
-        args: sanitizeToolArgs(event.args),
+        args: event.args,
       });
     } else if (event.type === "tool_execution_end") {
       const name = normalizeToolPolicyName(event.toolName);
-      const result = sanitizeToolResult(event.result);
+      const result = readResult!();
       recorder.recordEvent("tool.result", {
         toolCallId: event.toolCallId,
         name,

@@ -1,4 +1,3 @@
-// Provider contract suites provide shared assertions for provider plugin behavior.
 import { expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ProviderPlugin } from "../provider-model-shared.js";
@@ -7,38 +6,26 @@ import type { WebSearchProviderPlugin } from "../provider-web-search-contract.js
 
 type Lazy<T> = T | (() => T);
 
-type WebProviderCredentialContract = Pick<
-  WebSearchProviderPlugin,
-  | "createTool"
-  | "docsUrl"
-  | "envVars"
-  | "getCredentialValue"
-  | "hint"
-  | "id"
-  | "label"
-  | "placeholder"
-  | "setCredentialValue"
-  | "signupUrl"
->;
-
 function resolveLazy<T>(value: Lazy<T>): T {
   return typeof value === "function" ? (value as () => T)() : value;
 }
 
+const expectUnique = (values: readonly unknown[] | undefined) =>
+  values && expect(values).toEqual([...new Set(values)]);
+const expectText = (value: string) => expect(value.trim()).not.toBe("");
+
 function expectWebProviderCredentialContract(
-  provider: WebProviderCredentialContract,
+  provider: WebSearchProviderPlugin | WebFetchProviderPlugin,
   credentialValue: unknown,
 ) {
   expect(provider.id).toMatch(/^[a-z0-9][a-z0-9-]*$/);
-  expect(provider.label.trim()).not.toBe("");
-  expect(provider.hint.trim()).not.toBe("");
-  expect(provider.placeholder.trim()).not.toBe("");
+  [provider.label, provider.hint, provider.placeholder].forEach(expectText);
   expect(provider.signupUrl.startsWith("https://")).toBe(true);
   if (provider.docsUrl) {
     expect(provider.docsUrl.startsWith("http")).toBe(true);
   }
 
-  expect(provider.envVars).toEqual([...new Set(provider.envVars)]);
+  expectUnique(provider.envVars);
   expect(provider.envVars.every((entry) => entry.trim().length > 0)).toBe(true);
 
   const configTarget: Record<string, unknown> = {};
@@ -46,81 +33,50 @@ function expectWebProviderCredentialContract(
   expect(provider.getCredentialValue(configTarget)).toEqual(credentialValue);
 
   expect(typeof provider.createTool).toBe("function");
-  return configTarget;
 }
 
 export function installProviderPluginContractSuite(params: { provider: Lazy<ProviderPlugin> }) {
   it("satisfies the base provider plugin contract", () => {
     const provider = resolveLazy(params.provider);
     const authIds = provider.auth.map((method) => method.id);
-    const wizardChoiceIds = new Set<string>();
+    const wizards = [...provider.auth.map((method) => method.wizard), provider.wizard?.setup];
+    const wizardChoiceIds = wizards.flatMap((wizard) =>
+      wizard?.choiceId ? [wizard.choiceId] : [],
+    );
+    wizardChoiceIds.forEach(expectText);
+    expectUnique(wizardChoiceIds);
+    for (const wizard of wizards) {
+      if (!wizard) {
+        continue;
+      }
+      if (wizard.methodId) {
+        expect(authIds).toContain(wizard.methodId);
+      }
+      expectUnique(wizard.modelAllowlist?.allowedKeys);
+      expectUnique(wizard.modelAllowlist?.initialSelections);
+    }
 
     expect(provider.id).toMatch(/^[a-z0-9][a-z0-9-]*$/);
-    expect(provider.label.trim()).not.toBe("");
+    expectText(provider.label);
 
     if (provider.docsPath) {
       expect(provider.docsPath.startsWith("/")).toBe(true);
     }
-    if (provider.aliases) {
-      expect(provider.aliases).toEqual([...new Set(provider.aliases)]);
-    }
-    if (provider.envVars) {
-      expect(provider.envVars).toEqual([...new Set(provider.envVars)]);
-      expect(provider.envVars.every((entry) => entry.trim().length > 0)).toBe(true);
-    }
+    expectUnique(provider.aliases);
+    expectUnique(provider.envVars);
+    provider.envVars?.forEach(expectText);
 
-    expect(Array.isArray(provider.auth)).toBe(true);
-    expect(authIds).toEqual([...new Set(authIds)]);
+    expectUnique(authIds);
     for (const method of provider.auth) {
-      expect(method.id.trim()).not.toBe("");
-      expect(method.label.trim()).not.toBe("");
+      [method.id, method.label].forEach(expectText);
       if (method.hint !== undefined) {
-        expect(method.hint.trim()).not.toBe("");
-      }
-      if (method.wizard) {
-        if (method.wizard.choiceId) {
-          expect(method.wizard.choiceId.trim()).not.toBe("");
-          expect(wizardChoiceIds.has(method.wizard.choiceId)).toBe(false);
-          wizardChoiceIds.add(method.wizard.choiceId);
-        }
-        if (method.wizard.methodId) {
-          expect(authIds).toContain(method.wizard.methodId);
-        }
-        if (method.wizard.modelAllowlist?.allowedKeys) {
-          expect(method.wizard.modelAllowlist.allowedKeys).toEqual([
-            ...new Set(method.wizard.modelAllowlist.allowedKeys),
-          ]);
-        }
-        if (method.wizard.modelAllowlist?.initialSelections) {
-          expect(method.wizard.modelAllowlist.initialSelections).toEqual([
-            ...new Set(method.wizard.modelAllowlist.initialSelections),
-          ]);
-        }
+        expectText(method.hint);
       }
       expect(typeof method.run).toBe("function");
     }
 
     if (provider.wizard?.setup || provider.wizard?.modelPicker) {
       expect(provider.auth.length).toBeGreaterThan(0);
-    }
-    if (provider.wizard?.setup) {
-      if (provider.wizard.setup.choiceId) {
-        expect(provider.wizard.setup.choiceId.trim()).not.toBe("");
-        expect(wizardChoiceIds.has(provider.wizard.setup.choiceId)).toBe(false);
-      }
-      if (provider.wizard.setup.methodId) {
-        expect(authIds).toContain(provider.wizard.setup.methodId);
-      }
-      if (provider.wizard.setup.modelAllowlist?.allowedKeys) {
-        expect(provider.wizard.setup.modelAllowlist.allowedKeys).toEqual([
-          ...new Set(provider.wizard.setup.modelAllowlist.allowedKeys),
-        ]);
-      }
-      if (provider.wizard.setup.modelAllowlist?.initialSelections) {
-        expect(provider.wizard.setup.modelAllowlist.initialSelections).toEqual([
-          ...new Set(provider.wizard.setup.modelAllowlist.initialSelections),
-        ]);
-      }
     }
     if (provider.wizard?.modelPicker?.methodId) {
       expect(authIds).toContain(provider.wizard.modelPicker.methodId);
@@ -134,10 +90,7 @@ export function installWebSearchProviderContractSuite(params: {
 }) {
   it("satisfies the base web search provider contract", () => {
     const provider = resolveLazy(params.provider);
-    const credentialValue = resolveLazy(params.credentialValue);
-
-    const searchConfigTarget = expectWebProviderCredentialContract(provider, credentialValue);
-    expect(provider.getCredentialValue(searchConfigTarget)).toEqual(credentialValue);
+    expectWebProviderCredentialContract(provider, resolveLazy(params.credentialValue));
     if (provider.runSetup) {
       expect(typeof provider.runSetup).toBe("function");
     }
@@ -154,15 +107,11 @@ export function installWebFetchProviderContractSuite(params: {
     const credentialValue = resolveLazy(params.credentialValue);
 
     expectWebProviderCredentialContract(provider, credentialValue);
-    expect(provider.credentialPath.trim()).not.toBe("");
+    expectText(provider.credentialPath);
     if (provider.inactiveSecretPaths) {
-      expect(provider.inactiveSecretPaths).toEqual([...new Set(provider.inactiveSecretPaths)]);
+      expectUnique(provider.inactiveSecretPaths);
       expect(provider.inactiveSecretPaths).toContain(provider.credentialPath);
     }
-
-    const fetchConfigTarget: Record<string, unknown> = {};
-    provider.setCredentialValue(fetchConfigTarget, credentialValue);
-    expect(provider.getCredentialValue(fetchConfigTarget)).toEqual(credentialValue);
 
     if (provider.setConfiguredCredentialValue && provider.getConfiguredCredentialValue) {
       const configTarget = {} as OpenClawConfig;

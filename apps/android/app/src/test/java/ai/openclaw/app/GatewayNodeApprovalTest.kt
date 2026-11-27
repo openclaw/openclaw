@@ -1,5 +1,6 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewayRequestRejected
@@ -213,7 +214,7 @@ class GatewayNodeApprovalTest {
     runTest {
       val gateway = Gateway()
       val action = GatewayNodeApproval()
-      gateway.writeError = GatewayRequestRejected(GatewaySession.ErrorShape("INVALID_REQUEST", "missing scope: operator.admin"))
+      gateway.writeError = GatewayRequestRejected(ErrorShape("INVALID_REQUEST", "missing scope: operator.admin"))
       action.refresh(gateway.context(), gateway.nodes())
 
       action.approve("phone-request")
@@ -309,8 +310,8 @@ class GatewayNodeApprovalTest {
       desired: GatewayNodeApprovalSurface =
         GatewayNodeApprovalSurface(
           setOf("camera", "notifications"),
-          setOf("camera.snap", "notifications.list"),
-          mapOf("camera" to true),
+          setOf("camera.snap", "notifications.list", "sms.search"),
+          mapOf("camera" to true, "smsRead" to false, "smsSend" to false),
         ),
     ): GatewayNodeApprovalContext {
       val lease =

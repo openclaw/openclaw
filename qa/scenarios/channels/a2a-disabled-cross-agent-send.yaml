@@ -11,12 +11,17 @@ scenario:
   objective: Verify explicitly disabling agent-to-agent messaging denies a real sessions_send before any target run or main-session creation.
   gatewayConfigPatch:
     agents:
+      ownership: explicit
       entries:
-        qa:
-          default: true
+        qa: {}
         orion:
           tools:
             profile: coding
+    bindings:
+      - agentId: qa
+        match:
+          channel: qa-channel
+          accountId: "*"
     tools:
       agentToAgent:
         enabled: false

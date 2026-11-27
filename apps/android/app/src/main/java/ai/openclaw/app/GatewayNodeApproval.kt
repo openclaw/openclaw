@@ -7,8 +7,6 @@ import ai.openclaw.app.gateway.normalizeGatewayApprovalRequestId
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.verbatimText
-import ai.openclaw.app.node.asObjectOrNull
-import ai.openclaw.app.node.asStringOrNull
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -42,13 +40,15 @@ internal data class GatewayNodeApprovalSurface(
       commands.containsAll(other.commands) &&
       other.permissions.all { (key, allowed) -> !allowed || permissions[key] == true }
 
-  // These are the configurable node surfaces on Android's onboarding page.
+  // A promptable SMS search alone is not an enabled onboarding capability.
   // Other commands may be withheld by Gateway policy or its protocol version.
-  fun onboardingSurface(): GatewayNodeApprovalSurface =
-    copy(
-      capabilities = capabilities.filterTo(mutableSetOf()) { it in setOf("camera", "location", "sms") },
-      commands = commands.filterTo(mutableSetOf()) { it.substringBefore('.') in setOf("camera", "location", "sms") },
+  fun onboardingSurface(): GatewayNodeApprovalSurface {
+    val enabledCapabilities = capabilities.intersect(setOf("camera", "location", "sms"))
+    return copy(
+      capabilities = enabledCapabilities,
+      commands = commands.filterTo(mutableSetOf()) { it.substringBefore('.') in enabledCapabilities },
     )
+  }
 }
 
 internal class GatewayNodeApprovalContext(
@@ -119,14 +119,13 @@ internal class GatewayNodeApproval {
   }
 
   suspend fun approve(expectedRequestId: String) {
-    val claimed =
+    val (context, epoch) =
       synchronized(lock) {
         val context = pendingContext ?: return
         if (mutableState.value.approving || mutableState.value.pending?.requestId != expectedRequestId) return
         mutableState.value = mutableState.value.copy(approving = true, errorText = null, verified = false)
         context to ++generation
       }
-    val (context, epoch) = claimed
     try {
       val pending = readPending(context, epoch)
       if (pending == null || pending.summary.requestId != expectedRequestId) {
@@ -201,10 +200,7 @@ internal class GatewayNodeApproval {
   ): Pending? {
     if (!canManage(context)) return null
     val root = request(context, epoch, "node.pair.list")
-    val pending =
-      (root["pending"] as? JsonArray)
-        ?.mapNotNull { it.asObjectOrNull() }
-        ?.singleOrNull { it["nodeId"].asStringOrNull() == context.selfNodeId } ?: return null
+    val pending = selfNode(root, context, listKey = "pending") ?: return null
     val requestId = normalizeGatewayApprovalRequestId(pending["requestId"].asStringOrNull()) ?: return null
     val surface = parseSurface(pending) ?: return null
     val requiredScopes = (pending["requiredApproveScopes"] as? JsonArray)?.mapNotNull { it.asStringOrNull() }
@@ -243,8 +239,9 @@ internal class GatewayNodeApproval {
   private fun selfNode(
     nodes: JsonObject,
     context: GatewayNodeApprovalContext,
+    listKey: String = "nodes",
   ): JsonObject? =
-    (nodes["nodes"] as? JsonArray)
+    (nodes[listKey] as? JsonArray)
       ?.mapNotNull { it.asObjectOrNull() }
       ?.singleOrNull { it["nodeId"].asStringOrNull() == context.selfNodeId }
 

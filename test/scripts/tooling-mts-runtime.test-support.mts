@@ -1,5 +1,29 @@
 // Keep CLI main guards and lazy-import probes on physical prepared modules.
 export const toolingMtsEntrypoints = {
+  updateGatewayBuild: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../../scripts/update-gateway-build",
+    sourceExtension: ".mts",
+    distWorkerPath: "legacy-finalizer/scripts/update-gateway-build.js",
+  },
+  sourceUpdateArtifactPreflight: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../../scripts/lib/source-update-artifact-preflight",
+    sourceExtension: ".mts",
+    distWorkerPath: "legacy-finalizer/scripts/lib/source-update-artifact-preflight.js",
+  },
+  distArtifactOwnership: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../../scripts/lib/dist-artifact-ownership",
+    sourceExtension: ".mts",
+    distWorkerPath: "legacy-finalizer/scripts/lib/dist-artifact-ownership.js",
+  },
+  stageBundledPluginRuntime: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../../scripts/stage-bundled-plugin-runtime",
+    sourceExtension: ".mts",
+    distWorkerPath: "legacy-finalizer/scripts/stage-bundled-plugin-runtime.js",
+  },
   tsdownDeclarationBoundary: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../../scripts/lib/tsdown-declaration-boundary",

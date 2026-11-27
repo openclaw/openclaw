@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import { buildOpenAIProvider } from "../extensions/openai/api.js";
 import { runProviderPluginAuthMethodUnpersisted } from "../src/plugins/provider-auth-method.js";
 import { createNonExitingRuntime } from "../src/runtime.js";
+import { acquireTestPortBlock } from "../src/test-utils/port-claims.js";
 import { WizardSession } from "../src/wizard/session.js";
 
 const guardedFetch = vi.hoisted(() => vi.fn());
@@ -10,27 +11,20 @@ const loopback = vi.hoisted<{ port: number; boundPorts: number[] }>(() => ({
   boundPorts: [],
 }));
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({ fetchWithSsrFGuard: guardedFetch }));
-vi.mock("node:http", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:http")>();
+vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth-runtime")>();
   return {
     ...actual,
-    createServer: (...args: Parameters<typeof actual.createServer>) => {
-      const server = actual.createServer(...args);
-      const listen = server.listen.bind(server);
-      vi.spyOn(server, "listen").mockImplementation((...listenArgs) => {
-        if (listenArgs[0] === 8080) {
-          // Isolate the test, but reuse its first real port so a leaked listener still fails.
-          listenArgs[0] = loopback.port;
-          server.once("listening", () => {
-            const address = server.address();
-            if (address && typeof address !== "string") {
-              loopback.port = address.port;
-              loopback.boundPorts.push(address.port);
-            }
-          });
-        }
-        return listen(...listenArgs);
+    startProviderOAuthLoopbackCallbackServer: async (
+      params: Parameters<typeof actual.startProviderOAuthLoopbackCallbackServer>[0],
+    ) => {
+      const redirectUrl = new URL(params.redirectUrl);
+      redirectUrl.port = String(loopback.port);
+      const server = await actual.startProviderOAuthLoopbackCallbackServer({
+        ...params,
+        redirectUrl,
       });
+      loopback.boundPorts.push(Number(redirectUrl.port));
       return server;
     },
   };
@@ -41,6 +35,10 @@ it("releases the SIWC callback port when OAuth expires before the wizard note is
   if (!method) {
     throw new Error("OpenAI did not register its SIWC method");
   }
+  // Retain ownership across the close/rebind gap; a leaked listener must still fail.
+  const portClaim = await acquireTestPortBlock({ offsets: [0] });
+  loopback.port = portClaim.port;
+  loopback.boundPorts = [];
   const timeout = new AbortController();
   const timeoutSignal = vi.spyOn(AbortSignal, "timeout").mockReturnValueOnce(timeout.signal);
   const start = () =>
@@ -76,7 +74,8 @@ it("releases the SIWC callback port when OAuth expires before the wizard note is
 
     retry = start();
     // SIWC publishes this note only after its callback listener has bound successfully.
-    expect(await retry.next()).toMatchObject({
+    const retried = await retry.next();
+    expect(retried, retry.getError()).toMatchObject({
       done: false,
       step: {
         type: "note",
@@ -91,5 +90,6 @@ it("releases the SIWC callback port when OAuth expires before the wizard note is
     retry?.cancel();
     await Promise.all([session.whenSettled(), retry?.whenSettled()]);
     timeoutSignal.mockRestore();
+    await portClaim.release();
   }
 });

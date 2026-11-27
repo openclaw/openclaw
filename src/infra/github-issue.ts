@@ -3,12 +3,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 
-export type PreparedGithubIssue = {
-  body: string;
-  browserFallback: GithubIssueBrowserFallback;
-  marker: string;
-  title: string;
-};
+export type PreparedGithubIssue = ReturnType<typeof prepareGithubIssue>;
 
 type GithubIssueBrowserFallback =
   | { status: "available"; url: string }
@@ -73,12 +68,12 @@ const GITHUB_MARKER_RE = /^openclaw-report:[a-f0-9]{64}$/u;
 const GITHUB_AUTH_ARGS = ["auth", "status", "--active", "--hostname", "github.com"] as const;
 const inflightSubmissions = new Map<string, Promise<GithubIssueSubmitResult>>();
 
-function boundUtf8(value: string, maxBytes: number, suffix: string): string {
+function boundUtf8(value: string, maxBytes: number): string {
   if (Buffer.byteLength(value, "utf8") <= maxBytes) {
     return value;
   }
-  const suffixBytes = Buffer.byteLength(suffix, "utf8");
-  return `${truncateUtf8Prefix(value, Math.max(0, maxBytes - suffixBytes))}${suffix}`;
+  const suffixBytes = Buffer.byteLength(GITHUB_BODY_TRUNCATED_SUFFIX, "utf8");
+  return `${truncateUtf8Prefix(value, Math.max(0, maxBytes - suffixBytes))}${GITHUB_BODY_TRUNCATED_SUFFIX}`;
 }
 
 /** Builds an exact browser fallback when its encoded request stays within a safe bound. */
@@ -95,13 +90,9 @@ function prepareGithubIssueBrowserFallback(
 }
 
 /** Bounds sanitized content and adds the stable marker used for reconciliation. */
-export function prepareGithubIssue(input: { body: string; title: string }): PreparedGithubIssue {
-  const title = boundUtf8(input.title, GITHUB_ISSUE_TITLE_MAX_BYTES, GITHUB_BODY_TRUNCATED_SUFFIX);
-  const boundedBody = boundUtf8(
-    input.body,
-    GITHUB_ISSUE_BODY_MAX_BYTES,
-    GITHUB_BODY_TRUNCATED_SUFFIX,
-  );
+export function prepareGithubIssue(input: { body: string; title: string }) {
+  const title = boundUtf8(input.title, GITHUB_ISSUE_TITLE_MAX_BYTES);
+  const boundedBody = boundUtf8(input.body, GITHUB_ISSUE_BODY_MAX_BYTES);
   const marker = `openclaw-report:${createHash("sha256")
     .update(title)
     .update("\0")
@@ -111,7 +102,6 @@ export function prepareGithubIssue(input: { body: string; title: string }): Prep
   const body = `${boundUtf8(
     boundedBody.trimEnd(),
     GITHUB_ISSUE_BODY_MAX_BYTES - Buffer.byteLength(markerComment, "utf8"),
-    GITHUB_BODY_TRUNCATED_SUFFIX,
   )}${markerComment}`;
   return {
     body,
@@ -128,39 +118,6 @@ export function browserFallbackResult(
   return issue.browserFallback.status === "available"
     ? { reason, status: "browser-fallback", url: issue.browserFallback.url }
     : { cause: reason, reason: "fallback-url-too-long", status: "fallback-unavailable" };
-}
-
-function issueCreateArgs(): readonly string[] {
-  return [
-    "api",
-    "--hostname",
-    "github.com",
-    "--include",
-    "--method",
-    "POST",
-    GITHUB_REPOSITORY_ISSUES_API,
-    "--input",
-    "-",
-    "--jq",
-    ".html_url",
-  ];
-}
-
-function issueLookupArgs(marker: string): readonly string[] {
-  return [
-    "issue",
-    "list",
-    "--repo",
-    GITHUB_REPOSITORY,
-    "--state",
-    "all",
-    "--search",
-    `"${marker}" in:body`,
-    "--limit",
-    "100",
-    "--json",
-    "url,title,body",
-  ];
 }
 
 function createdIssueUrl(value: unknown): string | undefined {
@@ -183,26 +140,6 @@ function createdIssueUrl(value: unknown): string | undefined {
   return undefined;
 }
 
-function issueUrlFromOutput(result: GithubCliResult): string | undefined {
-  return createdIssueUrl(result.stdout.toString("utf8").trim().split(/\r?\n/u).at(-1));
-}
-
-function finalApiHttpStatus(result: GithubCliResult): number | undefined {
-  const matches = [...result.stdout.toString("utf8").matchAll(/^HTTP\/\S+\s+(\d{3})(?:\s|$)/gmu)];
-  const status = Number(matches.at(-1)?.[1]);
-  return Number.isInteger(status) ? status : undefined;
-}
-
-function browserFallbackReason(
-  result: GithubCliResult,
-): "authentication-unavailable" | "cli-unavailable" {
-  return result.errorCode === "ENOENT" ||
-    result.errorCode === "EACCES" ||
-    result.errorCode === "EPERM"
-    ? "cli-unavailable"
-    : "authentication-unavailable";
-}
-
 /** Looks up one exact prepared issue without creating or mutating remote state. */
 export async function reconcileGithubIssue(
   issue: PreparedGithubIssue,
@@ -213,7 +150,23 @@ export async function reconcileGithubIssue(
     return { status: "unavailable" };
   }
   await hooks.beforeIssueLookup?.();
-  const lookup = await runGh(issueLookupArgs(issue.marker), { input: "" });
+  const lookup = await runGh(
+    [
+      "issue",
+      "list",
+      "--repo",
+      GITHUB_REPOSITORY,
+      "--state",
+      "all",
+      "--search",
+      `"${issue.marker}" in:body`,
+      "--limit",
+      "100",
+      "--json",
+      "url,title,body",
+    ],
+    { input: "" },
+  );
   if (lookup.errorCode || lookup.status !== 0) {
     return { status: "unavailable" };
   }
@@ -254,17 +207,39 @@ async function submitGithubIssueOnce(
   const auth = await runGh(GITHUB_AUTH_ARGS, { input: "" });
   await hooks.afterAuthPreflight?.();
   if (auth.errorCode || auth.status !== 0) {
-    return browserFallbackResult(issue, browserFallbackReason(auth));
+    return browserFallbackResult(
+      issue,
+      auth.errorCode === "ENOENT" || auth.errorCode === "EACCES" || auth.errorCode === "EPERM"
+        ? "cli-unavailable"
+        : "authentication-unavailable",
+    );
   }
   const commitIssueCreate = await hooks.beforeIssueCreate?.();
   // The caller's live authority and durable claim must not yield before child creation.
   commitIssueCreate?.();
-  const created = await runGh(issueCreateArgs(), {
-    input: JSON.stringify({ body: issue.body, title: issue.title }),
-  });
-  const httpStatus = finalApiHttpStatus(created);
+  const created = await runGh(
+    [
+      "api",
+      "--hostname",
+      "github.com",
+      "--include",
+      "--method",
+      "POST",
+      GITHUB_REPOSITORY_ISSUES_API,
+      "--input",
+      "-",
+      "--jq",
+      ".html_url",
+    ],
+    { input: JSON.stringify({ body: issue.body, title: issue.title }) },
+  );
+  const matches = [...created.stdout.toString("utf8").matchAll(/^HTTP\/\S+\s+(\d{3})(?:\s|$)/gmu)];
+  const status = Number(matches.at(-1)?.[1]);
+  const httpStatus = Number.isInteger(status) ? status : undefined;
   const directUrl =
-    httpStatus === undefined || httpStatus === 201 ? issueUrlFromOutput(created) : undefined;
+    httpStatus === undefined || httpStatus === 201
+      ? createdIssueUrl(created.stdout.toString("utf8").trim().split(/\r?\n/u).at(-1))
+      : undefined;
   if (directUrl) {
     return { status: "created", url: directUrl };
   }
@@ -368,8 +343,7 @@ async function runGithubCli(
       child.stdout.destroy();
       child.unref();
       settle(null);
-    }, GITHUB_ISSUE_CREATE_TIMEOUT_MS);
-    timeout.unref?.();
+    }, GITHUB_ISSUE_CREATE_TIMEOUT_MS).unref();
     child.stdin.end(options.input);
   });
 }

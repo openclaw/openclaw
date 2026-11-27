@@ -6,7 +6,8 @@ import java.util.Locale
 internal fun slashCommandQuery(input: String): String? {
   val trimmed = input.trimStart()
   if (!trimmed.startsWith("/")) return null
-  val token = trimmed.drop(1).takeWhile { !it.isWhitespace() }
+  val token = trimmed.drop(1)
+  if (token.any { it.isWhitespace() }) return null
   return token.lowercase(Locale.US)
 }
 
@@ -15,7 +16,6 @@ internal fun shouldShowSlashCommandMenu(input: String): Boolean = slashCommandQu
 internal fun matchingSlashCommands(
   input: String,
   commands: List<ChatCommandEntry>,
-  limit: Int = 6,
 ): List<ChatCommandEntry> {
   val query = slashCommandQuery(input) ?: return emptyList()
   val uniqueCommands = commands.map { command -> command.withMatchedSlashAliasFirst(query) }.distinctBy { slashCommandText(it) }
@@ -27,7 +27,7 @@ internal fun matchingSlashCommands(
         slashCommandPrefixes(command).any { prefix -> prefix.startsWith(query) }
       }
     }
-  return matches.take(limit)
+  return matches.take(6)
 }
 
 internal fun slashCommandText(command: ChatCommandEntry): String {
@@ -47,13 +47,7 @@ internal fun slashCommandCompletion(command: ChatCommandEntry): String {
   return if (command.acceptsArgs) "$text " else text
 }
 
-private fun slashCommandPrefixes(command: ChatCommandEntry): List<String> =
-  buildList {
-    add(normalizedSlashCommandName(command.name))
-    command.textAliases.forEach { alias ->
-      add(normalizedSlashCommandName(alias))
-    }
-  }.filter { it.isNotEmpty() }
+private fun slashCommandPrefixes(command: ChatCommandEntry): List<String> = (listOf(command.name) + command.textAliases).map(::normalizedSlashCommandName).filter(String::isNotEmpty)
 
 private fun ChatCommandEntry.withMatchedSlashAliasFirst(query: String): ChatCommandEntry {
   if (query.isEmpty()) return this

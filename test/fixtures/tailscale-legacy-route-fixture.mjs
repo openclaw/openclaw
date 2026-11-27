@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFile, writeFile } from "node:fs/promises";
+import { appendFile, readFile, writeFile } from "node:fs/promises";
 
 const args = process.argv.slice(2);
 const marker = process.env.OPENCLAW_TEST_TAILSCALE_FIXTURE_MARKER;
@@ -28,10 +28,14 @@ if (
   if (Object.keys(status.Web[host].Handlers).length === 0) {
     delete status.Web[host];
     delete status.TCP["443"];
-    if (status.AllowFunnel) delete status.AllowFunnel[host];
+    if (status.AllowFunnel) {
+      delete status.AllowFunnel[host];
+    }
   }
   for (const key of ["Web", "TCP", "AllowFunnel"]) {
-    if (status[key] && Object.keys(status[key]).length === 0) delete status[key];
+    if (status[key] && Object.keys(status[key]).length === 0) {
+      delete status[key];
+    }
   }
   await writeFile(marker, JSON.stringify(status));
   process.exit(0);
@@ -43,6 +47,10 @@ if (JSON.stringify(args) === JSON.stringify([mode, "--yes", "--bg=false", "19000
   if ([status, ...Object.values(status.Foreground ?? {})].some((config) => config.TCP?.["443"])) {
     process.stderr.write("listener already exists for port 443\n");
     process.exit(1);
+  }
+  const claims = process.env.OPENCLAW_TEST_TAILSCALE_FIXTURE_CLAIMS;
+  if (claims) {
+    await appendFile(claims, `${JSON.stringify({ pid: process.pid, target: args.at(-1) })}\n`);
   }
   process.stdout.write("Press Ctrl+C to exit.\n");
   setInterval(() => {}, 1000);

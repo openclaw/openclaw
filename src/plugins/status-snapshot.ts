@@ -14,8 +14,10 @@ import {
   appendPluginControlPlaneWorkspaceDiagnostic,
   resolvePluginControlPlaneWorkspace,
 } from "./control-plane-workspace.js";
+import { createBlockedPluginDiagnosticLookup } from "./discovery-availability.js";
 import { createInstalledPluginOwnershipResolver } from "./installed-plugin-package-ownership.js";
 import { resolveRetainedManagedNpmInstallPackageInfo } from "./managed-npm-retention.js";
+import { createManifestProviderIdLists } from "./manifest-provider-ids.js";
 import { tracksPluginDependencyStatus } from "./official-external-plugin-repair-hints.js";
 import { pluginCacheStatSync } from "./plugin-cache-files.js";
 import { getPluginMetadataSnapshotCache, withPluginCache } from "./plugin-cache.js";
@@ -59,22 +61,28 @@ type PluginRegistrySnapshotReportParams = {
 export function projectPluginInstallHealth<T extends PluginDependencyHealthRegistry>(
   registry: T,
   params: { metadata: PluginMetadataSnapshot; config?: OpenClawConfig; env?: NodeJS.ProcessEnv },
+  ownership = createInstalledPluginOwnershipResolver(params.metadata.index, params.env),
 ): T {
   const cache = getPluginMetadataSnapshotCache(params.metadata);
   return withPluginCache(cache, () => {
     const { index, byPluginId: manifests, pluginIds: scope } = params.metadata;
     const diagnostics = [...registry.diagnostics];
-    const ownership = createInstalledPluginOwnershipResolver(index, params.env);
+    const findBlockedPluginDiagnostic = createBlockedPluginDiagnosticLookup({
+      diagnostics: params.metadata.diagnostics,
+      config: params.config,
+      env: params.env,
+    });
     const records = new Map(index.plugins.map((record) => [record.pluginId, record]));
     const installSelectors = new Map(
-      Object.entries(index.installRecords).map(([owner, record]) => [
-        owner,
-        record.spec ??
+      Object.entries(index.installRecords).map(([owner, record]) => {
+        const spec =
+          record.spec ??
           record.resolvedSpec ??
           (record.source === "clawhub"
             ? `clawhub:${record.clawhubPackage ?? owner}`
-            : (record.resolvedName ?? owner)),
-      ]),
+            : (record.resolvedName ?? owner));
+        return [owner, record.source === "npm" ? `npm:${spec}` : spec];
+      }),
     );
     const installTargets = new Map<string, string>();
     const preparedPlugins = registry.plugins.map((plugin) => {
@@ -132,11 +140,18 @@ export function projectPluginInstallHealth<T extends PluginDependencyHealthRegis
     const plugins = new Map(preparedPlugins.map((plugin) => [plugin.id, plugin]));
     const config = normalizePluginsConfig(params.config?.plugins);
     for (const installOwner of Object.keys(index.installRecords)) {
+      const installId =
+        index.installRecords[installOwner]?.source === "path"
+          ? null
+          : (installSelectors.get(installOwner) ?? installOwner);
       const resolved = ownership.resolveUpdate(installOwner);
       if (!resolved.ok || resolved.value.kind === "operator-managed") {
         continue;
       }
       if (resolved.value.kind === "orphan") {
+        if (findBlockedPluginDiagnostic(installOwner)) {
+          continue;
+        }
         if (
           (!scope || scope.includes(installOwner)) &&
           resolveEffectiveEnableState({
@@ -150,7 +165,7 @@ export function projectPluginInstallHealth<T extends PluginDependencyHealthRegis
             pluginInstallIncompleteDiagnostic(
               installOwner,
               "plugin metadata is missing.",
-              installSelectors.get(installOwner) ?? installOwner,
+              installId,
             ),
           );
         }
@@ -198,7 +213,7 @@ export function projectPluginInstallHealth<T extends PluginDependencyHealthRegis
             pluginInstallIncompleteDiagnostic(
               id,
               missingManifest ? "plugin manifest is missing." : "package.json is missing.",
-              installSelectors.get(installOwner) ?? installOwner,
+              installId,
             ),
           ),
         );
@@ -259,20 +274,7 @@ function buildPluginRecordFromInstalledIndex(
     channelIds: [...(manifest?.channels ?? [])],
     cliBackendIds: [...(manifest?.cliBackends ?? []), ...(manifest?.setup?.cliBackends ?? [])],
     providerIds: [...(manifest?.providers ?? [])],
-    embeddingProviderIds: [...(manifest?.contracts?.embeddingProviders ?? [])],
-    speechProviderIds: [...(manifest?.contracts?.speechProviders ?? [])],
-    realtimeTranscriptionProviderIds: [
-      ...(manifest?.contracts?.realtimeTranscriptionProviders ?? []),
-    ],
-    realtimeVoiceProviderIds: [...(manifest?.contracts?.realtimeVoiceProviders ?? [])],
-    mediaUnderstandingProviderIds: [...(manifest?.contracts?.mediaUnderstandingProviders ?? [])],
-    transcriptSourceProviderIds: [...(manifest?.contracts?.transcriptSourceProviders ?? [])],
-    imageGenerationProviderIds: [...(manifest?.contracts?.imageGenerationProviders ?? [])],
-    videoGenerationProviderIds: [...(manifest?.contracts?.videoGenerationProviders ?? [])],
-    musicGenerationProviderIds: [...(manifest?.contracts?.musicGenerationProviders ?? [])],
-    webFetchProviderIds: [...(manifest?.contracts?.webFetchProviders ?? [])],
-    webSearchProviderIds: [...(manifest?.contracts?.webSearchProviders ?? [])],
-    migrationProviderIds: [...(manifest?.contracts?.migrationProviders ?? [])],
+    ...createManifestProviderIdLists(manifest?.contracts),
     agentHarnessIds: [],
     cliCommands: [],
     services: [],

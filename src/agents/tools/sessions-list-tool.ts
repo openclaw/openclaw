@@ -1,28 +1,23 @@
-/**
- * sessions_list built-in tool.
- *
- * Lists visible sessions and optionally hydrates titles, last messages, and transcript-derived metadata.
- */
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import pMap from "p-map";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { SessionsListParamsSchema } from "../../../packages/gateway-protocol/src/schema/sessions-list.js";
-import {
-  SessionRunStatusSchema,
-  type SessionRunStatus,
-} from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
+import { SessionRunStatusSchema } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { deriveSessionTitle, prepareSessionTitleRead } from "../../gateway/session-utils-core.js";
+import { createSessionVisibilityDecisionChecker } from "../../plugin-sdk/session-visibility-internal.js";
 import { classifySessionKeyShape, isIncognitoSessionKey } from "../../routing/session-key.js";
 import { getSessionStateVersions } from "../../sessions/session-state-events.js";
+import { largestFittingValue } from "../../shared/largest-fitting-value.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
-import { stringEnum } from "../schema/typebox.js";
+import { requesterProfileSchema, stringEnum } from "../schema/typebox.js";
 import {
   describeSessionLinkRule,
   describeSessionsListTool,
   describeSessionVisibilityScope,
+  SESSION_LINK_RULE_DESCRIPTION,
   SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
 import { stripToolMessages } from "./chat-history-text.js";
@@ -34,16 +29,18 @@ import {
   readStringArrayParam,
   readToolStringParam,
 } from "./common.js";
-import { captureGatewayToolCallerAssertion } from "./gateway-caller-context.js";
+import {
+  resolveGatewayToolOperatorSelection,
+  wrapGatewayPersonalToolExecution,
+} from "./gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
   getInProcessGatewayToolContext,
   hasGatewayToolRoutingContext,
-  type AgentToolGatewayRequestCaller,
+  type AgentToolGatewayRequestCaller as GatewayCaller,
 } from "./in-process-gateway.js";
 import { resolveSessionToolTargetAgentId } from "./scoped-session-access.js";
 import {
-  createSessionVisibilityRowChecker,
   classifySessionListKind,
   deriveChannel,
   resolveDisplaySessionKey,
@@ -56,6 +53,7 @@ import {
 } from "./sessions-helpers.js";
 
 const SessionsListToolSchema = Type.Object({
+  user: requesterProfileSchema({ defaultToTurnOwner: true }),
   kinds: Type.Optional(Type.Array(stringEnum(SESSION_LIST_KINDS))),
   limit: SessionsListParamsSchema.properties.limit,
   offset: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
@@ -74,6 +72,7 @@ const SessionsListToolSchema = Type.Object({
   workspaceDir: SessionsListParamsSchema.properties.workspaceDir,
   group: SessionsListParamsSchema.properties.group,
   pinned: SessionsListParamsSchema.properties.pinned,
+  hasBoard: SessionsListParamsSchema.properties.hasBoard,
   messageLimit: Type.Optional(Type.Integer({ minimum: 0 })),
   label: Type.Optional(Type.String({ minLength: 1 })),
   agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
@@ -94,14 +93,10 @@ const SessionsListOutputSchema = Type.Object(
     enrichmentOmitted: Type.Optional(
       Type.Boolean({
         description:
-          "Inline messages and transcript previews were omitted to fit the byte budget; read session history separately.",
+          "Inline messages and chat previews were omitted to fit the byte budget; read session history separately.",
       }),
     ),
-    sessionLinkRule: Type.Optional(
-      Type.String({
-        description: "How to build Control UI URLs for sessionKey values in this result.",
-      }),
-    ),
+    sessionLinkRule: Type.Optional(Type.String({ description: SESSION_LINK_RULE_DESCRIPTION })),
     visibility: Type.Optional(
       Type.Object(
         {
@@ -116,8 +111,6 @@ const SessionsListOutputSchema = Type.Object(
   { additionalProperties: false },
 );
 
-type GatewayCaller = AgentToolGatewayRequestCaller;
-
 const SESSIONS_LIST_TRANSCRIPT_FIELD_ROWS = 100;
 const SESSIONS_LIST_MAX_SCAN_PAGES = 5;
 const SESSIONS_LIST_MAX_RESULT_BYTES = 64 * 1024;
@@ -127,37 +120,35 @@ function projectInventoryActor(actor: NonNullable<SessionListRow["createdActor"]
   return { type, id, label, identity };
 }
 
-function readSessionRunStatus(value: unknown): SessionRunStatus | undefined {
-  return Value.Check(SessionRunStatusSchema, value) ? value : undefined;
-}
-
-/** Creates the sessions-list tool with Gateway-owned listing and bounded enrichment. */
 export function createSessionsListTool(opts?: {
   agentSessionKey?: string;
+  sessionReadAgentOnly?: boolean;
   requesterAgentIdOverride?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
   callGateway?: GatewayCaller;
   sessionLinkBase?: string;
   requesterProfileId?: string;
-  supportsActiveOnly?: boolean;
+  gatewayBacked?: boolean;
   requireSessionReadOwner?: boolean;
 }): AnyAgentTool {
   return {
     label: "Sessions",
     name: "sessions_list",
     displaySummary: SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
-    description: describeSessionsListTool({ sessionLinkBase: opts?.sessionLinkBase }),
+    description: describeSessionsListTool({
+      sessionLinkBase: opts?.sessionLinkBase,
+      gatewayBacked: opts?.gatewayBacked,
+    }),
     parameters:
-      opts?.supportsActiveOnly === false
-        ? Type.Omit(SessionsListToolSchema, ["activeOnly"])
+      opts?.gatewayBacked === false
+        ? Type.Omit(SessionsListToolSchema, ["activeOnly", "pinned"])
         : SessionsListToolSchema,
     outputSchema: SessionsListOutputSchema,
-    execute: async (_toolCallId, args, signal) => {
-      const assertCallerCurrent = captureGatewayToolCallerAssertion();
-      const gatewayContext = getInProcessGatewayToolContext();
+    execute: wrapGatewayPersonalToolExecution(async (_toolCallId, args, signal) => {
       const params = args as Record<string, unknown>;
-      if (params.activeOnly === true && opts?.supportsActiveOnly === false) {
+      const gatewayContext = getInProcessGatewayToolContext();
+      if (params.activeOnly === true && opts?.gatewayBacked === false) {
         throw new Error("activeOnly requires a Gateway-backed inventory with live run state");
       }
       const {
@@ -186,10 +177,11 @@ export function createSessionsListTool(opts?: {
       const limit = readPositiveIntegerParam(params, "limit");
       const initialOffset = readNonNegativeIntegerParam(params, "offset") ?? 0;
       const activeMinutes = readPositiveIntegerParam(params, "activeMinutes");
-      const messageLimitRaw = readNonNegativeIntegerParam(params, "messageLimit") ?? 0;
-      const messageLimit = Math.min(messageLimitRaw, 20);
+      const messageLimit = Math.min(readNonNegativeIntegerParam(params, "messageLimit") ?? 0, 20);
       const label = readToolStringParam(params, "label");
-      const agentId = readToolStringParam(params, "agentId");
+      const agentId = opts?.sessionReadAgentOnly
+        ? requesterAgentId
+        : readToolStringParam(params, "agentId");
       const search = readToolStringParam(params, "search");
       const archived = params.archived === "all" ? "all" : params.archived === true;
       const relationship = readToolStringParam(params, "relationship", {
@@ -198,7 +190,9 @@ export function createSessionsListTool(opts?: {
       if (relationship && !["owned", "created", "involving"].includes(relationship)) {
         throw new Error("relationship must be owned, created, or involving");
       }
-      const profileId = opts?.requesterProfileId?.trim();
+      const profileId =
+        resolveGatewayToolOperatorSelection().operatorAuthority?.profileId ??
+        opts?.requesterProfileId?.trim();
       if (relationship && !profileId) {
         throw new Error(
           "relationship requires an authenticated requesting user; use an explicit ownerId or creatorId instead",
@@ -224,12 +218,12 @@ export function createSessionsListTool(opts?: {
         Boolean(gatewayContext) ||
         hasGatewayToolRoutingContext();
       const hydrateTranscriptFieldsAfterFiltering = includeDerivedTitles || includeLastMessage;
-      const defaultAgentId = requesterAgentId;
-      const visibilityGuard = createSessionVisibilityRowChecker({
+      const visibilityGuard = createSessionVisibilityDecisionChecker({
         action: "list",
-        defaultAgentId,
+        defaultAgentId: requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
         mainSessionKey,
+        sessionReadAgentOnly: opts?.sessionReadAgentOnly,
         visibility,
         a2aPolicy,
       });
@@ -258,8 +252,6 @@ export function createSessionsListTool(opts?: {
       const outputLimit = Math.min(limit ?? 100, 200);
       let offset = initialOffset;
       let nextOffset: number | undefined;
-      let hasMore = false;
-      let truncationReason: "scan-limit" | "byte-limit" | undefined;
       for (let pageIndex = 0; sessions.length < outputLimit; pageIndex += 1) {
         const page = await gatewayCall<{
           sessions?: GatewaySessionListRow[];
@@ -285,6 +277,7 @@ export function createSessionsListTool(opts?: {
             workspaceDir,
             group: typeof params.group === "string" ? params.group : undefined,
             pinned: typeof params.pinned === "boolean" ? params.pinned : undefined,
+            hasBoard: typeof params.hasBoard === "boolean" ? params.hasBoard : undefined,
             includeDerivedTitles: false,
             includeLastMessage: false,
             includeGlobal: !restrictToSpawned,
@@ -350,9 +343,9 @@ export function createSessionsListTool(opts?: {
               typeof (entry as { ownerSessionKey?: unknown }).ownerSessionKey === "string"
                 ? (entry as { ownerSessionKey?: string }).ownerSessionKey
                 : undefined,
-            spawnedBy: typeof entry.spawnedBy === "string" ? entry.spawnedBy : undefined,
-            parentSessionKey:
-              typeof entry.parentSessionKey === "string" ? entry.parentSessionKey : undefined,
+            spawnedBy: readStringValue(entry.spawnedBy),
+            parentSessionKey: readStringValue(entry.parentSessionKey),
+            childOwnerSessionKeys: entry.childOwnerSessionKeys,
           });
           const kind = classifySessionListKind(entry);
           if (
@@ -363,8 +356,10 @@ export function createSessionsListTool(opts?: {
           ) {
             sessions.push({ entry, agentId: resolvedAgentId, offset: offset + index });
             if (sessions.length === outputLimit) {
-              hasMore = index + 1 < pageSessions.length || page?.hasMore === true;
-              nextOffset = hasMore ? offset + index + 1 : undefined;
+              nextOffset =
+                index + 1 < pageSessions.length || page?.hasMore === true
+                  ? offset + index + 1
+                  : undefined;
               break;
             }
           }
@@ -373,21 +368,18 @@ export function createSessionsListTool(opts?: {
           break;
         }
         if (pageNextOffset === undefined) {
-          hasMore = false;
           nextOffset = undefined;
           break;
         }
-        hasMore = true;
         nextOffset = pageNextOffset;
         // Continue in a later tool call instead of throwing away a sparse partial page.
         if (pageIndex + 1 >= SESSIONS_LIST_MAX_SCAN_PAGES) {
-          truncationReason = "scan-limit";
           break;
         }
         offset = pageNextOffset;
       }
 
-      const stateVersions = getSessionStateVersions(
+      const stateVersions = await getSessionStateVersions(
         sessions.map(({ entry, agentId: stateAgentId }) => ({
           sessionKey: entry.key,
           agentId: stateAgentId,
@@ -399,9 +391,7 @@ export function createSessionsListTool(opts?: {
         source: GatewaySessionListRow;
         row: SessionListRow;
         titleEntry: SessionEntry;
-        sessionId: string;
         sessionKey: string;
-        agentId: string;
       }> = [];
 
       for (const { entry, agentId: resolvedAgentId } of sessions) {
@@ -414,12 +404,9 @@ export function createSessionsListTool(opts?: {
         });
 
         const entryChannel = readStringValue(entry.channel);
-        const entryOrigin = entry.origin as Record<string, unknown> | undefined;
-        const originChannel =
-          typeof entryOrigin?.provider === "string" ? entryOrigin.provider : undefined;
-        const deliveryContext = entry.deliveryContext;
-        const deliveryChannel = readStringValue(deliveryContext?.channel);
-        const lastChannel = deliveryChannel ?? readStringValue(entry.lastChannel);
+        const originChannel = readStringValue(entry.origin?.provider);
+        const lastChannel =
+          readStringValue(entry.deliveryContext?.channel) ?? readStringValue(entry.lastChannel);
         const derivedChannel = deriveChannel({
           key,
           kind,
@@ -437,11 +424,7 @@ export function createSessionsListTool(opts?: {
         const derivedTitle = readStringValue(entry.derivedTitle);
         const lastMessagePreview = readStringValue(entry.lastMessagePreview);
         const parentSessionKeyRaw =
-          typeof entry.parentSessionKey === "string"
-            ? entry.parentSessionKey
-            : typeof entry.spawnedBy === "string"
-              ? entry.spawnedBy
-              : undefined;
+          readStringValue(entry.parentSessionKey) ?? readStringValue(entry.spawnedBy);
         const parentSessionKey = parentSessionKeyRaw
           ? visibleReference(parentSessionKeyRaw)
           : undefined;
@@ -452,7 +435,7 @@ export function createSessionsListTool(opts?: {
         const contextTokens =
           typeof entry.contextTokens === "number" ? entry.contextTokens : undefined;
         const totalTokens = typeof entry.totalTokens === "number" ? entry.totalTokens : undefined;
-        const status = readSessionRunStatus(entry.status);
+        const status = Value.Check(SessionRunStatusSchema, entry.status) ? entry.status : undefined;
         const abortedLastRun =
           typeof entry.abortedLastRun === "boolean" ? entry.abortedLastRun : undefined;
         const childSessions = Array.isArray(entry.childSessions)
@@ -468,7 +451,9 @@ export function createSessionsListTool(opts?: {
           kind,
           channel: derivedChannel,
           archived: entry.archived === true,
-          pinned: entry.pinned === true,
+          ...(typeof entry.pinned === "boolean" ? { pinned: entry.pinned } : {}),
+          sidebarRoot: entry.sidebarRoot === true,
+          ...(typeof entry.hasBoard === "boolean" ? { hasBoard: entry.hasBoard } : {}),
           ...(rowLabel ? { label: rowLabel } : {}),
           ...(entry.createdActor
             ? { createdActor: projectInventoryActor(entry.createdActor) }
@@ -527,23 +512,13 @@ export function createSessionsListTool(opts?: {
               displayName: row.displayName,
               label: row.label,
               subject: readStringValue((entry as { subject?: unknown }).subject),
-              updatedAt: typeof row.updatedAt === "number" ? row.updatedAt : 0,
+              updatedAt: row.updatedAt ?? 0,
             },
-            sessionId,
-            sessionKey: resolveInternalSessionKey({
-              key,
-              alias,
-              mainKey,
-            }),
-            agentId: resolvedAgentId,
+            sessionKey: resolveInternalSessionKey({ key, alias }),
           });
         }
         if (messageLimit > 0) {
-          const resolvedKey = resolveInternalSessionKey({
-            key,
-            alias,
-            mainKey,
-          });
+          const resolvedKey = resolveInternalSessionKey({ key, alias });
           historyTargets.push({ row, resolvedKey });
         }
         rows.push(row);
@@ -577,13 +552,13 @@ export function createSessionsListTool(opts?: {
                   ...(signal ? { signal } : {}),
                   params: {
                     key: target.sessionKey,
-                    agentId: target.agentId,
+                    agentId: target.row.agentId,
                     includeDerivedTitles,
                     includeLastMessage,
                   },
                 })
               : undefined;
-          if (described && described.session?.sessionId !== target.sessionId) {
+          if (described && described.session?.sessionId !== target.titleEntry.sessionId) {
             unavailableRows.add(target.row);
             return;
           }
@@ -624,8 +599,14 @@ export function createSessionsListTool(opts?: {
         );
       }
 
-      const visibilityMetadata =
-        visibility === "all"
+      const visibilityMetadata = opts?.sessionReadAgentOnly
+        ? {
+            mode: visibility === "all" ? ("agent" as const) : visibility,
+            restricted: true,
+            warning:
+              "This run can list only its own agent's sessions. Other configured limits still apply.",
+          }
+        : visibility === "all"
           ? undefined
           : {
               mode: visibility,
@@ -635,7 +616,6 @@ export function createSessionsListTool(opts?: {
 
       const finalize = (visible: readonly boolean[]) => {
         signal?.throwIfAborted();
-        assertCallerCurrent?.("sessions.list");
         if (gatewayContext && getInProcessGatewayToolContext() !== gatewayContext) {
           throw new Error("Gateway instance unavailable for sessions.list");
         }
@@ -649,7 +629,7 @@ export function createSessionsListTool(opts?: {
         const resultFor = (count: number) => ({
           count,
           sessions: retainedRows.slice(0, count),
-          hasMore: count < retainedRows.length || hasMore,
+          hasMore: count < retainedRows.length || nextOffset !== undefined,
           ...(count < retainedRows.length
             ? { nextOffset: retained[count]?.offset }
             : nextOffset !== undefined
@@ -659,8 +639,8 @@ export function createSessionsListTool(opts?: {
           ...(enrichmentOmitted ? { enrichmentOmitted: true } : {}),
           ...(count < retainedRows.length
             ? { truncationReason: "byte-limit" as const }
-            : truncationReason
-              ? { truncationReason }
+            : sessions.length < outputLimit && nextOffset !== undefined
+              ? { truncationReason: "scan-limit" as const }
               : {}),
           ...(opts?.sessionLinkBase
             ? { sessionLinkRule: describeSessionLinkRule(opts.sessionLinkBase) }
@@ -668,7 +648,7 @@ export function createSessionsListTool(opts?: {
           ...(visibilityMetadata ? { visibility: visibilityMetadata } : {}),
         });
         const fits = (count: number) =>
-          Buffer.byteLength(JSON.stringify(resultFor(count), null, 2), "utf8") <=
+          Buffer.byteLength(JSON.stringify(resultFor(count)), "utf8") <=
           SESSIONS_LIST_MAX_RESULT_BYTES;
         // A large optional preview must not make an otherwise usable inventory fail.
         // Keep identity/metadata intact and report the enrichment downgrade explicitly.
@@ -685,17 +665,7 @@ export function createSessionsListTool(opts?: {
         }
         let count = retainedRows.length;
         if (!fits(count)) {
-          let lower = 0;
-          let upper = count;
-          while (lower < upper) {
-            const middle = Math.ceil((lower + upper) / 2);
-            if (fits(middle)) {
-              lower = middle;
-            } else {
-              upper = middle - 1;
-            }
-          }
-          count = lower;
+          count = largestFittingValue(0, count, fits);
           if (count === 0) {
             throw new Error(
               "Session metadata exceeds the 64 KiB result budget even without previews; use a narrower inventory query",
@@ -718,6 +688,6 @@ export function createSessionsListTool(opts?: {
         finalize,
         requireSessionReadOwner,
       );
-    },
+    }),
   };
 }

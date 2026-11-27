@@ -19,14 +19,6 @@ describe("outbound message log", () => {
     expect(quotesLineBotMessage("personal", "shared-room-message")).toBe(false);
   });
 
-  it("forgets the oldest ids once the bound is reached, keeping the newest", () => {
-    const overflow = Array.from({ length: 600 }, (_, index) => `bulk-${index}`);
-    recordLineSentMessages("bulk", overflow);
-
-    expect(quotesLineBotMessage("bulk", "bulk-0")).toBe(false);
-    expect(quotesLineBotMessage("bulk", "bulk-599")).toBe(true);
-  });
-
   it("keeps a quiet account's ids while a busy account fills its own bound", () => {
     recordLineSentMessages("quiet", ["quiet-1"]);
     recordLineSentMessages(

@@ -10,21 +10,18 @@ function normalizeSummaryWhitespace(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
-function truncateSummary(value: string, maxLen = 120): string {
+function truncateSummary(value: string, maxLen = 120, minWordBoundary = 48): string {
   if (value.length <= maxLen) {
     return value;
   }
   const sliced = truncateUtf16Safe(value, maxLen - 3);
   const boundary = sliced.lastIndexOf(" ");
-  const trimmed = (boundary >= 48 ? sliced.slice(0, boundary) : sliced).trimEnd();
+  const trimmed = (boundary >= minWordBoundary ? sliced.slice(0, boundary) : sliced).trimEnd();
   return `${trimmed}...`;
 }
 
 function isToolDocBlockStart(line: string): boolean {
   const normalized = line.trim().toUpperCase();
-  if (!normalized) {
-    return false;
-  }
   if (
     normalized === "ACTIONS:" ||
     normalized === "JOB SCHEMA (FOR ADD ACTION):" ||
@@ -89,7 +86,6 @@ export function summarizeToolDescriptionText(params: {
 export function describeToolForVerbose(params: {
   rawDescription?: string | null;
   fallback: string;
-  maxLen?: number;
 }): string {
   const raw = normalizeOptionalString(params.rawDescription) ?? "";
   if (!raw) {
@@ -113,7 +109,7 @@ export function describeToolForVerbose(params: {
     }
     keptLength += trimmed.length + (kept.length > 0 ? 1 : 0);
     kept.push(trimmed);
-    if (keptLength >= (params.maxLen ?? 320)) {
+    if (keptLength >= 320) {
       break;
     }
   }
@@ -122,11 +118,5 @@ export function describeToolForVerbose(params: {
   if (!normalized) {
     return params.fallback;
   }
-  const maxLen = params.maxLen ?? 320;
-  if (normalized.length <= maxLen) {
-    return normalized;
-  }
-  const sliced = truncateUtf16Safe(normalized, maxLen - 3);
-  const boundary = sliced.lastIndexOf(" ");
-  return `${(boundary >= Math.floor(maxLen / 2) ? sliced.slice(0, boundary) : sliced).trimEnd()}...`;
+  return truncateSummary(normalized, 320, 160);
 }

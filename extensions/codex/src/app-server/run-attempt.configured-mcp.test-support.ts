@@ -17,7 +17,6 @@ const mcpMocks = vi.hoisted(() => ({
     }>
   >,
   captureCalls: [] as Array<{
-    sourceNames: string[];
     storedNames: string[];
     provenance?: unknown;
   }>,
@@ -25,8 +24,6 @@ const mcpMocks = vi.hoisted(() => ({
     value?: { version: 1; source: "final-executable-surface" };
   }>,
   dispose: vi.fn(async () => undefined),
-  captureFacade: vi.fn(),
-  staticFacade: vi.fn(),
   threadConfigFacade: vi.fn(),
   requesterCalls: 0,
   requesterCollisionTool: false,
@@ -38,7 +35,6 @@ const mcpMocks = vi.hoisted(() => ({
   staticFailureGate: undefined as Promise<void> | undefined,
   staticCalls: [] as Array<Record<string, unknown>>,
   staticToolExecutes: [] as ReturnType<typeof vi.fn>[],
-  threadConfigCalls: [] as Array<Record<string, unknown>>,
 }));
 
 export { mcpMocks };
@@ -74,7 +70,6 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
       ...args: Parameters<typeof actual.loadCodexBundleMcpThreadConfig>
     ) => {
       const params = args[0] as Record<string, unknown>;
-      mcpMocks.threadConfigCalls.push(params);
       const override = mcpMocks.threadConfigFacade(params);
       if (override) {
         return override;
@@ -118,7 +113,6 @@ vi.mock("openclaw/plugin-sdk/codex-mcp-projection", async (importOriginal) => {
     ) => {
       const params = args[0];
       mcpMocks.staticCalls.push(params);
-      mcpMocks.staticFacade(params);
       if (mcpMocks.useRealStaticMcp) {
         return actual.materializeStaticMcpToolsForHarnessRun({
           ...params,
@@ -164,7 +158,6 @@ vi.mock("openclaw/plugin-sdk/codex-mcp-projection", async (importOriginal) => {
     ) => {
       const [target, captureRef, tools] = args;
       mcpMocks.captureRefs.push(captureRef);
-      mcpMocks.captureFacade(target, captureRef, tools);
       if (mcpMocks.useRealStaticMcp) {
         await actual.captureFinalCodexCronCreatorToolAllowlist(...args);
       } else {
@@ -179,7 +172,6 @@ vi.mock("openclaw/plugin-sdk/codex-mcp-projection", async (importOriginal) => {
         captureRef.value = { version: 1, source: "final-executable-surface" };
       }
       mcpMocks.captureCalls.push({
-        sourceNames: tools.map((tool) => tool.name).toSorted(),
         storedNames: target
           .map((entry) => (typeof entry === "string" ? entry : entry.name))
           .toSorted(),
@@ -201,14 +193,11 @@ export function setupConfiguredMcpTestHooks() {
     mcpMocks.requesterCollisionTool = false;
     mcpMocks.requesterParams.length = 0;
     mcpMocks.useRealStaticMcp = false;
-    mcpMocks.threadConfigCalls.length = 0;
     mcpMocks.staticDiagnosticNotice = undefined;
     mcpMocks.staticFailure = undefined;
     mcpMocks.staticFailureGate = undefined;
     mcpMocks.dispose.mockClear();
     mcpMocks.requesterDispose.mockClear();
-    mcpMocks.captureFacade.mockClear();
-    mcpMocks.staticFacade.mockClear();
     mcpMocks.threadConfigFacade.mockClear();
   });
 }
@@ -231,7 +220,6 @@ export function configureFakeMcp(params: ReturnType<typeof createParams>) {
       },
     },
   };
-  return metadataSnapshot;
 }
 
 export function admitLocalOperatorCronAuthority(params: ReturnType<typeof createParams>): void {

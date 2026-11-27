@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // Enforces a hard-zero policy for Knip's unused exports.
 import { fileURLToPath } from "node:url";
+import { stripVTControlCharacters } from "node:util";
+import { checkUnusedFiles } from "./check-deadcode-unused-files.mts";
 import {
   isLikelyRepoFilePath,
   runKnipScans,
@@ -78,13 +80,11 @@ export function parseKnipCompactUnusedExportsResult(output: string) {
   return { entries: uniqueSorted(entries), sawExportSection };
 }
 
-/** Parses compact Knip export sections into one path-and-symbol entry per finding. */
 export function parseKnipCompactUnusedExports(output: string) {
   return parseKnipCompactUnusedExportsResult(output).entries;
 }
 
-/** Rejects every unused export reported by Knip. */
-export function checkUnusedExports(output: string) {
+function checkUnusedExports(output: string) {
   const entries = parseKnipCompactUnusedExports(output);
   return {
     ok: entries.length === 0,
@@ -166,6 +166,69 @@ function reportUnusedExportScan(scan: (typeof KNIP_SCANS)[number], result: KnipR
   return true;
 }
 
+// Namespace-only inclusion extends Knip's production defaults; listing the export
+// categories here instead would silently remove dependency analysis.
+const KNIP_REPORT_SCANS = [
+  {
+    name: "production report",
+    args: [
+      "--config",
+      "config/knip.config.ts",
+      "--production",
+      "--include",
+      "nsExports,nsTypes",
+      "--exclude",
+      "duplicates",
+    ],
+  },
+  {
+    name: "full-tree report",
+    args: ["--config", "config/knip.all-exports.config.ts", "--include", `files,${KNIP_ISSUES}`],
+  },
+  {
+    name: "script report",
+    args: [
+      "--config",
+      "config/knip.scripts-exports.config.ts",
+      "--include-entry-exports",
+      "--include",
+      KNIP_ISSUES,
+    ],
+  },
+];
+
+// Keep Knip's native diagnostics and dependency severity. The existing parsers
+// add the repository's hard-zero file/export policy, including warning rules.
+function reportKnipScan(scan: (typeof KNIP_REPORT_SCANS)[number], result: KnipRunResult) {
+  const exports = checkExportScan(scan.name, stripVTControlCharacters(result.output));
+  const files = checkUnusedFiles(stripVTControlCharacters(result.stdout));
+  process.stdout.write(result.stdout);
+  process.stderr.write(result.stderr);
+  const ok = !result.errorCode && !result.signal && result.status === 0 && exports.ok && files.ok;
+  if (!ok) {
+    console.error(
+      `deadcode ${scan.name} failed: ${result.errorCode ?? result.signal ?? `exit status ${result.status}`}${result.errorMessage ? `: ${result.errorMessage}` : ""}`,
+    );
+    if (exports.message) {
+      console.error(exports.message);
+    }
+    if (files.message) {
+      console.error(files.message);
+    }
+  } else {
+    console.log(`[deadcode] Knip ${scan.name} passed.`);
+  }
+  return ok;
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  await runKnipScans(KNIP_SCANS, KNIP_COMMON_ARGS, reportUnusedExportScan);
+  if (process.argv.includes("--all")) {
+    await runKnipScans(
+      KNIP_REPORT_SCANS,
+      ["--no-progress", "--reporter", "compact", "--no-config-hints"],
+      reportKnipScan,
+    );
+  } else {
+    await runKnipScans(KNIP_SCANS, KNIP_COMMON_ARGS, reportUnusedExportScan);
+  }
 }

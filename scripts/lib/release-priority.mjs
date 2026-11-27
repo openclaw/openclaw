@@ -1,11 +1,10 @@
 // Historical release-priority recovery records identify workflows deferred by
 // the former repository-variable gate. Current release validation shares runner
 // capacity with PR CI and does not pause or cancel unrelated workflows.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { readFileSync } from "node:fs";
 
 export const RELEASE_PRIORITY_VARIABLE = "OPENCLAW_RELEASE_PRIORITY_RUN";
-export const RELEASE_PRIORITY_RECORD_KIND = "openclaw.frv-release-priority";
+const RELEASE_PRIORITY_RECORD_KIND = "openclaw.frv-release-priority";
 const CI_GATE_JOB = "openclaw/ci-gate";
 // Workflows retained for restoring runs deferred by the former variable gate.
 // Security Review stays live: it owns approval revocation for openclaw/ci-gate.
@@ -23,9 +22,8 @@ const RELEASE_PRIORITY_WORKFLOWS = Object.freeze([
   "ClawSweeper Dispatch",
   "Maintainer Command Reactions",
 ]);
-const QUEUED_STATUSES = new Set(["queued", "pending", "waiting"]);
 
-export function isReleaseBranch(name) {
+function isReleaseBranch(name) {
   return /^release(?:-ci|-publish)?\//u.test(String(name ?? ""));
 }
 
@@ -58,12 +56,6 @@ export function describeRun(run) {
     name: String(run.name ?? ""),
     url: String(run.html_url ?? ""),
   };
-}
-
-export function selectQueuedRunsToCancel(runs, parentRunId) {
-  return runs
-    .filter((run) => QUEUED_STATUSES.has(run.status) && isDeferrableRun(run, parentRunId))
-    .map(describeRun);
 }
 
 // Gated workflows end skipped; a deferred CI run skips every lane and its gate
@@ -104,39 +96,7 @@ export function selectLatestRunsPerLane(runs) {
   return [...latest.values()];
 }
 
-// Repeated prioritization keeps the original pause window and every
-// cancellation it already recorded.
-export function mergeReleasePriorityRecord(previous, next) {
-  if (!previous) {
-    return next;
-  }
-  if (previous.parentRunId !== next.parentRunId) {
-    throw new Error(`release priority record belongs to parent ${previous.parentRunId}`);
-  }
-  const known = new Set(previous.cancelled.map((run) => run.id));
-  return {
-    ...previous,
-    cancelled: [...previous.cancelled, ...next.cancelled.filter((run) => !known.has(run.id))],
-  };
-}
-
-export function isQueuedRun(run) {
-  return QUEUED_STATUSES.has(run?.status);
-}
-
-export function defaultReleasePriorityRecordPath(parentRunId) {
-  return `.artifacts/frv-release-priority-${parentRunId}.json`;
-}
-
-export function writeReleasePriorityRecord(path, record) {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(record, null, 2)}\n`);
-}
-
-export function readReleasePriorityRecord(path, options = {}) {
-  if (options.optional && !existsSync(path)) {
-    return null;
-  }
+export function readReleasePriorityRecord(path) {
   const record = JSON.parse(readFileSync(path, "utf8"));
   if (
     record?.kind !== RELEASE_PRIORITY_RECORD_KIND ||

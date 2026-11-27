@@ -1,6 +1,5 @@
 import { t } from "../../i18n/index.ts";
 import { discardConfigFormValue } from "./config-draft-model.ts";
-import type { ConfigSubmission } from "./config-gateway-operations.ts";
 import {
   currentConfigConnectionEpoch,
   isCurrentConfigConnection,
@@ -11,7 +10,7 @@ export function createConfigFieldDiscard(options: {
   state: RuntimeConfigState;
   serialize: (task: () => Promise<boolean>) => Promise<boolean>;
   readSnapshot: () => Promise<boolean>;
-  getLastSubmission: () => ConfigSubmission | null;
+  hasUnacknowledgedDraftWrite: () => boolean;
   holdAutoSave: () => (resume: boolean) => void;
   isDisposed: () => boolean;
   publish: () => void;
@@ -19,20 +18,19 @@ export function createConfigFieldDiscard(options: {
 }) {
   const { state } = options;
   const pending = new Set<{ path: Array<string | number>; current: boolean }>();
-  const invalidate = (path?: Array<string | number>) => {
-    for (const intent of pending) {
-      if (
-        !path ||
-        path
-          .slice(0, Math.min(path.length, intent.path.length))
-          .every((part, index) => part === intent.path[index])
-      ) {
-        intent.current = false;
-      }
-    }
-  };
   return {
-    invalidate,
+    invalidate: (path?: Array<string | number>) => {
+      for (const intent of pending) {
+        if (
+          !path ||
+          path
+            .slice(0, Math.min(path.length, intent.path.length))
+            .every((part, index) => part === intent.path[index])
+        ) {
+          intent.current = false;
+        }
+      }
+    },
     discard: async (path: Array<string | number>): Promise<boolean> => {
       const client = state.client;
       const epoch = currentConfigConnectionEpoch(state);
@@ -53,13 +51,7 @@ export function createConfigFieldDiscard(options: {
           if (state.configRecoveryError !== null) {
             return false;
           }
-          const submitted = options.getLastSubmission();
-          if (
-            submitted &&
-            submitted.operation !== "independent" &&
-            !submitted.ack &&
-            !submitted.rejected
-          ) {
+          if (options.hasUnacknowledgedDraftWrite()) {
             state.lastError = t("configView.discardUnconfirmed");
             state.configAutoSaveStatus = "error";
             return false;

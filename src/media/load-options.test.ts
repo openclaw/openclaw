@@ -1,32 +1,18 @@
 // Media load option tests cover normalized media load policy.
 import { describe, expect, it } from "vitest";
-import { buildOutboundMediaLoadOptions, resolveOutboundMediaLocalRoots } from "./load-options.js";
+import {
+  buildOutboundMediaLoadOptions,
+  resolveOutboundMediaAccess,
+  resolveOutboundMediaAccessForConfig,
+  resolveOutboundMediaLocalRoots,
+} from "./load-options.js";
 
 const readMediaAccessFile = async () => Buffer.from("media-access");
 const readLegacyMediaFile = async () => Buffer.from("legacy-media");
 
 describe("media load options", () => {
-  function expectResolvedOutboundMediaRoots(
-    mediaLocalRoots: readonly string[] | "any" | undefined,
-    expectedLocalRoots: readonly string[] | "any" | undefined,
-  ) {
-    expect(resolveOutboundMediaLocalRoots(mediaLocalRoots)).toEqual(expectedLocalRoots);
-  }
-
-  function expectBuiltOutboundMediaLoadOptions(
-    params: Parameters<typeof buildOutboundMediaLoadOptions>[0],
-    expected: ReturnType<typeof buildOutboundMediaLoadOptions>,
-  ) {
-    expect(buildOutboundMediaLoadOptions(params)).toEqual(expected);
-  }
-
-  it.each([
-    { mediaLocalRoots: undefined, expectedLocalRoots: undefined },
-    { mediaLocalRoots: [], expectedLocalRoots: undefined },
-    { mediaLocalRoots: ["/tmp/workspace"], expectedLocalRoots: ["/tmp/workspace"] },
-    { mediaLocalRoots: "any", expectedLocalRoots: "any" },
-  ] as const)("resolves outbound local roots %#", ({ mediaLocalRoots, expectedLocalRoots }) => {
-    expectResolvedOutboundMediaRoots(mediaLocalRoots, expectedLocalRoots);
+  it("normalizes an empty local root list", () => {
+    expect(resolveOutboundMediaLocalRoots([])).toBeUndefined();
   });
 
   it.each([
@@ -67,7 +53,32 @@ describe("media load options", () => {
       },
     },
   ] as const)("builds outbound media load options %#", ({ params, expected }) => {
-    expectBuiltOutboundMediaLoadOptions(params, expected);
+    expect(buildOutboundMediaLoadOptions(params)).toEqual(expected);
+  });
+
+  it("applies only the configured deny list to outbound media options", () => {
+    const mediaAccess = resolveOutboundMediaAccessForConfig({
+      tools: {
+        web: {
+          fetch: {
+            ssrfPolicy: {
+              blockedHostnames: ["blocked.example"],
+              dangerouslyAllowPrivateNetwork: true,
+            },
+          },
+        },
+      },
+    });
+    expect(mediaAccess).toEqual({ blockedHostnames: ["blocked.example"] });
+    expect(resolveOutboundMediaAccess({ mediaAccess })).toEqual(mediaAccess);
+    expect(
+      buildOutboundMediaLoadOptions({ maxBytes: 1024, mediaLocalRoots: ["/tmp/w"], mediaAccess }),
+    ).toEqual({
+      maxBytes: 1024,
+      localRoots: ["/tmp/w"],
+      ssrfPolicy: { blockedHostnames: ["blocked.example"] },
+    });
+    expect(resolveOutboundMediaAccessForConfig({})).toBeUndefined();
   });
 
   it("rejects host read capability without explicit local roots", () => {

@@ -6,6 +6,7 @@ import path from "node:path";
 import { Script } from "node:vm";
 import { JSDOM } from "jsdom";
 import { chromium, type WebSocketRoute } from "playwright";
+import { createDeferredCore } from "../../src/shared/deferred.ts";
 import {
   createControlUiMockBootstrapConfig,
   createControlUiMockGatewayInitScript,
@@ -37,10 +38,7 @@ new Script(createControlUiMockGatewayInitScript(scenario)).runInContext(
 const sockets = new Set<WebSocketRoute>();
 let sendRequest: { id: string; params: unknown } | undefined;
 let sendRequestCount = 0;
-let resolveSend: (() => void) | undefined;
-const sent = new Promise<void>((resolve) => {
-  resolveSend = resolve;
-});
+const { promise: sent, resolve: resolveSend } = createDeferredCore();
 let trafficBytes = 0;
 let protocolError = false;
 let captureArmed = false;
@@ -142,7 +140,7 @@ try {
         if (frame.ok !== true) {
           protocolError = true;
         }
-        resolveSend?.();
+        resolveSend();
       }
     });
     route.onMessage((message) => {

@@ -1,4 +1,3 @@
-// FFmpeg exec helpers run ffmpeg and ffprobe with normalized errors.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveSystemBin } from "../infra/resolve-system-bin.js";
 import { runExec, type RunExecOptions } from "../process/exec.js";
@@ -9,25 +8,20 @@ import {
 } from "./ffmpeg-limits.js";
 
 /** Process limits and optional stdin payload for ffmpeg/ffprobe helper calls. */
-type MediaExecOptions = {
+type MediaExecOptions = Pick<RunExecOptions, "stdinFile" | "stdinFileDescriptor"> & {
   timeoutMs?: number;
   maxBufferBytes?: number;
   input?: Buffer | string;
-  stdinFileDescriptor?: number;
 };
 
 function resolveExecOptions(
   defaultTimeoutMs: number,
   options: MediaExecOptions | undefined,
 ): RunExecOptions {
-  if (options?.input !== undefined && options.stdinFileDescriptor !== undefined) {
-    throw new Error("media exec accepts either input or stdinFileDescriptor, not both");
-  }
   return {
     input: options?.input,
-    ...(options?.stdinFileDescriptor !== undefined
-      ? { stdinFileDescriptor: options.stdinFileDescriptor }
-      : {}),
+    stdinFile: options?.stdinFile,
+    stdinFileDescriptor: options?.stdinFileDescriptor,
     logOutput: false,
     maxBuffer: options?.maxBufferBytes ?? MEDIA_FFMPEG_MAX_BUFFER_BYTES,
     timeoutMs: options?.timeoutMs ?? defaultTimeoutMs,
@@ -74,31 +68,18 @@ export async function runFfmpeg(args: string[], options?: MediaExecOptions): Pro
   return stdout;
 }
 
-/** Splits ffprobe CSV-ish output into normalized lowercase fields. */
-function parseFfprobeCsvFields(stdout: string, maxFields: number): string[] {
-  return stdout
-    .trim()
-    .split(/[,\r\n]+/, maxFields)
-    .map((field) => normalizeLowercaseStringOrEmpty(field));
-}
-
-function parseFfprobeSampleRateHz(value: string | undefined): number | null {
-  if (!value || !/^\d+$/.test(value)) {
-    return null;
-  }
-  const sampleRate = Number(value);
-  return Number.isSafeInteger(sampleRate) && sampleRate > 0 ? sampleRate : null;
-}
-
 /** Parses codec and positive sample rate from compact ffprobe stream output. */
 export function parseFfprobeCodecAndSampleRate(stdout: string): {
   codec: string | null;
   sampleRateHz: number | null;
 } {
-  const [codecRaw, sampleRateRaw] = parseFfprobeCsvFields(stdout, 2);
-  const codec = codecRaw ? codecRaw : null;
+  const [codec, sampleRate] = stdout
+    .trim()
+    .split(/[,\r\n]+/, 2)
+    .map((field) => normalizeLowercaseStringOrEmpty(field));
+  const sampleRateHz = sampleRate && /^\d+$/.test(sampleRate) ? Number(sampleRate) : 0;
   return {
-    codec,
-    sampleRateHz: parseFfprobeSampleRateHz(sampleRateRaw),
+    codec: codec || null,
+    sampleRateHz: Number.isSafeInteger(sampleRateHz) && sampleRateHz > 0 ? sampleRateHz : null,
   };
 }

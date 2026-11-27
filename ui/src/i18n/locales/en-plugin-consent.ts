@@ -24,7 +24,9 @@ const enPluginConsent = {
     grantsTitle: "Your grants",
     grantsDescription:
       "Set per plugin in plugins.entries.{id}. Hooks outside these grants are blocked at load.",
-    promptInjection: "Prompt injection",
+    promptInjection: "Modify prompts",
+    promptInjectionDescription:
+      "Allows this plugin to add or change the context and instructions sent to the model, which can influence its responses. Only allow this for plugins you trust.",
     conversationAccess: "Conversation access",
     allowed: "Allowed",
     blocked: "Blocked",
@@ -61,7 +63,7 @@ const enPluginConsent = {
     community: "Community",
     enableNamed: "Enable {name}",
     installPolicy: {
-      technicalDetails: "Technical details",
+      technicalDetails: "Show details",
       severity: { info: "Info", warn: "Warning", critical: "Critical" },
       policyScope:
         "Continuing approves every install-policy warning encountered during this install. Each warning is checked again before installation continues.",

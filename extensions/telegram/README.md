@@ -16,3 +16,30 @@ using the bot in a group.
 
 Follow the [Telegram setup guide](https://docs.openclaw.ai/channels/telegram/setup)
 for bot creation, pairing, and group permissions.
+
+## Upgrade legacy ingress state
+
+Update-time Doctor and startup migration import remaining
+`telegram/ingress-spool-<account>/*.json` and `.json.processing` files into SQLite
+ingress. Pending updates retain their payload and receipt timestamp; old process
+claims return to pending replay. `.json.failed` files remain failed tombstones
+with their original failure time and are never automatically replayed.
+
+Doctor backs up exact source bytes as `.migrated` files before normalization.
+Import receipts prevent duplicate replay after an interrupted cleanup, including
+after the corresponding queue rows have been consumed or pruned. Conflicting or
+malformed sources remain intact with a diagnostic; resolve the reported conflict
+and run `openclaw doctor --fix`. Keep the backups for recovery.
+Verified cleanup-only failures warn without blocking an upgrade.
+
+Plugin developers can follow the
+[Doctor ingress migration contract](https://docs.openclaw.ai/plugins/sdk-migration/how-to-migrate#migrate-durable-ingress-files-through-doctor).
+
+## Retired JSON sidecars
+
+Bot-info, sticker, thread-binding, update-offset, message, sent-message, and
+topic-name JSON sidecars from before July 2026 are no longer inspected or
+archived by Doctor. The files remain untouched. If they contain state you
+still need, restore a complete pre-update backup, run `openclaw doctor --fix`
+with OpenClaw 2026.9.5, then update again. See
+[older-version upgrades](https://docs.openclaw.ai/install/updating#upgrading-very-old-versions).

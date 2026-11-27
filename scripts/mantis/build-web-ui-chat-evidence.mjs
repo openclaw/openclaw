@@ -3,34 +3,14 @@
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
-function parseArgs(argv) {
-  const args = {};
-  for (let index = 0; index < argv.length; index += 1) {
-    const key = argv[index];
-    if (!key.startsWith("--")) {
-      throw new Error(`Unexpected argument: ${key}`);
-    }
-    const name = key.slice(2).replaceAll("-", "_");
-    const value = argv[index + 1];
-    if (!value || value.startsWith("--")) {
-      throw new Error(`Missing value for ${key}`);
-    }
-    args[name] = value;
-    index += 1;
-  }
-  return args;
-}
+import { parseMantisCliArgs } from "./cli-args.mjs";
 
 function normalizeStatus(value) {
   const normalized = String(value ?? "")
     .trim()
     .toLowerCase();
-  if (normalized === "pass") {
-    return "pass";
-  }
-  if (normalized === "fail") {
-    return "fail";
+  if (normalized === "pass" || normalized === "fail") {
+    return normalized;
   }
   throw new Error(`Unsupported web UI chat proof status: ${value}`);
 }
@@ -66,7 +46,7 @@ function buildWebUiChatEvidenceManifest({ candidateRef, candidateSha, status, ca
         status,
         fixed: passed,
       },
-      outcome: passed ? "pass" : "fail",
+      outcome: status,
       pass: passed,
     },
     artifacts: [
@@ -91,18 +71,10 @@ function buildWebUiChatEvidenceManifest({ candidateRef, candidateSha, status, ca
           required: passed && complete,
         }),
       ]),
-      artifactEntry({
-        kind: "metadata",
-        label: "Control UI web chat Vitest log",
-        path: "vitest.log",
-        required: false,
-      }),
-      artifactEntry({
-        kind: "metadata",
-        label: "Control UI web chat setup log",
-        path: "setup.log",
-        required: false,
-      }),
+      ...[
+        { label: "Control UI web chat Vitest log", path: "vitest.log" },
+        { label: "Control UI web chat setup log", path: "setup.log" },
+      ].map((artifact) => artifactEntry({ ...artifact, kind: "metadata", required: false })),
       {
         kind: "report",
         lane: "run",
@@ -141,7 +113,7 @@ function renderReport({ candidateRef, candidateSha, outputDir, status, artifacts
 }
 
 export function writeWebUiChatEvidence(rawArgs = process.argv.slice(2)) {
-  const args = parseArgs(rawArgs);
+  const args = parseMantisCliArgs(rawArgs);
   if (!args.output_dir) {
     throw new Error("Missing --output-dir.");
   }

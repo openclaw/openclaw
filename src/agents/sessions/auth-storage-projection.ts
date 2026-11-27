@@ -27,21 +27,20 @@ export function materializeAuthStorageStore(
                 isDeepStrictEqual(candidate.tokenRef, credential.tokenRef)
               : false,
         );
-      const needsMaterializedRef =
-        (credential.type === "api_key" && Boolean(credential.keyRef)) ||
-        (credential.type === "token" && Boolean(credential.tokenRef));
-      return [
-        profileId,
-        needsMaterializedRef && runtimeCredential ? runtimeCredential : credential,
-      ];
+      return [profileId, runtimeCredential ?? credential];
     }),
   );
   return { ...store, profiles };
 }
 
-function projectAuthStorageData(store: AuthProfileStore | null): AuthStorageData {
+export function projectAuthoritativeAuthStorageData(
+  store: AuthProfileStore,
+  snapshots: readonly AuthProfileStore[],
+): AuthStorageData {
+  const materialized = materializeAuthStorageStore(store, snapshots);
+  assertAuthStorageSecretRefsMaterialized(materialized);
   const projected: AuthStorageData = {};
-  for (const [profileId, credential] of Object.entries(store?.profiles ?? {})) {
+  for (const [profileId, credential] of Object.entries(materialized.profiles)) {
     if (profileId !== `${credential.provider}:default`) {
       continue;
     }
@@ -77,15 +76,6 @@ export function assertAuthStorageSecretRefsMaterialized(store: AuthProfileStore)
   }
 }
 
-export function projectAuthoritativeAuthStorageData(
-  store: AuthProfileStore,
-  snapshots: readonly AuthProfileStore[],
-): AuthStorageData {
-  const materialized = materializeAuthStorageStore(store, snapshots);
-  assertAuthStorageSecretRefsMaterialized(materialized);
-  return projectAuthStorageData(materialized);
-}
-
 export function applyAuthStorageData(
   store: AuthProfileStore,
   data: AuthStorageData,
@@ -107,21 +97,16 @@ export function applyAuthStorageData(
     const profileId = `${provider}:default`;
     const existing = profiles[profileId];
     if (
-      credential.type === "api_key" &&
-      existing?.type === "api_key" &&
-      existing.keyRef &&
-      materializedBaseline[provider]?.type === "api_key" &&
-      materializedBaseline[provider].key === credential.key
-    ) {
-      profiles[profileId] = existing;
-      continue;
-    }
-    if (
-      credential.type === "token" &&
-      existing?.type === "token" &&
-      existing.tokenRef &&
-      materializedBaseline[provider]?.type === "token" &&
-      materializedBaseline[provider].token === credential.token
+      (credential.type === "api_key" &&
+        existing?.type === "api_key" &&
+        existing.keyRef &&
+        materializedBaseline[provider]?.type === "api_key" &&
+        materializedBaseline[provider].key === credential.key) ||
+      (credential.type === "token" &&
+        existing?.type === "token" &&
+        existing.tokenRef &&
+        materializedBaseline[provider]?.type === "token" &&
+        materializedBaseline[provider].token === credential.token)
     ) {
       profiles[profileId] = existing;
       continue;

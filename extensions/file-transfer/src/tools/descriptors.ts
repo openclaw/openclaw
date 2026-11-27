@@ -11,8 +11,6 @@ export type FileTransferToolDescriptor = Pick<
 // can attach them and follow-up file_write calls can reuse the media id.
 export const FILE_TRANSFER_SUBDIR = "tool-file-transfer";
 
-export const FILE_FETCH_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
-export const FILE_FETCH_HARD_MAX_BYTES = 16 * 1024 * 1024;
 export const DIR_LIST_DEFAULT_MAX_ENTRIES = 200;
 export const DIR_LIST_HARD_MAX_ENTRIES = 5000;
 export const FILE_WRITE_HARD_MAX_BYTES = 16 * 1024 * 1024;
@@ -68,7 +66,7 @@ export const DIR_LIST_TOOL_DESCRIPTOR: FileTransferToolDescriptor = {
   label: "Directory List",
   name: "dir_list",
   description:
-    "Retrieve a directory listing from a paired node, not the local workspace. Text is limited to 8192 UTF-8 bytes and shows complete names, isDir and sizes under the canonical path when representable; full returned metadata stays in structured details. Use this to discover remote paths before requesting file content. For text pagination, pass the text's nextPageToken as pageToken with the same node and path; it resumes after the last displayed entry and may differ from the structured token. An unrepresentable first entry reports that pagination cannot advance. Requires operator opt-in: gateway.nodes.commands.allow must include 'dir.list', and file-transfer policy must authorize the path through allowReadPaths or a remembered exact approval. Without policy configured, every call is denied.",
+    "Retrieve a directory listing from a paired node, not the local workspace. Text is limited to 8192 UTF-8 bytes and shows complete names, isDir and sizes under the resolved path when representable; full returned metadata stays in structured details. Use this to discover remote paths before requesting file content. For text pagination, pass the text's nextPageToken as pageToken with the same node and path; it resumes after the last displayed entry and may differ from the structured token. An unrepresentable first entry reports that pagination cannot advance. Requires operator opt-in: gateway.nodes.commands.allow must include 'dir.list', and file-transfer policy must authorize the path through allowReadPaths or a remembered exact approval. Without policy configured, every call is denied.",
   parameters: DirListToolSchema,
 };
 

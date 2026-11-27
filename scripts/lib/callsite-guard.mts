@@ -1,7 +1,7 @@
 // Shared scanner for guard scripts that reject disallowed source callsites.
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import type { SourceFile } from "typescript/unstable/ast";
+import type { SourceFile } from "typescript/ast";
 import { createNativeTypeScriptParser } from "./native-typescript.mts";
 import { resolveRepoRoot } from "./repo-root.mjs";
 import { collectTypeScriptFilesFromRoots, resolveSourceRoots } from "./ts-guard-utils.mts";

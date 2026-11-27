@@ -1,5 +1,4 @@
-import { randomUUID } from "node:crypto";
-import { classifyUpdateOutcome } from "../shared/update-outcome.js";
+import { classifyUpdateOutcome } from "../shared/update-outcome-classification.js";
 import { VERSION } from "../version.js";
 import { extractErrorCode, formatErrorMessage } from "./errors.js";
 import {
@@ -11,31 +10,22 @@ import {
   readRestartSentinelSnapshot,
   writeRestartSentinelIfUnchanged,
 } from "./restart-sentinel.js";
-import { detectRespawnSupervisor } from "./supervisor-markers.js";
 import type { UpdateCampaignController } from "./update-campaign.js";
 import { isPendingControlPlaneUpdateRestartSentinel } from "./update-control-plane-sentinel.js";
 import type { TrackedDevUpdateTarget } from "./update-dev-target.js";
 import { createUpdateErrorFact } from "./update-failure-facts.js";
-import {
-  buildManagedServiceHandoffUnavailableMessage,
-  formatManagedServiceUpdateCommand,
-} from "./update-managed-service-handoff-command.js";
-import {
-  cancelManagedServiceUpdateHandoff,
-  startManagedServiceUpdateHandoff,
-  transferManagedServiceUpdateHandoff,
-} from "./update-managed-service-handoff.js";
 import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-payload.js";
-import {
-  createUpdateRun,
-  finishUpdateRun,
-  getUpdateRun,
-  recordUpdateRunPhase,
-  recordUpdateRunDiagnostics,
-  recordUpdateRunStep,
-} from "./update-run-ledger.js";
+import { getUpdateRunAsync as getUpdateRun, listUpdateRunsAsync } from "./update-run-reader.js";
+import type { UpdateRunRecord } from "./update-run-record.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import { AUTO_UPDATE_STEP_TIMEOUT_MS } from "./update-run-timeouts.js";
+import {
+  createUpdateRunAsync as createUpdateRun,
+  finishUpdateRunAsync as finishUpdateRun,
+  recordUpdateRunPhaseAsync as recordUpdateRunPhase,
+  recordUpdateRunDiagnosticsAsync as recordUpdateRunDiagnostics,
+  recordUpdateRunStepAsync as recordUpdateRunStep,
+} from "./update-run-write.async.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
 
 export type AutoUpdateRunResult =
@@ -56,13 +46,9 @@ export type AutoUpdateRunParams = {
 
 export async function runAutoUpdateCommand(
   params: AutoUpdateRunParams,
-  log: { info: (msg: string, meta?: Record<string, unknown>) => void },
+  _log: { info: (msg: string, meta?: Record<string, unknown>) => void },
 ): Promise<AutoUpdateRunResult> {
   const startedAt = Date.now();
-  const command = formatManagedServiceUpdateCommand({
-    channel: params.channel,
-    ...(params.packageTargetVersion ? { tag: params.packageTargetVersion } : {}),
-  });
   const failure = (
     reason: string,
     message: string,
@@ -87,122 +73,104 @@ export async function runAutoUpdateCommand(
       "skipped",
     );
   }
-  const supervisor = detectRespawnSupervisor(process.env, process.platform, {
-    includeLinuxOpenClawGatewayServiceMarker: true,
-  });
-  if (!supervisor) {
+  params.signal?.throwIfAborted();
+  if (!params.root) {
     return failure(
-      "managed-service-handoff-unavailable",
-      buildManagedServiceHandoffUnavailableMessage(command),
+      "missing-install-root",
+      "The OpenClaw installation root is unavailable.",
       "skipped",
     );
   }
-  recordUpdateRunPhase(params.runId, "requested", {
-    target: { installationMethod: "managed-service" },
-  });
-  const handoffFailure = (error: unknown): AutoUpdateRunResult => {
-    log.info("automatic update handoff failed", { error: formatErrorMessage(error) });
-    const reason = "managed-service-handoff-failed";
-    const fact = createUpdateErrorFact("managed-service", error);
-    // Cancellation may finish the run; retain its cause before that ownership transition.
-    try {
-      recordUpdateRunStep(params.runId, { step: "requested", status: "failed", reason });
-    } catch {
-      log.info("Update failure state could not be recorded; preserving the original error.");
-    }
-    recordUpdateRunDiagnostics(
-      params.runId,
-      { failure: { step: "managed-service", detail: fact.message, failureFacts: [fact] } },
-      (message) => log.info(message),
-    );
-    const code = extractErrorCode(error);
-    const outcome = failure(
-      reason,
-      `Automatic update handoff failed${code ? ` (${code})` : ""}. Inspect the Gateway log, then run \`${command}\` from a shell to retry.`,
-    );
-    outcome.result.steps = [
-      {
-        name: "managed-service",
-        command: "",
-        cwd: "",
-        durationMs: 0,
-        exitCode: 1,
-        failureFacts: [fact],
-      },
-    ];
-    outcome.result.rollbackOutcome = {
-      status: "not-attempted",
-      reason: "Automatic handoff does not perform package rollback after an exception",
-    };
-    return outcome;
-  };
-
-  try {
-    params.signal?.throwIfAborted();
-    if (!params.root?.trim()) {
-      throw new Error("managed auto-update install root is unavailable");
-    }
-    const handoffId = randomUUID();
-    const started = await startManagedServiceUpdateHandoff({
-      root: params.root,
-      recoveryTimeoutMs: params.timeoutMs,
-      restartDrainTimeoutMs:
-        resolveGatewayRestartDeferralTimeoutMs(params.restartDrainTimeoutMs) ??
-        resolveGatewayRestartDeferralTimeoutMs(),
+  // Owned installs prepare a release and restart into the launcher's trial; no handoff helper.
+  {
+    const [{ prepareUpdate }, { scheduleGatewayRestart }] = await Promise.all([
+      import("../update/run.js"),
+      import("./restart.js"),
+    ]);
+    // prepareUpdate settles the run itself unless a trial is pending; later writes are no-ops.
+    const outcome = await prepareUpdate({
+      runId: params.runId,
+      runningRoot: params.root,
+      runningVersion: VERSION,
       channel: params.channel,
-      ...(params.packageTargetVersion ? { tag: params.packageTargetVersion } : {}),
-      supervisor,
-      handoffId,
-      ...(params.devTarget ? { devTarget: params.devTarget } : {}),
-      meta: { runId: params.runId, handoffId, note: "background auto-update" },
+      ...(params.devTarget ? { sha: params.devTarget.upstreamSha } : {}),
+      tag: params.packageTargetVersion,
+      timeoutMs: params.timeoutMs,
     });
-    if (started.status === "started") {
-      const successorOwner = {
-        kind: "managed-update-handoff" as const,
-        handoffId: started.handoffId,
-        installRoot: started.installRoot,
-      };
-      if (params.signal?.aborted) {
-        const cancelled = await cancelManagedServiceUpdateHandoff(successorOwner);
-        if (cancelled !== "restored-in-process") {
-          log.info("stopped auto-update handoff cancellation could not be verified", {
-            result: cancelled,
-            command: started.command,
-            logPath: started.logPath,
-          });
-        }
-        params.signal.throwIfAborted();
+    if (outcome.status === "current") {
+      // Changed plugins load in a new process, as after a core update.
+      if (outcome.pluginsChanged) {
+        scheduleGatewayRestart({ reason: "update.auto" });
       }
-      // Transfer starts validation while this generation remains available. Only
-      // the orchestrator's activation request may park the managed service.
-      try {
-        if (!(await transferManagedServiceUpdateHandoff(successorOwner))) {
-          throw new Error("managed update ownership transfer failed");
-        }
-        params.signal?.throwIfAborted();
-      } catch (error) {
-        const outcome = handoffFailure(error);
-        await cancelManagedServiceUpdateHandoff(successorOwner);
-        return outcome;
-      }
-    } else {
-      // A joined helper owns another run; it cannot complete this campaign's admission.
-      finishUpdateRun(params.runId, {
-        status: "skipped",
-        reason: "managed-service-handoff-already-running",
-      });
+      return failure(
+        "already-current",
+        `OpenClaw ${outcome.version} is already current.`,
+        "skipped",
+      );
     }
-    return {
-      status: "handoff",
-      command: started.command,
-      logPath: started.logPath,
-    };
-  } catch (err) {
-    return handoffFailure(err);
+    if (outcome.status === "failed") {
+      return failure(outcome.reason, outcome.message);
+    }
+    await recordUpdateRunPhase(params.runId, "restarting");
+    scheduleGatewayRestart({ reason: "update.auto" });
+    return { status: "handoff" };
   }
 }
 
 export type AutoUpdateRunner = (params: AutoUpdateRunParams) => Promise<AutoUpdateRunResult>;
+
+// A release that fails these checks rolls back; retrying the same release fails the same way.
+const ACTIVATION_CHECK_STEPS = new Set([
+  "openclaw doctor",
+  "post-update verification",
+  "activated-gateway-startup",
+]);
+
+function activationFailureSignature(run: UpdateRunRecord): string | undefined {
+  // A failed activation usually restores the previous release, which records `rolled-back`.
+  if (
+    run.trigger !== "campaign" ||
+    (run.status !== "failed" && run.status !== "rolled-back") ||
+    !run.reason
+  ) {
+    return undefined;
+  }
+  const failed = run.steps.filter(
+    (step) => step.status === "failed" && ACTIVATION_CHECK_STEPS.has(step.step),
+  );
+  if (!failed.length) {
+    return undefined;
+  }
+  // Elapsed time changes between identical failures.
+  const stable = (detail: string | undefined) => detail?.replace(/\(\d+ms\)/gu, "(elapsed)");
+  return JSON.stringify([
+    run.reason,
+    failed
+      .toSorted((a, b) => a.step.localeCompare(b.step))
+      .map((step) => [
+        step.step,
+        step.exitCode,
+        step.failureFacts?.length
+          ? step.failureFacts
+              .map((fact) =>
+                JSON.stringify([
+                  fact.check,
+                  fact.code,
+                  fact.affectedKey,
+                  fact.pluginId,
+                  stable(fact.message),
+                ]),
+              )
+              .toSorted()
+          : stable(step.detail),
+      ]),
+  ]);
+}
+
+const AUTOMATIC_RETRY_BASE_MS = 60 * 60 * 1000;
+const AUTOMATIC_RETRY_MAX_MS = 24 * AUTOMATIC_RETRY_BASE_MS;
+// After the hourly first retry the wait doubles: 2, 4, 8, 16, then the 24 h cap at six failures.
+const AUTOMATIC_FAILURE_HISTORY = 6;
 
 // The owner joins handoff readiness, never the helper's subsequent wait for Gateway exit.
 export async function runCampaignUpdate(params: {
@@ -217,7 +185,7 @@ export async function runCampaignUpdate(params: {
   runAuto: AutoUpdateRunner;
   canApply: () => boolean;
   campaign: UpdateCampaignController;
-  onAttempt: (version: string) => void;
+  onAttempt: (version: string) => Promise<void> | void;
   onUpdateRunCreated?: () => void;
   signal?: AbortSignal;
 }): Promise<"handoff" | "applied" | "failed"> {
@@ -231,7 +199,61 @@ export async function runCampaignUpdate(params: {
   if (campaignId === undefined || !isCurrent() || !params.canApply()) {
     return "failed";
   }
-  const run = createUpdateRun({
+  const recent = await listUpdateRunsAsync({
+    limit: AUTOMATIC_FAILURE_HISTORY,
+    excludeReason: "dry-run",
+  }).catch((error: unknown) => {
+    params.log.info("Warning: Automatic update retry history is unavailable; continuing update.", {
+      error: formatErrorMessage(error),
+    });
+    return [];
+  });
+  if (!isCurrent() || !params.canApply()) {
+    return "failed";
+  }
+  // The existing terminal rows are the durable backoff fact. A new candidate, a
+  // success, or an intervening operator run breaks the streak without another state store.
+  const failureClass = (run: UpdateRunRecord) =>
+    run.trigger === "campaign" &&
+    (run.status === "failed" || run.status === "rolled-back") &&
+    run.target.channel === params.channel &&
+    (params.mode === "git" ? run.target.sha : run.target.version) === params.version
+      ? (activationFailureSignature(run) ?? run.reason ?? undefined)
+      : undefined;
+  const headClass = recent[0] && failureClass(recent[0]);
+  const streakEnd = recent.findIndex((run) => !headClass || failureClass(run) !== headClass);
+  const streak = streakEnd === -1 ? recent.length : streakEnd;
+  if (streak >= 2 && activationFailureSignature(recent[0]!)) {
+    const nextAction =
+      "Inspect `openclaw update status`, resolve the reported check, then run `openclaw update` to retry; a new candidate also resumes automatic updates.";
+    params.log.info(
+      `Warning: Automatic updates paused after repeated activation failure. ${nextAction}`,
+      {
+        version: params.version,
+        reason: recent[0]?.reason,
+        runIds: recent.slice(0, 2).map((run) => run.runId),
+        nextAction,
+      },
+    );
+    return "failed";
+  }
+  // Other identical failures, such as a pre-mutation refusal, keep the hourly first
+  // retry, then double the wait up to the cap.
+  const retryAtMs =
+    streak >= 2
+      ? recent[0]!.updatedAtMs +
+        Math.min(AUTOMATIC_RETRY_BASE_MS * 2 ** (streak - 1), AUTOMATIC_RETRY_MAX_MS)
+      : 0;
+  if (Date.now() < retryAtMs) {
+    const nextAction =
+      "Inspect `openclaw update status`, resolve the reported check, then run `openclaw update` to retry now.";
+    params.log.info(
+      `Automatic update deferred after ${streak} identical failures; next attempt after ${new Date(retryAtMs).toISOString()}.`,
+      { version: params.version, reason: recent[0]?.reason, retryAtMs, nextAction },
+    );
+    return "failed";
+  }
+  const run = await createUpdateRun({
     trigger: "campaign",
     origin: { campaignId },
     target: {
@@ -261,7 +283,10 @@ export async function runCampaignUpdate(params: {
     if (!isCurrent()) {
       return "failed";
     }
-    params.onAttempt(params.version);
+    await params.onAttempt(params.version);
+    if (!isCurrent()) {
+      return "failed";
+    }
 
     const outcome = await params.runAuto({
       runId,
@@ -276,11 +301,6 @@ export async function runCampaignUpdate(params: {
     });
     if (outcome.status === "handoff") {
       terminal = undefined;
-      recordUpdateRunStep(runId, {
-        step: "managed-service update handoff",
-        status: "completed",
-        endedAtMs: Date.now(),
-      });
       if (!isCurrent()) {
         return "failed";
       }
@@ -296,22 +316,18 @@ export async function runCampaignUpdate(params: {
       reason: outcome.result.reason,
       after: outcome.result.after,
     };
-    recordUpdateRunDiagnostics(
+    await recordUpdateRunDiagnostics(
       runId,
-      (recorded) => ({
-        recovery: outcome.result.recovery && (recorded.recovery ?? outcome.result.recovery),
-        rollbackOutcome:
-          outcome.result.rollbackOutcome &&
-          (recorded.rollbackOutcome ?? outcome.result.rollbackOutcome),
-      }),
+      { recovery: outcome.result.recovery, rollbackOutcome: outcome.result.rollbackOutcome },
       (message) => params.log.info(message),
+      { preserveRecovery: true },
     );
-    recordUpdateRunPhase(runId, "requested", {
+    await recordUpdateRunPhase(runId, "requested", {
       before: outcome.result.before,
       origin: { nextAction: outcome.message },
     });
     for (const step of outcome.result.steps.flatMap(updateRunStepsFromResultStep)) {
-      recordUpdateRunStep(runId, { ...step, endedAtMs: Date.now() });
+      await recordUpdateRunStep(runId, { ...step, endedAtMs: Date.now() });
     }
     if (!isCurrent()) {
       return "failed";
@@ -331,7 +347,7 @@ export async function runCampaignUpdate(params: {
       });
       if (triage.status !== "cancelled") {
         triageHint = triage.hint;
-        recordUpdateRunPhase(runId, "requested", { origin: { doctorHint: triageHint } });
+        await recordUpdateRunPhase(runId, "requested", { origin: { doctorHint: triageHint } });
       }
     }
     if (!isCurrent()) {
@@ -352,6 +368,9 @@ export async function runCampaignUpdate(params: {
         isCurrent,
       });
     }
+    if (!isCurrent()) {
+      return "failed";
+    }
     const skipped = classifyUpdateOutcome(outcome.result) === "noop";
     params.log.info(skipped ? "auto-update attempt skipped" : "auto-update attempt failed", {
       ...attempt,
@@ -360,7 +379,7 @@ export async function runCampaignUpdate(params: {
       ...(triageHint ? { triage: triageHint } : {}),
     });
     if (skipped) {
-      finishUpdateRun(runId, terminal);
+      await finishUpdateRun(runId, terminal);
       terminal = undefined;
       params.campaign.clear();
     }
@@ -374,7 +393,7 @@ export async function runCampaignUpdate(params: {
       terminal.reason = extractErrorCode(error) || "unexpected-error";
       let current = run;
       try {
-        current = getUpdateRun(runId) ?? run;
+        current = (await getUpdateRun(runId)) ?? run;
       } catch {
         params.log.info(
           "Update history could not be read; preserving the original automatic update failure with captured admission facts.",
@@ -383,26 +402,27 @@ export async function runCampaignUpdate(params: {
       const step =
         current.steps.findLast((entry) => entry.status === "in_progress")?.step ?? current.phase;
       const fact = createUpdateErrorFact(step, error);
-      recordUpdateRunDiagnostics(
+      await recordUpdateRunDiagnostics(
         runId,
         { failure: { step, detail: fact.message, failureFacts: [fact] } },
         (message) => params.log.info(message),
       );
-      recordUpdateRunDiagnostics(
+      await recordUpdateRunDiagnostics(
         runId,
-        (recorded) => ({
-          rollbackOutcome: recorded.rollbackOutcome ?? {
+        {
+          rollbackOutcome: {
             status: "not-attempted",
             reason: "The startup campaign does not roll back a failed automatic update handoff",
           },
-        }),
+        },
         (message) => params.log.info(message),
+        { preserveRecovery: true },
       );
     }
     throw error;
   } finally {
     if (terminal) {
-      finishUpdateRun(runId, terminal);
+      await finishUpdateRun(runId, terminal);
     }
   }
 }

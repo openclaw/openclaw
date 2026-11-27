@@ -20,7 +20,7 @@ describe("github-copilot session OAuth adapter", () => {
         userCode: "ABCD-1234",
         expiresInMs: 60_000,
       });
-      return { status: "authorized", accessToken: "durable-github-token" };
+      return "durable-github-token";
     });
     const onAuth = vi.fn();
     const onProgress = vi.fn();
@@ -49,10 +49,7 @@ describe("github-copilot session OAuth adapter", () => {
     " HTTPS://ACME.GHE.COM/ ",
     "http://fixture-user@acme.ghe.com:443/path?q=1",
   ])("preserves a validated enterprise tenant from %s", async (input) => {
-    runDeviceFlow.mockResolvedValueOnce({
-      status: "authorized",
-      accessToken: "tenant-github-token",
-    });
+    runDeviceFlow.mockResolvedValueOnce("tenant-github-token");
 
     await expect(
       loginGithubCopilotOAuth({
@@ -79,9 +76,21 @@ describe("github-copilot session OAuth adapter", () => {
       expect(runDeviceFlow).not.toHaveBeenCalled();
     },
   );
-  it("keeps whitespace-only persisted enterprise metadata invalid when formatting a key", () => {
-    expect(() =>
-      formatGithubCopilotApiKey({ type: "oauth", refresh: "fixture", enterpriseUrl: "  " }),
-    ).toThrow("Unsupported GitHub Enterprise domain");
-  });
+  it.each([undefined, ""])(
+    "treats absent or empty persisted metadata as public (%j)",
+    (enterpriseUrl) => {
+      expect(formatGithubCopilotApiKey({ type: "oauth", refresh: "fixture", enterpriseUrl })).toBe(
+        "fixture",
+      );
+    },
+  );
+
+  it.each(["  ", "\t\n"])(
+    "keeps whitespace-only persisted enterprise metadata invalid (%j)",
+    (enterpriseUrl) => {
+      expect(() =>
+        formatGithubCopilotApiKey({ type: "oauth", refresh: "fixture", enterpriseUrl }),
+      ).toThrow("Unsupported GitHub Enterprise domain");
+    },
+  );
 });

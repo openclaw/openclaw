@@ -1,0 +1,266 @@
+import { createMemo, Loading, onSettled } from "solid-js";
+import type { AgentSelectElement } from "../../components/agent-select.tsx";
+import { Icon } from "../../components/solid/icon.tsx";
+import type { PopoverHandle } from "../../components/solid/popover.tsx";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { normalizeAgentTargetLabel } from "../../lib/agents/display.ts";
+import { t } from "../../lib/reactive/i18n.ts";
+import { liveValue } from "../../lib/reactive/live-value.ts";
+import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
+import * as catalog from "./catalog-target.ts";
+import { CheckoutChip } from "./checkout-chip.tsx";
+import type { DraftGatewayState } from "./draft-gateway-state.ts";
+import "../../components/agent-select-registration.ts";
+import { resolveProjectChip } from "./project-chip.ts";
+import { ProjectChip } from "./project-chip.tsx";
+import type { AgentSelectOptions, NewSessionPlaceControlsOptions } from "./target-controls.ts";
+import { NewSessionTerminalHost } from "./terminal-start-view.tsx";
+import { draftWhereChipParams, resolveWhereChip } from "./where-chip.ts";
+import { WhereChip } from "./where-chip.tsx";
+
+registerNewSessionSetupEnglish();
+
+function CheckoutLoadingRow() {
+  return (
+    <span class="new-session-page__select new-session-page__checkout-loading">
+      <span
+        class="new-session-page__trigger new-session-page__checkout-skeleton"
+        role="status"
+        aria-label={t("common.loading")}
+        style={{ "pointer-events": "none" }}
+      >
+        <span class="new-session-page__target-icon" aria-hidden="true">
+          <Icon name="gitBranch" />
+        </span>
+        <span class="new-session-page__skeleton-bar" aria-hidden="true" style={{ width: "80px" }} />
+      </span>
+    </span>
+  );
+}
+
+export function AgentSelect(props: {
+  params: AgentSelectOptions;
+  ref?: (node: HTMLSpanElement) => void;
+  focusTargetsRef?: AgentSelectElement["focusTargetsRef"];
+}) {
+  return (
+    <span class="new-session-page__select new-session-page__select--agent" ref={props.ref}>
+      <openclaw-agent-select
+        ref={(element) => {
+          element.focusTargetsRef = props.focusTargetsRef;
+        }}
+        prop:variant={props.params.variant ?? "compact"}
+        prop:identityTargetsRef={props.params.identityTargetsRef}
+        prop:onIdentityTargetsChange={props.params.onIdentityTargetsChange}
+        prop:options={props.params.agents.map((agent) => ({
+          value: normalizeAgentId(agent.id),
+          label: normalizeAgentTargetLabel(agent, props.params.agentIdentity?.get(agent.id)),
+          agent,
+        }))}
+        prop:identityById={Object.fromEntries(
+          props.params.agents.flatMap((agent) => {
+            const identity = props.params.agentIdentity?.get(agent.id);
+            return identity ? [[agent.id, identity]] : [];
+          }),
+        )}
+        prop:value={normalizeAgentId(props.params.agentId)}
+        prop:accessibleLabel={t("newSession.agent")}
+        prop:menuLabel={t("newSession.agents")}
+        prop:disabled={props.params.disabled}
+        prop:onSelect={props.params.onSelect}
+      />
+    </span>
+  );
+}
+
+export function RequiredSessionPlacement(props: {
+  gateway: DraftGatewayState;
+  retryRef?: (button: HTMLButtonElement) => void;
+  ref?: (element: HTMLSpanElement) => void;
+}) {
+  const profile = () =>
+    props.gateway.cloudProfiles.find((candidate) => candidate.id === props.gateway.requiredProfile);
+  const completion = createMemo(() => ({ promise: props.gateway.cloudProfilesRead }), {
+    equals: (previous, next) => previous.promise === next.promise,
+  });
+  const cloudProfilesRead = createMemo(() => completion().promise?.then(() => null));
+  return (
+    <span
+      class="new-session-page__select"
+      role="status"
+      data-required-placement
+      ref={(element) => props.ref?.(element)}
+    >
+      {!props.gateway.placementPolicyReady
+        ? t("newSession.placementNotReady")
+        : !profile()
+          ? t("newSession.requiredWorkerUnavailable")
+          : t(
+              profile()?.inference === "worker"
+                ? "newSession.openClawWorker"
+                : "newSession.requiredWorker",
+            )}
+      <Loading on={completion()}>
+        {cloudProfilesRead()}
+        {!props.gateway.placementPolicyReady || !profile() ? (
+          <button
+            type="button"
+            class="btn btn--sm"
+            ref={props.retryRef}
+            onClick={() => void props.gateway.retryRequiredPlacement()}
+          >
+            {t("common.retry")}
+          </button>
+        ) : undefined}
+      </Loading>
+    </span>
+  );
+}
+
+export function NewSessionPlaceControls(props: {
+  params: NewSessionPlaceControlsOptions;
+  ref?: (elements: () => readonly HTMLElement[]) => void;
+}) {
+  let required: HTMLSpanElement | undefined;
+  let terminal: HTMLElement | undefined;
+  let where: PopoverHandle | undefined;
+  let workspace: HTMLDivElement | undefined;
+  onSettled(() => {
+    props.ref?.(() =>
+      [
+        required,
+        terminal,
+        where?.overlay.trigger?.parentElement ?? undefined,
+        where?.overlay.surface,
+        workspace,
+      ].filter((element): element is HTMLElement => element?.isConnected === true),
+    );
+  });
+  const folderValue = liveValue(() => props.params.place.folder);
+  const view = createMemo(() => {
+    const { context, data, gateway, place } = props.params;
+    const browser = place.browser;
+    const nativeTerminal = catalog.isTarget(data);
+    const cloudProfiles = nativeTerminal ? [] : gateway.cloudProfiles;
+    const projects = nativeTerminal ? [] : browser.projects;
+    const workspacePath = place.workspacePath();
+    const recents = nativeTerminal
+      ? []
+      : browser.resolveProjectRecents({
+          sessions: context?.sessions.state.result?.sessions ?? [],
+          workspace: workspacePath,
+          workspaceRoots: place.knownWorkspaceRoots(),
+          isAdmin: place.isAdmin(),
+        });
+    const whereState = resolveWhereChip(draftWhereChipParams(place, gateway, cloudProfiles));
+    const agentRoster = context?.agents.state;
+    const projectLabelPending = Boolean(
+      agentRoster?.agentsLoading &&
+      !agentRoster.agentsList &&
+      !workspacePath &&
+      !place.folder &&
+      !place.deviceFolder &&
+      !place.freshWorkspace &&
+      !browser.remoteProject &&
+      !browser.projectId,
+    );
+    const projectState = resolveProjectChip({
+      folder: place.deviceFolder?.path ?? place.folder,
+      workspace: workspacePath,
+      projectId: browser.projectId,
+      selectedRemoteProject: browser.remoteProject,
+      projects,
+      recents,
+      projectQuery: browser.projectQuery,
+      freshWorkspace: place.freshWorkspace,
+    });
+    return {
+      nativeTerminal,
+      browser,
+      whereState,
+      projectState,
+      projectLabelPending,
+      // The mobile tray stacks above the composer. Reserve the possible
+      // checkout row while the default workspace's Git status is still unknown.
+      checkoutPending:
+        projectLabelPending && !nativeTerminal && !place.hostedEnvironment && place.canWrite(),
+    };
+  });
+  return (
+    <>
+      {props.params.place.requiredPlacement ? (
+        <RequiredSessionPlacement
+          gateway={props.params.gateway}
+          ref={(element) => {
+            required = element;
+          }}
+        />
+      ) : (
+        <>
+          {view().nativeTerminal ? (
+            <NewSessionTerminalHost
+              ref={(element) => {
+                terminal = element;
+              }}
+              params={{
+                hosts: props.params.data?.terminalHosts,
+                hostId: props.params.place.terminalHostId,
+                submitting: props.params.submitting,
+                onSelect: (hostId) => props.params.place.selectTerminalHost(hostId),
+              }}
+            />
+          ) : (
+            <WhereChip
+              params={props.params}
+              state={view().whereState}
+              ref={(handle) => {
+                where = handle;
+              }}
+            />
+          )}
+          <div
+            ref={(element) => {
+              workspace = element;
+            }}
+            class="new-session-page__workspace"
+          >
+            {props.params.place.hostedEnvironment ? (
+              <span
+                class="new-session-page__select new-session-page__hosted-workspace"
+                title={t("newSession.hostedHint")}
+              >
+                {t("newSession.hostedWorkspace")}
+              </span>
+            ) : view().nativeTerminal && props.params.place.terminalOnNode ? (
+              <label class="new-session-page__select new-session-page__menu-field">
+                <span>{t("newSession.terminalNodeFolder")}</span>
+                <input
+                  aria-label={t("newSession.terminalNodeFolder")}
+                  ref={folderValue}
+                  disabled={props.params.submitting}
+                  onInput={(event) => props.params.place.applyFolder(event.currentTarget.value)}
+                />
+              </label>
+            ) : (
+              <ProjectChip
+                params={props.params}
+                state={view().projectState}
+                labelPending={view().projectLabelPending}
+                nativeTerminal={view().nativeTerminal}
+                focus={view().browser.projectFocus}
+              />
+            )}
+            {(view().checkoutPending || props.params.place.checkoutVisible) &&
+            !(view().nativeTerminal && props.params.place.terminalOnNode) ? (
+              view().checkoutPending || props.params.place.repositoryState.checkoutPending ? (
+                <CheckoutLoadingRow />
+              ) : (
+                <CheckoutChip params={props.params} folderLabel={view().projectState.label} />
+              )
+            ) : undefined}
+          </div>
+        </>
+      )}{" "}
+    </>
+  );
+}

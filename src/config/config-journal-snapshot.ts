@@ -1,9 +1,9 @@
 // Stores the fingerprinted config snapshot used by the config change journal.
 import { createHmac, randomBytes } from "node:crypto";
-import fs from "node:fs";
+import { readFileSync } from "node:fs";
+import fs from "node:fs/promises";
 import { homedir as defaultHomedir } from "node:os";
 import path from "node:path";
-import { createSqliteAuditRecordStore } from "../infra/sqlite-audit-record-store.js";
 import { prepareSqliteAuditRecord } from "../infra/sqlite-audit-record.kernel.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -36,9 +36,11 @@ type ConfigSnapshotWrite = ConfigAuditStoreContext & {
   expectedSnapshot?: ConfigSnapshotAuditRecord | null;
 };
 
-const configJournalFingerprintKeys = new Map<string, Buffer>();
+const configJournalFingerprintKeys = new Map<string, Buffer | Promise<Buffer | null>>();
 
-function loadConfigJournalFingerprintKey(params?: ConfigAuditStoreContext): Buffer | null {
+async function loadConfigJournalFingerprintKey(
+  params?: ConfigAuditStoreContext,
+): Promise<Buffer | null> {
   const context = resolveConfigAuditStoreContext(params);
   const stateDir = resolveStateDir(context.env, context.homedir);
   const keyPath = path.join(stateDir, CONFIG_JOURNAL_FINGERPRINT_KEY_FILENAME);
@@ -46,40 +48,41 @@ function loadConfigJournalFingerprintKey(params?: ConfigAuditStoreContext): Buff
   if (cached) {
     return cached;
   }
-  try {
-    let key: Buffer;
+  // Share initialization as well as the key: another reader must not observe a partial create.
+  const pending = (async () => {
     try {
-      key = fs.readFileSync(keyPath);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw error;
-      }
-      fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
-      const created = randomBytes(CONFIG_JOURNAL_FINGERPRINT_KEY_BYTES);
+      let key: Buffer;
       try {
-        const descriptor = fs.openSync(keyPath, "wx", 0o600);
+        key = await fs.readFile(keyPath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw error;
+        }
+        await fs.mkdir(stateDir, { recursive: true, mode: 0o700 });
+        const created = randomBytes(CONFIG_JOURNAL_FINGERPRINT_KEY_BYTES);
         try {
-          fs.writeFileSync(descriptor, created);
-        } finally {
-          fs.closeSync(descriptor);
+          await fs.writeFile(keyPath, created, { flag: "wx", mode: 0o600 });
+          key = created;
+        } catch (createError) {
+          if ((createError as NodeJS.ErrnoException).code !== "EEXIST") {
+            throw createError;
+          }
+          key = await fs.readFile(keyPath);
         }
-        key = created;
-      } catch (createError) {
-        if ((createError as NodeJS.ErrnoException).code !== "EEXIST") {
-          throw createError;
-        }
-        key = fs.readFileSync(keyPath);
       }
-    }
-    if (key.length !== CONFIG_JOURNAL_FINGERPRINT_KEY_BYTES) {
+      if (key.length !== CONFIG_JOURNAL_FINGERPRINT_KEY_BYTES) {
+        throw new Error("Invalid config journal fingerprint key");
+      }
+      await fs.chmod(keyPath, 0o600);
+      configJournalFingerprintKeys.set(keyPath, key);
+      return key;
+    } catch {
+      configJournalFingerprintKeys.delete(keyPath);
       return null;
     }
-    fs.chmodSync(keyPath, 0o600);
-    configJournalFingerprintKeys.set(keyPath, key);
-    return key;
-  } catch {
-    return null;
-  }
+  })();
+  configJournalFingerprintKeys.set(keyPath, pending);
+  return pending;
 }
 
 function fingerprintConfigSnapshotValue(value: unknown, key: Buffer | null): string {
@@ -111,21 +114,36 @@ function fingerprintConfigSnapshotLeaves(value: unknown, key: Buffer | null): un
   return fingerprintConfigSnapshotValue(value, key);
 }
 
-export function fingerprintConfigSnapshotAuthoredConfig(
+export async function fingerprintConfigSnapshotAuthoredConfig(
+  value: unknown,
+  params?: ConfigAuditStoreContext,
+): Promise<unknown> {
+  const key = await loadConfigJournalFingerprintKey(params);
+  // This slot is a diff baseline, not a data store; fingerprint every leaf.
+  return fingerprintConfigSnapshotLeaves(value, key);
+}
+
+/** Immutable cutover checks read existing keys synchronously without changing Gateway state. */
+export function fingerprintConfigSnapshotAuthoredConfigReadOnlySync(
   value: unknown,
   params?: ConfigAuditStoreContext,
 ): unknown {
-  const key = loadConfigJournalFingerprintKey(params);
-  // This slot is a diff baseline, not a data store; fingerprint every leaf.
-  return fingerprintConfigSnapshotLeaves(structuredClone(value), key);
-}
-
-function openConfigSnapshotStore(env: NodeJS.ProcessEnv) {
-  return createSqliteAuditRecordStore<ConfigSnapshotAuditRecord>({
-    scope: CONFIG_SNAPSHOT_SCOPE,
-    maxEntries: 1,
-    env,
-  });
+  const context = resolveConfigAuditStoreContext(params);
+  let key: Buffer | null = null;
+  try {
+    const stored = readFileSync(
+      path.join(
+        resolveStateDir(context.env, context.homedir),
+        CONFIG_JOURNAL_FINGERPRINT_KEY_FILENAME,
+      ),
+    );
+    if (stored.length === CONFIG_JOURNAL_FINGERPRINT_KEY_BYTES) {
+      key = stored;
+    }
+  } catch {
+    // A privileged updater must never recreate an unavailable Gateway key.
+  }
+  return fingerprintConfigSnapshotLeaves(value, key);
 }
 
 function resolveConfigAuditStoreContext(
@@ -154,52 +172,13 @@ export function configSnapshotAuditRecordMatchesPath(
   return snapshot?.configPath === path.resolve(configPath);
 }
 
-export function readLatestConfigSnapshotAuditRecord(
-  params?: ConfigAuditStoreContext,
-): ConfigSnapshotAuditRecord | null {
-  try {
-    const context = resolveConfigAuditStoreContext(params);
-    return (
-      openConfigSnapshotStore(resolveConfigAuditStoreEnv(context))
-        .entries()
-        .find((candidate) => candidate.key === CONFIG_SNAPSHOT_KEY)?.value ?? null
-    );
-  } catch {
-    return null;
-  }
-}
-
-export function upsertConfigSnapshotAuditRecord(
+async function prepareConfigSnapshotAuditRecord(
   params: ConfigSnapshotWrite,
-): ConfigSnapshotAuditRecord | null {
-  try {
-    const context = resolveConfigAuditStoreContext(params);
-    const snapshot = prepareConfigSnapshotAuditRecord(params);
-    // One bounded slot intentionally follows the latest config path in this state DB.
-    // Keyed fingerprints reveal only per-install secret equality, not secret values.
-    // Known limit: slot reads, record appends, and this upsert are separate steps,
-    // so near-simultaneous writers/watchers across processes can journal duplicate
-    // or misordered external records (hashes cited are always real). The follow-up
-    // journal primitive (#110896 phase 2b) folds classification into one txn.
-    const store = openConfigSnapshotStore(resolveConfigAuditStoreEnv(context));
-    if (params.expectedSnapshot !== undefined) {
-      return store.compareAndSet(CONFIG_SNAPSHOT_KEY, params.expectedSnapshot, snapshot)
-        ? snapshot
-        : null;
-    }
-    store.upsert(CONFIG_SNAPSHOT_KEY, snapshot);
-    return snapshot;
-  } catch {
-    // best-effort
-    return null;
-  }
-}
-
-function prepareConfigSnapshotAuditRecord(params: ConfigSnapshotWrite): ConfigSnapshotAuditRecord {
+): Promise<ConfigSnapshotAuditRecord> {
   return {
     configPath: path.resolve(params.configPath),
     rawHash: params.rawHash,
-    fingerprintedAuthoredConfig: fingerprintConfigSnapshotAuthoredConfig(
+    fingerprintedAuthoredConfig: await fingerprintConfigSnapshotAuthoredConfig(
       params.authoredConfig,
       params,
     ),
@@ -221,7 +200,7 @@ export async function readLatestConfigSnapshotAuditRecordAsync(
     );
     context.admission.assertCurrent();
     assertCurrent?.();
-    return result?.ok && result.type === "config.snapshot.read" ? result.snapshot : null;
+    return result?.snapshot ?? null;
   } catch {
     assertCurrent?.();
     return null;
@@ -234,15 +213,35 @@ export async function upsertConfigSnapshotAuditRecordAsync(
 ): Promise<ConfigSnapshotAuditRecord | null> {
   assertCurrent?.();
   try {
+    const snapshot = await prepareConfigSnapshotAuditRecord(params);
+    const written = await writeConfigSnapshotAuditRecord({ ...params, snapshot }, assertCurrent);
+    return written ? snapshot : null;
+  } catch {
+    assertCurrent?.();
+    return null;
+  }
+}
+
+async function writeConfigSnapshotAuditRecord(
+  params: ConfigAuditStoreContext & {
+    snapshot: ConfigSnapshotAuditRecord | null;
+    expectedSnapshot?: ConfigSnapshotAuditRecord | null;
+  },
+  assertCurrent?: () => void,
+): Promise<boolean> {
+  assertCurrent?.();
+  try {
     const env = resolveConfigAuditStoreEnv(resolveConfigAuditStoreContext(params));
     const context = captureOpenClawStateWorkerContext({ env });
-    const snapshot = prepareConfigSnapshotAuditRecord(params);
     const input = {
-      record: prepareSqliteAuditRecord(CONFIG_SNAPSHOT_SCOPE, {
-        key: CONFIG_SNAPSHOT_KEY,
-        value: snapshot,
-        createdAt: Date.now(),
-      }),
+      record:
+        params.snapshot === null
+          ? null
+          : prepareSqliteAuditRecord(CONFIG_SNAPSHOT_SCOPE, {
+              key: CONFIG_SNAPSHOT_KEY,
+              value: params.snapshot,
+              createdAt: Date.now(),
+            }),
       expectedPayloadJson:
         params.expectedSnapshot === null ? null : JSON.stringify(params.expectedSnapshot),
     };
@@ -253,32 +252,16 @@ export async function upsertConfigSnapshotAuditRecordAsync(
     );
     context.admission.assertCurrent();
     assertCurrent?.();
-    return written ? snapshot : null;
+    return written;
   } catch {
     assertCurrent?.();
-    return null;
+    return false;
   }
 }
 
-export function restoreConfigSnapshotAuditRecord(
-  params: ConfigAuditStoreContext & {
-    snapshot: ConfigSnapshotAuditRecord | null;
-    expectedSnapshot?: ConfigSnapshotAuditRecord | null;
-  },
-): void {
-  try {
-    const context = resolveConfigAuditStoreContext(params);
-    const store = openConfigSnapshotStore(resolveConfigAuditStoreEnv(context));
-    if (params.expectedSnapshot !== undefined) {
-      store.compareAndSet(CONFIG_SNAPSHOT_KEY, params.expectedSnapshot, params.snapshot);
-      return;
-    }
-    if (params.snapshot) {
-      store.upsert(CONFIG_SNAPSHOT_KEY, params.snapshot);
-    } else {
-      store.delete(CONFIG_SNAPSHOT_KEY);
-    }
-  } catch {
-    // best-effort
-  }
+export async function restoreConfigSnapshotAuditRecordAsync(
+  params: Parameters<typeof writeConfigSnapshotAuditRecord>[0],
+  assertCurrent?: () => void,
+): Promise<void> {
+  await writeConfigSnapshotAuditRecord(params, assertCurrent);
 }

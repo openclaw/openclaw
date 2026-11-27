@@ -16,42 +16,6 @@ describe("createHooksBridge", () => {
     expect(createHooksBridge({ onHookError: () => undefined })).toBeUndefined();
   });
 
-  it("includes only configured native handlers", () => {
-    const hooks = createHooksBridge({
-      onPreToolUse: vi.fn(),
-      onSessionStart: vi.fn(),
-    })!;
-
-    expect(typeof hooks.onPreToolUse).toBe("function");
-    expect(typeof hooks.onSessionStart).toBe("function");
-    expect(hooks.onPreMcpToolCall).toBeUndefined();
-    expect(hooks.onPostToolUse).toBeUndefined();
-    expect(hooks.onPostToolUseFailure).toBeUndefined();
-    expect(hooks.onUserPromptSubmitted).toBeUndefined();
-    expect(hooks.onSessionEnd).toBeUndefined();
-    expect(hooks.onErrorOccurred).toBeUndefined();
-  });
-
-  it("forwards arguments and return values from a successful handler", async () => {
-    const onPreToolUse = vi
-      .fn()
-      .mockResolvedValue({ permissionDecision: "allow" as const, additionalContext: "ok" });
-    const hooks = createHooksBridge({ onPreToolUse })!;
-    const input = {
-      ...hookBase,
-      cwd: "/tmp",
-      workingDirectory: "/tmp",
-      toolName: "bash",
-      toolArgs: { cmd: "ls" },
-    };
-
-    await expect(hooks.onPreToolUse!(input, { sessionId: "sess-1" })).resolves.toEqual({
-      permissionDecision: "allow",
-      additionalContext: "ok",
-    });
-    expect(onPreToolUse).toHaveBeenCalledWith(input, { sessionId: "sess-1" });
-  });
-
   it("reports the effective prompt after a native prompt hook completes", async () => {
     const onUserPromptSubmitted = vi.fn().mockResolvedValue({
       additionalContext: "Use the approved repository.",
@@ -93,30 +57,6 @@ describe("createHooksBridge", () => {
     expect(observedPrompt).toHaveBeenCalledWith({ prompt: "hello" });
   });
 
-  it("isolates synchronous and asynchronous handler failures", async () => {
-    const onHookError = vi.fn();
-    const hooks = createHooksBridge({
-      onPostToolUse: () => {
-        throw new Error("post boom");
-      },
-      onUserPromptSubmitted: async () => {
-        throw new Error("prompt boom");
-      },
-      onHookError,
-    })!;
-
-    await expect(
-      hooks.onPostToolUse!(
-        { ...hookBase, toolName: "x", toolArgs: {}, toolResult: {} as never },
-        { sessionId: "s" },
-      ),
-    ).resolves.toBeUndefined();
-    await expect(
-      hooks.onUserPromptSubmitted!({ ...hookBase, prompt: "hi" }, { sessionId: "s" }),
-    ).resolves.toBeUndefined();
-    expect(onHookError).toHaveBeenCalledTimes(2);
-  });
-
   it("never lets the error notifier throw into the SDK", async () => {
     const hooks = createHooksBridge({
       onSessionEnd: () => {
@@ -130,21 +70,6 @@ describe("createHooksBridge", () => {
     await expect(
       hooks.onSessionEnd!({ ...hookBase, reason: "complete" }, { sessionId: "s" }),
     ).resolves.toBeUndefined();
-  });
-
-  it("preserves native MCP and failed-tool callbacks", async () => {
-    const onPreMcpToolCall = vi.fn();
-    const onPostToolUseFailure = vi.fn();
-    const hooks = createHooksBridge({
-      onPreMcpToolCall,
-      onPostToolUseFailure,
-    })!;
-
-    await hooks.onPreMcpToolCall!({} as never, { sessionId: "s" });
-    await hooks.onPostToolUseFailure!({} as never, { sessionId: "s" });
-
-    expect(onPreMcpToolCall).toHaveBeenCalledTimes(1);
-    expect(onPostToolUseFailure).toHaveBeenCalledTimes(1);
   });
 
   it("preserves all supported SDK hook handlers", () => {

@@ -28,6 +28,13 @@ OpenClaw loads this instead of the full entry when a channel is disabled or
 unconfigured. See
 [Setup and Config](/plugins/sdk-setup#setup-entry) for when this matters.
 
+Doctor also inspects this public setup entry when finishing a deferred plugin
+upgrade. It uses `plugin.lifecycle.detectLegacyStateMigrations` when provided.
+Keep the detector on this lightweight entry while a released version may still
+need a legacy migration; omitting it does not prove that the full entry has no
+migration, so Doctor keeps the upgrade obligation pending. Missing or broken
+setup entries also keep the obligation pending.
+
 Pair `defineSetupPluginEntry(...)` with the narrow setup helper families:
 
 | Import                                  | Use for                                                                                                                                                                            |
@@ -44,7 +51,7 @@ Pair `defineSetupPluginEntry(...)` with the narrow setup helper families:
 returns a bounded, frozen list of accepted `{ path, kind, size }` TAR/gzip members
 without creating an extracted tree. It uses fs-safe's complete admission and
 zero-strip extraction policy, not tar display output. Paths use the existing
-canonical archive identity; LF and Unicode spelling are preserved. Use matching
+normalized archive identity; LF and Unicode spelling are preserved. Use matching
 filter/limit settings and retain or verify the same archive bytes for subsequent
 extraction: inspection results are not reusable write authority. Only the resolved
 result is complete-admission evidence; a filter callback can precede a later

@@ -1,21 +1,16 @@
 // Imported by agent.test.ts to retain its shared mocked module graph.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { findTaskByRunId } from "../../tasks/task-registry.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as agentHandlerHelpers from "../agent-turn/agent-handler-helpers.js";
 import { waitForAcceptedRunDispatch } from "./agent-clock.test-helpers.js";
-import {
-  mockSpawnedChildSessionEntry,
-  spyDetachedCreateRunningTaskRun,
-} from "./agent-task-tracking.test-helpers.js";
+import { mockSpawnedChildSessionEntry } from "./agent.spawned-child.test-support.js";
 import {
   backendGatewayClient,
   describe0AfterEach0,
   getAgentTestMocks,
   invokeAgent,
   requireValue,
-  resetAgentTaskRegistryForTests,
   useTestStateDir,
   waitForAgentCommandCall,
 } from "./agent.test-harness.js";
@@ -29,7 +24,7 @@ describe("gateway accepted dispatch clock", () => {
     const respond = vi.fn();
     respond(true, { status: "accepted" });
     let pumps = 0;
-    const pump = vi.spyOn(vi, "runOnlyPendingTimersAsync").mockImplementation(async () => {
+    const pump = vi.spyOn(vi, "advanceTimersByTimeAsync").mockImplementation(async () => {
       // Bound the broken implementation too, so the regression fails without hanging CI.
       if (++pumps === 2_000) {
         throw new Error("unbounded dispatch loop reached the regression guard");
@@ -55,7 +50,6 @@ describe("gateway accepted dispatch clock", () => {
       async (state) => {
         const root = state.stateDir;
         useTestStateDir(root);
-        resetAgentTaskRegistryForTests();
         const childSessionKey = "agent:main:subagent:native-delayed-child";
         const runId = "native-delayed-subagent-run";
         const baseClient = requireValue(backendGatewayClient(), "expected backend client");
@@ -65,13 +59,12 @@ describe("gateway accepted dispatch clock", () => {
           payloads: [{ text: "ok" }],
           meta: { durationMs: 100 },
         });
-        const createRunningTaskRunSpy = spyDetachedCreateRunningTaskRun();
         const prepared = createDeferred();
         const originalYield = agentHandlerHelpers.yieldAfterAgentAcceptedAck;
-        const advancePending = vi.runOnlyPendingTimersAsync.bind(vi);
+        const advancePending = vi.advanceTimersByTimeAsync.bind(vi);
         let pumps = 0;
-        const pump = vi.spyOn(vi, "runOnlyPendingTimersAsync").mockImplementation(async () => {
-          const advanced = await advancePending();
+        const pump = vi.spyOn(vi, "advanceTimersByTimeAsync").mockImplementation(async (ms) => {
+          const advanced = await advancePending(ms);
           // Release asynchronous preparation at the former final pump. Its acknowledgement
           // timer is now queued, but that pump's timer snapshot has already been drained.
           if (++pumps === 50) {
@@ -103,8 +96,8 @@ describe("gateway accepted dispatch clock", () => {
             },
           );
           await waitForAgentCommandCall();
-          expect(createRunningTaskRunSpy).not.toHaveBeenCalled();
-          expect(findTaskByRunId(runId)).toBeUndefined();
+          expect(mocks.agentCommand).toHaveBeenCalledOnce();
+          expect(respond.mock.calls[0]?.[1]).toMatchObject({ status: "accepted", runId });
         } finally {
           prepared.resolve();
           pump.mockRestore();

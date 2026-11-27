@@ -19,6 +19,7 @@ spec.loader.exec_module(client)
 # Independent constants from the verified installation and official SDK docs.
 VERIFIED_HASH = "759030a682c31ae71878ab71f1bf1560957ff89308c9de621d1b9bee4b9fcd80"
 VERIFIED_2702_HASH = "aa112c4e83bb63ae4fe88ef3fbc76aeba643cb7e1fcd3acdc12f00b4ac3d45b3"
+VERIFIED_2710_HASH = "2f61a1c60db2d51591fb8479a248a982a81658f136f1501a94733b7a81731c57"
 PRIVILEGED = b"531582ac-3dce-446f-8c26-dd7e3384dcf4"
 CURRENT_USER = b"4a5533a7-31c6-4d7a-a400-1f330dc57a9d"
 
@@ -30,8 +31,9 @@ class ExecReplaced(BaseException):
 class FakeSdk:
     """Enforce live-handle ownership at the external C API boundary."""
 
-    def __init__(self, exit_code=0, failure=None, stream=False, lookup_outcomes=()):
+    def __init__(self, exit_code=0, failure=None, stream=False, lookup_outcomes=(), exit_code_parameter=0x13e):
         self.exit_code = exit_code
+        self.exit_code_parameter = exit_code_parameter
         self.failure = failure
         self.stream = stream
         self.lookup_outcomes = lookup_outcomes
@@ -125,6 +127,9 @@ class FakeSdk:
             return self.create("job", "guest")
         if name == "PrlApi_CreateStringsList":
             return self.output(args[0], "strings")
+        if name == "PrlStrList_AddItem":
+            self.live(args[0], "strings")
+            return 0
         if name == "PrlVmGuest_RunProgram":
             self.live(args[0], "guest")
             self.live(args[2], "strings")
@@ -169,7 +174,7 @@ class FakeSdk:
             return self.output(args[1], "event")
         if name == "PrlEvent_GetParamByName":
             self.live(args[0], "event")
-            assert args[1] == 0x13e
+            assert args[1] == self.exit_code_parameter
             return self.output(args[2], "parameter")
         if name == "PrlEvtPrm_ToUint32":
             self.live(args[0], "parameter")
@@ -215,9 +220,9 @@ def boundaries(
 
 
 class ParallelsExecTests(unittest.TestCase):
-    def invoke(self, fake, args=None):
+    def invoke(self, fake, args=None, digest=VERIFIED_HASH):
         error = io.StringIO()
-        with boundaries(fake, args or ["--", "exec", "Synthetic VM", "/bin/true"]):
+        with boundaries(fake, args or ["--", "exec", "Synthetic VM", "/bin/true"], digest=digest):
             with redirect_stderr(error):
                 code = client.main()
             client.os.execvp.assert_not_called()
@@ -324,25 +329,49 @@ class ParallelsExecTests(unittest.TestCase):
     def test_passes_binary_stdin_and_separate_output_exit_through_process(self):
         code = """import runpy, sys
 fixture = runpy.run_path(sys.argv.pop(1))
-fake = fixture['FakeSdk'](exit_code=7, stream=True)
-with fixture['boundaries'](fake, ['--', 'exec', 'Synthetic VM', '/bin/cat']):
+windows = sys.argv.pop(1) == 'windows'
+fake = fixture['FakeSdk'](exit_code=256 if windows else 7, stream=True,
+                          exit_code_parameter=0x13d if windows else 0x13e)
+guest_args = ['--windows'] if windows else []
+digest = fixture['VERIFIED_2710_HASH'] if windows else fixture['VERIFIED_HASH']
+with fixture['boundaries'](fake, [*guest_args, '--', 'exec', 'Synthetic VM', 'synthetic-cat'], digest=digest):
     raise SystemExit(fixture['client'].main())
 """
         payload = b"first line\n\x00\xfflast line\n"
-        result = subprocess.run(
-            [sys.executable, "-B", "-c", code, str(Path(__file__).resolve())],
-            input=payload, capture_output=True, timeout=10, check=False,
-        )
-        self.assertEqual(result.returncode, 7)
-        self.assertEqual(result.stdout, payload)
-        self.assertEqual(result.stderr, b"guest-stderr\n")
+        for guest, expected_exit in [("posix", 7), ("windows", 255)]:
+            with self.subTest(guest=guest):
+                result = subprocess.run(
+                    [sys.executable, "-B", "-c", code, str(Path(__file__).resolve()), guest],
+                    input=payload, capture_output=True, timeout=10, check=False,
+                )
+                self.assertEqual(result.returncode, expected_exit)
+                self.assertEqual(result.stdout, payload)
+                expected_stderr = b"guest-stderr\n"
+                if guest == "windows":
+                    expected_stderr += b"[parallels-exec] Windows guest exit code 0x00000100\n"
+                self.assertEqual(result.stderr, expected_stderr)
+
+    def test_preserves_windows_startup_status_without_sdk_replay(self):
+        fake = FakeSdk(exit_code=0xc0000142, exit_code_parameter=0x13d)
+        code, error = self.invoke(fake, ["--windows", "--", "exec", "VM", "powershell.exe", "-EncodedCommand", "fixture"], digest=VERIFIED_2710_HASH)
+        self.assertEqual(code, 255)
+        self.assertEqual(error, "[parallels-exec] Windows guest exit code 0xc0000142\n")
+        self.assertEqual(len(fake.calls("PrlVmGuest_RunProgram")), 1)
+        fake.assert_released(self)
+
+    def test_windows_preserves_program_and_raw_arguments(self):
+        args = ["cmd.exe", "/d", "/s", "/c", '"C:\\Program Files\\Synthetic\\tool.cmd" "two words"']
+        fake = FakeSdk(exit_code=23, exit_code_parameter=0x13d)
+        self.assertEqual(self.invoke(fake, ["--windows", "--", "exec", "VM", "--current-user", *args], digest=VERIFIED_2710_HASH), (23, ""))
+        self.assertEqual(fake.calls("PrlVmGuest_RunProgram")[0][1], b"cmd.exe")
+        self.assertEqual([call[1] for call in fake.calls("PrlStrList_AddItem")], [arg.encode() for arg in args[1:]])
 
     def test_unsupported_hosts_or_hash_exec_original_arguments_without_sdk(self):
         argv = ["exec", "VM with spaces", "--user", "synthetic-user", "/bin/sh -c 'echo ready'"]
-        for system, machine, digest in [("Linux", "arm64", VERIFIED_HASH), ("Darwin", "x86_64", VERIFIED_HASH), ("Darwin", "arm64", "unrecognized")]:
+        for system, machine, digest, guest_args in [("Linux", "arm64", VERIFIED_HASH, []), ("Darwin", "x86_64", VERIFIED_HASH, []), ("Darwin", "arm64", "unrecognized", []), ("Darwin", "arm64", VERIFIED_HASH, ["--windows"]), ("Darwin", "arm64", VERIFIED_2710_HASH, [])]:
             with self.subTest(system=system, machine=machine, digest=digest):
                 fake = FakeSdk()
-                with boundaries(fake, ["--timeout-ms", "1000", "--", *argv], system, machine, digest):
+                with boundaries(fake, ["--timeout-ms", "1000", *guest_args, "--", *argv], system, machine, digest):
                     with self.assertRaises(ExecReplaced):
                         client.main()
                     client.os.execvp.assert_called_once_with("prlctl", ["prlctl", *argv])
@@ -369,13 +398,13 @@ with fixture['boundaries'](fake, ['--', 'exec', 'Synthetic VM', '/bin/cat']):
                 self.assertEqual(fake.events, [])
 
     def test_selected_default_cli_or_wrapper_can_use_verified_sdk(self):
-        for digest in [VERIFIED_HASH, VERIFIED_2702_HASH]:
+        for digest, parameter, guest_args in [(VERIFIED_HASH, 0x13e, []), (VERIFIED_2702_HASH, 0x13e, []), (VERIFIED_2710_HASH, 0x13d, ["--windows"])]:
             for executable in ["prlctl", "parallels_wrapper"]:
                 with self.subTest(digest=digest, executable=executable):
                     resolved = f"/Applications/Parallels Desktop.app/Contents/MacOS/{executable}"
-                    fake = FakeSdk()
-                    with boundaries(fake, ["--", "exec", "VM", "true"], digest=digest, resolved=resolved):
-                        self.assertEqual(client.main(), 0)
+                    fake = FakeSdk(exit_code=7, exit_code_parameter=parameter)
+                    with boundaries(fake, [*guest_args, "--", "exec", "VM", "true"], digest=digest, resolved=resolved):
+                        self.assertEqual(client.main(), 7)
                         client.shutil.which.assert_called_once_with("prlctl")
                         Path.resolve.assert_called_once_with(strict=True)
                         client.os.execvp.assert_not_called()

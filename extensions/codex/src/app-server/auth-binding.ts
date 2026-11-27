@@ -2,11 +2,7 @@ import {
   fingerprintResolvedAuthProfileCredential,
   type AgentHarnessAuthBindingFingerprintParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  resolveApiKeyForProfile,
-  type AuthProfileCredential,
-  type AuthProfileStore,
-} from "openclaw/plugin-sdk/agent-runtime";
+import { resolveApiKeyForProfile, type AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveOpenAICodexAuthIdentity } from "openclaw/plugin-sdk/provider-auth";
 import {
   isCodexResponsesOAuthCredential,
@@ -17,23 +13,6 @@ type CodexAppServerPreparedAuthBinding = {
   authProfileStore: AuthProfileStore;
   fingerprint: string;
 };
-
-function withMaterializedCredential(params: {
-  store: AuthProfileStore;
-  profileId: string;
-  credential: AuthProfileCredential;
-  value: string;
-}): AuthProfileStore {
-  const store = structuredClone(params.store);
-  if (params.credential.type === "api_key") {
-    const { keyRef: _keyRef, ...credential } = params.credential;
-    store.profiles[params.profileId] = { ...credential, key: params.value };
-  } else if (params.credential.type === "token") {
-    const { tokenRef: _tokenRef, ...credential } = params.credential;
-    store.profiles[params.profileId] = { ...credential, token: params.value };
-  }
-  return store;
-}
 
 /** Resolves one forwarded profile once so attestation and execution share exact material. */
 export async function prepareCodexAppServerAuthBinding(
@@ -97,15 +76,15 @@ export async function prepareCodexAppServerAuthBinding(
       `Codex could not attest auth profile "${params.authProfileId}". Re-select the OpenAI profile and retry.`,
     );
   }
-  return {
-    fingerprint,
-    authProfileStore: withMaterializedCredential({
-      store: params.authProfileStore,
-      profileId: params.authProfileId,
-      credential,
-      value: resolved.apiKey,
-    }),
-  };
+  const store = structuredClone(params.authProfileStore);
+  if (credential.type === "api_key") {
+    const { keyRef: _keyRef, ...materialized } = credential;
+    store.profiles[params.authProfileId] = { ...materialized, key: resolved.apiKey };
+  } else {
+    const { tokenRef: _tokenRef, ...materialized } = credential;
+    store.profiles[params.authProfileId] = { ...materialized, token: resolved.apiKey };
+  }
+  return { fingerprint, authProfileStore: store };
 }
 
 export async function fingerprintCodexAppServerAuthBinding(

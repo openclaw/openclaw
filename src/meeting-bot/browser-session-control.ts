@@ -1,4 +1,6 @@
-import { runMeetingBrowserAct } from "./browser-act-lock.js";
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { sleep } from "../utils/sleep.js";
+import { evaluateMeetingBrowser, runMeetingBrowserAct } from "./browser-act-lock.js";
 import { asMeetingBrowserTabs } from "./browser-request.js";
 import type {
   MeetingBrowserRequestCaller,
@@ -11,19 +13,14 @@ import type {
 } from "./session-types.js";
 
 type BrowserAdapter<
-  Session,
-  Mode extends string,
-  Health extends MeetingBrowserHealth,
-  Transcript extends MeetingTranscriptSnapshot,
+  Session = never,
+  Mode extends string = string,
+  Health extends MeetingBrowserHealth = MeetingBrowserHealth,
+  Transcript extends MeetingTranscriptSnapshot = MeetingTranscriptSnapshot,
 > = Pick<MeetingPlatformAdapter<Session, Mode, Health, Transcript>, "browser" | "browserLabel">;
 
-async function leaveMeetingInPage<
-  Session,
-  Mode extends string,
-  Health extends MeetingBrowserHealth,
-  Transcript extends MeetingTranscriptSnapshot,
->(params: {
-  adapter: BrowserAdapter<Session, Mode, Health, Transcript>;
+async function leaveMeetingInPage(params: {
+  adapter: BrowserAdapter;
   callBrowser: MeetingBrowserRequestCaller;
   meetingSessionId?: string;
   meetingUrl: string;
@@ -32,7 +29,6 @@ async function leaveMeetingInPage<
 }): Promise<{
   departed: boolean;
   clickedLeave: boolean;
-  clickedConfirmation: boolean;
   ownershipRetained?: boolean;
   sessionConflict?: boolean;
   sessionMatched?: boolean;
@@ -40,7 +36,6 @@ async function leaveMeetingInPage<
 }> {
   const deadline = performance.now() + params.timeoutMs;
   let clickedLeave = false;
-  let clickedConfirmation = false;
   let ownershipRetained = false;
   do {
     const remainingMs = Math.floor(deadline - performance.now());
@@ -64,14 +59,12 @@ async function leaveMeetingInPage<
     });
     const step = params.adapter.browser.parseLeaveResult(evaluated);
     clickedLeave ||= step.leaveAction === "leave";
-    clickedConfirmation ||= step.leaveAction === "confirm";
     if (step.sessionMatched === false) {
       const stepOwnershipRetained = clickedLeave && step.sessionConflict !== true;
       if (step.departed || !stepOwnershipRetained) {
         return {
           departed: stepOwnershipRetained ? step.departed : false,
           clickedLeave,
-          clickedConfirmation,
           ownershipRetained: stepOwnershipRetained,
           sessionConflict: step.sessionConflict,
           sessionMatched: false,
@@ -84,24 +77,20 @@ async function leaveMeetingInPage<
       return {
         departed: step.departed,
         clickedLeave,
-        clickedConfirmation,
         ...(ownershipRetained && step.sessionConflict !== true ? { ownershipRetained: true } : {}),
         urlMatched: step.urlMatched,
       };
     }
     if (!step.leaveAction && !clickedLeave) {
-      return { departed: false, clickedLeave, clickedConfirmation, urlMatched: true };
+      return { departed: false, clickedLeave, urlMatched: true };
     }
     if (!step.leaveAction) {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 100);
-      });
+      await sleep(100);
     }
   } while (performance.now() < deadline);
   return {
     departed: false,
     clickedLeave,
-    clickedConfirmation,
     ...(ownershipRetained ? { ownershipRetained: true, sessionMatched: false } : {}),
     urlMatched: true,
   };
@@ -185,9 +174,7 @@ export async function leaveMeetingWithBrowser<
     } catch (error) {
       return {
         left: false,
-        note: `Browser control could not verify the ${params.adapter.browserLabel} tab before leaving: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        note: `Browser control could not verify the ${params.adapter.browserLabel} tab before leaving: ${coerceErrorMessage(error)}`,
       };
     }
     if (leaveResult.urlMatched === false) {
@@ -232,9 +219,7 @@ export async function leaveMeetingWithBrowser<
   } catch (error) {
     return {
       left: false,
-      note: `Browser control could not leave the ${params.adapter.browserLabel} tab: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      note: `Browser control could not leave the ${params.adapter.browserLabel} tab: ${coerceErrorMessage(error)}`,
     };
   }
 }
@@ -253,23 +238,15 @@ export async function readMeetingTranscriptWithBrowser<
   tab: MeetingBrowserTab;
   timeoutMs: number;
 }): Promise<Transcript> {
-  const result = await runMeetingBrowserAct({
+  const result = await evaluateMeetingBrowser({
+    callBrowser: params.callBrowser,
     deadline: performance.now() + Math.max(1, params.timeoutMs),
     targetId: params.tab.targetId,
-    operation: async (remainingMs) =>
-      await params.callBrowser({
-        method: "POST",
-        path: "/act",
-        body: {
-          kind: "evaluate",
-          targetId: params.tab.targetId,
-          fn: params.adapter.browser.captions.buildTranscriptScript({
-            finalize: params.finalize,
-            meetingSessionId: params.meetingSessionId,
-            meetingUrl: params.meetingUrl,
-          }),
-        },
-        timeoutMs: remainingMs,
+    script: () =>
+      params.adapter.browser.captions.buildTranscriptScript({
+        finalize: params.finalize,
+        meetingSessionId: params.meetingSessionId,
+        meetingUrl: params.meetingUrl,
       }),
   });
   const snapshot = params.adapter.browser.captions.parseTranscript(result);

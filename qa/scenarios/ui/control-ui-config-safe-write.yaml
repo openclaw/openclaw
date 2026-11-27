@@ -28,7 +28,7 @@ scenario:
   codeRefs:
     - ui/src/e2e/config-safe-write.e2e.test.ts
     - ui/src/lib/config/config-write-coordinator.ts
-    - ui/src/components/settings-save-indicator.ts
+    - ui/src/components/settings-save-indicator.tsx
   execution:
     kind: playwright
     path: ui/src/e2e/config-safe-write.e2e.test.ts

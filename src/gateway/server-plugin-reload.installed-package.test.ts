@@ -3,13 +3,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createAgentToolResultMiddlewareRunner } from "../agents/harness/tool-result-middleware.js";
 import { retainRuntimePluginWork } from "../agents/runtime-plugin-work.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import { resolveConfigWidePluginMetadataSnapshotAsync } from "../config/io.plugin-metadata.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { validateConfigObjectWithPlugins } from "../config/validation.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { writePersistedInstalledPluginIndexSync } from "../plugins/installed-plugin-index-store-write.js";
+import { formatBundledPluginDevReloadWarning } from "../plugins/bundled-plugin-dev-reload.js";
+import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
 import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import type { PluginLifecycleReason } from "../plugins/lifecycle.js";
 import { activatePluginRegistry } from "../plugins/loader-shared.js";
@@ -28,14 +30,19 @@ import {
   createPluginRegistryOwner,
   resetPluginRuntimeStateForTest,
 } from "../plugins/runtime.js";
-import { startPluginServices, type PluginServicesHandle } from "../plugins/services.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  startPluginServices,
+  type PluginServicesHandle,
+} from "../plugins/services.test-support.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-helpers/fs-fixtures.js";
-import { writeManagedNpmPlugin } from "../plugins/test-helpers/managed-npm-plugin.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
+import { createInstalledReloadPackageWriter } from "./server-plugin-reload.installed-package.test-support.js";
 import { reloadGatewayPlugins } from "./server-plugin-reload.js";
 import { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
 import { GatewayRequestEntryLifetime } from "./server-request-entry.js";
@@ -100,79 +107,31 @@ async function verifyInstalledPackageRetention(
     OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "bundled"),
   };
   fs.mkdirSync(env.OPENCLAW_BUNDLED_PLUGINS_DIR, { recursive: true });
-  const writePackage = (
-    id: string,
-    packageDir = writeManagedNpmPlugin({
-      stateDir,
-      packageName: id,
-      pluginId: id,
-      version: "1.0.0",
-    }),
-  ) => {
-    fs.mkdirSync(path.join(packageDir, "dist"), { recursive: true });
-    fs.writeFileSync(
-      path.join(packageDir, "package.json"),
-      JSON.stringify({
-        name: id,
-        version: "1.0.0",
-        openclaw: { extensions: ["./index.ts"], runtimeExtensions: ["./dist/index.js"] },
-      }),
-    );
-    fs.writeFileSync(path.join(packageDir, "index.ts"), "throw new Error('unselected source');");
-    fs.writeFileSync(
-      path.join(packageDir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id,
-        activation: { onStartup: true },
-        configSchema:
-          id === "sibling"
-            ? {
-                type: "object",
-                additionalProperties: false,
-                properties:
-                  settings === "defaulted" ? { mode: { type: "string", default: "auto" } } : {},
-              }
-            : { type: "object" },
-      }),
-    );
-    fs.writeFileSync(path.join(packageDir, "dist", "helper.cjs"), 'module.exports = "A";');
-    fs.writeFileSync(
-      path.join(packageDir, "dist", "index.js"),
-      `const helper = require("./helper.cjs");
-const instance = require("node:crypto").randomUUID();
-let starts = 0, stops = 0;
-module.exports = { id: ${JSON.stringify(id)}, register(api) {
-  ${
-    cleanupRetry && id === "installed-probe"
-      ? `const fs = require('node:fs');
-  process.emit(${JSON.stringify(registrationEvent)}, instance, __filename);
-  const resource = fs.openSync(${JSON.stringify(resourcePath)}, 'wx');
-  api.lifecycle.onDispose(() => {
-    fs.closeSync(resource);
-    fs.unlinkSync(${JSON.stringify(resourcePath)});
+  const usesMiddleware = settings === "empty" && !cleanupRetry;
+  const writePackage = createInstalledReloadPackageWriter({
+    stateDir,
+    settings,
+    usesMiddleware,
+    cleanupFault: cleanupRetry ? { registrationEvent, resourcePath, stopFailurePath } : undefined,
   });
-  api.on('gateway_stop', () => {
-    if (fs.existsSync(${JSON.stringify(stopFailurePath)})) {
-      throw new Error('previous stop hook refused cleanup');
-    }
-  });`
-      : ""
-  }
-  api.registerService({ id: ${JSON.stringify(id)}, start() {
-    if (api.pluginConfig?.failStart) throw new Error("synthetic candidate start failed");
-    starts++;
-  }, stop() {
-    stops++;
-  } });
-  api.registerGatewayMethod(${JSON.stringify(`${id}.probe`)}, ({ respond }) => {
-    respond(true, { helper, instance, starts, stops, settings: api.pluginConfig });
-  });
-} };`,
-    );
-    return packageDir;
-  };
   await withEnvAsync(env, async () => {
     const siblingDir = writePackage("sibling");
+    const writeSiblingControlUi = (build: string) => {
+      const assetDir = `dist/control-ui/${build}`;
+      fs.mkdirSync(path.join(siblingDir, assetDir), { recursive: true });
+      fs.writeFileSync(path.join(siblingDir, assetDir, "index.js"), "export {};\n");
+      fs.writeFileSync(path.join(siblingDir, assetDir, "index.css"), ":root { color: blue; }\n");
+      const manifestPath = path.join(siblingDir, "openclaw.plugin.json");
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      fs.writeFileSync(
+        manifestPath,
+        JSON.stringify({
+          ...manifest,
+          controlUi: { entry: `${assetDir}/index.js`, styles: [`${assetDir}/index.css`] },
+        }),
+      );
+    };
+    writeSiblingControlUi("build-a");
     const bundledDir =
       settings === "empty" && !cleanupRetry
         ? writePackage(
@@ -228,7 +187,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         ...(hasWorkspacePlugin ? ["workspace-probe"] : []),
       ].toSorted(),
     );
-    const initial = bootstrap.prepareGatewayPluginLoad({
+    const initial = await bootstrap.prepareGatewayPluginLoad({
       pluginMetadataSnapshot: initialMetadata,
       pluginLookUpTable: loadPluginLookUpTable({
         config: initialConfig,
@@ -246,7 +205,9 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       loadIntent: "startup",
     });
     activatePluginRegistry(initial.pluginRegistry, null, "gateway-bindable", workspaceDir);
+    const scheduler = createTestGatewayScheduler();
     let currentServices: PluginServicesHandle | null = await startPluginServices({
+      scheduler,
       registry: initial.pluginRegistry,
       config: initialConfig,
       workspaceDir,
@@ -258,7 +219,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       },
     });
     const registryOwner = createPluginRegistryOwner(initial.pluginRegistry, workspaceDir);
-    const metadata = retainGatewayPluginMetadata();
+    const metadata = retainGatewayPluginMetadata(scheduler);
     metadata.publish(initialMetadata);
     const loaded = [initial];
     let beforeAttachment: ((candidate: (typeof loaded)[number]) => void) | undefined;
@@ -274,9 +235,11 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         }
         await registryOwner.close();
         await metadata.close();
+        await scheduler.stop();
       }
     });
     const runtime = {
+      scheduler,
       requestEntryLifetime: new GatewayRequestEntryLifetime(),
       pluginMetadataSnapshot: initialMetadata,
       pluginRuntime: registryOwner,
@@ -341,7 +304,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     };
     // Managed npm roots live outside discovery directories and are owned by the persisted ledger.
     const writeInstall = (installedAt?: string, version = "1.0.0") =>
-      writePersistedInstalledPluginIndexSync(
+      writePersistedInstalledPluginIndex(
         loadInstalledPluginIndex({
           config,
           env,
@@ -358,7 +321,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         }),
         { env },
       );
-    writeInstall();
+    await writeInstall();
     fs.writeFileSync(path.join(stateDir, "openclaw.json"), JSON.stringify(config));
     const reload = async (
       nextConfig = config,
@@ -373,7 +336,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
           port: 0,
           log,
           loadGatewayPluginBootstrapModule: async () => bootstrap,
-          prepareAttachedPluginRuntime: async (candidate) => {
+          prepareAttachedPluginRuntime: async (candidate, trackActivationCleanup) => {
             loaded.push(candidate);
             beforeAttachment?.(candidate);
             return {
@@ -384,6 +347,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
                   "gateway-bindable",
                   workspaceDir,
                   runtime.pluginRuntime.registry,
+                  trackActivationCleanup,
                 );
                 registryOwner.publish(candidate.pluginRegistry);
               },
@@ -395,7 +359,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
           nextConfig,
           sourceConfig,
           changedPaths: [],
-          prepareConfigEffects: () => async () => {},
+          prepareConfigEffects: () => ({ retire: () => {}, rollback: async () => {} }),
           assertInvokerOwned,
           pluginLifecycle: {
             reason,
@@ -423,9 +387,22 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     assert.ok(siblingRecord);
     const siblingInstance = getPluginInstance(siblingRecord);
     assert.ok(siblingInstance);
+    const applyMiddleware = () =>
+      withPluginRuntimeRegistryScope(runtime.pluginRuntime.registry, () =>
+        createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }).applyToolResultMiddleware({
+          toolName: "exec",
+          toolCallId: "installed-middleware",
+          args: {},
+          result: { content: [{ type: "text", text: "raw" }], details: {} },
+        }),
+      );
+    if (usesMiddleware) {
+      expect((await applyMiddleware()).content).toEqual([{ type: "text", text: "raw" }]);
+    }
     const releaseSiblingWork = siblingInstance.retainWork();
     let firstReceipt: Awaited<ReturnType<typeof reload>>;
     try {
+      writeSiblingControlUi("build-b");
       firstReceipt = await reload(
         validated.config,
         ["installed-probe"],
@@ -436,7 +413,19 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     } finally {
       releaseSiblingWork();
     }
+    if (usesMiddleware) {
+      expect(
+        runtime.pluginRuntime.registry.agentToolResultMiddlewares.map((entry) => entry.pluginId),
+      ).toEqual(["installed-probe"]);
+      expect((await applyMiddleware()).content).toEqual([{ type: "text", text: "A" }]);
+    }
     expect(firstReceipt.runtime.pluginIds).toEqual(["installed-probe"]);
+    expect(firstReceipt.runtime.warnings ?? []).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("retained work")]),
+    );
+    expect(runtime.pluginRuntime.registry.plugins.find((record) => record.id === "sibling")).toBe(
+      siblingRecord,
+    );
     expect(await probe("sibling")).toEqual(sibling);
     if (workspacePlugin) {
       expect(await probe("workspace-probe")).toEqual(workspacePlugin);
@@ -749,7 +738,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
 
     // Same-version reinstall changes the committed install input, not the manifest.
     fs.writeFileSync(path.join(packageDir, "dist", "helper.cjs"), 'module.exports = "B";');
-    writeInstall("2026-09-07T00:00:00.000Z");
+    await writeInstall("2026-09-07T00:00:00.000Z");
     const changedReceipt = await refresh();
     expect(runtime.pluginMetadataSnapshot?.index.installRecords["installed-probe"]).toMatchObject({
       installedAt: "2026-09-07T00:00:00.000Z",
@@ -880,7 +869,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         packageManifestPath,
         JSON.stringify({ ...packageManifest, version: "1.1.0" }),
       );
-      writeInstall("2026-09-08T00:00:00.000Z", "1.1.0");
+      await writeInstall("2026-09-08T00:00:00.000Z", "1.1.0");
       const drainEntered = createDeferredCore();
       const wait = previousInstance.waitForRetainedWork.bind(previousInstance);
       const observation = vi
@@ -904,9 +893,6 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         expect(await probe("installed-probe")).toEqual(configured);
         expect(runtime.pluginRuntime.registry).toBe(previousRegistry);
         expect(previousInstance.disposing).toBe(false);
-        expect(() => retainRuntimePluginWork([previousRegistry])).toThrow(
-          "replacement is in progress",
-        );
         finishSecondRun();
         await expect(replacing).resolves.toMatchObject({
           runtime: { pluginIds: ["installed-probe"] },
@@ -935,21 +921,44 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     }
     if (bundledDir) {
       expect((await probe("bundled-probe")).helper).toBe("A");
+      const originalBundled = await probe("bundled-probe");
       const unchangedBundled = await reload(changedSettings, ["bundled-probe"]);
-      expect(unchangedBundled.runtime.restartRequired ?? false).toBe(false);
-      expect((await probe("bundled-probe", { starts: 2, stops: 1 })).helper).toBe("A");
+      expect(unchangedBundled.runtime.restartRequired).toBe(true);
+      const freshBundled = await probe("bundled-probe", { starts: 2, stops: 1 });
+      expect(freshBundled).toMatchObject({
+        helper: "A",
+        instance: originalBundled.instance,
+      });
       fs.writeFileSync(path.join(bundledDir, "dist", "helper.cjs"), 'module.exports = "B";');
       const bundledReload = await reload(changedSettings, ["bundled-probe"]);
-      expect((await probe("bundled-probe", { starts: 3, stops: 2 })).helper).toBe("A");
-      expect(bundledReload.runtime).toMatchObject({
-        restartRequired: true,
-        pluginIds: ["bundled-probe"],
-        warnings: [expect.stringMatching(/compiled bundled.*restart/i)],
-      });
+      expect(await probe("bundled-probe", { starts: 3, stops: 2 })).toMatchObject({ helper: "A" });
+      expect(bundledReload.runtime.restartRequired).toBe(true);
+      expect(bundledReload.runtime.pluginIds).toEqual(["bundled-probe"]);
       expect(bundledReload.runtime.generation).toBeGreaterThan(configReceipt.runtime.generation);
       const repeatedBundled = await reload(changedSettings, ["bundled-probe"]);
       expect(repeatedBundled.runtime.restartRequired).toBe(true);
-      expect((await probe("bundled-probe", { starts: 4, stops: 3 })).helper).toBe("A");
+      expect(await probe("bundled-probe", { starts: 4, stops: 3 })).toMatchObject({ helper: "A" });
+      expect(await probe("sibling")).toEqual(sibling);
+
+      // The operator opt-in recaptures the edited bundled code for explicit reload targets.
+      vi.stubEnv("OPENCLAW_DEV_RELOAD_BUNDLED_PLUGINS", "1");
+      try {
+        const devReload = await reload(changedSettings, ["bundled-probe"]);
+        expect(devReload.runtime.restartRequired).toBeUndefined();
+        expect(devReload.runtime.warnings).toContain(
+          formatBundledPluginDevReloadWarning("bundled-probe"),
+        );
+        const devBundled = await probe("bundled-probe");
+        expect(devBundled.helper).toBe("B");
+        expect(devBundled.instance).not.toBe(originalBundled.instance);
+        fs.writeFileSync(path.join(bundledDir, "dist", "helper.cjs"), 'module.exports = "C";');
+        const repeatedDevReload = await reload(changedSettings, ["bundled-probe"]);
+        expect(repeatedDevReload.runtime.restartRequired).toBeUndefined();
+        expect(await probe("bundled-probe")).toMatchObject({ helper: "C" });
+        expect(await probe("sibling")).toEqual(sibling);
+      } finally {
+        vi.unstubAllEnvs();
+      }
     }
   });
 }

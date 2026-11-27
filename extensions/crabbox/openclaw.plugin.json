@@ -21,6 +21,7 @@
   "commandAliases": [{ "name": "crabbox", "kind": "cli" }],
   "contracts": {
     "workerProviders": ["crabbox"],
+    "workerProfileSuggestions": ["crabbox"],
     "tools": ["crabbox"]
   },
   "skills": ["./skills"],

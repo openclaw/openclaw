@@ -1,11 +1,31 @@
-import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
+import type { TranscriptDisplayTurn } from "./speaker-labels.js";
+import type { TranscriptSessionDescriptor, TranscriptsSummary } from "./types.js";
+
+export type TranscriptReadEntry = {
+  session: TranscriptSessionDescriptor;
+  selector: string;
+  hasSummary: boolean;
+  utteranceCount: number;
+  participants: string[];
+  overview: string | undefined;
+  summarySource: TranscriptsSummary["source"] | undefined;
+  updatedAt: string;
+  lastUtteranceAt: string | null;
+};
+
+export type TranscriptReadNotes = {
+  summary?: Omit<TranscriptsSummary, "transcript">;
+  markdown?: string;
+};
 
 export type TranscriptSummarySnapshot = {
+  hasSpeakerAliases?: boolean;
   inputRevision: string;
   nextSequence: number;
   stoppedAt?: string;
   summaryRevision: string;
-  utterances: TranscriptUtterance[];
+  turns: TranscriptDisplayTurn[];
+  utteranceCount: number;
 };
 
 export type TranscriptSummaryWriteGuard = Pick<
@@ -27,7 +47,6 @@ export type MaterializedTranscriptArtifacts = {
   sessionDir: string;
   metadataPath: string;
   transcriptPath: string;
-  summaryJsonPath: string;
   summaryPath: string;
   hasSummary: boolean;
 };

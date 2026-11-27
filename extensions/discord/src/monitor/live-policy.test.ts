@@ -17,10 +17,17 @@ vi.mock("./provider.allowlist.js", () => ({
 }));
 
 type ResolvedAllowlist = Awaited<ReturnType<typeof resolveDiscordAllowlistConfig>>;
+type DiscordConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["discord"]>;
 const publish = (cfg: OpenClawConfig) => setRuntimeConfigSnapshot(cfg, cfg);
-const config = (allowFrom: string[]): OpenClawConfig => ({
-  channels: { discord: { token: "synthetic-token", allowFrom, dmPolicy: "allowlist" } },
+const config = (allowFrom: string[], overrides: DiscordConfig = {}): OpenClawConfig => ({
+  channels: {
+    discord: { token: "synthetic-token", allowFrom, dmPolicy: "allowlist", ...overrides },
+  },
 });
+const reader = (
+  cfg: OpenClawConfig,
+  options: Partial<Parameters<typeof createDiscordLivePolicyReader>[0]> = {},
+) => createDiscordLivePolicyReader({ cfg, accountId: "default", ...options });
 
 beforeEach(() => {
   mocks.resolveAllowlist.mockReset();
@@ -37,13 +44,7 @@ describe("Discord live account policy", () => {
     publish(cfg);
     const readConfig = createRuntimeConfigReader(cfg);
     const startup = createDeferred<ResolvedAllowlist>();
-    const start = async () =>
-      createDiscordLivePolicyReader({
-        cfg,
-        accountId: "default",
-        readConfig,
-        resolvedAllowlist: await startup.promise,
-      });
+    const start = async () => reader(cfg, { readConfig, resolvedAllowlist: await startup.promise });
     const pending = start();
     publish(config(["published-during-startup"]));
     startup.resolve({ guildEntries: undefined, allowFrom: ["old-resolved-id"] });
@@ -54,19 +55,14 @@ describe("Discord live account policy", () => {
   });
 
   it("preserves prepared named-account policy until an authored policy changes", async () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        discord: {
-          token: "synthetic-token",
-          dmPolicy: "disabled",
-          allowFrom: ["root"],
-          accounts: { work: { dmPolicy: "allowlist", allowFrom: ["configured-name"] } },
-        },
-      },
-    };
+    const namedConfig = (allowFrom: string[]) =>
+      config(["root"], {
+        dmPolicy: "disabled",
+        accounts: { work: { dmPolicy: "allowlist", allowFrom } },
+      });
+    const cfg = namedConfig(["configured-name"]);
     publish(cfg);
-    const read = createDiscordLivePolicyReader({
-      cfg,
+    const read = reader(cfg, {
       accountId: "work",
       token: "synthetic-token",
       discordConfig: {
@@ -90,15 +86,7 @@ describe("Discord live account policy", () => {
     expect(await read()).toMatchObject({ dmEnabled: false, allowFrom: ["222"] });
     expect(mocks.resolveAllowlist).not.toHaveBeenCalled();
 
-    const cleared: OpenClawConfig = {
-      channels: {
-        discord: {
-          ...cfg.channels?.discord,
-          accounts: { work: { dmPolicy: "allowlist", allowFrom: [] } },
-        },
-      },
-    };
-    publish(cleared);
+    publish(namedConfig([]));
     expect(preparedPolicy.isCurrent()).toBe(false);
     expect(await read()).toMatchObject({ dmEnabled: true, allowFrom: [] });
     mocks.resolveAllowlist.mockResolvedValueOnce({ guildEntries: undefined, allowFrom: ["333"] });
@@ -114,7 +102,7 @@ describe("Discord live account policy", () => {
     mocks.resolveAllowlist.mockReturnValueOnce(first.promise).mockReturnValueOnce(next.promise);
     const cfg = config(["first-name"]);
     publish(cfg);
-    const read = createDiscordLivePolicyReader({ cfg, accountId: "default" });
+    const read = reader(cfg);
     const firstRead = read();
     const sameRevisionRead = read();
     expect(mocks.resolveAllowlist).toHaveBeenCalledTimes(1);
@@ -138,9 +126,7 @@ describe("Discord live account policy", () => {
     mocks.resolveAllowlist.mockReturnValueOnce(next.promise).mockReturnValueOnce(reverted.promise);
     const cfg = config(["original-name"]);
     publish(cfg);
-    const read = createDiscordLivePolicyReader({
-      cfg,
-      accountId: "default",
+    const read = reader(cfg, {
       resolvedAllowlist: { guildEntries: undefined, allowFrom: ["prepared-id"] },
     });
     const initialRead = read();
@@ -161,11 +147,7 @@ describe("Discord live account policy", () => {
     const cfg = config(["pending-name"]);
     publish(cfg);
     const abort = new AbortController();
-    const read = createDiscordLivePolicyReader({
-      cfg,
-      accountId: "default",
-      abortSignal: abort.signal,
-    });
+    const read = reader(cfg, { abortSignal: abort.signal });
     const pending = read();
     abort.abort();
     resolution.resolve({ guildEntries: undefined, allowFrom: ["resolved-id"] });
@@ -175,7 +157,7 @@ describe("Discord live account policy", () => {
   it("keeps explicitly scoped configuration independent of another runtime", async () => {
     publish(config(["global"]));
     const scoped = config(["scoped"]);
-    const read = createDiscordLivePolicyReader({ cfg: scoped, accountId: "default" });
+    const read = reader(scoped);
     expect((await read()).allowFrom).toEqual(["scoped"]);
     publish(config(["different-global"]));
     expect((await read()).cfg).toBe(scoped);

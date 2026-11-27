@@ -28,10 +28,6 @@ extension OnboardingAISetupModel {
             self.configuredGatewayBlocker != nil ||
             self.waitingForPendingActivationDeadline
         else { return }
-        self.enterGatewayAuthBlocker(issue)
-    }
-
-    func enterGatewayAuthBlocker(_ issue: RemoteGatewayAuthIssue) {
         self.enterConfiguredGatewayBlocker(.authentication(issue))
     }
 }

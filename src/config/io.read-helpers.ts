@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,8 +7,10 @@ import { normalizeNullableString } from "@openclaw/normalization-core/string-coe
 import JSON5 from "json5";
 import { sha256Hex } from "../infra/crypto-digest.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { collectErrorGraphCandidates, extractErrorCode } from "../infra/errors.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { projectUpdateRehearsalDatabaseConfig } from "../infra/update-rehearsal-paths.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { applyConfigEnvVars, cloneEnvWithPlatformSemantics } from "./config-env-vars.js";
 import { type EnvSubstitutionWarning, resolveConfigEnvVars } from "./env-substitution.js";
@@ -24,6 +27,7 @@ import type {
   NormalizedConfigIoDeps,
   ParseConfigJson5Result,
 } from "./io.read.types.js";
+import { normalizeLegacyWorkboardDatabaseConfig } from "./legacy-workboard-database.js";
 import { resolveConfigPath, resolveIncludeRoots, resolveStateDir } from "./paths.js";
 import { createConfigResolutionFacts, type ConfigResolutionFacts } from "./resolution-facts.js";
 import type { OpenClawConfig } from "./types.js";
@@ -32,6 +36,33 @@ export function hashConfigRaw(raw: string | null): string {
   // Present-file hashes stay compatible with last-known-good recovery metadata.
   // Missing needs a distinct token so optimistic writes reject missing-to-empty races.
   return raw === null ? hashConfigIncludeRaw(null) : sha256Hex(raw);
+}
+
+export function hashConfigRevision(
+  raw: string,
+  includeFileHashes: Record<string, string>,
+  includeFileTargets: Record<string, string>,
+): string {
+  const revision = createHash("sha256").update(raw);
+  for (const [includePath, includeHash] of Object.entries(includeFileHashes)) {
+    revision.update(JSON.stringify([includePath, includeFileTargets[includePath], includeHash]));
+  }
+  return revision.digest("hex");
+}
+
+export function readConfigFileIfPresent(
+  deps: Pick<NormalizedConfigIoDeps, "fs">,
+  configPath: string,
+): string | undefined {
+  try {
+    return deps.fs.readFileSync(configPath, "utf-8");
+  } catch (error) {
+    // existsSync also hides inaccessible parents; only ENOENT establishes absence.
+    if (hasErrnoCode(error, "ENOENT")) {
+      return undefined;
+    }
+    throw error;
+  }
 }
 
 export function resolveConfigSnapshotHash(snapshot: {
@@ -56,16 +87,27 @@ export function resolveGatewayMode(value: unknown): string | null {
 }
 
 export function containsConfigIncludeDirective(value: unknown): boolean {
-  if (Array.isArray(value)) {
-    return value.some((item) => containsConfigIncludeDirective(item));
+  // Avoid call-stack limits from recursive traversal or spreading large arrays.
+  const stack: unknown[] = [value];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (Array.isArray(current)) {
+      for (const item of current) {
+        stack.push(item);
+      }
+      continue;
+    }
+    if (!isRecord(current)) {
+      continue;
+    }
+    if (INCLUDE_KEY in current) {
+      return true;
+    }
+    for (const child of Object.values(current)) {
+      stack.push(child);
+    }
   }
-  if (!isRecord(value)) {
-    return false;
-  }
-  if (INCLUDE_KEY in value) {
-    return true;
-  }
-  return Object.values(value).some((item) => containsConfigIncludeDirective(item));
+  return false;
 }
 
 export function resolveConfigPathForDeps(deps: NormalizedConfigIoDeps): string {
@@ -79,11 +121,11 @@ export function normalizeConfigIoDeps(overrides: ConfigIoDeps = {}): NormalizedC
   const env = overrides.env ?? process.env;
   return {
     fs: overrides.fs ?? fs,
-    json5: overrides.json5 ?? JSON5,
     env,
     lowerPrecedenceEnv: overrides.lowerPrecedenceEnv ?? {},
     homedir: overrides.homedir ?? (() => resolveRequiredHomeDir(env, os.homedir)),
     configPath: overrides.configPath ?? "",
+    mapIncludePath: overrides.mapIncludePath ?? ((absolutePath) => absolutePath),
     logger: overrides.logger ?? console,
     measure: overrides.measure ?? (async (_name, run) => await run()),
     suppressFutureVersionWarning:
@@ -94,12 +136,9 @@ export function normalizeConfigIoDeps(overrides: ConfigIoDeps = {}): NormalizedC
   };
 }
 
-export function parseConfigJson5(
-  raw: string,
-  json5: { parse: (value: string) => unknown } = JSON5,
-): ParseConfigJson5Result {
+export function parseConfigJson5(raw: string): ParseConfigJson5Result {
   try {
-    return { ok: true, parsed: parseJsonWithJson5Fallback(raw, json5) };
+    return { ok: true, parsed: parseJsonWithJson5Fallback(raw, JSON5) };
   } catch (err) {
     return { ok: false, error: String(err) };
   }
@@ -113,17 +152,6 @@ function isPathLikeConfigKey(key: string | undefined): boolean {
   return Boolean(key && (PATH_LIKE_CONFIG_KEY_RE.test(key) || PATH_LIKE_CONFIG_LIST_KEYS.has(key)));
 }
 
-function expandAuthoredTildePath(value: string, home: string): string {
-  const suffix = value.slice(1);
-  if (!suffix) {
-    return home;
-  }
-  if (suffix.startsWith("/") || suffix.startsWith("\\")) {
-    return path.join(home, suffix.slice(1));
-  }
-  return value;
-}
-
 export function restoreAuthoredTildePathsForWrite(
   next: unknown,
   authored: unknown,
@@ -135,7 +163,7 @@ export function restoreAuthoredTildePathsForWrite(
     typeof authored === "string" &&
     isPathLikeConfigKey(key) &&
     TILDE_PATH_VALUE_RE.test(authored.trim()) &&
-    path.normalize(next) === path.normalize(expandAuthoredTildePath(authored.trim(), home))
+    path.normalize(next) === path.join(home, authored.trim().slice(2))
   ) {
     return authored;
   }
@@ -199,6 +227,7 @@ export function resolveConfigIncludesForRead(
     configPath,
     {
       readFile: (candidate) => deps.fs.readFileSync(candidate, "utf-8"),
+      mapPath: deps.mapIncludePath,
       onLexicalPath: recordIncludeWatchPath,
       onIncludeResolved,
       readFileWithGuards: ({ includePath, resolvedPath, rootRealDir }) => {
@@ -230,7 +259,7 @@ export function resolveConfigIncludesForRead(
           throw error;
         }
       },
-      parseJson: (raw) => deps.json5.parse(raw),
+      parseJson: (raw) => JSON5.parse(raw),
     },
     { allowedRoots },
   );
@@ -260,7 +289,10 @@ export function resolveConfigForRead(
     onResolvedEnvSecretRef: (id, configPath) => resolvedEnvSecretRefs.set(configPath, id),
   });
   return {
-    resolvedConfigRaw,
+    resolvedConfigRaw: normalizeLegacyWorkboardDatabaseConfig(
+      projectUpdateRehearsalDatabaseConfig(resolvedConfigRaw, env),
+      env,
+    ),
     envSnapshotForRestore: cloneEnvWithPlatformSemantics(env),
     envWarnings,
     resolutionFacts: createConfigResolutionFacts(

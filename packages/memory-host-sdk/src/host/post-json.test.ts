@@ -1,6 +1,6 @@
 // Memory Host SDK tests cover post json behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { withTestTimeout } from "../../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/promise.js";
 import { postJson } from "./post-json.js";
 import { withRemoteHttpResponse } from "./remote-http.js";
 import { createPendingResponse } from "./response-snippet.test-harness.js";
@@ -42,8 +42,10 @@ describe("postJson", () => {
     vi.clearAllMocks();
   });
 
-  it("parses JSON payload on successful response", async () => {
+  it("forwards the abort signal and parses JSON on success", async () => {
+    const controller = new AbortController();
     remoteHttpMock.mockImplementationOnce(async (params) => {
+      expect(params.signal).toBe(controller.signal);
       return await params.onResponse(jsonResponse({ data: [{ embedding: [1, 2] }] }));
     });
 
@@ -51,6 +53,7 @@ describe("postJson", () => {
       url: "https://memory.example/v1/post",
       headers: { Authorization: "Bearer test" },
       body: { input: ["x"] },
+      signal: controller.signal,
       errorPrefix: "post failed",
       parse: (payload) => payload,
     });
@@ -58,24 +61,7 @@ describe("postJson", () => {
     expect(result).toEqual({ data: [{ embedding: [1, 2] }] });
   });
 
-  it("forwards abort signals to the remote HTTP request", async () => {
-    const controller = new AbortController();
-    remoteHttpMock.mockImplementationOnce(async (params) => {
-      expect(params.signal).toBe(controller.signal);
-      return await params.onResponse(jsonResponse({ ok: true }));
-    });
-
-    await postJson({
-      url: "https://memory.example/v1/post",
-      headers: {},
-      body: {},
-      signal: controller.signal,
-      errorPrefix: "post failed",
-      parse: (payload) => payload,
-    });
-  });
-
-  it.each([200, 429])("aborts response body reads for HTTP %s", async (status) => {
+  it.for([200, 429])("aborts response body reads for HTTP %s", async (status, { signal }) => {
     const fixture = createPendingResponse({ status });
     const controller = new AbortController();
     const expected = new Error("body aborted");
@@ -96,19 +82,20 @@ describe("postJson", () => {
       (error: unknown) => error,
     );
     try {
-      await withTestTimeout(fixture.readStarted, 1_000, "POST JSON read did not start");
+      await withinTest(
+        awaitGateBeforeSettlement(fixture.readStarted, read, "POST JSON read did not start"),
+        signal,
+      );
       expect(fixture.response.body?.locked).toBe(true);
       controller.abort(expected);
 
-      await expect(withTestTimeout(settled, 1_000, "POST JSON abort did not settle")).resolves.toBe(
-        expected,
-      );
+      await expect(withinTest(settled, signal)).resolves.toBe(expected);
       expect(fixture.cancel).toHaveBeenCalledOnce();
       expect(fixture.response.body?.locked).toBe(false);
     } finally {
       controller.abort(expected);
       fixture.dispose();
-      await withTestTimeout(settled, 1_000, "POST JSON cleanup did not settle");
+      await settled;
     }
   });
 

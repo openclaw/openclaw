@@ -1,5 +1,9 @@
-// Utility helpers for applying parsed directives to get-reply execution state.
-import type { InlineDirectives } from "./directive-handling.js";
+import { isFailoverError } from "../../agents/failover/error.js";
+import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
+import { ModelSelectionLockedError } from "../../sessions/model-overrides.js";
+import { type InlineDirectives, parseInlineSessionDirectives } from "./directive-handling.parse.js";
+
+const EMPTY_DIRECTIVES = { ...parseInlineSessionDirectives(""), command: undefined };
 
 const CLEARED_EXEC_FIELDS = {
   hasExecDirective: false,
@@ -18,52 +22,8 @@ const CLEARED_EXEC_FIELDS = {
   invalidExecNode: false,
 } satisfies Partial<InlineDirectives>;
 
-/** Clears all inline directive state while preserving cleaned text. */
 export function clearInlineDirectives(cleaned: string): InlineDirectives {
-  return {
-    cleaned,
-    command: undefined,
-    hasThinkDirective: false,
-    thinkLevel: undefined,
-    rawThinkLevel: undefined,
-    clearThinkLevel: false,
-    hasVerboseDirective: false,
-    verboseLevel: undefined,
-    rawVerboseLevel: undefined,
-    hasTraceDirective: false,
-    traceLevel: undefined,
-    rawTraceLevel: undefined,
-    hasFastDirective: false,
-    fastMode: undefined,
-    rawFastMode: undefined,
-    clearFastMode: false,
-    hasReasoningDirective: false,
-    reasoningLevel: undefined,
-    rawReasoningLevel: undefined,
-    hasElevatedDirective: false,
-    elevatedLevel: undefined,
-    rawElevatedLevel: undefined,
-    ...CLEARED_EXEC_FIELDS,
-    hasStatusDirective: false,
-    hasModelDirective: false,
-    rawModelDirective: undefined,
-    rawModelProfile: undefined,
-    rawModelRuntime: undefined,
-    modelDirectiveSource: undefined,
-    modelScope: undefined,
-    modelScopeConflict: false,
-    hasQueueDirective: false,
-    queueMode: undefined,
-    queueReset: false,
-    rawQueueMode: undefined,
-    debounceMs: undefined,
-    cap: undefined,
-    dropPolicy: undefined,
-    rawDebounce: undefined,
-    rawCap: undefined,
-    rawDrop: undefined,
-    hasQueueOptions: false,
-  };
+  return { ...EMPTY_DIRECTIVES, cleaned };
 }
 
 /** Clears only exec-related directive state after execution policy is consumed. */
@@ -71,5 +31,25 @@ export function clearExecInlineDirectives(directives: InlineDirectives): InlineD
   return {
     ...directives,
     ...CLEARED_EXEC_FIELDS,
+  };
+}
+
+export function resolveModelSelectionErrorReply(error: unknown) {
+  const unsupportedChat = isFailoverError(error) && error.code === "model_chat_unsupported";
+  if (
+    !(error instanceof ModelSelectionLockedError) &&
+    !isSessionWorkStartInvalidatedError(error) &&
+    !unsupportedChat
+  ) {
+    throw error;
+  }
+  return {
+    reply: { text: error.message, isError: true },
+    preRunRejection:
+      error instanceof ModelSelectionLockedError
+        ? ("model-selection-locked" as const)
+        : unsupportedChat
+          ? ("model-selection-rejected" as const)
+          : undefined,
   };
 }

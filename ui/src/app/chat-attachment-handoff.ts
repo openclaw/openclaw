@@ -1,14 +1,6 @@
 import { t } from "../i18n/index.ts";
-import type {
-  ChatAttachment,
-  ChatComposerMemoryFallback,
-  ChatGoalDraftMode,
-  ChatReplyTarget,
-  HumanMention,
-} from "../lib/chat/chat-types.ts";
 import { showToast } from "../lib/toast.ts";
 import { releaseChatAttachmentPayloads } from "../pages/chat/attachment-payload-lifecycle.ts";
-import type { NewSessionDraftHandoff } from "../pages/new-session/draft-persistence.ts";
 import type { ApplicationChatAttachmentHandoff } from "./context.ts";
 import { registerControlUiReloadGuard } from "./document-reload-guard.ts";
 import { createGatewayControlUiReloadOptions } from "./gateway-control-ui-reload.ts";
@@ -20,18 +12,13 @@ const MAX_PENDING_CHAT_ATTACHMENT_ENTRIES = 32;
 // Hidden split panes can remain unmounted indefinitely, so wall-clock expiry
 // would lose valid drafts. Bounded oldest-first eviction owns abandoned cleanup.
 
-type PendingChatAttachmentHandoff = {
+type PendingChatAttachmentHandoff = NonNullable<
+  ReturnType<ApplicationChatAttachmentHandoff["consume"]>
+> & {
   owner: NonNullable<Parameters<ApplicationChatAttachmentHandoff["prepare"]>[0]["owner"]>;
   paneId: string;
   scopeKey: string;
-  attachments: ChatAttachment[];
-  fallbacks: Record<string, ChatComposerMemoryFallback>;
   message: string;
-  draftRevision?: number;
-  goalMode?: ChatGoalDraftMode | null;
-  replyTarget?: ChatReplyTarget | null;
-  mentions?: readonly HumanMention[];
-  newSessionDraft?: NewSessionDraftHandoff;
   preparedAt: number;
   incognito?: boolean;
   isConnectionCurrent: () => boolean;
@@ -61,7 +48,12 @@ export function createChatAttachmentHandoff(
   let disposed = false;
   let activeReview: { key: string; controller: AbortController } | undefined;
 
-  const handoffAttachments = (handoff: PendingChatAttachmentHandoff) => {
+  const handoffAttachments = (
+    handoff: Pick<
+      Parameters<ApplicationChatAttachmentHandoff["prepare"]>[0],
+      "attachments" | "fallbacks"
+    >,
+  ) => {
     const byId = new Map(handoff.attachments.map((attachment) => [attachment.id, attachment]));
     for (const fallback of Object.values(handoff.fallbacks)) {
       for (const attachment of fallback.attachments) {
@@ -113,6 +105,7 @@ export function createChatAttachmentHandoff(
       }
     }
   };
+  // Retire private draft leases on connection changes, even while their panes are unmounted.
   const stopGateway = gateway.subscribe(retirePrivateOwners);
   const privateEntry = () => {
     retirePrivateOwners();
@@ -181,7 +174,7 @@ export function createChatAttachmentHandoff(
       await retryStaleChunkReloadWhenReachable({ timeoutMs: 0, ...reloadOptions });
     } catch {
       if (current()) {
-        showToast({ message: t("chat.privateDraftReload.unavailable") });
+        showToast({ severity: "error", message: t("chat.privateDraftReload.unavailable") });
       }
     } finally {
       if (activeReview?.controller === controller) {
@@ -193,6 +186,8 @@ export function createChatAttachmentHandoff(
     () => !privateEntry(),
     () =>
       showToast({
+        severity: "error",
+        actionPrimary: true,
         message: t("chat.privateDraftReload.blocked"),
         actionLabel: t("chat.privateDraftReload.review"),
         onAction: () => void review(),
@@ -228,18 +223,11 @@ export function createChatAttachmentHandoff(
         releaseHandoff(previous);
         return;
       }
-      const retainedIds = new Set(attachments.map((attachment) => attachment.id));
-      for (const fallback of Object.values(fallbacks)) {
-        for (const attachment of fallback.attachments) {
-          retainedIds.add(attachment.id);
-        }
-      }
+      const handoff = { attachments, fallbacks };
+      const retainedIds = new Set(handoffAttachments(handoff).map((attachment) => attachment.id));
       releaseHandoff(previous, retainedIds);
       if (!owner || disposed) {
-        releaseChatAttachmentPayloads(attachments);
-        for (const fallback of Object.values(fallbacks)) {
-          releaseChatAttachmentPayloads(fallback.attachments);
-        }
+        releaseChatAttachmentPayloads(handoffAttachments(handoff));
         return;
       }
       pending.set(key, {
@@ -247,7 +235,7 @@ export function createChatAttachmentHandoff(
         reviewPrivateDraft,
         isConnectionCurrent: capturePlacementStartupConnection(gateway, {
           gatewayUrl: gateway.connection.gatewayUrl,
-          recoveryScope: owner.recoveryScope ?? "",
+          recoveryScope: owner.recoveryScope || undefined,
         }),
         preparedAt: Date.now(),
         paneId,
@@ -280,7 +268,7 @@ export function createChatAttachmentHandoff(
       const match = take(entryKey(paneId, scopeKey));
       // A Gateway mismatch is terminal for this exact presentation. Other
       // retained session scopes under the same logical pane remain independent.
-      if (match?.owner === owner) {
+      if (match?.owner === owner && match.isConnectionCurrent()) {
         return {
           attachments: match.attachments,
           fallbacks: match.fallbacks,
@@ -297,22 +285,19 @@ export function createChatAttachmentHandoff(
     },
     retainedAttachmentIds: (attachments) => {
       const requested = new Set(attachments.map((attachment) => attachment.id));
-      const retained = new Set<string>();
-      for (const handoff of pending.values()) {
-        for (const attachment of handoffAttachments(handoff)) {
-          if (requested.has(attachment.id)) {
-            retained.add(attachment.id);
-          }
-        }
-      }
-      return retained;
+      return new Set([...retainedPayloadIds()].filter((id) => requested.has(id)));
     },
     retireScope: (scopeKey, beforeRevision) => {
       // Optimistic navigation may unmount the pane before deletion confirms.
       // Retire that package without touching a later edit or another session.
       for (const [key, handoff] of pending) {
-        if (handoff.scopeKey === scopeKey && handoff.preparedAt < beforeRevision) {
-          releaseHandoff(take(key));
+        if (
+          handoff.owner === gateway.snapshot.client &&
+          handoff.isConnectionCurrent() &&
+          handoff.scopeKey === scopeKey &&
+          handoff.preparedAt < beforeRevision
+        ) {
+          releaseHandoff(take(key), retainedPayloadIds());
         }
       }
     },

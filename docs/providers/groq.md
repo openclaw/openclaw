@@ -74,18 +74,14 @@ on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#app
 
 ## Built-in catalog
 
-OpenClaw ships a manifest-backed Groq catalog with both reasoning and non-reasoning entries. Run `openclaw models list --provider groq` to see the static rows for your installed version, or check [console.groq.com/docs/models](https://console.groq.com/docs/models) for Groq's authoritative list.
+OpenClaw ships a manifest-backed Groq catalog of reasoning models. Run `openclaw models list --provider groq` to see the static rows for your installed version, or check [console.groq.com/docs/models](https://console.groq.com/docs/models) for Groq's authoritative list.
 
-| Model ref                           | Name               | Reasoning | Input        | Context |
-| ----------------------------------- | ------------------ | --------- | ------------ | ------- |
-| `groq/openai/gpt-oss-120b`          | GPT OSS 120B       | yes       | text         | 131,072 |
-| `groq/openai/gpt-oss-20b`           | GPT OSS 20B        | yes       | text         | 131,072 |
-| `groq/openai/gpt-oss-safeguard-20b` | Safety GPT OSS 20B | yes       | text         | 131,072 |
-| `groq/qwen/qwen3.6-27b`             | Qwen 3.6 27B       | yes       | text + image | 131,072 |
-| `groq/groq/compound`                | Compound           | no        | text         | 131,072 |
-| `groq/groq/compound-mini`           | Compound Mini      | no        | text         | 131,072 |
-
-The manifest also retains `groq/llama-3.1-8b-instant` and `groq/llama-3.3-70b-versatile` as hidden deprecated compatibility rows after Groq's August 16, 2026 shutdown. Use `groq/openai/gpt-oss-20b` and `groq/openai/gpt-oss-120b`, respectively, for new configurations.
+| Model ref                           | Name               | Reasoning | Input | Context |
+| ----------------------------------- | ------------------ | --------- | ----- | ------- |
+| `groq/openai/gpt-oss-120b`          | GPT OSS 120B       | yes       | text  | 131,072 |
+| `groq/openai/gpt-oss-20b`           | GPT OSS 20B        | yes       | text  | 131,072 |
+| `groq/openai/gpt-oss-safeguard-20b` | Safety GPT OSS 20B | yes       | text  | 131,072 |
+| `groq/qwen/qwen3.6-27b`             | Qwen 3.6 27B       | yes       | text  | 131,072 |
 
 <Tip>
   The catalog evolves with each OpenClaw release. `openclaw models list --provider groq` shows the rows known to your installed version; cross-check with [console.groq.com/docs/models](https://console.groq.com/docs/models) for newly-added or deprecated models.
@@ -93,7 +89,9 @@ The manifest also retains `groq/llama-3.1-8b-instant` and `groq/llama-3.3-70b-ve
 
 ## Reasoning models
 
-Groq reasoning models (`reasoning: true` in the table above) map OpenClaw's shared `/think` levels onto `reasoning_effort` values of `low`, `medium`, or `high`. `/think off` or `/think none` omits `reasoning_effort` from the request rather than sending a disabled value.
+Groq's GPT OSS reasoning models map OpenClaw's shared `/think` levels onto `reasoning_effort` values of `low`, `medium`, or `high`. `/think off` or `/think none` omits `reasoning_effort` from those requests rather than sending a disabled value.
+
+Qwen 3.6 27B is text-only on Groq and supports two wire reasoning modes. `/think off` or `/think none` sends `reasoning_effort: "none"`; every enabled level sends `"default"`. When reasoning is enabled on Groq Qwen models, OpenClaw requests `reasoning_format: "parsed"` so reasoning stays in thinking blocks instead of visible answer text. Disabled reasoning and GPT OSS requests are left unchanged by this format hook.
 
 See [Thinking modes](/tools/thinking) for the shared `/think` levels and how OpenClaw translates them per provider.
 

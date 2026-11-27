@@ -1,4 +1,3 @@
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { RuntimeEnv } from "../runtime-api.js";
 import { waitForAbortableDelay } from "./async.js";
 import { fetchBotIdentityForMonitor, type FeishuMonitorBotIdentity } from "./monitor.startup.js";
@@ -12,13 +11,10 @@ const BOT_IDENTITY_RETRY_DELAYS_MS = [60_000, 120_000, 300_000, 600_000, 900_000
 export function applyBotIdentityState(
   accountId: string,
   identity: FeishuMonitorBotIdentity,
-): FeishuMonitorBotIdentity {
-  const botOpenId = normalizeOptionalString(identity.botOpenId);
-  const botName = normalizeOptionalString(identity.botName);
-
-  setFeishuBotIdentityState(accountId, { botOpenId: botOpenId ?? "", botName });
-
-  return { botOpenId, botName, source: botOpenId ? identity.source : undefined };
+): string | undefined {
+  const botOpenId = identity.botOpenId;
+  setFeishuBotIdentityState(accountId, botOpenId ?? "");
+  return botOpenId;
 }
 
 async function retryBotIdentityProbe(
@@ -45,11 +41,9 @@ async function retryBotIdentityProbe(
       abortSignal,
       allowCachedFallback: false,
     });
-    if (normalizeOptionalString(identity.botOpenId) && identity.source === "provider") {
+    if (identity.botOpenId && identity.source === "provider") {
       const resolved = applyBotIdentityState(accountId, identity);
-      log(
-        `feishu[${accountId}]: bot open_id recovered via background retry: ${resolved.botOpenId}`,
-      );
+      log(`feishu[${accountId}]: bot open_id recovered via background retry: ${resolved}`);
       return;
     }
 

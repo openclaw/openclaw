@@ -9,6 +9,8 @@ export class EmbeddedPreparedModelRuntimeHost {
     // The runtime layer synchronously stales the prior generation and coalesces queued requests.
     // Invoke it immediately so overlapping config writes retain those latest-wins semantics.
     this.ready = refreshPreparedModelRuntimeSnapshots(config);
+    // Idle hosts may have no readiness consumer yet; retain the rejection for later callers.
+    void this.ready.catch(() => undefined);
   }
 
   async waitUntilReady(): Promise<void> {

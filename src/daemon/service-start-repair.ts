@@ -1,4 +1,3 @@
-/** Inspect captured native service commands for repairable start drift. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -24,7 +23,6 @@ export function collectGatewayServiceStartRepairIssues(
     parseTcpPort(command.environment?.OPENCLAW_GATEWAY_PORT ?? "");
   if (expectedPort !== undefined && servicePort !== null && servicePort !== expectedPort) {
     issues.push({
-      code: "port-mismatch",
       message: `service port ${servicePort} does not match current gateway config port ${expectedPort}`,
     });
   }
@@ -38,14 +36,12 @@ export function collectGatewayServiceStartRepairIssues(
     const resolved = path.resolve(candidate);
     if (TEMP_PROGRAM_ROOTS.some((root) => isPathInside(root, resolved))) {
       issues.push({
-        code: "temporary-program",
         message: `service command points at a temporary path: ${candidate}`,
       });
       continue;
     }
     if (!fs.existsSync(candidate)) {
       issues.push({
-        code: "missing-program",
         message: `service command points at a missing path: ${candidate}`,
       });
     }

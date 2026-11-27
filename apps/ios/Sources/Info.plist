@@ -46,6 +46,8 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>OpenClaw uses Bluetooth to securely set up a nearby ESP device when you choose device setup.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_openclaw-gw._tcp</string>
@@ -57,7 +59,7 @@
 	<key>NSCalendarsWriteOnlyAccessUsageDescription</key>
 	<string>OpenClaw uses your calendars to add events when you enable calendar access.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>OpenClaw uses the camera when you scan a Gateway setup QR code or ask your paired Gateway or assistant to capture a photo or short video from this iPhone, for example to connect to your Gateway or show your assistant a document, device screen, or workspace.</string>
+	<string>OpenClaw uses the camera when you scan a Gateway or device setup QR code or ask your paired Gateway or assistant to capture a photo or short video from this iPhone, for example to connect to your Gateway or show your assistant a document, device screen, or workspace.</string>
 	<key>NSContactsUsageDescription</key>
 	<string>OpenClaw uses your contacts so you can search and reference people while using the assistant.</string>
 	<key>NSHealthShareUsageDescription</key>

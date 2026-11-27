@@ -1,4 +1,3 @@
-// Sync Plugin Versions script supports OpenClaw repository automation.
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parse as parseSemver } from "semver";
@@ -33,25 +32,12 @@ const VERSION_ALIGNED_PACKAGE_DIRS = [
   "packages/gateway-protocol",
 ] as const;
 
-function syncOpenClawDependencyRange(
-  deps: Record<string, string> | undefined,
+function syncVersionRange(
+  fields: Record<string, string | undefined> | undefined,
+  key: string,
   targetVersion: string,
 ): boolean {
-  const current = deps?.openclaw;
-  if (!current || current === "workspace:*" || !OPENCLAW_VERSION_RANGE_RE.test(current)) {
-    return false;
-  }
-  const next = `>=${targetVersion}`;
-  if (current === next) {
-    return false;
-  }
-  deps.openclaw = next;
-  return true;
-}
-
-function syncPluginApiVersion(pkg: PackageJson, targetVersion: string): boolean {
-  const compat = pkg.openclaw?.compat;
-  const current = compat?.pluginApi;
+  const current = fields?.[key];
   if (!current || !OPENCLAW_VERSION_RANGE_RE.test(current)) {
     return false;
   }
@@ -60,25 +46,18 @@ function syncPluginApiVersion(pkg: PackageJson, targetVersion: string): boolean 
   if (!currentVersion || !nextVersion || compareOpenClawSemver(nextVersion, currentVersion) <= 0) {
     return false;
   }
-  compat.pluginApi = `>=${targetVersion}`;
+  fields[key] = `>=${targetVersion}`;
   return true;
 }
 
 function syncBuildOpenClawVersion(pkg: PackageJson, targetVersion: string): boolean {
   const build = pkg.openclaw?.build;
   const current = build?.openclawVersion;
-  if (!current) {
-    return false;
-  }
-  if (current === targetVersion) {
+  if (!current || current === targetVersion) {
     return false;
   }
   build.openclawVersion = targetVersion;
   return true;
-}
-
-function changelogVersionForPackageVersion(version: string): string {
-  return version.replace(/-beta\.\d+$/u, "");
 }
 
 function ensureChangelogEntry(changelogPath: string, version: string, write: boolean): boolean {
@@ -90,16 +69,11 @@ function ensureChangelogEntry(changelogPath: string, version: string, write: boo
     return false;
   }
   const entry = `## ${version}\n\n### Changes\n- Version alignment with core OpenClaw release numbers.\n\n`;
-  if (content.startsWith("# Changelog\n\n")) {
-    const next = content.replace("# Changelog\n\n", `# Changelog\n\n${entry}`);
-    if (write) {
-      writeFileSync(changelogPath, next);
-    }
-    return true;
-  }
-  const next = `# Changelog\n\n${entry}${content.trimStart()}`;
+  const next = content.startsWith("# Changelog\n\n")
+    ? content.replace("# Changelog\n\n", `# Changelog\n\n${entry}`)
+    : `# Changelog\n\n${entry}${content.trimStart()}\n`;
   if (write) {
-    writeFileSync(changelogPath, `${next}\n`);
+    writeFileSync(changelogPath, next);
   }
   return true;
 }
@@ -156,17 +130,17 @@ export function syncPluginVersions(
     }
 
     const changelogPath = join(extensionsDir, dir.name, "CHANGELOG.md");
-    const changelogVersion = changelogVersionForPackageVersion(targetVersion);
+    const changelogVersion = targetVersion.replace(/-beta\.\d+$/u, "");
     if (ensureChangelogEntry(changelogPath, changelogVersion, write)) {
       changelogged.push(pkg.name);
     }
 
     const versionChanged = pkg.version !== targetVersion;
-    const devDependencyChanged = syncOpenClawDependencyRange(pkg.devDependencies, targetVersion);
-    const peerDependencyChanged = syncOpenClawDependencyRange(pkg.peerDependencies, targetVersion);
+    const devDependencyChanged = syncVersionRange(pkg.devDependencies, "openclaw", targetVersion);
+    const peerDependencyChanged = syncVersionRange(pkg.peerDependencies, "openclaw", targetVersion);
     // minHostVersion is a compatibility floor, not release alignment metadata.
     // Keep it stable unless the owning plugin intentionally raises it.
-    const pluginApiChanged = syncPluginApiVersion(pkg, targetVersion);
+    const pluginApiChanged = syncVersionRange(pkg.openclaw?.compat, "pluginApi", targetVersion);
     const buildOpenClawVersionChanged = syncBuildOpenClawVersion(pkg, targetVersion);
     const packageChanged =
       versionChanged ||

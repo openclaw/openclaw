@@ -2,20 +2,16 @@
 import path from "node:path";
 import { resolveUserPath } from "../utils.js";
 import { areBundledPluginsDisabled, resolveBundledPluginsDir } from "./bundled-dir.js";
-import { isTypeScriptPackageEntry } from "./package-entrypoints.js";
+import {
+  isTypeScriptPackageEntry,
+  PUBLIC_SURFACE_SOURCE_EXTENSIONS,
+} from "./package-entrypoints.js";
 import { isPathInside } from "./path-safety.js";
 import { pluginCacheExistsSync, pluginCacheRealpathSync } from "./plugin-cache-files.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
+import type { PluginOrigin } from "./plugin-origin.types.js";
+import { getPluginLoadedEntry } from "./plugin-runtime-artifact-binding.js";
 import { resolvePluginRuntimeRecord } from "./runtime-context.js";
-
-export const PUBLIC_SURFACE_SOURCE_EXTENSIONS = [
-  ".ts",
-  ".mts",
-  ".js",
-  ".mjs",
-  ".cts",
-  ".cjs",
-] as const;
 
 /** Normalizes a bundled public artifact subpath and rejects traversal/absolute paths. */
 function normalizeBundledPluginArtifactSubpath(artifactBasename: string): string {
@@ -61,6 +57,27 @@ function normalizeBundledPluginDirName(dirName: string): string {
   return normalized;
 }
 
+// Older Git updaters build the next release below lib/node_modules/openclaw.
+// Node cannot strip plugin TypeScript there, even through a release symlink.
+function resolveNodeModulesBuiltPublicSurface(pluginRoot: string, artifactBasename: string) {
+  const physicalRoot = pluginCacheRealpathSync(pluginRoot);
+  if (
+    !physicalRoot?.split(path.sep).includes("node_modules") ||
+    path.basename(path.dirname(physicalRoot)) !== "extensions"
+  ) {
+    return null;
+  }
+  const packageRoot = path.resolve(physicalRoot, "../..");
+  for (const dist of ["dist", "dist-runtime"]) {
+    const boundaryRoot = path.join(packageRoot, dist, "extensions", path.basename(physicalRoot));
+    const modulePath = path.join(boundaryRoot, artifactBasename);
+    if (pluginCacheExistsSync(modulePath)) {
+      return { modulePath, boundaryRoot };
+    }
+  }
+  return null;
+}
+
 /** Resolves a source-tree public surface artifact path for bundled plugin development. */
 export function resolveBundledPluginSourcePublicSurfacePath(params: {
   sourceRoot: string;
@@ -73,31 +90,43 @@ export function resolveBundledPluginSourcePublicSurfacePath(params: {
   for (const ext of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
     const sourceCandidate = path.resolve(params.sourceRoot, dirName, `${sourceBaseName}${ext}`);
     if (pluginCacheExistsSync(sourceCandidate)) {
-      return sourceCandidate;
+      return (
+        (isTypeScriptPackageEntry(sourceCandidate)
+          ? resolveNodeModulesBuiltPublicSurface(
+              path.resolve(params.sourceRoot, dirName),
+              artifactBasename,
+            )?.modulePath
+          : undefined) ?? sourceCandidate
+      );
     }
   }
   return null;
 }
 
 /** Resolves a public surface artifact within one installed plugin root. */
-export function resolvePluginRootPublicSurfacePath(params: {
+export function resolvePluginRootPublicSurfaceLocation(params: {
   pluginRoot: string;
   artifactBasename: string;
   pluginId?: string;
   entrySource?: string;
-}): string | null {
+  origin?: PluginOrigin;
+}): { modulePath: string; boundaryRoot: string } | null {
   const artifactBasename = normalizeBundledPluginArtifactSubpath(params.artifactBasename);
-  const pluginRoot = path.resolve(params.pluginRoot);
   const record = resolvePluginRuntimeRecord(params);
+  const selected = record && getPluginLoadedEntry(record);
+  const pluginRoot = path.resolve(selected?.rootDir ?? params.pluginRoot);
   const instance = record ? getPluginInstance(record) : undefined;
   const exists = (source: string) =>
     instance?.hasModuleSource(source) ?? pluginCacheExistsSync(source);
   const sourceBaseName = artifactBasename.replace(/\.js$/u, "");
-  const entrySource = record?.source ?? params.entrySource;
+  const entrySource = selected?.source ?? record?.source ?? params.entrySource;
   const entryDir = entrySource
     ? path.resolve(
         pluginRoot,
-        path.relative(record?.rootDir ?? pluginRoot, path.dirname(path.resolve(entrySource))),
+        path.relative(
+          selected?.rootDir ?? record?.rootDir ?? pluginRoot,
+          path.dirname(path.resolve(entrySource)),
+        ),
       )
     : undefined;
   if (entryDir && !isPathInside(pluginRoot, entryDir)) {
@@ -132,7 +161,17 @@ export function resolvePluginRootPublicSurfacePath(params: {
       }
       checkedPaths.add(candidate);
       if (exists(candidate)) {
-        return candidate;
+        if (
+          !instance &&
+          (record?.origin ?? params.origin) === "bundled" &&
+          isTypeScriptPackageEntry(candidate)
+        ) {
+          const built = resolveNodeModulesBuiltPublicSurface(pluginRoot, artifactBasename);
+          if (built) {
+            return built;
+          }
+        }
+        return { modulePath: candidate, boundaryRoot: pluginRoot };
       }
     }
   }
@@ -145,12 +184,13 @@ function resolvePublicSurfaceFromBundledDir(params: {
   dirName: string;
   artifactBasename: string;
 }): string | null {
-  const resolved = resolvePluginRootPublicSurfacePath({
+  const resolved = resolvePluginRootPublicSurfaceLocation({
     pluginRoot: path.resolve(params.bundledPluginsDir, params.dirName),
     artifactBasename: params.artifactBasename,
+    origin: "bundled",
   });
   if (resolved !== null) {
-    return resolved;
+    return resolved.modulePath;
   }
   const normalizedBundledDir = path.resolve(params.bundledPluginsDir);
   const normalizedRootDir = path.resolve(params.rootDir);
@@ -171,7 +211,7 @@ function resolvePublicSurfaceFromBundledDir(params: {
     }
   }
   return (
-    resolveRetainedConfigDoctorPath(params) ??
+    resolveRetainedDoctorPath(params) ??
     resolveBundledPluginSourcePublicSurfacePath({
       sourceRoot: path.join(normalizedRootDir, "extensions"),
       dirName: params.dirName,
@@ -180,23 +220,34 @@ function resolvePublicSurfaceFromBundledDir(params: {
   );
 }
 
-function resolveRetainedConfigDoctorPath(params: {
+export function resolveRetainedDoctorPath(params: {
   rootDir: string;
   dirName: string;
   artifactBasename: string;
 }): string | null {
-  if (params.artifactBasename !== "config-doctor-api.js") {
+  const dirName = normalizeBundledPluginDirName(params.dirName);
+  const artifactBasename = normalizeBundledPluginArtifactSubpath(params.artifactBasename);
+  const directory =
+    artifactBasename === "config-doctor-api.js"
+      ? "config-doctor"
+      : artifactBasename === "state-retention-api.js"
+        ? "state-retention"
+        : undefined;
+  if (!directory) {
     return null;
   }
-  // Externalizing a channel removes its runtime entry, but shipped config still needs
-  // its core-version migration before that plugin can be installed or granted capabilities.
+  // Host-retained Doctor contracts remain available after runtime externalization.
   for (const dist of ["dist", "dist-runtime"]) {
-    const candidate = path.resolve(params.rootDir, dist, "config-doctor", `${params.dirName}.js`);
+    const candidate = path.resolve(params.rootDir, dist, directory, `${dirName}.js`);
     if (pluginCacheExistsSync(candidate)) {
       return candidate;
     }
   }
-  return null;
+  return resolveBundledPluginSourcePublicSurfacePath({
+    sourceRoot: path.join(params.rootDir, "extensions"),
+    dirName,
+    artifactBasename,
+  });
 }
 
 function resolveExplicitEnvBundledPluginsDir(env: NodeJS.ProcessEnv): string | undefined {
@@ -277,5 +328,5 @@ export function resolveBundledPluginPublicSurfacePath(params: {
       return candidate;
     }
   }
-  return resolveRetainedConfigDoctorPath({ ...params, dirName, artifactBasename });
+  return resolveRetainedDoctorPath({ ...params, dirName, artifactBasename });
 }

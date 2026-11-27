@@ -1,4 +1,3 @@
-// Line plugin module owns native mention facts carried by webhook text messages.
 import type { webhook } from "@line/bot-sdk";
 
 type LineMessageContent = webhook.MessageEvent["message"];

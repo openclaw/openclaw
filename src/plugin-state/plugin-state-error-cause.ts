@@ -1,23 +1,21 @@
-import type { OpenClawStateWorkerErrorPayload } from "../state/openclaw-state-worker-error.js";
-
-export type PluginStateErrorCause =
-  | { canonical: OpenClawStateWorkerErrorPayload }
+export type PluginStateErrorCause<Canonical = never> =
+  | { canonical: Canonical }
   | {
       name: string;
       message: string;
       errorCode?: string | number;
       errcode?: number;
       errno?: number;
-      cause?: PluginStateErrorCause;
-      errors?: Array<PluginStateErrorCause | undefined>;
+      cause?: PluginStateErrorCause<Canonical>;
+      errors?: Array<PluginStateErrorCause<Canonical> | undefined>;
     };
 
 // The wire and log share one bounded field policy; only the worker retains canonical identity.
-export function capturePluginStateErrorCause(
+export function capturePluginStateErrorCause<Canonical = never>(
   value: unknown,
-  encodeCanonical?: (value: unknown) => OpenClawStateWorkerErrorPayload | undefined,
+  encodeCanonical?: (value: unknown) => Canonical | undefined,
   seen = new Set<object>(),
-): PluginStateErrorCause | undefined {
+): PluginStateErrorCause<Canonical> | undefined {
   if (value === undefined) {
     return undefined;
   }

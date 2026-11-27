@@ -1,26 +1,66 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { assertSandboxStateOwnerPathCurrent } from "../agents/sandbox/state-owner-path.js";
+import { assertWorkspaceFilesystemEvidence } from "../agents/workspace-state-guard.js";
+import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
+import type { DiffReadTiming } from "./diff-read-timing.js";
 import { serializeGitWorkerFailure, withGitWorkerContext } from "./git-worker-context.js";
 import type { GitWorkerCommand, GitWorkerReply, GitWorkerResult } from "./git-worker-contract.js";
+import { withWorkerFsSafeNativeMode } from "./worker-fs-safe.js";
+import { workerMutationAssertion } from "./worker-mutation-authority.js";
 import { serveWorkerTasks } from "./worker-task-server.js";
 
-serveWorkerTasks<GitWorkerReply<GitWorkerResult>>(
-  async (input, channel, control) => {
+serveWorkerTasks<GitWorkerReply<GitWorkerResult>, GitWorkerCommand>(
+  async (command, channel, control) => {
     try {
-      if (
-        !channel ||
-        !isRecord(input) ||
-        typeof input.type !== "string" ||
-        !isRecord(input.input)
-      ) {
+      if (!channel) {
         throw new Error("Git worker requires a typed operation and host channel");
       }
-      // SAFETY: This private entry consumes only commands created by its typed host broker.
-      const command = input as GitWorkerCommand;
       channel.consumeInput();
+      const diffTiming: DiffReadTiming | undefined =
+        command.type === "checkout.revision" && command.input.scope === "diff"
+          ? { durations: {} }
+          : undefined;
       const value = await withGitWorkerContext<GitWorkerResult>(
         channel,
         () => {
           switch (command.type) {
+            case "github.profile-token":
+              return import("../agents/github-tool-profile-files.js").then(
+                ({ readManagedGitHubProfileToken }) =>
+                  withWorkerFsSafeNativeMode(command.input.nativeMode, () =>
+                    readManagedGitHubProfileToken(command.input.profileDir),
+                  ),
+              );
+            case "github.profile-stage":
+            case "github.profile-refresh":
+              return control.runNativeSection(() =>
+                withWorkerFsSafeNativeMode(command.input.nativeMode, async () => {
+                  const { writeManagedGitHubProfileFiles, refreshManagedGitHubProfileFiles } =
+                    await import("../agents/github-tool-profile-files.js");
+                  const assertCurrent = command.mutationAuthority
+                    ? workerMutationAssertion(
+                        command.mutationAuthority,
+                        () => channel.notify("authority"),
+                        control.throwIfCancelled,
+                      )
+                    : control.throwIfCancelled;
+                  await (
+                    command.type === "github.profile-stage"
+                      ? writeManagedGitHubProfileFiles
+                      : refreshManagedGitHubProfileFiles
+                  )(command.input.profileDir, command.input.identity, {
+                    assertCurrent,
+                  });
+                }),
+              );
+            case "checkout.bootstrap-workspace":
+              return import("./git-root.js").then(({ findGitRoot, readGitMetadataDirectories }) => {
+                const repository = findGitRoot(command.input.workspace);
+                const commonDir = repository && readGitMetadataDirectories(repository)?.commonDir;
+                return Boolean(
+                  commonDir &&
+                  readGitMetadataDirectories(command.input.root)?.commonDir === commonDir,
+                );
+              });
             case "workspace.inventory.select":
             case "workspace.inventory.existing":
             case "workspace.inventory.paths":
@@ -29,14 +69,22 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>>(
                 ({ executeWorkspaceInventoryComputation }) =>
                   executeWorkspaceInventoryComputation(command),
               );
+            case "workspace.manifest.local":
             case "workspace.manifest.capture":
+            case "workspace.manifest.base-refresh":
+            case "workspace.manifest.equal":
             case "workspace.manifest.snapshot":
+            case "workspace.manifest.document":
+            case "workspace.manifest.initial":
+            case "workspace.manifest.template":
+            case "workspace.manifest.reference":
             case "workspace.manifest.parse":
+            case "workspace.manifest.paths":
             case "workspace.manifest.serialize":
             case "workspace.manifest.overlay":
             case "workspace.manifest.pair":
             case "workspace.manifest.staged":
-            case "workspace.manifest.entries":
+            case "workspace.manifest.result":
             case "workspace.manifest.file":
             case "workspace.manifest.nodes":
             case "workspace.reconcile.preflight":
@@ -44,8 +92,48 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>>(
                 ({ executeWorkspaceManifestComputation }) =>
                   executeWorkspaceManifestComputation(command),
               );
+            case "workspace.reconcile.ownership":
+            case "workspace.reconcile.apply":
+            case "workspace.reconcile.recover":
             case "workspace.manifest.stage-input":
+            case "workspace.reconcile.temporary": {
+              const mutation = command.mutation;
+              if (!mutation) {
+                throw new Error("Workspace filesystem work requires its original authority");
+              }
+              const grant = workerMutationAssertion(
+                mutation.decision,
+                () => channel.notify("authority"),
+                control.throwIfCancelled,
+              );
+              const assertCurrent = () => {
+                for (const evidence of mutation.filesystem) {
+                  assertWorkspaceFilesystemEvidence(evidence);
+                }
+                if (mutation.stateOwnerPath) {
+                  assertSandboxStateOwnerPathCurrent(mutation.stateOwnerPath);
+                }
+                grant();
+              };
+              return control.runNativeSection(() =>
+                withWorkerFsSafeNativeMode(mutation.nativeMode, async () => {
+                  const { executeWorkspaceManifestComputation } =
+                    await import("../gateway/worker-environments/workspace-manifest-computation.runtime.js");
+                  assertCurrent();
+                  return await executeWorkspaceManifestComputation(
+                    command,
+                    command.type === "workspace.manifest.stage-input" ||
+                      command.type === "workspace.reconcile.temporary"
+                      ? control.throwIfCancelled
+                      : assertCurrent,
+                  );
+                }),
+              );
+            }
             case "workspace.manifest.tree-input":
+            case "workspace.reconcile.patch":
+            case "workspace.reconcile.diff":
+            case "workspace.manifest.remote-capture":
               // Streamed fs-safe creation owns native descriptors until cleanup settles.
               return control.runNativeSection(async () => {
                 const { executeWorkspaceManifestComputation } =
@@ -56,33 +144,99 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>>(
               return import("../gateway/worker-environments/workspace-result-inventory.runtime.js").then(
                 ({ collectStagedWorkerArtifacts }) => collectStagedWorkerArtifacts(command.input),
               );
+            case "worktree.eviction-purge":
+              return control.runNativeSection(async () => {
+                const { executeGitWorktreeOperation } =
+                  await import("../agents/worktrees/git-worktree-operations.runtime.js");
+                return await executeGitWorktreeOperation(command);
+              });
             case "worktree.snapshot-verify-exact":
             case "worktree.snapshot":
             case "worktree.provisioning-inspection":
             case "worktree.cleanup-inspection":
+            case "worktree.cleanup-fingerprint":
+            case "worktree.eviction-classify":
+            case "worktree.eviction-source":
+            case "worktree.eviction-repositories":
             case "worktree.git-size":
             case "worktree.checkout-transition-size":
             case "worktree.directory-size":
               return import("../agents/worktrees/git-worktree-operations.runtime.js").then(
                 ({ executeGitWorktreeOperation }) => executeGitWorktreeOperation(command),
               );
-            default:
-              return import("./git-read-operations.runtime.js").then(
-                ({ executeGitReadOperation }) => executeGitReadOperation(command),
+            case "repository.identities":
+              return import("../agents/worktrees/repository-paths.js").then(
+                async ({ resolveRepositoryIdentity }) =>
+                  (
+                    await runTasksWithConcurrency({
+                      tasks: command.input.roots.map(
+                        (root) => () => resolveRepositoryIdentity(root),
+                      ),
+                      limit: 4,
+                    })
+                  ).results,
+              );
+            case "repository.branches":
+              return import("../agents/worktrees/branches.runtime.js").then(
+                ({ readRepositoryBranchSnapshot }) =>
+                  readRepositoryBranchSnapshot(command.input.repoRoot, command.input),
+              );
+            case "checkout.revision":
+              return import("../gateway/control-ui-session-prs-git.runtime.js").then(
+                ({ readCheckoutGitRevision }) => readCheckoutGitRevision(command.input, diffTiming),
+              );
+            case "checkout.context":
+              return import("../gateway/control-ui-session-prs-git.runtime.js").then(
+                ({ readCheckoutGitContext }) =>
+                  readCheckoutGitContext(command.input.root, command.input.githubHost),
+              );
+            case "pull-request.branch-comparison":
+              return import("../gateway/control-ui-session-prs-git.runtime.js").then(
+                ({ readPullRequestBranchComparison }) =>
+                  readPullRequestBranchComparison(command.input),
+              );
+            case "pull-request.branch-facts":
+              return import("../gateway/control-ui-session-prs-git.runtime.js").then(
+                ({ readPullRequestBranchFacts }) => readPullRequestBranchFacts(command.input),
+              );
+            case "checkout.diff":
+              return import("../sessions/session-diff.runtime.js").then(({ collectCheckoutDiff }) =>
+                collectCheckoutDiff(command.input),
+              );
+            case "checkout.baseline":
+              return import("../sessions/session-diff.runtime.js").then(
+                ({ collectCheckoutDiffBaseline }) => collectCheckoutDiffBaseline(command.input),
               );
           }
+          throw new Error("Unsupported Git worker operation");
         },
         command.filesystemRefs,
       );
-      return { ok: true, value };
+      return { ok: true, value, revisionUnavailableReason: diffTiming?.revisionUnavailableReason };
     } catch (error) {
       return { ok: false, error: serializeGitWorkerFailure(error) };
+    } finally {
+      // V8 retains the last successful regex input, including task-owned checkout paths.
+      /(?:)/.test("");
     }
   },
   {
-    transferList: (reply) =>
-      reply.ok && reply.value instanceof Uint8Array && reply.value.buffer instanceof ArrayBuffer
-        ? [reply.value.buffer]
-        : [],
+    transferList: (reply) => {
+      if (!reply.ok) {
+        return [];
+      }
+      const value = reply.value;
+      if (value instanceof Uint8Array && value.buffer instanceof ArrayBuffer) {
+        return [value.buffer];
+      }
+      if (value && typeof value === "object" && "patch" in value) {
+        return [
+          value.patch.buffer,
+          value.basePack.buffer,
+          ...(value.publicationPack ? [value.publicationPack.buffer] : []),
+        ];
+      }
+      return [];
+    },
   },
 );

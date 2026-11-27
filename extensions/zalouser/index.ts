@@ -1,9 +1,9 @@
-// Zalouser plugin entrypoint registers its OpenClaw integration.
 import {
   type AnyAgentTool,
   defineBundledChannelEntry,
   loadBundledEntryExportSync,
 } from "openclaw/plugin-sdk/channel-entry-contract";
+import { registerZalouserRuntimeLifecycle } from "./src/session-runtime.js";
 
 function createZalouserTool(context?: unknown): AnyAgentTool {
   const createTool = loadBundledEntryExportSync<(context?: unknown) => AnyAgentTool>(
@@ -32,4 +32,5 @@ export default defineBundledChannelEntry({
   registerFull(api) {
     api.registerTool((ctx) => createZalouserTool(ctx), { name: "zalouser" });
   },
+  registerCapabilities: registerZalouserRuntimeLifecycle,
 });

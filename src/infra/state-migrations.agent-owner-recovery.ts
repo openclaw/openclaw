@@ -7,6 +7,7 @@ import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/sess
 import { normalizeAgentId } from "../routing/session-key.js";
 import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
 import { readExistingAgentSchemaMeta } from "../state/openclaw-agent-db-schema-helpers.js";
+import { assertSupportedAgentMigrationSchemas } from "../state/openclaw-agent-db-session-migrations.js";
 import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
 import { sameFileMutationFingerprint } from "./file-descriptor.js";
 import { FsSafeError } from "./fs-safe.js";
@@ -18,6 +19,7 @@ import {
 import { resolveSqliteDatabaseFilePaths } from "./sqlite-files.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
 import { moveSqliteFilesAside } from "./sqlite-recovery-files.js";
+import { readSqliteUserVersion } from "./sqlite-user-version.js";
 import { truncateSqliteWal } from "./sqlite-wal-checkpoint.js";
 import { formatAgentDatabaseOwnershipRepairHint } from "./state-migrations.agent-owner-guidance.js";
 
@@ -101,6 +103,7 @@ function checkpoint(target: Target, maintenance: OpenClawStateLeaseContext): voi
   );
   try {
     assertOpenClawAgentDatabaseOwner(database, { agentId: target.agentId, pathname: target.path });
+    assertSupportedAgentMigrationSchemas(database, target.path, readSqliteUserVersion(database));
     assertSqliteIntegrity(database, target.path);
     maintenance.assertOwned();
     truncateSqliteWal(database, target.path);

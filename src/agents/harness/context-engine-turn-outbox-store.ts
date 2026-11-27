@@ -1,34 +1,26 @@
-import type { DatabaseSync } from "node:sqlite";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
-import type {
-  TranscriptTurnAdmission,
-  TranscriptTurnBoundary,
-} from "../../config/sessions/transcript-entry-anchor.js";
+import {
+  captureSessionActorStorageOwner,
+  type SessionActorStorageBinding,
+} from "../../config/sessions/session-actor-storage-binding.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
-import { recordContextEngineTurnOutboxSchemaCommitted } from "../../state/openclaw-agent-context-engine-turn-outbox-schema.js";
+import { IncognitoSessionMissingError } from "../../state/incognito-session-error.js";
 import {
-  runOpenClawAgentWriteTransaction,
-  withOpenClawAgentDatabaseAsync,
-} from "../../state/openclaw-agent-db.js";
-import {
-  isIncognitoOpenClawAgentSqlitePath,
+  resolveExplicitIncognitoAgentSqliteTarget,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.paths.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { captureOpenClawAgentDatabaseExecutionAsync } from "../../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
-import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
-import {
-  executeContextEngineTurnOutboxCommand,
-  type ContextEngineTurnOutboxStore,
-  type ContextEngineTurnOutboxWorkerOperations,
-  type ContextEngineTurnRuntimeContext,
+import { openMemoryContextEngineTurnOutboxStore } from "./context-engine-turn-outbox-memory.js";
+import type {
+  ContextEngineTurnOutboxWorkerStore,
+  ContextEngineTurnOutboxWorkerOperations,
 } from "./context-engine-turn-outbox.js";
 
 type OutboxCommand = SqliteWorkerCommand<ContextEngineTurnOutboxWorkerOperations>;
-type OutboxOwner = { engineId: string; ownerPluginId?: string };
 
 /**
  * Runs one outbox command in the agent database worker. The host thread only
@@ -39,6 +31,9 @@ async function runContextEngineTurnOutboxCommand(
   target: { agentId: string; path: string },
   command: OutboxCommand,
 ): Promise<unknown> {
+  if (resolveExplicitIncognitoAgentSqliteTarget(target.path, { agentId: target.agentId })) {
+    throw new IncognitoSessionMissingError();
+  }
   const env = cloneEnvWithPlatformSemantics(process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const options = {
@@ -46,108 +41,48 @@ async function runContextEngineTurnOutboxCommand(
     env,
     path: resolveOpenClawAgentSqlitePath({ agentId: target.agentId, env, path: target.path }),
   };
-  if (isIncognitoOpenClawAgentSqlitePath(options.path, options)) {
-    // Incognito retains its sole in-memory owner until that owner is migrated as a whole.
-    let committedDb: DatabaseSync | undefined;
-    const result = await runOpenClawAgentWriteAdmission(
-      options,
-      () =>
-        runOpenClawAgentWriteTransaction(
-          ({ db }) => {
-            committedDb = db;
-            return executeContextEngineTurnOutboxCommand(db, command);
-          },
-          options,
-          { operationLabel: `context-engine.turn-outbox.${command.type}` },
-        ),
-      true,
-    );
-    // The transaction committed its lazy DDL; later commands on this connection skip it.
-    if (committedDb) {
-      recordContextEngineTurnOutboxSchemaCommitted(committedDb);
-    }
-    return result;
-  }
-  // Retain the lifecycle before queuing so close cannot turn waiting work into a fresh open.
-  const execution = captureOpenClawAgentDatabaseExecution(options);
-  const assertCurrent = () => execution.assertCurrent();
+  const execution = await captureOpenClawAgentDatabaseExecutionAsync(options);
   try {
-    return await runOpenClawAgentWriteAdmission(
-      options,
-      () =>
-        withOpenClawAgentDatabaseAsync(
-          options,
-          async ({ db }) => {
-            assertCurrent();
-            const worker =
-              await openOpenClawAgentSqliteWorkerStore<ContextEngineTurnOutboxWorkerOperations>(
-                options,
-                db,
-                {
-                  moduleUrl: resolveRuntimeWorkerUrl(
-                    runtimeProcessEntrypoints.contextEngineTurnOutbox,
-                  ),
-                  input: undefined,
-                },
-              );
-            try {
-              return await worker.run((scope) => scope.execute(command), assertCurrent);
-            } finally {
-              await worker.close();
-            }
-          },
-          assertCurrent,
-        ),
-      true,
-    );
+    const worker =
+      await openOpenClawAgentSqliteWorkerStore<ContextEngineTurnOutboxWorkerOperations>(
+        options,
+        { execution },
+        {
+          moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.contextEngineTurnOutbox),
+          input: undefined,
+        },
+      );
+    try {
+      return await worker.execute(command, () => execution.assertCurrent());
+    } finally {
+      await worker.close();
+    }
   } finally {
     await execution.release();
   }
 }
 
-/** The durable context-engine turn outbox of one agent database, executed in its worker. */
-export type ContextEngineTurnOutboxWorkerStore = ContextEngineTurnOutboxStore &
-  Readonly<{
-    prepareRun(
-      input: OutboxOwner & {
-        admission?: TranscriptTurnAdmission;
-        isHeartbeat: boolean;
-        sessionId: string;
-      },
-    ): Promise<ContextEngineTurnOutboxWorkerOperations["prepareRun"]["output"]>;
-    enqueueIntent(
-      input: OutboxOwner & { admission: TranscriptTurnAdmission; isHeartbeat: boolean },
-    ): Promise<void>;
-    acceptIntent(
-      input: OutboxOwner & {
-        boundary: TranscriptTurnBoundary;
-        isHeartbeat: boolean;
-        runtimeContext?: ContextEngineTurnRuntimeContext;
-      },
-    ): Promise<void>;
-    publishClosedTurn(
-      input: OutboxOwner & {
-        boundary: TranscriptTurnBoundary;
-        isHeartbeat: boolean;
-        maxBytes: number;
-        maxEvents: number;
-        runtimeContext?: ContextEngineTurnRuntimeContext;
-      },
-    ): Promise<ContextEngineTurnOutboxWorkerOperations["publishClosedTurn"]["output"]>;
-    discardIntent(input: OutboxOwner & { admission: TranscriptTurnAdmission }): Promise<void>;
-  }>;
-
 export function openContextEngineTurnOutboxWorkerStore(target: {
   agentId: string;
   path: string;
+  sessionKey?: string;
+  sessionId?: string;
+  sessionActor?: SessionActorStorageBinding;
 }): ContextEngineTurnOutboxWorkerStore {
+  const scope = { ...target, storePath: target.path };
+  const memory = captureSessionActorStorageOwner(scope, { assertCurrent() {}, authorize() {} });
+  if (memory) {
+    return openMemoryContextEngineTurnOutboxStore(scope, memory);
+  }
+  const captured = { ...target };
   const run = <Type extends OutboxCommand["type"]>(
     command: Extract<OutboxCommand, { type: Type }>,
-  ) =>
+  ) => {
     // SAFETY: executeContextEngineTurnOutboxCommand returns each command type's declared output.
-    runContextEngineTurnOutboxCommand(target, command) as Promise<
+    return runContextEngineTurnOutboxCommand(captured, command) as Promise<
       ContextEngineTurnOutboxWorkerOperations[Type]["output"]
     >;
+  };
   return {
     prepareRun: (input) => run({ type: "prepareRun", input }),
     listPendingSessions: (input) => run({ type: "listPendingSessions", input }),
@@ -159,15 +94,9 @@ export function openContextEngineTurnOutboxWorkerStore(target: {
       await run({ type: "recordFailure", input: { advancementKey, message, attemptedAt } });
     },
     hasPending: (input) => run({ type: "hasPending", input }),
-    enqueueIntent: async (input) => {
-      await run({ type: "enqueueIntent", input });
-    },
-    acceptIntent: async (input) => {
-      await run({ type: "acceptIntent", input });
-    },
+    enqueueIntent: (input) => run({ type: "enqueueIntent", input }),
+    acceptIntent: (input) => run({ type: "acceptIntent", input }),
     publishClosedTurn: (input) => run({ type: "publishClosedTurn", input }),
-    discardIntent: async (input) => {
-      await run({ type: "discardIntent", input });
-    },
+    discardIntent: (input) => run({ type: "discardIntent", input }),
   };
 }

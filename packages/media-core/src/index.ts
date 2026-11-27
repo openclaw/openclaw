@@ -1,5 +1,3 @@
-// Public barrel for media URL, MIME, path, and byte-stream helpers.
-
 export * from "./base64.js";
 export * from "./attachment-classify.js";
 export * from "./constants.js";

@@ -53,3 +53,12 @@ describe("session panel toggle buffer", () => {
     expect(takeSessionPanelToggle("browser")).toBe(newer);
   });
 });
+
+it("keeps plugin panel intents separate for global sessions owned by different agents", () => {
+  const event = new CustomEvent("plugin-panel", {
+    detail: { sessionKey: "global", agentId: "writer", open: true },
+  });
+  rememberSessionPanelToggle("plugin:review/document", event);
+  expect(takeSessionPanelToggle("plugin:review/document", "global", "main")).toBeNull();
+  expect(takeSessionPanelToggle("plugin:review/document", "global", "writer")).toBe(event);
+});

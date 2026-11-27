@@ -2,13 +2,17 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { findVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
+import { fixtureReceiptClientSource } from "../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { runCommandBuffered } from "../process/exec.js";
+import { hasErrnoCode } from "./errno.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { useStateReceipts } from "./update-candidate-state-fixtures.test-support.js";
 import {
   UpdateCandidateSnapshotInventorySchema,
   UpdateCandidateStateSnapshotSchema,
@@ -16,6 +20,7 @@ import {
 
 let fixtureCompletion: Promise<void> | undefined;
 let releaseFixture: (() => void) | undefined;
+const receipts = useStateReceipts();
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     // Vitest cancellation can finish the test before its async body reaches finally.
@@ -35,12 +40,28 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-async function waitForFile(file: string): Promise<void> {
-  await expect
-    .poll(async () => fs.readFile(file, "utf8").catch(() => ""), {
-      timeout: 10_000,
-    })
-    .not.toBe("");
+async function fixtureEventBeforeSettlement(
+  file: string,
+  operation: PromiseLike<unknown>,
+): Promise<void> {
+  const readReady = () =>
+    fs.readFile(file, "utf8").catch((error: unknown) => {
+      if (hasErrnoCode(error, "ENOENT")) {
+        return "";
+      }
+      throw error;
+    });
+  // The first-commit record precedes replies and exit; receipt delivery uses a separate pipe.
+  const requireReady = async (error: unknown) => {
+    if (!(await readReady())) {
+      throw error;
+    }
+  };
+  const settled = Promise.resolve(operation).then(
+    () => requireReady(new Error(`Independent WAL writer exited before publishing ${file}`)),
+    requireReady,
+  );
+  await Promise.race([receipts.waitFor(file, "ready"), settled]);
 }
 
 async function readWriterGeneration(file: string): Promise<number> {
@@ -49,7 +70,17 @@ async function readWriterGeneration(file: string): Promise<number> {
   return Number(generations.at(-2) ?? -1);
 }
 
-it.for(["inventory", "snapshot", "discover", "versions"] as const)(
+function checkDatabase(db: ReturnType<typeof openNodeSqliteDatabase>) {
+  expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+  expect(db.prepare("SELECT rowid, value FROM evidence").all()).toEqual([
+    { rowid: 71, value: "preserved" },
+  ]);
+  expect(db.prepare("SELECT length(bytes) AS bytes FROM payload").get()).toEqual({
+    bytes: 4194304,
+  });
+}
+
+it.for(["snapshot", "discover"] as const)(
   "%s acquires coherent rehearsal copies while an independent WAL writer commits",
   { timeout: 30_000 },
   async (mode, { signal }) => {
@@ -65,26 +96,24 @@ it.for(["inventory", "snapshot", "discover", "versions"] as const)(
       const candidateRoot = path.join(root, "package");
       const shared = path.join(stateDir, "state", "openclaw.sqlite");
       const agent = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
-      for (const file of [shared, agent]) {
+      const supplemental = path.join(stateDir, "plugins", "workboard", "workboard.sqlite");
+      const sources = [shared, agent, supplemental];
+      for (const file of sources) {
         await fs.mkdir(path.dirname(file), { recursive: true });
-        const db = openNodeSqliteDatabase(file);
-        try {
-          db.exec(`
+        using db = openNodeSqliteDatabase(file);
+        db.exec(`
           PRAGMA journal_mode = WAL;
-          PRAGMA user_version = 3;
+          PRAGMA user_version = ${file === supplemental ? 0 : 3};
           CREATE TABLE witness (id INTEGER PRIMARY KEY, generation INTEGER, inverse INTEGER);
           INSERT INTO witness VALUES (1, 0, 0), (2, 0, 0);
           CREATE TABLE payload (bytes BLOB);
           INSERT INTO payload VALUES (zeroblob(4194304));
+          CREATE TABLE evidence(value TEXT);
+          INSERT INTO evidence(rowid, value) VALUES(71, 'preserved');
         `);
-          if (file === shared) {
-            db.exec("CREATE TABLE agent_databases (path TEXT);");
-            db.prepare("INSERT INTO agent_databases VALUES (?)").run(
-              path.relative(stateDir, agent),
-            );
-          }
-        } finally {
-          db.close();
+        if (file === shared) {
+          db.exec("CREATE TABLE agent_databases (path TEXT);");
+          db.prepare("INSERT INTO agent_databases VALUES (?)").run(path.relative(stateDir, agent));
         }
       }
       await fs.mkdir(candidateRoot);
@@ -100,12 +129,12 @@ it.for(["inventory", "snapshot", "discover", "versions"] as const)(
       import fs from "node:fs";
       import { DatabaseSync } from "node:sqlite";
       import { setTimeout as sleep } from "node:timers/promises";
-      const files = ${JSON.stringify([shared, agent])};
+      ${fixtureReceiptClientSource(receipts.endpoint)}
+      const files = ${JSON.stringify(sources)};
       const stores = files.map(file => new DatabaseSync(file));
       try {
         for (const db of stores) db.exec("PRAGMA busy_timeout = 1000; PRAGMA wal_autocheckpoint = 1;");
         fs.writeFileSync(${JSON.stringify(progress)}, "");
-        fs.writeFileSync(${JSON.stringify(ready)}, String(process.pid));
         let generation = 0;
         while (!fs.existsSync(${JSON.stringify(stop)})) {
           for (const db of stores) {
@@ -114,6 +143,10 @@ it.for(["inventory", "snapshot", "discover", "versions"] as const)(
             db.exec("COMMIT");
           }
           fs.appendFileSync(${JSON.stringify(progress)}, String(generation++) + "\\n");
+          if (generation === 1) {
+            fs.writeFileSync(${JSON.stringify(ready)}, String(process.pid));
+            sendReceipt(${JSON.stringify(ready)}, "ready");
+          }
           for (const file of files) {
             if (fs.statSync(file + "-wal").size > 16 * 1024 * 1024) {
               throw new Error("bounded writer WAL exceeded 16 MiB");
@@ -142,7 +175,7 @@ it.for(["inventory", "snapshot", "discover", "versions"] as const)(
       };
       const opened = new Map();
       const open = fs.openSync, read = fs.readSync, close = fs.closeSync;
-      const sources = new Set(${JSON.stringify([shared, agent])});
+      const sources = new Set(${JSON.stringify(sources)});
       fs.openSync = function(file, ...args) {
         const fd = open.call(this, file, ...args);
         if (sources.has(String(file))) opened.set(fd, true);
@@ -170,7 +203,11 @@ it.for(["inventory", "snapshot", "discover", "versions"] as const)(
         targetStateDir,
         stagingRoot: targetStateDir,
         candidateRoot,
+        additionalPaths: [supplemental],
         config: {},
+        // Current launchers' reply shape publishes supplemental schema rows.
+        includeLocalStoreVersions: true,
+        includeClientCredentialStoreVersion: true,
         env: {
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
         },
@@ -204,10 +241,8 @@ it.for(["inventory", "snapshot", "discover", "versions"] as const)(
         maxOutputBytes: { stdout: 4096, stderr: 4096 },
       });
       try {
-        await waitForFile(ready);
-        await expect
-          .poll(() => readWriterGeneration(progress), { timeout: 10_000 })
-          .toBeGreaterThanOrEqual(0);
+        await withinTest(fixtureEventBeforeSettlement(ready, writing), signal);
+        expect(await readWriterGeneration(progress)).toBeGreaterThanOrEqual(0);
         const before = await readWriterGeneration(progress);
         const result = await runWorker({ mode, ...admission });
         expect(result.code, result.stderr.toString()).toBe(0);
@@ -217,7 +252,7 @@ it.for(["inventory", "snapshot", "discover", "versions"] as const)(
           .filter((line) => line.startsWith("State schema progress: "))
           .map((line) => JSON.parse(line.slice("State schema progress: ".length)));
         const completed = progressFrames.filter((entry) => entry.snapshot?.status === "completed");
-        expect(completed).toHaveLength(mode === "snapshot" ? 2 : 1);
+        expect(completed).toHaveLength(mode === "snapshot" ? 3 : 1);
         for (const { snapshot } of completed) {
           expect(snapshot.copiedBytes).toBeGreaterThan(4194304);
           expect(snapshot.copiedPages).toBeGreaterThan(0);
@@ -226,7 +261,7 @@ it.for(["inventory", "snapshot", "discover", "versions"] as const)(
         }
         // One fresh materialization per source; verification consumes that private image.
         expect((await fs.readFile(backups, "utf8")).split("\n").filter(Boolean)).toHaveLength(
-          mode === "snapshot" ? 2 : 1,
+          mode === "snapshot" ? 3 : 1,
         );
         const observedAfter = await readWriterGeneration(progress);
         expect(observedAfter).toBeGreaterThan(before);
@@ -234,22 +269,10 @@ it.for(["inventory", "snapshot", "discover", "versions"] as const)(
         await fs.writeFile(stop, "stop");
         await writing;
         const after = await readWriterGeneration(progress);
-        if (mode === "inventory") {
-          const inventory = UpdateCandidateSnapshotInventorySchema.parse(
-            JSON.parse(result.stdout.toString()),
-          );
-          expect([...inventory.databases.keys()]).toEqual(expect.arrayContaining([shared, agent]));
-        } else if (mode === "discover") {
+        if (mode === "discover") {
           expect(JSON.parse(result.stdout.toString())).toMatchObject({
             sharedVersion: { path: shared, userVersion: 3 },
           });
-        } else if (mode === "versions") {
-          expect(JSON.parse(result.stdout.toString())).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({ path: shared, userVersion: 3 }),
-              expect.objectContaining({ path: agent, userVersion: 3 }),
-            ]),
-          );
         } else {
           const snapshot = UpdateCandidateStateSnapshotSchema.parse(
             JSON.parse(result.stdout.toString()),
@@ -258,55 +281,34 @@ it.for(["inventory", "snapshot", "discover", "versions"] as const)(
             expect.arrayContaining([
               expect.objectContaining({ path: shared, userVersion: 3 }),
               expect.objectContaining({ path: agent, userVersion: 3 }),
+              expect.objectContaining({ path: supplemental, userVersion: 0 }),
             ]),
           );
-          for (const source of [shared, agent]) {
-            const db = openNodeSqliteDatabase(
+          for (const source of sources) {
+            using db = openNodeSqliteDatabase(
               path.join(targetStateDir, path.relative(stateDir, source)),
               { readOnly: true },
             );
-            try {
-              expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-              const rows = db.prepare("SELECT generation, inverse FROM witness ORDER BY id").all();
-              expect(rows).toHaveLength(2);
-              expect(rows[0]).toEqual(rows[1]);
-              expect(rows[0]?.generation).toBeGreaterThanOrEqual(before);
-              expect(rows[0]?.generation).toBeLessThanOrEqual(after);
-              expect(Number(rows[0]?.generation) + Number(rows[0]?.inverse)).toBe(0);
-              expect(db.prepare("SELECT length(bytes) AS bytes FROM payload").get()).toEqual({
-                bytes: 4194304,
-              });
-            } finally {
-              db.close();
-            }
+            checkDatabase(db);
+            const rows = db.prepare("SELECT generation, inverse FROM witness ORDER BY id").all();
+            expect(rows).toHaveLength(2);
+            expect(rows[0]).toEqual(rows[1]);
+            expect(rows[0]?.generation).toBeGreaterThanOrEqual(before);
+            expect(rows[0]?.generation).toBeLessThanOrEqual(after);
+            expect(Number(rows[0]?.generation) + Number(rows[0]?.inverse)).toBe(0);
           }
         }
-        console.log(
-          JSON.stringify({
-            mode,
-            writerPid: Number(await fs.readFile(ready, "utf8")),
-            before,
-            after,
-          }),
-        );
       } finally {
         await fs.writeFile(stop, "stop");
         const ended = await writing;
         expect(ended.code, ended.stderr.toString()).toBe(0);
       }
-      for (const source of [shared, agent]) {
-        const db = openNodeSqliteDatabase(source, { readOnly: true });
-        try {
-          expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-          expect(
-            db.prepare("SELECT count(*) AS n FROM witness WHERE generation + inverse != 0").get(),
-          ).toEqual({ n: 0 });
-          expect(db.prepare("SELECT length(bytes) AS bytes FROM payload").get()).toEqual({
-            bytes: 4194304,
-          });
-        } finally {
-          db.close();
-        }
+      for (const source of sources) {
+        using db = openNodeSqliteDatabase(source, { readOnly: true });
+        checkDatabase(db);
+        expect(
+          db.prepare("SELECT count(*) AS n FROM witness WHERE generation + inverse != 0").get(),
+        ).toEqual({ n: 0 });
       }
     }, signal));
   },

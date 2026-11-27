@@ -1,22 +1,47 @@
 // Keyed async queue helpers serialize async plugin work by key while preserving parallelism.
+import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
 /** Optional lifecycle hooks fired around each queued task. */
 export type KeyedAsyncQueueHooks = {
   onEnqueue?: () => void;
   onSettle?: () => void;
 };
 
-/** Serialize async work per key while allowing unrelated keys to run concurrently. */
+type KeyedAsyncTask<T, TKey> = {
+  tails: {
+    get(key: TKey): Promise<unknown> | undefined;
+    set(key: TKey, tail: Promise<void>): unknown;
+    delete(key: TKey): boolean;
+  };
+  task: () => Promise<T>;
+  hooks?: KeyedAsyncQueueHooks;
+  /** Cancel admission only; a running task retains its keys until it settles. */
+  signal?: AbortSignal;
+} & ({ key: TKey } | { keys: readonly TKey[] });
+
+/** Reserve every task key before yielding; unrelated keys remain independent. */
+export function enqueueKeyedTask<T, TKey>(params: KeyedAsyncTask<T, TKey>): Promise<T>;
 export function enqueueKeyedTask<T>(params: {
   tails: Map<string, Promise<void>>;
   key: string;
   task: () => Promise<T>;
   hooks?: KeyedAsyncQueueHooks;
-}): Promise<T> {
+  signal?: AbortSignal;
+}): Promise<T>;
+export function enqueueKeyedTask<T, TKey>(params: KeyedAsyncTask<T, TKey>): Promise<T> {
   params.hooks?.onEnqueue?.();
-  const previous = params.tails.get(params.key) ?? Promise.resolve();
+  const keys = "keys" in params ? params.keys : [params.key];
+  const previous =
+    "keys" in params
+      ? Promise.allSettled(keys.map((key) => params.tails.get(key) ?? Promise.resolve()))
+      : (params.tails.get(params.key) ?? Promise.resolve()).catch(() => undefined);
+  const admitted = params.signal ? racePromiseWithAbortSignal(previous, params.signal) : previous;
+  // Cancellation rejects the waiter promptly, but its reservation still joins
+  // the predecessor before settling. Otherwise later writers could overlap it.
   const current = previous
-    .catch(() => undefined)
-    .then(params.task)
+    .then(() => {
+      params.signal?.throwIfAborted();
+      return params.task();
+    })
     .finally(() => {
       params.hooks?.onSettle?.();
     });
@@ -24,14 +49,18 @@ export function enqueueKeyedTask<T>(params: {
     () => undefined,
     () => undefined,
   );
-  params.tails.set(params.key, tail);
+  for (const key of keys) {
+    params.tails.set(key, tail);
+  }
   const cleanup = () => {
-    if (params.tails.get(params.key) === tail) {
-      params.tails.delete(params.key);
+    for (const key of keys) {
+      if (params.tails.get(key) === tail) {
+        params.tails.delete(key);
+      }
     }
   };
   tail.then(cleanup, cleanup);
-  return current;
+  return params.signal ? admitted.then(() => current) : current;
 }
 
 /** Small per-key async queue wrapper for plugin runtimes that need serialized work. */

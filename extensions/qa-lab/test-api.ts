@@ -16,7 +16,13 @@ export {
   type QaEvidenceSummaryV3Entry,
   validateQaEvidenceSummaryJson,
 } from "./src/evidence-summary.js";
+export { seedQaSessionTranscript } from "./src/suite-runtime-agent-session.js";
 export { splitQaModelRef } from "./src/model-selection.js";
+export { buildQaGatewayConfig } from "./src/qa-gateway-config.js";
+export {
+  normalizeResponsesInput,
+  resolveMockSubagentTurn,
+} from "./src/providers/mock-openai/mock-openai-input.js";
 export { liveFrontierProviderDefinition as qaLiveFrontierProvider } from "./src/providers/live-frontier/index.js";
 export { QA_FRONTIER_PROVIDER_IDS } from "./src/providers/live-frontier/catalog.js";
 export { qaProfileEvidencePlan } from "./src/profile-evidence-plan.js";

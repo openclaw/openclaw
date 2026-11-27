@@ -38,14 +38,7 @@ function replayableTranscriptRole(record: SessionRecord | null): "user" | "assis
   return role === "user" || role === "assistant" ? role : undefined;
 }
 
-export function selectRecentUserAssistantReplayRecords(
-  records: readonly unknown[],
-  maxMessages = DEFAULT_REPLAY_MAX_MESSAGES,
-): unknown[] {
-  const max = Math.max(0, maxMessages);
-  if (max === 0) {
-    return [];
-  }
+export function selectRecentUserAssistantReplayRecords(records: readonly unknown[]): unknown[] {
   const kept: KeptParsedRecord[] = [];
   for (const record of records) {
     const role = replayableTranscriptRole(record as SessionRecord | null);
@@ -53,36 +46,13 @@ export function selectRecentUserAssistantReplayRecords(
       kept.push({ role, record });
     }
   }
-  const tail = selectAlternatingReplayTail(kept, max);
-  return tail.map((entry) => entry.record);
-}
-
-function selectAlternatingReplayTail<T extends { role: "user" | "assistant" }>(
-  kept: T[],
-  max: number,
-): T[] {
-  if (kept.length === 0) {
-    return [];
-  }
-  let startIdx = Math.max(0, kept.length - max);
+  let startIdx = Math.max(0, kept.length - DEFAULT_REPLAY_MAX_MESSAGES);
   while (startIdx < kept.length && kept[startIdx]?.role === "assistant") {
     startIdx += 1;
   }
-  if (startIdx === kept.length) {
-    // Retained window is assistant-only; replaying would re-create the same
-    // role-ordering hazard this reset path is recovering from.
-    return [];
-  }
-  return coalesceAlternatingReplayTail(kept.slice(startIdx));
-}
-
-// Keep the newest record from each same-role run, preserving original JSONL bytes
-// for replay while ensuring strict provider alternation.
-function coalesceAlternatingReplayTail<T extends { role: "user" | "assistant" }>(
-  entries: T[],
-): T[] {
-  const tail: T[] = [];
-  for (const entry of entries) {
+  // Keep the newest record from each same-role run without changing its replay bytes.
+  const tail: KeptParsedRecord[] = [];
+  for (const entry of kept.slice(startIdx)) {
     const lastIdx = tail.length - 1;
     if (lastIdx >= 0 && tail[lastIdx]?.role === entry.role) {
       tail[lastIdx] = entry;
@@ -90,5 +60,5 @@ function coalesceAlternatingReplayTail<T extends { role: "user" | "assistant" }>
     }
     tail.push(entry);
   }
-  return tail;
+  return tail.map((entry) => entry.record);
 }
