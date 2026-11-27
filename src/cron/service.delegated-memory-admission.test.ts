@@ -37,7 +37,7 @@ it.skipIf(process.platform !== "linux" || Boolean(process.versions.bun))(
     const due = now + 1_000;
     const { storePath } = fixtures.makeStorePath();
     const jobs = Array.from({ length: 10 }, (_, i) =>
-      cron.createDueIsolatedJob(`job-${i}`, now, due),
+      cron.createDueIsolatedJob({ id: `job-${i}`, nowMs: now, nextRunAtMs: due }),
     );
     await saveCronStore(storePath, { version: 1, jobs });
     const running = async () =>
