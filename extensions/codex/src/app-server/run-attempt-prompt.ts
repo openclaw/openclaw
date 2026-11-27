@@ -460,21 +460,21 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   let threadDeveloperInstructions: string | undefined;
   let baseInDeveloperCarrier = false;
   // Observability view of OpenClaw-managed developer instructions; not the complete
-  // native/provider prompt. Reuse registered relay text so diagnostics include every
-  // relay component. Hook context is already in that text, so only native policy
-  // precedes it. These projections must never feed native thread requests.
+  // native/provider prompt. Stable context is on the thread either way; relay text
+  // already holds hook context, so only native policy precedes it. These projections
+  // must never feed native thread requests.
   const buildRenderedCodexDeveloperInstructions = () =>
     joinPresentSections(
       renderCodexThreadPolicy(
         baseInDeveloperCarrier ? reportedOpenClawBaseInstructions : undefined,
         threadDeveloperInstructions ??
-          (inferenceInstructions !== undefined
-            ? (turnState.promptBuild.threadDeveloperInstructions ??
-              turnState.promptBuild.developerInstructions)
-            : joinPresentSections(
-                turnState.promptBuild.developerInstructions,
-                refreshableInstructions,
-              )),
+          joinPresentSections(
+            inferenceInstructions !== undefined
+              ? (turnState.promptBuild.threadDeveloperInstructions ??
+                  turnState.promptBuild.developerInstructions)
+              : turnState.promptBuild.developerInstructions,
+            refreshableInstructions,
+          ),
       ),
       inferenceInstructions ?? collaboration.developer_instructions ?? undefined,
     );

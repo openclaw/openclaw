@@ -7,8 +7,11 @@ export function manifestOwnsWorkerProvider(
   manifest: PluginManifestRecord | undefined,
   providerIds: ReadonlySet<string>,
 ): boolean {
-  return normalizeWorkerProviderIds(manifest?.contracts?.workerProviders ?? []).some((id) =>
-    providerIds.has(id),
+  return (
+    providerIds.size > 0 &&
+    normalizeWorkerProviderIds(manifest?.contracts?.workerProviders ?? []).some((id) =>
+      providerIds.has(id),
+    )
   );
 }
 
@@ -17,6 +20,9 @@ export function listBundledWorkerProviderOwners(
   providerIds: readonly string[],
 ): Array<{ pluginId: string; providerId: string }> {
   const selected = new Set(normalizeWorkerProviderIds(providerIds));
+  if (selected.size === 0) {
+    return [];
+  }
   return registry.plugins
     .filter((plugin) => plugin.origin === "bundled")
     .flatMap((plugin) =>

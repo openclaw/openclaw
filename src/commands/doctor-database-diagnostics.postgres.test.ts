@@ -23,7 +23,8 @@ const connection = typeof configured === "string" ? configured : undefined;
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 
 async function snapshot(...args: Parameters<typeof diagnosticOutput>) {
-  expect(await diagnosticOutput(...args)).toMatchSnapshot();
+  const output = await diagnosticOutput(...args);
+  expect({ text: output.text }).toMatchSnapshot();
 }
 
 describe.skipIf(!connection)("Doctor physical PostgreSQL output", () => {

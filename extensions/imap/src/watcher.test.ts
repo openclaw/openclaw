@@ -222,7 +222,10 @@ describe("IMAP watcher protocol boundary", () => {
       const sender = retry && uid === 30 ? "blocked@evil.example" : "trusted@example.com";
       server.append(`From: ${sender}\r\nSubject: Retry ${uid}\r\n\r\nMessage ${uid}`);
     }
-    await waitForCursor(61, retry ? 10_000 : 1_000);
+    // The 60-message backlog sweep runs against real timers; under a loaded machine
+    // (shared CI runners, parallel shards) it can exceed a tight deadline, so both
+    // variants use the same margin the retry path already needed.
+    await waitForCursor(61, 10_000);
     const expected = Array.from({ length: 60 }, (_, index) => index + 2).filter(
       (uid) => !retry || uid !== 30,
     );

@@ -90,6 +90,8 @@ export type DurableDraftModelSelection = {
 
 export type DurableComposerDraft = {
   revision: number;
+  /** Unchanged attachments keep their identity across caption edits. */
+  attachmentVersion?: string;
   text: string;
   mentions?: readonly HumanMention[];
   goalMode?: ChatGoalDraftMode;

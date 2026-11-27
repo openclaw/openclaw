@@ -18,13 +18,15 @@ type PendingTimelineEvent =
   | {
       type: "mark";
       name: string;
+      observedAt: number;
       durationMs: number;
       totalMs: number;
     }
   | {
       type: "span";
       name: string;
-      durationMs: number;
+      startedAt: number;
+      completedAt: number;
     };
 
 const CLI_STARTUP_TIMELINE_PHASE = "cli.startup";
@@ -125,11 +127,9 @@ export async function measureGatewayBootstrapStep<T>(
   }
   const startedAt = performance.now();
   const { formatConsoleDiagnosticLine } = await import("../logging/json-console-line.js");
-  if (progressEnabled) {
-    process.stderr.write(
-      `${formatConsoleDiagnosticLine({ level: "info", message: `[gateway] startup phase: ${name} starting total=${startedAt.toFixed(1)}ms` })}\n`,
-    );
-  }
+  // Update filters the trace it enables internally; keep ordinary progress visible.
+  const starting = `[gateway] startup ${progressEnabled ? "phase" : "trace"}: ${name} starting total=${startedAt.toFixed(1)}ms`;
+  process.stderr.write(`${formatConsoleDiagnosticLine({ level: "info", message: starting })}\n`);
   const result = await run();
   const completedAt = performance.now();
   const facts = metrics?.() ?? {};
@@ -204,6 +204,7 @@ export function createGatewayDispatchStartupTrace(
         {
           type: "mark",
           name: event.name,
+          timestamp: new Date(performance.timeOrigin + event.observedAt).toISOString(),
           phase: CLI_STARTUP_TIMELINE_PHASE,
           durationMs: event.durationMs,
           attributes: { totalMs: event.totalMs },
@@ -212,7 +213,7 @@ export function createGatewayDispatchStartupTrace(
       );
       return;
     }
-    module.emitCompletedDiagnosticsTimelineSpan(event.name, event.durationMs, {
+    module.emitCompletedDiagnosticsTimelineSpan(event.name, event, {
       phase: CLI_STARTUP_TIMELINE_PHASE,
       ...commonOptions,
     });
@@ -312,6 +313,7 @@ export function createGatewayDispatchStartupTrace(
       enqueueTimelineEvent({
         type: "mark",
         name: timelineName(name),
+        observedAt: now,
         durationMs,
         totalMs,
       });
@@ -331,6 +333,7 @@ export function createGatewayDispatchStartupTrace(
         );
       }
       let bufferCompletedTimelineSpan = false;
+      let timelineStartedAt = before;
       let completed = false;
       try {
         if (timelineModule && options.timeline !== false) {
@@ -352,6 +355,10 @@ export function createGatewayDispatchStartupTrace(
           }
           bufferCompletedTimelineSpan = timelineActivation === "unknown";
         }
+        // Match live spans: activation/import waits precede the measured operation.
+        if (bufferCompletedTimelineSpan) {
+          timelineStartedAt = performance.now();
+        }
         const result = await run();
         completed = true;
         return result;
@@ -361,7 +368,8 @@ export function createGatewayDispatchStartupTrace(
           enqueueTimelineEvent({
             type: "span",
             name: timelineName(name),
-            durationMs: now - before,
+            startedAt: timelineStartedAt,
+            completedAt: now,
           });
         }
         if (completed) {

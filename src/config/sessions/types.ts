@@ -395,6 +395,8 @@ type SessionEntryCore = SessionEntryProvenance &
     parentSessionLifecycleRevision?: string;
     /** How this session node came to exist; written once and retained across sessionId rotations. */
     createdVia?: SessionCreatedVia;
+    /** Write-once sessions_create intent; spawn lineage still bounds admission depth. */
+    createdIndependently?: true;
     /** Creation-only presentation surface; stored in entry_json without a column projection. */
     createdSurface?: SessionRow["createdSurface"];
     /** Actor that caused node creation, with an optional profile, session, or sender id; written once. */
@@ -734,6 +736,8 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   lastRunId?: string;
   /** Run admitted by the session lane; overwritten at admission and checked by transcript writes. */
   activeWriterRunId?: string;
+  /** Admitted native shell calls whose terminal transcript write has not been acknowledged. */
+  pendingShellCalls?: import("./session-restart-resume-scope.js").PendingSessionShellCalls;
   /** Canonical remote repository awaiting preparation by this exact session generation. */
   pendingProjectGitUrl?: string;
   /** Authorized worktree intent awaiting preparation by an admitted turn. */
@@ -901,6 +905,7 @@ function mergeSessionEntryWithPolicy(
     next.createdVia = existing.createdVia;
   }
   next.createdSurface = existing.createdSurface;
+  next.createdIndependently = existing.createdIndependently;
   if (existing.createdActor !== undefined) {
     next.createdActor = existing.createdActor;
   }

@@ -24,6 +24,7 @@ import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { prepareRuntimePluginsConfig } from "../../src/plugins/config-state.js";
 import type { PluginManifestRegistry } from "../../src/plugins/manifest-registry.types.js";
 import { freezeJsonSnapshot } from "../../src/shared/immutable-data.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -105,12 +106,7 @@ run(100);
 globalThis.gc();
 const inspector = new Session();
 if (values.allocation) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 32_768,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 32_768);
 }
 const hostLoadBefore = loadavg();
 const cpuBefore = process.cpuUsage();

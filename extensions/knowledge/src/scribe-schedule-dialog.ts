@@ -1,12 +1,7 @@
 /** Change schedule: the dialog that picks a new schedule for a scribe's automation. */
 import { button, choice, el } from "./page-dom.js";
 import { dialogFrame, scribeTile, show } from "./scribe-dialog.js";
-import {
-  SCHEDULE_CHOICES,
-  scheduleWords,
-  scribeLabel,
-  type ScribeDefinition,
-} from "./scribes-catalog.js";
+import { SCHEDULE_CHOICES, scheduleWords, type ScribeDefinition } from "./scribes-catalog.js";
 
 /** A cron schedule in a time zone, as Change schedule sets it. */
 type CronSchedule = { kind: "cron"; expr: string; tz: string };
@@ -159,7 +154,7 @@ export function openScheduleDialog(input: ScheduleDialogInput) {
     preview,
     el(
       "p",
-      `${scribeLabel(scribe)} makes the change in a turn, so later runs keep your access. Its other settings stay as they are.`,
+      "Later runs follow the new schedule. The run message and other settings stay as they are.",
       "knowledge-muted scribe-dialog-blurb",
     ),
   );

@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { SessionWorkspaceListResult } from "../../../api/types.ts";
+import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import { createGatewayBrowserClientFixture } from "../chat-application-context.test-support.ts";
 import { createSessionCapabilityFixture } from "../chat-session-capability.test-support.ts";
 import {
@@ -22,6 +24,8 @@ import { textFile } from "./chat-session-workspace.test-support.ts";
 import {
   createSessionWorkspaceProps,
   openSessionWorkspaceFile,
+  refreshSessionWorkspace,
+  resolveSessionDiffSidebarContent,
   type SessionWorkspaceHost,
 } from "./chat-session-workspace.ts";
 
@@ -518,4 +522,40 @@ it("keeps flat catalog request identities, metadata and artifact search scope", 
   expect(workspaceCatalogSearch(listing, "report", "session").map((entry) => entry.origin)).toEqual(
     ["session"],
   );
+});
+
+it("keeps accepted Changes totals through a same-workspace refresh, never across sessions", async () => {
+  const { state } = await fixture({ loadInitialListing: false });
+  const totals = (additions: number): SessionsDiffResult => ({
+    sessionKey: state.sessionKey,
+    files: [],
+    additions,
+    deletions: 84,
+  });
+  const stale = createDeferred<SessionsDiffResult>();
+  const request = vi
+    .fn()
+    .mockResolvedValueOnce(totals(4656))
+    .mockReturnValueOnce(stale.promise)
+    .mockResolvedValueOnce(totals(4700));
+  Object.assign(state, {
+    client: createGatewayBrowserClientFixture({ request }),
+    hello: gatewayHelloForMethods(["sessions.diff"], ["operator.read"]),
+    sessionWorkspaceReadDisabledReason: null,
+  });
+  const diff = () => {
+    const content = resolveSessionDiffSidebarContent(state);
+    return content?.kind === "session-diff" ? content : undefined;
+  };
+  const summary = { scope: "uncommitted" } as const;
+  await diff()?.load(summary, { summaryOnly: true });
+  const staleLoad = diff()?.load(summary, { summaryOnly: true, refresh: true });
+  refreshSessionWorkspace(state, false);
+  expect(diff()?.uncommitted?.additions).toBe(4656);
+  await diff()?.load(summary, { summaryOnly: true });
+  stale.resolve(totals(1));
+  await staleLoad;
+  expect(diff()?.uncommitted?.additions).toBe(4700);
+  state.sessionKey = "agent:main:other";
+  expect(diff()?.uncommitted).toBeUndefined();
 });

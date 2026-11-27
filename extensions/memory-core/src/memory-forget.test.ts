@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { StatementSync } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core";
+import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import { encodeMemoryEmbedding } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { readMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
@@ -293,7 +296,16 @@ describe("memory forget", () => {
     const content = `${retainedMemory}- Candidate: ${quotation}\r\n`;
     const retainedCorpus = "[main/sessions/main/survivor#L1] User: Keep this unrelated fact.\n";
     await fs.mkdir(corpusDir, { recursive: true });
-    await fs.writeFile(memoryPath, content);
+    const write = createOpenClawCodingTools({
+      workspaceDir: h.workspaceDir,
+      config: h.cfg,
+      senderIsOwner: true,
+      isTurnTainted: () => true,
+    }).find((tool) => tool.name === "write");
+    await expectDefined(write, "write tool").execute("tainted-write", {
+      path: "MEMORY.md",
+      content,
+    });
     await fs.writeFile(
       corpusPath,
       `[main/sessions/main/target#L1] ${quotation}\r\n${retainedCorpus}`,
@@ -312,6 +324,10 @@ describe("memory forget", () => {
     const report = await forget("target");
     expect(report).toEqual({ ...preview, dryRun: false });
     expect(await readText(memoryPath)).toBe(retainedMemory);
+    // The scrub publishes new bytes but must not lift MEMORY.md quarantine.
+    await expect(
+      readMemoryArtifactProvenance({ workspaceDir: h.workspaceDir, relativePath: "MEMORY.md" }),
+    ).resolves.toMatchObject({ originClass: "untrusted" });
     expect(await readText(corpusPath)).toBe(retainedCorpus);
     expect(await h.readEntries(DREAMING_MEMORY_BACKUP_NAMESPACE)).toEqual([backup(retainedMemory)]);
   });

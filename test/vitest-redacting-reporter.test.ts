@@ -140,6 +140,7 @@ it.each([
   ["exact-value", "EXAMPLE_TOKEN", synthetic],
 ])("redacts %s failures through the shard runner", (kind, credential, value) => {
   const marker = `<redacted len=${value.length}>`;
+  const filename = "synthetic.session.test.ts";
   const root = tempDirs.make("oc-reporter-redaction-");
   const file = (name: string) => path.join(root, name);
   fs.symlinkSync(path.join(repoRoot, "node_modules"), file("node_modules"), "junction");
@@ -155,16 +156,22 @@ export default {
   test: {
     ...sharedVitestConfig.test,
     root: ${JSON.stringify(root)}, dir: ${JSON.stringify(root)},
-    include: ["synthetic.test.ts"], exclude: [], setupFiles: [], runner: undefined,
+    include: [${JSON.stringify(filename)}], exclude: [], setupFiles: [], runner: undefined,
     maxWorkers: 1, fileParallelism: false,
     reporters: ["verbose", ["json", { outputFile: ${JSON.stringify(path.join(root, "result.json"))} }], ["junit", { outputFile: ${JSON.stringify(path.join(root, "result.xml"))} }]],
   },
 };
 `,
   );
-  fs.writeFileSync(
-    path.join(root, "synthetic.test.ts"),
-    `
+  const assertion =
+    kind === "resolved-env"
+      ? "await expect(Promise.resolve(actual)).rejects.toThrow();"
+      : kind === "node-multiline"
+        ? "assert.deepStrictEqual(actual, expected);"
+        : kind === "spy-call"
+          ? "const spy = vi.fn(); spy(actual); expect(spy).toHaveBeenCalledWith(expected);"
+          : "expect(actual).toEqual(expected);";
+  const source = `
 import assert from "node:assert/strict";
 import { chai, expect, it, vi } from "vitest";
 chai.config.truncateThreshold = 0;
@@ -172,10 +179,11 @@ it("synthetic ${kind} failure", async ({ annotate }) => {
   await annotate(${JSON.stringify(`AUTHORIZATION=Bearer ${synthetic}\nretained % detail`)}, ${JSON.stringify(`EXAMPLE_TOKEN=${synthetic}`)});
   const actual = ${kind === "resolved-env" ? `{ databaseTarget: { env: { FAL_KEY: ${JSON.stringify(value)}, NORMAL: "x" } } }` : kind === "exact-value" ? `{ url: "https://example.invalid/?q=" + process.env.EXAMPLE_PROVIDER_KEY }` : kind === "entries-array" ? `Object.entries({ ${credential}: ${JSON.stringify(value)}, NORMAL: "received" })` : `{ nested: { env: { ${credential}: ${JSON.stringify(value)} } }, visible: "received" }`};
   const expected = ${kind === "entries-array" ? `Object.entries({ ${credential}: ${JSON.stringify(value)}, NORMAL: "expected" })` : `{ nested: { env: { ${kind === "node-multiline" ? "" : `${credential}: ${JSON.stringify(value)}`} } }, visible: "expected" }`};
-  ${kind === "resolved-env" ? "await expect(Promise.resolve(actual)).rejects.toThrow();" : kind === "node-multiline" ? "assert.deepStrictEqual(actual, expected);" : kind === "spy-call" ? "const spy = vi.fn(); spy(actual); expect(spy).toHaveBeenCalledWith(expected);" : "expect(actual).toEqual(expected);"}
+  ${assertion}
 });
-`,
-  );
+`;
+  fs.writeFileSync(file(filename), source);
+  const assertionLine = source.slice(0, source.indexOf(assertion)).split("\n").length;
   const env: NodeJS.ProcessEnv = {
     ...Object.fromEntries(
       Object.entries(testRunnerFixtureEnv()).filter(([key]) => !/^(VITEST|OPENCLAW_)/u.test(key)),
@@ -223,11 +231,25 @@ it("synthetic ${kind} failure", async ({ annotate }) => {
   );
   expect(output).toContain(kind === "exact-value" ? "https://example.invalid/?q=" : credential);
   expect(output).toContain("[vitest:resources]");
-  for (const outputFile of ["result.json", "result.xml", "summary.md"]) {
-    const report = fs.readFileSync(file(outputFile), "utf8");
+  const json = fs.readFileSync(file("result.json"), "utf8");
+  const junit = fs.readFileSync(file("result.xml"), "utf8");
+  for (const [outputFile, report] of [
+    ["result.json", json],
+    ["result.xml", junit],
+    ["summary.md", fs.readFileSync(file("summary.md"), "utf8")],
+  ] as const) {
     expect(report.includes(synthetic), outputFile).toBe(false);
     if (outputFile !== "summary.md") {
       expect(report, outputFile).toContain(`redacted len=${value.length}`);
     }
   }
+  const failures = JSON.parse(json).testResults[0].assertionResults[0].failureMessages;
+  expect(failures).toHaveLength(1);
+  const location = new RegExp(
+    `synthetic\\.session\\.test\\.ts:${assertionLine}:[1-9]\\d*`,
+    "u",
+  ).exec(failures[0])?.[0];
+  expect(location).toBeDefined();
+  expect(output).toContain(location);
+  expect(junit).toContain(location);
 });

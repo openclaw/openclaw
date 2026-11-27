@@ -258,7 +258,6 @@ export function createSelfHeldSendRetainer(
             delete work.scope;
           };
         },
-        senderIsOwner: options.senderIsOwner,
         run: async (scope) => {
           const outcomes: unknown[] = [];
           for (const item of ownedBatch.operations.values()) {

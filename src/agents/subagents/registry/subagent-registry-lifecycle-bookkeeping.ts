@@ -1,12 +1,10 @@
 import { runWithGatewayDetachedWorkContinuation } from "../../../process/gateway-work-admission.js";
 import { defaultRuntime } from "../../../runtime.js";
-import { isCronRunSessionKey } from "../../../sessions/session-key-utils.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { retireSessionMcpRuntime } from "../../agent-bundle-mcp-tools.js";
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
+import { subagentTerminalTransition } from "../completion/subagent-terminal-transition.js";
 import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
-import { markRequesterSettleWakePending } from "./subagent-delivery-state.js";
-import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { retireSubagentGatewayBinding } from "./subagent-registry-execution-cleanup.js";
 import type {
   CleanupBookkeepingParams,
@@ -41,17 +39,16 @@ export async function completeCleanupBookkeeping(
     }
     entry = current;
   };
-  const scheduleCleanupTails = (options: {
-    allowRetiredRow: boolean;
-    isDeleteCleanup: boolean;
-  }) => {
+  const scheduleCleanupTails = (
+    decision: ReturnType<typeof subagentTerminalTransition.cleanup>,
+  ) => {
     // Retired cleanup may continue only while no replacement owns this execution
     // and no newer child generation owns its session.
     const postBookkeepingEffectsAllowed = () => {
       assertSubagentRegistryWriteSourceCurrent(stateContext);
       const current = getCurrentSubagentRunOwner(params.runs, entry);
       const rowOwnershipMatches =
-        current !== undefined || (options.allowRetiredRow && !params.runs.has(entry.runId));
+        current !== undefined || (decision.retireAfterSettle && !params.runs.has(entry.runId));
       return (
         rowOwnershipMatches &&
         cleanupParams.isCurrent?.() !== false &&
@@ -80,12 +77,12 @@ export async function completeCleanupBookkeeping(
       });
     };
     // The admitted tails report their own failures after bookkeeping has committed.
-    if (!cleanupParams.preserveTranscript) {
+    if (decision.removeTranscript) {
       runCleanupTail("session cleanup", () =>
         removeInternalSessionEffectsSession(entry.execution.transcriptTarget),
       );
     }
-    if (entry.spawnMode !== "session") {
+    if (decision.retireMcp) {
       runCleanupTail("bundle MCP cleanup", () =>
         retireSessionMcpRuntime({
           sessionId: entry.childSessionIdentity?.sessionId,
@@ -102,12 +99,13 @@ export async function completeCleanupBookkeeping(
         }),
       );
     }
-    if (!cleanupParams.provisionalKill && (options.isDeleteCleanup || !entry.collect)) {
+    const contextEndedReason = decision.contextEndedReason;
+    if (contextEndedReason) {
       runCleanupTail("context-engine cleanup", () =>
         params.notifyContextEngineSubagentEnded(
           {
             childSessionKey: entry.childSessionKey,
-            reason: options.isDeleteCleanup ? "deleted" : "completed",
+            reason: contextEndedReason,
             agentDir: entry.agentDir,
             workspaceDir: entry.workspaceDir,
           },
@@ -124,18 +122,16 @@ export async function completeCleanupBookkeeping(
   if (cleanupParams.provisionalKill) {
     // The provider result or the kill's confirmation owns terminal settle.
     // Its kill marker was committed by the caller before reaching this tail.
-    scheduleCleanupTails({ allowRetiredRow: false, isDeleteCleanup: false });
+    scheduleCleanupTails(subagentTerminalTransition.cleanup(entry, cleanupParams, false));
     return;
   }
-  const isDeleteCleanup = cleanupParams.cleanup === "delete";
-  let retireAfterSettle = false;
-  let retireImmediately = false;
+  let decision!: ReturnType<typeof subagentTerminalTransition.cleanup>;
   const assertPublishedOwner = () => {
     assertSubagentRegistryWriteSourceCurrent(stateContext);
     const current = getCurrentSubagentRunOwner(params.runs, entry);
     if (
       cleanupParams.isCurrent?.() === false ||
-      (retireImmediately
+      (decision.retireImmediately
         ? current !== undefined || params.runs.has(entry.runId)
         : current === undefined)
     ) {
@@ -148,54 +144,28 @@ export async function completeCleanupBookkeeping(
     entry,
     stateContext,
     assertCurrent,
-    retire: () => retireImmediately,
+    retire: () => decision.retireImmediately,
     mutate: (draft, current) => {
       const suppressSessionEffects = !context.sessionEffectsHostCurrent(current);
       cleanupParams.finalizeDelivery?.(draft);
-      // Cron reads settled rows until archive; expired discards have no remaining reader.
-      retireAfterSettle =
-        !draft.collect &&
-        ((isDeleteCleanup &&
-          (!isCronRunSessionKey(draft.requesterSessionKey) ||
-            (draft.delivery?.status === "discarded" &&
-              draft.delivery.discardReason === "expired"))) ||
-          (draft.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
-            draft.suppressAnnounceReason !== "killed"));
-      retireImmediately =
-        retireAfterSettle &&
-        cleanupParams.skipRequesterSettleWake === true &&
-        cleanupParams.retainForCleanup !== true;
-      if (!retireImmediately) {
-        draft.cleanupCompletedAt = cleanupParams.completedAt;
-        if (suppressSessionEffects) {
-          draft.execution.suppressSessionEffects = true;
-        }
-        if (draft.collect) {
-          draft.requesterSettleWake = undefined;
-        } else if (!cleanupParams.skipRequesterSettleWake) {
-          if (retireAfterSettle) {
-            draft.retireAfterSettle = true;
-          }
-          markRequesterSettleWakePending(draft);
-        }
-      }
+      decision = subagentTerminalTransition.cleanup(draft, cleanupParams, suppressSessionEffects);
     },
   });
   assertPublishedOwner();
-  if (retireImmediately) {
+  if (decision.retireImmediately) {
     subagentRuns.confirmRetirement(entry);
   }
-  if (retireImmediately || entry.collect || cleanupParams.skipRequesterSettleWake) {
+  if (decision.retireBinding) {
     retireSubagentGatewayBinding(entry);
   }
-  if (isDeleteCleanup || retireAfterSettle) {
+  if (decision.clearPendingError) {
     params.clearPendingLifecycleError(entry.runId);
   }
   // A settle wake may retire its durably marked row before detached tails start.
   // A replacement row or newer child generation still fences these effects.
-  scheduleCleanupTails({ allowRetiredRow: retireAfterSettle, isDeleteCleanup });
+  scheduleCleanupTails(decision);
   assertPublishedOwner();
-  if (!entry.collect && !cleanupParams.skipRequesterSettleWake) {
+  if (decision.wakeRequester) {
     scheduleRequesterSettleWake(context, entry.runId, entry, stateContext);
   }
   context.resumeAncestorCleanup(entry);

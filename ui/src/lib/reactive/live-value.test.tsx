@@ -22,9 +22,10 @@ it("commits controlled values without untracked reads and preserves input select
     flush();
     const input = view.container.querySelector("textarea")!;
     expect(input.value).toBe("draft");
+    input.value = "edited";
     input.setSelectionRange(2, 2);
     setter.mockClear();
-    setValue("draft");
+    setValue("edited");
     flush();
     expect(setter).not.toHaveBeenCalled();
     expect(input.selectionStart).toBe(2);

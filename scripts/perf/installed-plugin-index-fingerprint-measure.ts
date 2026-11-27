@@ -11,6 +11,7 @@ import { captureRuntimeConfig } from "../../src/config/runtime-source-projection
 import { createPluginCache, withPluginCache } from "../../src/plugins/plugin-cache.js";
 import { finalizePluginMetadataSnapshot } from "../../src/plugins/plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../src/plugins/plugin-metadata.test-support.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const allocation = process.argv.includes("--allocation");
 const calls = 2000;
@@ -69,12 +70,7 @@ await withPluginCache(cache, async () => {
   globalThis.gc?.();
   const inspector = new Session();
   if (allocation) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   }
   const started = performance.now();
   const cpuStart = process.threadCpuUsage();

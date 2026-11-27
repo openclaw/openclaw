@@ -23,7 +23,7 @@ async function releaseIdentity(codeRoot) {
   return { build: { ...build, root }, schemaVersions: manifest.openclaw?.schemaVersions };
 }
 
-async function command(fixture, codeRoot, args, timeout = 30_000) {
+export async function runReaderCommand(fixture, codeRoot, args, timeout = 30_000) {
   const process = startNodeFixture([path.resolve(codeRoot, "openclaw.mjs"), ...args], fixture.env);
   let timer;
   /** @type {Error | undefined} */
@@ -60,7 +60,7 @@ async function command(fixture, codeRoot, args, timeout = 30_000) {
 }
 
 function gatewayCall(fixture, codeRoot, method, params) {
-  return command(
+  return runReaderCommand(
     fixture,
     codeRoot,
     [
@@ -107,19 +107,23 @@ async function waitReady(fixture, gateway) {
   throw new Error("Reader Gateway did not become ready within 120 seconds");
 }
 
-async function withGateway(fixture, codeRoot, run) {
-  const { build } = await releaseIdentity(codeRoot);
-  const receipt = { status: "failed", expectedBuild: build, observedBuild: null, ready: false };
-  const gateway = startNodeFixture(
-    [path.resolve(codeRoot, "openclaw.mjs"), "gateway", "run", "--port", String(fixture.port)],
-    fixture.env,
-  );
+async function checkRunningGateway(fixture, codeRoot, gateway, run) {
+  const receipt = { status: "failed", expectedBuild: null, observedBuild: null, ready: false };
   /** @type {Error | undefined} */
   let failure;
   try {
+    try {
+      receipt.expectedBuild = (await releaseIdentity(codeRoot)).build;
+    } catch (error) {
+      throw Object.assign(
+        new Error(error instanceof Error ? error.message : String(error), { cause: error }),
+        { failureKind: "setup" },
+      );
+    }
+    const build = receipt.expectedBuild;
     await waitReady(fixture, gateway);
     receipt.ready = true;
-    receipt.probe = await command(fixture, codeRoot, [
+    receipt.probe = await runReaderCommand(fixture, codeRoot, [
       "gateway",
       "probe",
       "--url",
@@ -154,13 +158,36 @@ async function withGateway(fixture, codeRoot, run) {
     receipt.failureKind = error?.failureKind ?? "compatibility";
     receipt.failure = { message: failure.message, command: error?.command };
   } finally {
-    const exit = await gateway.stop();
-    receipt.gateway = { exit, output: gateway.output(), error: gateway.error()?.message };
+    receipt.gateway = {
+      exit: { code: gateway.child.exitCode, signal: gateway.child.signalCode },
+      output: gateway.output(),
+      error: gateway.error()?.message,
+    };
   }
   if (failure) {
     throw Object.assign(failure, { receipt });
   }
   return receipt;
+}
+
+async function withGateway(fixture, codeRoot, run) {
+  const gateway = startNodeFixture(
+    [path.resolve(codeRoot, "openclaw.mjs"), "gateway", "run", "--port", String(fixture.port)],
+    fixture.env,
+  );
+  let receipt;
+  try {
+    receipt = await checkRunningGateway(fixture, codeRoot, gateway, run);
+    return receipt;
+  } catch (error) {
+    receipt = error.receipt;
+    throw error;
+  } finally {
+    const exit = await gateway.stop();
+    if (receipt) {
+      receipt.gateway = { exit, output: gateway.output(), error: gateway.error()?.message };
+    }
+  }
 }
 
 function historyMessages(history) {
@@ -355,16 +382,9 @@ export async function createReaderFixture({ codeRoot, root, port, env = process.
   return fixture;
 }
 
-// Refusals are failures here. The caller can classify the untouched exit/output receipt.
-export async function smokeReaderFixture(fixture, codeRoot, options = {}) {
-  const reader = {
-    ...fixture,
-    port: options.port ?? fixture.port,
-    env: {
-      ...fixture.env,
-      ...options.env,
-      OPENCLAW_RELEASE_LAUNCHER_FORWARDED: "1",
-    },
-  };
-  return await withGateway(reader, codeRoot, () => readFixture(reader, codeRoot));
+// Read the resident's real rollback target; its lifecycle belongs to the controller.
+export async function smokeRunningReaderFixture(codeRoot, fixture, resident) {
+  return await checkRunningGateway(fixture, codeRoot, resident, () =>
+    readFixture(fixture, codeRoot),
+  );
 }

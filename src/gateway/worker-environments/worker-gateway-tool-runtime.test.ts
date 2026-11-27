@@ -395,8 +395,9 @@ it("prepares deferred discovery guidance with the model tool projection", async 
     "dispatch_action",
   ]);
   const guidance = projection.toolSchemaDirectoryPrompt;
-  expect(guidance).toContain("Deferred names are not directly callable.");
-  expect(guidance).not.toContain("Call a unique deferred tool name directly");
+  expect(guidance?.split("\n")[0]).toBe("Deferred tools: web_fetch");
+  expect(guidance).toContain("not directly callable: call dispatch_action");
+  expect(guidance).not.toContain("Call a unique name directly");
 });
 
 it("reconstructs the configured Code Mode index from worker surface definitions", async () => {
@@ -446,7 +447,7 @@ it("carries the run-granted listing that the cached deferred directory omits", a
     }),
   }));
   const projection = await runtime.getPromptProjection(identity);
-  expect(projection.toolSchemaDirectoryPrompt).toContain("- web_fetch");
+  expect(projection.toolSchemaDirectoryPrompt?.split("\n")[0]).toBe("Deferred tools: web_fetch");
   expect(projection.toolSchemaDirectoryPrompt).not.toContain("skill_library");
   expect(projection.runGrantedToolDirectory).toContain("- skill_library (core)");
 });

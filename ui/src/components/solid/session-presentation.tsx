@@ -91,7 +91,6 @@ export function SessionGlyph(props: {
   content: JSX.Element;
   running: boolean;
   queued?: boolean;
-  background?: boolean;
   runningLabel?: string;
   circular?: boolean;
   badge?: JSX.Element;
@@ -99,14 +98,7 @@ export function SessionGlyph(props: {
   runVisibility?: SessionRunVisibility;
 }) {
   const label = () =>
-    props.runningLabel ??
-    t(
-      props.background
-        ? "sessionsView.backgroundWorkRunning"
-        : props.queued
-          ? "sessionsView.statusQueued"
-          : "sessionsView.activeRun",
-    );
+    props.runningLabel ?? t(props.queued ? "sessionsView.statusQueued" : "sessionsView.activeRun");
   const glyph = () => (
     <span
       class={[
@@ -135,7 +127,6 @@ export function SessionGlyph(props: {
                     "session-glyph__ring",
                     {
                       "session-glyph__ring--queued": props.queued,
-                      "session-glyph__ring--background": props.background,
                       "session-run-indicator--offscreen": offscreen(),
                     },
                   ]}
@@ -145,13 +136,7 @@ export function SessionGlyph(props: {
               }
             >
               <svg
-                class={[
-                  "session-glyph__trace",
-                  {
-                    "session-glyph__trace--queued": props.queued,
-                    "session-glyph__trace--background": props.background,
-                  },
-                ]}
+                class={["session-glyph__trace", { "session-glyph__trace--queued": props.queued }]}
                 viewBox="-16 -11 32 22"
                 role="img"
                 aria-label={label()}
@@ -447,9 +432,7 @@ export function renderSessionLeadingState(props: {
       (session().subagentSummary?.runningChildCount ?? session().runningChildCount) > 0,
   );
   const ownRunActive = () => session().isRunVisuallyActive ?? session().hasActiveRun;
-  const background = () =>
-    !ownRunActive() && !subagentsWorking() && (session().backgroundProcessCount ?? 0) > 0;
-  const running = createMemo(() => ownRunActive() || subagentsWorking() || background());
+  const running = createMemo(() => ownRunActive() || subagentsWorking());
   const ownRunQueued = createMemo(() => ownRunActive() && session().status === "queued");
   const showRun = createMemo(
     () => running() && !props.trailingState && session().attention.kind !== "question",
@@ -534,7 +517,6 @@ export function renderSessionLeadingState(props: {
         running={showRun()}
         queued={ownRunQueued() && !subagentsWorking()}
         runningLabel={runningLabel()}
-        background={background()}
         runVisibility={props.runVisibility}
         circular={!hasIcon() && Boolean(channelAvatarUrl() || hasOwner())}
         ring={

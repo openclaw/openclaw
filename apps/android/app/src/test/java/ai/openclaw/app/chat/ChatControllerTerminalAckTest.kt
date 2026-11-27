@@ -1,7 +1,7 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayRequestRejected
-import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
@@ -314,7 +314,7 @@ class ChatControllerTerminalAckTest {
         listOf<suspend () -> String>(
           { """{"runId":"run-timeout","status":"timeout"}""" },
           { """{"runId":"run-error","status":"error"}""" },
-          { throw GatewayRequestRejected(GatewaySession.ErrorShape("INVALID_REQUEST", "message rejected")) },
+          { throw GatewayRequestRejected(ErrorShape("INVALID_REQUEST", "message rejected")) },
         )
       for ((index, outcome) in outcomes.withIndex()) {
         val controller =

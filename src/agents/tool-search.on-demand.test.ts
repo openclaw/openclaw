@@ -92,14 +92,17 @@ it("loads it when looked up or refused, and refuses dispatch_action and Code Mod
   expect(JSON.stringify(guest.details)).toContain(refusal);
   // Prompt directories and the Code Mode index mark them and exempt them from dispatch_action.
   for (const [mode, rule] of [
-    ["tools", "Tools marked [loads on lookup] become top-level tools after tool_describe; then"],
-    ["directory", "; tools marked [loads on lookup] become top-level after tool_describe, then"],
+    ["tools", "Other names are not directly callable: call dispatch_action"],
+    ["directory", "Call a unique other name directly, or dispatch_action"],
   ] as const) {
     const prompt = buildToolSchemaDirectoryPrompt({
       config: { tools: { toolSearch: { mode } } },
       catalogRef: surface(mode).catalogRef,
     });
-    expect(prompt).toContain("- computer (core) [loads on lookup]");
+    expect(prompt.split("\n")[0]).toContain("computer [loads on lookup]");
+    expect(prompt).toContain(
+      "Tools marked [loads on lookup] become top-level after tool_describe; call them only by name.",
+    );
     expect(prompt).toContain(rule);
   }
   const { catalogRef } = surface("code-mode");
