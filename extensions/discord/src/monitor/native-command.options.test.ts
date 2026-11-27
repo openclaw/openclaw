@@ -433,12 +433,14 @@ it("registers Goal actions as native subcommands with action-specific fields", (
     if (option.type !== ApplicationCommandOptionType.Subcommand) {
       throw new Error("Expected subcommand");
     }
-    expect(option.options?.map(({ name, required }) => ({ name, required })) ?? []).toEqual(
+    expect(
+      option.options?.map(({ name, type, required }) => ({ name, type, required })) ?? [],
+    ).toEqual(
       ["start", "edit"].includes(option.name)
-        ? [{ name: "objective", required: true }]
+        ? [{ name: "objective", type: ApplicationCommandOptionType.String, required: true }]
         : ["status", "clear"].includes(option.name)
           ? []
-          : [{ name: "note", required: false }],
+          : [{ name: "note", type: ApplicationCommandOptionType.String, required: false }],
     );
   }
 });

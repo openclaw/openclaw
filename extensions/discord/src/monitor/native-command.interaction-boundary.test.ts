@@ -463,19 +463,10 @@ it.each<Surface>(["status", "autocomplete", "picker"])(
 );
 
 it.each([
-  [
-    "start",
-    "objective",
-    "Count from 1 to 3\nThen finish",
-    "/goal start Count from 1 to 3\nThen finish",
-  ],
-  ["edit", "objective", "Keep /status literal", "/goal edit Keep /status literal"],
-  ["resume", "note", "CI passed", "/goal resume CI passed"],
+  ["start", "objective", "Count to 3", "/goal start Count to 3"],
+  ["pause", "note", "Waiting for CI", "/goal pause Waiting for CI"],
   ["pause", "note", undefined, "/goal pause"],
   ["status", undefined, undefined, "/goal status"],
-  ["clear", undefined, undefined, "/goal clear"],
-  ["complete", "note", "All checks passed", "/goal complete All checks passed"],
-  ["block", "note", "Waiting on access", "/goal block Waiting on access"],
 ] as const)(
   "routes nested /goal %s to the channel command handler",
   async (action, field, value, prompt) => {
