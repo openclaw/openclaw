@@ -271,8 +271,9 @@ fits; filesystem (14 KB), GitHub (16 KB), and Playwright (19 KB) stay behind
 Tool Search. Later turns of the series keep exactly the MCP tools the session's
 tool listing already sends, so the provider tool list stays byte-stable; a tool
 a server adds mid-series joins the directory below instead. A name another tool
-already uses stays deferred, and configured `include`/`exclude` selectors keep
-their own split.
+already uses stays deferred, as do the tools of a server that advertises
+instructions, which `tool_describe` returns. Configured `include`/`exclude`
+selectors keep their own split.
 
 When the catalog contains deferred MCP tools, the system prompt's deferred-tool
 section ends with a directory of them. The `tool_search` definition never

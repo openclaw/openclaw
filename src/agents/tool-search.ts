@@ -383,7 +383,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       name: TOOL_CALL_RAW_TOOL_NAME,
       label: "Tool Call",
       description:
-        "Call an exact Tool Search result id or name through OpenClaw. Invalid arguments return the tool's input schema; retry from that error. Use tool_describe for a full description; do not invent values the task does not supply.",
+        "Call an exact Tool Search result id or name through OpenClaw. Invalid arguments to OpenClaw and MCP tools return the input schema; retry from that error. Use tool_describe for a full description; do not invent values the task does not supply.",
       parameters: callParameters,
       prepareArguments: prepareToolSearchDispatcherArguments,
       execute: async (

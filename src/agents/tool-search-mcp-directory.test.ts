@@ -386,4 +386,22 @@ describe("direct MCP tools", () => {
     expect(visibleMcp(later)).toEqual(["tracker__create", "tracker__list"]);
     expect(later.directory).toContain("- mcp:tracker:tracker__close");
   });
+
+  it("keeps a server with instructions deferred so tool_describe can return them", () => {
+    const guided = mcpTool("guided", "query", "Query.");
+    setPluginToolMeta(guided, {
+      pluginId: "bundle-mcp",
+      optional: false,
+      mcp: {
+        serverName: "guided",
+        safeServerName: "guided",
+        toolName: "query",
+        operation: "tool",
+        instructions: "Call query with ISO dates.",
+      },
+    });
+    const applied = apply([mcpTool("tracker", "list", "List."), guided], { catalogRef: {} });
+    expect(visibleMcp(applied)).toEqual(["tracker__list"]);
+    expect(applied.directory).toContain("- mcp:guided:guided__query");
+  });
 });
