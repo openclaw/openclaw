@@ -405,7 +405,7 @@ struct ChatCompletedWorkTests {
         ].map(Self.decode)
         let rows = ChatTranscriptRow.build(from: ChatTranscriptRow.mergeToolResults(in: messages))
 
-        let works = Self.work(in: ChatTranscriptRow.collapseCompletedWork(rows, runWorking: false))
+        let works = Self.work(in: ChatTranscriptRow.collapseCompletedWork(rows.answeredByOpenAI(), runWorking: false))
         #expect(works.count == 1)
         let work = try #require(works.first)
         #expect(work.durationMilliseconds == 1_655_000)
@@ -445,7 +445,7 @@ struct ChatCompletedWorkTests {
         let rows = try ChatTranscriptRow.build(from: ChatTranscriptRow.mergeToolResults(in: json.map(Self.decode)))
         // Automatic continuations resume the same request (web chat-turn-boundary.ts:88-102).
         #expect(rows.filter(\.startsTurn).count == 1)
-        let collapsed = ChatTranscriptRow.collapseCompletedWork(rows, runWorking: false)
+        let collapsed = ChatTranscriptRow.collapseCompletedWork(rows.answeredByOpenAI(), runWorking: false)
         let projected = collapsed.dropFirst().map { row -> String? in
             switch row {
             case let .message(message): ChatMessageVisibleText.visibleText(in: message)
@@ -498,7 +498,7 @@ struct ChatCompletedWorkTests {
         let rows = ChatTranscriptRow.collapseCompletedWork(ChatTranscriptRow.build(from: merged), runWorking: false)
         let logs = Self.work(in: rows)
         #expect(logs.map(\.isActivityRun) == [true, true])
-        #expect(logs.map { ChatCompletedWorkSummary.label(work: $0) } == ["Ran commands", "Ran commands, read files"])
+        #expect(logs.map { ChatCompletedWorkSummary.label(work: $0) } == ["Ran commands", "Read files, ran commands"])
         // Narration and a lone command between it stay in place; a failure stays inside its log.
         #expect(Self.visibleIDs(rows) == [user.id, merged[3].id, merged[6].id, merged[7].id])
         #expect(logs.last.map { ChatToolActivity.items(message: $0.messages[0]).map(\.isError) } == [true])
@@ -549,10 +549,91 @@ struct ChatCompletedWorkTests {
         // Answered: the other tools fold into "Worked"; the launch stays beside the answer.
         let answer = Self.message("assistant", "Auditor is on it.", at: 3, run: "p", phase: "final_answer")
         let done = ChatTranscriptRow.collapseCompletedWork(
-            ChatTranscriptRow.build(from: merged + [answer]), runWorking: false)
+            ChatTranscriptRow.build(from: (merged + [answer]).answeredByOpenAI()), runWorking: false)
         #expect(Self.visibleIDs(done) == [user.id, launchRow.id, answer.id])
         #expect(Self.work(in: done).map(\.messages.count) == [4])
         #expect(Self.work(in: done).map(\.isActivityRun) == [false])
+    }
+
+    /// Victor's iPhone, build 11782: a Claude CLI turn still running. Its history rows carry no run ID,
+    /// and empty thinking sits between the calls (chat.history of 2026-11-26, texts shortened).
+    @Test func `a running Claude CLI turn leaves no command alone and shows its launch`() throws {
+        /// The app ingests history first; that copies each CLI result's content into its text.
+        func imported(_ id: String, _ blocks: String) throws -> OpenClawChatMessage {
+            try Self.decode(#"{"role":"assistant","provider":"claude-cli","stopReason":"toolUse","timestamp":2,"#
+                + #""__openclaw":{"id":"\#(id)","importedFrom":"claude-cli","cliSessionId":"cli"},"#
+                + #""content":[\#(blocks)]}"#).ingestedMessages[0]
+        }
+        func thinking(_ id: String) throws -> OpenClawChatMessage {
+            try imported(id, #"{"type":"thinking","thinking":"","signature":"sig"}"#)
+        }
+        func call(_ id: String, _ tool: String, _ arguments: String, result: String) throws -> OpenClawChatMessage {
+            try imported(
+                id,
+                #"{"type":"toolcall","id":"\#(id)","name":"mcp__openclaw__\#(tool)","#
+                    + #""arguments":\#(arguments)},{"type":"tool_result","tool_use_id":"\#(id)","#
+                    + #""name":"mcp__openclaw__\#(tool)","is_error":false,"#
+                    + #""content":[{"type":"text","text":\#(result)}]}"#)
+        }
+        let input = try Self.decode(
+            #"{"role":"user","timestamp":1,"idempotencyKey":"live:user","#
+                + #""content":[{"type":"text","text":"o que falta ir pro iphone?"}]}"#)
+        let firstCommand = try call(
+            "e1", "exec", #"{"command":"B=batch47/checkout && for d in */checkout; do :; done"}"#, result: #""ok""#)
+        let opening = try [input, thinking("t1"), firstCommand]
+        let launch = try call(
+            "s1",
+            "sessions_spawn",
+            #"{"label":"iOS R3: port the reconnect fix","task":"Port it"}"#,
+            result: #""{\"status\":\"accepted\",\"childSessionKey\":\"agent:main:subagent:port\"}""#)
+        let later = try [
+            thinking("t2"),
+            call("e2", "exec", #"{"command":"git -C chat-info/checkout log -6"}"#, result: #""ok""#),
+            thinking("t3"),
+            launch,
+            call(
+                "m1", "sessions_send", #"{"sessionKey":"agent:main:subagent:lander","message":"Pick it"}"#,
+                result: #""{}""#),
+        ]
+        func live(_ messages: [OpenClawChatMessage]) -> [ChatTranscriptRow] {
+            ChatTranscriptRow.collapseCompletedWork(
+                ChatTranscriptRow.build(from: ChatTranscriptRow.mergeToolResults(in: messages)),
+                runWorking: true,
+                activeRunIDs: ["live"],
+                liveToolRunIDs: ["live"],
+                narratedRunID: "live")
+        }
+        #expect(input.workRunID == "live" && firstCommand.workRunID == nil)
+
+        // Only the first command is recorded yet: the working claw narrates it, no "Ran …" row of its own.
+        let started = live(opening)
+        #expect(Self.work(in: started).isEmpty)
+        #expect(Self.visibleIDs(started).filter { $0 != input.id }.allSatisfy { id in
+            opening.first { $0.id == id }.map { ChatToolActivity.items(message: $0).isEmpty } ?? false
+        })
+
+        // After the launch: both commands share one log, the launch keeps its "Launched …" row, and the
+        // message still being sent belongs to the claw. Calls the phone also saw live carry the run ID
+        // (ChatAssistantRunGroup.orderedParts); calls from before it connected do not.
+        let seenLive = later.map { message in
+            var copy = message
+            copy.transcriptRunID = ChatToolActivity.items(message: message).isEmpty ? nil : "live"
+            return copy
+        }
+        for steps in [later, seenLive] {
+            let launched = live(opening + steps)
+            let commands = Self.work(in: launched)
+            #expect(commands.map(\.isActivityRun) == [true])
+            #expect(commands.first?.messages.map(\.id) == [firstCommand.id, later[1].id])
+            let shown = Self.visibleIDs(launched).filter { id in
+                (opening + steps).first { $0.id == id }.map { !ChatToolActivity.items(message: $0).isEmpty } ?? false
+            }
+            #expect(shown == [launch.id])
+        }
+        let presentation = try #require(ChatToolActivity.items(message: launch).first?.sessionLaunch)
+        #expect(presentation.phase == .succeeded)
+        #expect(String(ChatSessionLaunch.title([presentation], linksChildren: false).characters) ==
+            "Launched iOS R3: port the reconnect fix")
     }
 
     private static func decode(_ json: String) throws -> OpenClawChatMessage {
@@ -589,7 +670,8 @@ struct ChatCompletedWorkTests {
     }
 
     private static func collapse(_ messages: [OpenClawChatMessage], working: Bool = false) -> [ChatTranscriptRow] {
-        ChatTranscriptRow.collapseCompletedWork(ChatTranscriptRow.build(from: messages), runWorking: working)
+        ChatTranscriptRow.collapseCompletedWork(
+            ChatTranscriptRow.build(from: messages.answeredByOpenAI()), runWorking: working)
     }
 
     private static func work(in rows: [ChatTranscriptRow]) -> [ChatTranscriptRow.CompletedWork] {

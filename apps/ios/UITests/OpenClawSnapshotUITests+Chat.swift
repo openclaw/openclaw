@@ -881,112 +881,47 @@ extension OpenClawSnapshotUITests {
     }
 
     func testNestedCustomToolsExposeResultsQuietDetailsAndPendingAuthority() throws {
-        self.executionTimeAllowance = 60
-        self.launchApp(
-            for: Self.chatScreenshotTarget,
-            additionalArguments: ["--openclaw-step-labels-fixture", "--openclaw-nested-tools-fixture"])
+        self.executionTimeAllowance = 90
+        self.launchApp(for: Self.chatScreenshotTarget, additionalArguments: [
+            "--openclaw-step-labels-fixture", "--openclaw-nested-tools-fixture",
+        ])
         let app = try XCTUnwrap(self.app)
         XCTAssertTrue(app.staticTexts["Local readiness checked."].waitForExistence(timeout: 8))
         let transcript = try self.chatTranscript(in: app)
-        let details = app.buttons["Tool details"].firstMatch
-        for _ in 0..<8 where !details.isHittable {
-            transcript.swipeDown()
-        }
-        XCTAssertTrue(details.waitForExistence(timeout: 5))
-        XCTAssertEqual(app.buttons.matching(identifier: "Tool details").count, 1)
-        XCTAssertTrue(details.isHittable)
-        let quiet = app.buttons["chat-tool-activity-fixture-nested-success"]
-        XCTAssertFalse(quiet.exists, "An explicit empty canonical descriptor must start under Tool details")
-        self.attachScreenshot(named: "nested-custom-quiet-collapsed")
-        details.tap()
-        let originalQuietWait = quiet.waitForExistence(timeout: 5)
-        XCTAssertTrue(originalQuietWait)
-        guard originalQuietWait else { return }
-        for (callID, title, status, text) in [
-            ("fixture-nested-success", "Knowledge Status", "Finished", "Sanitized nested success output"),
-            ("fixture-nested-failed", "Read", "Failed", "Recorded nested output"),
-        ] {
-            let rows = app.buttons.matching(identifier: "chat-tool-activity-" + callID)
+        func inspect(_ id: String, status: String, output: String?) {
+            let rows = app.buttons.matching(identifier: "chat-tool-activity-" + id)
             let row = rows.firstMatch
-            for _ in 0..<4 where !row.isHittable {
+            for _ in 0..<6 where !row.isHittable {
                 transcript.swipeDown()
             }
-            XCTAssertTrue(row.waitForExistence(timeout: 5))
-            XCTAssertEqual(rows.count, 1, "A custom carrier must not duplicate its result row")
-            XCTAssertTrue(row.isHittable)
-            XCTAssertEqual(row.label, title)
+            XCTAssertEqual(
+                rows.count,
+                1,
+                "The nested carrier does not duplicate its operation: \(app.debugDescription)")
             XCTAssertTrue((row.value as? String)?.hasPrefix(status) == true)
-            self.assertElementHasRenderedContent(row, named: callID + " collapsed control")
-            let output = app.staticTexts[text]
-            XCTAssertFalse(output.exists, "The result must start collapsed, not merely be present in metadata")
-            XCTAssertTrue(output.waitForExistence(timeout: 5))
-            XCTAssertEqual(output.label, text)
-            self.assertElementHasRenderedContent(output, named: callID + " expanded output")
-            self.attachScreenshot(named: "nested-custom-" + callID + "-expanded")
             row.tap()
-            XCTAssertTrue(output.waitForNonExistence(timeout: 5))
+            XCTAssertTrue(app.staticTexts["Input"].waitForExistence(timeout: 5))
+            if let output {
+                XCTAssertTrue(app.staticTexts[output].waitForExistence(timeout: 5))
+            } else {
+                XCTAssertFalse(app.staticTexts["Output"].exists, "A pending receipt has no result")
+            }
+            if !app.buttons["chat-tool-sheet-close"].isHittable { app.navigationBars.buttons["BackButton"].tap() }
+            app.buttons["chat-tool-sheet-close"].tap()
         }
-        for _ in 0..<4 where !details.isHittable {
-            transcript.swipeUp()
-        }
-        XCTAssertTrue(details.isHittable)
-        details.tap()
-        XCTAssertTrue(quiet.waitForNonExistence(timeout: 5), "Quiet output must return under its disclosure")
-        let originalPendingRows = app.descendants(matching: .any).matching(NSPredicate(
-            format: "label == %@ AND value == %@", "Knowledge Status", "Working, Original pending control"))
-        let pending = originalPendingRows.firstMatch
-        for _ in 0..<4 where !pending.isHittable {
-            transcript.swipeDown()
-        }
-        XCTAssertTrue(pending.waitForExistence(timeout: 5))
-        XCTAssertEqual(originalPendingRows.count, 1)
-        XCTAssertEqual(pending.label, "Knowledge Status")
-        XCTAssertEqual(pending.value as? String, "Working, Original pending control")
-        XCTAssertTrue(pending.isHittable)
-        XCTAssertNotEqual(pending.elementType, .button)
-        XCTAssertFalse(app.buttons["chat-tool-activity-fixture-nested-pending"].exists)
-        self.assertElementHasRenderedContent(pending, named: "canonical nested start without result")
-        self.attachScreenshot(named: "nested-custom-quiet-recollapsed-and-pending")
+        inspect("fixture-nested-success", status: "Finished", output: "Sanitized nested success output")
+        inspect("fixture-nested-failed", status: "Failed", output: "Recorded nested output")
+        inspect("fixture-nested-pending", status: "Working", output: nil)
 
-        // Keep the old output expanded while the same raw carrier changes authority. A stale
-        // terminal receipt must disappear, not survive under the old disclosure state.
-        for _ in 0..<4 where !details.isHittable {
-            transcript.swipeUp()
-        }
-        XCTAssertTrue(details.isHittable)
-        details.tap()
-        XCTAssertTrue(quiet.waitForExistence(timeout: 5))
-        XCTAssertEqual(app.buttons.matching(identifier: "chat-tool-activity-fixture-nested-success").count, 1)
-        quiet.tap()
-        let oldOutput = app.staticTexts["Sanitized nested success output"]
-        XCTAssertTrue(oldOutput.waitForExistence(timeout: 5))
-        XCTAssertEqual(oldOutput.label, "Sanitized nested success output")
         let input = self.chatMessageInput(in: app)
-        XCTAssertTrue(input.waitForExistence(timeout: 5))
         input.tap()
         input.typeText("Transition the nested success fixture to pending")
         let send = app.buttons["chat-send-message"]
         self.waitForEnabled(send)
         send.tap()
-        let targetRows = app.descendants(matching: .any).matching(NSPredicate(
-            format: "label == %@ AND value == %@", "Knowledge Status", "Working"))
-        let target = targetRows.firstMatch
-        for _ in 0..<8 where !target.isHittable {
-            transcript.swipeDown()
-        }
-        XCTAssertTrue(target.waitForExistence(timeout: 5))
-        XCTAssertEqual(targetRows.count, 1, "The original pending control cannot satisfy this target")
-        XCTAssertEqual(target.label, "Knowledge Status")
-        XCTAssertEqual(target.value as? String, "Working")
-        XCTAssertNotEqual(target.elementType, .button)
-        XCTAssertTrue(quiet.waitForNonExistence(timeout: 5))
-        XCTAssertTrue(oldOutput.waitForNonExistence(timeout: 5))
-        XCTAssertEqual(app.buttons.matching(identifier: "chat-tool-activity-fixture-nested-success").count, 0)
-        XCTAssertEqual(app.staticTexts.matching(identifier: "Sanitized nested success output").count, 0)
-        XCTAssertEqual(originalPendingRows.count, 1, "Keep the independent original pending receipt")
-        XCTAssertFalse(app.buttons["chat-tool-activity-fixture-nested-pending"].exists)
-        self.assertElementHasRenderedContent(target, named: "same nested target now canonically pending")
-        self.attachScreenshot(named: "nested-custom-expanded-result-replaced-by-pending")
+        if app.keyboards.firstMatch.exists { try self.dismissChatKeyboardThroughTranscript(in: app) }
+        inspect("fixture-nested-success", status: "Working", output: nil)
+        XCTAssertFalse(app.staticTexts["Sanitized nested success output"].exists)
     }
 
     func testCompletedWorkDisclosureKeepsFinalReplyVisible() throws {

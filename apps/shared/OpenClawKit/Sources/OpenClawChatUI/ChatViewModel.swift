@@ -1562,10 +1562,7 @@ extension OpenClawChatViewModel {
 
     private func modelRef(forSelectionID selectionID: String) -> String? {
         let normalized = self.normalizedSelectionID(selectionID)
-        if normalized == Self.defaultModelSelectionID {
-            return nil
-        }
-        return normalized
+        return normalized == Self.defaultModelSelectionID ? nil : normalized
     }
 
     private func applySuccessfulModelSelection(
