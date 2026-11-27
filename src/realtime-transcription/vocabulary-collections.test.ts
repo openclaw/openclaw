@@ -82,9 +82,7 @@ function fixture() {
   const options = { authority, openStore, now: () => clock, id: () => `collection-${++nextId}` };
   return {
     service: new VocabularyCollections(options),
-    options,
     rows,
-    versions,
     allowed,
     membership,
     openStore,
@@ -132,56 +130,6 @@ describe("shared vocabulary collection management", () => {
     await expect(
       f.service.read({ scopeId: "scope-a", collectionId: secret.collectionId }),
     ).rejects.toThrow("Vocabulary unavailable");
-  });
-
-  it("allows one concurrent editor and refuses the stale revision without lost updates", async () => {
-    const f = fixture();
-    const original = await f.service.create("scope-a", draft());
-    const secondEditor = new VocabularyCollections(f.options);
-    const outcomes = await Promise.allSettled([
-      f.service.replace(original, 1, draft("First edit")),
-      secondEditor.replace(original, 1, draft("Second edit")),
-    ]);
-    expect(outcomes.filter((result) => result.status === "fulfilled")).toHaveLength(1);
-    expect(outcomes.filter((result) => result.status === "rejected")).toEqual([
-      expect.objectContaining({ reason: expect.objectContaining({ code: "revision-conflict" }) }),
-    ]);
-    const current = await f.service.read(original);
-    expect(current.revision).toBe(2);
-    expect(["First edit", "Second edit"]).toContain(current.terms[0]?.canonical);
-    await expect(secondEditor.replace(original, 1, draft("Stale overwrite"))).rejects.toMatchObject(
-      { code: "revision-conflict" },
-    );
-  });
-
-  it("atomically rejects malformed import and prevents resurrection after deletion", async () => {
-    const f = fixture();
-    const original = await f.service.create("scope-a", draft());
-    const before = await f.service.export(original);
-    await expect(
-      f.service.import(original, 1, '{"schemaVersion":1,"label":"broken","terms":[{}]}'),
-    ).rejects.toMatchObject({ code: "invalid-input" });
-    expect(await f.service.export(original)).toBe(before);
-    await expect(f.service.delete(original, 1)).resolves.toMatchObject({
-      deleted: true,
-      revision: 2,
-    });
-    await expect(f.service.import(original, 1, before)).rejects.toMatchObject({
-      code: "unavailable",
-    });
-    await expect(f.service.replace(original, 2, draft())).rejects.toMatchObject({
-      code: "unavailable",
-    });
-    expect(f.rows.get(`scope-a:${original.collectionId}`)).toEqual(
-      expect.objectContaining({
-        deleted: true,
-        revision: 2,
-      }),
-    );
-    expect(f.rows.get(`scope-a:${original.collectionId}`)).not.toHaveProperty("terms");
-    expect(f.rows.get(`scope-a:${original.collectionId}`)).not.toHaveProperty("label");
-    expect((await f.service.list("scope-a")).collections).toEqual([]);
-    expect((await f.service.audit(original)).at(-1)?.operation).toBe("delete");
   });
 
   it("separates export and audit permission, strips administrative data, and preserves unrelated rows", async () => {

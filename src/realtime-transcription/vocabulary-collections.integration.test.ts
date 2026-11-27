@@ -145,12 +145,12 @@ describe("vocabulary collections over the real worker store", () => {
     const sibling = await editor.create("scope-b", draft("SyntheticSibling"));
     const exported = await editor.export(original);
     await expect(
-      editor.import(original, 1, '{"schemaVersion":1,"terms":[{}]}'),
+      editor.import(original, 1, '{"schemaVersion":1,"label":"broken","terms":[{}]}'),
     ).rejects.toMatchObject({
       code: "invalid-input",
     });
     expect(await editor.export(original)).toBe(exported);
-    await editor.delete(original, 1);
+    await expect(editor.delete(original, 1)).resolves.toMatchObject({ deleted: true, revision: 2 });
     await closeWorkers();
     const reopened = f.editor("bob");
     await expect(reopened.import(original, 1, exported)).rejects.toMatchObject({
