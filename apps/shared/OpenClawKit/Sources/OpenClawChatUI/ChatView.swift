@@ -13,7 +13,6 @@ private struct ChatTurnRecapObservation: Equatable {
 }
 
 @MainActor
-// swiftlint:disable file_length
 public struct OpenClawChatView: View {
     // The caller owns model lifetime; transport replacement can preserve presentation identity.
     private let viewModel: OpenClawChatViewModel
@@ -490,8 +489,10 @@ extension OpenClawChatView {
         let hasVisibleContent = !transcript.rows.isEmpty || self.hasVisibleTransientContent
         let notice = hasVisibleContent && !self.viewModel.isLoading && self.visibleEmptyAssistantIntro == nil
             ? self.activeErrorText : nil
+        let isWaitingForTranscript = self.showsCleanLoadingPlaceholder(hasVisibleContent: hasVisibleContent)
         return ZStack {
             self.messageListScrollContent(transcript: transcript, hasVisibleContent: hasVisibleContent)
+                .chatTranscriptReveal(isWaiting: isWaitingForTranscript)
                 .accessibilityIdentifier("chat-transcript")
                 #if !os(macOS)
                 .scrollDismissesKeyboard(.interactively)
@@ -509,15 +510,21 @@ extension OpenClawChatView {
                 } action: { _, distanceFromBottom in
                     self.handleTranscriptDistanceChange(distanceFromBottom)
                 }
-                .onScrollPhaseChange { _, phase in
-                    self.handleTranscriptScrollPhase(phase)
-                }
+                .onScrollPhaseChange { _, phase in self.handleTranscriptScrollPhase(phase) }
                 .chatBehaviorProbeScroll()
+                #if os(iOS)
+                .modifier(ChatTranscriptTimeReveal(margin: self.columnLayout.margin))
+                #endif
 
             if self.viewModel.isLoading, self.composerChrome == .full {
                 ProgressView()
                     .controlSize(.large)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+
+            if isWaitingForTranscript {
+                ChatTranscriptLoadingPlaceholder(columnLayout: self.columnLayout)
+                    .transition(ChatTranscriptLoadingPlaceholder.transition)
             }
 
             self.messageListOverlay(hasVisibleContent: hasVisibleContent)
@@ -575,13 +582,13 @@ extension OpenClawChatView {
             guard self.hasPerformedInitialScroll, self.searchMessageID == nil else { return }
             self.readerHistorySnapshot = nil
             self.scroll.hasNewerContentBelow = false
-            // The reading position moves once the new rows lay out.
-            if self.isKeyboardVisible {
-                self.scroll.followTarget = .latest
-            } else if let turnID = self.latestVisibleTurnStartID {
-                self.scroll.followTarget = .turn(turnID)
-                self.moveScrollPosition(to: turnID, anchor: Layout.newTurnAnchor)
-            }
+            // The sent message rests just above the composer until the reply outgrows the room under it.
+            self.scroll.readingPosition.turnSent(
+                in: self.viewModel.transcriptMessages,
+                keyboardUp: self.isKeyboardVisible)
+        }
+        .onChange(of: self.showsWorkingIndicator && !self.hasVisibleStreamingAssistantText, initial: true) {
+            self.scroll.readingPosition.workingRowOnly = $1
         }
         #endif
         .onChange(of: self.viewModel.timelineRevision) { _, _ in
@@ -702,11 +709,6 @@ extension OpenClawChatView {
                     model?.input = prompt.prompt
                     model?.send()
                 })
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-
-        if self.showsCleanLoadingPlaceholder(hasVisibleContent: hasVisibleContent) {
-            ChatLoadingBubble()
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
 
@@ -1216,19 +1218,11 @@ extension OpenClawChatView {
             self.moveScrollPosition(to: self.scrollerBottomID)
             #endif
         } label: {
-            Image(systemName: "arrow.down")
-                .font(.system(size: 15, weight: .semibold))
-                .frame(width: 36, height: 36)
-                .background(
-                    Circle()
-                        .fill(OpenClawChatTheme.subtleCard)
-                        .shadow(color: .black.opacity(0.16), radius: 8, y: 3))
-                // Padding keeps a ~44pt tap target around the compact visual circle.
-                .padding(4)
-                .contentShape(Circle())
+            ChatJumpToLatestLabel()
         }
         .buttonStyle(.plain)
         .foregroundStyle(OpenClawChatTheme.assistantText)
+        .modifier(ChatJumpToLatestGlass())
         .accessibilityLabel("Jump to latest reply")
     }
 
@@ -1326,9 +1320,11 @@ extension OpenClawChatView {
             .padding(.vertical, 8)
     }
 
+    /// A new chat has no transcript to wait for, so it never shows a loading state.
     private func showsCleanLoadingPlaceholder(hasVisibleContent: Bool) -> Bool {
         self.composerChrome == .clean &&
             self.viewModel.isLoading &&
+            !self.viewModel.isNewChatDraft &&
             self.visibleEmptyAssistantIntro == nil &&
             self.activeErrorText == nil &&
             !hasVisibleContent

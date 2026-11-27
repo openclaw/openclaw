@@ -355,7 +355,10 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
         idempotencyKey: String,
         attachments _: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
     {
-        await self.store.sendMessage(
+        if let delay = ScreenshotFixtureMode.replyDelay {
+            try await Task.sleep(for: delay)
+        }
+        return await self.store.sendMessage(
             sessionKey: sessionKey,
             message: message,
             runId: idempotencyKey)
@@ -634,6 +637,13 @@ private actor LocalFixtureChatStore {
                    "phase":"start","status":"running","title":"Knowledge status","name":"knowledge_status"}
                 ]}]
                 """.utf8))
+        }
+        if let clockMedia = try ScreenshotFixtureMode.clockMediaHistory() {
+            historyWireMessages = clockMedia
+        }
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-reaction-tool-fixture") {
+            historyActivity = try JSONDecoder().decode([OpenClawChatHistoryActivity].self, from: Data(
+                #"[{"messageId":"reaction-call","items":[]}]"#.utf8))
         }
         return try OpenClawChatHistoryPayload(
             sessionKey: normalizedSessionKey,
@@ -1106,6 +1116,9 @@ private actor LocalFixtureChatStore {
 
     private static func seedMessages(fixture: LocalChatFixture) -> [OpenClawChatMessage] {
         let now = Date().timeIntervalSince1970 * 1000
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-reaction-tool-fixture") {
+            return Self.reactionToolMessages(now: now)
+        }
         if ProcessInfo.processInfo.arguments.contains("--openclaw-external-run-fixture") {
             return [Self.message(
                 role: "user",
@@ -1274,6 +1287,43 @@ private actor LocalFixtureChatStore {
                 text: "All checks passed.",
                 timestamp: now + 5,
                 transcriptMessageID: "work-chunks-final"),
+        ]
+    }
+
+    private static func reactionToolMessages(now: Double) -> [OpenClawChatMessage] {
+        [
+            self.message(role: "user", text: "Hello", timestamp: now - 5000, transcriptMessageID: "hello"),
+            self.message(
+                role: "assistant",
+                text: "Hi! I’m here.",
+                timestamp: now - 4000,
+                transcriptMessageID: "reply"),
+            self.message(role: "user", text: "Great", timestamp: now - 3000, transcriptMessageID: "thanks"),
+            self.message(
+                role: "user",
+                text: "React to my message with an emoji",
+                timestamp: now - 2000,
+                transcriptMessageID: "reaction-prompt"),
+            OpenClawChatMessage(
+                role: "assistant",
+                content: [.init(
+                    type: "toolCall",
+                    id: "reaction",
+                    name: "message",
+                    arguments: AnyCodable([
+                        "action": "react",
+                        "emoji": "👍",
+                    ]))],
+                timestamp: now - 1000,
+                transcriptMessageID: "reaction-call",
+                stopReason: "toolUse"),
+            OpenClawChatMessage(
+                role: "toolResult",
+                content: [.init(type: "text", text: #"{"ok":true,"changed":true,"remove":false,"dryRun":false}"#)],
+                timestamp: now,
+                transcriptMessageID: "reaction-result",
+                toolCallId: "reaction",
+                toolName: "message"),
         ]
     }
 
