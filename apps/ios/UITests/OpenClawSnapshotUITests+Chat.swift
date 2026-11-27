@@ -106,6 +106,105 @@ extension OpenClawSnapshotUITests {
         }
     }
 
+    func testLandscapeSubagentHeaderShowsTitleOnOneLine() throws {
+        guard #available(iOS 27.1, *) else { throw XCTSkip("Requires the compact chat toolbar") }
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .phone, "Compact landscape chat")
+        XCUIDevice.shared.orientation = .portrait
+        defer { XCUIDevice.shared.orientation = .portrait }
+        self.launchApp(for: Self.chatScreenshotTarget, additionalArguments: [
+            "--openclaw-activity-fixture", "--openclaw-native-child-chat-fixture",
+        ])
+        let app = try XCTUnwrap(self.app)
+        app.buttons["chat-activity-pill-subagents"].tap()
+        app.buttons["chat-activity-child-agent:main:subagent:activity-flights"].tap()
+        let title = app.staticTexts["chat-header-title"].firstMatch
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        let back = app.navigationBars.buttons["BackButton"].firstMatch
+        for orientation in [UIDeviceOrientation.landscapeLeft, .landscapeRight] {
+            XCUIDevice.shared.orientation = orientation
+            XCTAssertGreaterThan(app.frame.width, app.frame.height)
+            XCTAssertTrue(back.waitForExistence(timeout: 5))
+            try self.assertCompactHeaderRenders(
+                "Compare nonstop flights from San Francisco to Lisbon",
+                in: app,
+                beside: back,
+                attachment: "child-title-\(orientation.rawValue)")
+            XCTAssertEqual(title.frame.midX, app.frame.midX, accuracy: 2)
+            XCTAssertEqual(title.frame.midY, back.frame.midY, accuracy: 2)
+        }
+        app.buttons["chat-stop-response"].firstMatch.tap()
+        let status = app.staticTexts["chat-header-subtitle"].firstMatch
+        XCTAssertTrue(status.waitForExistence(timeout: 6))
+        XCTAssertTrue(status.label.contains("Stopped"))
+        XCTAssertGreaterThan(status.frame.midY, title.frame.maxY)
+        XCTAssertEqual(status.frame.midX, title.frame.midX, accuracy: 1)
+        XCTAssertEqual(title.frame.union(status.frame).midY, back.frame.midY, accuracy: 2)
+        let stopped = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        stopped.name = "compact-stopped-title"
+        stopped.lifetime = .keepAlways
+        self.add(stopped)
+    }
+
+    func testLandscapeChatHeaderKeepsFirstMessageClear() throws {
+        guard #available(iOS 27.1, *) else { throw XCTSkip("Requires the compact chat toolbar") }
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .phone, "Compact landscape chat")
+        defer { XCUIDevice.shared.orientation = .portrait }
+
+        // Both destinations use the compact system toolbar. Its height can differ on a pushed chat.
+        func check(_ app: XCUIApplication, first: XCUIElement, control: XCUIElement, name: String) throws -> CGFloat {
+            let transcript = try self.chatTranscript(in: app)
+            XCTAssertGreaterThan(app.frame.width, app.frame.height)
+            XCTAssertTrue(control.waitForExistence(timeout: 5))
+            for _ in 0..<16 where !first.isHittable {
+                transcript.swipeDown(velocity: .fast)
+            }
+            transcript.swipeDown(velocity: .fast)
+            XCTAssertTrue(first.isHittable)
+            XCTAssertGreaterThanOrEqual(first.frame.minY, control.frame.maxY)
+            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.55, dy: 0.69))
+            let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.55, dy: name == "child" ? 0.17 : 0.23))
+            start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.25)
+            let capture = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+            capture.name = "compact-header-" + name
+            capture.lifetime = .keepAlways
+            self.add(capture)
+            return transcript.frame.minY - control.frame.midY
+        }
+
+        XCUIDevice.shared.orientation = .landscapeLeft
+        self.launchApp(for: Self.chatScreenshotTarget, additionalArguments: ["--openclaw-chat-switch-fixture"])
+        let normal = try XCTUnwrap(self.app)
+        let normalCutoff = try check(
+            normal,
+            first: normal.staticTexts["OPENCLAW_SWITCH_A_FIRST"],
+            control: normal.buttons["RootTabs.Sidebar.Show"],
+            name: "normal")
+
+        XCUIDevice.shared.orientation = .portrait
+        self.launchApp(for: Self.chatScreenshotTarget, additionalArguments: [
+            "--openclaw-activity-fixture", "--openclaw-native-child-chat-fixture",
+        ])
+        let child = try XCTUnwrap(self.app)
+        let pill = child.buttons["chat-activity-pill-subagents"]
+        XCTAssertTrue(pill.waitForExistence(timeout: 8))
+        pill.tap()
+        child.buttons["chat-activity-child-agent:main:subagent:activity-flights"].tap()
+        XCTAssertTrue(child.staticTexts["chat-header-title"].firstMatch.waitForExistence(timeout: 8))
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let order = child.staticTexts.matching(NSPredicate(
+            format: "label BEGINSWITH %@",
+            "Compare round-trip flights for May")).firstMatch
+        let childCutoff = try check(
+            child,
+            first: order,
+            control: child.navigationBars.buttons["BackButton"].firstMatch,
+            name: "child")
+        XCTAssertLessThan(
+            max(normalCutoff, childCutoff),
+            0,
+            "Both transcripts must scroll beneath their controls (normal: \(normalCutoff), child: \(childCutoff))")
+    }
+
     func testNewChatFromSidebarFocusesDraft() throws {
         try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .phone, "Phone drawer")
         self.launchApp(for: Self.chatScreenshotTarget, appearance: "light", additionalArguments: [
