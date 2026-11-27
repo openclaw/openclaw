@@ -66,33 +66,37 @@ const EXT_BY_MIME: Record<string, string> = {
   "application/xml": ".xml",
 };
 
-const MIME_BY_EXT: Record<string, string> = {};
-for (const [mime, ext] of Object.entries(EXT_BY_MIME)) {
-  MIME_BY_EXT[ext] ??= mime;
-}
-Object.assign(MIME_BY_EXT, {
-  // Canonical extension mappings for common MIME aliases
-  ".jpg": "image/jpeg",
-  ".m2a": "audio/mpeg",
-  ".m4b": "audio/mp4",
-  ".mp3": "audio/mpeg",
-  ".oga": "audio/ogg",
-  ".wav": "audio/wav",
-  ".webm": "video/webm",
-  ".aif": "audio/aiff",
-  ".aifc": "audio/aiff",
-  ".jpeg": "image/jpeg",
-  ".cfg": "text/plain",
-  ".conf": "text/plain",
-  ".env": "text/plain",
-  ".ini": "text/plain",
-  ".js": "text/javascript",
-  ".log": "text/plain",
-  ".htm": "text/html",
-  ".tsv": "text/tab-separated-values",
-  ".xml": "text/xml",
-  ".yml": "application/yaml",
-});
+// Consumers of MIME normalization or CSV metadata do not need the extension lookup.
+const MIME_BY_EXT: Record<string, string> = /* @__PURE__ */ (() => {
+  const mimeByExt: Record<string, string> = {};
+  for (const [mime, ext] of Object.entries(EXT_BY_MIME)) {
+    mimeByExt[ext] ??= mime;
+  }
+  Object.assign(mimeByExt, {
+    // Canonical extension mappings for common MIME aliases
+    ".jpg": "image/jpeg",
+    ".m2a": "audio/mpeg",
+    ".m4b": "audio/mp4",
+    ".mp3": "audio/mpeg",
+    ".oga": "audio/ogg",
+    ".wav": "audio/wav",
+    ".webm": "video/webm",
+    ".aif": "audio/aiff",
+    ".aifc": "audio/aiff",
+    ".jpeg": "image/jpeg",
+    ".cfg": "text/plain",
+    ".conf": "text/plain",
+    ".env": "text/plain",
+    ".ini": "text/plain",
+    ".js": "text/javascript",
+    ".log": "text/plain",
+    ".htm": "text/html",
+    ".tsv": "text/tab-separated-values",
+    ".xml": "text/xml",
+    ".yml": "application/yaml",
+  });
+  return mimeByExt;
+})();
 
 const AMBIGUOUS_VIDEO_MIME_BY_AUDIO_MIME: Readonly<Record<string, string>> = {
   "audio/mp4": "video/mp4",
