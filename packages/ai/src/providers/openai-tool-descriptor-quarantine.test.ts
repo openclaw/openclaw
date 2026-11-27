@@ -23,7 +23,6 @@ it.each(apis)(
     const source = publishRuntimeToolInputSchema({
       type: "object",
       properties: { action: { type: "string", description: null } },
-      required: ["action"],
     }).schema;
     const parameters = normalizeOpenAIStrictCompatSchema(source);
     const onPayload = (payload: unknown) => {

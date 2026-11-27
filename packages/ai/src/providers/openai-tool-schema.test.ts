@@ -94,7 +94,6 @@ describe("OpenAI strict tool schema normalization", () => {
         ["additionalProperties", "required"].map((key) => `parameters.${path}.${key}`),
       ),
     );
-    // Nested objects that only list properties stay open, so this tool goes non-strict.
     expect(isStrictOpenAIJsonSchemaCompatible(schema)).toBe(false);
   });
 
@@ -115,84 +114,17 @@ describe("OpenAI strict tool schema normalization", () => {
     );
   });
 
-  // The strict projection never narrows: a tool it cannot project exactly goes non-strict.
-  it.each([
-    [
-      "an open nested object",
-      objectSchema({ options: { type: "object", properties: { known: { type: "string" } } } }),
-    ],
-    [
-      "an optional key that already accepts null (null would clear, not omit)",
-      {
-        type: "object",
-        properties: { title: { type: "string" }, assignee: { type: ["string", "null"] } },
-        required: ["title"],
-        additionalProperties: false,
-      },
-    ],
-    [
-      "optional keys beside a key-count constraint",
-      {
-        type: "object",
-        properties: { a: { type: "string" }, b: { type: "string" } },
-        required: [],
-        additionalProperties: false,
-        maxProperties: 1,
-      },
-    ],
-    [
-      "optional keys inside a union of arrays",
-      objectSchema({
-        tags: {
-          anyOf: [
-            {
-              type: "array",
-              items: {
-                type: "object",
-                properties: { name: { type: "string" }, note: { type: "string" } },
-                required: ["name"],
-                additionalProperties: false,
-              },
-            },
-            { type: "null" },
-          ],
-        },
-      }),
-    ],
-  ])("sends a tool with %s non-strict", (_name, schema) => {
+  // Strict is decided per tool on the schema as written; optional keys are never projected.
+  it("keeps a tool with optional keys non-strict and its schema unchanged", () => {
+    const schema = {
+      type: "object",
+      properties: { path: { type: "string" }, limit: { type: "number" } },
+      required: ["path"],
+      additionalProperties: false,
+    };
     expect(resolveOpenAIToolStrictFlag(schema, true)).toBe(false);
-  });
-
-  it("keeps an optional untyped enum omittable under strict", () => {
-    const schema = {
-      type: "object",
-      properties: { mode: { enum: ["image", "file"] } },
-      required: [],
-    };
-    expect(normalizeStrictOpenAIJsonSchema(schema)).toMatchObject({
-      required: ["mode"],
-      properties: { mode: { enum: ["image", "file", null] } },
-    });
-  });
-
-  it("keeps an optional union with a sibling type omittable under strict", () => {
-    const mode = { type: "string", anyOf: [{ enum: ["auto", "manual"] }] };
-    const schema = { type: "object", properties: { mode }, required: [] };
-    expect(normalizeStrictOpenAIJsonSchema(schema)).toMatchObject({
-      required: ["mode"],
-      properties: { mode: { anyOf: [mode, { type: "null" }] } },
-    });
-  });
-
-  it("adds null to an enum that a nullable type would still reject", () => {
-    const schema = {
-      type: "object",
-      properties: { mode: { type: ["string", "null"], enum: ["auto", "manual"] } },
-      required: [],
-    };
-    expect(normalizeStrictOpenAIJsonSchema(schema)).toMatchObject({
-      required: ["mode"],
-      properties: { mode: { type: ["string", "null"], enum: ["auto", "manual", null] } },
-    });
+    expect(resolveOpenAIToolStrictFlag(objectSchema({ path: { type: "string" } }), true)).toBe(
+      true,
+    );
   });
 });

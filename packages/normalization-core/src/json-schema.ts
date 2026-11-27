@@ -30,23 +30,6 @@ export function parseLocalSchemaRefPointer(ref: string): string[] | undefined {
     : undefined;
 }
 
-/**
- * True when null validates against a schema node. `root` supplies the definitions a local
- * `$ref` inside the node points at.
- */
-export function schemaAcceptsNull(schema: unknown, root?: unknown): boolean {
-  if (!isRecord(schema)) {
-    return schema !== false;
-  }
-  const definitions = isRecord(root)
-    ? {
-        ...(isRecord(root.$defs) ? { $defs: root.$defs } : {}),
-        ...(isRecord(root.definitions) ? { definitions: root.definitions } : {}),
-      }
-    : {};
-  return isJsonSchemaValueValid({ ...definitions, ...schema }, null);
-}
-
 /** Validation details shared by the TypeBox schema and value compilers. */
 export type TypeBoxValidationError = {
   keyword?: string;

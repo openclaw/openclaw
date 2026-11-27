@@ -119,18 +119,16 @@ it.each(
   expect(tools.every((tool) => tool.parameters === parameters)).toBe(true);
 });
 
-// Strict is per tool: a schema strict mode cannot express stays non-strict on its own, and an
-// optional key is projected as required and nullable so its tool can still be strict.
+// Strict is per tool on the schema as written: a fully required, closed tool is strict; a
+// lookaround pattern or an optional key keeps its own tool non-strict and unchanged.
 it("decides strict for each tool in one request", async () => {
   const model = { ...responsesLoopbackModel, compat: { supportsStrictMode: true } };
   const lookaround = schema({ filename });
+  const optionalValue = schema({ value: { type: "integer" } }, []);
   const context = contextFor([
     { name: "record_value", description: "Record", parameters: lookaround },
-    {
-      name: "set_value",
-      description: "Set",
-      parameters: schema({ value: { type: "integer" } }, []),
-    },
+    { name: "set_value", description: "Set", parameters: optionalValue },
+    { name: "write_note", description: "Write", parameters: schema({ note: string }) },
   ]);
   for (const stream of [
     () => owner.stream(model, context, options),
@@ -138,11 +136,11 @@ it("decides strict for each tool in one request", async () => {
   ]) {
     expect((await (await stream()).result()).stopReason).toBe("stop");
   }
-  const nullableValue = schema({ value: { type: ["integer", "null"] } });
   expect(server.requests.map((request) => request.tools)).toEqual(
     Array.from({ length: 2 }, () => [
       wireTool("record_value", lookaround, false, "Record"),
-      wireTool("set_value", nullableValue, true, "Set"),
+      wireTool("set_value", optionalValue, false, "Set"),
+      wireTool("write_note", schema({ note: string }), true, "Write"),
     ]),
   );
 });

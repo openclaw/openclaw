@@ -98,7 +98,7 @@ function collectStrictSchemaViolations(
 
   const record = schema as Record<string, unknown>;
   const violations: string[] = [];
-  // Strict mode accepts anyOf and multi-type lists (the nullable optional keys use them).
+  // Strict mode accepts anyOf and multi-type lists such as ["string", "null"].
   for (const key of ["oneOf", "allOf"] as const) {
     if (key in record) {
       violations.push(`${path}.${key}`);
@@ -113,7 +113,7 @@ function collectStrictSchemaViolations(
 
   const properties = isRecord(record.properties) ? record.properties : undefined;
 
-  // A nullable optional key is ["object", "null"]; its object branch follows the object rules.
+  // A nullable key is ["object", "null"]; its object branch follows the object rules.
   if (record.type === "object" || (Array.isArray(record.type) && record.type.includes("object"))) {
     if (record.additionalProperties !== false) {
       violations.push(`${path}.additionalProperties`);

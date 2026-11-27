@@ -72,68 +72,6 @@ describe.each(profiles)("validateToolArguments (%s)", (profile) => {
     expect(validate({ b: 2 })).toEqual({ b: 2 });
     expect(() => validate({ b: "invalid" })).toThrow(/Validation failed/);
   });
-
-  // A strict tool schema makes every key required, so models send null for "absent".
-  it("treats null for an optional key as absent at every depth, but keeps a declared null", () => {
-    const attachment = objectSchema(
-      { media: string, type: { enum: ["image", "file"] } },
-      { required: ["media"] },
-    );
-    const validate = validator(
-      objectSchema(
-        {
-          path: string,
-          offset: positiveInteger,
-          mode: { anyOf: [string, positiveInteger] },
-          note: { type: ["string", "null"] },
-          attachments: { type: "array", items: attachment },
-        },
-        { required: ["path"] },
-      ),
-    );
-    expect(
-      validate({
-        path: "a.md",
-        offset: null,
-        mode: null,
-        note: null,
-        attachments: [{ media: "a.png", type: null }],
-      }),
-    ).toEqual({ path: "a.md", note: null, attachments: [{ media: "a.png" }] });
-  });
-  // A non-matching union branch must not drop a null the matching branch requires.
-  it("keeps a null that one union branch requires", () => {
-    const validate = validator({
-      anyOf: [
-        requiredObject({ kind: { const: "clear" }, value: nil }),
-        objectSchema({ kind: { const: "set" }, value: string }, { required: ["kind"] }),
-      ],
-    });
-    expect(validate({ kind: "clear", value: null })).toEqual({ kind: "clear", value: null });
-  });
-  // A sibling type rejects null even when a union branch allows it, so the null means absent.
-  it("drops null for an optional key whose sibling type rejects it", () => {
-    const validate = validator(
-      objectSchema(
-        { path: string, mode: { type: "string", anyOf: [string, nil] } },
-        { required: ["path"] },
-      ),
-    );
-    expect(validate({ path: "a.md", mode: null })).toEqual({ path: "a.md" });
-  });
-  // The strict projection inlines referenced objects, so their optional nulls mean absent too.
-  it("drops null for an optional key inside a referenced object", () => {
-    const validate = validator(
-      objectSchema(
-        { options: ref("Options") },
-        {
-          required: ["options"],
-          $defs: { Options: objectSchema({ offset: integer }, { required: [] }) },
-        },
-      ),
-    );
-    expect(validate({ options: { offset: null } })).toEqual({ options: {} });
-  });
   it.each([
     { label: "a missing required field", value: {} },
     { label: "an invalid field type", value: { leaf: "invalid" } },

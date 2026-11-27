@@ -109,7 +109,7 @@ export function resolveOpenAIStrictToolSetting(compat: {
   return compat.supportsStrictMode === false ? undefined : true;
 }
 
-/** Strict is per tool: tools whose strict projection qualifies are strict, open maps are not. */
+/** Strict is per tool: a tool is strict only when its schema is strict-compatible as written. */
 export function resolveOpenAIToolStrictFlag(
   parameters: unknown,
   strictSetting: boolean | null | undefined,

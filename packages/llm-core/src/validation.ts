@@ -1,7 +1,4 @@
-import {
-  parseLocalSchemaRefPointer,
-  schemaAcceptsNull,
-} from "@openclaw/normalization-core/json-schema";
+import { parseLocalSchemaRefPointer } from "@openclaw/normalization-core/json-schema";
 import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { Compile } from "typebox/compile";
@@ -407,58 +404,9 @@ function introducesNullValue(previous: unknown, converted: unknown): boolean {
   );
 }
 
-/**
- * A strict tool schema makes every key required, so the model sends null for a key the tool
- * leaves optional. Absent is what the tool means: drop those nulls before validation, in
- * properties and array items. Union branches are never projected that way (their tool stays
- * non-strict), so a null inside a branch is the tool's own value and is left alone.
- */
-function dropNullOptionalArguments(args: unknown, initialSchema: unknown, root: unknown): void {
-  if (!isObjectBackedRecord(initialSchema)) {
-    return;
-  }
-  // Follow local references the strict projection inlined, as the rest of validation does.
-  let node: JsonSchemaObject = initialSchema;
-  const seen = new Set<JsonSchemaObject>();
-  while (!seen.has(node)) {
-    seen.add(node);
-    const target = resolveRootSchemaRef(node, isJsonSchemaObject(root) ? root : undefined);
-    if (!target) {
-      break;
-    }
-    node = target;
-  }
-  const schema = node;
-  if (!isObjectBackedRecord(schema)) {
-    return;
-  }
-  if (Array.isArray(args)) {
-    for (const item of args) {
-      dropNullOptionalArguments(item, schema.items, root);
-    }
-    return;
-  }
-  if (!isObjectBackedRecord(args)) {
-    return;
-  }
-  const properties = schema.properties;
-  if (!isObjectBackedRecord(properties)) {
-    return;
-  }
-  const required = new Set(Array.isArray(schema.required) ? schema.required : []);
-  for (const [key, propertySchema] of Object.entries(properties)) {
-    if (args[key] === null && !required.has(key) && !schemaAcceptsNull(propertySchema, root)) {
-      delete args[key];
-    } else {
-      dropNullOptionalArguments(args[key], propertySchema, root);
-    }
-  }
-}
-
 /** Validates tool arguments against TypeBox or plain JSON-schema parameters. */
 export function validateToolArguments(tool: Tool, toolCall: ToolCall): unknown {
   const args = structuredClone(toolCall.arguments);
-  dropNullOptionalArguments(args, tool.parameters, tool.parameters);
   const validator = getValidator(tool.parameters);
 
   if (isJsonSchemaObject(tool.parameters)) {

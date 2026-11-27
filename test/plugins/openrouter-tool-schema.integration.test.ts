@@ -110,15 +110,13 @@ it.each(
   expect(captured.url).toBe(`${route.baseUrl}/chat/completions`);
   expect(captured.body.model).toBe(route.id);
   const tool = captured.body.tools[0]!.function;
-  // Managed requests make the tool strict and keep targetId optional as a nullable key; direct
-  // requests and a declared opt-out send the tool non-strict with its own required list.
+  // targetId is optional, so the tool is not strict as written: managed requests send it with
+  // strict: false; direct requests and a declared opt-out omit the field.
   if (mode === "managed" && !omitStrict) {
-    expect(tool.strict).toBe(true);
-    expect(tool.parameters.required).toEqual(["action", "targetId"]);
-    expect(tool.parameters.properties).toHaveProperty("targetId.type", ["string", "null"]);
+    expect(tool.strict).toBe(false);
   } else {
     expect(tool).not.toHaveProperty("strict");
-    expect(tool.parameters.required).toEqual(["action"]);
-    expect(tool.parameters.properties).toHaveProperty("targetId");
   }
+  expect(tool.parameters.required).toEqual(["action"]);
+  expect(tool.parameters.properties).toHaveProperty("targetId");
 });

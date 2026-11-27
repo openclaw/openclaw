@@ -1,4 +1,3 @@
-import { schemaAcceptsNull } from "@openclaw/normalization-core/json-schema";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { SCHEMA_MAP_KEYS, SCHEMA_NESTED_KEYS } from "./schema-walk.js";
 import {
@@ -24,23 +23,6 @@ const OPENAPI_SCHEMA_ANNOTATION_KEYS = new Set([
   "writeOnly",
   "xml",
   "example",
-]);
-
-/** Object keywords beside which optional keys can become required-and-nullable exactly. */
-const STRICT_PROJECTABLE_OBJECT_KEYS = new Set([
-  "type",
-  "properties",
-  "required",
-  "additionalProperties",
-  "title",
-  "description",
-  "default",
-  "examples",
-  "$comment",
-  "$id",
-  "$schema",
-  "$defs",
-  "definitions",
 ]);
 
 function isNullSchemaLike(schema: unknown): boolean {
@@ -101,7 +83,6 @@ function normalizeToolSchemaRecursive(
   profile: SchemaProfile | `${SchemaProfile}-map`,
   depth = 0,
   inferBranchType = false,
-  unionBranch = false,
 ): unknown {
   const mapProfile =
     profile === "strict-map"
@@ -124,7 +105,6 @@ function normalizeToolSchemaRecursive(
         profile,
         profile === "strict" ? depth : 1,
         inferBranchType,
-        unionBranch,
       );
       changed ||= next !== entry;
       return next;
@@ -180,23 +160,15 @@ function normalizeToolSchemaRecursive(
     let next = value;
     if (profile === "strict") {
       if (SCHEMA_MAP_KEYS.has(key)) {
-        next = normalizeToolSchemaRecursive(value, "strict-map", depth, false, unionBranch);
+        next = normalizeToolSchemaRecursive(value, "strict-map", depth);
       } else if (SCHEMA_NESTED_KEYS.has(key)) {
-        next = normalizeToolSchemaRecursive(
-          value,
-          profile,
-          depth + 1,
-          false,
-          unionBranch || key === "anyOf" || key === "oneOf" || key === "allOf",
-        );
+        next = normalizeToolSchemaRecursive(value, profile, depth + 1);
       }
     } else if (mapProfile) {
       next = normalizeToolSchemaRecursive(
         value,
         mapProfile,
         profile === "strict-map" ? depth + 1 : 1,
-        false,
-        unionBranch,
       );
     } else if (SCHEMA_MAP_KEYS.has(key)) {
       next = normalizeToolSchemaRecursive(
@@ -295,46 +267,6 @@ function normalizeToolSchemaRecursive(
     changed = true;
   }
   if (
-    profile === "strict" &&
-    !unionBranch &&
-    normalized.type === "object" &&
-    isRecord(normalized.properties) &&
-    Object.keys(normalized).every((key) => STRICT_PROJECTABLE_OBJECT_KEYS.has(key))
-  ) {
-    // Strict mode requires every key: an optional key becomes required and nullable, and the
-    // argument boundary drops those nulls again, so tool semantics do not change. Inside a
-    // union branch, or beside a keyword that counts or relates keys (maxProperties,
-    // dependentRequired, if/then, ...), that is not exact, so those keys stay optional and
-    // the tool is sent non-strict.
-    const properties = normalized.properties;
-    const required = new Set(
-      Array.isArray(normalized.required)
-        ? normalized.required.filter((key) => typeof key === "string")
-        : [],
-    );
-    const keys = Object.keys(properties);
-    const optional = keys.filter((key) => !required.has(key));
-    // Null must mean "omitted": an optional key that already accepts null (or whose
-    // reference this node cannot resolve) would turn omission into an explicit null, so the
-    // object stays as-is and its tool goes non-strict.
-    const nullMeansOmitted = optional.every(
-      (key) =>
-        !schemaAcceptsNull(properties[key]) && !JSON.stringify(properties[key]).includes('"$ref"'),
-    );
-    if (optional.length > 0 && nullMeansOmitted) {
-      normalized.properties = Object.fromEntries(
-        keys.map((key) => [
-          key,
-          required.has(key) ? properties[key] : nullableStrictSchema(properties[key]),
-        ]),
-      );
-      normalized.required = keys;
-      changed = true;
-    }
-  }
-  // Only the root is closed: a nested object listing only properties still allows other keys,
-  // so it stays open and its tool is sent non-strict rather than narrowed.
-  if (
     normalized.type === "object" &&
     (profile === "strict" ? depth === 0 : hasEmptyProperties) &&
     !("additionalProperties" in normalized)
@@ -344,38 +276,6 @@ function normalizeToolSchemaRecursive(
   }
 
   return changed ? normalized : schema;
-}
-
-/** Widens an optional key's schema to accept the null a strict model sends for "absent". */
-function nullableStrictSchema(schema: unknown): unknown {
-  if (!isRecord(schema) || schemaAcceptsNull(schema)) {
-    return schema;
-  }
-  if (Array.isArray(schema.anyOf)) {
-    // A sibling constraint (type, enum, ...) would still reject null, so wrap the whole schema.
-    const constrained = Object.keys(schema).some(
-      (key) => key !== "anyOf" && key !== "description" && key !== "title",
-    );
-    return constrained
-      ? { anyOf: [schema, { type: "null" }] }
-      : { ...schema, anyOf: [...schema.anyOf, { type: "null" }] };
-  }
-  const { const: constValue, ...rest } = schema;
-  const next: Record<string, unknown> =
-    "const" in schema ? { ...rest, enum: [constValue] } : { ...schema };
-  const type = next.type;
-  if (typeof type === "string" && type !== "null") {
-    next.type = [type, "null"];
-  } else if (Array.isArray(type) && !type.includes("null")) {
-    next.type = [...type, "null"];
-  } else if (type === undefined && !Array.isArray(next.enum)) {
-    // Some other constraint (allOf, oneOf) rejects null: wrap rather than edit it.
-    return { anyOf: [schema, { type: "null" }] };
-  }
-  if (Array.isArray(next.enum) && !next.enum.includes(null)) {
-    next.enum = [...next.enum, null];
-  }
-  return next;
 }
 
 export function normalizeToolSchema(
