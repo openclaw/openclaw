@@ -120,7 +120,7 @@ export const SYSTEM_PROMPT_SECTIONS = [
     region: "dynamic",
     includedWhen:
       "exec/process, sessions, automations, screen, media tools; plugin command guidance",
-    budgetBytes: 2_048,
+    budgetBytes: 1_536,
   },
   {
     id: "tool_call_style",
@@ -169,7 +169,7 @@ export const SYSTEM_PROMPT_SECTIONS = [
     owner: "memory plugin prompt (plugins/memory-state.ts)",
     region: "dynamic",
     includedWhen: "full prompt with memory tools",
-    budgetBytes: 2_048,
+    budgetBytes: 256,
   },
   {
     id: "model_aliases",
@@ -246,7 +246,7 @@ export const SYSTEM_PROMPT_SECTIONS = [
     owner: "ui-presentation-prompt.ts",
     region: "dynamic",
     includedWhen: "full prompt with UI tools",
-    budgetBytes: 1_450,
+    budgetBytes: 600,
   },
   {
     id: "control_ui",
@@ -315,5 +315,5 @@ export const SYSTEM_PROMPT_SECTIONS = [
 
 export type SystemPromptSectionId = (typeof SYSTEM_PROMPT_SECTIONS)[number]["id"];
 
-/** @internal Budget gate for the fresh-install fixture (12,864 B after the shave; ~5% headroom). */
-export const FRESH_INSTALL_SYSTEM_PROMPT_BUDGET_BYTES = 13_500;
+/** @internal Fresh-install system-prompt ceiling: 12 KiB. */
+export const FRESH_INSTALL_SYSTEM_PROMPT_BUDGET_BYTES = 12_288;
