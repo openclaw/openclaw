@@ -1,9 +1,5 @@
 // Package Acceptance Workflow tests cover package acceptance workflow script behavior.
-import {
-  execFileSync,
-  spawnSync,
-  type SpawnSyncOptionsWithStringEncoding,
-} from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -3065,15 +3061,9 @@ function workflowStepById(job: WorkflowJob, stepId: string): WorkflowStep {
   return step;
 }
 
-function runBash(script: string, options: Omit<SpawnSyncOptionsWithStringEncoding, "encoding">) {
-  return spawnSync(
-    process.platform === "darwin" ? "/bin/bash" : "bash",
-    ["--noprofile", "--norc", "-c", script],
-    {
-      ...options,
-      encoding: "utf8",
-    },
-  );
+function runBash(script: string, options: Parameters<typeof runWorkflowShellScript>[1]) {
+  // Linux workflow guards need Bash 5 and file-backed Node probes on macOS.
+  return runWorkflowShellScript(script, { ...options, linuxWorkflow: true });
 }
 
 function runFullReleaseInputValidation(releaseProfile: string, skipTelegram: string) {
