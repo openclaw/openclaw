@@ -27,7 +27,10 @@ import {
 } from "./active-jobs.js";
 import { sendCronAnnouncePayloadStrict } from "./delivery.js";
 import { makeCronJob } from "./delivery.test-helpers.js";
-import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
+import {
+  readCronRunHistoryPageForTests,
+  readCronRunStateForTests,
+} from "./run-history.test-support.js";
 import { TEST_SCHEDULED_TURN } from "./scheduled-occurrence.test-support.js";
 import { cronTestDeps, cronTestInput } from "./service.fixture-builders.test-support.js";
 import { CronService } from "./service.js";
@@ -231,18 +234,17 @@ it.for([
       await restart(first, replacement, job.id);
       expectRecoveredOnce();
       const recovered = await replacement.cron.readJob(job.id);
-      expect(recovered).toMatchObject({
-        enabled: scheduleKind !== "at",
-        state: {
-          lastRunStatus: interrupted === "before-delivery" ? "ok" : "error",
-          ...(interrupted !== "before-delivery"
-            ? { lastError: interruptedError, lastDeliveryStatus: "unknown" }
-            : { lastDeliveryStatus: "delivered" }),
-        },
+      expect(recovered?.state ?? readCronRunStateForTests(job.id)).toMatchObject({
+        lastRunStatus: interrupted === "before-delivery" ? "ok" : "error",
+        ...(interrupted !== "before-delivery"
+          ? { lastError: interruptedError, lastDeliveryStatus: "unknown" }
+          : { lastDeliveryStatus: "delivered" }),
       });
       if (scheduleKind === "at") {
-        expect(recovered?.state.nextRunAtMs).toBeUndefined();
+        expect(recovered).toBeUndefined();
+        expect(readCronRunStateForTests(job.id)?.nextRunAtMs).toBeUndefined();
       } else {
+        expect(recovered?.enabled).toBe(true);
         expect(recovered?.state.nextRunAtMs).toBeGreaterThan(replacement.clock.clock.now());
       }
       expect(recovered?.state.startupCatchupAtMs).toBeUndefined();

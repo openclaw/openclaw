@@ -94,9 +94,8 @@ it("retries an ended one-time definition only for an administrator without expos
       );
       expect(JSON.stringify(history.mock.calls)).not.toContain("archivedJob");
       expect((await invokeCron(context, "cron.run", selection)).mock.calls[0]?.[0]).toBe(false);
-      expect(
-        (await invokeCron(context, "cron.run", selection, { client: admin })).mock.calls[0]?.[0],
-      ).toBe(true);
+      const retried = await invokeCron(context, "cron.run", selection, { client: admin });
+      expect(retried.mock.calls[0]?.[0], JSON.stringify(retried.mock.calls[0])).toBe(true);
       expect(await cron.list({ includeDisabled: true })).toMatchObject([
         { name: job.name, enabled: true, payload: job.payload },
       ]);

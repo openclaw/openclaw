@@ -10,6 +10,7 @@ import {
   applyCronRunHistoryMaintenanceInDatabase,
   planCronRunHistoryMaintenance,
   readCronRunRecordsInDatabase,
+  recordArchivedCronFailureAlertOutcomeInDatabase,
 } from "./run-history.kernel.js";
 import type { CronRunRecord } from "./run-history.types.js";
 import { readActiveCronRunReceiptsInDatabase } from "./run-receipt-read.js";
@@ -196,7 +197,8 @@ export function recordCronFailureAlertOutcomeInWorker(
         job.state.lastFailureNotificationDeliveryError = input.outcome.error;
         updateCronRuntimeRow(db, input.storeKey, job);
       }
-      return { outcome: { job: ownsCycle ? job : undefined } };
+      const recorded = !job && recordArchivedCronFailureAlertOutcomeInDatabase(db, input);
+      return { outcome: { job: ownsCycle ? job : undefined, recorded } };
     },
     { database, path: database.path, env: getSqliteWorkerStateContext().environment },
     { operationLabel: "cron.failure-alert-outcome" },

@@ -93,7 +93,12 @@ export function cronRunResultHistory(
         ? cronQuietTriggerDetail(storeKey, { ...result.triggerEval, fired: false })
         : cronRunLogEntryToDetail(entry, {
             storeKey,
-            ...(endedOneTime ? { archivedJob: definition } : {}),
+            ...(endedOneTime
+              ? {
+                  archivedJob: definition,
+                  failureNotificationId: job.state.lastFailureNotificationId,
+                }
+              : {}),
             scriptResult: result,
             triggerEval: result.triggerEval,
           }),

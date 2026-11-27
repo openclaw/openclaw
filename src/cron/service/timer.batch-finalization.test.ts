@@ -15,6 +15,7 @@ import * as activeJobs from "../active-jobs.js";
 import { isCronJobActive, markCronJobActive } from "../active-jobs.js";
 import {
   readCronRunHistoryPageForTests,
+  readCronRunStateForTests,
   readCronRunRecordsForTests,
 } from "../run-history.test-support.js";
 import { createCronExecutionId } from "../run-id.js";
@@ -114,8 +115,8 @@ function finalizeError(
 function rejectWrite(jobId: string) {
   const database = openOpenClawStateDatabase().db;
   database.exec(`
-    CREATE TRIGGER reject_terminal_write AFTER UPDATE ON cron_jobs
-    WHEN NEW.job_id = '${jobId}' AND json_extract(NEW.state_json, '$.lastRunStatus') = 'ok'
+    CREATE TRIGGER reject_terminal_write BEFORE DELETE ON cron_jobs
+    WHEN OLD.job_id = '${jobId}'
     BEGIN SELECT RAISE(ABORT, 'terminal write failed'); END;
   `);
   return () => database.exec("DROP TRIGGER IF EXISTS reject_terminal_write");
@@ -177,7 +178,8 @@ describe("cron batch outcome finalization", () => {
       }
       runner.release.resolve({ status: "ok", summary: "stale completion" });
       await batch;
-      expectSettled((await persistedJob(storePath, job.id))?.state);
+      expect(await persistedJob(storePath, job.id)).toBeUndefined();
+      expectSettled(readCronRunStateForTests(job.id));
       expect(isCronJobActive(job.id)).toBe(false);
       const receipt = openOpenClawStateDatabase()
         .db.prepare(
@@ -355,7 +357,8 @@ describe("cron batch outcome finalization", () => {
       await runner.started.promise;
       runner.release.resolve({ status: "ok", summary: "later completion" });
       expect(await batch).toEqual(expect.objectContaining({ message: "terminal write failed" }));
-      expectSettled((await persistedJob(storePath, second.id))?.state);
+      expect(await persistedJob(storePath, second.id)).toBeUndefined();
+      expectSettled(readCronRunStateForTests(second.id));
       expectInactive(first.id, second.id);
     } finally {
       await finishBatch(batch, runner);
@@ -464,9 +467,7 @@ describe("cron batch outcome finalization", () => {
       expect(reachedFinalRun).toBe(true);
       await inactive.settled;
       const persistedJobs = (await loadCronStore(storePath)).jobs;
-      expect(
-        persistedJobs.filter((job) => job.id !== lastJob.id && job.state.lastRunStatus === "ok"),
-      ).toHaveLength(jobCount - 1);
+      expect(persistedJobs.filter((job) => job.id !== lastJob.id)).toEqual([]);
       expect(persistedJobs.find((job) => job.id === lastJob.id)?.state.runningAtMs).toBe(dueAt);
 
       for (const job of jobs.slice(0, -1)) {

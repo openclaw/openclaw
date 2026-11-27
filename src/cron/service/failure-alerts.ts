@@ -442,29 +442,29 @@ function maybeEmitFailureAlert(
     !params.alertConfig?.includeSkipped &&
     !localProviderUnavailable
   ) {
-    return;
+    return undefined;
   }
   recordUnresolvedFailure(params.job, params.failureNotificationDetail);
   // A one-shot's final failure is its last outcome: its notice ignores the threshold and cooldown.
   const terminal = params.terminalOneShot === true;
   const alertConfig = params.alertConfig;
   if (!alertConfig) {
-    return;
+    return undefined;
   }
   if (!terminal && params.consecutiveCount < alertConfig.after) {
-    return;
+    return undefined;
   }
   // Best-effort delivery suppresses inherited alert noise, not an independently
   // configured job alert that the operator explicitly requested.
   if (params.job.delivery?.bestEffort === true && !params.job.failureAlert) {
-    return;
+    return undefined;
   }
   const incident = failureIncident({ ...params, route: alertConfig });
   if (terminal) {
     // The retries' earlier notice shares this incident signature; the final outcome is still news.
     startFailureAlertCycle(params.job, incident, state.deps.nowMs());
   } else if (!requestFailureNotification(state, params.job, alertConfig, incident)) {
-    return;
+    return undefined;
   }
   const job = cronNotificationJob(params.job);
   const alert: Extract<CronNotificationIntent, { kind: "failure-alert" }> = {
@@ -561,15 +561,15 @@ export function finalizeCronFailureNotifications(
 ): "queued" | undefined {
   if (params.result.status === "ok" && params.completionStatus === "succeeded") {
     resolveFailureIncident(params.job);
-    return;
+    return undefined;
   }
   if (params.result.errorClassification?.kind === "aborted") {
-    return;
+    return undefined;
   }
   recordUnresolvedFailure(params.job, params.result.failureNotificationDetail);
   // Replay repairs incident state but never requests a historical notification.
   if (params.replay) {
-    return;
+    return undefined;
   }
   if (
     (params.result.status === "error" || params.result.status === "skipped") &&
@@ -609,7 +609,7 @@ export function finalizeCronFailureNotifications(
         }),
       )
     ) {
-      return;
+      return undefined;
     }
     const job = cronNotificationJob(params.job);
     const route = params.alertConfig;
@@ -631,4 +631,5 @@ export function finalizeCronFailureNotifications(
     });
     return "queued";
   }
+  return undefined;
 }

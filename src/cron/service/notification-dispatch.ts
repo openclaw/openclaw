@@ -147,7 +147,8 @@ async function recordFailureAlertOutcome(
         // A replacement alert may race dispatch; the worker checks its persisted cycle.
         snapshot: {},
         publish(committed) {
-          ownsCycle = committed.job !== undefined;
+          ownsCycle = committed.job !== undefined || committed.recorded === true;
+          result = ownsCycle ? "recorded" : "stale";
           if (committed.job) {
             noteCronJobsStoreCommit(storeKey);
             applyCronRuntimeRowsToState(state, [committed.job], [], { publish: false });

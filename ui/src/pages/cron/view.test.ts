@@ -128,7 +128,7 @@ describe("cron view editor", () => {
       { onFormChange: onExitFormChange },
     );
     expect(text(onExitContainer, testId("cron-schedule-frequency"))).toBe("On exit");
-    expect(findToggleByLabel(onExitContainer, "Delete after it runs")).not.toBeNull();
+    expect(findToggleByLabel(onExitContainer, "Delete after it runs")).toBeNull();
 
     selectSchedule(onExitContainer, "at");
     expect(onExitFormChange).toHaveBeenCalledWith({ scheduleKind: "at" });

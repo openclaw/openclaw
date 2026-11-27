@@ -19,6 +19,7 @@ import {
   resolveCronRunRecordTimestamp,
 } from "../run-history-detail.js";
 import { createCronExecutionId } from "../run-id.js";
+import type { CronFailureNotificationDelivery } from "../types.js";
 import { publishCronRunHistoryChange } from "./run-history-changes.js";
 import type { CronRunHistoryWrite, CronRunRecord } from "./run-history.types.js";
 import type { CronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
@@ -64,6 +65,48 @@ export function archiveCronRunDefinitionInDatabase(
       })
       .where("task_id", "=", row.id),
   );
+}
+
+export function recordArchivedCronFailureAlertOutcomeInDatabase(
+  db: EngineConnection,
+  input: {
+    storeKey: string;
+    jobId: string;
+    runAtMs: number | undefined;
+    notificationId: string | undefined;
+    outcome: CronFailureNotificationDelivery;
+  },
+): boolean {
+  if (!input.notificationId) {
+    return false;
+  }
+  const row = readCronRunRecordsInDatabase(db, input.jobId).find(
+    (record) =>
+      cronRunRecordStoreKey(record) === input.storeKey &&
+      record.startedAt === input.runAtMs &&
+      isRecord(record.detail) &&
+      isRecord(record.detail.archivedJob) &&
+      record.detail.failureNotificationId === input.notificationId,
+  );
+  if (
+    !row ||
+    !isRecord(row.detail) ||
+    !isRecord(row.detail.failureNotificationDelivery) ||
+    row.detail.failureNotificationDelivery.status !== "unknown"
+  ) {
+    return false;
+  }
+  executeSqliteQuerySync(
+    db,
+    query(db)
+      .updateTable("task_runs")
+      .set({
+        detail_json: JSON.stringify({ ...row.detail, failureNotificationDelivery: input.outcome }),
+      })
+      .where("task_id", "=", row.id),
+  );
+  publishCronRunHistoryChange(db);
+  return true;
 }
 
 function validateRetainedEnum(value: string, allowed: readonly string[], label: string): void {

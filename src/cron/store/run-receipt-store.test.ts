@@ -16,6 +16,7 @@ import {
   resetCronActiveJobs,
 } from "../active-jobs.js";
 import { prepareCronRunAdmission } from "../run-admission.js";
+import { readCronRunRecordsForTests } from "../run-history.test-support.js";
 import { TEST_SCHEDULED_EXECUTION } from "../scheduled-occurrence.test-support.js";
 import { CronService } from "../service.js";
 import { setupCronServiceSuite } from "../service.test-harness.js";
@@ -501,7 +502,7 @@ it.each([
 );
 
 it.each(["legacy-running", "legacy-terminal", "started-terminal", "receiptless"] as const)(
-  "holds an interrupted ambiguous one-shot disabled across repeated startup: %s",
+  "archives an interrupted ambiguous one-shot without rerunning across repeated startup: %s",
   async (kind) => {
     const { storePath } = await makeStorePath();
     const now = Date.now();
@@ -528,16 +529,24 @@ it.each(["legacy-running", "legacy-terminal", "started-terminal", "receiptless"]
       state.deps.runCommandJob = vi.fn(async () => ({ status: "ok" as const }));
       try {
         await start(state);
-        const recovered = (await loadCronStore(storePath)).jobs[0];
-        expect(recovered).toMatchObject({
-          enabled: false,
-          state: { lastRunStatus: "error", lastDeliveryStatus: "unknown" },
+        expect((await loadCronStore(storePath)).jobs).toEqual([]);
+        const record = readCronRunRecordsForTests(job.id).at(-1);
+        expect(record?.detail).toMatchObject({
+          archivedJob: {
+            enabled: false,
+            state: { lastRunStatus: "error", lastDeliveryStatus: "unknown" },
+          },
         });
-        expect(recovered?.state.consecutiveErrors).toBeUndefined();
-        expect(recovered?.state.autoDisabled).toBeUndefined();
-        expect(recovered?.state.runningAtMs).toBeUndefined();
-        expect(recovered?.state.nextRunAtMs).toBeUndefined();
-        expect(recovered?.state.startupCatchupAtMs).toBeUndefined();
+        const recovered =
+          record?.detail && typeof record.detail === "object" && !Array.isArray(record.detail)
+            ? record.detail.archivedJob
+            : undefined;
+        expect(recovered).toMatchObject({ enabled: false });
+        expect(recovered).not.toHaveProperty("state.consecutiveErrors");
+        expect(recovered).not.toHaveProperty("state.autoDisabled");
+        expect(recovered).not.toHaveProperty("state.runningAtMs");
+        expect(recovered).not.toHaveProperty("state.nextRunAtMs");
+        expect(recovered).not.toHaveProperty("state.startupCatchupAtMs");
         expect(state.deps.runCommandJob).not.toHaveBeenCalled();
       } finally {
         stop(state);

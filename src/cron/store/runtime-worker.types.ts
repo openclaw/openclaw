@@ -275,7 +275,7 @@ export type CronRuntimeMutationContracts = {
   "cron.recordFailureAlertOutcome": {
     input: CronRuntimeMutationInputs["cron.recordFailureAlertOutcome"];
     snapshot: Record<string, never>;
-    outcome: { job?: CronJob };
+    outcome: { job?: CronJob; recorded?: boolean };
   };
 };
 

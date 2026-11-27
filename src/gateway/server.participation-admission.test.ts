@@ -11,29 +11,10 @@ import { resolveCronOperatorExecutionRevision } from "../cron/service/jobs-tool-
 import { loadCronJobsStore } from "../cron/store.js";
 import { writeToolCall } from "./gateway-provider-fixture.test-support.js";
 import { withInvitedGuestGateway } from "./guest-session-access.test-support.js";
-import * as cronNotifications from "./server-cron-notifications.js";
 
 it("readmits pending native child and scheduled work under current invitation bounds", async ({
   signal,
 }) => {
-  const repair = cronNotifications.createGatewayCronFailureRepair;
-  const repairFinished = createDeferred();
-  using repairObserver = vi
-    .spyOn(cronNotifications, "createGatewayCronFailureRepair")
-    .mockImplementation((...args) => {
-      const owner = repair(...args);
-      return {
-        ...owner,
-        runCronFailureRepair: async (request) => {
-          try {
-            await owner.runCronFailureRepair(request);
-          } finally {
-            repairFinished.resolve();
-          }
-        },
-      };
-    });
-  void repairObserver;
   await withInvitedGuestGateway(
     signal,
     async (fixture) => {
@@ -211,7 +192,9 @@ it("readmits pending native child and scheduled work under current invitation bo
           "cron.update",
           {
             id: job.id,
-            patch: { schedule: { kind: "at", at: new Date(Date.now() + 1_000).toISOString() } },
+            patch: {
+              schedule: { kind: "every", everyMs: 3_600_000, anchorMs: Date.now() + 1_000 },
+            },
           },
           { signal },
         );
@@ -233,7 +216,6 @@ it("readmits pending native child and scheduled work under current invitation bo
           status: "error",
           error: expect.stringContaining("authority"),
         });
-        await withinTest(repairFinished.promise, signal);
         expect(providerRequests.length).toBe(afterParent);
         await expect(fs.access(outside)).rejects.toThrow();
         await sender.request(

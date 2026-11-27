@@ -72,12 +72,12 @@ import {
   recoverValidQuarantinedCronScheduleJobs,
   type CronCodexRuntimePolicyTarget,
 } from "./store-migration.js";
-import { backupCronStoreForDoctor, inspectCronJobOwnersForDoctor } from "./store-repair.js";
-
-export type CronOwnerProjection =
-  | { kind: "explicit"; agentId: string }
-  | { kind: "runtime-default"; agentId: string }
-  | { kind: "unresolved" };
+import {
+  backupCronStoreForDoctor,
+  inspectCronJobOwnersForDoctor,
+  projectCronOwner,
+  type CronOwnerProjection,
+} from "./store-repair.js";
 
 export type LegacyCronRepairState = {
   storePath: string;
@@ -102,21 +102,6 @@ export function readLegacyCronStorePath(cfg: OpenClawConfig): string | undefined
     ?.store;
 }
 
-function projectCronOwner(
-  job: { agentId?: unknown; sessionKey?: unknown },
-  runtimeDefaultAgentId: string | undefined,
-): CronOwnerProjection {
-  const explicitAgentId =
-    normalizeOptionalString(job.agentId) ??
-    parseAgentSessionKey(normalizeOptionalString(job.sessionKey))?.agentId;
-  if (explicitAgentId) {
-    return { kind: "explicit", agentId: explicitAgentId };
-  }
-  return runtimeDefaultAgentId
-    ? { kind: "runtime-default", agentId: runtimeDefaultAgentId }
-    : { kind: "unresolved" };
-}
-
 export async function loadLegacyCronRepairState(params: {
   cfg: OpenClawConfig;
   storePath?: string;
@@ -128,9 +113,6 @@ export async function loadLegacyCronRepairState(params: {
     params.storePath ?? resolveCronJobsStorePath(readLegacyCronStorePath(params.cfg), params.env);
   await assertCronStateSchemaSupportedAsync(params.env);
   const legacyQuarantine = await loadLegacyCronQuarantineForMigration(storePath);
-  if (params.onlyIfLegacyDetected && !legacyQuarantine) {
-    return null;
-  }
   const persistedQuarantine = await loadCronQuarantinedJobs(storePath, params.env);
 
   const loaded = params.readOnly
@@ -171,6 +153,12 @@ export async function loadLegacyCronRepairState(params: {
           }),
         )
       : (loaded.store.jobs as unknown as Array<Record<string, unknown>>);
+  if (params.onlyIfLegacyDetected && !legacyQuarantine) {
+    const oneTimeRepair = planEndedOneTimeCronRepair(currentJobs);
+    if (describeEndedOneTimeCronRepair(oneTimeRepair).length === 0) {
+      return null;
+    }
+  }
   for (const job of currentJobs) {
     const jobId = normalizeOptionalString(job.id) ?? normalizeOptionalString(job.jobId);
     const sqlOwner = jobId ? sqlOwners.get(jobId) : undefined;

@@ -1,8 +1,6 @@
 import { expect, it, vi } from "vitest";
-import type {
-  CronOwnerProjection as Projection,
-  LegacyCronRepairState as State,
-} from "../commands/doctor/cron/legacy-repair.js";
+import type { LegacyCronRepairState as State } from "../commands/doctor/cron/legacy-repair.js";
+import type { CronOwnerProjection as Projection } from "../commands/doctor/cron/store-repair.js";
 import {
   isCronOwnerWriteRefusalError,
   prepareCronOwnerWriteRefusal,

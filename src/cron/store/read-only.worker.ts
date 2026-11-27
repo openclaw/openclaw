@@ -135,7 +135,7 @@ serveWorkerTasks<CronReadOnlyResult, CronReadOnlyRequest>(async (input, _channel
                     db,
                     storeKey,
                     input.history.taskIds,
-                    input.history.view === "summary" ? "summary" : "full",
+                    input.history.view,
                   ),
                 } satisfies CronReadOnlyResult;
               }

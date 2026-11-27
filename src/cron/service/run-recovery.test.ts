@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -6,6 +7,7 @@ import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-c
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { cronRunLogEntryToDetail } from "../run-history-detail.js";
 import { projectCronRunHistoryPage } from "../run-history.js";
+import { readCronRunRecordsForTests } from "../run-history.test-support.js";
 import type { CronRunLogEntry } from "../run-log-types.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import { loadCronStore } from "../store.js";
@@ -221,7 +223,13 @@ describe("worker-owned startup recovery", () => {
       });
       try {
         await start(state);
-        expect((await loadCronStore(store.storePath)).jobs[0]).toMatchObject({
+        const live = (await loadCronStore(store.storePath)).jobs[0];
+        if (kind === "at") {
+          expect(live).toBeUndefined();
+        }
+        const detail = readCronRunRecordsForTests(entry.id).at(-1)?.detail;
+        const recovered = live ?? (isRecord(detail) ? detail.archivedJob : undefined);
+        expect(recovered).toMatchObject({
           enabled: kind !== "at",
           state: {
             lastRunStatus: "error",
@@ -237,10 +245,13 @@ describe("worker-owned startup recovery", () => {
             deliveryStatus: "unknown",
           },
         ]);
-        const recovered = (await loadCronStore(store.storePath)).jobs[0]!;
-        expect(recovered.state.nextRunAtMs).toBe(kind === "at" ? undefined : now + 3_601_000);
-        expect(recovered.state.autoDisabled).toBeUndefined();
-        expect(recovered.state.failureAlertIncident).toBeUndefined();
+        if (kind === "at") {
+          expect(recovered).not.toHaveProperty("state.nextRunAtMs");
+        } else {
+          expect(live?.state.nextRunAtMs).toBe(now + 3_601_000);
+        }
+        expect(recovered).not.toHaveProperty("state.autoDisabled");
+        expect(recovered).not.toHaveProperty("state.failureAlertIncident");
         expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
         expect(runCommandJob).not.toHaveBeenCalled();
         expect(onEvent.mock.calls.filter(([event]) => event.action === "finished")).toHaveLength(1);

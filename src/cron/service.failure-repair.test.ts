@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { advanceCronActiveJobGeneration } from "./active-jobs.js";
 import { resolveCronRunErrorReason } from "./run-error-reason.js";
+import {
+  readCronRunStateForTests,
+  readCronRunRecordsForTests,
+} from "./run-history.test-support.js";
 import { cronScriptFailureMetadata } from "./script-failure.js";
 import {
   createTelegramDelivery,
@@ -36,10 +40,14 @@ function expectNotifications(f: RepairFixture, repairs: number, alerts: number, 
 
 const oneShot = () => ({ kind: "at" as const, at: new Date(Date.now()).toISOString() });
 
-/** A finished one-shot is off because it completed; a failure records no auto-disable. */
-function expectDisabled(job: CronJob | undefined, consecutiveErrors: number) {
-  expect(job).toMatchObject({ enabled: false, state: { consecutiveErrors } });
-  expect(job?.state.autoDisabled).toBeUndefined();
+/** A finished one-shot retains its outcome in history, not the schedule list. */
+function expectArchived(f: RepairFixture, id: string, consecutiveErrors: number) {
+  expect(f.cron.getJob(id)).toBeUndefined();
+  expect(readCronRunRecordsForTests(id)).toHaveLength(consecutiveErrors);
+  expect(readCronRunStateForTests(id)).toMatchObject({
+    lastRunStatus: "error",
+    nextRunAtMs: undefined,
+  });
 }
 
 const repairCase = (run: AlertParams[1]) => () => withRepair(run);
@@ -272,14 +280,15 @@ describe("CronService failure repair", () => {
           result.resolve({ status: "ok" });
           await run;
         }
-        expect(f.cron.getJob(job.id)?.state.lastStatus).toBe("error");
+        const settled = f.cron.getJob(job.id)?.state ?? readCronRunStateForTests(job.id);
+        expect(settled?.lastStatus).toBe("error");
         expectNotifications(f, 0, 0, 0);
         expect(f.cron.getJob(job.id)?.state.autoDisabled).toBeUndefined();
       }),
   );
 
   it(
-    "requests terminal repair after a one-shot exhausts its transient retries",
+    "alerts without repair after a one-shot exhausts its transient retries",
     repairCase(async (f) => {
       f.runIsolatedAgentJob.mockResolvedValue({ status: "error", error: "rate limit exceeded" });
       const job = await f.addJob("one-shot sync", {
@@ -294,16 +303,15 @@ describe("CronService failure repair", () => {
           expectNotifications(f, 0, 0);
         }
       }
-      expectDisabled(await f.cron.readJob(job.id), 4);
-      expectNotifications(f, 1, 0);
-      expect(f.runCronFailureRepair.mock.calls[0]?.[0]?.message).toContain(
-        "will not run again (now disabled)",
-      );
+      expect(await f.cron.readJob(job.id)).toBeUndefined();
+      expectArchived(f, job.id, 4);
+      expectNotifications(f, 0, 1, 0);
+      expectAlertTextContaining(f.sendCronFailureAlert, "Automations → Run history");
     }),
   );
 
   it.each<[string, Partial<CronJob>, [number, number, number], boolean?]>([
-    ["owned", { owner: owned.owner }, [1, 0, 0]],
+    ["owned", { owner: owned.owner }, [0, 1, 0]],
     [
       "owned with an explicit failure destination",
       { owner: owned.owner, failureAlert: { channel: "telegram", to: "19098680" } },
@@ -312,26 +320,26 @@ describe("CronService failure repair", () => {
     [
       "owner without an external route",
       { owner: owned.owner, delivery: { mode: "none" } },
-      [1, 0, 0],
+      [0, 1, 0],
     ],
-    ["owned when repair cannot start", { owner: owned.owner }, [1, 1, 0], true],
+    ["owned with settled alert delivery", { owner: owned.owner }, [0, 1, 0], true],
     ["unowned", {}, [0, 1, 0]],
-    ["unowned without a route", { delivery: { mode: "none" } }, [0, 0, 0]],
+    ["unowned without a route", { delivery: { mode: "none" } }, [0, 0, 1]],
     [
       "inherited best-effort alert suppressed",
       { delivery: { ...createTelegramDelivery(), bestEffort: true } },
-      [0, 0, 0],
+      [0, 0, 1],
     ],
-    ["alerts disabled", { failureAlert: false }, [0, 0, 0]],
+    ["alerts disabled", { failureAlert: false }, [0, 0, 1]],
   ])(
     "notifies a terminal one-shot script failure: %s",
-    (_name, jobOptions, [repairs, alerts, notices], rejectRepair = false) =>
+    (_name, jobOptions, [repairs, alerts, notices], settleAlert = false) =>
       withRepair(async (f) => {
         const alertSettled = Promise.withResolvers<void>();
-        if (rejectRepair) {
-          f.runCronFailureRepair.mockRejectedValueOnce(new Error("owner session deleted"));
+        if (settleAlert) {
           f.sendCronFailureAlert.mockImplementationOnce(async ({ onDeliverySettled }) => {
             await onDeliverySettled({ delivered: true, status: "delivered" });
+            await onDeliverySettled({ delivered: false, status: "not-delivered" });
             alertSettled.resolve();
           });
         }
@@ -350,7 +358,8 @@ describe("CronService failure repair", () => {
         await f.cron.run(job.id, "due");
         const stored = await f.cron.readJob(job.id);
         expect(stored?.state.nextRunAtMs).toBeUndefined();
-        expectDisabled(stored, 1);
+        expect(stored).toBeUndefined();
+        expectArchived(f, job.id, 1);
         const expectTerminalNotifications = () => {
           expect(f.runScriptJob).toHaveBeenCalledOnce();
           expectNotifications(f, repairs, alerts, notices);
@@ -360,32 +369,28 @@ describe("CronService failure repair", () => {
           expect(f.sendCronFailureAlert).toHaveBeenCalledWith(
             expect.objectContaining({
               job: expect.objectContaining({ id: job.id }),
-              channel: "telegram",
-              to: "19098680",
+              channel: jobOptions.delivery?.mode === "none" ? "last" : "telegram",
+              to: jobOptions.delivery?.mode === "none" ? undefined : "19098680",
               mode: "announce",
               payload: expect.objectContaining({
-                text: expect.stringContaining('Automation "continue PR work" failed'),
+                text: expect.stringContaining('One-time automation "continue PR work" ended'),
               }),
             }),
           );
         }
-        if (rejectRepair) {
+        if (settleAlert) {
           await alertSettled.promise;
-          expect(f.cron.getJob(job.id)?.state.lastFailureNotificationDeliveryStatus).toBe(
-            "delivered",
+          expect(readCronRunRecordsForTests(job.id).at(-1)?.detail).toMatchObject({
+            failureNotificationDelivery: { delivered: true, status: "delivered" },
+          });
+        }
+        if (notices) {
+          expect(f.enqueueSessionEvent).toHaveBeenCalledWith(
+            expect.stringContaining("Automations → Run history"),
+            expect.objectContaining({ jobId: job.id }),
           );
         }
-        if (repairs) {
-          const request = f.runCronFailureRepair.mock.calls[0]?.[0];
-          expect(request).toMatchObject({ jobId: job.id, sessionKey: ownerSessionKey });
-          expect(request?.message).toContain("one-time automation");
-          expect(request?.message).toContain("will not run again (now disabled)");
-          expect(request?.message).toContain(`session:${ownerSessionKey}`);
-          expect(request?.message).toMatch(/<untrusted-text[^>]*>[\s\S]*await automations/u);
-          expect(request?.message).toMatch(/<untrusted-text[^>]*>[\s\S]*wake is invalid_input/u);
-          expect(request?.message).not.toContain("Transient (provider outage");
-        }
-        await f.cron.run(job.id, "due");
+        await expect(f.cron.run(job.id, "due")).rejects.toThrow(/unknown cron job/i);
         expectTerminalNotifications();
       }),
   );

@@ -1,6 +1,9 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { cronRunRecordStoreKey } from "./run-history-detail.js";
+import { readCronRunRecordsForTests } from "./run-history.test-support.js";
 import { cronTestJob } from "./service.fixture-builders.test-support.js";
 import { CronService } from "./service.js";
 import {
@@ -10,6 +13,7 @@ import {
 import { createCronServiceState, type CronServiceDeps } from "./service/state.js";
 import { onTimer, runMissedJobs } from "./service/timer.test-support.js";
 import { loadCronStore, saveCronStore } from "./store.js";
+import { cronStoreKey } from "./store/key.js";
 import type { CronJob } from "./types.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
@@ -366,7 +370,11 @@ describe("CronService restart catch-up", () => {
       state: { nextRunAtMs: time("2025-12-13T18:00:00Z"), runningAtMs },
     });
     const { cron, deps } = h;
-    const recovered = cron.getJob("restart-job");
+    expect(cron.getJob("restart-job")).toBeUndefined();
+    const detail = readCronRunRecordsForTests("restart-job").findLast(
+      (record) => cronRunRecordStoreKey(record) === cronStoreKey(deps.storePath),
+    )?.detail;
+    const recovered = isRecord(detail) ? detail.archivedJob : undefined;
     expect(recovered).toMatchObject({
       enabled: false,
       schedule: { kind: "at", at: "2025-12-13T16:00:00.000Z" },
@@ -376,11 +384,9 @@ describe("CronService restart catch-up", () => {
         lastDeliveryStatus: "unknown",
       },
     });
-    expect(recovered?.state).toMatchObject({
-      runningAtMs: undefined,
-      nextRunAtMs: undefined,
-      startupCatchupAtMs: undefined,
-    });
+    expect(recovered).not.toHaveProperty("state.runningAtMs");
+    expect(recovered).not.toHaveProperty("state.nextRunAtMs");
+    expect(recovered).not.toHaveProperty("state.startupCatchupAtMs");
     expectInterrupted(deps, runningAtMs);
   });
 

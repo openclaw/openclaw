@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { assert, afterEach, beforeEach, expect, it } from "vitest";
+import { readCronRunStateForTests } from "../cron/run-history.test-support.js";
 import {
   addAgentTurnJob,
   createCronConfig,
@@ -60,7 +61,7 @@ it("refuses a stored job whose explicit session belongs to another agent", async
 
   await state.cron.run(job.id, "force");
 
-  expect(state.cron.getJob(job.id)?.state).toMatchObject({
+  expect(readCronRunStateForTests(job.id)).toMatchObject({
     lastRunStatus: "error",
     lastError: expect.stringMatching(/session target belongs to another agent/i),
   });

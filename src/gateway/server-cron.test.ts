@@ -23,6 +23,10 @@ import {
   type OpenClawConfig,
 } from "../config/config.js";
 import type * as deliveryTarget from "../cron/isolated-agent/delivery-target.js";
+import {
+  readCronRunRecordsForTests,
+  readCronRunStateForTests,
+} from "../cron/run-history.test-support.js";
 import { CronService } from "../cron/service.js";
 import { waitForCronJobRun, waitForCronRunQueue } from "../cron/service/run-queue.js";
 import { onTimer as onCronTimer } from "../cron/service/timer.test-support.js";
@@ -797,7 +801,7 @@ describe("buildGatewayCronService", () => {
           second.release.resolve();
           expect(nextRun.mock.results[0]?.type).toBe("return");
           await nextRun.mock.results[0]?.value;
-          expect(next.cron.getJob(secondId)?.state.lastRunStatus).toBe("ok");
+          expect(readCronRunStateForTests(secondId)?.lastRunStatus).toBe("ok");
           expect(spawn).toHaveBeenCalledTimes(2);
         } else {
           await next.cron.stopAndDrain?.();
@@ -1046,7 +1050,7 @@ describe("buildGatewayCronService", () => {
         }
         await vi.waitFor(() => expect(runSessionEvent).toHaveBeenCalledTimes(2));
         expect(spawn).toHaveBeenCalledTimes(2);
-        expect(state.cron.getJob(job.id)?.enabled).toBe(false);
+        expect(state.cron.getJob(job.id)).toBeUndefined();
       } finally {
         releasePayload.resolve();
         releaseReceiptFinalization.resolve();
@@ -1162,8 +1166,8 @@ describe("buildGatewayCronService", () => {
         await completion.value;
         const payloadRunner = sessionTarget === "main" ? runSessionEvent : mocks.runAgent;
         expect(payloadRunner).toHaveBeenCalledTimes(2);
-        expect(state.cron.getJob(job.id)?.state.lastRunStatus).toBe("ok");
-        expect(state.cron.getJob(job.id)?.enabled).toBe(false);
+        expect(readCronRunStateForTests(job.id)?.lastRunStatus).toBe("ok");
+        expect(state.cron.getJob(job.id)).toBeUndefined();
         expect(spawn).toHaveBeenCalledOnce();
       } finally {
         predecessorRelease.resolve();
@@ -1486,8 +1490,8 @@ describe("buildGatewayCronService", () => {
 
       await state.cron.run(job.id, "force");
 
-      expect(state.cron.getJob(job.id)?.state.lastDeliveryError).toBeUndefined();
-      expect(state.cron.getJob(job.id)?.state).toMatchObject({
+      expect(readCronRunStateForTests(job.id)?.lastDeliveryError).toBeUndefined();
+      expect(readCronRunStateForTests(job.id)).toMatchObject({
         lastRunStatus: "ok",
         lastDeliveryStatus: "not-delivered",
         lastDelivered: false,
@@ -1566,15 +1570,11 @@ describe("buildGatewayCronService", () => {
         const expectedDeliveryStatus = recipientReached ? "unknown" : "not-delivered";
         const required = policy !== "optional";
         const deliveryError = `cron delivery ${recipientReached ? "outcome is unknown" : "was suppressed"}: ${reason}`;
-        const updated = state.cron.getJob(job.id);
-        if (required) {
-          expect(updated?.state).toMatchObject({
-            lastDeliveryStatus: expectedDeliveryStatus,
-            lastDeliveryError: deliveryError,
-          });
-        } else {
-          expect(updated).toBeUndefined();
-        }
+        expect(state.cron.getJob(job.id)).toBeUndefined();
+        expect(readCronRunStateForTests(job.id)).toMatchObject({
+          lastDeliveryStatus: expectedDeliveryStatus,
+          lastDeliveryError: deliveryError,
+        });
         const finished = finishedEvent(job.id);
         expect(finished).toMatchObject({
           status: "ok",
@@ -1632,7 +1632,7 @@ describe("buildGatewayCronService", () => {
       await state.cron.run(job.id, "force");
 
       expect(mocks.announce).toHaveBeenCalledOnce();
-      expect(state.cron.getJob(job.id)?.state.lastDeliveryStatus).toBe("unknown");
+      expect(readCronRunStateForTests(job.id)?.lastDeliveryStatus).toBe("unknown");
     } finally {
       state.cron.stop();
       vi.unstubAllEnvs();
@@ -1671,7 +1671,7 @@ describe("buildGatewayCronService", () => {
       await state.cron.run(job.id, "force");
 
       expect(mocks.announce).toHaveBeenCalledOnce();
-      expect(state.cron.getJob(job.id)?.state).toMatchObject({
+      expect(readCronRunStateForTests(job.id)).toMatchObject({
         lastRunStatus: "ok",
         lastDeliveryStatus: "not-delivered",
         lastDeliveryError: expect.stringContaining(error.message),
@@ -1708,12 +1708,12 @@ describe("buildGatewayCronService", () => {
           expect.objectContaining({ text: "scheduled result" }),
         ]);
         expect(deliverySignal?.aborted).toBe(true);
-        const stored = state.cron.getJob(job.id);
-        expect(stored).toMatchObject({
-          enabled: false,
-          state: { lastRunStatus: "error", lastError: "Cancelled by operator." },
+        expect(state.cron.getJob(job.id)).toBeUndefined();
+        expect(readCronRunStateForTests(job.id)).toMatchObject({
+          lastRunStatus: "error",
+          lastError: "Cancelled by operator.",
         });
-        expect(stored?.state.autoDisabled).toBeUndefined();
+        expect(finishedEvent(job.id)).not.toHaveProperty("job.state.autoDisabled");
       });
     } finally {
       vi.unstubAllEnvs();
@@ -1760,7 +1760,7 @@ describe("buildGatewayCronService", () => {
     );
   });
 
-  it("retains a one-shot command without changing execution status when required delivery fails", async () => {
+  it("archives a one-shot command without changing execution status when required delivery fails", async () => {
     const cfg = createCronConfig("server-cron-command-required-delivery-failure");
 
     const deliveryError = "network unavailable while delivering command output";
@@ -1776,18 +1776,19 @@ describe("buildGatewayCronService", () => {
 
       await state.cron.run(job.id, "force");
 
-      const updated = state.cron.getJob(job.id);
+      expect(state.cron.getJob(job.id)).toBeUndefined();
+      expect(readCronRunRecordsForTests(job.id)).toHaveLength(1);
+      const updated = finishedEvent(job.id)?.job;
       expect(updated).toMatchObject({
         enabled: false,
         state: {
           lastRunStatus: "ok",
-          consecutiveErrors: 0,
           lastDeliveryStatus: "not-delivered",
           lastDeliveryError: deliveryError,
         },
       });
-      expect(updated?.state.lastError).toBeUndefined();
-      expect(updated?.state.nextRunAtMs).toBeUndefined();
+      expect(readCronRunStateForTests(job.id)?.lastError).toBeUndefined();
+      expect(readCronRunStateForTests(job.id)?.nextRunAtMs).toBeUndefined();
       expect(finishedEvent(job.id)).toMatchObject({ status: "ok", completionStatus: "failed" });
     });
   });
@@ -1838,19 +1839,19 @@ describe("buildGatewayCronService", () => {
         );
         if (expected === undefined) {
           expect(mocks.announce).not.toHaveBeenCalled();
-          expect(state.cron.getJob(job.id)?.state.deliverySuppressionReason).toBe("silent");
+          expect(readCronRunStateForTests(job.id)?.deliverySuppressionReason).toBe("silent");
         } else {
           expect(mocks.announce).toHaveBeenCalledExactlyOnceWith(
             expect.objectContaining({
               jobId: job.id,
               payload: [{ text: expected }],
-              inspectionUrl: `https://gateway.example/control/automations?job=${job.id}&run=cron%3A${job.id}%3A${state.cron.getJob(job.id)?.state.lastRunAtMs}`,
+              inspectionUrl: `https://gateway.example/control/automations?job=${job.id}&run=cron%3A${job.id}%3A${readCronRunStateForTests(job.id)?.lastRunAtMs}`,
               target: expect.objectContaining({ threadId: 456 }),
             }),
           );
-          expect(state.cron.getJob(job.id)?.state.deliverySuppressionReason).toBeUndefined();
+          expect(readCronRunStateForTests(job.id)?.deliverySuppressionReason).toBeUndefined();
         }
-        expect(state.cron.getJob(job.id)?.state.lastRunStatus).toBe("ok");
+        expect(readCronRunStateForTests(job.id)?.lastRunStatus).toBe("ok");
       });
     },
   );
@@ -1897,7 +1898,7 @@ describe("buildGatewayCronService", () => {
         const announceRequest = callRecord(mocks.announce);
         const announce = requireRecord(announceRequest.payload, "script failure announce");
         expect(announce.text).toContain(
-          'Automation "script failure detail" failed\nCause: automation script failed internally',
+          'One-time automation "script failure detail" ended without a confirmed successful outcome.\nCause: automation script failed internally',
         );
         expect(announce.text).not.toContain(rawError);
 
@@ -1927,14 +1928,13 @@ describe("buildGatewayCronService", () => {
     {
       name: "default required",
       bestEffort: undefined,
-      retained: true,
       completion: "failed",
     },
-    { name: "explicit required", bestEffort: false, retained: true, completion: "failed" },
-    { name: "explicit best-effort", bestEffort: true, retained: false, completion: "succeeded" },
+    { name: "explicit required", bestEffort: false, completion: "failed" },
+    { name: "explicit best-effort", bestEffort: true, completion: "succeeded" },
   ])(
     "keeps script execution successful after $name announce failure",
-    async ({ name, bestEffort, retained, completion }) => {
+    async ({ name, bestEffort, completion }) => {
       const cfg = createTriggerConfig(`server-cron-script-${name}`);
 
       mockScriptResult("queue changed");
@@ -1957,19 +1957,18 @@ describe("buildGatewayCronService", () => {
 
         await state.cron.run(job.id, "force");
 
-        const updated = state.cron.getJob(job.id);
-        expect(Boolean(updated)).toBe(retained);
-        if (updated) {
-          expect(updated).toMatchObject({
+        expect(state.cron.getJob(job.id)).toBeUndefined();
+        expect(readCronRunRecordsForTests(job.id)).toHaveLength(1);
+        expect(finishedEvent(job.id)).toMatchObject({
+          job: {
             enabled: false,
             state: {
               lastRunStatus: "ok",
               lastDeliveryStatus: "not-delivered",
-              consecutiveErrors: 0,
             },
-          });
-          expect(updated.state.lastError).toBeUndefined();
-        }
+          },
+        });
+        expect(readCronRunStateForTests(job.id)?.lastError).toBeUndefined();
         expect(finishedEvent(job.id)).toMatchObject({ status: "ok", completionStatus: completion });
       });
     },
@@ -2078,9 +2077,9 @@ describe("buildGatewayCronService", () => {
             "cron reply",
           ).text;
           expect(announce.inspectionUrl).toBe(
-            `https://gateway.example/control/automations?job=${job.id}&run=cron%3A${job.id}%3A${state.cron.getJob(job.id)?.state.lastRunAtMs}`,
+            `https://gateway.example/control/automations?job=${job.id}&run=cron%3A${job.id}%3A${readCronRunStateForTests(job.id)?.lastRunAtMs}`,
           );
-          expect(state.cron.getJob(job.id)?.state).toMatchObject({
+          expect(readCronRunStateForTests(job.id)).toMatchObject({
             lastRunStatus: "ok",
             lastDeliveryStatus: "delivered",
           });
@@ -2171,7 +2170,7 @@ describe("buildGatewayCronService", () => {
 
       expect(mocks.fetch).toHaveBeenCalledOnce();
       expect(receivedMethods).toEqual(Array.from({ length: expectedRequests }, () => "POST"));
-      const updatedState = state.cron.getJob(job.id)?.state;
+      const updatedState = readCronRunStateForTests(job.id);
       expect(updatedState).toMatchObject({
         lastRunStatus: "ok",
         lastDelivered: expectedRequests === 1,

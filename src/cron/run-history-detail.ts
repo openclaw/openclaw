@@ -143,6 +143,7 @@ export function cronRunLogEntryToDetail(
   options: {
     storeKey: string;
     archivedJob?: unknown;
+    failureNotificationId?: string;
     triggerEval?: { fired: boolean; stateChanged: boolean; state?: unknown };
     scriptResult?: { scriptStateChanged?: boolean; scriptState?: unknown };
   },
@@ -158,6 +159,7 @@ export function cronRunLogEntryToDetail(
     jobName: entry.jobName,
     retryAvailable: entry.retryAvailable,
     archivedJob: options.archivedJob,
+    failureNotificationId: options.failureNotificationId,
     errorReason: entry.errorReason,
     diagnostics: entry.diagnostics,
     delivered: entry.delivered,

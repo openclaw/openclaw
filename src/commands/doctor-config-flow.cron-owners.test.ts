@@ -7,6 +7,7 @@ import { readConfigFileSnapshot, transformConfigFile } from "../config/config.js
 import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../cron/agent-id.js";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
+import { readCronRunRecordsForTests } from "../cron/run-history.test-support.js";
 import { createCronServiceWithStateForTest } from "../cron/service.test-harness.js";
 import { waitForCronRunQueue } from "../cron/service/run-queue.js";
 import { captureCronSchedulerWakeForTest } from "../cron/service/scheduler-actor.test-support.js";
@@ -267,11 +268,10 @@ it("preserves a due legacy one-shot through Doctor ownership repair, then runs i
   await wake(cronState);
   await waitForCronRunQueue(cronState);
   expect(execute).toHaveBeenCalledOnce();
-  expect(cron.getJob("pending-one-shot")).toMatchObject({
-    agentId: "ops",
-    enabled: false,
-    state: { lastRunStatus: "ok" },
-  });
+  expect(cron.getJob("pending-one-shot")).toBeUndefined();
+  expect(readCronRunRecordsForTests("pending-one-shot")).toMatchObject([
+    { agentId: "ops", detail: { status: "ok" } },
+  ]);
   expect(readReceipts()).toEqual([{ status: "ok" }]);
   cron.stop();
   await cron.start();

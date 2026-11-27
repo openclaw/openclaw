@@ -12,6 +12,7 @@ import {
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isCronJobActive } from "../cron/active-jobs.js";
+import { readCronRunStateForTests } from "../cron/run-history.test-support.js";
 import { CronService } from "../cron/service.js";
 import { waitForActiveCronTaskRuns } from "../cron/service/active-run-cancellation.js";
 import { captureCronSchedulerWakeForTest } from "../cron/service/scheduler-actor.test-support.js";
@@ -292,8 +293,9 @@ describe("gateway cron stop-and-drain automation ownership", () => {
       await drain;
       expect(observed.outcome).toEqual({ ok: false, error: stopError });
       const completed = (await loadJobs(original)).store.jobs.find((entry) => entry.id === job.id);
-      expect(completed).toMatchObject({ enabled: false, state: { lastRunStatus: "ok" } });
-      expect(completed?.state.runningAtMs).toBeUndefined();
+      expect(completed).toBeUndefined();
+      const archived = readCronRunStateForTests(job.id);
+      expect(archived).toMatchObject({ lastRunStatus: "ok" });
       expect(isCronJobActive(job.id)).toBe(false);
     } finally {
       releaseFinalization.resolve();

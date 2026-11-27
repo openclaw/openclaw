@@ -465,13 +465,10 @@ describe("cron service operations", () => {
 
       await expect(run(state, job.id)).resolves.toEqual({ ok: true, ran: true });
 
-      const restored = (await loadCronStore(storePath)).jobs[0];
-      expect(restored).toMatchObject({
-        id: job.id,
-        enabled: false,
-        state: { consecutiveErrors: 1 },
-      });
-      expect(restored?.state.nextRunAtMs).toBeUndefined();
+      expect((await loadCronStore(storePath)).jobs).toEqual([]);
+      expect(readCronRunRecordsForTests(job.id)).toMatchObject([
+        { status: "failed", error: expect.stringContaining("changed while starting work") },
+      ]);
     });
   });
 

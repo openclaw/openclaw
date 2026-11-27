@@ -79,11 +79,8 @@ it.each([
     state.deps.sendCronFailureAlert = vi.fn(async () => undefined);
     const restored = restore({ completionStatus, deliveryStatus, failureNotificationDelivery });
 
-    expect(restored?.shouldDelete).toBe(completionStatus === "succeeded");
+    expect(restored?.shouldDelete).toBe(true);
     expect(job.state).toMatchObject({ lastRunStatus: "ok", consecutiveErrors: 0 });
-    if (!restored?.shouldDelete) {
-      expect(job.enabled).toBe(false);
-    }
     expect(job.state.nextRunAtMs).toBeUndefined();
     expect(deferredNotifications).toEqual([]);
     expect(state.deps.sendCronFailureAlert).not.toHaveBeenCalled();
