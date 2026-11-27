@@ -142,7 +142,7 @@ export function registerReleaseUpdateGatewayTests(context: () => GatewayTestCont
       });
 
       await run({
-        update: (options) => runReleaseUpdateCli({ ...updateOptions, ...options }),
+        update: (overrides) => runReleaseUpdateCli({ ...updateOptions, ...overrides }),
         runId,
         output,
         requests,
@@ -224,7 +224,9 @@ export function registerReleaseUpdateGatewayTests(context: () => GatewayTestCont
               const registered = createDeferred<{ wait: Promise<unknown> }>();
               // Named promise timers can stay real on Node/Bun; control this poll's wait only.
               vi.mocked(sleep).mockImplementationOnce((delay, value) => {
-                const wait = new Promise((resolve) => globalThis.setTimeout(resolve, delay, value));
+                const wait = new Promise((resolve) => {
+                  globalThis.setTimeout(resolve, delay, value);
+                });
                 registered.resolve({ wait });
                 return wait;
               });
