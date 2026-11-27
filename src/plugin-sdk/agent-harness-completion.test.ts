@@ -124,7 +124,7 @@ it("keeps native consumption through an in-flight failure and separates a succes
     const attempt = owner.complete("same native result");
     await started.promise;
     await duplicate.complete("same native result");
-    owner.consume();
+    duplicate.consume();
     response.resolve({ delivered: false, path: "none", error: "late transport failure" });
     await attempt;
     await vi.advanceTimersByTimeAsync(300_000);
@@ -167,6 +167,96 @@ it("cannot retire a successor from a released native delivery attempt", async ()
   await pending;
   expect(retire).not.toHaveBeenCalled();
   expect(() => owner.complete("successor result")).toThrow("no longer active");
+});
+
+it("retires a duplicate observer after the shared delivery is abandoned", async () => {
+  const started = Promise.withResolvers<void>();
+  const response = Promise.withResolvers<AgentHarnessCompletionDelivery>();
+  const send = vi.fn(() => {
+    started.resolve();
+    return response.promise;
+  });
+  const retire = vi.fn(async (outcome: string) => {
+    if (outcome === "undelivered") {
+      owner.release();
+    }
+  });
+  const registration = {
+    scope: createAgentHarnessCompletionScope(source),
+    assignmentId: "abandoned-native-result",
+    isCurrent: () => true,
+    readiness: () => "ready" as const,
+    observeConsumption: async () => false,
+    deliver: send,
+    retire,
+    settleExecution() {},
+    onError(error: unknown) {
+      throw error;
+    },
+  };
+  const owner = registerAgentHarnessCompletion(registration);
+  const duplicate = registerAgentHarnessCompletion(registration);
+  try {
+    const pending = owner.complete("native result");
+    await started.promise;
+    await duplicate.complete("native result");
+    response.resolve({ delivered: false, path: "none", recoveryBlocked: true });
+    await pending;
+    await duplicate.join();
+    expect(send).toHaveBeenCalledOnce();
+    expect(retire).toHaveBeenCalledWith("unavailable", expect.any(Function));
+  } finally {
+    owner.release();
+    duplicate.release();
+  }
+});
+
+it("accepts a duplicate receipt while undelivered retirement is still pending", async () => {
+  const entered = Promise.withResolvers<void>();
+  const persistence = Promise.withResolvers<void>();
+  const send = vi.fn(async () => ({
+    delivered: false,
+    path: "none" as const,
+    recoveryBlocked: true as const,
+  }));
+  const retire = vi.fn(async (outcome: string, assertCurrent: () => void) => {
+    if (outcome === "undelivered") {
+      entered.resolve();
+      await persistence.promise;
+      assertCurrent();
+    }
+  });
+  const registration = {
+    scope: createAgentHarnessCompletionScope(source),
+    assignmentId: "retiring-native-result",
+    isCurrent: () => true,
+    readiness: () => "ready" as const,
+    observeConsumption: async () => false,
+    deliver: send,
+    retire,
+    settleExecution() {},
+    onError(error: unknown) {
+      throw error;
+    },
+  };
+  const owner = registerAgentHarnessCompletion(registration);
+  const duplicate = registerAgentHarnessCompletion(registration);
+  try {
+    const pending = owner.complete("native result");
+    await entered.promise;
+    await duplicate.complete("native result");
+    duplicate.consume();
+    persistence.resolve();
+    await pending;
+    await duplicate.join();
+    expect(send).toHaveBeenCalledOnce();
+    expect(retire).toHaveBeenCalledWith("consumed", expect.any(Function));
+    expect(owner.isConsumed()).toBe(true);
+  } finally {
+    persistence.resolve();
+    owner.release();
+    duplicate.release();
+  }
 });
 
 it("retries consumed retirement without redelivering after repeated persistence failures", async () => {

@@ -86,14 +86,30 @@ export function createSubagentAnnounceObligation<Completion>(
 // Detached native results retain only delivery custody between attempts. Their
 // six-delay budget predates the persisted registry's separate expiry policy.
 const DETACHED_COMPLETION_RETRY_DELAYS_MS = [5_000, 15_000, 30_000, 60_000, 120_000, 300_000];
-const detachedCompletionOwners = new WeakMap<object, Map<string, object>>();
+type DetachedCompletionOwner = {
+  obligation: AnnounceObligation;
+  token?: object;
+  wake: Set<() => void>;
+  retiring: boolean;
+  references: number;
+};
+const detachedCompletionOwners = new WeakMap<object, Map<string, DetachedCompletionOwner>>();
 
 function registerDetachedCompletion<Completion>(
   lifecycle: DetachedCompletionLifecycle<Completion>,
   obligation: AnnounceObligation,
 ): DetachedCompletion<Completion> {
-  const owners = detachedCompletionOwners.get(lifecycle.scope) ?? new Map<string, object>();
+  const owners =
+    detachedCompletionOwners.get(lifecycle.scope) ?? new Map<string, DetachedCompletionOwner>();
   detachedCompletionOwners.set(lifecycle.scope, owners);
+  const shared: DetachedCompletionOwner = owners.get(lifecycle.key) ?? {
+    obligation,
+    wake: new Set(),
+    retiring: false,
+    references: 0,
+  };
+  owners.set(lifecycle.key, shared);
+  shared.references += 1;
   const owner = {};
   let completion: Completion | undefined;
   let retiring = false;
@@ -101,7 +117,7 @@ function registerDetachedCompletion<Completion>(
   let attemptCount = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let inFlight: Promise<void> | undefined;
-  const isConsumed = () => obligation.outcome === "delivered";
+  const isConsumed = () => shared.obligation.outcome === "delivered";
   const assertActive = () => {
     if (released || !lifecycle.isCurrent()) {
       throw new Error("Completion registration is no longer active");
@@ -111,11 +127,10 @@ function registerDetachedCompletion<Completion>(
     if (released || !lifecycle.isCurrent()) {
       return false;
     }
-    const current = owners.get(lifecycle.key);
-    if (current && current !== owner) {
+    if (shared.token && shared.token !== owner) {
       return false;
     }
-    owners.set(lifecycle.key, owner);
+    shared.token = owner;
     return true;
   };
   const assertCurrent = () => {
@@ -124,10 +139,20 @@ function registerDetachedCompletion<Completion>(
     }
   };
   const release = () => {
+    if (released) {
+      return;
+    }
     released = true;
+    shared.wake.delete(wake);
     clearTimeout(timer);
     timer = undefined;
-    if (owners.get(lifecycle.key) === owner) {
+    if (shared.token === owner) {
+      shared.token = undefined;
+      for (const resumeObserver of shared.wake) {
+        resumeObserver();
+      }
+    }
+    if (--shared.references === 0 && owners.get(lifecycle.key) === shared) {
       owners.delete(lifecycle.key);
     }
   };
@@ -149,6 +174,8 @@ function registerDetachedCompletion<Completion>(
     timer.unref();
   };
   const retire = async () => {
+    // Native cleanup can release its handle before the persistence call returns.
+    shared.retiring = true;
     const consumed = isConsumed();
     try {
       await lifecycle.retire(consumed ? "consumed" : "undelivered", () => {
@@ -157,6 +184,9 @@ function registerDetachedCompletion<Completion>(
           throw new Error("Completion was consumed during retirement");
         }
       });
+      for (const resumeObserver of shared.wake) {
+        resumeObserver();
+      }
       release();
     } catch (error) {
       if (released || !lifecycle.isCurrent()) {
@@ -176,16 +206,27 @@ function registerDetachedCompletion<Completion>(
     }
     let waiting = false;
     try {
-      if (!claim()) {
-        await lifecycle.retire("unavailable", () => {});
+      if (shared.retiring && !shared.token && !isConsumed()) {
+        await lifecycle.retire("unavailable", assertActive);
         release();
+        return;
+      }
+      if (!claim()) {
+        // A duplicate still observes native receipts while the delivery owner runs.
+        if (isConsumed()) {
+          await lifecycle.retire("consumed", assertActive);
+          release();
+        }
         return;
       }
       if (lifecycle.readiness() === "blocked") {
         return;
       }
       if (await lifecycle.observeConsumption(assertCurrent)) {
-        obligation.consume();
+        shared.obligation.consume();
+        for (const resumeObserver of shared.wake) {
+          resumeObserver();
+        }
       }
       if (released || !lifecycle.isCurrent()) {
         return;
@@ -213,7 +254,10 @@ function registerDetachedCompletion<Completion>(
         return;
       }
       if (isDurableAnnounceDelivery(delivery)) {
-        obligation.consume();
+        shared.obligation.consume();
+        for (const resumeObserver of shared.wake) {
+          resumeObserver();
+        }
       }
       if (!acceptsAnnounceDeliveryResult(delivery, { delivered: isConsumed(), handedOff: false })) {
         await retire();
@@ -254,6 +298,14 @@ function registerDetachedCompletion<Completion>(
     void inFlight.then(finished, finished);
     return inFlight;
   };
+  function wake() {
+    clearTimeout(timer);
+    timer = undefined;
+    if (!released && completion !== undefined) {
+      void resume();
+    }
+  }
+  shared.wake.add(wake);
   return {
     complete(fact) {
       assertActive();
@@ -262,14 +314,9 @@ function registerDetachedCompletion<Completion>(
     },
     consume() {
       assertActive();
-      if (!claim()) {
-        return;
-      }
-      obligation.consume();
-      clearTimeout(timer);
-      timer = undefined;
-      if (completion !== undefined) {
-        void resume();
+      shared.obligation.consume();
+      for (const resumeObserver of shared.wake) {
+        resumeObserver();
       }
     },
     join: async () => {
