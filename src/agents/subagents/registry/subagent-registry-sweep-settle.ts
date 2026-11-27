@@ -11,7 +11,7 @@ import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { resolveSubagentYieldWaitSource } from "./subagent-registry-read.js";
 import { resolveYieldedRunContinuation } from "./subagent-registry-run-pause.js";
-import type { createSubagentSweepReadScope } from "./subagent-registry-sweep-cleanup.js";
+import type { createSubagentSweepContext } from "./subagent-registry-sweep-cleanup.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 import {
@@ -24,7 +24,7 @@ import {
 type CompleteRun = ReturnType<
   typeof createSubagentRegistryCompletionRuntime
 >["completeSubagentRunWithRecovery"];
-type SweepReadScope = ReturnType<typeof createSubagentSweepReadScope>;
+type SweepReadScope = ReturnType<typeof createSubagentSweepContext>;
 
 /**
  * Settles a yielded run that no continuation can reach (see
