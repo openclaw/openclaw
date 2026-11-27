@@ -112,8 +112,20 @@ it("keeps native consumption through an in-flight failure and separates a succes
       throw error;
     },
   };
-  const owner = registerAgentHarnessCompletion(registration);
-  const duplicate = registerAgentHarnessCompletion(registration);
+  const owner = registerAgentHarnessCompletion({
+    ...registration,
+    scope: createAgentHarnessCompletionScope({
+      ...source,
+      gatewayContextResolver: () => undefined,
+    }),
+  });
+  const duplicate = registerAgentHarnessCompletion({
+    ...registration,
+    scope: createAgentHarnessCompletionScope({
+      ...source,
+      gatewayContextResolver: () => undefined,
+    }),
+  });
   const successorSend = vi.fn(async () => direct());
   const successor = registerAgentHarnessCompletion({
     ...registration,

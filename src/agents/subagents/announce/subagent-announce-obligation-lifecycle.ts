@@ -273,6 +273,11 @@ function registerDetachedCompletion<Completion>(
       }
     } catch (error) {
       if (!released && lifecycle.isCurrent()) {
+        if (lifecycle.readiness() === "unavailable") {
+          await lifecycle.retire("unavailable", assertCurrent);
+          release();
+          return;
+        }
         lifecycle.onError(error);
         retiring ||= attemptCount >= DETACHED_COMPLETION_RETRY_DELAYS_MS.length;
         if (retiring || isConsumed()) {

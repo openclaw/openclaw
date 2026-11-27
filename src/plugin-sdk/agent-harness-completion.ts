@@ -32,7 +32,6 @@ import {
 import { runWithOperatorToolGatewayContinuationContext } from "../gateway/server-plugin-in-process-authority.js";
 import {
   getGatewayContextResolver,
-  getCanonicalGatewayContextResolver,
   withPluginRuntimeGatewayContextResolver,
 } from "../plugins/runtime/gateway-request-scope.js";
 import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
@@ -76,12 +75,12 @@ export function registerAgentHarnessCompletion<Completion>(params: {
 }) {
   const { scope: scopeInput, assignmentId, ...lifecycle } = params;
   const scope = assertAgentHarnessCompletionScope(scopeInput);
-  const resolver = getGatewayContextResolver(scope);
   // Identity groups receipts; it never grants execution or delivery authority.
+  // Replacement client contexts still observe the same requester and assignment.
   // The supplied delivery operation still uses the host-issued scope and custody.
   return createSubagentAnnounceObligation(undefined, {
     ...lifecycle,
-    scope: (resolver && getCanonicalGatewayContextResolver(resolver)) ?? detachedCompletionScope,
+    scope: detachedCompletionScope,
     key: `${scope.requesterAgentId}\0${scope.requesterSessionKey}\0${assignmentId}`,
   });
 }
