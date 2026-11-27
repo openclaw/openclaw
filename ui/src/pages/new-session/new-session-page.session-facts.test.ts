@@ -7,6 +7,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
+import { createWebPushCapability } from "../../app/web-push.ts";
 import type { LobsterPetProps } from "../../components/lobster-pet-contract.ts";
 import { t } from "../../i18n/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
@@ -98,7 +99,16 @@ async function mountSessionDraft(
           defaultId: "main",
           mainKey: "main",
           scope: "per-sender",
-          agents,
+          // Dictation tests submit, so they need a placement policy and a model to send with.
+          ...(dictationClient
+            ? {
+                agents: agents.map((agent) => ({
+                  ...agent,
+                  model: { primary: "openai/initial-model" },
+                })),
+                sessionPlacement: {},
+              }
+            : { agents }),
         };
       }
       if (method === "models.list") {
@@ -117,7 +127,11 @@ async function mountSessionDraft(
   });
   const context = createSessionContext(client);
   const lifetime = new AbortController();
+  // A clicked Send may offer notifications, which reads the web push capability.
+  const webPush = createWebPushCapability(context.gateway);
+  onTestFinished(() => webPush.dispose());
   Object.assign(context, {
+    webPush,
     lifecycleAbortSignal: lifetime.signal,
     router: createRouter<RouteId, ApplicationContext>({
       routes: [{ id: "new-session", path: "/new", component: () => ({}) }],
@@ -291,13 +305,19 @@ describe("new session pending dictation review", () => {
         }
         return {};
       });
-      const previous = loadSettings().dictationRefinement;
-      patchSettings({
-        dictationRefinement:
-          resolution === "off"
-            ? undefined
-            : { version: 1, mode: "automatic", locale: "en-US", explicitEnabled: false },
-      });
+      // The mounted page reads preferences for its own gateway, not the page default.
+      const gatewayUrl = "ws://example.test";
+      const previous = loadSettings(gatewayUrl).dictationRefinement;
+      patchSettings(
+        {
+          gatewayUrl,
+          dictationRefinement:
+            resolution === "off"
+              ? undefined
+              : { version: 1, mode: "automatic", locale: "en-US", explicitEnabled: false },
+        },
+        { selectGateway: false },
+      );
       const options = vi.spyOn(NewSessionPageOwner.prototype, "composerOptions");
       const prepare = vi.spyOn(DirectDictationControl.prototype, "prepare");
       const start = vi.spyOn(ComposerDictationSession.prototype, "start");
@@ -378,7 +398,7 @@ describe("new session pending dictation review", () => {
         send()!.click();
         await waitForSolid(() => expect(writes).toEqual(["sessions.create"]));
       } finally {
-        patchSettings({ dictationRefinement: previous });
+        patchSettings({ gatewayUrl, dictationRefinement: previous }, { selectGateway: false });
       }
     },
   );
