@@ -470,7 +470,7 @@ When the run deadline stops a command, run history retains its captured output a
 
 ### Script payloads
 
-Script payloads run headlessly in the same code-mode executor as trigger scripts, without starting a conversational agent turn. They are available by default; setting `cron.triggers.enabled: false` disables creation and execution of script payloads together with condition-trigger scripts and stream schedules. Script jobs support only `main` and `isolated` session targets.
+Script payloads run headlessly in the same code-mode executor as trigger scripts, without starting a conversational agent turn. They are available by default; setting `cron.triggers.enabled: false` disables creation and execution of script payloads together with condition-trigger scripts and stream schedules. Script jobs support only the `isolated` session target.
 
 Scripts get only self-scoped `automations` actions (status, list, get, remove, runs, and next_check), with no add, update, run, or wake. To resume a conversation later, schedule an `agentTurn` instead.
 

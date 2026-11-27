@@ -236,6 +236,11 @@ describe("cron model schema regressions", () => {
     expect(disabled.description).toContain("say it is unsupported");
   });
 
+  it("advertises only the isolated target for script payloads when triggers are enabled", () => {
+    const tool = createCronTool({ config: { cron: { triggers: { enabled: true } } } });
+    expect(tool.description).toContain('{kind:"script",script}: headless, isolated only');
+  });
+
   it("keeps the full trigger surface and approval guidance when config omits cron.triggers", () => {
     const defaults = createCronTool({ config: { cron: { enabled: true } } });
     expect(propertyAt(defaults.parameters, "job.trigger.script")).toMatchObject({ type: "string" });
