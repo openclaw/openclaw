@@ -1008,7 +1008,7 @@
 /* An adjacent standalone activity is not part of this run. Keep its neighbor's
    identity available, without reserving a second row between operations. */
 .chat-virtual-row--compact-activity > .chat-group.assistant {
-  grid-template: auto / var(--chat-avatar-column) minmax(0, 1fr) fit-content(30%);
+  grid-template: auto / [avatar] var(--chat-avatar-column) [message] minmax(0, 1fr) fit-content(30%);
 }
 
 .chat-virtual-row--compact-activity > .chat-group.assistant > .chat-avatar,

@@ -209,6 +209,21 @@ suite.define(() => {
         const line = replyButton(answer, "Replying to Jordan Lee");
         await completion.waitFor();
         await line.waitFor();
+        const avatar = thread
+          .locator(".chat-group.assistant")
+          .filter({ hasText: "Release check" })
+          .locator(":scope > .chat-avatar, :scope > .chat-avatar-slot");
+        await expect
+          .poll(async () => {
+            const [label, face] = await Promise.all([
+              completion.boundingBox(),
+              avatar.boundingBox(),
+            ]);
+            return label && face
+              ? Math.abs(label.y + label.height / 2 - face.y - face.height / 2)
+              : Infinity;
+          })
+          .toBeLessThanOrEqual(1);
         if (process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR) {
           await thread.screenshot({ path: path.join(suite.artifactDir, "completion-reply.png") });
         }
