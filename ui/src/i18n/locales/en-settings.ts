@@ -2148,6 +2148,9 @@ const enSettings = {
       deleteConfirm: "Confirm before deleting sessions",
       deleteConfirmHint:
         "Applies to sidebar deletes. Stopping cloud devices or removing saved worktrees always asks.",
+      preloadSessionRenderer: "Preload chat on session link hover",
+      preloadSessionRendererHint:
+        "Prepare the chat view when you pause on a session link. Its messages load when you open it.",
     },
     sessionObserver: {
       title: "Session observer",

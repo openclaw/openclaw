@@ -475,6 +475,7 @@ export function loadUiPreferences(
         ? (personalNavigation?.railShortcuts ?? defaults.sidebarEntries)
         : (normalizeSidebarEntries(parsedRecord.railShortcuts) ?? defaults.sidebarEntries),
       sidebarLiveActivity: booleanSetting("sidebarLiveActivity"),
+      ...(parsed.preloadSessionRenderer === true ? { preloadSessionRenderer: true } : {}),
       chatMessageMaxWidth: normalizeChatMessageMaxWidth(parsed.chatMessageMaxWidth),
       showAdvancedSettings: booleanSetting("showAdvancedSettings"),
       pinnedAgentIds: normalizeUniqueTrimmedStringList(parsed.pinnedAgentIds),
@@ -649,6 +650,7 @@ export function saveSettings(
       ),
     },
     sidebarLiveActivity: next.sidebarLiveActivity === false ? false : undefined,
+    preloadSessionRenderer: next.preloadSessionRenderer === true ? true : undefined,
     chatMessageMaxWidth: normalizeChatMessageMaxWidth(next.chatMessageMaxWidth),
     showAdvancedSettings: next.showAdvancedSettings === true ? true : undefined,
     // Empty pin list is the default; only real pins persist.

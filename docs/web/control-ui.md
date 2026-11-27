@@ -211,6 +211,8 @@ such as Beam. After conversion, they use the normal session controls, including
 rename, pin, and archive. Their child-session disclosure opens the normal nested
 conversation tree; the source group does not require another import.
 
+In **Appearance → Sidebar**, enable **Preload chat on session link hover** to fetch the chat renderer assets when hovering over or focusing a chat link in the Sessions table, sidebar or pinned rail. The link loads the conversation when opened.
+
 ## Rename a session
 
 On desktop, double-click a session name in the sidebar to edit it in place, or

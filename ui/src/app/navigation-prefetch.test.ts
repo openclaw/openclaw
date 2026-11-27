@@ -21,6 +21,7 @@ const connection = { saveData: false };
 const manifest = {
   "new-session": ["assets/new-1234abcd.js", "assets/new-1234abcd.css"],
   templates: ["assets/templates-1234abcd.js"],
+  chat: ["assets/chat-route-1234abcd.js"],
   palette: ["assets/palette-1234abcd.js"],
   "model-picker": ["assets/model-picker-1234abcd.js"],
   "chat-next": ["assets/chat-controls-1234abcd.js"],
@@ -165,6 +166,7 @@ function setup(
     shell,
     stop,
     preloadRoute,
+    theme: context.theme,
     notify: () => notify(),
     panes,
     pane,
@@ -609,4 +611,45 @@ it("waits for mounted plugin activation without waiting for unrelated plugins", 
   await expectNativeIntent(fixture, false);
   fixture.pluginPages.length = 0;
   await expectNativeIntent(fixture, true);
+});
+
+it.each([
+  { surface: "expanded sidebar", className: "sidebar-recent-session__link" },
+  {
+    surface: "pinned rail",
+    className: "sidebar-rail__button",
+    pin: "session-rail:agent:main:example",
+  },
+])("preloads the $surface chat asset only after opted-in intent", async ({ className, pin }) => {
+  const fixture = setup("advanced");
+  fixture.outlet.presentationSettled = true;
+  fixture.transcript.ready = true;
+  const container = pin ? fixture.shell.appendChild(document.createElement("div")) : fixture.shell;
+  if (pin) {
+    container.dataset.sidebarEntry = pin;
+  }
+  const link = container.appendChild(document.createElement("a"));
+  link.className = className;
+  link.href = "/control/chat/main/example";
+  const settings = fixture.theme.settings;
+  const readSettings = vi.spyOn(fixture.theme, "settings", "get");
+  const chatHint = () => hints().find((hint) => hint.href.endsWith("/chat-route-1234abcd.js"));
+  const hover = () => link.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
+
+  readSettings.mockReturnValue({ ...settings, preloadSessionRenderer: false });
+  hover();
+  await vi.advanceTimersByTimeAsync(75);
+  expect(chatHint()).toBeUndefined();
+
+  readSettings.mockReturnValue({ ...settings, preloadSessionRenderer: true });
+  hover();
+  link.dispatchEvent(new MouseEvent("pointerout", { bubbles: true }));
+  await vi.advanceTimersByTimeAsync(75);
+  expect(chatHint()).toBeUndefined();
+
+  link.focus();
+  link.dispatchEvent(new MouseEvent("pointerout", { bubbles: true }));
+  await vi.advanceTimersByTimeAsync(75);
+  expect(chatHint()).toMatchObject({ rel: "modulepreload", fetchPriority: "low" });
+  expect(fixture.preloadRoute).not.toHaveBeenCalled();
 });

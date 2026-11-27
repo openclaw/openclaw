@@ -152,6 +152,7 @@ export const baseProps = () => ({
   textScaleOverridden: false,
   setTextScale: vi.fn(),
   sidebarLiveActivity: true,
+  preloadSessionRenderer: false,
   hiddenSessionCatalogIds: new Set<string>(),
   hiddenSessionCatalogLabels: { read: () => new Map<string, string>(), scope: null },
   setSessionCatalogHidden: vi.fn(),

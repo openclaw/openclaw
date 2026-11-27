@@ -429,6 +429,12 @@ export function SidebarPreferencesSection(
       <div class="settings-group">
         <LocalToggleRow
           config={props}
+          setting="preloadSessionRenderer"
+          title={t("configView.sidebarPrefs.preloadSessionRenderer")}
+          hint={t("configView.sidebarPrefs.preloadSessionRendererHint")}
+        />
+        <LocalToggleRow
+          config={props}
           setting="sidebarLiveActivity"
           title={t("configView.sidebarPrefs.liveActivity")}
           hint={t("configView.sidebarPrefs.liveActivityHint")}

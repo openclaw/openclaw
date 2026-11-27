@@ -382,6 +382,8 @@ export const SETTINGS_SEARCH_TARGETS = {
     searchKeys: [
       "configView.sidebarPrefs.liveActivity",
       "configView.sidebarPrefs.liveActivityHint",
+      "configView.sidebarPrefs.preloadSessionRenderer",
+      "configView.sidebarPrefs.preloadSessionRendererHint",
       "chat.sidebar.hiddenSessionSections",
       "configView.sessionObserver.title",
       "configView.sessionObserver.toggle",

@@ -61,7 +61,11 @@ export function connectShellIdle(
   let intent: string | undefined;
   // Explicit intent wins. Chat warms its controls before the existing New Session warmup.
   const nextPending = () => {
-    if (intent && pending.has(intent)) {
+    if (
+      intent &&
+      pending.has(intent) &&
+      (intent !== "chat" || context.theme.settings.preloadSessionRenderer === true)
+    ) {
       return intent;
     }
     const currentRoute = router.getState().matches[0]?.routeId;
@@ -222,7 +226,7 @@ export function connectShellIdle(
       }
     }
   };
-  const preloadRoute = async (target: Element, routeId: RouteId) => {
+  const preloadRoute = async (target: Element, routeId: RouteId, sessionLink: boolean) => {
     intentTimers.delete(target);
     if (
       !target.isConnected ||
@@ -231,6 +235,12 @@ export function connectShellIdle(
       !ready() ||
       router.getState().matches[0]?.routeId === routeId
     ) {
+      return;
+    }
+    if (sessionLink) {
+      if (context.theme.settings.preloadSessionRenderer === true) {
+        prioritize("chat");
+      }
       return;
     }
     prioritize(routeId === "config" ? "appearance" : routeId);
@@ -256,8 +266,21 @@ export function connectShellIdle(
     }
     const anchor = event.target.closest<HTMLAnchorElement>("a[href]");
     const routeId = anchor ? routeIdFromPath(anchor.pathname, basePath) : null;
+    const chatLink =
+      anchor !== null &&
+      anchor.origin === location.origin &&
+      routeId === "chat" &&
+      context.theme.settings.preloadSessionRenderer === true &&
+      event.type !== "touchstart" &&
+      (!("pointerType" in event) || event.pointerType !== "touch") &&
+      anchor.matches(
+        ".session-link, .sidebar-recent-session__link, [data-sidebar-entry^='session-rail:'] a",
+      );
     const routeTarget =
-      anchor && (routeId === "new-session" || anchor.matches(".nav-item, .settings-sidebar__item"))
+      anchor &&
+      (chatLink ||
+        routeId === "new-session" ||
+        anchor.matches(".nav-item, .settings-sidebar__item"))
         ? anchor
         : null;
     const leaving = event.type === "pointerout" || event.type === "focusout";
@@ -268,6 +291,14 @@ export function connectShellIdle(
         return;
       }
       if (leaving) {
+        if (
+          chatLink &&
+          (event.type === "pointerout"
+            ? routeTarget.matches(":focus-within")
+            : routeTarget.matches(":hover"))
+        ) {
+          return;
+        }
         clearTimeout(intentTimers.get(routeTarget));
         intentTimers.delete(routeTarget);
         return;
@@ -275,11 +306,11 @@ export function connectShellIdle(
       if (routeId) {
         if (event.type === "touchstart") {
           clearTimeout(intentTimers.get(routeTarget));
-          void preloadRoute(routeTarget, routeId);
+          void preloadRoute(routeTarget, routeId, false);
         } else if (!intentTimers.has(routeTarget)) {
           intentTimers.set(
             routeTarget,
-            setTimeout(() => void preloadRoute(routeTarget, routeId), 50),
+            setTimeout(() => void preloadRoute(routeTarget, routeId, chatLink), chatLink ? 75 : 50),
           );
         }
       }

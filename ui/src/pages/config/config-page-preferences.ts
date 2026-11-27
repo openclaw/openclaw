@@ -104,6 +104,7 @@ export function createConfigPagePreferences(context: ApplicationContext, invalid
         accentProvenance: accentPref.provenance,
         accentResetValue: accentPref.resetValue,
         fontUi: settings().fontUi,
+        preloadSessionRenderer: settings().preloadSessionRenderer === true,
         fontChat: settings().fontChat,
         fontUiProvenance: current("fontUi").provenance,
         fontChatProvenance: current("fontChat").provenance,

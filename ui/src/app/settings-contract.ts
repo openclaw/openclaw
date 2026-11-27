@@ -229,6 +229,7 @@ export type UiSettings = {
   sidebarCollapsedAgentIds?: string[];
   sidebarRecentlyCreatedAgentId?: string;
   sidebarEntries: string[]; // Ordered personal navigation references
+  preloadSessionRenderer?: boolean;
   sidebarLiveActivity?: boolean; // Latest activity under running sidebar sessions (default true)
   chatMessageMaxWidth?: string; // Browser-local centered chat transcript max width
   chatBubbleDisabledSessionKeys?: string[]; // Explicit per-session opt-outs, retained when the lab is off

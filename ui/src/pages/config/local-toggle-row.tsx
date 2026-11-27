@@ -12,6 +12,7 @@ export function LocalToggleRow(props: {
     | "chatShowTaskProgress"
     | "chatCollapseTaskProgress"
     | "composerHoldToRecord"
+    | "preloadSessionRenderer"
     | "sidebarLiveActivity"
     | "sessionDeleteConfirm"
     | "lobsterPetVisits"
