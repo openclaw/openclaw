@@ -79,6 +79,12 @@ describe("ollama lazy imports", () => {
     expect(imports).toEqual({ memory: 0, node: 0, setup: 0, stream: 0, web: 0, wsl: 0 });
     expect(media.mock.calls[0]?.[0]).toMatchObject({ id: "ollama", capabilities: ["image"] });
 
+    // Memory config resolution reads media support synchronously from the registered adapter.
+    expect(memory.mock.calls[0]?.[0].mediaModalities?.({ model: "embeddinggemma-2" })).toEqual([
+      "image",
+      "audio",
+    ]);
+    expect(imports.memory).toBe(0);
     await expect(memory.mock.calls[0]?.[0].create({} as never)).resolves.toEqual({
       provider: null,
     });

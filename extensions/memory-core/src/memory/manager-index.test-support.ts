@@ -293,6 +293,11 @@ vi.mock("./embeddings.js", async (importOriginal) => {
                   }
                   const mimeType =
                     inlineData?.type === "inline-data" ? inlineData.mimeType : undefined;
+                  if (mimeType === "image/heic") {
+                    throw Object.assign(new Error("cannot read image/heic"), {
+                      code: "EMBEDDING_MEDIA_UNSUPPORTED",
+                    });
+                  }
                   if (mimeType?.startsWith("image/")) {
                     return [0, 0, 1, 0];
                   }

@@ -106,10 +106,10 @@ beforeEach(() => {
 });
 afterEach(() => vi.useRealTimers());
 
-it("preserves per-agent multimodal config for an incompatible provider", async () => {
+it("keeps per-agent multimodal config and warns when the new model skips its media", async () => {
   const chosen = adapter("openai");
-  chosen.supportsMultimodalEmbeddings = () => false;
   mocks.get.mockReturnValue(chosen);
+  const multimodal = { enabled: true, modalities: ["image" as const] };
   const config: OpenClawConfig = {
     ...memoryConfig({
       provider: "gemini",
@@ -117,22 +117,18 @@ it("preserves per-agent multimodal config for an incompatible provider", async (
       fallback: "none",
       query: { maxResults: 7 },
     }),
-    agents: {
-      entries: {
-        main: { memory: { search: { multimodal: { enabled: true, modalities: ["image"] } } } },
-      },
-    },
+    agents: { entries: { main: { memory: { search: { multimodal } } } } },
   };
-  const original = structuredClone(config);
   const prompt = prompter({ selects: ["openai", "existing"], texts: ["text-embedding-3-small"] });
   const result = await runMemorySetupFlow(config, prompt);
-  expect(result).toBe(config);
-  expect(config).toEqual(original);
-  expect(chosen.create).not.toHaveBeenCalled();
-  expect(prompt.confirm).toHaveBeenCalledOnce();
+  expect(result.memory?.search).toMatchObject({
+    provider: "openai",
+    model: "text-embedding-3-small",
+  });
+  expect(result.agents?.entries?.main?.memory?.search?.multimodal).toEqual(multimodal);
   expect(prompt.note).toHaveBeenCalledWith(
-    expect.stringContaining("compatible"),
-    "Memory setup unchanged",
+    expect.stringContaining("does not support image files"),
+    "Ready to save",
   );
 });
 

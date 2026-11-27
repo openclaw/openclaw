@@ -232,9 +232,9 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "memory.search.extraPaths.*.evergreen":
     "Keeps matching extra-path reference files out of filesystem-mtime temporal decay. This changes recency ranking only; it does not make the content trusted, promote it, or change source provenance.",
   "memory.search.multimodal":
-    'Optional multimodal memory settings for indexing image and audio files from configured extra paths. Keep this off unless your embedding model explicitly supports cross-modal embeddings, and set `memory.search.fallback` to "none" while it is enabled. Matching files are uploaded to the configured remote embedding provider during indexing.',
+    'Optional multimodal memory settings for indexing image and audio files from configured extra paths. Only modalities the embedding model declares are indexed; others are skipped and shown in memory status. Set `memory.search.fallback` to "none" while it is enabled. Matching files are uploaded to the configured remote embedding provider during indexing.',
   "memory.search.multimodal.enabled":
-    "Enables image/audio memory indexing from extraPaths. This currently requires Gemini embedding-2, keeps the default memory roots Markdown-only, disables memory-search fallback providers, and uploads matching binary content to the configured remote embedding provider.",
+    "Enables image/audio memory indexing from extraPaths. Needs an embedding model that embeds media, such as Gemini embedding-2; keeps the default memory roots Markdown-only, disables memory-search fallback providers, and uploads matching binary content to the configured remote embedding provider.",
   "memory.search.multimodal.modalities":
     'Selects which multimodal file types are indexed from extraPaths: "image", "audio", or "all". Keep this narrow to avoid indexing large binary corpora unintentionally.',
   "memory.search.multimodal.maxFileBytes":

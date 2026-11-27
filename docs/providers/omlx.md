@@ -99,6 +99,19 @@ openclaw memory search "a fact from your notes"
 oMLX owns model loading. OpenClaw sends embedding requests to `/v1/embeddings`
 and does not install models or call oMLX management endpoints.
 
+### Images and audio
+
+An EmbeddingGemma 2 model (an ID containing `embeddinggemma-2`, such as
+`mlx-community/embeddinggemma-2-bf16`) also embeds images and audio for
+[multimodal memory](/reference/memory-config#multimodal-memory). oMLX loads its
+audio encoder only when the model's `embedding_audio_enabled` setting is on; until
+then, memory skips audio files with oMLX's message as the warning. After turning it
+on, run `openclaw memory index --force` to index the skipped files.
+
+oMLX decodes JPEG, PNG, GIF, and WebP images and WAV, MP3, and FLAC audio. Memory
+skips HEIC images with a warning. M4A and AAC audio fail the sync, because oMLX
+returns a generic server error for them; keep them out of indexed paths.
+
 ## Server URL and authentication
 
 The default endpoint needs no configuration. To use a different port or host,

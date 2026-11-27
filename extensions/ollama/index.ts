@@ -1,7 +1,6 @@
 import { collectConfiguredModelRefValues } from "@openclaw/model-catalog-core/configured-model-refs";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import type { MemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { splitTrailingAuthProfile } from "openclaw/plugin-sdk/model-ref-parse";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
@@ -33,7 +32,6 @@ import {
 } from "./provider-policy-api.js";
 import { createOllamaCloudAuthMethod } from "./src/cloud-auth.js";
 import {
-  DEFAULT_OLLAMA_EMBEDDING_MODEL,
   isHostedOllamaCloud,
   OLLAMA_CLOUD_BASE_URL,
   OLLAMA_CLOUD_DEFAULT_MODELS,
@@ -54,6 +52,7 @@ import {
   shouldUseSyntheticOllamaAuth,
   type OllamaPluginConfig,
 } from "./src/discovery-shared.js";
+import { lazyOllamaMemoryEmbeddingProviderAdapter } from "./src/embedding-registration.js";
 import { ollamaMediaUnderstandingProvider } from "./src/media-understanding-provider.js";
 import {
   createLazyOllamaNodeHostCommands,
@@ -95,20 +94,6 @@ const resolveConfiguredSecretInputString = createLazyRuntimeMethod(
   createLazyRuntimeModule(() => import("openclaw/plugin-sdk/secret-input-runtime")),
   (runtime) => runtime.resolveConfiguredSecretInputString,
 );
-const loadOllamaMemoryEmbeddingProviderAdapter = createLazyRuntimeModule(
-  async () =>
-    (await import("./src/memory-embedding-adapter.js")).ollamaMemoryEmbeddingProviderAdapter,
-);
-
-const lazyOllamaMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapter = {
-  id: OLLAMA_PROVIDER_ID,
-  defaultModel: DEFAULT_OLLAMA_EMBEDDING_MODEL,
-  transport: "remote",
-  authProviderId: OLLAMA_PROVIDER_ID,
-  create: async (options) =>
-    await (await loadOllamaMemoryEmbeddingProviderAdapter()).create(options),
-};
-
 async function checkWsl2CrashLoopRiskLazily(api: OpenClawPluginApi): Promise<void> {
   try {
     const { isWSL2Sync } = await import("openclaw/plugin-sdk/runtime-env");

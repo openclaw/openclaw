@@ -30,6 +30,12 @@ export type EmbeddingProviderCreateOptions = {
   };
   dimensions?: number;
   taskType?: string;
+  /**
+   * Wire shape for inline media on the OpenAI-compatible transport, set in code by a
+   * provider plugin whose model declares media: `content` sends llama.cpp-style
+   * `{content:[...]}` inputs, `items` sends oMLX-style `items`. Unset means text only.
+   */
+  mediaFormat?: "content" | "items";
 };
 
 /** Result returned by an embedding provider adapter create call. */
@@ -37,6 +43,9 @@ export type EmbeddingProviderCreateResult = {
   provider: EmbeddingProvider | null;
   runtime?: EmbeddingProviderRuntime;
 };
+
+/** Non-text input a model embeds into the same vector space as its text. */
+export type EmbeddingMediaModality = "image" | "audio";
 
 /** Adapter contract registered by core or plugin embedding providers. */
 export type EmbeddingProviderAdapter = {
@@ -51,6 +60,11 @@ export type EmbeddingProviderAdapter = {
   resolveIndexIdentity?: (
     options: EmbeddingProviderCreateOptions,
   ) => EmbeddingProviderIndexIdentity;
+  /**
+   * Media this model embeds alongside text, which the adapter's requests must carry as
+   * inline-data parts. Absent or empty means text only.
+   */
+  mediaModalities?: (params: { model: string }) => readonly EmbeddingMediaModality[];
   create: (options: EmbeddingProviderCreateOptions) => Promise<EmbeddingProviderCreateResult>;
   formatSetupError?: (err: unknown) => string;
 };

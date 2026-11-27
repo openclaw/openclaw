@@ -7,10 +7,16 @@ import {
   OMLX_PROVIDER_ID,
 } from "./defaults.js";
 
+// oMLX serves EmbeddingGemma 2 images, and audio once the model's embedding_audio_enabled
+// setting is on; otherwise memory skips the audio file with oMLX's message as the warning.
+const EMBEDDINGGEMMA_2_MODEL = /(?:^|[/\\])embeddinggemma-2(?:[-:._]|$)/iu;
+
 export const omlxEmbeddingProvider: MemoryEmbeddingProviderAdapter = {
   id: OMLX_PROVIDER_ID,
   transport: "remote",
   authProviderId: OMLX_PROVIDER_ID,
+  mediaModalities: ({ model }) =>
+    EMBEDDINGGEMMA_2_MODEL.test(model.trim()) ? ["image", "audio"] : [],
   create: async (options) => {
     const { embeddingProviderOwnsDestination, getMemoryEmbeddingProvider } =
       await import("openclaw/plugin-sdk/memory-core-host-engine-embeddings");
@@ -79,6 +85,7 @@ export const omlxEmbeddingProvider: MemoryEmbeddingProviderAdapter = {
       ...options,
       config,
       provider: providerId,
+      mediaFormat: "items",
       remote: {
         ...options.remote,
         baseUrl,

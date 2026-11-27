@@ -30,7 +30,10 @@ import {
   type MemoryEmbeddingCacheCandidate,
   type MemoryCachedEmbeddings,
 } from "./manager-embedding-cache-ops.js";
-import { createMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
+import {
+  createMemoryEmbeddingOperationError,
+  isRejectedMultimodalFileError,
+} from "./manager-embedding-errors.js";
 import {
   embedMemoryDocuments,
   embedMemoryQuery,
@@ -853,13 +856,8 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
       embeddings = await this.embedChunksWithBatch(candidates, source, generation);
     } catch (err) {
       const message = formatErrorMessage(err);
-      if (
-        entry.kind === "multimodal" &&
-        /(413|payload too large|request too large|input too large|too many tokens|input limit|request size)/i.test(
-          message,
-        )
-      ) {
-        log.warn("memory embeddings: skipping multimodal file rejected as too large", {
+      if (entry.kind === "multimodal" && isRejectedMultimodalFileError(err, message)) {
+        log.warn("memory embeddings: skipping multimodal file the provider rejected", {
           path: entry.path,
           bytes: prepared.structuredInputBytes,
           provider: generation.provider.id,

@@ -61,6 +61,7 @@ type OpenAICompatibleEmbeddingClient = {
   inputType?: string;
   queryInputType?: string;
   documentInputType?: string;
+  mediaFormat?: EmbeddingProviderCreateOptions["mediaFormat"];
   localServiceTarget?: ConfiguredProviderLocalServiceTarget;
   acquireLocalService?: AcquireConfiguredProviderLocalService;
 };
@@ -315,6 +316,63 @@ function embeddingInputToText(input: EmbeddingInput): string {
   return textParts.join("");
 }
 
+const AUDIO_FORMATS: Record<string, string> = {
+  "audio/mpeg": "mp3",
+  "audio/mp3": "mp3",
+  "audio/x-wav": "wav",
+  "audio/wave": "wav",
+};
+
+function hasInlineMedia(input: EmbeddingInput): boolean {
+  return (
+    typeof input !== "string" && (input.parts?.some((part) => part.type === "inline-data") ?? false)
+  );
+}
+
+/** One request input in the plugin-selected media shape; text stays a plain string. */
+function toMediaRequestInput(
+  input: EmbeddingInput,
+  format: NonNullable<EmbeddingProviderCreateOptions["mediaFormat"]>,
+): unknown {
+  if (typeof input === "string" || !input.parts || !hasInlineMedia(input)) {
+    const text = embeddingInputToText(input);
+    return format === "items" ? { text } : text;
+  }
+  if (format === "content") {
+    return {
+      content: input.parts.map((part) =>
+        part.type === "text"
+          ? part
+          : part.mimeType.startsWith("image/")
+            ? { type: "image_url", image_url: { url: `data:${part.mimeType};base64,${part.data}` } }
+            : {
+                type: "input_audio",
+                input_audio: {
+                  data: part.data,
+                  format: AUDIO_FORMATS[part.mimeType] ?? part.mimeType.replace(/^audio\//u, ""),
+                },
+              },
+      ),
+    };
+  }
+  const item: Record<string, string> = {};
+  const text = input.parts.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("");
+  if (text) {
+    item.text = text;
+  }
+  for (const part of input.parts) {
+    if (part.type !== "inline-data") {
+      continue;
+    }
+    const kind = part.mimeType.startsWith("image/") ? "image" : "audio";
+    if (item[kind] !== undefined) {
+      throw new Error(`openai-compatible embeddings accept one ${kind} per input.`);
+    }
+    item[kind] = `data:${part.mimeType};base64,${part.data}`;
+  }
+  return item;
+}
+
 async function createEmbeddingHttpError(
   response: Response,
   requestHeaders: HeadersInit,
@@ -362,7 +420,9 @@ const fetchWithCallerDeadline: typeof fetchWithRuntimeDispatcher = (url, init) =
 
 async function postEmbeddingRequest(params: {
   client: OpenAICompatibleEmbeddingClient;
-  input: string[];
+  input: unknown[];
+  /** The request carries inline media in the client's media format. */
+  media?: boolean;
   callOptions?: EmbeddingProviderCallOptions;
 }): Promise<number[][]> {
   const { client, input, callOptions } = params;
@@ -372,7 +432,7 @@ async function postEmbeddingRequest(params: {
   const inputType = resolveRequestInputType(client, callOptions?.inputType);
   const body = {
     model: client.model,
-    input,
+    [params.media && client.mediaFormat === "items" ? "items" : "input"]: input,
     ...(typeof client.dimensions === "number" ? { dimensions: client.dimensions } : {}),
     ...(inputType ? { input_type: inputType } : {}),
   };
@@ -418,7 +478,20 @@ async function postEmbeddingRequest(params: {
         });
         try {
           if (!response.ok) {
-            throw await createEmbeddingHttpError(response, client.headers, errorPrefix);
+            const error = await createEmbeddingHttpError(response, client.headers, errorPrefix);
+            // An opaque oMLX 500 can mean a server failure, not an undecodable file.
+            if (
+              params.media &&
+              ((client.mediaFormat === "content" &&
+                response.status === 500 &&
+                /failed to load image or audio file/i.test(error.message)) ||
+                (client.mediaFormat === "items" &&
+                  response.status === 400 &&
+                  /does not support audio inputs|incorrect image source/i.test(error.message)))
+            ) {
+              throw Object.assign(error, { code: "EMBEDDING_MEDIA_UNSUPPORTED" });
+            }
+            throw error;
           }
           const payload = await readProviderJsonResponse<unknown>(response, errorPrefix);
           const vectors = readEmbeddingVectors(
@@ -521,6 +594,7 @@ async function createOpenAICompatibleEmbeddingClient(
     ...(inputType ? { inputType } : {}),
     ...(queryInputType ? { queryInputType } : {}),
     ...(documentInputType ? { documentInputType } : {}),
+    ...(options.mediaFormat ? { mediaFormat: options.mediaFormat } : {}),
   };
 }
 
@@ -534,9 +608,15 @@ export const openAICompatibleEmbeddingProviderAdapter: EmbeddingProviderAdapter 
       if (inputs.length === 0) {
         return [];
       }
+      const format = client.mediaFormat;
+      // Media goes out only in the shape a declaring plugin chose; text stays plain strings.
+      const media = format !== undefined && inputs.some(hasInlineMedia);
       return await postEmbeddingRequest({
         client,
-        input: inputs.map(embeddingInputToText),
+        input: media
+          ? inputs.map((input) => toMediaRequestInput(input, format))
+          : inputs.map(embeddingInputToText),
+        media,
         callOptions,
       });
     };

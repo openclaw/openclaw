@@ -200,6 +200,31 @@ describe("memory index", () => {
     });
   });
 
+  it("keeps local embeddings healthy when one media file cannot be decoded", async () => {
+    const manager = await getPersistentManager(createCfg({}));
+    await expect(manager.probeEmbeddingAvailability()).resolves.toEqual({ ok: true });
+    const fields = fieldsOf(manager);
+    const provider = {
+      id: "local",
+      model: "local-model",
+      embed: async () => [1, 0],
+      embedBatch: async (texts: unknown[]) => texts.map(() => [1, 0]),
+      close: async () => {},
+    };
+    fields.provider = provider;
+
+    fields.markEmbeddingProviderFailure(
+      new Error("batch failed", {
+        cause: Object.assign(new Error("unsupported media"), {
+          code: "EMBEDDING_MEDIA_UNSUPPORTED",
+        }),
+      }),
+    );
+
+    expect(fields.provider).toBe(provider);
+    expect(manager.getCachedEmbeddingAvailability()?.ok).toBe(true);
+  });
+
   it.each(["degraded fallback", "retry"])(
     "waits for provider shutdown before %s initialization",
     async (mode) => {

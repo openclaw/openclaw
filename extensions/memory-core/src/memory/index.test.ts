@@ -853,6 +853,7 @@ describe("memory index", () => {
     await fs.writeFile(path.join(mediaDir, "diagram.png"), Buffer.from("png"));
     await fs.writeFile(path.join(mediaDir, "meeting.wav"), Buffer.from("wav"));
     await fs.writeFile(path.join(mediaDir, "oversized.png"), Buffer.alloc(32, 1));
+    await fs.writeFile(path.join(mediaDir, "undecodable.heic"), Buffer.from("heic"));
     await fs.writeFile(path.join(fixture.paths.memory, "default-diagram.png"), Buffer.from("png"));
 
     const cfg = createCfg({
@@ -873,7 +874,7 @@ describe("memory index", () => {
     expect(
       read(
         manager,
-        "SELECT path FROM memory_index_chunks WHERE source = 'memory' AND path LIKE '%.png' ORDER BY path",
+        "SELECT path FROM memory_index_chunks WHERE source = 'memory' AND (path LIKE '%.png' OR path LIKE '%.heic') ORDER BY path",
       ).all(),
     ).toEqual([{ path: "media-memory/diagram.png" }]);
 

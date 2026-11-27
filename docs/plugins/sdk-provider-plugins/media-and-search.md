@@ -65,6 +65,22 @@ merging a nested value such as voice settings.
     memory search. The retired memory-specific registrar and manifest
     contract are no longer accepted.
 
+    If a model embeds images or audio into the same space as text, return them
+    from `mediaModalities({ model })` (for example `["image", "audio"]`), and
+    send `inline-data` parts of `EmbeddingInput` in the request. Memory indexes
+    only the media a model declares; omitting it means text only. The older
+    `supportsMultimodalEmbeddings({ model })` boolean is deprecated; `true` still
+    counts as image and audio. When the runtime cannot decode one media file,
+    throw an error with `code: "EMBEDDING_MEDIA_UNSUPPORTED"`; memory skips that
+    file with a warning instead of failing the sync.
+
+    A plugin that serves media through the bundled `openai-compatible`
+    transport passes `mediaFormat` in its create options: `"content"` sends
+    each media input as `{content: [text, image_url | input_audio parts]}`
+    (llama.cpp), and `"items"` sends an `items` array of
+    `{text?, image | audio}` data URLs (oMLX). It is set in plugin code, not
+    config. Without it the transport sends text only and rejects inline data.
+
     OpenAI-compatible endpoints can use `createRemoteEmbeddingProvider`
     from `openclaw/plugin-sdk/memory-core-host-engine-embeddings`. Its optional
     `buildRequestFields(kind)` callback returns extra JSON fields for

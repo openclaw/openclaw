@@ -302,6 +302,14 @@ Other balance failures include guidance for checking the server or its access pe
     `mxbai-embed-large`. Document batches stay raw, so existing indexes need
     no format migration.
 
+    `embeddinggemma-2` also embeds images and audio for
+    [multimodal memory](/reference/memory-config#multimodal-memory), locally.
+    The tag decides which media: the default and `740m` tags embed both,
+    `440m` embeds images, `570m` embeds audio, and `270m` embeds text only.
+    Ollama decodes JPEG, PNG, GIF, and WebP images and WAV, MP3, and FLAC
+    audio; memory skips files it cannot decode, such as HEIC and M4A, with a
+    warning.
+
     Embedding concurrency and batching behavior are owned by the Ollama
     memory provider. For a remote embedding host, use the supported
     `remote.baseUrl` and `remote.apiKey` fields to keep auth scoped to that

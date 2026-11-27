@@ -26,6 +26,7 @@ import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { resolveEmbeddingProviderAdapterTransport } from "./embeddings.js";
 import { MemoryManagerReloadError } from "./lifecycle.js";
 import { runMemoryIndexState } from "./manager-cpu-worker-runtime.js";
+import { isUnsupportedEmbeddingMediaError } from "./manager-embedding-errors.js";
 import {
   MemoryEmbeddingRefusalOps,
   type MemoryEmbeddingBootstrapDebug,
@@ -446,6 +447,10 @@ export abstract class MemoryProviderLifecycle extends MemoryEmbeddingRefusalOps 
   }
 
   protected markEmbeddingProviderFailure(err: unknown): void {
+    // One undecodable file is not a failure of the local provider or remote endpoint.
+    if (isUnsupportedEmbeddingMediaError(err)) {
+      return;
+    }
     if (this.provider?.id !== "local") {
       this.markImplicitEmbeddingEndpointFailure(err);
       return;
