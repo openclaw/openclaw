@@ -300,9 +300,9 @@ export function buildOpenAICompletionsRequest(
     supportsTools,
     // Deferred tools stay callable without a declaration; only unavailable history becomes text.
     // A request that offers no tools has no catalog to reconcile, so its history stays native.
-    declaredToolNames: context.tools?.length
+    declaredToolNames: converted?.projection.inputToolCount
       ? new Set([
-          ...(converted?.projection.tools.map((tool) => tool.name) ?? []),
+          ...converted.projection.tools.map((tool) => tool.name),
           ...(options?.[PROVIDER_DEFERRED_TOOL_NAMES] ?? []),
         ])
       : undefined,
