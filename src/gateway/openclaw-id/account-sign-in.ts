@@ -66,6 +66,7 @@ type IdTokenClaims = {
   exp?: unknown;
   nonce?: unknown;
   email?: unknown;
+  email_verified?: unknown;
   name?: unknown;
 };
 
@@ -210,6 +211,8 @@ function accountFrom(claims: IdTokenClaims & { sub: string; exp: number }): Open
     email: optionalText(claims.email),
     name: optionalText(claims.name),
     exp: claims.exp,
+    // Only the literal boolean counts; a missing or string claim is unverified.
+    emailVerified: claims.email_verified === true,
   };
 }
 

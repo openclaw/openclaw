@@ -104,6 +104,8 @@ const loopback = (): Client => ({
 });
 
 let handlers: typeof import("../server-methods/openclaw-id.js").openclawIdHandlers;
+// Extra ID token claims for the next device sign-in (email, email_verified).
+let tokenClaims: Record<string, unknown> = {};
 
 beforeAll(async () => {
   vi.stubGlobal(
@@ -137,6 +139,7 @@ beforeAll(async () => {
           sub: "acct-josh",
           exp: Math.floor(Date.now() / 1000) + 3600,
           email: "josh@id.test",
+          ...tokenClaims,
         }),
       });
     }),
@@ -338,6 +341,31 @@ describe("Turn on remote access over a personal sign-in", () => {
       expect.stringContaining("remote access link_profile failure code=link_approval_required"),
     );
     expect(store.link).not.toHaveBeenCalled();
+  });
+
+  it("links the admin's first account at commit only for their own verified email", async () => {
+    const josh = admin();
+    try {
+      tokenClaims = { email: "josh@tailnet.example", email_verified: false };
+      store.linkedProfile.mockResolvedValueOnce(null);
+      const unverified = await deviceSignIn(josh);
+      expect(await authority(josh, { ...commitParams, idToken: unverified })).toMatchObject({
+        payload: { linked: true, profileLink: "link_approval_required" },
+      });
+      expect(store.link).not.toHaveBeenCalled();
+      tokenClaims = { email: "JOSH@tailnet.example", email_verified: true };
+      store.linkedProfile.mockResolvedValueOnce(null);
+      const verified = await deviceSignIn(josh);
+      expect(await authority(josh, { ...commitParams, idToken: verified })).toMatchObject({
+        payload: { linked: true, profileLink: "linked" },
+      });
+      expect(store.link).toHaveBeenCalledExactlyOnceWith(
+        { profileId: "profile-josh", accountId: "acct-josh", email: "JOSH@tailnet.example" },
+        { assertCurrent: expect.any(Function) },
+      );
+    } finally {
+      tokenClaims = {};
+    }
   });
 
   it("links nothing for the loopback operator", async () => {

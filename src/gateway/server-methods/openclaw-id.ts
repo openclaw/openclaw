@@ -26,6 +26,7 @@ import { decodeInviteProfile, decodeInviteProofKey } from "../openclaw-id/invite
 import { resolveOpenClawIdOwnerAccount } from "../openclaw-id/owner-account.js";
 import type { OpenClawIdService } from "../openclaw-id/service.js";
 import { hasCurrentPersonalGatewaySource } from "./gateway-personal-caller.js";
+import { resolveVerifiedProfileLink } from "./openclaw-id-profile-link.js";
 import {
   auditRemoteAccessSetup,
   prepareRemoteAccessSetup,
@@ -182,8 +183,8 @@ async function handleLinkCode(
   }
 }
 
-// After a personal admin's commit, keep the verified owner's display claims and confirm an
-// existing personal profile link. The claw stays linked even without a profile link.
+// After a personal admin's commit, keep the verified owner's display claims and resolve the
+// profile link under the same rule as Link. The claw stays linked even without a profile link.
 async function linkRunnerProfile(
   opts: GatewayRequestHandlerOptions,
   service: OpenClawIdService,
@@ -200,7 +201,7 @@ async function linkRunnerProfile(
   try {
     setup.assertCurrent();
     await service.recordVerifiedAccount(held.account);
-    return await readVerifiedProfileLink(held.owner, held.account.sub);
+    return await resolveVerifiedProfileLink(opts, held.owner, held.account, setup.assertCurrent);
   } catch {
     return "not_admin";
   }
@@ -348,37 +349,22 @@ export function verifyHeldOpenClawIdSignIn(
   return "account" in held ? { owner, account: held.account } : held;
 }
 
-// Device sign-in proves the issuer account, not that it belongs to the person who
-// started the grant. Only the separately authorized profile-link workflow may create
-// a binding; here we may recognize an exact subject already bound to this profile.
-async function readVerifiedProfileLink(profileId: string, accountId: string) {
-  const { readOpenClawIdLinkedProfile, readOpenClawIdLinksOfProfile } =
-    await import("../../state/user-profile-openclaw-id.js");
-  const binding = await readOpenClawIdLinkedProfile(accountId);
-  if (!binding) {
-    // A profile that already holds another account needs an unlink, not an invitation.
-    return (await readOpenClawIdLinksOfProfile(profileId)).length > 0
-      ? ("profile_linked" as const)
-      : ("link_approval_required" as const);
-  }
-  return binding.profileId === profileId ? "linked" : "linked_elsewhere";
-}
-
 async function confirmVerifiedAccountLink(
   opts: GatewayRequestHandlerOptions,
   owner: string,
   account: OpenClawIdAccount,
 ): Promise<string | undefined> {
-  if (!(await prepareProfileLink(opts, owner))) {
+  const assertCurrent = await prepareProfileLink(opts, owner);
+  if (!assertCurrent) {
     return undefined;
   }
-  const link = await readVerifiedProfileLink(owner, account.sub);
+  const link = await resolveVerifiedProfileLink(opts, owner, account, assertCurrent);
   // The lookup awaited the state worker; release its result only to the live connection.
   if (!isCurrentDeviceSignIn(opts, owner)) {
     refuse(opts, { code: "not_personal_connection", detail: "this connection changed" });
     return undefined;
   }
-  // A sign-in that asked to link still succeeds; it reports why no link was created.
+  // A sign-in that asked to link still succeeds; it reports the link or why there is none.
   return link;
 }
 
@@ -388,8 +374,9 @@ async function confirmVerifiedAccountLink(
 // nothing.
 // - device_begin: a device sign-in's user code and verification page;
 // - device_poll: polls it once; returns pending, or the account and ID token. With
-//   `link: true`, also confirms an existing profile link without creating one;
-// - link_held: confirms the same link using a held ID token;
+//   `link: true`, also reports the profile link, creating a first one only for a verified
+//   email that matches this connection's own (resolveVerifiedProfileLink);
+// - link_held: the same, using a held ID token;
 // - link_status: the OpenClaw ID accounts linked to this connection's profile;
 // - unlink: removes them; owner devices return to the shared owner.
 async function handleDeviceAccount(opts: GatewayRequestHandlerOptions) {
