@@ -38,7 +38,9 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { formatInlineCodeSpan } from "../shared/markdown-code.js";
 import { readConfigMachineStateAsync } from "../state/config-machine-state-async.js";
 import { updateConfigMachineState } from "../state/config-machine-state-write.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { isRecord } from "../utils.js";
+import { decideDoctorPendingFromLiveStores } from "./doctor-live-store-pending.js";
 import type { DoctorMaintenancePending } from "./doctor-maintenance-pending.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import { listUnavailableAuthProfiles } from "./models/auth-unavailability.js";
@@ -515,25 +517,39 @@ export async function checkAuthProfileRefreshPending(params: {
   env?: NodeJS.ProcessEnv;
   inspectProfiles: boolean;
 }): Promise<DoctorMaintenancePending> {
-  // The once-per-state ambient-token notice records that it was shown.
-  if (await isCopilotAmbientTokenNoticePending(params.cfg, params.env ?? process.env)) {
-    return "work";
-  }
-  if (!params.inspectProfiles) {
-    return "none";
-  }
-  for (const target of await listAuthProfileHealthTargets(params.cfg)) {
-    const { summary } = await loadAuthProfileHealth({
-      cfg: params.cfg,
-      target,
-      allowKeychainPrompt: false,
-      readOnly: true,
-    });
-    if (listAuthProfileRefreshTargets(summary).length > 0) {
+  const env = params.env ?? process.env;
+  // The reads touch the state database and every auth store; read them only while held.
+  const stores = [
+    resolveOpenClawStateSqlitePath(env),
+    ...listAgentIds(params.cfg).map((agentId) =>
+      resolveAuthProfileDatabasePath(resolveAgentDir(params.cfg, agentId, env)),
+    ),
+  ];
+  return decideDoctorPendingFromLiveStores(stores, async () => {
+    // The once-per-state ambient-token notice records that it was shown.
+    if (await isCopilotAmbientTokenNoticePending(params.cfg, env)) {
       return "work";
     }
-  }
-  return "none";
+    if (!params.inspectProfiles) {
+      return "none";
+    }
+    // The shared store's location is known only after its ownership is read.
+    await prepareSharedAuthStoreOwnership(env);
+    return decideDoctorPendingFromLiveStores([resolveSharedAuthStorePath(env)], async () => {
+      for (const target of await listAuthProfileHealthTargets(params.cfg)) {
+        const { summary } = await loadAuthProfileHealth({
+          cfg: params.cfg,
+          target,
+          allowKeychainPrompt: false,
+          readOnly: true,
+        });
+        if (listAuthProfileRefreshTargets(summary).length > 0) {
+          return "work";
+        }
+      }
+      return "none";
+    });
+  });
 }
 
 /** Aggregate normal Doctor output; lint retains each store's location and finding. */

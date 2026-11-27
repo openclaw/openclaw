@@ -11,6 +11,7 @@ import {
 } from "../infra/session-sqlite-migration-readers.js";
 import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker-context.js";
 import { beginUpdateDoctorHistoricalScan } from "../infra/update-doctor-scan-receipts.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { decideDoctorPendingFromLiveStores } from "./doctor-live-store-pending.js";
 import type { DoctorMaintenancePending } from "./doctor-maintenance-pending.js";
 import { ReadOnlySqliteTranscriptReader } from "./doctor-session-sqlite-transcript-readers.js";
@@ -121,42 +122,47 @@ export async function checkDoctorSessionTranscriptsPending(
     target: ExistingAgentDatabaseTarget;
   }) => DoctorMaintenancePending,
 ): Promise<DoctorMaintenancePending> {
-  const targets = listDoctorSessionTranscriptTargets(params).flatMap((candidate) => {
-    const scan = params.cleanScanIdentity
-      ? beginUpdateDoctorHistoricalScan(candidate.sqlitePath, params.cleanScanIdentity(candidate))
-      : undefined;
-    return scan?.reused ? [] : [scan ? { ...candidate, sqlitePath: scan.databasePath } : candidate];
-  });
-  return decideDoctorPendingFromLiveStores(
-    targets.map((target) => target.sqlitePath),
-    () => {
-      let undecidable = false;
-      for (const target of targets) {
-        let database: DatabaseSync | undefined;
-        try {
-          database = openNodeSqliteDatabase(target.sqlitePath, { readOnly: true });
-          const reader = new ReadOnlySqliteTranscriptReader(database);
-          const sessionIds = params.selectSessionIds
-            ? params.selectSessionIds(reader, () => {
-                undecidable = true;
-              })
-            : reader.sessionIds();
-          for (const sessionId of sessionIds) {
-            const pending = plan({ reader, sessionId, target });
-            if (pending === "work") {
-              return "work";
+  // Resolving the targets reads the agent registry in the state database.
+  return decideDoctorPendingFromLiveStores([resolveOpenClawStateSqlitePath(params.env)], () => {
+    const targets = listDoctorSessionTranscriptTargets(params).flatMap((candidate) => {
+      const scan = params.cleanScanIdentity
+        ? beginUpdateDoctorHistoricalScan(candidate.sqlitePath, params.cleanScanIdentity(candidate))
+        : undefined;
+      return scan?.reused
+        ? []
+        : [scan ? { ...candidate, sqlitePath: scan.databasePath } : candidate];
+    });
+    return decideDoctorPendingFromLiveStores(
+      targets.map((target) => target.sqlitePath),
+      () => {
+        let undecidable = false;
+        for (const target of targets) {
+          let database: DatabaseSync | undefined;
+          try {
+            database = openNodeSqliteDatabase(target.sqlitePath, { readOnly: true });
+            const reader = new ReadOnlySqliteTranscriptReader(database);
+            const sessionIds = params.selectSessionIds
+              ? params.selectSessionIds(reader, () => {
+                  undecidable = true;
+                })
+              : reader.sessionIds();
+            for (const sessionId of sessionIds) {
+              const pending = plan({ reader, sessionId, target });
+              if (pending === "work") {
+                return "work";
+              }
+              undecidable ||= pending === "undecidable";
             }
-            undecidable ||= pending === "undecidable";
+          } catch {
+            undecidable = true;
+          } finally {
+            database?.close();
           }
-        } catch {
-          undecidable = true;
-        } finally {
-          database?.close();
         }
-      }
-      return undecidable ? "undecidable" : "none";
-    },
-  );
+        return undecidable ? "undecidable" : "none";
+      },
+    );
+  });
 }
 
 export function transcriptSnapshotsMatch<
