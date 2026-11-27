@@ -199,8 +199,11 @@ function produceMemorySearchConfig(cfg: OpenClawConfig, agentId: string) {
     (remote) => remote?.baseUrl || remote?.apiKey || remote?.headers,
   );
   const configuredProvider = (overrides?.provider ?? defaults?.provider)?.trim();
+  const configuredFallback = overrides?.fallback ?? defaults?.fallback ?? "none";
+  const fallback = configuredFallback.toLowerCase() === "none" ? "none" : configuredFallback;
   const embeddingsConfigured =
     (configuredProvider && configuredProvider.toLowerCase() !== "auto") ||
+    fallback !== "none" ||
     hasRemoteConfig ||
     Boolean(overrides?.model ?? defaults?.model);
   // Auto embeds through OpenAI only where the openai provider reaches OpenAI itself. A custom
@@ -216,8 +219,6 @@ function produceMemorySearchConfig(cfg: OpenClawConfig, agentId: string) {
     (overrideRemote?.baseUrl === undefined && defaultRemote?.baseUrl?.trim())
       ? defaultRemote
       : undefined;
-  const configuredFallback = overrides?.fallback ?? defaults?.fallback ?? "none";
-  const fallback = configuredFallback.toLowerCase() === "none" ? "none" : configuredFallback;
   const fallbackAdapter =
     normalizeProviderId(provider) !== "none" && fallback && fallback !== "none"
       ? getConfiguredMemoryEmbeddingProvider(fallback, cfg)

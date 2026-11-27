@@ -468,6 +468,12 @@ describe("memory search config", () => {
       provider: "openai",
     },
     {
+      case: "custom chat endpoint, configured fallback",
+      baseUrl: "http://127.0.0.1:8787/v1",
+      search: { fallback: "gemini" },
+      provider: "openai",
+    },
+    {
       case: "custom chat endpoint, embeddings remote",
       baseUrl: "http://127.0.0.1:8787/v1",
       search: { remote: { baseUrl: "https://embed.example/v1" } },

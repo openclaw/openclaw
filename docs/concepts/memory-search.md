@@ -63,7 +63,7 @@ keyword search remains available if the rebuild cannot finish immediately.
 
 OpenClaw uses OpenAI embeddings by default. When `models.providers.openai` points
 at a custom `baseUrl` (a proxy or another OpenAI-compatible endpoint) and nothing
-under `memory.search` names a provider, model, or `remote` endpoint, memory search
+under `memory.search` names a provider, model, fallback, or `remote` endpoint, memory search
 uses keyword search only and sends no embedding requests to that endpoint. To use
 another provider, or embeddings through that endpoint, set it explicitly:
 
