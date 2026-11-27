@@ -1,6 +1,7 @@
 // Exercises the shipped models auth login command across shared credential and local order owners.
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { createOAuthRefreshCredential } from "../agents/auth-profiles/credential-fixtures.test-support.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { setAuthProfileOrder } from "../agents/auth-profiles/profiles.js";
@@ -11,6 +12,7 @@ import type { ProviderPlugin } from "../plugins/types.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { runLocalProviderLogin } from "../tui/tui-auth-invocation.js";
 import { registerModelsCli } from "./models-cli.js";
 import { defaultRuntime } from "./models-cli.runtime.js";
 import { createCliTtyMock } from "./test-runtime-capture.js";
@@ -114,6 +116,39 @@ describe("models auth login owner integration", () => {
           requireLocalBackendSharedAuth: true,
         }),
       );
+    });
+  });
+
+  it("keeps the previous credential when the local TUI exits with a save waiting", async () => {
+    await withLoginState(async (state) => {
+      const controller = new AbortController();
+      const previous = createOAuthRefreshCredential({ access: "previous-access" });
+      const holder = await providerAuthPersistence.stageProviderAuthProfileBatch({
+        config: {},
+        env: state.env,
+        agentDir: state.agentDir(),
+        profiles: [{ profileId: FRESH_PROFILE_ID, credential: previous }],
+      });
+      const saving = createDeferred();
+      const persist = providerAuthPersistence.persistProviderAuthProfilesAfterLogin;
+      vi.spyOn(
+        providerAuthPersistence,
+        "persistProviderAuthProfilesAfterLogin",
+      ).mockImplementationOnce((params) => {
+        const pending = persist(params);
+        saving.resolve();
+        return pending;
+      });
+
+      const localLogin = runLocalProviderLogin("openai", controller.signal);
+      try {
+        await awaitGateBeforeSettlement(saving.promise, localLogin, "Login ended before the save");
+        controller.abort();
+      } finally {
+        await holder.commit();
+      }
+      await expect(localLogin).rejects.toBe(controller.signal.reason);
+      expect(loadPersistedAuthProfileStore()?.profiles[FRESH_PROFILE_ID]).toMatchObject(previous);
     });
   });
 

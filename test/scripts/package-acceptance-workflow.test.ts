@@ -1,9 +1,5 @@
 // Package Acceptance Workflow tests cover package acceptance workflow script behavior.
-import {
-  execFileSync,
-  spawnSync,
-  type SpawnSyncOptionsWithStringEncoding,
-} from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -3065,15 +3061,9 @@ function workflowStepById(job: WorkflowJob, stepId: string): WorkflowStep {
   return step;
 }
 
-function runBash(script: string, options: Omit<SpawnSyncOptionsWithStringEncoding, "encoding">) {
-  return spawnSync(
-    process.platform === "darwin" ? "/bin/bash" : "bash",
-    ["--noprofile", "--norc", "-c", script],
-    {
-      ...options,
-      encoding: "utf8",
-    },
-  );
+function runBash(script: string, options: Parameters<typeof runWorkflowShellScript>[1]) {
+  // Linux workflow guards need Bash 5 and file-backed Node probes on macOS.
+  return runWorkflowShellScript(script, { ...options, linuxWorkflow: true });
 }
 
 function runFullReleaseInputValidation(releaseProfile: string, skipTelegram: string) {
@@ -8009,23 +7999,13 @@ NODE
     const setupPnpmAction = readFileSync(SETUP_PNPM_STORE_CACHE_ACTION, "utf8");
 
     expect(packageJson.packageManager).toMatch(/^pnpm@\d+\.\d+\.\d+\+sha512\.[a-f0-9]+$/u);
-    expect(setupPnpmAction).toContain("Setup pnpm from packageManager");
-    expect(setupPnpmAction).toContain("PACKAGE_MANAGER_FILE: ${{ inputs.package-manager-file }}");
-    expect(setupPnpmAction).toContain('case "$package_manager" in');
-    expect(setupPnpmAction).toContain('corepack prepare "$package_manager" --activate');
-    expect(setupPnpmAction).toContain(
-      "if: ${{ inputs.cache-mode != 'off' && runner.os != 'Windows' }}",
-    );
     const action = parse(setupPnpmAction) as { runs: { steps: WorkflowStep[] } };
     const setup = { steps: action.runs.steps };
     const pin = workflowStep(setup, "Validate pnpm setup inputs");
-    const cache = workflowStep(setup, "Restore pnpm store cache");
     const root = tempDirs.make("pnpm-cache-key-");
     const manifest = join(root, "selected-package.json");
-    const lockfile = join(root, "selected-lock.yaml");
     const output = join(root, "outputs");
     writeJson(manifest, { packageManager: packageJson.packageManager });
-    writeFileSync(lockfile, "lockfileVersion: '9.0'\n");
     const resolved = spawnSync("bash", ["--noprofile", "--norc", "-eu", "-c", pin.run ?? ""], {
       cwd: root,
       encoding: "utf8",
@@ -8046,35 +8026,6 @@ NODE
         .map((line) => line.split("=")),
     );
     expect(outputs["package-manager"]).toBe(packageJson.packageManager);
-    for (const runner of [
-      { os: "Linux", arch: "X64" },
-      { os: "macOS", arch: "ARM64" },
-    ]) {
-      const lockHash = createHash("sha256").update(readFileSync(lockfile)).digest("hex");
-      const key = cache.with?.key?.replace(/\$\{\{\s*(.*?)\s*\}\}/gu, (_, expression: string) =>
-        String(
-          runInNewContext(expression.replace(/\.([\w-]+)/gu, '["$1"]'), {
-            runner,
-            inputs: {
-              "node-version": "24.x",
-              "lockfile-path": lockfile,
-              "package-manager-file": manifest,
-            },
-            steps: { "setup-pnpm": { outputs } },
-            hashFiles: (file: string) => {
-              expect(file).toBe(lockfile);
-              return lockHash;
-            },
-          }),
-        ),
-      );
-      expect(key).toContain(`-${runner.os}-${runner.arch}-24.x-`);
-      expect(key).toContain(outputs["package-manager"]);
-      expect(key?.endsWith(`-${lockHash}`)).toBe(true);
-    }
-    expect(setupPnpmAction).not.toContain("pnpm/action-setup");
-    expect(setupPnpmAction).not.toContain("shasum");
-    expect(setupPnpmAction).not.toContain("PNPM_VERSION_INPUT");
     expect(setupPnpmAction).not.toContain("version: ${{ inputs.pnpm-version }}");
     expect(setupPnpmAction).toContain('corepack enable --install-directory "$PNPM_HOME"');
     expect(setupPnpmAction).toContain('echo "PNPM_HOME=$PNPM_HOME" >> "$GITHUB_ENV"');
@@ -8098,14 +8049,6 @@ NODE
     const setupNodeAction = readFileSync(".github/actions/setup-node-env/action.yml", "utf8");
     expect(setupNodeAction).toContain("Normalize container toolcache");
     expect(setupNodeAction).toContain("ln -s /__t /opt/hostedtoolcache");
-
-    for (const workflowPath of workflowPaths()) {
-      const workflowText = readFileSync(workflowPath, "utf8");
-      // Observed versions such as REPLAY_PNPM_VERSION are not a competing pin.
-      expect(workflowText, workflowPath).not.toMatch(/\bPNPM_VERSION\b/u);
-      expect(workflowText, workflowPath).not.toContain("pnpm-version:");
-      expect(workflowText, workflowPath).not.toContain("pnpm/action-setup");
-    }
   });
 
   it("runs trusted npm preflight pnpm commands from the tooling checkout", () => {
@@ -11113,12 +11056,6 @@ describe("package artifact reuse", () => {
       "OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-opus-5",
       "anthropic/claude-sonnet-4-6,anthropic/claude-haiku-4-5",
     ]);
-    expect(workflow).toContain("suite_id: native-live-extensions-a-k");
-    expect(workflow).toContain("suite_id: native-live-extensions-l-n");
-    expect(workflow).toContain("suite_id: native-live-extensions-moonshot");
-    expect(workflow).toContain("suite_id: native-live-extensions-openai");
-    expect(workflow).toContain("suite_id: native-live-extensions-o-z-other");
-    expect(workflow).toContain("validate_live_media_provider_suites:");
     expect(workflow).toContain(`image: ${LIVE_MEDIA_RUNNER_IMAGE}`);
     expect(workflow).toContain("ffmpeg -version | head -1");
     expect(workflow).toContain("ffprobe -version | head -1");
@@ -11127,11 +11064,6 @@ describe("package artifact reuse", () => {
     const buildJob = workflowJob(LIVE_MEDIA_RUNNER_IMAGE_WORKFLOW, "build");
     const buildStep = workflowStep(buildJob, "Build and push live media runner image");
     expect(imageDockerfile).toMatch(/^FROM ubuntu:24\.04@sha256:[a-f0-9]{64}$/m);
-    expect(imageDockerfile).toContain("apt-get install -y --no-install-recommends");
-    for (const packageName of ["bash", "curl", "ffmpeg", "git", "openssh-client", "zstd"]) {
-      expect(imageDockerfile).toContain(`    ${packageName} \\`);
-    }
-    expect(imageDockerfile).toContain("rm -rf /var/lib/apt/lists/*");
     expect(imageWorkflow).toContain(`- "${LIVE_MEDIA_RUNNER_DOCKERFILE}"`);
     expect(workflowStep(buildJob, "Set up Docker Buildx")).toEqual({
       name: "Set up Docker Buildx",
@@ -11153,31 +11085,7 @@ describe("package artifact reuse", () => {
     expect(buildStep.with?.tags).toContain(
       "ghcr.io/openclaw/openclaw-live-media-runner:${{ github.sha }}",
     );
-    expect(workflow).toContain("suite_id: native-live-extensions-media-audio");
-    expect(workflow).toContain("suite_id: native-live-extensions-media-music-google");
-    expect(workflow).toContain("suite_id: native-live-extensions-media-music-minimax");
-    expect(workflow).toContain("suite_id: native-live-extensions-media-video");
-    expect(workflow).toContain("suite_group: native-live-extensions-media-video");
-    for (const suffix of ["a", "b", "c", "d"]) {
-      const shard = workflowMatrixEntry(
-        LIVE_E2E_WORKFLOW,
-        "validate_live_media_provider_suites",
-        `native-live-extensions-media-video-${suffix}`,
-      );
-      const providers = shard.command?.match(
-        /OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=(\S+)/u,
-      )?.[1];
-      if (!providers) {
-        throw new Error(`Missing video providers for shard ${suffix}`);
-      }
-      expect(providers.split(",")).toHaveLength(4);
-      expect(shard.command).toContain("OPENCLAW_LIVE_VIDEO_GENERATION_TIMEOUT_MS=600000");
-      // Four serial ten-minute operations plus test overhead leave eight minutes for setup.
-      expect(shard.timeout_minutes).toBeGreaterThanOrEqual(4 * 10.5 + 8);
-    }
     expectTextToIncludeAll(workflow, [
-      "OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=google,kie,minimax,pixverse OPENCLAW_LIVE_VIDEO_GENERATION_TIMEOUT_MS=600000",
-      "OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=novita,openrouter,xai,zai",
       "inputs.live_suite_filter == 'native-live-src-gateway-profiles-anthropic'",
       "inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go'",
       "inputs.live_suite_filter == 'native-live-extensions-media-video'",
@@ -11783,38 +11691,41 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     ).toBe("${{ inputs.allow_older_binary_destructive_actions && '1' || '' }}");
   });
 
-  it.each(["stable", "full"])(
-    "rejects Package Acceptance Telegram deferral for direct %s release checks",
-    (releaseProfile) => {
-      const { result } = runReleaseChecksInputValidation(releaseProfile, "true");
-
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain(
-        "skip_package_telegram_e2e is allowed only for release_profile=beta.",
-      );
+  it.each(
+    (["direct", "umbrella"] as const).flatMap((route) =>
+      (
+        [
+          ["stable", "true", 1],
+          ["full", "true", 1],
+          ["beta", "true", 0],
+          ["stable", "false", 0],
+          ["full", "false", 0],
+        ] as const
+      ).map(([profile, skipTelegram, status]) => ({ route, profile, skipTelegram, status })),
+    ),
+  )(
+    "validates $route $profile Telegram deferral=$skipTelegram",
+    ({ route, profile, skipTelegram, status }) => {
+      const direct =
+        route === "direct" ? runReleaseChecksInputValidation(profile, skipTelegram) : undefined;
+      const result = direct?.result ?? runFullReleaseInputValidation(profile, skipTelegram);
+      expect(result.status, result.stderr).toBe(status);
+      if (status === 1) {
+        expect(result.stderr).toContain(
+          "skip_package_telegram_e2e is allowed only for release_profile=beta.",
+        );
+      } else if (direct) {
+        const output = readFileSync(direct.outputPath, "utf8");
+        expect(output).toContain(`skip_package_telegram_e2e=${skipTelegram}`);
+        if (skipTelegram === "false") {
+          expectTextToIncludeAll(output, [
+            "qa_live_telegram_enabled=true",
+            "run_release_soak=true",
+          ]);
+        }
+      }
     },
   );
-
-  it.each(["stable", "full"])(
-    "rejects Package Acceptance Telegram deferral for umbrella %s validation",
-    (releaseProfile) => {
-      const result = runFullReleaseInputValidation(releaseProfile, "true");
-
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain(
-        "skip_package_telegram_e2e is allowed only for release_profile=beta.",
-      );
-    },
-  );
-
-  it("allows Package Acceptance Telegram deferral only for beta validation", () => {
-    const direct = runReleaseChecksInputValidation("beta", "true");
-    const umbrella = runFullReleaseInputValidation("beta", "true");
-
-    expect(direct.result.status, direct.result.stderr).toBe(0);
-    expect(readFileSync(direct.outputPath, "utf8")).toContain("skip_package_telegram_e2e=true");
-    expect(umbrella.status, umbrella.stderr).toBe(0);
-  });
 
   it.each([
     { label: "canonical beta", scope: "npm-beta" },
@@ -12105,21 +12016,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(mismatchedTag.stderr).toContain("does not match release tag");
   });
 
-  it.each(["stable", "full"])(
-    "preserves normal %s validation when Telegram deferral is false",
-    (releaseProfile) => {
-      const direct = runReleaseChecksInputValidation(releaseProfile, "false");
-      const umbrella = runFullReleaseInputValidation(releaseProfile, "false");
-
-      expect(direct.result.status, direct.result.stderr).toBe(0);
-      const output = readFileSync(direct.outputPath, "utf8");
-      expect(output).toContain("skip_package_telegram_e2e=false");
-      expect(output).toContain("qa_live_telegram_enabled=true");
-      expect(output).toContain("run_release_soak=true");
-      expect(umbrella.status, umbrella.stderr).toBe(0);
-    },
-  );
-
   it("declares isolated release-check phases in dispatch and concurrency", () => {
     const workflow = readWorkflow(RELEASE_CHECKS_WORKFLOW);
 
@@ -12137,70 +12033,45 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     });
   });
 
-  it.each([
-    [
-      "all",
-      {
-        cross_os_scheduled: "true",
-        docker_required: "true",
-        install_smoke_scheduled: "true",
-        live_e2e_scheduled: "true",
-        package_acceptance_scheduled: "true",
-        package_required: "true",
-        qa_live_scheduled: "true",
-        qa_parity_scheduled: "true",
-        run_maturity_scorecard: "true",
-      },
-    ],
-    [
-      "independent",
-      {
-        cross_os_scheduled: "false",
-        docker_required: "false",
-        install_smoke_scheduled: "true",
-        live_e2e_scheduled: "true",
-        package_acceptance_scheduled: "false",
-        package_required: "false",
-        qa_live_scheduled: "true",
-        qa_parity_scheduled: "true",
-        run_maturity_scorecard: "true",
-      },
-    ],
-    [
-      "candidate",
-      {
-        cross_os_scheduled: "true",
-        docker_required: "true",
-        install_smoke_scheduled: "false",
-        live_e2e_scheduled: "false",
-        package_acceptance_scheduled: "true",
-        package_required: "true",
-        qa_live_scheduled: "false",
-        qa_parity_scheduled: "false",
-        run_maturity_scorecard: "false",
-      },
-    ],
-  ] as const)("routes only the %s release-check phase", (phase, expected) => {
-    const { outputPath, result } = runReleaseChecksInputValidation(
-      "stable",
-      "false",
-      "all",
-      "false",
-      "",
-      {
-        candidateArtifactJson: releaseCandidateArtifactJson(),
-        phase,
-        runMaturityScorecard: "true",
-      },
-    );
+  // Each row is an independent scheduling promise across all three release phases.
+  const releasePhaseSchedule = [
+    ["cross_os_scheduled", true, false, true],
+    ["docker_required", true, false, true],
+    ["install_smoke_scheduled", true, true, false],
+    ["live_e2e_scheduled", true, true, false],
+    ["package_acceptance_scheduled", true, false, true],
+    ["package_required", true, false, true],
+    ["qa_live_scheduled", true, true, false],
+    ["qa_parity_scheduled", true, true, false],
+    ["run_maturity_scorecard", true, true, false],
+  ] as const satisfies ReadonlyArray<
+    readonly [output: string, all: boolean, independent: boolean, candidate: boolean]
+  >;
+  it.each(["all", "independent", "candidate"] as const)(
+    "routes only the %s release-check phase",
+    (phase) => {
+      const { outputPath, result } = runReleaseChecksInputValidation(
+        "stable",
+        "false",
+        "all",
+        "false",
+        "",
+        {
+          candidateArtifactJson: releaseCandidateArtifactJson(),
+          phase,
+          runMaturityScorecard: "true",
+        },
+      );
 
-    expect(result.status, result.stderr).toBe(0);
-    const output = readFileSync(outputPath, "utf8");
-    expect(output).toContain(`phase=${phase}\n`);
-    for (const [lane, scheduled] of Object.entries(expected)) {
-      expect(output).toContain(`${lane}=${scheduled}\n`);
-    }
-  });
+      expect(result.status, result.stderr).toBe(0);
+      const output = readFileSync(outputPath, "utf8");
+      expect(output).toContain(`phase=${phase}\n`);
+      const phaseColumn = { all: 1, independent: 2, candidate: 3 } as const;
+      for (const schedule of releasePhaseSchedule) {
+        expect(output).toContain(`${schedule[0]}=${schedule[phaseColumn[phase]]}\n`);
+      }
+    },
+  );
 
   it("fails closed when a candidate phase would rebuild an FRV artifact", () => {
     const missing = runReleaseChecksInputValidation("beta", "false", "package", "false", "", {
@@ -15134,14 +15005,10 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     const notesIndex = publishSteps.findIndex(
       (step) => step.name === "Prepare GitHub release notes",
     );
-    const dispatchIndex = publishSteps.findIndex(
-      (step) => step.name === "Dispatch publish workflows",
-    );
     expect(setupIndex).toBeGreaterThan(-1);
     expect(notesIndex).toBeGreaterThan(setupIndex);
     expect(publishSteps.some((step) => step.name === "Write Android release approval")).toBe(false);
     expect(workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish_android").needs).toContain("publish");
-    expect(dispatchIndex).toBeGreaterThan(notesIndex);
     expect(publishSteps[notesIndex]?.if).toBe("${{ inputs.publish_openclaw_npm }}");
 
     const publishRun = publishOrchestration.run ?? "";

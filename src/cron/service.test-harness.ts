@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
+import * as hostMemory from "../infra/host-memory.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
@@ -17,6 +18,13 @@ import {
 } from "./service/state.js";
 import { saveCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
+
+// An existing scheduler keeps the captured reader while later drains observe new headroom.
+const cronAvailableMemory = vi.fn<() => number>();
+export function mockCronAvailableMemory(bytes: number) {
+  vi.spyOn(hostMemory, "captureServiceAvailableMemoryReader").mockReturnValue(cronAvailableMemory);
+  return cronAvailableMemory.mockReturnValue(bytes);
+}
 
 type NoopLogger = {
   debug: MockFn;

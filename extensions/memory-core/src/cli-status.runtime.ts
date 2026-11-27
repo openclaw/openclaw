@@ -398,6 +398,9 @@ export async function runMemoryStatus(
             : "unavailable";
       addState("Embeddings", state);
       addField("Embeddings error", embeddingProbe.error, warn);
+    } else {
+      const refusal = asNullableRecord(status.custom)?.embeddingRefusal;
+      addField("Embeddings", typeof refusal === "string" ? refusal : undefined, warn);
     }
     const runtime = deep ? readLlamaCppRuntimeStatus(status) : null;
     if (runtime) {

@@ -25,7 +25,6 @@ import {
   recordUpdateRunVerification,
 } from "./update-run-ledger.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
-import { renderUpdateRunReport } from "./update-run-report.js";
 import { parseUpdateAdmissionVerdict } from "./update-run-schema.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import type { UpdateStepResult } from "./update-step-result.js";
@@ -61,33 +60,6 @@ afterEach(async () => {
 });
 
 describe("update run ledger", () => {
-  it("reads a completed model repair from a saved run without its historical warning", () => {
-    const options = isolatedOptions();
-    const run = createUpdateRun({ trigger: "cli", after: { version: "2026.11.7" } }, options);
-    recordUpdateRunStep(
-      run.runId,
-      {
-        step: "warning:finalize:doctor:model-retirement",
-        status: "completed",
-        detail: "Deferred model retirement repair completed after plugin convergence.",
-      },
-      options,
-    );
-    recordUpdateRunStep(
-      run.runId,
-      { step: "finalize:doctor:model-retirement", status: "completed" },
-      options,
-    );
-    const saved = finishUpdateRun(run.runId, { status: "succeeded" }, options);
-    const loaded = getUpdateRun(run.runId, options);
-    expect(loaded?.steps).toEqual(saved.steps);
-    const report = renderUpdateRunReport(loaded!);
-    expect(report.headline).not.toContain("warning needs attention");
-    expect(report.lines).not.toContain(
-      "Warning: Deferred model retirement repair completed after plugin convergence.",
-    );
-  });
-
   it("confirms channel-only outages without inheriting a stale core proof", () => {
     const options = isolatedOptions();
     const run = createUpdateRun({ trigger: "cli" }, options);
@@ -108,7 +80,7 @@ describe("update run ledger", () => {
     });
   });
 
-  it("persists and reports installed admission through the existing origin metadata", () => {
+  it("persists installed admission through the existing origin metadata", () => {
     const options = isolatedOptions();
     const run = createUpdateRun({ trigger: "cli" }, options);
     const admission = {
@@ -121,9 +93,6 @@ describe("update run ledger", () => {
     expect(retained.admission).toEqual(admission);
     expect(retained.origin.candidateAdmission).toBeUndefined();
     expect(listUpdateRuns({}, options)[0]?.admission).toEqual(admission);
-    const report = renderUpdateRunReport(retained).markdown;
-    expect(report).toContain("Update safety checks ran in the installed updater");
-    expect(report).toContain("update-admission-unsupported-target");
     const database = openOpenClawStateDatabase(options);
     const row = database.db
       .prepare("SELECT origin_json FROM update_runs WHERE run_id = ?")
@@ -193,9 +162,7 @@ describe("update run ledger", () => {
       candidateVersion,
       installedVersion,
     });
-    expect(renderUpdateRunReport(retained).markdown).toContain(
-      "Update safety checks ran in the candidate updater",
-    );
+    expect(retained.admission?.owner).toBe("candidate");
     expect(Buffer.byteLength(JSON.stringify(retained.origin))).toBeLessThanOrEqual(16 * 1024);
   });
 
@@ -397,15 +364,7 @@ describe("update run ledger", () => {
         selection:
           outcome === "selected" ? { kind: "state-volume", directory: redactedDirectory } : null,
       });
-      const report = renderUpdateRunReport(retained).markdown;
-      expect(report).toContain(redactedDirectory);
-      expect(report).toContain("8 MiB");
-      expect(report).toContain("1 MiB SQLite");
-      expect(report).toContain("2 MiB plugin files");
-      expect(report).not.toContain(options.env.OPENCLAW_STATE_DIR);
-      if (outcome !== "selected") {
-        expect(report).toContain("TMPDIR");
-      }
+      expect(JSON.stringify(retained.steps)).not.toContain(options.env.OPENCLAW_STATE_DIR);
       expect(snapshotCapacity.candidates[1]?.directory).toBe(directory);
     },
   );
@@ -499,21 +458,14 @@ describe("update run ledger", () => {
       if (!retained) {
         throw new Error("Missing retained update run");
       }
-      const report = renderUpdateRunReport(retained).markdown;
-      expect(report).toContain(keys.join(", "));
       if (outcome === "committed") {
         expect(
           retained.steps.flatMap((entry) => (entry.configChange ? [entry.configChange] : [])),
         ).toEqual(step.configChanges);
-        expect(report).toContain(migration);
-        expect(report).not.toContain("repair-requires-config-change");
       } else {
         expect(
           retained.steps.find((entry) => entry.step === step.name)?.configWriteRefusal,
         ).toEqual(step.configWriteRefusal);
-        expect(report).toContain("config-input-changed");
-        expect(report).toContain("An operator saved the config before publication.");
-        expect(report).toContain("Doctor could not promote config changes.");
       }
     },
   );

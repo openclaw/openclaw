@@ -733,7 +733,8 @@ outcomes immediately. For ordinary agent runs, Workboard consumes the execution
 owner's settled lifecycle event and final outcome, not the attempt-level
 `agent_end` hook or a timed session re-read. Intermediate fallback attempts and
 yielded turns leave the card running. Success moves the matching run to `review`;
-failure, cancellation, or timeout moves it to `blocked`. Events for an older
+failure, cancellation, or timeout moves it to `blocked` and releases the worker's
+claim, so the card can be dispatched again. Events for an older
 linked run cannot settle a newer run, and retired services discard queued events.
 A recovery sweep runs once per minute and reads only the
 sessions linked to active cards, sharing each read across cards with the same link.

@@ -294,7 +294,7 @@ it("matches runtime-config execution inventory without changing canonical owners
 });
 
 it.each(measuredConfigCases)(
-  "matches $owner execution inventory only for measurement",
+  "matches $owner execution inventory without promoting canonical runtime ownership",
   ({ config, createConfig }) => {
     const files = expectDefined(listNodeTestVolumeConfigFiles(config), "measurement inventory");
     expect(files.toSorted()).toEqual(listMatchedTestFiles(createConfig()).toSorted());

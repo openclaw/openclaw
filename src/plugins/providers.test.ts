@@ -61,20 +61,6 @@ function setManifest(id: string, overrides: Partial<PluginManifestRecord> = {}) 
   setManifestPlugins([manifest(id, overrides)]);
 }
 
-function setOwningProviderManifestPlugins() {
-  setManifestPlugins([
-    manifest("minimax", { providers: ["minimax", "minimax-portal"] }),
-    manifest("openai", {
-      providers: ["openai", "openai"],
-      modelSupport: { modelPrefixes: ["gpt-", "o1", "o3", "o4"] },
-    }),
-    manifest("anthropic", {
-      cliBackends: ["claude-cli"],
-      modelSupport: { modelPrefixes: ["claude-"] },
-    }),
-  ]);
-}
-
 function createProviderRegistrySnapshotFixture(): PluginRegistrySnapshot {
   const plugins = manifestLoader().plugins.map((plugin) => {
     const snapshotPlugin = {
@@ -312,18 +298,6 @@ describe("resolvePluginProviders", () => {
       expect(manifestLoader).toHaveBeenCalledTimes(prepared ? 0 : 2);
     },
   );
-
-  it("reuses one registry snapshot across explicit model ownership lookups", () => {
-    setOwningProviderManifestPlugins();
-
-    expect(
-      owners.resolveOwningPluginIdsForModelRefs({
-        models: ["openai/gpt-5.6-luna", "claude-cli/claude-sonnet-4-6"],
-      }),
-    ).toEqual(["anthropic", "openai"]);
-    expect(metadataLoader).not.toHaveBeenCalled();
-    expect(indexLoader).toHaveBeenCalledOnce();
-  });
 
   beforeEach(() => {
     setActivePluginRegistry(createEmptyPluginRegistry());

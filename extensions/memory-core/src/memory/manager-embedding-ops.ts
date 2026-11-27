@@ -81,7 +81,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
   protected batchFailure: { count: number; lastError?: string; lastProvider?: string } = {
     count: 0,
   };
-  protected abstract markLocalEmbeddingProviderDegraded(err: unknown): void;
+  protected abstract markEmbeddingProviderFailure(err: unknown): void;
   private readonly activeProviderUses = new Map<MemoryEmbeddingProvider, Set<Promise<void>>>();
   private syncProviderGenerationRelease: (() => void) | null = null;
   private syncProviderGenerationOwners = 0;
@@ -253,6 +253,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     }
     const structured = inputs.some((input) => typeof input !== "string");
     const label = structured ? "structured batch" : "batch";
+    const signal = this.backgroundEmbeddingController?.signal;
     const requestItems = inputs.map((input, index) => ({
       input,
       cacheCandidate: cacheCandidates?.[index],
@@ -260,6 +261,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     try {
       return await runMemoryEmbeddingBatchRetryWithSplit({
         items: requestItems,
+        signal,
         maxInputsPerRequest: provider.maxInputsPerRequest,
         run: async (batchItems) => {
           const timeoutMs = this.resolveEmbeddingTimeout("batch", provider, generation?.runtime);
@@ -270,13 +272,14 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
           });
           const result = await runEmbeddingOperationWithTimeout({
             timeoutMs,
+            signal,
             message: `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
-            run: async (signal) =>
+            run: async (operationSignal) =>
               await embedMemoryDocuments(
                 provider,
                 batchItems.map((item) => item.input),
                 this.settings.inputFormat,
-                { signal },
+                { signal: operationSignal },
               ),
           });
           if (!structured) {
@@ -303,6 +306,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
           await this.waitForEmbeddingRetry(
             delayMs,
             structured ? "retrying structured batch" : "retrying",
+            signal,
           );
         },
         onSplit: ({ itemCount, splitAt }) => {
@@ -312,13 +316,14 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
         },
       });
     } catch (err) {
+      signal?.throwIfAborted();
       if (!structured) {
         log.debug("memory embeddings: batch failed", {
           provider: provider.id,
           error: formatErrorMessage(err),
         });
       }
-      this.markLocalEmbeddingProviderDegraded(err);
+      this.markEmbeddingProviderFailure(err);
       throw createMemoryEmbeddingOperationError({
         operation: structured ? "structured-batch" : "batch",
         providerId: provider.id,
@@ -373,7 +378,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     } catch (error) {
       // An interrupted check says nothing about the provider's health.
       if (provider === this.provider && !signal?.aborted) {
-        this.markLocalEmbeddingProviderDegraded(error);
+        this.markEmbeddingProviderFailure(error);
       }
       throw error;
     }

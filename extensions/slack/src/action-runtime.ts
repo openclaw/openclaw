@@ -629,15 +629,15 @@ export async function handleSlackAction(
           after,
           threadId,
           messageId,
-          includeAuthorProfiles: true,
+          includeUserProfiles: true,
         });
         const messages = result.messages.map((m) => withNormalizedTimestamp(m, m.ts));
         return jsonResult({
           ok: true,
           channelId,
           ...(threadId ? { threadId } : {}),
+          ...result,
           messages,
-          hasMore: result.hasMore,
         });
       }
       case "downloadFile": {

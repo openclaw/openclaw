@@ -381,7 +381,7 @@ describe("memory index", () => {
     await manager.sync({ reason: "test" });
     const degraded = manager as unknown as {
       provider: MemoryEmbeddingProvider | null;
-      markLocalEmbeddingProviderDegraded: (err: unknown) => void;
+      markEmbeddingProviderFailure: (err: unknown) => void;
     };
     const provider = degraded.provider;
     if (!provider) {
@@ -390,7 +390,7 @@ describe("memory index", () => {
     provider.embed = async () => {
       throw providerFixture.createLocalWorkerExitError();
     };
-    degraded.markLocalEmbeddingProviderDegraded = () => {
+    degraded.markEmbeddingProviderFailure = () => {
       degraded.provider = null;
     };
 

@@ -67,18 +67,17 @@ export function resolveOllamaCloudDefaultModel(modelId: string) {
 }
 
 /**
- * Hosted Ollama output budget. Local models return undefined and take the shared
- * context-sized default, which keeps prompt room inside the local num_ctx.
+ * Hosted Ollama output budget, curated list only. Ollama's API reports no
+ * per-model output limit and a context window is never a safe output budget,
+ * so uncurated cloud models return undefined and take the shared unknown-limit
+ * default on their full window (32,768 for large windows).
  */
 export function resolveOllamaOutputBudget(params: {
   modelId: string;
-  contextWindow?: number;
   remote?: boolean;
 }): number | undefined {
   return params.remote || isCloudModelRef(params.modelId)
-    ? (resolveOllamaCloudDefaultModel(params.modelId)?.maxTokens ??
-        params.contextWindow ??
-        OLLAMA_DEFAULT_CONTEXT_WINDOW)
+    ? resolveOllamaCloudDefaultModel(params.modelId)?.maxTokens
     : undefined;
 }
 

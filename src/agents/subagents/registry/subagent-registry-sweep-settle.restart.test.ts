@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
@@ -71,6 +72,7 @@ it("fails a running child restored from an earlier Gateway so its requester wake
       recoveryCurrent: undefined,
       endedAt: NOW,
       outcome: { status: "error", error: SUBAGENT_RESTART_INTERRUPTED_ERROR },
+      terminalReply: { disposition: "empty" },
       reason: SUBAGENT_ENDED_REASON_ERROR,
       sendFarewell: true,
       accountId: "primary",
@@ -81,6 +83,12 @@ it("fails a running child restored from an earlier Gateway so its requester wake
 });
 
 it.each([
+  [
+    "a current-lifecycle row with an earlier wall-clock timestamp",
+    (entry: SubagentRunRecord) => {
+      entry.execution.lifecycleGeneration = getAgentEventLifecycleGeneration();
+    },
+  ],
   [
     "a row awaiting fresh completion admission",
     (entry: SubagentRunRecord) => subagentRuns.retireCompletionAuthority(entry),

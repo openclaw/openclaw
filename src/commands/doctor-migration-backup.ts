@@ -51,6 +51,7 @@ import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js"
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { agentEngineInput } from "../state/openclaw-agent-db-engine.js";
 import { invalidateOpenClawAgentDatabaseIntegrityBeforeMutation } from "../state/openclaw-agent-db-lease.js";
+import { AGENT_FTS_SCHEMAS } from "../state/openclaw-agent-fts-schema.js";
 import type { OpenClawDatabaseSchemaPreflight } from "../state/openclaw-database-preflight.types.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
@@ -146,6 +147,15 @@ export function captureFreshDoctorMigrationTables(
   };
 }
 
+/** Doctor backs up the shared state database before a repair its schema needs. */
+export async function needsSharedStateMigrationBackup(sharedPath: string): Promise<boolean> {
+  return (
+    !isStatePostgres() &&
+    existsSync(sharedPath) &&
+    (await needsOpenClawStateDatabaseSchemaRepair(sharedPath))
+  );
+}
+
 /** Preserve the old database generation before Doctor advances its schemas. */
 export async function backupDoctorMigrationDatabases(params: {
   env: NodeJS.ProcessEnv;
@@ -167,11 +177,7 @@ export async function backupDoctorMigrationDatabases(params: {
 > {
   const sharedPath = resolveOpenClawStateSqlitePath(params.env);
   const pending = new Set(params.pendingDatabasePaths);
-  if (
-    !isStatePostgres() &&
-    existsSync(sharedPath) &&
-    (await needsOpenClawStateDatabaseSchemaRepair(sharedPath))
-  ) {
+  if (await needsSharedStateMigrationBackup(sharedPath)) {
     pending.add(sharedPath);
   }
   if (pending.size === 0) {
@@ -208,14 +214,20 @@ export async function backupDoctorMigrationDatabases(params: {
       // This custody checks current bytes once, before its version and additive phases.
       invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(pathname);
     }
-    if (migration) {
-      integrityChecks.set(
-        realpathSync.native(pathname),
-        resolveSchemaMigrationIntegrityCheck(migration, params.check),
-      );
-    } else if (params.versionMigrationsOnly && !pending.has(pathname)) {
-      // Companion databases are preserved for rollback but no schema tables change.
-      integrityChecks.set(realpathSync.native(pathname), { check: params.check ?? "quick" });
+    const integrity = migration
+      ? resolveSchemaMigrationIntegrityCheck(migration, params.check)
+      : params.versionMigrationsOnly && !pending.has(pathname)
+        ? { check: params.check ?? "quick" }
+        : undefined;
+    // Heartbeat preparation can reuse the original group left by the version phase.
+    // Preserve canonical derived FTS indexes in that group; agent maintenance owns repair.
+    if (!params.repair && pathname !== sharedPath) {
+      integrityChecks.set(realpathSync.native(pathname), {
+        ...integrity,
+        ftsSchemas: AGENT_FTS_SCHEMAS,
+      });
+    } else if (integrity) {
+      integrityChecks.set(realpathSync.native(pathname), integrity);
     }
   }
   const postgresPaths = new Map(
@@ -583,7 +595,7 @@ export async function backupDoctorSqliteDatabases(params: {
     // Narrow source admission never weakens certification of the retained backup image.
     const sourceIntegrity = params.integrityChecks?.get(sourcePath);
     const backupIntegrity = sourceIntegrity?.schemaOnly
-      ? { check: sourceIntegrity.check, tables: sourceIntegrity.tables }
+      ? { ...sourceIntegrity, schemaOnly: undefined }
       : sourceIntegrity;
     const existing = lstatSync(targetPath, { bigint: true, throwIfNoEntry: false });
     if (existing) {

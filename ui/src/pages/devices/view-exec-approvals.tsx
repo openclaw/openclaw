@@ -6,9 +6,9 @@ import {
   SettingsSection,
   SettingsRow,
   SettingsStatus,
-  SettingsToggle,
   SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
+import { Switch } from "../../components/solid/switch.tsx";
 import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import { clampText, formatRelativeTimestamp } from "../../lib/format.ts";
 import {
@@ -500,7 +500,7 @@ function AutoAllowField(props: {
               })}
             </button>
           ) : undefined}
-          <SettingsToggle
+          <Switch
             checked={props.override ?? props.effective.autoAllowSkills}
             disabled={props.state.disabled}
             ariaLabel={t("devices.execApprovals.autoAllowSkills")}

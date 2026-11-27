@@ -757,7 +757,6 @@ const startupEnglish = {
     provider: "Provider",
     lastActive: "Last active {time}",
     activeRun: "Active run",
-    backgroundWorkRunning: "Background work running",
     subagentsWorking: "Subagents working",
     showChildSessions: "Show {count} child sessions for {session}",
     hideChildSessions: "Hide {count} child sessions for {session}",
@@ -915,7 +914,7 @@ const startupEnglish = {
   skillsPage: {},
   skillStatus: {},
   nav: {
-    automationFailure: "An automation has failed",
+    automationFailure: "An automation needs attention",
     gateway: {
       sectionLabel: "Gateway",
       primaryTag: "primary",

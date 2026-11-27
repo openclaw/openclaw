@@ -16,14 +16,14 @@ import {
 } from "./update-run-record.js";
 import { ABANDONED_UPDATE_RUN_MS } from "./update-run-timeouts.js";
 
-export function updateRunLastActivity(record: UpdateRunRecord): number {
+function updateRunLastActivity(record: UpdateRunRecord): number {
   return Math.max(
     record.updatedAtMs,
     ...record.steps.flatMap((step) => [step.startedAtMs ?? 0, step.endedAtMs ?? 0]),
   );
 }
 
-export function hasUnrecordedUpdateRunDriver(record: UpdateRunRecord): boolean {
+function hasUnrecordedUpdateRunDriver(record: UpdateRunRecord): boolean {
   return record.steps.some((step) => step.step === "driver:identity-unavailable");
 }
 

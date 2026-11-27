@@ -43,6 +43,12 @@ function setup() {
   return { callGateway, tool, execute };
 }
 
+it("reserves the comment approval lifetime and completion without extending other actions", () => {
+  const tool = createGitHubPublishTool();
+  expect(tool.getExecutionTimeoutMs?.({ action: "create_comment" })).toBeGreaterThan(300_000);
+  expect(tool.getExecutionTimeoutMs?.({ action: "readiness" })).toBeUndefined();
+});
+
 it("offers issue creation without workspace publication, but not in observation-only mode", async () => {
   const input = { action: "create_issue", title: "Report", body: "Details" };
   const tool = createGitHubPublishTool({ publicationAvailable: false });

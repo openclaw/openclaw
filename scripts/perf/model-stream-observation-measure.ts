@@ -27,6 +27,7 @@ import { getModelTransportContext } from "../../src/llm/model-transport-context.
 import type { AssistantMessage, AssistantMessageEvent } from "../../src/llm/types.js";
 import { getPluginExecutionFrame } from "../../src/plugins/plugin-instance-invocation.js";
 import { PluginInstance } from "../../src/plugins/plugin-instance.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -264,12 +265,7 @@ if (values.mode === "timing") {
   gc.observe({ entryTypes: ["gc"] });
   loop.enable();
 } else if (values.mode === "allocation") {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 4096,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 4096);
 } else {
   const nativeStringify = JSON.stringify;
   const instrument = mock.method(JSON, "stringify", (...args: unknown[]) => {

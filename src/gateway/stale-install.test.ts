@@ -9,8 +9,18 @@ import {
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createPreparedReadinessFixture } from "./server/readiness.test-support.js";
 
 const fixture = vi.hoisted(() => ({ root: "", buildId: "build-before" as string | null }));
+const trial = vi.hoisted(() => ({
+  residentReady: vi.fn<typeof import("../update/gateway-trial.js").announceReady>(),
+  ready: vi.fn<typeof import("../update/gateway-trial.js").observeLegacyTrialReadiness>(),
+}));
+vi.mock("../update/gateway-trial.js", async (original) => ({
+  ...(await original<typeof import("../update/gateway-trial.js")>()),
+  announceReady: trial.residentReady,
+  observeLegacyTrialReadiness: trial.ready,
+}));
 vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/openclaw-root.js")>()),
   resolveOpenClawPackageRootSync: () => fixture.root,
@@ -69,9 +79,12 @@ beforeEach(async () => {
   resetGatewayWorkAdmission();
   fixture.root = directories.make("openclaw-replaced-install-");
   fixture.buildId = "build-before";
+  trial.ready.mockReset().mockResolvedValue(undefined);
+  trial.residentReady.mockReset().mockResolvedValue(undefined);
   await fs.mkdir(path.join(fixture.root, "dist"));
   vi.resetModules();
   owner = await import("./stale-install.js");
+  await import("../update/gateway-trial.js");
 });
 
 afterEach(() => {
@@ -83,6 +96,65 @@ afterEach(() => {
 });
 
 describe("running installation replacement", () => {
+  it("detects replacement while a history write is pending and retries after rejection", async () => {
+    const handoff = registerReplacement();
+    const release = createDeferredCore();
+    let recovered = false;
+    trial.ready.mockResolvedValueOnce(
+      vi
+        .fn()
+        .mockImplementationOnce(async () => {
+          await release.promise;
+          throw new Error("history write failed");
+        })
+        .mockImplementation(async () => {
+          recovered = true;
+          return true;
+        }),
+    );
+    await owner.announceGatewayInstallationReady(createPreparedReadinessFixture());
+    try {
+      await writeIdentity();
+      await owner.checkGatewayInstallationReplacement();
+      expect(owner.getGatewayInstallationReplacement()).toMatchObject({
+        running: { version: "2026.9.4", buildId: "build-before" },
+        onDisk: { version: "2026.9.5", buildId: "build-after" },
+      });
+      expect(handoff).toHaveBeenCalledOnce();
+    } finally {
+      release.resolve();
+    }
+    await expect
+      .poll(async () => {
+        await owner.checkGatewayInstallationReplacement();
+        return recovered;
+      })
+      .toBe(true);
+  });
+  it("rechecks core admission after an early startup observation was not ready", async () => {
+    registerReplacement();
+    const { createReadinessChecker } = await import("./server/readiness.js");
+    const { logGatewayReady } = await import("./server-startup-readiness.js");
+    let pending = true;
+    const readiness = createReadinessChecker({
+      startedAt: Date.now(),
+      getStartupPending: () => pending,
+      channelManager: {
+        getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+        getAutostartSuppression: () => null,
+        isAmbientAutostartSuppressed: () => false,
+      },
+    });
+    await logGatewayReady({ getReadiness: readiness, log: { info: vi.fn() } });
+    await owner.checkGatewayInstallationReplacement();
+    expect(trial.residentReady).not.toHaveBeenCalled();
+    expect(trial.ready).not.toHaveBeenCalled();
+    pending = false;
+    await owner.checkGatewayInstallationReplacement();
+    expect(trial.ready).toHaveBeenCalledExactlyOnceWith("build-before", fixture.root, undefined);
+    expect(trial.residentReady).toHaveBeenCalledExactlyOnceWith("build-before");
+  });
+
   it("keeps periodic installation observations free of synchronous filesystem calls", async () => {
     const handoff = registerReplacement();
     await writeIdentity("2026.9.4", "build-before");

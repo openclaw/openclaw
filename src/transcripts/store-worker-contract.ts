@@ -50,7 +50,7 @@ export type TranscriptReadRequests = {
     output: ReturnType<typeof readTranscriptExportPathOwners>;
   };
   "transcripts.summarySnapshot": {
-    input: { session: SessionIdentity; maxUtterances: number };
+    input: { session: SessionIdentity; maxUtterances: number; minimumNextSequence?: number };
     output: ReturnType<typeof readTranscriptSummarySnapshot>;
   };
   "transcripts.sessionEntries": {

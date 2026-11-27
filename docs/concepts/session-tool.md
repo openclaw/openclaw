@@ -94,7 +94,13 @@ requesting session as its parent. It inherits that turn's sandbox requirement, t
 policy, and permission mode, so it is never less contained than the turn that
 created it. Agent targets, spawn depth, and child limits follow the same
 `subagents` admission rules. Unlike a visible spawn, the session is not registered
-as a supervised run.
+as a supervised run. Its `sessions_send` reports are visible updates, not private
+subagent coordination. This distinction is recorded when the session is created;
+older sessions without that marker keep their existing classification. Create a
+new independent session to use visible reports. Supervised `sessions_spawn`
+coordination remains private. Later `sessions_send` messages from its creator
+are peer messages, so an exact `NO_REPLY` returns `status: "no_reply"`; the
+opening `message` still requires a result.
 
 For an admitted, authenticated channel sender whose account and sender ID have no
 linked profile, `sessions_create` ignores a supplied `user` and uses the same
@@ -246,6 +252,16 @@ individually when more detail is needed. Duplicate targets that pass these check
 reject the batch before mutation. To archive an eligible current session, use a single patch;
 its archive is deferred until the run finishes, while a batch reports that
 current-session target as failed and continues with the others.
+
+To snooze an eligible session, pass `snoozedUntil` as a future Unix timestamp in
+milliseconds, or `null` to wake it early. When an agent snoozes its own session,
+its final reply stays in the transcript. A newer user message accepted after the
+request cancels the pending snooze, even if it steers the same run or is queued.
+If the write returns an error, OpenClaw checks the snooze time once without
+retrying. A matching time or newer user choice needs no notice. Otherwise,
+the original chat says whether the time isn’t set or couldn’t be confirmed.
+When the deadline passes, the session returns to the Active sidebar; the deadline
+does not start an agent run.
 
 Use `sessions_create` for independent sessions. For deliberately supervised child work, use `sessions_spawn` with `visible: true`. Pass `group` to place that child in a sidebar group atomically; omit `group` or pass an empty string to leave it ungrouped. The spawn path enforces the parent's tool policy, sandbox, concurrency limits, and run timeout.
 

@@ -13,6 +13,8 @@ const catalog = {
       workspaceRestoring: "Restoring workspace…",
       workspaceRestoreHelp:
         "Retry Restore, ask an administrator for help, or start a new conversation.",
+      workspaceRestoreAskAdmin:
+        "Ask an administrator to restore this workspace, or start a new conversation.",
     },
   },
 } satisfies TranslationMap;

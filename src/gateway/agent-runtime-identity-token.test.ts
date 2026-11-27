@@ -359,6 +359,7 @@ it.each(["run-1", "run-other"])(
       requesterProfileId: "profile-vito",
       requesterSenderIsOwner: false,
       completionOwnerSessionKey: "agent:main:discord:direct:alice",
+      createdIndependently: true,
       resolvedModel: { provider: "custom", model: "custom/model" },
       spawnModelAutoSelection: { model: "custom/custom/model", hasFallbackOrigin: true },
     };

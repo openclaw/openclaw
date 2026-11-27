@@ -1,4 +1,3 @@
-import path from "node:path";
 import { expect, vi } from "vitest";
 import type { ConfigFileSnapshot } from "../config/types.openclaw.js";
 import * as mocks from "./update-cli-mocks.test-support.js";
@@ -24,29 +23,6 @@ export const packageInstallCommandCall = () =>
 
 const packagePackCommandCall = () =>
   commandCalls().find(([argv]) => argv[0] === "npm" && argv[1] === "pack");
-
-const isNpmGitPackageSpec = (spec: string) => {
-  const target = spec.trim().replace(/^openclaw@/i, "");
-  if (
-    /^(?:github:|git[+:]|ssh:\/\/)/i.test(target) ||
-    /^[^@\s]+@[^:\s]+:[^#\s]+(?:#.*)?$/u.test(target) ||
-    /^[^.\s/:@][^\s/:@]*\/[^\s/:@]+$/u.test(target.split("#", 1)[0] ?? "")
-  ) {
-    return true;
-  }
-  try {
-    const url = new URL(target);
-    const pathname = url.pathname.replace(/\/+$/u, "");
-    return (
-      (url.protocol === "https:" || url.protocol === "http:") &&
-      (pathname.endsWith(".git") ||
-        (url.hostname.toLowerCase() === "github.com" &&
-          pathname.split("/").filter(Boolean).length === 2))
-    );
-  } catch {
-    return false;
-  }
-};
 
 export const freshRestartCalls = () =>
   vi
@@ -99,39 +75,19 @@ export const expectNoSideEffects = (...effects: unknown[]) => {
   }
 };
 
-export const expectPackageInstallSpec = (spec: string, staged = true) => {
+export const expectPackageInstallSpec = (spec: string) => {
   expect(update.updateGitRelease).not.toHaveBeenCalled();
-  let installSpec = spec;
-  const isGit = isNpmGitPackageSpec(spec);
-  if (isGit) {
-    const packCall = packagePackCommandCall();
-    expect(packCall?.[0]).toEqual([
-      "npm",
-      "pack",
-      spec,
-      "--pack-destination",
-      expect.any(String),
-      "--json",
-      "--loglevel=error",
-    ]);
-    const packDir = requireValue(packCall?.[0][4] || undefined, "package pack directory");
-    installSpec = path.join(packDir, "openclaw-9999.0.0.tgz");
-  } else {
-    expect(packagePackCommandCall()).toBeUndefined();
-  }
-  const allowScriptsIdentity = isGit
-    ? installSpec
-    : spec.toLowerCase().startsWith("openclaw@")
-      ? "openclaw"
-      : spec;
+  expect(packagePackCommandCall()).toBeUndefined();
+  const allowScriptsIdentity = spec.toLowerCase().startsWith("openclaw@") ? "openclaw" : spec;
   const call = packageInstallCommandCall();
   expect(call?.[0]).toEqual([
     "npm",
     "i",
     "-g",
     `--allow-scripts=${allowScriptsIdentity}`,
-    ...(staged ? ["--prefix", expect.stringContaining(".openclaw.update-stage-")] : []),
-    installSpec,
+    "--prefix",
+    expect.stringContaining(".openclaw.update-stage-"),
+    spec,
     "--no-fund",
     "--no-audit",
     "--loglevel=error",

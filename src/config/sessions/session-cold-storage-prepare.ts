@@ -78,6 +78,12 @@ async function prepareExternalization(
   }
   const chunks = selected.value;
   let envelopeBytes = 0;
+  const admitEnvelope = (byteLength: number) => {
+    envelopeBytes += byteLength;
+    if (envelopeBytes > maxEnvelopeBytes) {
+      throw new ColdArchiveBudgetError();
+    }
+  };
   for (const file of chunks.length ? chunks : [archive]) {
     const embedded = chunks.length
       ? withOpenClawAgentDatabaseReadOnly(
@@ -101,17 +107,9 @@ async function prepareExternalization(
         archive_blob: embedded?.found ? (embedded.value ?? null) : archive.archive_blob,
       },
     });
-    // A window is indivisible; its files are bounded independently of the remaining pass budget.
-    envelopeBytes += zlib.zstdDecompressSync(bytes, {
-      maxOutputLength: MAX_COLD_ARCHIVE_BYTES,
-    }).byteLength;
-    if (envelopeBytes > maxEnvelopeBytes) {
-      throw new ColdArchiveBudgetError();
-    }
-    for (const record of decodeSessionColdRecords(bytes, {
-      ...file,
-      generation: archive.generation,
-    })) {
+    // A window is indivisible. Check its remaining budget before validating each decoded file.
+    const metadata = { ...file, generation: archive.generation };
+    for (const record of decodeSessionColdRecords(bytes, metadata, admitEnvelope)) {
       void record;
     }
     const directory = path.dirname(

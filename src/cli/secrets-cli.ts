@@ -242,7 +242,7 @@ export function registerSecretsCli(program: Command): void {
                 `Preflight: changed=${configured.preflight.changed}, files=${configured.preflight.changedFiles.length}, warnings=${configured.preflight.warningCount}.`,
               );
               if (configured.preflight.warningCount > 0) {
-                for (const warning of configured.preflight.warnings) {
+                for (const warning of new Set(configured.preflight.warnings)) {
                   defaultRuntime.log(terminalText`- warning: ${warning}`);
                 }
               }
@@ -295,6 +295,11 @@ export function registerSecretsCli(program: Command): void {
                 allowExec: Boolean(opts.allowExec),
               });
               if (!opts.json) {
+                for (const warning of new Set(result.warnings)) {
+                  if (!configured.preflight.warnings.includes(warning)) {
+                    defaultRuntime.log(terminalText`- warning: ${warning}`);
+                  }
+                }
                 defaultRuntime.log(
                   result.changed
                     ? `Secrets applied. Updated ${result.changedFiles.length} file(s).`
@@ -355,6 +360,9 @@ export function registerSecretsCli(program: Command): void {
         );
         if (opts.json) {
           return;
+        }
+        for (const warning of new Set(result.warnings)) {
+          defaultRuntime.log(terminalText`- warning: ${warning}`);
         }
         if (opts.dryRun) {
           defaultRuntime.log(
