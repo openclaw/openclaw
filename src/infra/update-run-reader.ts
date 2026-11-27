@@ -1,3 +1,5 @@
+import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import { readAdmittedStateFileFingerprint } from "../state/openclaw-state-db-content-version.js";
 import type {
   OpenClawStateDatabaseOptions,
   OpenClawStateSchemaReadAdmission,
@@ -8,6 +10,7 @@ import {
   executeExistingOpenClawStateRead,
   withArtifactPreservingStateReads,
   readCurrentOpenClawStateDatabaseContentVersion,
+  withCurrentOpenClawStateReadScope,
 } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
@@ -137,12 +140,7 @@ export function createUpdateRunAdmissionReader(
     openStateSchemaReadAdmission,
   );
   let previous: { version: string; runs: UpdateRunRecord[] } | undefined;
-  return () => {
-    // PostgreSQL ledger writes do not change the SQLite anchor's content fingerprint.
-    if (isStatePostgres()) {
-      previous = undefined;
-      return listUpdateRuns(input, options, openStateSchemaReadAdmission);
-    }
+  const readRuns = () => {
     const warm = readWarm();
     if (warm.available) {
       previous = undefined;
@@ -159,6 +157,37 @@ export function createUpdateRunAdmissionReader(
       version === readCurrentOpenClawStateDatabaseContentVersion(options)
     ) {
       previous = { version, runs };
+    }
+    return runs;
+  };
+  const readFileFingerprint = () =>
+    withCurrentOpenClawStateReadScope(options, (pathname) =>
+      readAdmittedStateFileFingerprint(pathname, options.env ?? process.env),
+    );
+  let unchanged: { fingerprint: string; runs: UpdateRunRecord[] } | undefined;
+  return () => {
+    // PostgreSQL ledger writes do not change the SQLite anchor's content fingerprint.
+    if (isStatePostgres()) {
+      previous = undefined;
+      unchanged = undefined;
+      return listUpdateRuns(input, options, openStateSchemaReadAdmission);
+    }
+    // Inside maintenance, every database access rechecks admission. A commit always
+    // changes the database family's metadata (the proof the content version already
+    // reuses), so unchanged files return the rows read under that same proof. The
+    // second observation catches a commit that lands while this one is selected.
+    const fingerprint = getOpenClawDatabaseMaintenanceScope() ? readFileFingerprint() : undefined;
+    if (
+      fingerprint !== undefined &&
+      unchanged?.fingerprint === fingerprint &&
+      readFileFingerprint() === fingerprint
+    ) {
+      return unchanged.runs;
+    }
+    unchanged = undefined;
+    const runs = readRuns();
+    if (fingerprint !== undefined && fingerprint === readFileFingerprint()) {
+      unchanged = { fingerprint, runs };
     }
     return runs;
   };
