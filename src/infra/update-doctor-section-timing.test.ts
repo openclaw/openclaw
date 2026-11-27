@@ -13,7 +13,10 @@ async function replayDoctorStderr(stderr: string, parentEnv: NodeJS.ProcessEnv =
     return { stderr };
   });
   const result = await run([], {});
-  return { stderr: result.stderr, diagnostics: timing.annotate({}).diagnostics };
+  return {
+    stderr: result.stderr,
+    diagnostics: timing.annotate({ diagnostics: [] as string[] }).diagnostics,
+  };
 }
 
 describe("Doctor sections diagnostic", () => {
@@ -70,7 +73,7 @@ describe("Doctor sections diagnostic", () => {
     const { diagnostics } = await replayDoctorStderr(
       `${names.map((name) => traceLine(name, 1500)).join("\n")}\n`,
     );
-    const [line] = diagnostics ?? [];
+    const [line] = diagnostics;
     expect(line).toHaveLength(UPDATE_RUN_TEXT_LIMIT);
     expect(line).toMatch(/^Doctor sections: maintenance\.section-0 1\.5 s, .*…$/u);
   });
