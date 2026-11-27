@@ -34,6 +34,7 @@ import {
   tryResolveLegacyDataOwner,
   tryResolveRawLegacyDefaultAgentId,
   tryResolveSoleAgentId,
+  type AgentRosterConfig,
 } from "./agent-roster.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace-default.js";
 
@@ -52,6 +53,11 @@ export {
 type AgentEntry = AgentConfig;
 type AgentEntriesConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>;
 type MutableAgentEntry = AgentEntry | AgentEntriesConfig[string];
+type AgentOperationConfig = AgentRosterConfig & {
+  readonly agents?: {
+    readonly defaults?: Readonly<Pick<AgentDefaultsConfig, "systemAgent">>;
+  };
+};
 export type AgentSelectionContext = {
   surface: string;
   hint: string;
@@ -190,7 +196,7 @@ export function resolveSoleAgentId(cfg: OpenClawConfig, context?: AgentSelection
 }
 
 /** Preserves legacy data locators independently of the configured runtime owner. */
-export function tryResolveLegacyDataOwnerAgentId(cfg: OpenClawConfig): string | undefined {
+export function tryResolveLegacyDataOwnerAgentId(cfg: AgentRosterConfig): string | undefined {
   const facts = readAgentRosterFacts(cfg);
   if (facts?.legacyDataOwnerAgentId) {
     return facts.legacyDataOwnerAgentId.value;
@@ -203,7 +209,9 @@ export function tryResolveLegacyDataOwnerAgentId(cfg: OpenClawConfig): string | 
 }
 
 /** Resolves the recorded default after migration, or a sole/raw legacy owner. */
-export function tryResolveLegacyCompatibilityAgentId(cfg: OpenClawConfig): string | undefined {
+export function tryResolveLegacyCompatibilityAgentId(
+  cfg: AgentOperationConfig,
+): string | undefined {
   const facts = readAgentRosterFacts(cfg);
   if (facts?.compatibilityAgentId) {
     return facts.compatibilityAgentId.value;
@@ -225,7 +233,7 @@ export function tryResolveLegacyCompatibilityAgentId(cfg: OpenClawConfig): strin
 
 /** Resolves the owner for ambient system work and explicit requests. */
 export function tryResolveAmbientOwnerAgentId(
-  cfg: OpenClawConfig,
+  cfg: AgentOperationConfig,
   requestedAgentId?: string,
 ): string | undefined {
   const explicitAgentId =
@@ -248,7 +256,7 @@ export function resolveAmbientOwnerAgentId(
 
 /** Returns an operation owner while preserving legacy defaults outside explicit fleets. */
 export function tryResolveAgentOperationAgentId(
-  cfg: OpenClawConfig,
+  cfg: AgentOperationConfig,
   requestedAgentId?: string,
 ): string | undefined {
   if (requestedAgentId !== undefined) {
