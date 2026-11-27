@@ -450,7 +450,7 @@ function SessionsTable(props: SessionsProps & { readRoster: () => RosterOutcome 
       </div>
 
       {totalRows() > 0 ? (
-        <div class="data-table-pagination">
+        <div class="data-table-pagination" ref={() => props.onTablePresented?.()}>
           <div class="data-table-pagination__info">
             {t("sessionsView.pagination", {
               start: String(page() * props.pageSize + 1),

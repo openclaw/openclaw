@@ -9,6 +9,7 @@ import {
   useNodeFakeTimers,
   wsInstances,
 } from "../api/gateway-socket.test-support.ts";
+import { requestSessionListParams } from "../lib/sessions/session-requests.ts";
 import type { startControlUi } from "../main.runtime.ts";
 import {
   discardPrewarmedChatSnapshot,
@@ -359,4 +360,71 @@ it("imports New without waiting for the socket to open", async () => {
   expect(mainRuntime.startControlUi).toHaveBeenCalledOnce();
   expect(wsInstances).toHaveLength(1);
   expect(getLatestWebSocket().sent).toEqual([]);
+});
+
+async function connectSessionsRuntime(native = false) {
+  window.history.replaceState({}, "", "/sessions");
+  saveSettings({ ...loadSettings(), prioritizeSessionsTable: true });
+  const initial = prepareApplicationStartup();
+  if (native) {
+    initial.startup.nativeClient = { clientName: "openclaw-control-ui", mode: "webchat" };
+  }
+  early = startEarlyApplicationGateway(initial);
+  runtime = bootstrapApplication(initial, early);
+  vi.spyOn(runtime.router.getRoute("sessions")!, "component").mockResolvedValue({
+    renderSolid: () => null,
+  });
+  await runtime.start();
+  const socket = getLatestWebSocket();
+  socket.emitOpen();
+  socket.emitConnectChallenge({ nonce: "sessions-preconnect", ts: 1_800_000_000_000 });
+  await vi.advanceTimersByTimeAsync(0);
+  const connect = JSON.parse(socket.sent[0]!);
+  socket.emitMessage({
+    type: "res",
+    id: connect.id,
+    ok: true,
+    payload: {
+      type: "hello-ok",
+      protocol: PROTOCOL_VERSION,
+      auth: { role: "operator", scopes: [] },
+    },
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(runtime.context.gateway.snapshot.phase).toBe("connected");
+  return { socket, client: runtime.context.gateway.snapshot.client! };
+}
+
+it("keeps the Sessions connection live past the foreground boot deadline", async () => {
+  const { socket } = await connectSessionsRuntime();
+  await vi.advanceTimersByTimeAsync(10_001);
+
+  expect(socket.lastClose).toBeNull();
+  expect(wsInstances).toHaveLength(1);
+});
+
+it("holds the initial sidebar read on the ordinary Sessions connection", async () => {
+  const { socket, client } = await connectSessionsRuntime(true);
+  expect(early).toBeUndefined();
+  const sidebar = () =>
+    socket.sent
+      .map((frame) => JSON.parse(frame))
+      .filter(
+        ({ method, params }) =>
+          method === "sessions.list" && params.source === "sidebar" && params.limit === 51,
+      );
+  const pending = requestSessionListParams(client, { source: "sidebar", limit: 51 }, () => true);
+  void pending.catch(() => {});
+  await vi.advanceTimersByTimeAsync(0);
+  expect(sidebar()).toHaveLength(0);
+
+  await vi.advanceTimersByTimeAsync(350);
+  expect(sidebar()).toHaveLength(1);
+  socket.emitMessage({
+    type: "res",
+    id: sidebar()[0].id,
+    ok: true,
+    payload: { count: 0, sessions: [] },
+  });
+  await expect(pending).resolves.toMatchObject({ sessions: [] });
 });

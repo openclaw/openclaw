@@ -160,6 +160,7 @@ export const baseProps = () => ({
   lobsterPetVisits: true,
   lobsterPetSounds: false,
   sessionDeleteConfirm: true,
+  prioritizeSessionsTable: false,
   terminalFontFamily: undefined,
   setTerminalFontFamily: vi.fn(),
   chatMessageMaxWidth: undefined,

@@ -1,20 +1,23 @@
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { parseControlUiFocusLocation } from "@openclaw/session-url-contract";
 import type { RouteLocation } from "@openclaw/uirouter";
-import { sameRouteLocation } from "../app-route-paths.ts";
+import { routeIdFromPath, sameRouteLocation } from "../app-route-paths.ts";
 import { sessionRefFromPath } from "../app-session-route-paths.ts";
 import {
   buildAgentMainSessionKey,
   isDashboardSessionKey,
   parseAgentSessionKey,
 } from "../lib/sessions/session-key.ts";
+import { prioritizeInitialSessionsTable } from "../lib/sessions/session-requests.ts";
 import { prewarmChatSnapshot } from "../pages/chat/chat-snapshot-prewarm.ts";
 import { resolveChatSnapshotKey } from "../pages/chat/session-snapshot-key.ts";
 import { resolveControlUiDocumentMode } from "./approval-deep-link.ts";
 import { finishBootFrame } from "./boot-composer.ts";
 import type { BootRecord } from "./boot-record.ts";
 import { createBrowserHistory, resolveControlUiPaths } from "./browser.ts";
+import type { EarlyApplicationGateway } from "./early-gateway.ts";
 import { readCredentialBootRecord } from "./gateway-store.credentials.ts";
+import type { ApplicationGateway } from "./gateway.ts";
 import { hasEmbedderTransport, isRemoteControlUiIngress } from "./remote-ingress.ts";
 import {
   loadGatewaySessionSelection,
@@ -118,6 +121,11 @@ export function prepareApplicationStartup() {
   const ownsWarmBoot =
     startsApplicationRouter && !isRemoteControlUiIngress() && !hasEmbedderTransport();
   const hasPendingGateway = startup.pendingGatewayUrl !== null;
+  const prioritizeSessionsTable =
+    settings.prioritizeSessionsTable === true &&
+    startsApplicationRouter &&
+    !hasPendingGateway &&
+    routeIdFromPath(applicationLocation.pathname, basePath) === "sessions";
   const readStartupBootRecord = () =>
     ownsWarmBoot && !hasPendingGateway
       ? readCredentialBootRecord({
@@ -152,7 +160,26 @@ export function prepareApplicationStartup() {
     applicationLocation,
     focusLocation,
     startsApplicationRouter,
+    prioritizeSessionsTable,
     ownsWarmBoot,
     hasPendingGateway,
+  };
+}
+
+export function startApplicationGatewayConnection(
+  gateway: ApplicationGateway,
+  earlyGateway: EarlyApplicationGateway | undefined,
+  prioritizeSessionsTable: boolean,
+): () => void {
+  gateway.start();
+  const client = gateway.snapshot.client;
+  if (prioritizeSessionsTable && client) {
+    prioritizeInitialSessionsTable(client);
+  }
+  return () => {
+    if (earlyGateway && !earlyGateway.credentials && !gateway.snapshot.client) {
+      earlyGateway.transport.client.stop();
+    }
+    gateway.stop();
   };
 }

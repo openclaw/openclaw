@@ -32,7 +32,7 @@ export function startEarlyApplicationGateway(
   if (!initial.ownsWarmBoot || initial.hasPendingGateway || startup.nativeClient) {
     return undefined;
   }
-  if (isNewSession) {
+  if (isNewSession || initial.prioritizeSessionsTable) {
     const transport = GatewayBrowserClient.preconnect(settings.gatewayUrl);
     if (!transport) {
       return undefined;

@@ -33,7 +33,10 @@ import { createAgentSelectionCapability } from "./agent-selection.ts";
 import { selectShellRouteState } from "./app-host-route-state.ts";
 import { AssistantDock } from "./assistant-dock.ts";
 import { finishBootFrame } from "./boot-composer.ts";
-import { prepareApplicationStartup } from "./bootstrap-connection.ts";
+import {
+  prepareApplicationStartup,
+  startApplicationGatewayConnection,
+} from "./bootstrap-connection.ts";
 import {
   applicationRouteLocation,
   createInitialApplicationLocationResolver,
@@ -107,6 +110,7 @@ export function bootstrapApplication(
     applicationLocation,
     focusLocation,
     startsApplicationRouter,
+    prioritizeSessionsTable,
     ownsWarmBoot,
     hasPendingGateway,
   } = initial;
@@ -565,20 +569,11 @@ export function bootstrapApplication(
         void config.refresh({ ifNeeded: true, signal: startupLifecycle.signal });
       }
       const stopRouter = () => router.stop();
-      const earlyNewConnection = earlyGateway !== undefined && !earlyGateway.credentials;
       if (startsApplicationRouter) {
         startupLifecycle.addDisposer(stopRouter);
       }
       const steps: StartupStep[] = [
-        () => {
-          gateway.start();
-          return () => {
-            if (earlyNewConnection && !gateway.snapshot.client) {
-              earlyGateway.transport.client.stop();
-            }
-            gateway.stop();
-          };
-        },
+        () => startApplicationGatewayConnection(gateway, earlyGateway, prioritizeSessionsTable),
         () => startGatewayPageActivation(gateway, document, window),
         () => startGatewayPresenceActivity(gateway, document),
         () => guestWelcome?.start(),

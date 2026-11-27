@@ -168,6 +168,32 @@ export function sessionListQueryKey(options: SessionListOptions): string {
   return sessionListRequestKey(normalizeManagedSessionListQuery(options));
 }
 
+// One cold Sessions document owns this hold. Other clients and later refreshes run normally.
+export const initialSessionsTables = new WeakMap<
+  object,
+  { waitForTable: () => Promise<void>; tablePresented: () => void }
+>();
+
+export function prioritizeInitialSessionsTable(client: object) {
+  const ready = Promise.withResolvers<void>();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const release = () => {
+    clearTimeout(timer);
+    initialSessionsTables.delete(client);
+    ready.resolve();
+  };
+  initialSessionsTables.set(client, {
+    waitForTable() {
+      // Navigation, failure, or an empty route must never strand the sidebar.
+      timer ??= setTimeout(release, 350);
+      return ready.promise;
+    },
+    tablePresented() {
+      requestAnimationFrame(() => requestAnimationFrame(release));
+    },
+  });
+}
+
 export async function requestSessionList(
   client: SessionRequestClient,
   options: SessionListOptions,
@@ -199,6 +225,13 @@ export async function requestSessionListWindow(
   options?: GatewayProtocolRequestOptions,
 ): Promise<{ result: SessionsListResult; expiry?: SessionWindowExpiry } | null> {
   const { pageSize, ...params } = query;
+  const table = initialSessionsTables.get(client);
+  if (table && (params.source === "sidebar" || params.source === "agent-roster")) {
+    await table.waitForTable();
+    if (!isCurrent()) {
+      return null;
+    }
+  }
   let earliestExpiry = Infinity;
   let sampledAt = -Infinity;
   const window = (result: SessionsListResult | null) =>

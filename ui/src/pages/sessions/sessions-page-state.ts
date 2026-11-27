@@ -21,7 +21,10 @@ import {
   resolveSessionPreferredFaceForKey,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
-import { SESSIONS_PAGE_DEFAULT_LIMIT } from "../../lib/sessions/session-requests.ts";
+import {
+  initialSessionsTables,
+  SESSIONS_PAGE_DEFAULT_LIMIT,
+} from "../../lib/sessions/session-requests.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import {
   sessionAgentId,
@@ -543,10 +546,12 @@ export function createSessionsPage(
 
   function viewProps() {
     const { selectedSessions, sessionMenuWork: _sessionMenuWork, ...viewState } = state;
+    const client = application.gateway.snapshot.client;
     const personGroupingAvailable = (state.result?.owners?.length ?? 0) > 1;
     return {
       ...viewState,
       commandEpoch: pageEpoch,
+      onTablePresented: client ? initialSessionsTables.get(client)?.tablePresented : undefined,
       // The descriptor read belongs to the expanded slot, outside this aggregate snapshot.
       detailsRead: details.read,
       detailsReadKey: details.readKey,

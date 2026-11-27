@@ -96,6 +96,7 @@ export function createConfigPagePreferences(context: ApplicationContext, invalid
         themeOverridden: themePref.overridden,
         themeProvenance: themePref.provenance,
         themeResetValue: themePref.resetValue ?? UI_APPEARANCE_DEFAULTS.theme,
+        prioritizeSessionsTable: settings().prioritizeSessionsTable === true,
         themeMode: settings().themeMode,
         themeModeOverridden: themeModePref.overridden,
         themeModeProvenance: themeModePref.provenance,

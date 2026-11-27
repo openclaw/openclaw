@@ -831,6 +831,9 @@ Global settings remain global. Skill Workshop uses the agent selected through
 chat; open an agent's main chat from its group header to select it. Chat actions
 always belong to the conversation's agent.
 
+For a direct open or reload of the Sessions page, enable **Load the Sessions table first**
+in **Appearance → Sidebar**. The sidebar waits briefly for the table.
+
 Choose **All sessions** from an agent group’s options menu to open the Sessions
 page filtered to that agent. See [Sidebar navigation](/web/control-ui/sessions-and-sidebar#sidebar-navigation)
 for group controls and filtering.

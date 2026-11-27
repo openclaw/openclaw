@@ -7,6 +7,7 @@ import {
   createSubscriptionHydrationHarness,
   sessionsResult,
 } from "./session-capability.test-support.ts";
+import { prioritizeInitialSessionsTable, requestSessionListParams } from "./session-requests.ts";
 import { listRequest, rosterFixture } from "./session-roster-refresh.test-support.ts";
 import type { SessionListScope, SessionListSnapshot } from "./session-types.ts";
 
@@ -251,6 +252,26 @@ it.each(["primary", "observed"] as const)(
       expect(settled).toHaveBeenCalledWith(
         expect.objectContaining({ listRefreshError: "Fresh reconciliation unavailable" }),
       );
+    }
+  },
+);
+
+it.each(["sidebar", "agent-roster"] as const)(
+  "retires a queued %s query if the selection changes before the initial table arrives",
+  async (source) => {
+    vi.useFakeTimers();
+    try {
+      const request = vi.fn();
+      const client = createTestGatewayClient(request);
+      prioritizeInitialSessionsTable(client);
+      let current = true;
+      const sidebar = requestSessionListParams(client, { ...query, source }, () => current);
+      current = false;
+      await vi.advanceTimersByTimeAsync(350);
+      expect(await sidebar).toBeNull();
+      expect(request).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
     }
   },
 );

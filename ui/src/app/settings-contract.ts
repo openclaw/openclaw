@@ -244,6 +244,7 @@ export type UiSettings = {
   // opting out on one browser must not lower the bar on the operator's others,
   // so this stays out of the synced ui.prefs set in server-prefs-state.ts.
   sessionDeleteConfirm?: boolean;
+  prioritizeSessionsTable?: boolean;
   chatModelChangeConfirm?: boolean;
   // Browser-local, Gateway-scoped acknowledgement; changed notices become visible again.
   dismissedReadOnlyConfigNotice?: string;

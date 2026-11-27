@@ -435,6 +435,12 @@ export function SidebarPreferencesSection(
         />
         <LocalToggleRow
           config={props}
+          setting="prioritizeSessionsTable"
+          title={t("configView.sidebarPrefs.prioritizeSessionsTable")}
+          hint={t("configView.sidebarPrefs.prioritizeSessionsTableHint")}
+        />
+        <LocalToggleRow
+          config={props}
           setting="sessionDeleteConfirm"
           title={t("configView.sidebarPrefs.deleteConfirm")}
           hint={t("configView.sidebarPrefs.deleteConfirmHint")}

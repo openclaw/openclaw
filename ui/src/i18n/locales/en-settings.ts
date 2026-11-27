@@ -2142,6 +2142,9 @@ const enSettings = {
       collapseTaskProgressHint: "On mobile, task progress always starts collapsed.",
     },
     sidebarPrefs: {
+      prioritizeSessionsTable: "Load the Sessions table first",
+      prioritizeSessionsTableHint:
+        "Give the table a head start over the sidebar when you open the Sessions page directly or reload it.",
       title: "Sidebar",
       liveActivity: "Show live agent activity",
       liveActivityHint: "Show the latest agent or tool activity beneath active sessions.",

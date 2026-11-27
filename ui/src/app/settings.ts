@@ -484,6 +484,7 @@ export function loadUiPreferences(
       ...(parsed.lobsterPetVisits === false ? { lobsterPetVisits: false } : {}),
       ...(parsed.lobsterPetSounds === true ? { lobsterPetSounds: true } : {}),
       ...(parsed.sessionDeleteConfirm === false ? { sessionDeleteConfirm: false } : {}),
+      ...(parsed.prioritizeSessionsTable === true ? { prioritizeSessionsTable: true } : {}),
       ...(parsed.chatModelChangeConfirm === false ? { chatModelChangeConfirm: false } : {}),
       dismissedReadOnlyConfigNotice: normalizeOptionalString(parsed.dismissedReadOnlyConfigNotice),
       ...(parsed.openLinksInControlUiBrowser === true ? { openLinksInControlUiBrowser: true } : {}),
@@ -664,6 +665,7 @@ export function saveSettings(
     lobsterPetSounds: next.lobsterPetSounds === true ? true : undefined,
     // Only the opted-out value is persisted; absence means the safe default.
     sessionDeleteConfirm: next.sessionDeleteConfirm === false ? false : undefined,
+    prioritizeSessionsTable: next.prioritizeSessionsTable === true ? true : undefined,
     chatModelChangeConfirm: next.chatModelChangeConfirm === false ? false : undefined,
     dismissedReadOnlyConfigNotice: normalizeOptionalString(next.dismissedReadOnlyConfigNotice),
     // External links keep host behavior unless the operator explicitly opts in.
