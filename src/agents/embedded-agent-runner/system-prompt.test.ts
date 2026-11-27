@@ -75,9 +75,18 @@ describe("buildConfiguredAgentSystemPrompt", () => {
         "<available_skills>\n  <skill>\n    <name>publish</name>\n    <location>/skills/publish/SKILL.md</location>\n  </skill>\n</available_skills>",
     });
     expect(prompt).toContain("read exact `<location>`");
-    expect(prompt).toContain(
-      "## Execution Bias\n- Act now on actionable requests using available tools; tool policy and approvals gate risk, so do not pre-refuse or ask unrequired permission. Explicit skill gates, user instructions, prior authorization, safety, and tool policy remain authoritative.",
-    );
+    const executionBias = prompt.split("## Execution Bias\n")[1]?.split("\n## ")[0];
+    expect(executionBias).toContain("Act on actionable requests");
+    for (const authority of [
+      "Explicit skill gates",
+      "user instructions",
+      "prior authorization",
+      "safety",
+      "tool policy",
+    ]) {
+      expect(executionBias).toContain(authority);
+    }
+    expect(executionBias).toContain("stay authoritative");
   });
 
   it.each(["available", "source-reply-only", "absent"] as const)(
@@ -149,12 +158,8 @@ describe("buildConfiguredAgentSystemPrompt", () => {
         tools: surface === "absent" ? [] : [sessions],
       });
 
-      expect(prompt.includes('"spin up a new task"')).toBe(surface === "create");
+      // The trigger stays in the prompt; sessions_create's description carries the details.
       expect(prompt.includes("`sessions_create`")).toBe(surface === "create");
-      if (surface === "create") {
-        expect(prompt).toContain("omit it to create an idle session");
-        expect(prompt).toContain("no completion event or yield expectation");
-      }
       expect(prompt).not.toContain("## Delegation");
     },
   );

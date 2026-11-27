@@ -329,7 +329,7 @@ public struct ChatSessionsSheet: View {
                         .tint(session.isArchived ? OpenClawChatTheme.accent : OpenClawChatTheme.danger)
                 }
             }
-            .contextMenu {
+            .chatActionContextMenu {
                 OpenClawSessionColorMenu(color: session.color) { color in
                     Task {
                         await self.viewModel.setSessionColor(key: session.key, color: color, agentID: session.agentId)

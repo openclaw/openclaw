@@ -69,13 +69,7 @@ registerCommandPaletteEnglish();
 type CommandPaletteProps = ReturnType<CommandPaletteState["readProps"]>;
 
 function groupItems(items: CommandPaletteItem[]): Array<[string, CommandPaletteItem[]]> {
-  const map = new Map<string, CommandPaletteItem[]>();
-  for (const item of items) {
-    const group = map.get(item.category) ?? [];
-    group.push(item);
-    map.set(item.category, group);
-  }
-  return [...map.entries()];
+  return [...Map.groupBy(items, (item) => item.category).entries()];
 }
 
 const paletteListboxId = "cmd-palette-listbox";

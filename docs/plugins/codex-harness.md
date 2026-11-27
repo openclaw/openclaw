@@ -449,6 +449,18 @@ repaired by `openclaw doctor --fix`.
 
 ### Parent-local inference connection recovery
 
+When a managed turn exceeds the local inference relay's 32 MiB request limit,
+OpenClaw preserves the failed turn and retires only its native thread binding.
+Your next message starts a new native thread using bounded history from the
+same OpenClaw conversation; the original transcript and native thread remain
+available. OpenClaw does not automatically replay the failed turn or its tools.
+Native-owned and supervised sessions retain their original binding instead.
+A current message or attachment that exceeds the limit on its own still needs
+to be made smaller.
+Restored historical images also consume their encoded byte size when selecting
+the bounded seed. A context engine's selected attachments must fit its rendered
+allowance before they can be injected into a native thread.
+
 When an ordinary managed turn ends with the exact `Codex parent-local inference
 transport failed` error, OpenClaw settles its recorded output before retiring
 that connection from future acquisitions. Retirement is skipped while sibling

@@ -18,11 +18,11 @@ import {
   type UpdateRunPhase,
   type UpdateRunRecord,
 } from "../../infra/update-run-record.js";
-import { updateRunReportInputFromResult } from "../../infra/update-run-report.js";
 import {
   isFailedUpdateStep,
   projectUpdateRunResultSteps,
   updateRunWarningMessages,
+  updateRunStepsFromResultStep,
 } from "../../infra/update-run-step.js";
 import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
@@ -343,10 +343,17 @@ export async function prepareResult(
       ? { ...result, steps: [...result.steps, ...additionalSteps] }
       : result;
     const reportedRun = run ? projectUpdateRunResultSteps(run, additionalSteps) : undefined;
-    const summary = updateRunReportInputFromResult(reportedResult, reportedRun);
-    if (reportHints.nextAction) {
-      summary.origin = { ...summary.origin, nextAction: reportHints.nextAction };
-    }
+    const status: UpdateRunRecord["status"] =
+      result.status === "ok" ? "succeeded" : result.status === "error" ? "failed" : "skipped";
+    const summary = reportedRun ?? {
+      status,
+      reason: result.reason ?? null,
+      before: result.before,
+      after: result.after,
+      verification: result.verification,
+      steps: reportedResult.steps.flatMap(updateRunStepsFromResultStep),
+      origin: {},
+    };
     finalizeProgress?.finish(reportedRun);
     if (opts.json) {
       defaultRuntime.writeJson({
@@ -356,7 +363,15 @@ export async function prepareResult(
       return;
     }
     defaultRuntime.log("");
-    defaultRuntime.log(theme.heading(renderUpdateRunSummary(summary)));
+    defaultRuntime.log(
+      theme.heading(
+        renderUpdateRunSummary(
+          reportHints.nextAction
+            ? { ...summary, origin: { ...summary.origin, nextAction: reportHints.nextAction } }
+            : summary,
+        ),
+      ),
+    );
     for (const warning of updateRunWarningMessages(summary.steps)) {
       defaultRuntime.log(`Warning: ${warning}`);
     }

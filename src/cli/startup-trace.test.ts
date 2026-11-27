@@ -59,6 +59,42 @@ it.each(["gateway", "status"])("foreground progress: %s", async (command) => {
 });
 
 it.each(["0", "1"])(
+  "reports pending parallel bootstrap steps only when traced (trace=%s)",
+  async (enabled) => {
+    vi.stubEnv("OPENCLAW_GATEWAY_STARTUP_TRACE", enabled);
+    vi.spyOn(process, "argv", "get").mockReturnValue(["node", "openclaw", "gateway", "run"]);
+    const start = (name: string) => {
+      const entered = createDeferredCore<boolean>();
+      const done = createDeferredCore<string>();
+      const result = measureGatewayBootstrapStep(name, () => {
+        entered.resolve(
+          messages().some((line) => line.includes(`startup trace: ${name} starting total=`)),
+        );
+        return done.promise;
+      });
+      return { entered: entered.promise, done, result };
+    };
+    const catalog = start("gateway.catalog-startup-snapshot");
+    const model = start("gateway.model-runtime-import");
+    const traced = enabled === "1";
+    expect(await Promise.all([catalog.entered, model.entered])).toEqual([traced, traced]);
+    expect(messages()).toHaveLength(traced ? 2 : 0);
+
+    catalog.done.resolve("snapshot");
+    await expect(catalog.result).resolves.toBe("snapshot");
+    if (traced) {
+      expect(messages().at(-1)).toMatch(
+        /startup trace: gateway\.catalog-startup-snapshot \d+\.\dms total=/u,
+      );
+    }
+    const failure = new Error("model unavailable");
+    model.done.reject(failure);
+    await expect(model.result).rejects.toBe(failure);
+    expect(messages()).toHaveLength(traced ? 3 : 0);
+  },
+);
+
+it.each(["0", "1"])(
   "captures phase memory before buffered logs flush (trace=%s)",
   async (enabled) => {
     vi.stubEnv("OPENCLAW_GATEWAY_STARTUP_TRACE", enabled);

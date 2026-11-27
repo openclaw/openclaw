@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
+import * as triageUpdate from "../../commands/triage-update.js";
 import * as config from "../../config/config.js";
 import * as launchd from "../../daemon/launchd.js";
 import * as scheduledTasks from "../../daemon/schtasks-control.js";
@@ -15,7 +16,6 @@ import { resolvePackageActivationAnchor } from "../../infra/package-update-activ
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
-import * as failureArtifacts from "../../infra/update-failure-report-artifact.js";
 import {
   POST_CORE_UPDATE_CHANNEL_ENV,
   POST_CORE_UPDATE_ENV,
@@ -200,7 +200,7 @@ function pendingPackageInvocation(
         .spyOn(launchd, "disableCurrentOpenClawUpdateLaunchdJob")
         .mockResolvedValue(false),
       prepareTriage: vi.spyOn(triage, "prepareUpdateFailureTriage").mockResolvedValue(runTriage),
-      writeTriage: vi.spyOn(failureArtifacts, "writeTriageUpdateFailure"),
+      writeTriage: vi.spyOn(triageUpdate, "writeTriageUpdateFailure"),
       runTriage,
       loadPlugins: vi.spyOn(installedPlugins, "loadInstalledPluginIndexInstallRecords"),
       resumePostCore: vi
@@ -447,72 +447,77 @@ describe("pending recovery finalizer", () => {
   );
 });
 
-it("settles interrupted Windows suspension without touching pending databases after mutation", async () => {
-  const f = await fixture();
-  const run = f.run;
-  const before = materialSnapshot(f.root);
-  const listeners = process.listeners("SIGINT");
-  const previousExitCode = process.exitCode;
-  const exit = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
-  const suspend = vi
-    .spyOn(scheduledTasks, "suspendScheduledTaskAutoStartForUpdate")
-    .mockResolvedValue(true);
-  const resume = vi.spyOn(scheduledTasks, "resumeScheduledTaskAutoStartAfterUpdate");
-  const recovery = createWindowsTaskAutoStartRecovery({ serviceEnv: f.env, updateRun: run });
-  await recovery.suspended;
-  recovery.beginMutation();
-  const signal = process.listeners("SIGINT").find((listener) => !listeners.includes(listener));
-  expect(signal).toBeDefined();
-  const siblingFinished = createDeferredCore();
-  const unregisterSibling = registerSignalExitGate(siblingFinished.promise);
-  const retired = createDeferredCore();
-  const removeListener = process.off.bind(process);
-  // Bun removes native signal listeners without emitting EventEmitter.removeListener.
-  // Observe the real removal effect, preserving its implementation and return value.
-  const off = vi.spyOn(process, "off").mockImplementation((event, listener) => {
-    const result = removeListener(event, listener);
-    if (event === "SIGBREAK" && listener === signal) {
-      retired.resolve();
+it.each(["SIGINT", "SIGBREAK"] as const)(
+  "settles interrupted Windows suspension without touching pending databases after mutation (%s)",
+  async (signalName) => {
+    const f = await fixture();
+    const run = f.run;
+    const before = materialSnapshot(f.root);
+    const listeners = process.listeners(signalName);
+    const previousExitCode = process.exitCode;
+    const exit = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+    const suspend = vi
+      .spyOn(scheduledTasks, "suspendScheduledTaskAutoStartForUpdate")
+      .mockResolvedValue(true);
+    const resume = vi.spyOn(scheduledTasks, "resumeScheduledTaskAutoStartAfterUpdate");
+    const recovery = createWindowsTaskAutoStartRecovery({ serviceEnv: f.env, updateRun: run });
+    await recovery.suspended;
+    recovery.beginMutation();
+    const signal = process.listeners(signalName).find((listener) => !listeners.includes(listener));
+    const siblingFinished = createDeferredCore();
+    const unregisterSibling = registerSignalExitGate(siblingFinished.promise);
+    const retired = createDeferredCore();
+    const removeListener = process.off.bind(process);
+    // Bun removes native signal listeners without emitting EventEmitter.removeListener.
+    // Observe the real removal effect, preserving its implementation and return value.
+    const off = vi.spyOn(process, "off").mockImplementation((event, listener) => {
+      const result = removeListener(event, listener);
+      if (event === "SIGBREAK" && listener === signal) {
+        retired.resolve();
+      }
+      return result;
+    });
+    const cause = new UpdateCommandRecoveryPendingError("Database rollback could not finish");
+    try {
+      expect(signal).toBeDefined();
+      signal!(signalName);
+      await expect(
+        withUpdateCommandRecoveryUnwind(
+          { run },
+          { triageTarget: { env: f.env }, windowsTaskAutoStartRecovery: recovery },
+          async () => {
+            throw cause;
+          },
+        ),
+      ).rejects.toMatchObject({ name: "UpdateCommandPendingRecoveryFailure", cause });
+      // Unwind releases its own gate without awaiting the still-pending sibling.
+      expect(process.listeners(signalName)).toContain(signal);
+      signal!(signalName);
+      expect(process.listeners(signalName)).toContain(signal);
+      siblingFinished.resolve();
+      expect(await waitForCliSignalExit()).toBe(130);
+      // Shared drain completion precedes this owner's status publication and retirement.
+      // Observe removal of its last signal listener instead of flushing microtasks.
+      await retired.promise;
+      expect(process.listeners(signalName)).toEqual(listeners);
+      expect(process.exitCode).toBe(130);
+      expect(exit).not.toHaveBeenCalled();
+      expect(suspend).toHaveBeenCalledOnce();
+      expect(resume).not.toHaveBeenCalled();
+      expect(materialSnapshot(f.root)).toEqual(before);
+    } finally {
+      siblingFinished.resolve();
+      unregisterSibling();
+      await recovery.complete(false, { preserveState: true });
+      await waitForCliSignalExit();
+      if (signal) {
+        await retired.promise;
+      }
+      off.mockRestore();
+      process.exitCode = previousExitCode;
     }
-    return result;
-  });
-  const cause = new UpdateCommandRecoveryPendingError("Database rollback could not finish");
-  try {
-    signal!("SIGINT");
-    await expect(
-      withUpdateCommandRecoveryUnwind(
-        { run },
-        { triageTarget: { env: f.env }, windowsTaskAutoStartRecovery: recovery },
-        async () => {
-          throw cause;
-        },
-      ),
-    ).rejects.toMatchObject({ name: "UpdateCommandPendingRecoveryFailure", cause });
-    // Unwind releases its own gate without awaiting the still-pending sibling.
-    expect(process.listeners("SIGINT")).toContain(signal);
-    signal!("SIGINT");
-    expect(process.listeners("SIGINT")).toContain(signal);
-    siblingFinished.resolve();
-    expect(await waitForCliSignalExit()).toBe(130);
-    // Shared drain completion precedes this owner's status publication and retirement.
-    // Observe removal of its last signal listener instead of flushing microtasks.
-    await retired.promise;
-    expect(process.listeners("SIGINT")).toEqual(listeners);
-    expect(process.exitCode).toBe(130);
-    expect(exit).not.toHaveBeenCalled();
-    expect(suspend).toHaveBeenCalledOnce();
-    expect(resume).not.toHaveBeenCalled();
-    expect(materialSnapshot(f.root)).toEqual(before);
-  } finally {
-    siblingFinished.resolve();
-    unregisterSibling();
-    await recovery.complete(false, { preserveState: true });
-    await waitForCliSignalExit();
-    await retired.promise;
-    off.mockRestore();
-    process.exitCode = previousExitCode;
-  }
-});
+  },
+);
 
 it.each([
   { confirmed: true, failed: true },

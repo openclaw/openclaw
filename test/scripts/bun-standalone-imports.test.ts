@@ -176,19 +176,21 @@ const result: string = readLoadedCommit("file:///explicit.mjs");
   });
 
   it.each([
-    ["direct", "%s"],
-    ["satisfies", "(%s) satisfies Resolver"],
-    ["as", "(%s) as Resolver"],
-    ["non-null", "(%s)!"],
-    ["parenthesized", "(((%s)))"],
+    ["direct", "%s", "._resolveFilename"],
+    ["satisfies", "(%s) satisfies Resolver", "[resolverProperty]"],
+    ["as", "(%s) as Resolver", '["_resolveFilename"]'],
+    ["non-null", "(%s)!", "[resolverProperty]"],
+    ["parenthesized", "(((%s)))", "[resolverProperty]"],
+    ["typed-arrow", "(%s) satisfies Resolver", "[resolverProperty]"],
   ])(
     "retains the typed %s resolver's handoff, receiver, arguments and restoration",
-    (_, expression) => {
+    (shape, expression, access) => {
+      const arrow = shape === "typed-arrow";
       const resolver = expression.replace(
         "%s",
-        `function (request, parent, isMain, options) {
+        `${arrow ? "(request, parent, isMain, options) =>" : "function (request, parent, isMain, options)"} {
   if (request === "throw") throw new Error("resolver failure");
-  this.calls += 1;
+  ${arrow ? "holder.module" : "this"}.calls += 1;
   seen.push([parent, isMain, options?.paths]);
   return request;
 }`,
@@ -198,7 +200,7 @@ const original: Resolver = function (request) { return request; };
 const holder: { module: { calls: number; _resolveFilename?: Resolver } } = { module: { calls: 0, _resolveFilename: original } };
 const resolverProperty = "_resolveFilename" as const;
 const seen: unknown[] = [];
-holder.module[resolverProperty] = ${resolver};
+holder.module${access} = ${resolver};
 const mapped: string = holder.module._resolveFilename("/physical/entry.js", "parent", false, { paths: ["root"] });
 const externalResult: string = holder.module._resolveFilename("/external/entry.js", undefined, true);
 let error: string | undefined;
@@ -217,21 +219,26 @@ holder.module._resolveFilename = original;
       });
       const declarations = `declare var __openclawStandaloneExternalModulePath: (path: string) => string | undefined;\n`;
       expect(typeCheckSources({ "resolver.ts": declarations + contents })).toEqual([]);
-      const result = vm.runInNewContext(stripTypeScriptTypes(contents), {
-        __openclawStandaloneExternalModulePath: (target: string) =>
-          target === "/physical/entry.js" ? "/$bunfs/root/entry.js" : undefined,
-      });
-      expect(result).toEqual([
-        "/$bunfs/root/entry.js",
-        "/external/entry.js",
-        2,
-        true,
-        "resolver failure",
-        [
-          ["parent", false, ["root"]],
-          [undefined, true, undefined],
-        ],
-      ]);
+      for (const runnable of [
+        stripTypeScriptTypes(contents),
+        rewrite(stripTypeScriptTypes(source)),
+      ]) {
+        const result = vm.runInNewContext(runnable, {
+          __openclawStandaloneExternalModulePath: (target: string) =>
+            target === "/physical/entry.js" ? "/$bunfs/root/entry.js" : undefined,
+        });
+        expect(result).toEqual([
+          "/$bunfs/root/entry.js",
+          "/external/entry.js",
+          2,
+          true,
+          "resolver failure",
+          [
+            ["parent", false, ["root"]],
+            [undefined, true, undefined],
+          ],
+        ]);
+      }
     },
   );
 
@@ -530,36 +537,4 @@ const later = "./later.js";
       rewrite('function installResolver() { return "openclaw-plugin-sdk-alias"; }'),
     ).toThrow("Unsupported standalone plugin resolver: openclaw-plugin-sdk-alias");
   });
-
-  it.each(["key", '"_resolveFilename"', "direct", "typed-arrow"])(
-    "maps the CJS %s resolver handoff while preserving external paths and restoration",
-    (property) => {
-      const typed = property === "typed-arrow";
-      const access = property === "direct" ? "._resolveFilename" : `[${typed ? "key" : property}]`;
-      const resolver = typed
-        ? "((value) => { Module.calls += 1; return value; }) satisfies typeof original"
-        : "function (value) { this.calls += 1; return value; }";
-      const source = `const key = "_resolveFilename"${typed ? " as const" : ""};
-        const original = (value) => value;
-        const Module = { calls: 0, _resolveFilename: original };
-        Module${access} = ${resolver};
-        const mapped = Module${access}("/app/runtime/dist/plugin-sdk/entry.js");
-        const external = Module${access}("/profile/plugins/entry.cjs");
-        Module${access} = original;
-        [mapped, external, Module.calls, Module${access} === original];`;
-      const context = {
-        __openclawStandaloneExternalModulePath: (target: string) =>
-          target === "/app/runtime/dist/plugin-sdk/entry.js" ? "/$bunfs/root/sdk.js" : undefined,
-      };
-      const expected = ["/$bunfs/root/sdk.js", "/profile/plugins/entry.cjs", 2, true];
-      expect(vm.runInNewContext(rewrite(stripTypeScriptTypes(source)), { ...context })).toEqual(
-        expected,
-      );
-      expect(
-        vm.runInNewContext(stripTypeScriptTypes(rewrite(source, embeddedPaths, typed)), {
-          ...context,
-        }),
-      ).toEqual(expected);
-    },
-  );
 });

@@ -87,6 +87,8 @@ export type CodexStartOrResumeThreadParams = Omit<
   dynamicTools: CodexDynamicToolSpec[];
   persistentWebSearchAllowed?: boolean;
   agentWorkspaceDeveloperInstructions?: string;
+  /** Per-turn plugin system context; thread-carried only when no relay owns the request. */
+  turnRefreshableInstructions?: string;
   buildFinalConfigPatch?: (
     decision: CodexThreadFinalConfigPatchDecision,
     client: CodexAppServerClient,

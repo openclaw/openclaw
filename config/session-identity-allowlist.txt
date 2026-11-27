@@ -441,7 +441,7 @@ src/agents/subagents/registry/subagent-control-kill-capture.ts	6
 src/agents/subagents/registry/subagent-control-kill-intent.ts	2
 src/agents/subagents/registry/subagent-control-kill-runtime.ts	2
 src/agents/subagents/registry/subagent-control-kill-scope.ts	3
-src/agents/subagents/registry/subagent-control-kill-settlement.ts	2
+src/agents/subagents/registry/subagent-control-kill-settlement.ts	1
 src/agents/subagents/registry/subagent-control-kill.ts	7
 src/agents/subagents/registry/subagent-control-scope.ts	4
 src/agents/subagents/registry/subagent-control-session.ts	6
@@ -455,7 +455,7 @@ src/agents/subagents/registry/subagent-registry-helpers.ts	13
 src/agents/subagents/registry/subagent-registry-lifecycle-announce-cleanup.ts	5
 src/agents/subagents/registry/subagent-registry-lifecycle-bookkeeping.ts	1
 src/agents/subagents/registry/subagent-registry-lifecycle-cleanup.ts	5
-src/agents/subagents/registry/subagent-registry-lifecycle-delivery.ts	3
+src/agents/subagents/registry/subagent-registry-lifecycle-delivery.ts	2
 src/agents/subagents/registry/subagent-registry-lifecycle-finalize-cleanup.ts	1
 src/agents/subagents/registry/subagent-registry-lifecycle-persistence.ts	3
 src/agents/subagents/registry/subagent-registry-lifecycle-wake.ts	2
@@ -476,7 +476,6 @@ src/agents/subagents/registry/subagent-registry-sweep-cleanup.ts	2
 src/agents/subagents/registry/subagent-registry-sweep-kill.ts	6
 src/agents/subagents/registry/subagent-registry-sweep-settle.ts	2
 src/agents/subagents/registry/subagent-registry-sweeper-retire.ts	7
-src/agents/subagents/registry/subagent-registry-sweeper.ts	2
 src/agents/subagents/registry/subagent-registry-typing.ts	1
 src/agents/subagents/registry/subagent-registry.mocks.shared.ts	1
 src/agents/subagents/registry/subagent-registry.ts	1
@@ -646,12 +645,10 @@ src/cli/update-cli/update-command-executor.ts	2
 src/cli/update-cli/update-command-git.ts	1
 src/cli/update-cli/update-command-migrate.ts	1
 src/cli/update-cli/update-command-migrated.ts	6
-src/cli/update-cli/update-command-recovery.ts	4
 src/cli/update-cli/update-command-resume.ts	2
-src/cli/update-cli/update-command-run.ts	4
+src/cli/update-cli/update-command-run.ts	2
 src/cli/update-cli/update-command-service-drain.ts	3
 src/cli/update-cli/update-command-terminal-record.ts	4
-src/cli/update-cli/update-plugin-cohort-settlement.ts	1
 src/cli/update-cli/update-repair-command.ts	2
 src/cli/update-cli/update-repair-service.ts	2
 src/commands/agents.commands.delete.ts	1
@@ -857,7 +854,6 @@ src/gateway/server-methods/artifacts-session-read.ts	4
 src/gateway/server-methods/chat-abort-authorization.ts	12
 src/gateway/server-methods/chat-abort-exact-run.ts	4
 src/gateway/server-methods/chat-abort-handler.ts	11
-src/gateway/server-methods/chat-abort-runtime.ts	2
 src/gateway/server-methods/chat-abort-session-plan.ts	10
 src/gateway/server-methods/chat-aborted-partial.ts	7
 src/gateway/server-methods/chat-history-handler.ts	2
@@ -954,7 +950,7 @@ src/gateway/server-methods/sessions-read.ts	6
 src/gateway/server-methods/sessions-rewind.ts	9
 src/gateway/server-methods/sessions-search-projected.ts	2
 src/gateway/server-methods/sessions-sharing-authority.ts	7
-src/gateway/server-methods/sessions-sharing.ts	15
+src/gateway/server-methods/sessions-sharing.ts	14
 src/gateway/server-methods/sessions-suggestions-access.ts	6
 src/gateway/server-methods/sessions-suggestions.ts	14
 src/gateway/server-methods/sessions-typing.ts	8
@@ -971,7 +967,7 @@ src/gateway/server-plugin-in-process-session-read.ts	2
 src/gateway/server-plugin-session-facts.ts	2
 src/gateway/server-plugin-subagent-runtime.ts	1
 src/gateway/server-plugins.ts	3
-src/gateway/server-restart-plugin-cohort.ts	4
+src/gateway/server-restart-plugin-cohort.ts	2
 src/gateway/server-restart-sentinel-agent-delivery.ts	8
 src/gateway/server-restart-sentinel-snapshot.ts	2
 src/gateway/server-restart-sentinel.ts	2
@@ -1291,7 +1287,6 @@ src/infra/update-database-generations.ts	1
 src/infra/update-doctor-migration-attribution.ts	1
 src/infra/update-doctor-process-custody.ts	4
 src/infra/update-doctor-scan-receipts.ts	2
-src/infra/update-failure-report-prepare.ts	2
 src/infra/update-immutable-activation.ts	3
 src/infra/update-immutable-generation.ts	2
 src/infra/update-immutable-protection.ts	1
@@ -1315,17 +1310,14 @@ src/infra/update-recovery-baseline-capture.ts	2
 src/infra/update-result-claim.ts	2
 src/infra/update-run-activity.ts	2
 src/infra/update-run-interruption-store.ts	2
-src/infra/update-run-ledger.ts	4
 src/infra/update-run-mutation.async.ts	2
 src/infra/update-run-mutation.worker.ts	4
 src/infra/update-run-read.kernel.ts	2
 src/infra/update-run-reconciliation.read.ts	2
-src/infra/update-run-recovery-admission.ts	4
 src/infra/update-run-recovery-schema.ts	13
 src/infra/update-run-recovery-store.ts	2
 src/infra/update-run-recovery.ts	6
 src/infra/update-run-status.ts	1
-src/infra/update-run-terminal-record.ts	2
 src/logging/diagnostic-owned-activity.ts	2
 src/logging/diagnostic-repeated-request-activity.ts	8
 src/logging/diagnostic-run-activity-state.ts	4

@@ -47,6 +47,7 @@ async function startGatewayServerWithSdkHost(
   const gatewayKernel = await createGatewayKernel(port, opts, {
     deferEarlyRuntime: true,
     deferRequestRuntime: true,
+    waitForPostReadyWork: () => postReadyWorkBarrier,
     sdkResourceHost,
   });
   // A Gateway restart must refresh restored skill catalogs, even in the same process.

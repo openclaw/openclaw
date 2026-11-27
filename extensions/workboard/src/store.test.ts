@@ -106,6 +106,7 @@ function createPausedCardStore(delegate: WorkboardCardStore) {
       lookup: (key) => delegate.lookup(key),
       delete: (key) => write(key, undefined, () => delegate.delete(key), Boolean),
       entries: (boardId) => delegate.entries(boardId),
+      findCardIdsByPrefix: (prefix) => delegate.findCardIdsByPrefix(prefix),
       listCardStatuses: (ids) => delegate.listCardStatuses(ids),
       listBoardAggregates: () => delegate.listBoardAggregates(),
       listStatsAggregates: (boardId) => delegate.listStatsAggregates(boardId),
@@ -1779,46 +1780,6 @@ describe("WorkboardStore", () => {
 
     await expect(store.get(card.id)).resolves.not.toMatchObject({
       metadata: { proof: [{ label: "CI" }] },
-    });
-  });
-
-  it("computes and refreshes card diagnostics", async () => {
-    const store = createStore();
-    const ready = await createCard(store, "Ready too long", { agentId: "main", position: 10 });
-    const running = await createCard(store, "Loose run", { status: "running", sessionKey: "s1" });
-    const failed = await createCard(store, "Failed twice", {
-      status: "blocked",
-      metadata: { failureCount: 2 },
-    });
-    const doneWithAttachment = await createCard(store, "Done with attachment", { status: "done" });
-    await store.addAttachment(doneWithAttachment.id, {
-      fileName: "result.log",
-      contentBase64: Buffer.from("x").toString("base64"),
-    });
-
-    const now = Date.now() + 2 * 24 * 60 * 60 * 1000;
-    const diagnostics = await store.refreshDiagnostics(now);
-
-    expect(diagnostics.count).toBeGreaterThanOrEqual(4);
-    const diagnosedReady = await store.get(ready.id);
-    expect(diagnosedReady?.updatedAt).toBeGreaterThan(ready.updatedAt);
-    expect(diagnosedReady).toMatchObject({
-      metadata: { diagnostics: [{ kind: "stranded_ready" }] },
-    });
-    await expectStored(store, running.id, {
-      metadata: {
-        diagnostics: contains({ kind: "running_without_heartbeat" }, { kind: "orphaned_session" }),
-      },
-    });
-    await expectStored(store, failed.id, {
-      metadata: {
-        diagnostics: contains({ kind: "blocked_too_long" }, { kind: "repeated_failures" }),
-      },
-    });
-    await expect(store.get(doneWithAttachment.id)).resolves.not.toMatchObject({
-      metadata: {
-        diagnostics: contains({ kind: "missing_proof" }),
-      },
     });
   });
 

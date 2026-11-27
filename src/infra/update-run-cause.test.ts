@@ -66,32 +66,23 @@ it.each<{
   expect(record.origin.cause).toBe(cause);
 });
 
-it("names the real cause in the auto report even when the step text is redacted", async () => {
+it("names the real cause in the reviewed report even when the step text is redacted", async () => {
   // 276 field reports read "Reason code: global-install-failed" with the npm detail redacted.
   await preparePublicUpdateFailureIdentifiers();
-  const prepared = await prepareUpdateFailureReport(
+  const record = running([
     {
-      attemptId: "report-test",
-      result: {
-        mode: "npm",
-        status: "error",
-        reason: "global-install-failed",
-        durationMs: 1,
-        steps: [
-          {
-            name: "package install",
-            command: "",
-            cwd: "",
-            durationMs: 1,
-            exitCode: 1,
-            failureFacts: [{ check: "npm", code: "global-install-failed", npmErrorCode: "ENOSPC" }],
-            stderrTail: "npm error nospc /private/customer/lib/node_modules",
-          },
-        ],
-      },
+      step: "package install",
+      status: "failed",
+      exitCode: 1,
+      failureFacts: [{ check: "npm", code: "global-install-failed", npmErrorCode: "ENOSPC" }],
+      stderrTail: "npm error nospc /private/customer/lib/node_modules",
     },
-    { env: {}, stateDir: "/report-test-state" },
-  );
+  ]);
+  finishUpdateRunRecord(record, { status: "failed", reason: "global-install-failed" });
+  const prepared = await prepareUpdateFailureReport(record, {
+    env: {},
+    stateDir: "/report-test-state",
+  });
   expect(prepared.body).toContain("- Reason code: global-install-failed");
   expect(prepared.body).toContain("- Cause: disk-full");
   expect(prepared.body).not.toContain("/private/customer");

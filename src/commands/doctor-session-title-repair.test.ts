@@ -2,10 +2,17 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { buildSubagentTaskMessage } from "../agents/subagents/spawn/subagent-system-prompt.js";
 import { INTERNAL_WAKE_TRANSCRIPT_PROMPTS } from "../auto-reply/heartbeat.js";
+import { resolveStateDir } from "../config/paths.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  changedStoreFiles,
+  snapshotStoreFiles,
+} from "../test-utils/store-snapshot.test-support.js";
 import { repairLegacySessionTitles } from "./doctor-session-title-repair.js";
 import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";
 import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
@@ -185,6 +192,44 @@ it.each([
     });
   },
 );
+
+it("leaves every store unchanged when no session needs a title", async () => {
+  await withSession(async () => {
+    await withDoctorSqliteMaintenanceLock({
+      operation: "session title repair",
+      run: async (authority) => {
+        // As inside the doctor --fix stop: no connection holds the stores.
+        await closeOpenClawAgentDatabasesAsync();
+        await closeOpenClawStateDatabaseAsync();
+        const root = resolveStateDir(process.env);
+        // A read-only open of an unheld store may leave empty sidecars; only a write counts.
+        const before = snapshotStoreFiles(root, { ignoreReadSidecars: true });
+
+        const report = await repairLegacySessionTitles({
+          cfg,
+          env: process.env,
+          apply: true,
+          authority,
+        });
+
+        expect(report).toMatchObject({ found: 0, repaired: 0, scannedStores: 1 });
+        expect(
+          changedStoreFiles(before, snapshotStoreFiles(root, { ignoreReadSidecars: true })),
+        ).toEqual([]);
+      },
+    });
+  }, [{ role: "assistant", content: "A reply with no user request to name the session" }]);
+});
+
+it("repairs a title when no connection holds the stores", async () => {
+  await withSession(async (params) => {
+    const before = sessionAccessor.loadSessionEntry(params);
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
+    await repair();
+    expect(sessionAccessor.loadSessionEntry(params)).toEqual({ ...before, displayName: title });
+  });
+});
 
 it("does not commit after Doctor maintenance authority expires", async () => {
   await withSession(async (params) => {

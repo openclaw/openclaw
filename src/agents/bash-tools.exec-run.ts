@@ -431,23 +431,25 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         if (useSecretEgress && !defaults?.operationalRunInstance) {
           throw new Error("Secret egress proxy requires an admitted agent run instance");
         }
-        const { env, requestedEnv, executionContext } = resolvePreparedExecEnvironment({
-          execParams: params,
-          host,
-          sandbox,
-          channelContext: defaults?.channelContext,
-          subagentExecution,
-          defaultPathPrepend,
-          pluginEnv: resolvedExecEnvState?.pluginEnv,
-          storeEnv: host === "gateway" ? storeEnv.env : undefined,
-          storeSecretEnv: useSecretEgress ? storeEnv.secretSentinels : undefined,
-          ...preparedRunEnvironment,
-          scratchEnv: await requestPreparation.prepareScratchEnv(host),
-          warnings,
-        });
+        const { env, requestedEnv, legacyScratchRequestedEnv, executionContext } =
+          resolvePreparedExecEnvironment({
+            execParams: params,
+            host,
+            sandbox,
+            channelContext: defaults?.channelContext,
+            subagentExecution,
+            defaultPathPrepend,
+            pluginEnv: resolvedExecEnvState?.pluginEnv,
+            storeEnv: host === "gateway" ? storeEnv.env : undefined,
+            storeSecretEnv: useSecretEgress ? storeEnv.secretSentinels : undefined,
+            ...preparedRunEnvironment,
+            scratchEnv: await requestPreparation.prepareScratchEnv(host),
+            warnings,
+          });
 
         const hostApprovalParams = () => ({
           admitShellDispatch,
+          spillOwner: defaults?.spillOwner,
           approvalTransport,
           command: params.command,
           toolCallId,
@@ -525,6 +527,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         if (host === "gateway" && !bypassApprovals) {
           gatewayApproval = await processGatewayAllowlist({
             ...hostApprovalParams(),
+            legacyScratchRequestedEnv,
             workdir,
             secretEgressBindings,
             durable: params.durable ? durableNotifications : undefined,
@@ -570,6 +573,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         await admitShellDispatch?.();
         run = await runExecProcess({
           command: params.command,
+          spillOwner: defaults?.spillOwner,
           execCommand: execCommandOverride,
           workdir,
           env,

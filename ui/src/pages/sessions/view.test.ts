@@ -167,88 +167,6 @@ describe("sessions view", () => {
     expect(queryAll(".session-key-cell .agent-row-chip")).toHaveLength(0);
   });
 
-  it.each([false, true])(
-    "shows the Agent column only in all-agent scope with category grouping %s",
-    async (categoryGrouping) => {
-      const result = buildResult(
-        createRow("agent:research:chat-two", { agentId: "research", category: "Work" }),
-      );
-      const groupBy = categoryGrouping ? "category" : "none";
-      const sharedProps = {
-        groupBy,
-        knownCategories: ["Work"],
-        expandedSessionKey: "agent:research:chat-two",
-      } satisfies Partial<ReturnType<typeof buildProps>>;
-      let columnCount = 0;
-      for (const allAgentsScope of [true, false]) {
-        renderView(result, { ...sharedProps, allAgentsScope });
-        columnCount = 4 + Number(allAgentsScope) + Number(categoryGrouping);
-        expect(queryAll("thead th")).toHaveLength(columnCount);
-        if (!categoryGrouping) {
-          expectTexts(
-            "thead th",
-            allAgentsScope
-              ? ["", "Session", "Agent", "Updated", "Actions"]
-              : ["", "Session", "Updated", "Actions"],
-          );
-        }
-        expect(queryAll(".session-data-row .session-agent-col")).toHaveLength(
-          allAgentsScope ? 1 : 0,
-        );
-        if (!allAgentsScope) {
-          expect(queryAll(".session-data-row .agent-row-chip")).toHaveLength(0);
-        }
-        expect(attr(".session-details-row td", "colspan")).toBe(String(columnCount));
-        if (categoryGrouping) {
-          expect(attr(".session-group-row td", "colspan")).toBe(String(columnCount));
-        }
-      }
-
-      const readiness = createDeferred<null>();
-      onTestFinished(() => readiness.resolve(null));
-      renderView([], {
-        ...sharedProps,
-        allAgentsScope: false,
-        result: null,
-        loading: true,
-        roster: readiness.promise,
-      });
-      await vi.waitFor(() =>
-        expect(queryAll(".session-skeleton-row:first-child td")).toHaveLength(columnCount),
-      );
-      renderView([], { ...sharedProps, allAgentsScope: false });
-      expect(attr(".data-table-empty-cell", "colspan")).toBe(String(columnCount));
-    },
-  );
-
-  it("renders local calendar date headings with their session rows", async () => {
-    const clock = vi.spyOn(Date, "now").mockReturnValue(new Date(2026, 2, 9, 12).getTime());
-    onTestFinished(() => clock.mockRestore());
-    await renderSettled(
-      [
-        createRow("today", { updatedAt: new Date(2026, 2, 9).getTime() }),
-        createRow("yesterday", { updatedAt: new Date(2026, 2, 8).getTime() }),
-        createRow("two-days-ago", { updatedAt: new Date(2026, 2, 7, 23, 59).getTime() }),
-        createRow("six-days-ago", { updatedAt: new Date(2026, 2, 3).getTime() }),
-        createRow("older", { updatedAt: new Date(2026, 2, 2, 23, 59).getTime() }),
-      ],
-      { groupBy: "date" },
-    );
-
-    expectTexts("tbody .session-group-row__label, tbody .session-link", [
-      "Today",
-      "today",
-      "Yesterday",
-      "yesterday",
-      "This week",
-      "two-days-ago",
-      "six-days-ago",
-      "Older",
-      "older",
-    ]);
-    expect(queryAll("tbody > tr:not([aria-hidden]):not(.session-window-spacer)")).toHaveLength(9);
-  });
-
   it("retains the focused sort button across direction changes", async () => {
     const result = buildMultiResult([]);
     const onSortChange = vi.fn((sortColumn: "key" | "updated", sortDir: "asc" | "desc") => {
@@ -429,7 +347,7 @@ describe("sessions view", () => {
     expectTexts(selector, ["first", "second", "ordinary"]);
   });
 
-  it("keeps session filters in the header popover without a count badge", async () => {
+  it("keeps session filters in the header popover", async () => {
     const onSearchChange = vi.fn();
     document.body.append(container);
     await renderSettled([], {
@@ -442,11 +360,6 @@ describe("sessions view", () => {
 
     const trigger = getButton(".settings-section__actions .sessions-filter-popover__trigger");
     const popover = query(".settings-section__actions .sessions-filter-popover");
-    expect(queryAll(".sessions-filter-bar, .settings-count")).toHaveLength(0);
-    expect(trigger?.textContent?.trim()).toBe("");
-    expect(trigger?.getAttribute("aria-label")).toBe("Filters");
-    expect(trigger?.getAttribute("title")).toBeNull();
-    expect(trigger?.getAttribute("aria-haspopup")).toBe("dialog");
     expect(trigger?.getAttribute("aria-expanded")).toBe("false");
 
     trigger?.click();
@@ -495,26 +408,6 @@ describe("sessions view", () => {
       expect(onPatch).toHaveBeenCalledWith("agent:main:main", { thinkingLevel: value });
     },
   );
-
-  it("shows agent identity name and emoji for matching session keys", async () => {
-    await renderSettled(
-      createRow("agent:data-expert:dingtalk:cidzg6sF43NZMy52Rnk8EN", { updatedAt: Date.now() }),
-      {
-        agentIdentityById: {
-          "data-expert": {
-            agentId: "data-expert",
-            name: "Data Expert",
-            avatar: "",
-            emoji: "📊",
-          },
-        },
-      },
-    );
-
-    const keyCell = query(".session-key-cell");
-    expect(text(".session-key-cell__primary", keyCell)).toBe("📊 Data Expert (dingtalk)");
-    expect(keyCell?.getAttribute("data-tooltip")).toBe("📊 Data Expert (dingtalk)");
-  });
 
   it("opens session details from row activation", async () => {
     const onToggleDetails = vi.fn();

@@ -82,6 +82,20 @@ explicit API use the generic OpenAI-compatible bridge. For ClawRouter, see
 [Text embeddings for memory](/providers/clawrouter#text-embeddings-for-memory)
 for the `/v1` base URL, explicit router credential binding, and qualified model id.
 
+When `memory.search.provider` is unset or `"auto"`, embeddings go to the OpenAI
+provider's endpoint, which can be a custom `models.providers.openai.baseUrl`.
+If that endpoint answers its first embedding request with 404, 405, or 501, it
+has no embeddings route: OpenClaw records that for this endpoint and model, logs
+one warning, and searches by keyword with no further embedding requests, also in
+later processes. `openclaw memory status` shows the reason on its `Embeddings`
+line. The record clears when the endpoint or model changes, or when
+`openclaw memory status --index` re-checks the endpoint and it now serves
+embeddings. `openclaw memory status --deep` and **Memory → Overview → Test** in the
+Control UI report the recorded refusal. A 401, 403, 429, or 5xx answer is not recorded; search is
+keyword-only until the next readiness check. With `memory.search.fallback` set, nothing is
+recorded: each process tries the endpoint and hands off to the fallback. An explicitly
+configured provider is always used.
+
 For local embeddings with no API key, configure the bundled llama.cpp
 provider, then set `provider: "local"`.
 

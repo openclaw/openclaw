@@ -325,15 +325,15 @@ export function createUserTurnTranscriptRecorder(
       await selfPersistencePromise;
     }
     assertCurrent();
-    const admission = admissionReceipt;
-    if (blocked || !admission || !admittedMessage) {
+    if (blocked || !admissionReceipt || !admittedMessage) {
       throw new Error("Model prompt projection requires a live, persisted user turn");
     }
     return {
-      admission,
+      admission: admissionReceipt,
       message: admittedMessage,
       text,
       assertCurrent,
+      dispatched: sentToProvider,
       assertWritable: () => {
         assertCurrent();
         if (blocked || sentToProvider) {

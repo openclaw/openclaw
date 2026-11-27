@@ -1,5 +1,6 @@
 import { createMemo } from "@solidjs/signals";
 import { createSignal, onSettled, Show } from "solid-js";
+import { hasNativeBrowserBridge } from "../../app/native-browser-bridge.ts";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
 import {
@@ -20,6 +21,7 @@ import { Icon } from "../solid/icon.tsx";
 import { Menu, type MenuItem } from "../solid/menu.tsx";
 import { PanelIconButton } from "../solid/panel-icon-button.tsx";
 import { StrokeIcon } from "../solid/stroke-icon.tsx";
+import { startBrowser } from "./browser-client.ts";
 import type { BrowserPanel } from "./browser-panel-owner.ts";
 import { bareNameAddress } from "./browser-url.ts";
 
@@ -338,7 +340,22 @@ export function BrowserToolbar(
             }}
             onInput={(event) => {
               setInvalid(false);
-              props.controller.setState("urlDraft", event.currentTarget.value);
+              const panel = props.controller;
+              const value = event.currentTarget.value;
+              if (
+                panel.running === false &&
+                !panel.urlDraft.trim() &&
+                value.trim() &&
+                !panel.host.fixedTab &&
+                !panel.host.dashboardTarget &&
+                !hasNativeBrowserBridge()
+              ) {
+                const client = panel.operations.captureClient();
+                if (client) {
+                  void startBrowser(client, "/prewarm").catch(() => {});
+                }
+              }
+              panel.setState("urlDraft", value);
             }}
             onCompositionEnd={recordCompositionEnd}
             onKeyUp={clearCompositionEnd}
