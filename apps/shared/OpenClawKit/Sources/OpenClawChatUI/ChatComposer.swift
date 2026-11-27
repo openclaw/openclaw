@@ -66,16 +66,6 @@ private struct SlashPanelHeightKey: PreferenceKey {
     }
 }
 
-/// The card takes its natural height, at least the resting height. The draft row stretches, so any
-/// room the minimum leaves sits under a short draft, and rows above the draft use it first.
-private struct CleanComposerRestingHeight: ViewModifier {
-    func body(content: Content) -> some View {
-        content
-            .frame(minHeight: CleanChatComposerMetrics.restingMinHeight, alignment: .bottom)
-            .fixedSize(horizontal: false, vertical: true)
-    }
-}
-
 /// Evaluates part of the composer in its own body. Debug builds keep every nested `some View` temporary on
 /// the stack, and the whole composer evaluated in one body nearly fills the 1 MB main-thread stack of a device.
 struct ChatComposerSection<Content: View>: View {
@@ -666,6 +656,10 @@ struct OpenClawChatComposer: View {
         VStack(alignment: .leading, spacing: 8) {
             self.editorOverlay
 
+            #if os(iOS)
+            self.sendOptions
+            #endif
+
             Rectangle()
                 .fill(OpenClawChatTheme.divider)
                 .frame(height: 1)
@@ -747,6 +741,8 @@ struct OpenClawChatComposer: View {
         #if os(iOS)
         VStack(alignment: .leading, spacing: CleanChatComposerMetrics.rowGap) {
             self.cleanDraftRow
+            self.sendOptions
+                .padding(.horizontal, CleanChatComposerMetrics.footerInlineInset)
             HStack(alignment: .center, spacing: 0) {
                 self.cleanLeadingControls
                 Spacer(minLength: 0)
@@ -1300,25 +1296,27 @@ extension OpenClawChatComposer {
             .accessibilityIdentifier("chat-send-message")
             .disabled(!self.canSendMessage)
             .contextMenu {
-                if self.canSendMessage {
-                    ForEach(self.inputModel?.sendModeChoices ?? [], id: \.self) { mode in
-                        Button {
-                            self.sendDraftIfEnabled(queueMode: mode)
-                        } label: {
-                            switch mode {
-                            case .steer:
-                                Label("Steer now", systemImage: "arrow.turn.up.right")
-                                    .font(OpenClawChatTypography.body)
-                            case .followup:
-                                Label("Queue next", systemImage: "clock")
-                                    .font(OpenClawChatTypography.body)
-                            }
-                        }
-                    }
-                }
+                self.sendModeMenuItems
             }
         }
     }
+
+    private var sendModeMenuItems: some View {
+        ChatSendModeMenuItems(modes: self.canSendMessage ? self.inputModel?.sendModeChoices ?? [] : []) { mode in
+            self.sendDraftIfEnabled(queueMode: mode)
+        }
+    }
+
+    #if os(iOS)
+    @ViewBuilder
+    private var sendOptions: some View {
+        if self.viewModel.canChooseSendMode, self.canSendMessage {
+            ChatSendOptions(defaultQueueMode: self.viewModel.currentSessionEntry()?.effectiveQueueMode) {
+                self.sendModeMenuItems
+            }
+        }
+    }
+    #endif
 
     private var refreshButton: some View {
         Button {

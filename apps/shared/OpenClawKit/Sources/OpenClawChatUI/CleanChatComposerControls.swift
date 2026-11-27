@@ -7,6 +7,16 @@ import UIKit
 #endif
 #endif
 
+/// The card takes its natural height, at least the resting height. The draft row stretches, so any
+/// room the minimum leaves sits under a short draft, and rows above the draft use it first.
+struct CleanComposerRestingHeight: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .frame(minHeight: CleanChatComposerMetrics.restingMinHeight, alignment: .bottom)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
 struct CleanChatComposerSurface: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
