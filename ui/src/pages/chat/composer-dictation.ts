@@ -271,7 +271,9 @@ export class ComposerDictationOwner extends EventTarget {
     this.capture?.retire();
     void this.stop({ commit: false });
     this.syncCancellationListeners();
-    this.dispatchEvent(new Event("change"));
+    if (!this.disposed) {
+      this.dispatchEvent(new Event("change"));
+    }
   }
 
   private readonly handleDocumentPointerMove = (event: PointerEvent): void => {
