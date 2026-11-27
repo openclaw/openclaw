@@ -243,7 +243,7 @@ export function inspectEarlyGitReleaseSchemaChange(
 }
 
 /** How the recovery a check started, or found running, is followed. */
-export type EarlyGitReleaseRecoveryJob = { status: string; log: string };
+type EarlyGitReleaseRecoveryJob = { status: string; log: string };
 
 export type EarlyGitReleaseRecoveryStart =
   | { started: true; job: EarlyGitReleaseRecoveryJob; target: string }

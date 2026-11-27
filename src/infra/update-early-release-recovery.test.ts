@@ -12,10 +12,12 @@ import { gatewayServiceControl } from "./update-early-release-recovery-service.j
 import { startEarlyGitReleaseRecovery } from "./update-early-release-recovery-start.js";
 import type { StartDeps } from "./update-early-release-recovery-start.js";
 import * as recovery from "./update-early-release-recovery.js";
-import type { FinishFacts, RunCommand, RunnerDeps } from "./update-early-release-recovery.js";
+import type { RunCommand } from "./update-early-release-recovery.js";
 import { getUpdateRunStatusAsync } from "./update-run-reader.js";
 import { createUpdateRunAsync, finishUpdateRunAsync } from "./update-run-write.async.js";
 
+type RunnerDeps = NonNullable<Parameters<typeof recovery.runEarlyGitReleaseRecovery>[1]>;
+type FinishFacts = Parameters<RunnerDeps["finish"]>[1];
 type RecoveryOutcome = Parameters<RunnerDeps["record"]>[0];
 const roots: string[] = [];
 afterEach(async () => {
@@ -179,7 +181,7 @@ const git = (fx: Fx, script: string) => sh(fx.checkout, script);
 const NESTED = "git worktree add -q w && mkdir w/d && echo w/d/x";
 const refusals: Array<[string, (fx: Fx) => unknown, ("systemd" | "launchd")?]> = [
   ["a macOS launchd Gateway", (fx) => (fx.deps.platform = "win32")],
-  ["no systemd user manager", (fx) => (fx.state.gateway = fx.state.gateway), "systemd"],
+  ["no systemd user manager", () => undefined, "systemd"],
   ["no desktop login session", (fx) => (fx.state.gui = 113), "launchd"],
   ["uncommitted changes", (fx) => fs.writeFileSync(path.join(fx.checkout, ".gitignore"), "x")],
   ["not on a branch", (fx) => git(fx, "git checkout -q --detach")],
@@ -311,6 +313,8 @@ type Opts = {
   supervisor?: "systemd" | "launchd";
   /** The state directory the runner's own environment resolves. */
   stateDir?: string;
+  /** The release's install writes and restarts a definition that names another entry. */
+  elsewhere?: boolean;
 };
 function runner(opts: Opts) {
   const { fail = {}, resumed = false, restarts = 0, supervisor = "systemd" } = opts;
@@ -381,7 +385,8 @@ function runner(opts: Opts) {
     }
     if (name.endsWith("gateway install") && !fail[name]) {
       // While the early link exists, the install binds the service to that updater's launcher.
-      const bound = fs.lstatSync(legacy, { throwIfNoEntry: false }) ? `${prefix}/launcher` : cli;
+      const linked = fs.lstatSync(legacy, { throwIfNoEntry: false });
+      const bound = linked || opts.elsewhere ? `${prefix}/launcher` : cli;
       fs.writeFileSync(serviceFile, unit(bound));
       [running, enabled, loaded] = [true, true, true];
       // A release that crashes part-way through its boot migration, until its unit fails.
@@ -486,6 +491,7 @@ const runs: Run[] = [
   ["changes nothing when the fast-forward fails", f(MERGE), "original"],
   ["never builds past the target", { past: true }, "original", "", "moved past"],
   ["changes nothing when the service cannot move", f("release gateway install"), "original"],
+  ["puts back a definition the install sent elsewhere", { elsewhere: true }, "original"],
   ["changes nothing under another state directory", { stateDir: "/x" }, "original", "", "/x"],
   ["puts the previous build back when unmigrated", f("release ready"), "original"],
   ["never puts it back once migrated", f("release ready", migrates), "release", "start-failed"],
@@ -502,6 +508,7 @@ const launchd: Opts = { supervisor: "launchd" };
 const launchdRuns: Run[] = [
   ["launchd: release, rebuild, then the checkout", launchd, "checkout"],
   ["launchd: puts the previous build back when unmigrated", f(READY, launchd), "original"],
+  ["launchd: puts back a definition sent elsewhere", { ...launchd, elsewhere: true }, "original"],
   [
     "launchd: never puts it back once migrated",
     f(READY, { ...launchd, ...migrates }),

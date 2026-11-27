@@ -134,7 +134,7 @@ export function removeTree(dir: string) {
 export const legacyLinkPath = (plan: Pick<RecoveryPlan, "prefix">) =>
   path.join(plan.prefix, "lib", "node_modules", "openclaw");
 
-export type RunnerDeps = {
+type RunnerDeps = {
   run: RunCommand;
   log: (line: string) => void;
   /** True while the updater that started this runner has not exited. */
@@ -161,7 +161,7 @@ export type RunnerDeps = {
 };
 
 /** `downtimeMs` is left out when a restart of the runner lost the first switch's timing. */
-export type FinishFacts = { downtimeMs?: number; runId?: string };
+type FinishFacts = { downtimeMs?: number; runId?: string };
 
 const REBUILD = "pnpm install --frozen-lockfile && pnpm build";
 /** The command that finishes a recovery that stopped after migrating, run from the checkout. */
@@ -250,7 +250,9 @@ export async function runEarlyGitReleaseRecovery(
   };
   const saveDefinition = () => {
     for (const file of plan.definitionFiles) {
+      // The environment file can hold secrets; the copy keeps its mode.
       fs.copyFileSync(file, savedPath(file));
+      fs.chmodSync(savedPath(file), fs.statSync(file).mode & 0o777);
     }
   };
   const restoreDefinition = () => {
@@ -280,10 +282,20 @@ export async function runEarlyGitReleaseRecovery(
     log(
       `stopped before changing the Gateway: ${why}.${moves} The next \`openclaw update\` tries again.`,
     );
-    // A failed install may still have enabled the service.
-    await keepEnablement();
     restoreLegacyLink();
     dropUnchangedCopies();
+    // A failed install may have rewritten, stopped or (on launchd) unloaded the service; the
+    // previous build serves again from its own definition. Only the definition of the previous
+    // build is put back: abandon never runs once state moved.
+    const changed = plan.definitionFiles.some((file) => fs.existsSync(savedPath(file)));
+    if (changed && (await service.stop())) {
+      restoreDefinition();
+    }
+    if (changed || (await service.state()) !== "active") {
+      await service.start(true);
+    }
+    // A failed install may still have enabled the service.
+    await keepEnablement();
     await removeRelease();
     return false;
   };

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS } from "../daemon/launchd-plist.js";
 import { escapeXml } from "../shared/xml.js";
 import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "./gateway-shutdown-budget.js";
@@ -42,7 +43,7 @@ async function systemctlShow(run: RunCommand, unit: string, key: string): Promis
 }
 
 /** A time span as `systemctl show` prints it ("5min 30s"); null for "infinity" or anything else. */
-export function parseSystemdSpanMs(text: string): number | null {
+function parseSystemdSpanMs(text: string): number | null {
   const units: Record<string, number> = { us: 1e-3, ms: 1, s: 1e3, min: 6e4, h: 36e5, d: 864e5 };
   let total = 0;
   const rest = text
@@ -122,7 +123,7 @@ function launchdControl(plan: RecoveryPlan, run: RunCommand): GatewayServiceCont
         if ((await launchctlPrint(run, target)) === null) {
           return true;
         }
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+        await delay(1000);
       }
       return false;
     },
@@ -181,7 +182,7 @@ export function describeRecoveryJob(
  * The launchd job: no KeepAlive except after a crash (systemd's Restart=on-abnormal), its
  * output appended to `log`.
  */
-export function buildRecoveryJobPlist(params: {
+function buildRecoveryJobPlist(params: {
   label: string;
   programArguments: string[];
   workingDirectory: string;
