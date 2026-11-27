@@ -100,7 +100,6 @@ it("readmits persisted participant work after restart without substituting the c
               name: "Retained invitation",
               schedule: { kind: "at", at: new Date(Date.now() + 86_400_000).toISOString() },
               sessionTarget: `session:${key}`,
-              wakeMode: "now",
               payload: { kind: "agentTurn", message: "INVITATION_OCCURRENCE_PROOF" },
               delivery: { mode: "none" },
             },

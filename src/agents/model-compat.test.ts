@@ -70,17 +70,18 @@ describe("normalizeModelCompat", () => {
     expect(normalizeModelCompat(model).baseUrl).toBe("https://api.anthropic.com");
   });
   it.each([
-    ["azure-openai", "https://my-deployment.openai.azure.com/openai"],
-    ["custom-cpa", "://api.openai.com malformed"],
-  ])("defaults non-native capabilities off for %s (%s)", (provider, baseUrl) => {
+    ["azure-openai", "https://my-deployment.openai.azure.com/openai", true],
+    ["custom-cpa", "://api.openai.com malformed", false],
+  ])("defaults non-native capabilities off for %s (%s)", (provider, baseUrl, strict) => {
     const model = baseModel({ provider, baseUrl });
     const normalized = normalizeModelCompat(model);
     expect(normalized).not.toBe(model);
     expect(model.compat).toBeUndefined();
+    // Azure OpenAI declares strict tool support; an unknown endpoint does not.
     expect(normalized.compat).toMatchObject({
       supportsDeveloperRole: false,
       supportsUsageInStreaming: false,
-      supportsStrictMode: false,
+      supportsStrictMode: strict,
     });
   });
 

@@ -513,7 +513,7 @@ runtimes. A fork replays the parent's last request before the gate, so a handler
 rewrites the same input the same way keeps the parent's cached prefix. A thrown error
 fails the side question.
 
-The event is `{ runtime, requestKind, payload, provider, model, messages }`:
+The event is `{ runtime, requestKind, payload, provider, model, messages, contextSpans? }`:
 
 - `runtime` is `"embedded"` or `"cli"`.
 - `requestKind` is `"turn"` for an agent turn (including steered CLI input),
@@ -546,6 +546,15 @@ The event is `{ runtime, requestKind, payload, provider, model, messages }`:
   turn's (or steered input's) user message last. Editing it does not change the
   request. Use that metadata, not text inside a message, to decide sender
   trust.
+- `contextSpans`, when present, labels quoted conversation data in embedded
+  in-history system updates. Each entry has `containerText` and UTF-16 `start`
+  (inclusive) and `end` (exclusive) offsets. Match the carrier against the final
+  payload before screening. OpenClaw records the ranges while rendering the
+  data, so adjacent runtime instructions are outside the spans. Ordinary
+  provider text replacements move the offsets with the quote. A rewrite that
+  crosses a quote boundary or copies other text can leave a span unavailable.
+  Older updates have no spans. Missing spans do not mean the text is trusted;
+  the plugin still receives the full payload.
 - Some requests resend history as text, so `messages` does not map one to one
   onto `payload`. A `"compaction"` summary request is the summary call itself:
   the older history is serialized into one user message inside `payload`, and

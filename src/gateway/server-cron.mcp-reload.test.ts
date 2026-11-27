@@ -40,7 +40,6 @@ test("a running cron service can call an MCP server added after startup", async 
         enabled: true,
         schedule: { kind: "every", everyMs: 30_000 },
         sessionTarget: "main",
-        wakeMode: "next-heartbeat",
         agentId: "main",
         payload: { kind: "systemEvent", text: "must not fire", toolsAllow: ["healthy__probe"] },
         trigger: {

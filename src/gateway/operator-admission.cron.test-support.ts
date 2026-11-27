@@ -136,7 +136,6 @@ export async function runCronAdmissionCase(
       schedule: { kind: "every", everyMs: 86_400_000 },
       sessionTarget: `session:${c.sessionKey}`,
       sessionKey: c.sessionKey,
-      wakeMode: "now",
       payload: { kind: "agentTurn", message: c.queuedText },
       delivery: { mode: "none" },
     };

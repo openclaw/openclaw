@@ -17,6 +17,7 @@ import {
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import { isManagedOnlyBrowserRequest } from "../request-policy.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
+import { observeAddressWarmupPages } from "../server-context.lifecycle.js";
 import { clearSnapshotKeysForTab } from "../snapshot-delta-cache.js";
 import { resolveBrowserTabOrThrow } from "../target-id.js";
 import {
@@ -177,6 +178,9 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
       return { running: false, tabs: [] };
     }
     let tabs = await profileCtx.listTabs({ signal, ...operatorPages });
+    if (observeAddressWarmupPages(ctx.state().profiles.get(profileCtx.profile.name), tabs)) {
+      return { running: false, tabs: [] };
+    }
     const navigationPolicy = browserNavigationPolicyForProfile(ctx, profileCtx);
     if (navigationPolicy.ssrfPolicy) {
       const { results } = await runTasksWithConcurrency<(typeof tabs)[number]>({

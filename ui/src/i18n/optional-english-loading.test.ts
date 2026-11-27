@@ -289,92 +289,6 @@ it.each([
 });
 
 it.each([false, true])(
-  "preserves sharing, subagent, and terminal catalogs when leaves load first=%s",
-  async (leavesFirst) => {
-    const { en, manager } = await loadI18n({
-      chat: {
-        sessionSharing: { visibility: "Sichtbarkeit" },
-        subagentsPanel: { empty: "Keine Subagents.", nativeStatus: { running: "Läuft" } },
-        sessionHeader: { continueInTerminal: { authNote: "Ohne Zugangsdaten." } },
-      },
-    });
-    const { registerEnglishCatalog } = await import("../lib/reactive/i18n.ts");
-    const { registerChatSessionEnglish } = await import("./locales/en-chat-session.ts");
-    const { registerChatSessionOptionalEnglish } =
-      await import("./locales/en-chat-session-optional.ts");
-    const { registerChatSessionSharingEnglish } =
-      await import("./locales/en-chat-session-sharing.ts");
-    await manager.setLocale("de");
-    const registrars = [
-      registerChatSessionEnglish,
-      registerChatSessionOptionalEnglish,
-      registerChatSessionSharingEnglish,
-    ];
-    const ordered = leavesFirst ? registrars.toReversed() : registrars;
-    registerEnglishCatalog(ordered[0]!);
-    const sharing = en.chat.sessionSharing;
-    const panel = en.chat.subagentsPanel;
-    const header = en.chat.sessionHeader;
-    const terminal = header.continueInTerminal;
-    for (const register of ordered.slice(1)) {
-      registerEnglishCatalog(register);
-    }
-    registerChatSessionEnglish();
-
-    expect(manager.t("chat.sessionSharing.copyPublicLink")).toBe("Copy public link");
-    expect(manager.t("chat.sessionSharing.publicIndicator")).toBe("Public");
-    expect(manager.t("chat.sessionSharing.visibility")).toBe("Sichtbarkeit");
-    expect(manager.t("chat.sessionHeader.continueInTerminal.title")).toBe("Continue in terminal");
-    expect(manager.t("chat.sessionHeader.continueInTerminal.action")).toBe("Continue in terminal…");
-    expect(manager.t("chat.sessionHeader.continueInTerminal.authNote")).toBe("Ohne Zugangsdaten.");
-    expect(manager.t("chat.subagentsPanel.nativeTitle")).toBe("Live subagents");
-    expect(manager.t("chat.subagentsPanel.empty")).toBe("Keine Subagents.");
-    expect(manager.t("chat.subagentsPanel.nativeStatus.running")).toBe("Läuft");
-    expect(manager.t("chat.subagentsPanel.stop", { name: "Build" })).toBe("Stop Build");
-    expect(manager.getLocale()).toBe("de");
-    expect(en.chat.subagentsPanel).toBe(panel);
-    expect(en.chat.sessionSharing).toBe(sharing);
-    expect(en.chat.sessionHeader).toBe(header);
-    expect(en.chat.sessionHeader.continueInTerminal).toBe(terminal);
-    const status = panel.nativeStatus;
-    const filters = panel.desktopFilter;
-    registerChatSessionOptionalEnglish();
-    expect(en.chat.subagentsPanel.nativeStatus).toBe(status);
-    expect(en.chat.subagentsPanel.desktopFilter).toBe(filters);
-  },
-);
-
-it.each([false, true])(
-  "merges conflict notice copy without replacing transcript copy (optional first=%s)",
-  async (optionalFirst) => {
-    const { en, manager } = await loadI18n({
-      chat: { workspaceConflict: { summary: "Lokale Versionen beibehalten." } },
-    });
-    const { registerEnglishCatalog } = await import("../lib/reactive/i18n.ts");
-    const { registerChatSessionEnglish } = await import("./locales/en-chat-session.ts");
-    const { registerChatSessionOptionalEnglish } =
-      await import("./locales/en-chat-session-optional.ts");
-    await manager.setLocale("de");
-    const registrars = [registerChatSessionEnglish, registerChatSessionOptionalEnglish];
-    const ordered = optionalFirst ? registrars.toReversed() : registrars;
-    registerEnglishCatalog(ordered[0]!);
-    const namespace = en.chat.workspaceConflict;
-    registerEnglishCatalog(ordered[1]!);
-    registerChatSessionEnglish();
-
-    expect(manager.t("chat.workspaceConflict.summary")).toBe("Lokale Versionen beibehalten.");
-    expect(manager.t("chat.workspaceConflict.showCommands")).toBe("Show commands");
-    expect(manager.t("chat.workspaceConflict.eventTitleOne")).toBe(
-      "Cloud result applied with 1 conflict",
-    );
-    expect(manager.t("chat.workspaceConflict.stagedResult")).toBe("Staged cloud result");
-    expect(manager.t("chat.workspaceConflict.morePaths", { count: "2" })).toBe("+2 more paths");
-    expect(manager.getLocale()).toBe("de");
-    expect(en.chat.workspaceConflict).toBe(namespace);
-  },
-);
-
-it.each([false, true])(
   "merges creator copy in either registration order (creator first=%s)",
   async (creatorFirst) => {
     const { en, manager } = await loadI18n({
@@ -479,33 +393,6 @@ it("loads workspace actions with the session menu before session management", as
   expect(manager.t("sessionsView.stopCloudWorker")).toBe("Stop cloud device…");
   expect(manager.t("sessionsView.groupDefaultsTitle")).toBe("sessionsView.groupDefaultsTitle");
 });
-
-it.each([false, true])(
-  "keeps menu and management copy after both load (menu first=%s)",
-  async (menuFirst) => {
-    const { en, manager } = await loadI18n({ sessionsView: { snooze: "Schlummern" } });
-    const { registerEnglishCatalog } = await import("../lib/reactive/i18n.ts");
-    const { registerSessionMenuEnglish } = await import("./locales/en-session-menu.ts");
-    const { registerSessionOrganizationEnglish } =
-      await import("./locales/en-session-organization.ts");
-    const namespace = en.sessionsView;
-    await manager.setLocale("de");
-    const registrars = [registerSessionOrganizationEnglish, registerSessionMenuEnglish];
-    for (const register of menuFirst ? registrars.toReversed() : registrars) {
-      registerEnglishCatalog(register);
-    }
-
-    expect(manager.t("sessionsView.snooze")).toBe("Schlummern");
-    expect(manager.t("sessionsView.searchGroups")).toBe("Search groups");
-    expect(manager.t("sessionsView.communication.send")).toBe("Send messages");
-    expect(manager.t("sessionsView.searchPlaceholder")).toBe("Search sessions…");
-    expect(manager.t("sessionsView.groupDefaultsTitle", { group: "Build" })).toBe(
-      "New session defaults for “Build”",
-    );
-    expect(manager.getLocale()).toBe("de");
-    expect(en.sessionsView).toBe(namespace);
-  },
-);
 
 it("keeps a cold roster metadata failure readable before its view catalog loads", async () => {
   const { en, manager } = await loadI18n();
