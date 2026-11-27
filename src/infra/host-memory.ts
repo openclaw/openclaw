@@ -257,7 +257,7 @@ function readLibuvMemoryRlimit() {
   return limit;
 }
 
-function readDelegatedMemory(view: ReturnType<typeof readCgroupV2View>) {
+function readDelegatedCgroupMemory(view: ReturnType<typeof readCgroupV2View>) {
   const leaf =
     view?.verified && view.leaf && view.directories.includes(view.leaf) ? view.leaf : undefined;
   const high = leaf && readCgroupV2File(leaf, "memory.high", view?.overmounts)?.trim();
@@ -279,12 +279,34 @@ function readDelegatedMemory(view: ReturnType<typeof readCgroupV2View>) {
       }
     }
   }
-  return { limitBytes: Math.min(limitBytes || Infinity, readLibuvMemoryRlimit()), availableBytes };
+  return { limitBytes: limitBytes || Infinity, availableBytes };
+}
+
+function readDelegatedMemory(view: ReturnType<typeof readCgroupV2View>) {
+  const { limitBytes, availableBytes } = readDelegatedCgroupMemory(view);
+  return { limitBytes: Math.min(limitBytes, readLibuvMemoryRlimit()), availableBytes };
+}
+
+function startsInDelegatedNodeCgroup() {
+  return process.platform === "linux" && !process.versions.bun && readCgroupV2View()?.delegated;
+}
+
+/** Ordinary schedulers keep the native read. Delegated schedulers recheck membership and masks. */
+export function captureServiceAvailableMemoryReader(): () => number | undefined {
+  if (!startsInDelegatedNodeCgroup()) {
+    return () => process.availableMemory();
+  }
+  return () => {
+    const view = readCgroupV2View();
+    return view?.verified && !view.delegated
+      ? process.availableMemory()
+      : readDelegatedCgroupMemory(view).availableBytes;
+  };
 }
 
 /** Ordinary startup mounts keep the native tick. Delegated ticks recheck membership and masks. */
 export function captureDelegatedMemoryPressureReader() {
-  if (process.platform === "linux" && !process.versions.bun && readCgroupV2View()?.delegated) {
+  if (startsInDelegatedNodeCgroup()) {
     return () => readDelegatedMemory(readCgroupV2View());
   }
   return undefined;
