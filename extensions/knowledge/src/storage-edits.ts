@@ -467,7 +467,9 @@ export class StorageEdits extends StoragePublication {
         !input.addEvidence?.length &&
         input.entities === undefined)
     ) {
-      throw new Error("Invalid annotation input.");
+      throw new Error(
+        "Invalid annotation input. Pass entities and addEvidence as top-level fields beside annotations, not inside it.",
+      );
     }
     access.assertCurrent();
     if (!this.config.writesEnabled) {
