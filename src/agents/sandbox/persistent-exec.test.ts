@@ -605,6 +605,31 @@ it("retains uncertain stop custody and refuses a replacement until the same owne
   expect(f.finalize).not.toHaveBeenCalled();
 });
 
+it("checks launch admission at START without retaining it for running custody", async () => {
+  let admitted = false;
+  const assertLaunch = () => {
+    if (!admitted) {
+      throw new Error("launch refused");
+    }
+  };
+  await expect(f.start({ assertLaunch, releaseAuthority: () => {} })).rejects.toThrow(
+    "launch refused",
+  );
+  expect(await f.store.list()).toEqual([]);
+
+  admitted = true;
+  const run = await f.start({ assertLaunch });
+  try {
+    admitted = false;
+    await f.clock.advanceBy(20_000);
+    expect(f.preparation.checkCurrent).toHaveBeenCalledOnce();
+    expect(run.activity?.resultSettled).toBe(false);
+  } finally {
+    run.cancel("manual-cancel");
+    await run.wait();
+  }
+});
+
 it.each(["source", "registry", "parent container"] as const)(
   "stops without duplicate START when its %s authority is retired",
   async (retirement) => {

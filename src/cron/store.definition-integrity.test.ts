@@ -122,12 +122,11 @@ it("preserves separately stored authority through reads and older-writer edits",
 
   const reloaded = (await loadCronStore(storePath)).jobs[0];
   expect(reloaded?.payload).toStrictEqual(job.payload);
-  expect(reloaded).not.toHaveProperty("ownerProfileId");
+  expect(reloaded?.ownerProfileId).toBe("legacy-owner");
   expect(reloaded).not.toHaveProperty("ownerTransferPending");
   expect(reloaded?.runtimeAuthority).toEqual(job.runtimeAuthority);
   expect(reloaded?.runtimeAuthorityRecoveryRequired).toBeUndefined();
   const readOnly = (await loadCronJobsStoreWithConfigJobsReadOnly(storePath)).store.jobs[0];
-  expect(readOnly).not.toHaveProperty("ownerProfileId");
   expect(readOnly?.runtimeAuthority).toEqual(job.runtimeAuthority);
   const downgradedJob = { ...parentJson, description: "edited by an older build" };
   database
@@ -136,7 +135,6 @@ it("preserves separately stored authority through reads and older-writer edits",
 
   const downgraded = (await loadCronStore(storePath)).jobs[0];
   expect(downgraded?.description).toBe("edited by an older build");
-  expect(downgraded).not.toHaveProperty("ownerProfileId");
   expect(downgraded?.runtimeAuthority).toEqual(job.runtimeAuthority);
   expect(downgraded?.runtimeAuthorityRecoveryRequired).toBeUndefined();
 });

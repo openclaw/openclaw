@@ -126,3 +126,21 @@ export function decodeStoredCronJobConfig(
       : {}),
   };
 }
+
+/** Keep legacy creator authority in the runtime projection until Doctor persists the owner. */
+export function decodeRuntimeCronJobConfig(
+  jobJson: Record<string, unknown>,
+): Record<string, unknown> {
+  const config = decodeStoredCronJobConfig(jobJson);
+  const actor = isRecord(config.createdActor) ? config.createdActor : undefined;
+  if (
+    config.ownerProfileId == null &&
+    actor?.type === "human" &&
+    actor.source === "profile" &&
+    typeof actor.id === "string" &&
+    actor.id.trim()
+  ) {
+    config.ownerProfileId = actor.id;
+  }
+  return config;
+}

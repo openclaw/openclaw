@@ -85,7 +85,7 @@ export type SandboxPersistentExecCommand = {
 export type SandboxPersistentExecPreparation = {
   receipt: DockerPersistentExecReceipt;
   /** START is available only to this admitted owner after durable receipt publication. */
-  start(admit: () => Promise<void>): Promise<void>;
+  start(admit: () => Promise<void>, assertLaunch?: () => void): Promise<void>;
   /** Revalidate the original parent generation while this controller is alive. */
   checkCurrent(): Promise<void>;
   stopped: Promise<SandboxPersistentExecStopped>;

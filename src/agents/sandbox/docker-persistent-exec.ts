@@ -440,7 +440,7 @@ export function createDockerPersistentExecCapability(params: {
             await assertParentCurrent();
           },
           stopped: terminal.promise,
-          async start(admit) {
+          async start(admit, assertLaunch) {
             if (phase !== "prepared") {
               throw new Error(
                 "Persistent sandbox START is only valid for its admitted prepared owner.",
@@ -474,6 +474,7 @@ export function createDockerPersistentExecCapability(params: {
                   const baseEnv = { ...(startEngine.baseEnv ?? process.env) };
                   stripGatewayAllocatorEnv(baseEnv);
                   assertCurrent();
+                  assertLaunch?.();
                   return spawnCommand(
                     [
                       startEngine.command,

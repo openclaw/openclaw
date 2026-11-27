@@ -14,7 +14,7 @@ import {
 } from "../../../cron/store.js";
 import { cronStoreKey } from "../../../cron/store/key.js";
 import { makeCronStreamSandboxTarget } from "../../../cron/stream-sandbox.test-support.js";
-import type { CronJob } from "../../../cron/types.js";
+import type { CronJob, CronStoredJob } from "../../../cron/types.js";
 import { buildUpdateRehearsalPathEnv } from "../../../infra/update-rehearsal-paths.js";
 import { withInstalledOfficialProviderCustody } from "../../../plugins/provider-policy-custody.test-support.js";
 import {
@@ -84,6 +84,28 @@ const updateDoctorEnv = {
   ...externalDoctorEnv(),
   OPENCLAW_COMPATIBILITY_HOST_VERSION: undefined,
 };
+
+it(
+  "persists an already usable legacy creator profile without another repair",
+  withState(async (fixture) => {
+    const storePath = fixture.statePath("cron", "jobs.json");
+    const legacy: CronStoredJob = {
+      ...job("legacy-owner", { delivery: { mode: "none" } }),
+      createdActor: { type: "human", source: "profile", id: "profile-creator" },
+    };
+    await saveJobs(storePath, legacy);
+    const before = await cronStore.loadCronJobsStoreWithConfigJobsReadOnly(storePath);
+    expect(before.configJobs[0]).not.toHaveProperty("ownerProfileId");
+    expect(before.store.jobs[0]?.ownerProfileId).toBe("profile-creator");
+
+    const result = await repair(storePath);
+    expect(result.changes).toContainEqual(
+      expect.stringContaining("Saved the recorded creator profile as the owner"),
+    );
+    const after = await cronStore.loadCronJobsStoreWithConfigJobsReadOnly(storePath);
+    expect(after.configJobs[0]?.ownerProfileId).toBe("profile-creator");
+  }),
+);
 
 it(
   "leaves canonical one-shot jobs untouched without a SQLite repair backup",

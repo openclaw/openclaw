@@ -1,4 +1,4 @@
-import type { CronJob, CronJobState } from "../cron/types.js";
+import type { CronJob, CronJobState, CronStoredJob } from "../cron/types.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import type { ManagedRun, ProcessSupervisor } from "../process/supervisor/index.js";
 import type {
@@ -21,11 +21,13 @@ export type CronStreamStopReason = DisableStop | LifecycleStop;
 export type CronStreamOwnerParams = {
   scheduler: GatewayScheduler;
   getDefaultAgentId?: () => string | undefined;
+  getJob?: (id: string) => CronStoredJob | undefined;
   resolveGatewayContext?: () => GatewayRequestContext | undefined;
   getProcessSupervisor: () => ProcessSupervisor;
   spawnSandboxSource?: (params: {
     job: CronStreamJob;
     assertCurrent: () => void;
+    assertLaunch: () => void;
     signal: AbortSignal;
     onOutput: (stream: "stdout" | "stderr", chunk: Buffer) => void;
   }) => Promise<ManagedRun>;

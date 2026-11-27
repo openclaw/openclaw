@@ -12,10 +12,12 @@ import type {
   SpawnInput,
 } from "../process/supervisor/types.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolveStreamStopReason } from "./cron-stream-watchers.js";
 import {
   createCronStreamWatcherFixture,
@@ -92,6 +94,32 @@ describe("cron stream watchers", () => {
     } finally {
       await watchers.stopAll("shutdown");
     }
+  });
+
+  it("withholds a stream source until its human owner is reassigned", async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      const { fake, updateState, watchers } = createCronStreamWatcherFixture();
+      const missing = job({ ownerProfileId: "removed-profile" });
+      try {
+        await watchers.start(missing);
+        expect(fake.runs).toHaveLength(0);
+        expect(updateState).toHaveBeenLastCalledWith(
+          missing.id,
+          expect.objectContaining({
+            streamStatus: "error",
+            streamError: expect.stringContaining("human owner no longer exists"),
+          }),
+          expect.any(String),
+          expect.any(String),
+        );
+
+        const owner = ensureProfileForEmail("stream-owner@example.test");
+        await watchers.start({ ...missing, ownerProfileId: owner.id });
+        expect(watchers.inspect(missing.id)?.processAlive).toBe(true);
+      } finally {
+        await watchers.stopAll("shutdown");
+      }
+    });
   });
 
   it("marks a source stable once after a late scheduler wake", async () => {

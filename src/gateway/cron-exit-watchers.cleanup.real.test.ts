@@ -19,6 +19,8 @@ import {
 } from "../process/supervisor/supervisor.forced-settlement.test-support.js";
 import { createProcessSupervisor } from "../process/supervisor/supervisor.js";
 import type { ManagedRun, ProcessSupervisor } from "../process/supervisor/types.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { killPidIfAlive } from "../test-utils/process-tree.js";
 import { createCronExitWatchers, type CronExitWatchers } from "./cron-exit-watchers.js";
 import { onExitJob } from "./cron-exit-watchers.test-support.js";
@@ -68,6 +70,49 @@ afterEach(async ({ signal }) => {
     vi.unstubAllEnvs();
   }
 });
+
+it.skipIf(process.platform !== "linux" || Boolean(process.versions.bun))(
+  "refuses a watched command for a missing human owner and rearms after reassignment",
+  async ({ signal }) => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      const cwd = tempDirs.make("openclaw-cron-exit-owner-");
+      const marker = `${cwd}/watched`;
+      const native = (nativeSupervisor = createProcessSupervisor());
+      scheduler = new GatewayScheduler();
+      const refusal = createDeferred<string | undefined>();
+      const completed = createDeferred<undefined>();
+      const watcher = (watchers = createCronExitWatchers(
+        {
+          getProcessSupervisor: () => native,
+          fireOnExit: async () => completed.resolve(undefined),
+          updateWatcherState: async (_job, patch) => refusal.resolve(patch.lastError),
+          logger: { info: () => {}, warn: () => {} },
+        },
+        scheduler,
+      ));
+      const job = {
+        ...onExitJob("human-owner-watch", `printf watched > ${quoteCliArg(marker)}`, true, cwd),
+        ownerProfileId: "removed-profile",
+      };
+      try {
+        watcher.reconcile([job]);
+        const outcome = await withinTest(
+          Promise.race([refusal.promise, completed.promise]),
+          signal,
+        );
+        expect(outcome).toContain("human owner no longer exists");
+        expect(existsSync(marker)).toBe(false);
+
+        const owner = ensureProfileForEmail("watch-owner@example.test");
+        watcher.reconcile([{ ...job, ownerProfileId: owner.id }]);
+        await withinTest(completed.promise, signal);
+        expect(readFileSync(marker, "utf8")).toBe("watched");
+      } finally {
+        await watcher.cancelAll();
+      }
+    });
+  },
+);
 
 // Linux's native subreaper retains descendants even after they change groups.
 it.skipIf(process.platform !== "linux" || Boolean(process.versions.bun))(

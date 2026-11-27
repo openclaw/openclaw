@@ -14,12 +14,13 @@ Day-to-day operation of stored jobs: copy-ready CLI examples, the management com
 In the Control UI, **Start now** starts an automation immediately. Open **Activity history** to review its activity. **Delete** removes the automation and stops future activity; the confirmation explains that this can’t be undone. An automation’s owner needs automation access to edit it. Admins can also edit it.
 
 For an automation with a recorded human owner, the scheduler checks that the
-profile still exists before starting the trigger or payload. If the owner has
-been removed, ask an administrator to select a new owner on the **Automations**
-page and review the automation before resuming it. If an older automation has a
-recorded creator profile but no saved owner, run `openclaw doctor --fix`. Doctor
-backs up the cron store before saving that profile as the owner. It does not
-replace an explicitly assigned owner or change the automation's tool list.
+profile still exists before starting a watched command, trigger, or payload.
+If the owner has been removed, ask an administrator to select a new owner on
+the **Automations** page and review the automation before resuming it. An older
+automation with a recorded creator profile keeps that owner until a different
+owner is assigned. Run `openclaw doctor --fix` to save that profile as the owner.
+Doctor backs up the cron store before saving ownership and preserves explicitly
+assigned owners and tool lists.
 
 When an agent or Template creates an automation in chat, the card appears as soon as the save is confirmed, even if the assistant is still working. Plans and failed attempts do not show a card. A saved automation says **Created** until its settings load, then shows the link and current on/off switch. You can pause or resume a saved automation from the conversation if you have permission to edit it. If the automation is removed or you lose access to it, the card keeps its name but no longer offers any actions.
 

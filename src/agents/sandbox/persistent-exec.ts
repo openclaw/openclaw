@@ -268,6 +268,7 @@ export function createSandboxPersistentExecOwner(params: { scheduler: GatewaySch
       argv: readonly string[];
       cwd?: string;
       assertCurrent: () => void;
+      assertLaunch?: () => void;
       signal: AbortSignal;
       onOutput: (stream: "stdout" | "stderr", chunk: Buffer) => void | Promise<void>;
       releaseAuthority: () => void;
@@ -487,20 +488,24 @@ export function createSandboxPersistentExecOwner(params: { scheduler: GatewaySch
             input.source,
           ),
         );
-        await preparation.start(async () => {
+        const assertLaunch = () => {
           assertCurrent();
+          input.assertLaunch?.();
+        };
+        await preparation.start(async () => {
+          assertLaunch();
           if (!record) {
             throw new Error("Persistent sandbox START lost its prepared custody.");
           }
           record = requireRecord(
             await store.transition(
               { ...expected(record), phase: "running" },
-              assertCurrent,
+              assertLaunch,
               input.source,
             ),
           );
-          assertCurrent();
-        });
+          assertLaunch();
+        }, input.assertLaunch);
         assertCurrent();
         input.signal.addEventListener("abort", onAbort, { once: true });
         assertCurrent();
