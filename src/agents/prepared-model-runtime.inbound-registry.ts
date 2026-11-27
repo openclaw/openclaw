@@ -220,7 +220,7 @@ export function prepareWorkspacePluginRegistries(
             metadataSnapshot,
             ...(preferBuiltPluginArtifacts ? { preferBuiltPluginArtifacts: true } : {}),
             selections: input.runtimePluginSelections,
-            configuredHarnessRuntimes: getConfiguredHarnessRuntimes?.(),
+            getConfiguredHarnessRuntimes,
             borrowRegistry: resolveLendingGatewayRegistry(input),
           },
           (source) => {
