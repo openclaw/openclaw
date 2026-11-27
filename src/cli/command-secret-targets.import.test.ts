@@ -34,8 +34,11 @@ describe("command secret targets module import", () => {
     const denyUnrelatedImport = () => {
       throw new Error("Model targets loaded channel or web discovery");
     };
+    // mock-isolation: Channel metadata must throw on import to detect eager channel discovery.
     vi.doMock("../channels/plugins/read-only.js", denyUnrelatedImport);
+    // mock-isolation: The web fetch provider runtime must throw on import to detect eager discovery.
     vi.doMock("../plugins/web-fetch-providers.runtime.js", denyUnrelatedImport);
+    // mock-isolation: The web search provider runtime must throw on import to detect eager discovery.
     vi.doMock("../plugins/web-search-providers.runtime.js", denyUnrelatedImport);
     try {
       const { getModelsCommandSecretTargetIds } = await import("./model-secret-targets.js");

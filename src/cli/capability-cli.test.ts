@@ -267,6 +267,7 @@ vi.mock("./command-config-resolution.js", () => ({
   resolveCommandConfigWithSecrets: mocks.resolveCommandConfigWithSecrets,
 }));
 
+// mock-isolation: Web, memory and TTS command wiring uses fixture discovery targets.
 vi.mock("./command-secret-targets.js", () => ({
   getCapabilityWebFetchCommandSecretTargets: mocks.getCapabilityWebFetchCommandSecretTargets,
   getCapabilityWebSearchCommandSecretTargets: mocks.getCapabilityWebSearchCommandSecretTargets,
