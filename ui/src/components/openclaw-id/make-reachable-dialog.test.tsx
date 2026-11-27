@@ -241,7 +241,7 @@ describe("Make reachable over a personal sign-in", () => {
     {
       linkProfile: true,
       profileLink: "link_approval_required",
-      expected: "Open that invite link and sign in with this OpenClaw ID",
+      expected: "set Role to the role you have now and choose Create invite link",
       canLink: false,
     },
     {
@@ -296,7 +296,7 @@ describe("Make reachable over a personal sign-in", () => {
     { outcome: "linked_elsewhere", expected: "already linked to another profile" },
     {
       outcome: "link_approval_required",
-      expected: "Open that invite link and sign in with this OpenClaw ID",
+      expected: "set Role to the role you have now and choose Create invite link",
     },
     { outcome: null, expected: "Sign in again to link it" },
   ])(

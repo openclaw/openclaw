@@ -721,7 +721,8 @@ your profile under the same rule as **Link**. When it is not linked, remote acce
 on and the note under the steps says how to link it. People and the invite form need an
 approved owner browser, so: open **Remote access** in an approved owner browser, choose
 **Invite someone**, enter this OpenClaw ID's email, pick your profile under **Existing
-person on this claw** and choose **Create invite link**. Open that invite link and sign in
+person on this claw**, set **Role** to the role you have now and choose **Create invite
+link**. Open that invite link and sign in
 with this OpenClaw ID. Then choose **Approve** on the request in People in the owner
 browser. **Link your profile** there signs in again when the Gateway no longer holds this
 browser's sign-in.
