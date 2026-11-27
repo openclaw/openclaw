@@ -423,10 +423,12 @@ Register each capability inside `register(api)` alongside your existing
     separate lifecycle operations.
 
     Gateway-relay clients express this choice with `talk.session.close`'s
-    optional `disposition`: `"detach"` preserves accepted agent work when
-    the client fails, while `"abort"` (or omission) cancels it on Stop. Check
-    the `talk-session-close-disposition` capability before sending the field.
-    On failure, the original agent answers remain visible alongside any recorded
+    optional `disposition`: `"detach"` (the default) preserves accepted agent
+    work when a transport closes, drops, or expires, while explicit `"abort"`
+    cancels it. Check the `talk-session-close-disposition` capability before
+    sending the field; older Gateways reject unknown fields and retain their
+    legacy aborting close when omitted.
+    On detachment, the original agent answers remain visible alongside any recorded
     speech; speech alone cannot prove which overlapping consults were delivered.
     Answers finishing after detachment are visible when first recorded. Already-hidden
     answers receive a new visible transcript entry, excluded from model context;

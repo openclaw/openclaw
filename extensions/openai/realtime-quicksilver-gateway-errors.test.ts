@@ -106,6 +106,7 @@ describe("OpenAI Quicksilver gateway bridge lifecycle", () => {
 
   it.each([
     { disposition: undefined, classified: false },
+    { disposition: "abort", classified: false },
     { disposition: "detach", classified: false },
     { disposition: "detach", classified: true },
   ] as const)(
@@ -133,7 +134,7 @@ describe("OpenAI Quicksilver gateway bridge lifecycle", () => {
       await harness.bridge.close(disposition ? { disposition } : undefined);
       const sentAtClose = socket.sent.length;
       emitSideband(socket, delegation("late", "Do not acknowledge after close"));
-      expect(consultSignal?.aborted).toBe(disposition !== "detach");
+      expect(consultSignal?.aborted).toBe(disposition === "abort");
       result.resolve({ text: "finished after close" });
       await nextEventLoopTurn();
       expect(eventsOf(socket, "delegation.context.append")).toEqual([]);

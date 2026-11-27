@@ -177,12 +177,12 @@ export function createOpenAIQuicksilverBrowserSessionBroker(
     socket.on("error", () => {
       const transportError = new Error(projectOpenAIQuicksilverErrorMessage("transport"));
       params.logger.warn(transportError.message);
-      void activeSessionLease.close(session, "abort", transportError).catch(() => undefined);
+      void activeSessionLease.close(session, "detach", transportError).catch(() => undefined);
     });
     socket.on("close", (code) => {
       const error =
         code === 1000 ? undefined : new Error(projectOpenAIQuicksilverErrorMessage("transport"));
-      void activeSessionLease.close(session, "abort", error).catch(() => undefined);
+      void activeSessionLease.close(session, "detach", error).catch(() => undefined);
     });
   };
 
@@ -522,7 +522,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(
           onError: (error) => offer.request.gatewayControl?.onError?.(error),
           onFatalError: (error) => {
             if (session) {
-              void activeSessionLease.close(session, "abort", error).catch(() => undefined);
+              void activeSessionLease.close(session, "detach", error).catch(() => undefined);
             }
           },
           onSessionClosed: (reason) => {
@@ -534,7 +534,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(
                 reason === "content" || reason === "connection_lost"
                   ? new Error("GPT-Live session ended with a provider or connection failure")
                   : undefined;
-              void activeSessionLease.close(session, "abort", error).catch(() => undefined);
+              void activeSessionLease.close(session, "detach", error).catch(() => undefined);
             }
           },
           onTranscript: publicApi
@@ -595,7 +595,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(
         }
         await activeSessionLease.close(
           session,
-          "abort",
+          "detach",
           new Error(projectOpenAIQuicksilverErrorMessage("transport")),
         );
       }
@@ -628,7 +628,9 @@ export function createOpenAIQuicksilverBrowserSessionBroker(
       if (session && activeSessions.get(token) === session) {
         // Startup already has a visible failure; a failed retirement keeps its
         // own retry obligation rather than preventing the HTTP error response.
-        await activeSessionLease.close(session, "abort", publicSessionError).catch(() => undefined);
+        await activeSessionLease
+          .close(session, "detach", publicSessionError)
+          .catch(() => undefined);
       }
       if (browserDisconnected || res.headersSent) {
         return true;

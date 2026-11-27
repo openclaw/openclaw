@@ -369,28 +369,6 @@ export function prepareTalkVoiceReplacement(params: {
   };
 }
 
-export function isTalkVoiceSessionReplacing(
-  voiceSessionId: string,
-  connId: string | undefined,
-  agentId: string,
-) {
-  const change = [...changes.values()].find(
-    ({ original }) =>
-      original.voiceSessionId === voiceSessionId &&
-      original.connId === connId &&
-      original.sessionTarget.agentId === agentId,
-  );
-  if (!change) {
-    return false;
-  }
-  try {
-    assertChangeCurrent(change);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export async function completeTalkVoiceChange(params: {
   changeId: string;
   connId: string;

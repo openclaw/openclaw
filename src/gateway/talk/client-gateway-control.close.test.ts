@@ -16,6 +16,62 @@ import { sessionTarget, controlContext } from "./client-gateway-control.test-sup
 import { cleanupTalkConnection } from "./session-registry.js";
 
 describe("Talk client Gateway control teardown", () => {
+  it.each(["close", "disconnect", "provider-close"] as const)(
+    "detaches accepted tool-call consults on %s without aborting them",
+    async (ending) => {
+      const result = createDeferred<{ text: string }>();
+      const started = createDeferred();
+      let acceptedSignal: AbortSignal | undefined;
+      const runToolAgentConsult = vi.fn(async (_args: unknown, signal: AbortSignal) => {
+        acceptedSignal = signal;
+        started.resolve();
+        signal.addEventListener(
+          "abort",
+          () => result.reject(new DOMException("aborted", "AbortError")),
+          { once: true },
+        );
+        return await result.promise;
+      });
+      const { owner, bridge, closeProvider, closeLogicalSession } = createControlFixture({
+        voiceSessionId: `voice-tool-detach-${ending}`,
+        connId: `conn-tool-detach-${ending}`,
+        runToolAgentConsult,
+        runAgentConsult: runToolAgentConsult,
+      });
+      owner.control.bindBridge(bridge);
+      await activate(owner, closeProvider);
+      owner.control.onToolCall?.({
+        itemId: `item-${ending}`,
+        callId: `call-${ending}`,
+        name: "openclaw_agent_consult",
+        args: { question: "keep running after hangup" },
+      });
+      try {
+        await started.promise;
+        if (ending === "close") {
+          await owner.close();
+        } else if (ending === "disconnect") {
+          cleanupTalkConnection(`conn-tool-detach-${ending}`, { warn: vi.fn() });
+          await vi.waitFor(() => expect(closeLogicalSession).toHaveBeenCalledOnce());
+        } else {
+          owner.control.onClose?.("error");
+          await vi.waitFor(() => expect(closeLogicalSession).toHaveBeenCalledOnce());
+        }
+        expect(acceptedSignal?.aborted).toBe(false);
+        expect(closeLogicalSession).toHaveBeenCalledOnce();
+        if (ending !== "provider-close") {
+          expect(closeProvider).toHaveBeenCalledOnce();
+        }
+        result.resolve({ text: "finished after hangup" });
+        await nextEventLoopTurn();
+        expect(bridge.submitToolResult).not.toHaveBeenCalled();
+      } finally {
+        result.resolve({ text: "test cleanup" });
+        await owner.close();
+      }
+    },
+  );
+
   it("detaches accepted provider consultations without extending admission", async () => {
     const result = createDeferred<{ text: string }>();
     const started = createDeferred();
