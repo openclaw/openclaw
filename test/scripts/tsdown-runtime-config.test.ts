@@ -198,6 +198,7 @@ describe("tsdown config", () => {
     expect(graph.minify).toEqual(runtimeGraph("plugins/runtime/index").minify);
     const plugins = await resolvePluginNames(graph.plugins);
     expect(plugins).toContain("openclaw:compact-module-labels");
+    expect(plugins).toContain("openclaw:package-runtime-url:@openclaw/fs-safe");
     expect(plugins).not.toContain("openclaw:runtime-dependency-ownership");
   });
 
@@ -242,8 +243,10 @@ describe("tsdown config", () => {
   });
 
   it("bundles SDK-owned helpers while retaining native package ownership", async () => {
+    const broker = runtimeGraph("plugins/plugin-capture-native-resource");
     for (const [graph, bundleFsSafe] of [
       [runtimeGraph("plugins/runtime/index"), false],
+      [broker, true],
       [runtimeGraph("config/sessions/disk-budget.worker"), true],
       [runtimeGraph("infra/fs-safe-copy.worker"), true],
       [runtimeGraph("infra/sqlite-readonly-location.worker"), true],
@@ -258,6 +261,9 @@ describe("tsdown config", () => {
       for (const specifier of ["@openclaw/fs-safe/advanced", "@openclaw/fs-safe/path"]) {
         expect(alwaysBundle(specifier, undefined)).toBe(bundleFsSafe);
         expect(external(specifier, undefined, false)).toBe(!bundleFsSafe);
+      }
+      for (const specifier of ["semver", "tslog"]) {
+        expect(alwaysBundle(specifier, undefined)).toBe(bundleFsSafe && graph !== broker);
       }
       for (const specifier of ["@openclaw/proc-safe/windows-job"]) {
         expect(alwaysBundle(specifier.split("/").slice(0, 2).join("/"), undefined)).toBe(false);

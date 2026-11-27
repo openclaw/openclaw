@@ -24,11 +24,7 @@ message. In Llama, give the model a context size of at least 32K.
 
 ### Connect OpenClaw
 
-The provider ships in the [llama.cpp plugin](/plugins/llama-cpp):
-
-```bash
-openclaw plugins install @openclaw/llama-cpp-provider
-```
+The provider ships with OpenClaw, in the bundled [llama.cpp plugin](/plugins/llama-cpp).
 
 Run `openclaw onboard` and choose **Llama**. Guided setup detects the running
 app and offers its models, preferring one already loaded in the app.
