@@ -20,7 +20,7 @@ type EmbeddingQueryRetryHarness = {
     providerRuntime?: MemoryEmbeddingProviderRuntime,
     deadlineControl?: MemorySearchDeadlineControl,
   ) => Promise<number[]>;
-  markLocalEmbeddingProviderDegraded: (error: unknown) => void;
+  markEmbeddingProviderFailure: (error: unknown) => void;
   resolveEmbeddingTimeout: () => number;
   waitForEmbeddingRetry: (delayMs: number, action: string, signal?: AbortSignal) => Promise<void>;
 };
@@ -40,7 +40,7 @@ function createEmbeddingQueryRetryHarness(
     provider,
     settings: {},
     resolveEmbeddingTimeout: () => timeoutMs,
-    markLocalEmbeddingProviderDegraded: vi.fn(),
+    markEmbeddingProviderFailure: vi.fn(),
   }) as EmbeddingQueryRetryHarness;
 }
 
@@ -306,7 +306,7 @@ describe.each(["text", "structured"])("memory embedding batch retry boundary (%s
       expect(aborted).toEqual([3, 2]);
       expect(embedBatch.mock.calls.map(([inputs]) => inputs.length)).toEqual([3, 2, 1, 1, 1]);
       expect(manager.waitForEmbeddingRetry).not.toHaveBeenCalled();
-      expect(manager.markLocalEmbeddingProviderDegraded).not.toHaveBeenCalled();
+      expect(manager.markEmbeddingProviderFailure).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
@@ -330,7 +330,7 @@ describe.each(["text", "structured"])("memory embedding batch retry boundary (%s
     );
     expect(embedBatch.mock.calls.map(([texts]) => texts.length)).toEqual([33, 10, 10, 10, 3]);
     expect(manager.waitForEmbeddingRetry).not.toHaveBeenCalled();
-    expect(manager.markLocalEmbeddingProviderDegraded).not.toHaveBeenCalled();
+    expect(manager.markEmbeddingProviderFailure).not.toHaveBeenCalled();
   });
 
   // #183556: Mistral rejects the whole batch by aggregate tokens, not by item count.
@@ -354,7 +354,7 @@ describe.each(["text", "structured"])("memory embedding batch retry boundary (%s
     expect(sizes[0]).toBe(33);
     expect(sizes.slice(1).every((size) => size < 33)).toBe(true);
     expect(manager.waitForEmbeddingRetry).not.toHaveBeenCalled();
-    expect(manager.markLocalEmbeddingProviderDegraded).not.toHaveBeenCalled();
+    expect(manager.markEmbeddingProviderFailure).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -376,6 +376,6 @@ describe.each(["text", "structured"])("memory embedding batch retry boundary (%s
     expect(embedBatch).toHaveBeenCalledOnce();
     expect(embedBatch.mock.calls[0]?.[0]).toEqual(batchInputs(items));
     expect(manager.waitForEmbeddingRetry).not.toHaveBeenCalled();
-    expect(manager.markLocalEmbeddingProviderDegraded).toHaveBeenCalledOnce();
+    expect(manager.markEmbeddingProviderFailure).toHaveBeenCalledOnce();
   });
 });
