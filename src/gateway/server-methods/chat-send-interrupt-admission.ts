@@ -17,20 +17,26 @@ export async function prepareChatSendInterruptAdmission(params: {
   abortSignal: AbortSignal;
 }) {
   const { sessionMutationAuthorization, ...source } = params.operator;
-  const sharing = source.client?.internal?.operatorRunAuthority
-    ? undefined
-    : sessionMutationAuthorization;
-  let releaseUntransferredSharing = sharing?.retain?.();
+  const sharing =
+    source.client?.internal?.operatorRunAuthority &&
+    !sessionMutationAuthorization?.participationCeiling
+      ? undefined
+      : sessionMutationAuthorization;
+  const invocationAuthority =
+    sharing?.retainForRun?.() ??
+    (sharing
+      ? {
+          assertCurrent: sharing.assertAdmittedInputCurrent ?? sharing.assertCurrent,
+          signal: sharing.participationSignal,
+          release: sharing.retain?.(),
+        }
+      : undefined);
+  let releaseUntransferredSharing = invocationAuthority?.release;
   try {
     const operator = await retainGatewayOperatorRun({
       ...source,
       entry: params.entry,
-      invocationAuthority: sharing
-        ? {
-            assertCurrent: sharing.assertAdmittedInputCurrent ?? sharing.assertCurrent,
-            release: releaseUntransferredSharing,
-          }
-        : undefined,
+      invocationAuthority,
     });
     if (operator.authority) {
       releaseUntransferredSharing = undefined;
@@ -38,7 +44,6 @@ export async function prepareChatSendInterruptAdmission(params: {
     const assertCurrent = () => {
       params.assertCurrent?.();
       params.abortSignal.throwIfAborted();
-      operator.authority?.assertCurrent();
       if (params.interruptCapture) {
         params.assertSessionTargetCurrent();
       }

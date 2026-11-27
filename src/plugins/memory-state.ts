@@ -5,11 +5,11 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
 import { wrapCurrentPluginInstance } from "./plugin-instance-scope.js";
 import type {
+  MemoryBackendRegistration,
   MemoryCorpusSupplement,
   MemoryCorpusSupplementRegistration,
   MemoryFlushFilePlanDraft,
   MemoryFlushToolsPlan,
-  MemoryLearnGuidanceBuilder,
   MemoryPluginCapability,
   MemoryPluginCapabilityRegistration,
   MemoryProviderFlushPlanResolver,
@@ -39,7 +39,6 @@ export type {
   MemoryFlushPlan,
   MemoryFlushPlanResolver,
   MemoryFlushToolsPlan,
-  MemoryLearnGuidanceBuilder,
   MemoryPluginCapability,
   MemoryPluginPublicArtifact,
   MemoryPluginPublicArtifactsProvider,
@@ -171,21 +170,6 @@ export function getMemoryCapabilityRegistration(): MemoryPluginCapabilityRegistr
     ? {
         pluginId: capability.pluginId,
         capability: { ...capability.capability },
-      }
-    : undefined;
-}
-
-/** The selected memory provider's /learn contribution, when it declares one. */
-export function getMemoryLearnContribution():
-  | { pluginId: string; toolNames: readonly string[]; buildGuidance: MemoryLearnGuidanceBuilder }
-  | undefined {
-  const registration = getMemoryCapability();
-  const capability = registration?.capability;
-  return registration && capability?.learnToolNames?.length && capability.learnGuidanceBuilder
-    ? {
-        pluginId: registration.pluginId,
-        toolNames: capability.learnToolNames,
-        buildGuidance: capability.learnGuidanceBuilder,
       }
     : undefined;
 }
@@ -462,6 +446,11 @@ export function getMemoryRuntime(): MemoryPluginRuntime | undefined {
 
 export function getMemoryProviderRuntime() {
   return getMemoryCapability()?.capability.providerRuntime;
+}
+
+/** Passive backends published beside the slot owner in the same registry. */
+export function listMemoryBackendRegistrations(): readonly MemoryBackendRegistration[] {
+  return getPluginRegistryForContext()?.memoryBackends ?? [];
 }
 
 let standaloneMemoryManagerActive = false;

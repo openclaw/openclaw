@@ -125,6 +125,95 @@ test("New session command discovery previews admitted project skills under runti
   });
 });
 
+test("restricted creators preview project skills only from public repositories", async () => {
+  await withSkillState(async (root) => {
+    const workspace = await initializeRepository(root, "workspace");
+    await putSkill(path.join(workspace, "skills"), "agent-fixture");
+    const projects: Record<string, string> = {};
+    for (const [kind, name] of [
+      ["public", "openclaw/project-skills-public"],
+      ["private", "openclaw/project-skills-private"],
+    ] as const) {
+      const repo = await initializeRepository(root, kind, `https://github.com/${name}.git`);
+      await putSkill(path.join(repo, "skills"), `${kind}-fixture`);
+      projects[kind] = (await registerProjectRegistry({ path: repo })).id;
+    }
+    const cfg = agentConfig(workspace, {
+      skills: ["agent-fixture", "public-fixture", "private-fixture"],
+    });
+    const fetchImpl = vi.fn<typeof fetch>(async (input) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const visibility = url.endsWith("/repos/openclaw/project-skills-public")
+        ? "public"
+        : "private";
+      return new Response(JSON.stringify({ visibility }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+    try {
+      // The team contributor role: session creation without operator.write.
+      const contributor = ["operator.read", "operator.sessions.write"];
+      const agentOnly = [{ name: "agent_fixture", description: "agent-fixture" }];
+      expect(
+        skillCommands(await listCommands(cfg, { projectId: projects.public }, contributor)),
+      ).toEqual([...agentOnly, { name: "public_fixture", description: "public-fixture" }]);
+      expect(
+        skillCommands(await listCommands(cfg, { projectId: projects.private }, contributor)),
+      ).toEqual(agentOnly);
+      expect(skillCommands(await listCommands(cfg, { projectId: projects.private }))).toEqual([
+        ...agentOnly,
+        { name: "private_fixture", description: "private-fixture" },
+      ]);
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+test("command catalogs distinguish manual-only skills from slash-only bundle templates", async () => {
+  await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, () =>
+    withSkillState(async (root) => {
+      const workspace = path.join(root, "workspace");
+      const bundle = path.join(root, "bundle");
+      await writeSkill({
+        dir: path.join(workspace, "skills", "manual-review"),
+        name: "manual-review",
+        description: "Manual review",
+        frontmatterExtra: "disable-model-invocation: true",
+      });
+      await fs.mkdir(path.join(bundle, ".claude-plugin"), { recursive: true });
+      await fs.mkdir(path.join(bundle, "commands"));
+      await fs.writeFile(
+        path.join(bundle, ".claude-plugin", "plugin.json"),
+        '{"name":"review-bundle"}',
+      );
+      await fs.writeFile(path.join(bundle, "commands", "bundle-review.md"), "Review $ARGUMENTS");
+      const cfg = agentConfig(workspace);
+      cfg.plugins = {
+        allow: ["review-bundle"],
+        load: { paths: [bundle] },
+        entries: { "review-bundle": { enabled: true } },
+      };
+      const result = await listCommands(cfg, {});
+      expect(result.ok).toBe(true);
+      const commands = (result.payload as CommandsListResult).commands;
+      expect(commands.find((command) => command.name === "manual_review")).toMatchObject({
+        source: "skill",
+        skillModelVisible: false,
+        skillReferenceable: true,
+      });
+      expect(commands.find((command) => command.name === "bundle_review")).toMatchObject({
+        source: "skill",
+        skillModelVisible: false,
+        skillReferenceable: false,
+      });
+    }),
+  );
+});
+
 // The created session's catalog takes the same host routing from its session entry; the
 // discovery owner proves that half in chat-commands.discovery.test.ts.
 test("project previews keep the registry's file host", async () => {

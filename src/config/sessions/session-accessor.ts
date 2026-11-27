@@ -264,7 +264,6 @@ export {
   readRecentSessionTranscriptActiveEvents,
   readSessionTranscriptBoundedMessageTailPage,
   readRecentSessionTranscriptMessageEvents,
-  readSessionTranscriptActivePathEntryRelation,
   readSessionTranscriptMessageEventPage,
   readSessionTranscriptMessageEvents,
   readSessionTranscriptVisibleMessageDeltaCore,

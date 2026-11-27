@@ -7,7 +7,6 @@
  * CPU passes are untraced; separate allocation passes include collected objects.
  */
 import assert from "node:assert/strict";
-import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import { pathToFileURL } from "node:url";
@@ -15,6 +14,7 @@ import { parseArgs } from "node:util";
 import { publishRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import * as current from "../../extensions/codex/src/app-server/attempt-context.js";
 import type { CodexDynamicToolSpec } from "../../extensions/codex/src/app-server/protocol.js";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.js";
 
 const { values } = parseArgs({
@@ -83,9 +83,6 @@ function run() {
     assert.equal(report.tools.entries.length, tools.length);
   }
 }
-function bytes(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + bytes(child), 0);
-}
 run();
 const inspector = new Session();
 inspector.connect();
@@ -111,7 +108,7 @@ try {
       sample,
       cpuUsPerReport: (cpu.user + cpu.system) / iterations,
       wallUsPerReport: (wallMs * 1000) / iterations,
-      sampledBytesPerReport: bytes(profile.head) / iterations,
+      sampledBytesPerReport: sumSampledHeapBytes(profile.head) / iterations,
       hostLoad,
     });
   }

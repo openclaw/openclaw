@@ -1,6 +1,7 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { FastMode, ModelsProbeResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
@@ -16,6 +17,7 @@ import {
 import type { DefaultModelSelection, DefaultsDraft, ModelBehaviorConfig } from "./data.ts";
 
 export type ModelDefaultsSaveField = "thinking" | "fastMode" | "defaults";
+export type ModelRuntimePick = { id: string; base: string };
 
 function replaceFirstFallback(fallbacks: string[], model: string | null): string[] {
   return model ? [model, ...fallbacks.slice(1).filter((fallback) => fallback !== model)] : [];
@@ -23,20 +25,39 @@ function replaceFirstFallback(fallbacks: string[], model: string | null): string
 
 export function modelDefaultsActions(
   getDefaults: () => DefaultModelSelection,
-  stageDefaults: (
-    patch: Partial<DefaultModelSelection & ModelBehaviorConfig>,
-    field?: ModelDefaultsSaveField,
-  ) => void,
+  stageDefaults: (patch: Partial<DefaultsDraft>, field?: ModelDefaultsSaveField) => void,
 ) {
+  function runtimePatch(model: string, pick?: ModelRuntimePick): Partial<DefaultsDraft> {
+    if (!pick) {
+      return {};
+    }
+    const runtimes = getDefaults().runtimes;
+    const prior = runtimes?.[model];
+    const previous = prior?.id ?? pick.base;
+    // The catalog omits its default from alternatives. Keep the old route selectable
+    // when the operator promotes its only configured alternative.
+    const choices = prior?.pickerRuntimes;
+    const pickerRuntimes =
+      previous !== pick.id && choices?.includes(pick.id) && !choices.includes(previous)
+        ? choices.map((id) => (id === pick.id ? previous : id))
+        : undefined;
+    const changed = { id: pick.id, ...(pickerRuntimes ? { pickerRuntimes } : {}) };
+    return {
+      runtimes: { ...runtimes, [model]: { ...prior, ...changed } },
+      runtimeEdit: { model, ...changed },
+    };
+  }
   return {
-    onPrimaryChange: (model: string) => {
+    onPrimaryChange: (model: string, runtime?: ModelRuntimePick) => {
       stageDefaults({
+        ...runtimePatch(model, runtime),
         primary: model,
         fallbacks: getDefaults().fallbacks.filter((fallback) => fallback !== model),
       });
     },
-    onFallbackChange: (model: string | null) => {
+    onFallbackChange: (model: string | null, runtime?: ModelRuntimePick) => {
       stageDefaults({
+        ...(model ? runtimePatch(model, runtime) : {}),
         fallbacks: replaceFirstFallback(getDefaults().fallbacks, model),
       });
     },
@@ -53,6 +74,16 @@ export function modelDefaultsActions(
       });
     },
     onDecisionChange: (model: string | null) => stageDefaults({ decisionModel: model }),
+    // The picker edits only the primary; a saved fallback chain is kept exactly as written.
+    onSubagentChange: (model: string | null) => {
+      const current = getDefaults().subagentModel;
+      const fallbacks = typeof current === "object" ? current?.fallbacks : undefined;
+      stageDefaults({
+        subagentModel: fallbacks
+          ? { ...(model !== null ? { primary: model } : {}), fallbacks }
+          : model,
+      });
+    },
     onThinkingChange: (level: string) =>
       stageDefaults({ thinkingLevel: level, thinkingOverridden: true }, "thinking"),
     onThinkingReset: () =>
@@ -186,6 +217,18 @@ export function runModelProviderDefaultsMutation(
       raw: {
         agents: {
           defaults: {
+            ...(params.runtimeEdit
+              ? {
+                  models: {
+                    [params.runtimeEdit.model]: {
+                      agentRuntime: { id: params.runtimeEdit.id },
+                      ...(params.runtimeEdit.pickerRuntimes
+                        ? { pickerRuntimes: params.runtimeEdit.pickerRuntimes }
+                        : {}),
+                    },
+                  },
+                }
+              : {}),
             ...(params.primary
               ? {
                   model:
@@ -196,6 +239,10 @@ export function runModelProviderDefaultsMutation(
               : {}),
             utilityModel: modelSettingPatch(params.utilityModel),
             ...(params.decisionModel !== undefined ? { decisionModel: params.decisionModel } : {}),
+            // Untouched and unset stays out of the patch, so no empty subagents object is written.
+            ...(params.subagentModel !== undefined
+              ? { subagents: { model: modelSettingPatch(params.subagentModel) } }
+              : {}),
             thinkingDefault:
               params.thinkingOverridden && params.thinkingLevel ? params.thinkingLevel : null,
             fastModeDefault:
@@ -204,7 +251,12 @@ export function runModelProviderDefaultsMutation(
         },
       },
       note: t("modelProviders.notes.defaultModel"),
-      replacePaths: DEFAULT_MODELS_REPLACE_PATHS,
+      replacePaths: params.runtimeEdit?.pickerRuntimes
+        ? [
+            ...DEFAULT_MODELS_REPLACE_PATHS,
+            `agents.defaults.models.${params.runtimeEdit.model}.pickerRuntimes`,
+          ]
+        : DEFAULT_MODELS_REPLACE_PATHS,
     },
   );
 }
@@ -217,7 +269,11 @@ export function modelProviderConfigMutationBlockedReason(
     return t("modelProviders.readOnly.disconnected");
   }
   if (context.runtimeConfig.canPatch !== true) {
-    return t("modelProviders.readOnly.adminRequired");
+    return t(
+      hasOperatorAdminAccess(snapshot.hello?.auth ?? null)
+        ? "modelProviders.configUnavailable"
+        : "modelProviders.readOnly.adminRequired",
+    );
   }
   const config = context.runtimeConfig.state;
   if (!snapshot.client || config.client !== snapshot.client || !currentConfigObject(config)) {
@@ -227,7 +283,9 @@ export function modelProviderConfigMutationBlockedReason(
 }
 
 export function modelProviderErrorMessage(error: unknown): string {
-  return formatUiError(error, t("modelProviders.requestFailed"));
+  const summary = t("modelProviders.requestFailed");
+  const detail = formatUiError(error, summary);
+  return detail === summary ? summary : `${summary} ${detail}`;
 }
 
 export async function modelProviderMutationWarnings(
@@ -304,11 +362,16 @@ export async function runModelProviderConfigMutation(
   }
 }
 
-/** Credential writes share config serialization and retain acknowledged success during refresh. */
+/**
+ * Credential writes share config serialization and retain acknowledged success during refresh.
+ * A saved key is then checked against its provider while the form stays busy, so the message
+ * the user sees is the check's outcome rather than a save receipt for a key that doesn't work.
+ */
 export async function runModelProviderApiKeyMutation(
   owner: ModelProviderConfigMutationOwner & {
     canMutate: () => boolean;
     refreshProviders: () => Promise<string | null>;
+    checkSavedKey: (receipt: { profileId?: string }) => Promise<ModelProviderRowMessage | null>;
   },
   params: {
     client: GatewayBrowserClient;
@@ -317,7 +380,7 @@ export async function runModelProviderApiKeyMutation(
     apiKey: string;
     success: string;
   },
-): Promise<{ ok: false } | { ok: true; warning: string | null }> {
+): Promise<{ ok: false } | { ok: true; warning: string | null; rejected: boolean }> {
   const isCurrent = () => owner.isCurrentClient() && owner.isCurrentAgent();
   owner.setBusy(true);
   owner.setMessage(null);
@@ -328,10 +391,10 @@ export async function runModelProviderApiKeyMutation(
           throw new Error(t("modelProviders.requestFailed"));
         }
         const target = { provider: params.provider, agentId: params.agentId };
-        const receipt = await client.request<{ warning?: string }>("models.authSetApiKey", {
-          ...target,
-          apiKey: params.apiKey,
-        });
+        const receipt = await client.request<{ warning?: string; profileId?: string }>(
+          "models.authSetApiKey",
+          { ...target, apiKey: params.apiKey },
+        );
         invalidateModelAuthStatusRequests(client);
         return receipt;
       },
@@ -348,8 +411,14 @@ export async function runModelProviderApiKeyMutation(
     if (!isCurrent()) {
       return { ok: false };
     }
-    owner.setMessage({ kind: "success", text: params.success, ...(warning ? { warning } : {}) });
-    return { ok: true, warning };
+    const checked = await owner.checkSavedKey(result.value);
+    if (!isCurrent()) {
+      return { ok: false };
+    }
+    const message = checked ?? { kind: "success" as const, text: params.success };
+    const warnings = [message.warning, warning].filter(Boolean).join(" ");
+    owner.setMessage({ ...message, ...(warnings ? { warning: warnings } : {}) });
+    return { ok: true, warning, rejected: message.kind === "error" };
   } finally {
     if (isCurrent()) {
       owner.setBusy(false);

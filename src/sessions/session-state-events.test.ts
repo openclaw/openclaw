@@ -458,7 +458,7 @@ describe("session state events", () => {
 });
 
 describe("session state watcher cursor batches", () => {
-  it("advances watcher fanout with bounded cursor reads and preserves excluded cursors", async () => {
+  it("advances watcher fanout with bounded cursor work and preserves excluded cursors", async () => {
     const database = createDatabaseOptions();
     await seedChild(database, nestedWatcher);
     const db = requireNativeSqliteDatabase(openOpenClawStateDatabase(database).db);
@@ -480,9 +480,12 @@ describe("session state watcher cursor batches", () => {
     insert.run(stale, child, 1, Date.now());
     insert.run(missing, "other-target", 1, Date.now());
     const staleBefore = readCursor(database, stale);
-    const reads = trackSqliteStatementExecutions(db, ["cursors"], (sql) =>
-      /^select\b/i.test(sql) && /\bfrom\s+"session_watch_cursors"/i.test(sql) ? "cursors" : null,
-    );
+    const statements = trackSqliteStatementExecutions(db, ["reads", "writes"], (sql) => {
+      if (/^select\b.*\bfrom "session_watch_cursors"/i.test(sql)) {
+        return "reads";
+      }
+      return /^insert into "session_watch_cursors"/i.test(sql) ? "writes" : null;
+    });
     let event: SessionStateEventRow | undefined;
     try {
       event = runOpenClawStateWriteTransaction(
@@ -500,7 +503,7 @@ describe("session state watcher cursor batches", () => {
         database,
       );
     } finally {
-      reads.restore();
+      statements.restore();
     }
     expect(event?.sequence).toBeGreaterThan(1);
     for (const [index, key] of watchers.entries()) {
@@ -515,7 +518,8 @@ describe("session state watcher cursor batches", () => {
       expect(readCursor(database, key)).toEqual(staleBefore);
     }
     expect(readCursor(database, missing, "other-target")).toEqual(staleBefore);
-    expect(reads.counts.cursors).toBeLessThanOrEqual(4);
+    expect(statements.counts.reads).toBeLessThanOrEqual(4);
+    expect(statements.counts.writes).toBeLessThanOrEqual(11);
   });
 
   it("preserves sequential store custody when watcher strings share a SQLite binding", () => {

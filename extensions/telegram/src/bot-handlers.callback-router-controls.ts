@@ -392,7 +392,7 @@ export async function handleTelegramInteractiveCallback(params: {
     });
     return { ctx: buildSyntheticContext(ctx, message), message };
   };
-  const processSubmitText = async (text: string): Promise<"completed" | "skipped"> => {
+  const processSubmitText = async (text: string): Promise<"completed" | "skipped" | "dropped"> => {
     const synthetic = buildSynthetic(text);
     const participant = isTelegramSpooledReplayUpdate(synthetic.ctx.update)
       ? (getTelegramSpooledReplayDeferredParticipant() ??
@@ -413,7 +413,7 @@ export async function handleTelegramInteractiveCallback(params: {
         },
         spooledReplayAbortSignal: participant?.abortSignal,
       });
-      if (result.kind === "completed" || result.kind === "skipped") {
+      if (result.kind !== "failed-retryable") {
         participant?.settle(result);
         return result.kind;
       }
@@ -489,7 +489,7 @@ export async function handleTelegramInteractiveCallback(params: {
         return;
       }
       const submitText = normalizeOptionalString(result?.submitText);
-      if (!submitText || (await processSubmitText(submitText)) === "skipped") {
+      if (!submitText || (await processSubmitText(submitText)) !== "completed") {
         return;
       }
       await clearCallbackButtons().catch((err: unknown) => {

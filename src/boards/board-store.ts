@@ -120,6 +120,12 @@ export function createBoardDeclaredSummary(
         ? `GitHub Actions metadata: ${tool.slice(GITHUB_ACTIONS_GRANT_PREFIX.length)} (including private repository data accessible to the agent; shared with this widget/session audience)`
         : `Tool access: ${tool}`,
     ),
+    ...(declared?.queries ?? []).map((query) => {
+      const selectors = Object.entries(query.params)
+        .map(([key, value]) => `${key}=${JSON.stringify(value)}`)
+        .join("; ");
+      return `GitHub Actions query ${query.name}: ${selectors}; fields=${query.fields.join(", ")} (uses the agent's credentials; shares selected private and future results with session readers)`;
+    }),
   ];
   return lines.length > 0 ? lines : undefined;
 }
@@ -269,7 +275,7 @@ export function createBoardWidgetPutSnapshot(
       ? createHash("sha256").update(params.content.html).digest("hex")
       : undefined;
   // HTML grants are frozen to approved bytes. MCP App grants stay within the
-  // source server. Either kind may narrow, but never widen, its declaration.
+  // source server. Origins/tools may narrow; named query definitions must stay identical.
   const preservesGrant =
     declared !== undefined &&
     context.grantScopeMatches &&

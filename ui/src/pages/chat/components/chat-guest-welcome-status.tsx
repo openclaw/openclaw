@@ -1,19 +1,23 @@
 import { Show } from "solid-js";
-import type { GuestWelcomeHandle } from "../../../app/guest-welcome-handle.ts";
+import type { GuestWelcomePresentation } from "../../../app/guest-welcome-handle.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
-import { projectOwner } from "../../../lib/reactive/projection.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 
-/** Non-blocking welcome-session setup progress in the composer status lane. */
-export function renderGuestWelcomeStatus(owner: GuestWelcomeHandle) {
-  const state = projectOwner(owner, (current) => current.presentation);
+registerEnglishCatalog(registerChatSessionEnglish);
+
+/** Non-blocking welcome setup progress, including when Home has no chat pane. */
+export function GuestWelcomeStatus(props: {
+  presentation: GuestWelcomePresentation;
+  onRetry: () => void;
+}) {
   const failed = () => {
-    const current = state.read();
+    const current = props.presentation;
     return current.kind === "failed" ? current : undefined;
   };
   return (
     <>
-      <Show when={state.read().kind === "pending"}>
+      <Show when={props.presentation.kind === "pending"}>
         <div class="agent-chat__composer-status chat-guest-welcome-status" data-tone="info">
           <div
             class="agent-chat__composer-status-band"
@@ -45,7 +49,7 @@ export function renderGuestWelcomeStatus(owner: GuestWelcomeHandle) {
                   ? `${t("chat.sessionSharing.guestWelcomeFailed")} ${current().message}`
                   : t("chat.sessionSharing.guestWelcomeFailed")}
               </span>
-              <button type="button" class="btn btn--sm" onClick={() => owner.retry()}>
+              <button type="button" class="btn btn--sm" onClick={() => props.onRetry()}>
                 {t("chat.sessionSharing.guestWelcomeRetry")}
               </button>
             </div>

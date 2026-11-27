@@ -64,7 +64,9 @@ import ai.openclaw.app.operatorScopesAllowAdmin
 import ai.openclaw.app.operatorScopesAllowRead
 import ai.openclaw.app.operatorScopesAllowWrite
 import ai.openclaw.app.providerDisplayName
+import ai.openclaw.app.providerQualifiedRef
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
+import ai.openclaw.app.selectedChatModelSendBlockingReason
 import ai.openclaw.app.ui.AppModalBottomSheet
 import ai.openclaw.app.ui.FoldAwareDropdownMenu
 import ai.openclaw.app.ui.FoldAwareMenuItem
@@ -87,6 +89,7 @@ import ai.openclaw.app.ui.relativeSessionTime
 import ai.openclaw.app.ui.rememberWindowDisplayFeatureState
 import ai.openclaw.app.ui.sessionPresentationTitle
 import ai.openclaw.app.ui.sidebarCatalogHosts
+import android.icu.text.BreakIterator
 import android.os.SystemClock
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -135,6 +138,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -239,6 +243,7 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -300,15 +305,15 @@ private enum class ChatComposerPickerPage { Models, Permissions }
 internal object ChatUserMessageDisclosurePolicy {
   const val collapsedLineLimit = 12
   const val collapsedCharacterLimit = 700
+  private val loneCarriageReturn = Regex("""\r(?!\n)""")
 
   fun collapsedPreview(text: String): String? {
     var end = minOf(text.length, collapsedCharacterLimit)
-    if (end in 1 until text.length && text[end - 1].isHighSurrogate() && text[end].isLowSurrogate()) {
-      end -= 1
-    }
     var lineCount = 1
     for (index in 0 until end) {
-      if (text[index] != '\n') continue
+      val char = text[index]
+      if (char != '\r' && char != '\n') continue
+      if (char == '\n' && index > 0 && text[index - 1] == '\r') continue
       if (lineCount == collapsedLineLimit) {
         end = index
         break
@@ -316,7 +321,12 @@ internal object ChatUserMessageDisclosurePolicy {
       lineCount += 1
     }
     if (end == text.length) return null
-    return text.substring(0, end).trimEnd() + "…"
+    // One code point beyond the cutoff lets ICU recognize a cluster that crosses it.
+    val boundaries = BreakIterator.getCharacterInstance(Locale.ROOT)
+    boundaries.setText(text.substring(0, text.offsetByCodePoints(end, 1)))
+    if (!boundaries.isBoundary(end)) end = boundaries.preceding(end)
+    // Compose Text needs LF to display a lone CR as a line break in the folded preview.
+    return text.substring(0, end).trimEnd().replace(loneCarriageReturn, "\n") + "…"
   }
 }
 
@@ -395,6 +405,7 @@ internal fun ChatScreen(
   val sessionCreating by viewModel.chatSessionCreating.collectAsState()
   val errorText by viewModel.chatError.collectAsState()
   val talkStatusText by viewModel.talkModeStatusText.collectAsState()
+  val talkMicrophoneMuted by viewModel.talkMicrophoneMuted.collectAsState()
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
   val selectedActiveRun by viewModel.chatSelectedActiveRunPresentation.collectAsState()
   val healthOk by viewModel.chatHealthOk.collectAsState()
@@ -415,7 +426,7 @@ internal fun ChatScreen(
   val gatewayAgents by viewModel.gatewayAgents.collectAsState()
   val thinkingLevel by viewModel.chatThinkingLevel.collectAsState()
   val thinkingLevelSelection by viewModel.chatThinkingLevelSelection.collectAsState()
-  val streamingAssistantText by viewModel.chatStreamingAssistantText.collectAsState()
+  val streamingAssistant by viewModel.chatStreamingAssistant.collectAsState()
   val pendingToolCalls by viewModel.chatToolActivities.collectAsState()
   val questions by viewModel.chatQuestions.collectAsState()
   val progressCard by viewModel.chatProgressCard.collectAsState()
@@ -962,7 +973,15 @@ internal fun ChatScreen(
       )
     }
     if (talkActive) {
-      ChatNotice(title = nativeString("Talk"), body = talkStatusText)
+      ChatNotice(
+        title = if (talkMicrophoneMuted) nativeString("Talk · Microphone muted") else nativeString("Talk"),
+        body = talkStatusText,
+      ) {
+        TalkMicrophoneButton(
+          muted = talkMicrophoneMuted,
+          onClick = { viewModel.setTalkMicrophoneMuted(!talkMicrophoneMuted) },
+        )
+      }
     }
     ChatSwarmProgress(groups = swarmGroups)
   }
@@ -975,7 +994,7 @@ internal fun ChatScreen(
       loading = historyLoading || sessionCreating,
       sending = sendInFlight,
       activeRun = pendingRunCount > 0,
-      streaming = streamingAssistantText != null,
+      streaming = streamingAssistant != null,
       settingsMutationPending = sessionSettingsPending,
     )
   ChatMessageList(
@@ -1012,7 +1031,7 @@ internal fun ChatScreen(
     activeRunOutputTokens = selectedActiveRun.outputTokens,
     pendingToolCalls = pendingToolCalls,
     questions = questionsForSession(questions, sessionKey, mainSessionKey, activeAgentId),
-    streamingAssistantText = streamingAssistantText,
+    streamingAssistant = streamingAssistant,
     healthOk = healthOk,
     gatewayOffline = gatewayOffline,
     outboxItems = currentSessionOutboxItems,
@@ -1755,7 +1774,7 @@ private fun ChatMessageList(
   activeRunOutputTokens: Long?,
   pendingToolCalls: List<ChatPendingToolCall>,
   questions: List<ChatQuestionPrompt>,
-  streamingAssistantText: String?,
+  streamingAssistant: ChatController.StreamingAssistant?,
   healthOk: Boolean,
   gatewayOffline: Boolean,
   outboxItems: List<ChatOutboxItem>,
@@ -1787,6 +1806,7 @@ private fun ChatMessageList(
   header: @Composable ((() -> Unit)?, Boolean, Boolean) -> Unit,
   composer: @Composable ((() -> Unit)?, Boolean, Boolean) -> Unit,
 ) {
+  val streamingAssistantText = streamingAssistant?.text
   val history = remember(messages, sessionKey, mainSessionKey) { prepareChatHistory(messages, sessionKey, mainSessionKey) }
   val indicatorVisible = activeRunCount > 0
   val workingRunTracker = remember(sessionKey) { ChatWorkingRunTracker(sessionKey) }
@@ -1803,13 +1823,7 @@ private fun ChatMessageList(
       sessionKey = sessionKey,
       indicatorVisible = indicatorVisible,
       row = session,
-      transcript =
-        TurnRecapTranscriptState(
-          sessionKey = transcriptAnchor?.sessionKey,
-          newestItemId = transcriptAnchor?.newestItemId,
-          completedEndedAt = transcriptAnchor?.completedEndedAt,
-          completedNewestItemId = transcriptAnchor?.completedNewestItemId,
-        ),
+      transcript = transcriptAnchor,
     )
   val toolBridge = remember(sessionKey) { LiveToolActivityBridge() }
   val presentedTools = remember(toolBridge, history.toolScope, pendingToolCalls) { toolBridge.update(history.toolScope, pendingToolCalls) }
@@ -1875,6 +1889,10 @@ private fun ChatMessageList(
           catalogRevision = gatewayCatalogRevision,
           prepareRead = prepareFullMessageRead,
         ) { visibleContent, disclosure ->
+          val codeReaderFor =
+            key(fullMessageOwner, selectionGeneration, sessionKey) {
+              rememberChatCodeReaderForRow(messages, streamingAssistant, fullMessageOwner, activeRunCount, visibleContent)
+            }
           ChatBrowserLayout(browser = browser, modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
             LazyColumn(
               modifier = Modifier.fillMaxSize().nestedScroll(readerScroll.nestedScrollConnection).onGloballyPositioned(readerScroll.navigation.anchors::viewportPlaced),
@@ -1897,6 +1915,7 @@ private fun ChatMessageList(
                     is ChatTimelineItem.Message -> {
                       key(fullMessageOwner, selectionGeneration) {
                         ChatBubble(
+                          codeReaders = codeReaderFor(item),
                           messageId = item.message.id,
                           entryId = item.message.entryId,
                           role = item.message.role,
@@ -1996,6 +2015,7 @@ private fun ChatMessageList(
 
                     is ChatTimelineItem.StreamingAssistant -> {
                       ChatBubble(
+                        codeReaders = codeReaderFor(item),
                         messageId = null,
                         entryId = null,
                         role = "assistant",
@@ -2263,6 +2283,7 @@ internal fun ChatBubble(
   resolveInlineWidgetResource: suspend (String, ChatWidgetResource?) -> ChatWidgetResource?,
   loadImageArtifact: suspend (String) -> GatewayLoadedImage?,
   loadMediaArtifact: suspend (String, GatewayMediaKind, Boolean) -> GatewayLoadedMedia?,
+  codeReaders: ChatCodeReaderRow? = null,
   sourcePreviews: List<ChatSourcePreview> = emptyList(),
   sourcePreviewConfig: GatewaySourcePreviewConfig? = null,
   loadSourceFavicon: suspend (GatewaySourcePreviewConfig, String) -> GatewayLoadedImage? = { _, _ -> null },
@@ -2375,10 +2396,11 @@ internal fun ChatBubble(
     val groups = remember(orderedContent) { chatMessageContentGroups(orderedContent) }
     var imageOffset = 0
     var transcriptShown = false
+    val firstTextGroup = if (codeReaders == null) -1 else groups.indexOfFirst { parts -> parts.any { it.type == "text" } }
     caption?.let {
       Text(it, modifier = Modifier.padding(horizontal = CHAT_MESSAGE_TEXT_INSET_DP.dp), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
     }
-    groups.forEach { parts ->
+    groups.forEachIndexed { groupIndex, parts ->
       if (parts.first().isDetachedChatAttachment()) {
         val groupImageOffset = imageOffset
         imageOffset += parts.count { it.type == "image" }
@@ -2402,15 +2424,18 @@ internal fun ChatBubble(
               onExpandedChange = { userMessageExpanded = it },
             )
           }
-          parts.forEach { part ->
+          val firstTextIndex = if (groupIndex == firstTextGroup) parts.indexOfFirst { it.type == "text" } else -1
+          parts.forEachIndexed { partIndex, part ->
             when {
               part.type == "text" && !collapsibleUserText -> {
-                ChatMarkdown(
-                  text = part.text.orEmpty(),
-                  textColor = ClawTheme.colors.text,
-                  isStreaming = live,
-                  bodyStyle = ClawTheme.type.body.copy(fontWeight = FontWeight.Normal),
-                )
+                CompositionLocalProvider(LocalChatCodeReaderHandoff provides codeReaders.takeIf { partIndex == firstTextIndex }) {
+                  ChatMarkdown(
+                    text = part.text.orEmpty(),
+                    textColor = ClawTheme.colors.text,
+                    isStreaming = live,
+                    bodyStyle = ClawTheme.type.body.copy(fontWeight = FontWeight.Normal),
+                  )
+                }
               }
 
               part.type == "text" -> {}
@@ -3025,6 +3050,7 @@ private fun DiffStatChip(
 private fun ChatNotice(
   title: String,
   body: String,
+  trailingContent: (@Composable () -> Unit)? = null,
 ) {
   Surface(
     modifier = Modifier.fillMaxWidth(),
@@ -3043,6 +3069,7 @@ private fun ChatNotice(
         Text(text = title, style = ClawTheme.type.section, color = ClawTheme.colors.text)
         Text(text = body, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
       }
+      trailingContent?.invoke()
     }
   }
 }
@@ -3434,6 +3461,7 @@ private fun ChatComposer(
               BasicTextField(
                 value = textFieldValue,
                 enabled = inputEnabled,
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                 // A pending IME callback must not edit the draft behind Details.
                 onValueChange = { if (inputEnabled) updateTextFieldValue(it) },
                 textStyle = draftStyle.copy(color = ClawTheme.colors.text),
@@ -3483,16 +3511,15 @@ private fun ChatComposer(
         )
         BoxWithConstraints(Modifier.fillMaxWidth()) {
           val toolbarInset = if (maxWidth >= 360.dp) 4.dp else 0.dp
-          val iconWidth = if (onOpenDetails != null) 36.dp else ClawTheme.spacing.touchTarget
           val showEffort = thinkingSupported || fastModeEnabled || fastMode
           val primaryAction = resolveChatComposerPrimaryAction(talkActive, pendingRunCount > 0, hasContent)
           Row(Modifier.fillMaxWidth().padding(horizontal = toolbarInset), verticalAlignment = Alignment.CenterVertically) {
             if (onOpenDetails != null) {
-              IconButton(onClick = onOpenDetails, modifier = Modifier.size(width = 36.dp, height = ClawTheme.spacing.touchTarget)) {
+              IconButton(onClick = onOpenDetails, modifier = Modifier.size(ClawTheme.spacing.touchTarget)) {
                 Icon(Icons.Default.MoreVert, contentDescription = nativeString("Details"))
               }
             }
-            IconButton(onClick = onOpenAttachments, enabled = inputEnabled, modifier = Modifier.size(width = iconWidth, height = ClawTheme.spacing.touchTarget)) {
+            IconButton(onClick = onOpenAttachments, enabled = inputEnabled, modifier = Modifier.size(ClawTheme.spacing.touchTarget)) {
               Icon(Icons.Default.Add, contentDescription = nativeString("Add attachment"), tint = ClawTheme.colors.textMuted, modifier = Modifier.size(24.dp))
             }
             Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
@@ -3520,7 +3547,6 @@ private fun ChatComposer(
               } else {
                 Box {
                   ChatComposerMicButton(
-                    modifier = Modifier.width(iconWidth),
                     dictationState = dictationState,
                     dictationEnabled = ownerReady && dictationEnabled,
                     voiceNoteEnabled = ownerReady && recordVoiceNoteEnabled,
@@ -4029,6 +4055,7 @@ private fun BranchSwitcherSheet(
         Surface(
           onClick = { if (!branch.active) onSelect(branch.leafEntryId) },
           enabled = selectionEnabled && !branch.active,
+          modifier = Modifier.semantics { selected = branch.active },
           color = if (branch.active) ClawTheme.colors.surfacePressed else Color.Transparent,
           contentColor = ClawTheme.colors.text,
         ) {
@@ -4473,7 +4500,7 @@ private fun ChatPermissionPicker(
             )
             if (!selectable) {
               Text(
-                text = nativeString("Full access requires operator.admin access."),
+                text = nativeString("You don’t have permission to turn on Full access."),
                 style = ClawTheme.type.caption,
                 color = ClawTheme.colors.warning,
               )

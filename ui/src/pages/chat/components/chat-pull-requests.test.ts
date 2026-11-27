@@ -70,9 +70,9 @@ function disposeContainer() {
 describe("ChatPullRequests", () => {
   beforeEach(setupContainer);
   afterEach(disposeContainer);
-  it("keeps unknown diff counts absent rather than inventing zeroes", () => {
+  it("keeps unavailable counts absent and PR rows outside live regions", () => {
     paint({ pullRequests: [pullRequest({ additions: undefined, deletions: 0 })] });
-    expect(query(".chat-pr__additions")).toBeNull();
+    expect(query(".chat-pr__additions, .chat-prs[aria-live]")).toBeNull();
     expect(text(".chat-pr__deletions")).toBe("−0");
   });
 
@@ -83,7 +83,7 @@ describe("ChatPullRequests", () => {
       onDismiss: () => {},
     });
     const warning = query(".chat-pr__warning");
-    expect(warning?.getAttribute("aria-label")).toContain("could not be refreshed");
+    expect(warning?.getAttribute("aria-label")).toContain("Couldn’t refresh GitHub status");
     expect(warning?.getAttribute("aria-label")).not.toContain("rate limit");
     expect(text(".chat-pr__number")).toBe("openclaw/openclaw#103469");
   });
@@ -175,7 +175,7 @@ describe("ChatPullRequests", () => {
       );
       expect(history?.closest("article")).toBeNull();
       expect(history?.querySelector("summary")?.textContent?.trim()).toBe(
-        "Publication attempt failed",
+        "Couldn’t publish. Try again.",
       );
       expect(history?.open).toBe(false);
       expect(history?.textContent).toContain("Check repository read access before retrying");
@@ -289,7 +289,7 @@ describe("ChatPullRequests", () => {
       "details.chat-pr__publication-status",
     );
     expect(status?.open).toBe(false);
-    expect(status?.querySelector("summary")?.textContent?.trim()).toBe("Publication failed");
+    expect(status?.querySelector("summary")?.textContent?.trim()).toBe("Couldn’t publish");
     expect(failure?.closest("article")?.getAttribute("data-state")).toBe("branch");
     expect(container.querySelector<HTMLButtonElement>(".chat-pr__create")?.textContent).toContain(
       "Choose a new publication",

@@ -1,6 +1,6 @@
 import fs from "node:fs";
-import path from "node:path";
 import { prependShellPath } from "../infra/login-shell-path-carrier.js";
+import { resolveShellCommandLaunch } from "../infra/node-shell.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { RunResult } from "./invoke-types.js";
 
@@ -40,33 +40,6 @@ function clarifyNodeExecCwdSpawnError(
   return `node exec working directory ${reason} on the node host: ${cwd} (os reported: ${message})`;
 }
 
-type CommandLaunch = {
-  argv: string[];
-  windowsVerbatimArguments?: true;
-};
-
-// cmd.exe /s strips the outer quotes; verbatim argv avoids Node's MSVCRT escaping.
-function resolveCommandLaunch(argv: string[]): CommandLaunch {
-  if (process.platform !== "win32" || argv.length !== 5) {
-    return { argv };
-  }
-  const [shell, noAutoRun, stripQuotes, runAndExit, command] = argv;
-  if (
-    shell === undefined ||
-    command === undefined ||
-    path.win32.basename(shell).toLowerCase() !== "cmd.exe" ||
-    noAutoRun !== "/d" ||
-    stripQuotes !== "/s" ||
-    runAndExit !== "/c"
-  ) {
-    return { argv };
-  }
-  return {
-    argv: [shell, noAutoRun, stripQuotes, runAndExit, `"${command}"`],
-    windowsVerbatimArguments: true,
-  };
-}
-
 export async function runCommand(
   argv: string[],
   cwd: string | undefined,
@@ -77,7 +50,7 @@ export async function runCommand(
 ): Promise<RunResult> {
   assertCurrent?.();
   try {
-    const launch = resolveCommandLaunch(argv);
+    const launch = resolveShellCommandLaunch(argv);
     // Only OpenClaw's generated login-shell envelope needs service PATH restoration.
     const servicePath = env?.PATH;
     let childEnv = env;

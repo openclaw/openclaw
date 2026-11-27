@@ -16,7 +16,6 @@ describe("CI package check chains", () => {
         "lint:docs",
         "lint:templates",
         "docs:check-mdx",
-        "docs:check-i18n-glossary",
         "docs:check-links",
         "docs:check-config-examples",
         "changelog:check",

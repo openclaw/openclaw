@@ -20,7 +20,7 @@ import {
   getDetachedNativeAttachment,
   resolveRegisteredEmbeddedRunRecoveryBlocker,
 } from "./run-state.js";
-import { canSteerEmbeddedRunDuringCompaction } from "./runs.probes.js";
+import { resolveEmbeddedRunCompactionSteeringRejection } from "./runs.probes.js";
 
 /** Sessionless input belongs to its exact native registration, never a session scheduler. */
 export function queueDetachedEmbeddedAgentMessage(
@@ -57,7 +57,7 @@ export function queueDetachedEmbeddedAgentMessage(
         : handle.isStopped
           ? !handle.isStopped()
           : handle.isStreaming();
-    if (!available || !canSteerEmbeddedRunDuringCompaction(sessionId, handle)) {
+    if (!available || resolveEmbeddedRunCompactionSteeringRejection(sessionId, handle)) {
       return false;
     }
     const recoveryBlocker = resolveRegisteredEmbeddedRunRecoveryBlocker(

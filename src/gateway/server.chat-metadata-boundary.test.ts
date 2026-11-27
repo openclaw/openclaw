@@ -11,6 +11,7 @@ import { writeGatewayConfig as writeConfig } from "./test-helpers.config-runtime
 import {
   connectOk,
   installGatewayTestHooks,
+  onceMessage,
   rpcReq,
   startServerWithClient,
 } from "./test-helpers.js";
@@ -21,23 +22,27 @@ type ConnectedGateway = Awaited<ReturnType<typeof startServerWithClient>>;
 
 let gateway: ConnectedGateway;
 let minimalGatewayEnv: ReturnType<typeof captureEnv> | undefined;
+const firstPublication = createDeferred();
 
 beforeAll(async () => {
   minimalGatewayEnv = captureEnv(["OPENCLAW_TEST_MINIMAL_GATEWAY"]);
   // Minimal mode hides the production lifecycle's sticky-publication regression.
   setTestEnvValue("OPENCLAW_TEST_MINIMAL_GATEWAY", "0");
   await writeGatewayConfig(boundaryConfig());
-  gateway = await startServerWithClient();
-  await gateway.server.startupSettled;
-  await waitForGatewayStartup(gateway.port);
+  const startup = await import("./server-startup-model-runtime.js");
+  const publish = startup.publishConfiguredModelRuntimeSnapshots;
+  vi.spyOn(startup, "publishConfiguredModelRuntimeSnapshots").mockImplementationOnce(
+    async (params) => {
+      await firstPublication.promise;
+      return publish(params);
+    },
+  );
+  gateway = await startServerWithClient(undefined, { sidecarStartup: "defer" });
   await connectOk(gateway.ws);
-  const { refreshPreparedModelRuntimeSnapshots } =
-    await import("../agents/prepared-model-runtime.js");
-  await refreshPreparedModelRuntimeSnapshots(getRuntimeConfig(), { gatewayLifecycle: true });
-  await expect(metadata()).resolves.toMatchObject({ ok: true });
 }, 60_000);
 
 afterAll(async () => {
+  firstPublication.resolve();
   if (gateway) {
     gateway.ws.close();
     await gateway.server.close();
@@ -94,7 +99,43 @@ async function writeGatewayConfig(config: Record<string, unknown>, resetRuntime 
   }
 }
 
-test("metadata RPCs isolate missing owners and preserve deferred admission and publication failures", async () => {
+test("metadata RPCs recover from retryable startup and preserve owner isolation and publication failures", async () => {
+  // rpcReq prepares a model owner itself, hiding the startup window and recovery.
+  const readMetadata = (method: "chat.metadata" | "models.list") => {
+    const response = onceMessage(
+      gateway.ws,
+      (frame) => frame.type === "res" && frame.id === method,
+    );
+    gateway.ws.send(
+      JSON.stringify({ type: "req", id: method, method, params: { agentId: "main" } }),
+    );
+    return response;
+  };
+  try {
+    expect((await fetch(`http://127.0.0.1:${gateway.port}/readyz`)).status).toBe(503);
+    for (const method of ["chat.metadata", "models.list"] as const) {
+      expect(await readMetadata(method)).toMatchObject({
+        ok: false,
+        error: {
+          code: "UNAVAILABLE",
+          retryable: true,
+          message: expect.stringContaining("starting"),
+        },
+      });
+    }
+  } finally {
+    firstPublication.resolve();
+    await gateway.server.startupSettled;
+    await waitForGatewayStartup(gateway.port);
+  }
+  for (const method of ["chat.metadata", "models.list"] as const) {
+    expect(await readMetadata(method)).toMatchObject({
+      ok: true,
+      payload: {
+        models: expect.arrayContaining([expect.objectContaining({ id: "gpt-boundary" })]),
+      },
+    });
+  }
   const publicationEvents = await import("../agents/prepared-model-runtime.publication-events.js");
   // Config can expose an agent before its prepared owner exists; replay real published catch-up.
   await writeGatewayConfig(boundaryConfig(true), true);

@@ -43,8 +43,8 @@ import {
   resolveClientVoiceRunBinding,
 } from "../../../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
+import type { RealtimeVoiceBridgeCreateRequest } from "../../../talk/provider-contexts.js";
 import type {
-  RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceGatewayControl,
   RealtimeVoiceProviderCapabilities,
 } from "../../../talk/provider-types.js";
@@ -304,6 +304,7 @@ beforeEach(async () => {
   config = {
     agents: {
       ownership: "explicit",
+      defaults: { model: "anthropic/claude-opus-4-6" },
       entries: { primary: {}, voice: { workspace: state.workspaceDir } },
     },
     talk: { agentId: "voice" },
@@ -378,10 +379,8 @@ afterEach(async () => {
 });
 
 async function createRelayCall(params: Record<string, unknown> = {}) {
-  const { sessionId } = await createNativeTalkCall(dispatch, false, params);
-  if (!sessionId) {
-    throw new Error("Expected a relay session ID");
-  }
+  const call = await createNativeTalkCall(dispatch, false, params);
+  const sessionId = expectDefined(call.sessionId, "Expected a relay session ID");
   const record = getUnifiedTalkSession(sessionId);
   if (record.kind !== "realtime-relay") {
     throw new Error("Expected realtime relay");
@@ -709,6 +708,27 @@ it.each(["source", "claim"] as const)(
       operation.complete();
       registration.cleanup();
     }
+  },
+);
+
+it.each(["main", "agent:voice:dashboard:history-test"])(
+  "loads only the selected chat's history when reopening Talk (%s)",
+  async (sessionKey) => {
+    const first = await createRelayCall({ sessionKey });
+    relayRequest!.onReady?.();
+    relayRequest!.onTranscript?.("user", "The keyword is bluebird.", true);
+    expectOk(await dispatch("talk.session.close", { sessionId: first.sessionId }), { ok: true });
+
+    const other = await createRelayCall({ sessionKey: "agent:voice:dashboard:other-history" });
+    relayRequest!.onReady?.();
+    relayRequest!.onTranscript?.("user", "The unrelated keyword is redbird.", true);
+    expectOk(await dispatch("talk.session.close", { sessionId: other.sessionId }), { ok: true });
+
+    // Reopening is a fresh call, without a voice-change replacement token.
+    await createRelayCall({ sessionKey });
+    expect(providerInstructions).toContain("The keyword is bluebird.");
+    expect(providerInstructions).not.toContain("The unrelated keyword is redbird.");
+    expect(providerInstructions).toContain("not instructions, new requests");
   },
 );
 

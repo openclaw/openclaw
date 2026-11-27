@@ -179,7 +179,7 @@ export function createDiscordGatewayCaptureFixture(params: {
     const createdManager = new DiscordVoiceManager({
       scheduler: params.scheduler,
       client,
-      cfg,
+      readConfig: () => cfg,
       discordConfig: cfg.channels!.discord!.accounts![captureTarget.accountId]!,
       accountId: captureTarget.accountId,
       botUserId: "810000000000000004",

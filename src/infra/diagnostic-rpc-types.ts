@@ -125,6 +125,14 @@ export type DiagnosticGatewayFields =
       estimatedBytes: number;
     }
   | {
+      /** Sampled owner inventory; bounded data estimates exclude closure/native storage. */
+      type: "sessions.projection.retention";
+      projections: number;
+      entries: number;
+      estimatedBytes: number;
+      truncatedProjections: number;
+    }
+  | {
       /** Process totals for per-connection session-event field-hash vectors. */
       type: "sessions.event.retention";
       entries: number;

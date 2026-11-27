@@ -11,6 +11,7 @@
     ]
   },
   "enabledByDefault": true,
+  "managesOwnAvailability": true,
   "providers": [
     "clawrouter"
   ],
@@ -21,6 +22,8 @@
     }
   },
   "contracts": {
+    "embeddingProviders": ["clawrouter"],
+    "webSearchProviders": ["clawrouter"],
     "mediaUnderstandingProviders": ["clawrouter"],
     "imageGenerationProviders": ["clawrouter"],
     "speechProviders": ["clawrouter"],

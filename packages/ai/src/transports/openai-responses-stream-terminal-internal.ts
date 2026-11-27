@@ -81,8 +81,12 @@ export function resolveResponsesToolCallId(
 
 export function resolveCompletedResponsesToolCall(
   item: Extract<ResponseOutputItem, { type: "function_call" }>,
-  streamed?: { name?: string; arguments?: string | Record<string, unknown> },
-): Pick<ToolCall, "name" | "arguments"> {
+  streamed?: {
+    name?: string;
+    arguments?: string | Record<string, unknown>;
+    rawArguments?: string;
+  },
+): Pick<ToolCall, "name" | "arguments" | "argumentsSignature"> {
   if (item.status && item.status !== "completed") {
     throw new IncompleteToolCallError(
       "Responses stream completed with an incomplete terminal tool call",
@@ -99,11 +103,17 @@ export function resolveCompletedResponsesToolCall(
   if (!name) {
     throw new Error("Responses stream completed tool call without a function name");
   }
+  const raw = streamed?.rawArguments ?? streamed?.arguments ?? item.arguments;
   const argumentsValue = parseTerminalToolCallArguments(
     streamed?.arguments ?? item.arguments,
     "Responses stream completed tool call with invalid JSON arguments",
   );
-  return { name, arguments: argumentsValue };
+  const value = JSON.stringify(argumentsValue);
+  return {
+    name,
+    arguments: argumentsValue,
+    ...(typeof raw === "string" && raw !== value ? { argumentsSignature: { value, raw } } : {}),
+  };
 }
 
 export function createResponsesTerminalController(params: {
@@ -240,7 +250,7 @@ export function createResponsesTerminalController(params: {
     item: { type: "function_call"; id?: string; call_id?: string },
     outputIndex: number | undefined,
     started: { block: ToolCall; contentIndex: number } | undefined,
-    validated: Pick<ToolCall, "name" | "arguments" | "async">,
+    validated: Pick<ToolCall, "name" | "arguments" | "argumentsSignature" | "async">,
   ): void => {
     // Complete the same public block with authoritative identities and arguments;
     // scratch JSON must never survive into transcript replay.

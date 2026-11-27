@@ -19,9 +19,11 @@ import { getProviderAuthAuthority } from "../plugins/provider-auth-authority.js"
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
 import { isRetryableProviderHttpStatus } from "./failover/retry-evidence.js";
 import {
+  formatProviderErrorPayload,
   ProviderHttpError,
   readResponseTextLimited,
   summarizeProviderTransportError,
+  truncateErrorDetail,
 } from "./provider-http-errors.js";
 import {
   attachLocalServiceDiagnostics,
@@ -41,6 +43,7 @@ import {
   mergeModelProviderRequestOverrides,
   resolveProviderRequestPolicyConfig,
 } from "./provider-request-config.js";
+import { redactProviderResponseErrorText } from "./provider-request-header-redaction.js";
 import { fetchWithProviderHttpGuard } from "./provider-transport-dispatcher-pool.js";
 import { requestBodyHasStreamTrue } from "./provider-transport-request-body.js";
 import { swapSecretSentinelsForEgress } from "./provider-transport-secret-egress.js";
@@ -407,7 +410,35 @@ export function buildGuardedModelFetch(
       `contentType=${response.headers.get("content-type") ?? ""} ` +
       `httpRequestId=${response.headers.get("x-request-id") ?? "unknown"}${diagnosticContext}`;
     if (!response.ok) {
-      log.info(responseMessage);
+      // Diagnose rejected payloads without consuming the SDK body or logging echoed requests.
+      const errorDetail =
+        response.status === 400
+          ? await readResponseTextLimited(response.clone(), 16 * 1024, {
+              signal: localServiceSignal
+                ? AbortSignal.any([localServiceSignal, AbortSignal.timeout(1_000)])
+                : AbortSignal.timeout(1_000),
+            })
+              .then((body) =>
+                formatProviderErrorPayload(
+                  // Decode JSON escapes before redaction; formatting may split a credential.
+                  JSON.parse(body, (_key, value: unknown) =>
+                    typeof value === "string"
+                      ? redactProviderResponseErrorText(
+                          value,
+                          swappedEgress.headers ?? rawHeaders ?? {},
+                        )
+                      : value,
+                  ),
+                ),
+              )
+              .catch(() => undefined)
+          : undefined;
+      log.info(
+        responseMessage +
+          (errorDetail
+            ? ` providerError=${JSON.stringify(truncateErrorDetail(errorDetail, 500))}`
+            : ""),
+      );
     } else {
       emitModelTransportDebug(log, responseMessage);
     }

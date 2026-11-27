@@ -286,7 +286,7 @@ describe("memory manager FTS-only reindex", () => {
     ]);
   });
 
-  it.each(["watch", "search maintenance"])(
+  it.each(["watch", "recovery"])(
     "retains the original embedding cooldown after a quota failure in %s",
     async (origin) => {
       providerAvailable = true;
@@ -304,8 +304,9 @@ describe("memory manager FTS-only reindex", () => {
           "embedding quota exhausted",
         );
       } else {
-        await expect(memoryManager.search("Alpha topic")).resolves.toHaveLength(1);
-        await idle.awaitManagerIdle();
+        await expect(
+          memoryManager["syncPublishedIndexInBackground"]({ reason: "reconcile" }),
+        ).rejects.toThrow("embedding quota exhausted");
       }
       const requestsAfterFailure = providerBatchCalls + providerQueryCalls;
 
@@ -321,6 +322,7 @@ describe("memory manager FTS-only reindex", () => {
       providerEmbeddingError = null;
       providerQueryError = null;
       clock.mockReturnValue(now + 30_000);
+      await memoryManager["syncPublishedIndexInBackground"]({ reason: "reconcile" });
       await expect(memoryManager.search("Alpha topic")).resolves.toHaveLength(1);
       await idle.awaitManagerIdle();
       expect(providerBatchCalls + providerQueryCalls).toBeGreaterThan(requestsAfterFailure);
@@ -350,7 +352,7 @@ describe("memory manager FTS-only reindex", () => {
       clock.mockReturnValue(now + elapsed);
       await writeMemory(`${marker}\n\nKeep this note.`);
       Reflect.set(memoryManager, "dirty", true);
-      await memoryManager.search(marker);
+      await memoryManager.sync({ reason: "watch" });
       await idle.awaitManagerIdle();
       expect(providerBatchCalls + providerQueryCalls).toBe(requestsAfterFailure);
       expect(countChunksContaining(marker)).toBeGreaterThan(0);

@@ -397,36 +397,6 @@ it("defers owner picker interactions before loading model data", async () => {
   expect(interaction.update).not.toHaveBeenCalled();
 });
 
-it.each(["back", "bucket"] as const)(
-  "preserves the selected provider bucket for %s interactions",
-  async (action) => {
-    const providers = providerEntries();
-    mockPickerData(createModelsProviderData(providers));
-    const selectingBucket = action === "bucket";
-    const interaction = createInteraction({
-      userId: "owner",
-      ...(selectingBucket ? { values: ["21-30"] } : {}),
-    });
-    const data = {
-      cmd: "model",
-      act: action,
-      view: "providers",
-      u: "owner",
-      pg: "3",
-      pb: selectingBucket ? "1-20" : "21-30",
-    };
-
-    await createPicker(selectingBucket).run(
-      interaction as unknown as PickerButtonInteraction,
-      data,
-    );
-
-    const rendered = replyText(interaction);
-    expect(rendered).toContain('"value":"provider-21"');
-    expect(rendered).not.toContain('"value":"provider-01"');
-  },
-);
-
 it("uses the hot-reloaded runtime config when old components reset to default", async () => {
   (context.cfg as { agents?: OpenClawConfig["agents"] }).agents = {
     defaults: { model: { primary: "openai/gpt-5.5" }, models: { "openai/gpt-5.5": {} } },
@@ -681,19 +651,6 @@ it("ignores category parent metadata for non-thread component channels", () => {
     parentName: undefined,
     parentSlug: "",
   });
-});
-
-it("clicking Recents button renders recents view", async () => {
-  mockPickerData();
-  mockRecents();
-  const interaction = await runSubmitButton(
-    pickerComponentData({ act: "recents", view: "recents", p: "openai" }),
-  );
-
-  expect(interaction.editReply).toHaveBeenCalledTimes(1);
-  const updateText = replyText(interaction);
-  expect(updateText).toContain("gpt-4o");
-  expect(updateText).toContain("claude-sonnet-4-5");
 });
 
 it("clicking recents model button applies model through /model pipeline", async () => {

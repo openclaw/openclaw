@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { withinTest } from "../../test/helpers/promise.js";
 import { resolveRuntimeWorkerUrl, resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
 import { testWorkerDescriptor } from "../node-host/node-worker-supervisor.test-support.js";
-import { createCompiledSdkHost } from "../plugins/compiled-sdk-host.test-support.js";
+import { prepareCompiledSdkHost } from "../plugins/compiled-sdk-host.test-support.js";
 import { prepareSecretInputStdio, type SpawnStdioEntry } from "../process/spawn-secret-input.js";
 import type { WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import {
@@ -14,6 +14,7 @@ import {
   type NativeInferenceStartup,
 } from "./native-inference-startup.js";
 import { nativeWorkerTestEntrypoint } from "./native-worker-entrypoints.test-support.js";
+import { NODE_WORKER_EXECUTION_ENV, type NodeExecutionContext } from "./node-execution-context.js";
 import { serializeWorkerProcessInput, type WorkerProcessInput } from "./worker-process-protocol.js";
 import { workerBackgroundExecEntrypoints } from "./worker-runtime-background-exec-entrypoints.test-support.js";
 
@@ -62,18 +63,18 @@ export function createWorkerProcessTestHarness(makeTempDir: (prefix: string) => 
   const launch = async (options: {
     descriptor: WorkerLaunchDescriptor;
     startup?: NativeInferenceStartup;
+    nodeExecution?: NodeExecutionContext;
     signal: AbortSignal;
     diagnostics?: () => Record<string, unknown>;
   }) => {
     const { descriptor, startup, signal, diagnostics } = options;
-    const sdkHost = createCompiledSdkHost(
+    const sdkHost = prepareCompiledSdkHost(
       [
         workerBackgroundExecEntrypoints.providerModelMetadata,
         workerBackgroundExecEntrypoints.stringCoerceRuntime,
       ],
-      makeTempDir,
       { mode: "link" },
-    );
+    )(makeTempDir);
     const home = makeTempDir("oc-native-child-");
     const temp = path.join(home, "tmp");
     await mkdir(temp);
@@ -98,6 +99,9 @@ export function createWorkerProcessTestHarness(makeTempDir: (prefix: string) => 
         cwd: repoRoot,
         // Deliberately do not inherit provider keys, proxy settings, NODE_OPTIONS, or live state.
         env: {
+          ...(options.nodeExecution && {
+            [NODE_WORKER_EXECUTION_ENV]: JSON.stringify(options.nodeExecution),
+          }),
           PATH: process.env.PATH,
           SystemRoot: process.env.SystemRoot,
           WINDIR: process.env.WINDIR,

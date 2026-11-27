@@ -187,6 +187,7 @@ export async function offerPostInstallMigrations(
                   configOverride: nextConfig,
                   configPatchMode: "return",
                   suppressPlanLog: true,
+                  preferHomeBackupOutput: true,
                 },
                 provider,
               );

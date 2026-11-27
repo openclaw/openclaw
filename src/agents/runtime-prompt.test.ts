@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as activeNodeContext from "../infra/active-node-context.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { resolveSessionGitCoauthorPrompt } from "./git-coauthor-prompt.js";
 import { resolveAgentRuntimePrompt } from "./runtime-prompt.js";
@@ -106,6 +107,22 @@ describe("resolveAgentRuntimePrompt", () => {
         messageToolHints: ["Use the message tool."],
       }),
     );
+  });
+
+  it("prepares independent runtime facts before waiting for active-node context", async () => {
+    const ready = Promise.withResolvers<void>();
+    const preparation = vi
+      .spyOn(activeNodeContext, "prepareActiveNodeContext")
+      .mockReturnValueOnce(ready.promise);
+    const loading = resolveAgentRuntimePrompt({ agentId: "main", model: "openai/gpt-test" });
+    try {
+      expect(resolveSessionGitCoauthorPrompt).toHaveBeenCalledTimes(1);
+      expect(getMachineDisplayNameMock).toHaveBeenCalledTimes(1);
+    } finally {
+      ready.resolve();
+      await loading;
+      preparation.mockRestore();
+    }
   });
 
   it.each([

@@ -16,7 +16,7 @@ import type {
 import {
   invalidateComputerFrameIfMissing,
   type ComputerContextEpoch,
-} from "../agents/tools/computer-tool.js";
+} from "../agents/tools/computer-tool-shared.js";
 import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import type {
   AssistantMessage,

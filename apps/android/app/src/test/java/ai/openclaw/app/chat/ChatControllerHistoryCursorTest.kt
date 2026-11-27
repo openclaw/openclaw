@@ -269,6 +269,7 @@ class ChatControllerHistoryCursorTest {
               "o1" -> if (fail) error("offline") else page("", """, "olderCursor":"o2"""")
               "o2" -> page(listOf(row("a"), row("b"), row("c")).joinToString(","), """, "newerCursor":"reverse-page-only"""")
               "d1" -> delta(event(row("d")))
+              "d2" -> delta(event(row("e")), "d3")
               else -> error("unexpected cursor $cursor")
             }
           }
@@ -296,7 +297,12 @@ class ChatControllerHistoryCursorTest {
       assertFalse(controller.historyPaging.value.hasOlder)
       assertFalse(controller.historyPaging.value.hasNewer)
       assertTrue(controller.historyPaging.value.olderComplete)
-      assertEquals(listOf(null, "o1", "o1", "o2", "d1"), requests)
+      controller.refresh()
+      runCurrent()
+      assertEquals(listOf("a", "b", "c", "d", "e"), controller.messages.value.map { it.entryId })
+      assertEquals(anchor, controller.messages.value[2].id)
+      assertTrue(controller.historyPaging.value.olderComplete)
+      assertEquals(listOf(null, "o1", "o1", "o2", "d1", "d2"), requests)
     }
 
   @Test
@@ -370,7 +376,7 @@ class ChatControllerHistoryCursorTest {
   @Test
   fun stalePageCannotCrossSessionResetReconnectOrBranchSelection() =
     runTest {
-      for (change in listOf("session", "reset", "reconnect", "branch", "agent", "gateway")) {
+      for (change in listOf("load", "session", "reset", "reconnect", "branch", "agent", "gateway")) {
         var gateway = ChatCacheScope("gateway-test", 1L)
         var agent = "main"
         val delayed = CompletableDeferred<String>()
@@ -396,8 +402,12 @@ class ChatControllerHistoryCursorTest {
         runCurrent()
         assertTrue(controller.historyPaging.value.loading)
         when (change) {
-          "session" -> {
+          "load" -> {
             controller.load("agent:main:other")
+          }
+
+          "session" -> {
+            controller.switchSession("agent:main:other")
           }
 
           "reset" -> {

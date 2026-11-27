@@ -209,6 +209,15 @@ class ChatImageCodecTest {
   }
 
   @Test
+  fun pickedImageShortensTheProviderNameWithoutSplittingASurrogatePair() {
+    val prefix = "A".repeat(127)
+    assertEquals("$prefix.jpg", loadProviderImage(displayName = "$prefix📷.png").fileName)
+
+    val fittingStem = "A".repeat(126) + "📷"
+    assertEquals("$fittingStem.jpg", loadProviderImage(displayName = "$fittingStem.png").fileName)
+  }
+
+  @Test
   fun pickedImageFallsBackWhenProviderDisplayNameIsBlank() {
     val attachment = loadProviderImage(displayName = "   ")
 

@@ -26,6 +26,9 @@ export function createControlUiMockResponses(
   };
   const methodResponseSequenceIndexes = new Map<string, number>();
   const sessions = input.sessions;
+  const sessionListReplies: { child: boolean; rows: number }[] = [];
+  let sessionListRepliesTruncated = false;
+  let unavailableSessionListReplies = 0;
 
   const startupPendingResponses = new Map(
     [
@@ -310,6 +313,56 @@ export function createControlUiMockResponses(
   }
 
   return {
+    get sessionListResponseFacts() {
+      return {
+        replies: sessionListReplies.map((reply) => ({ ...reply })),
+        truncated: sessionListRepliesTruncated,
+        unavailableReplies: unavailableSessionListReplies,
+      };
+    },
+    deliver(
+      request: { id: string; method: string; params: unknown },
+      payload: unknown,
+      client: {
+        readyState: number;
+        deliver: (frame: unknown) => void;
+        sessionMessageSubscriptions: {
+          recordRequest: (method: string, params: unknown, result?: unknown) => void;
+        };
+      },
+      openState: number,
+    ) {
+      const mockError =
+        isRecord(payload) && isRecord(payload["__mockError"]) ? payload["__mockError"] : null;
+      if (!mockError) {
+        client.sessionMessageSubscriptions.recordRequest(request.method, request.params, payload);
+      }
+      // A receiver may close synchronously during delivery; count that reply, never a closed one.
+      const wasOpen = client.readyState === openState;
+      client.deliver(
+        mockError
+          ? { id: request.id, ok: false, error: mockError, type: "res" }
+          : { id: request.id, ok: true, payload, type: "res" },
+      );
+      if (wasOpen && !mockError && request.method === "sessions.list") {
+        if (isRecord(payload) && Array.isArray(payload.sessions)) {
+          sessionListReplies.push({
+            child:
+              isRecord(request.params) &&
+              typeof request.params.spawnedBy === "string" &&
+              request.params.spawnedBy.trim().length > 0,
+            rows: payload.sessions.length,
+          });
+          if (sessionListReplies.length > 8) {
+            sessionListReplies.shift();
+            sessionListRepliesTruncated = true;
+          }
+        } else {
+          unavailableSessionListReplies++;
+        }
+      }
+      return mockError;
+    },
     select: configuredResponse,
     startupPending,
     applyAgentModel,

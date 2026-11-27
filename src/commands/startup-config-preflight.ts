@@ -16,13 +16,13 @@ import {
   type PluginCache,
 } from "../plugins/plugin-cache.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
+import { restorePrivateStateStoreModes } from "../state/openclaw-state-db-permissions.js";
 import {
   readAdmittedConfigSnapshot,
   createConfigPreflightSnapshotReader,
   type ConfigPreflightSnapshotRead,
 } from "./config-preflight-snapshot.js";
 import { measureDoctorConfigPreflightStep } from "./doctor-config-preflight-measure.js";
-import { refreshStartupPluginQuarantine } from "./doctor-config-preflight-plugin-verification.js";
 import {
   rethrowStartupConfigFailure,
   throwStartupMigrationGuardRejected,
@@ -120,6 +120,8 @@ async function prepareStartupConfig(
     return result(read);
   }
 
+  const { refreshStartupPluginQuarantine } =
+    await import("./doctor-config-preflight-plugin-verification.js");
   const readAdmitted = () =>
     readAdmittedConfigSnapshot({
       env,
@@ -128,6 +130,8 @@ async function prepareStartupConfig(
       beforeStatePreparation,
       prepareClientCredentials: async (snapshot) => {
         const { prepareStartupClientCredentials } = await import("./startup-client-credentials.js");
+        // Repair modes broadened by remount before strict startup credential reads.
+        restorePrivateStateStoreModes(env);
         await prepareStartupClientCredentials({ env, config: snapshot.config });
       },
     });
@@ -170,7 +174,8 @@ async function prepareStartupConfig(
       await withPluginLifecycleLease(
         { env, assertCurrent: assertLeaseCurrent, processBound: true },
         async (pluginLease) => {
-          // Recovery must consume the current config after both writers settle.
+          // Refuse backup drift before a fresh plan can skip the changed candidate.
+          read.recovery?.assertBackupUnchanged();
           read = await readAdmitted();
           if (!read.snapshot.valid) {
             return;
@@ -196,10 +201,30 @@ async function prepareStartupConfig(
     // Finish that producer's bootstrap after read admission releases its snapshot,
     // before webhook history or other runtime tables are consumed.
     if (!isStatePostgres()) {
-      initializeNativeOpenClawStateDatabase({ env });
-      const { initializeFreshDaemonRuntimePinMigration } =
-        await import("../infra/state-migrations.daemon-runtime-pins.js");
-      initializeFreshDaemonRuntimePinMigration(env);
+      const [
+        { initializeFreshDaemonRuntimePinMigration },
+        { withStateDatabaseColdAdmission },
+        { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS },
+        { resolveOpenClawStateSqlitePath },
+      ] = await Promise.all([
+        import("../infra/state-migrations.daemon-runtime-pins.js"),
+        import("../infra/gateway-state-owner.js"),
+        import("../state/openclaw-state-db-contract.js"),
+        import("../state/openclaw-state-db.paths.js"),
+      ]);
+      // A concurrent CLI (e.g. `gateway status` loading the device identity) can hold a
+      // transient schema lease here. Both steps are idempotent, so wait for it within the
+      // busy timeout; offline maintenance (Doctor, migrations) still refuses immediately.
+      withStateDatabaseColdAdmission(
+        {
+          databasePath: resolveOpenClawStateSqlitePath(env),
+          busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+        },
+        () => {
+          initializeNativeOpenClawStateDatabase({ env });
+          initializeFreshDaemonRuntimePinMigration(env);
+        },
+      );
     }
     const {
       HISTORICAL_WEBHOOK_CHANNELS,
@@ -215,7 +240,18 @@ async function prepareStartupConfig(
       const migration = await measureDoctorConfigPreflightStep("webhook-readiness", async () => {
         const { applyPluginDoctorCompatibilityMigrations } =
           await import("../plugins/doctor-contract-registry.js");
-        // Legacy compatibility inspection is synchronous boot admission, before runtime starts.
+        const { preparePluginDoctorContractModules } =
+          await import("../plugins/doctor-contract-preparation.js");
+        await preparePluginDoctorContractModules({
+          config: read.snapshot.sourceConfig,
+          env,
+          manifestRegistry: read.pluginMetadataSnapshot?.manifestRegistry,
+          pluginIds: pendingWebhookChannels,
+          historicalWebhookListeners: true,
+          surfaces: ["configRepair"],
+          assertCurrent: assertLeaseCurrent,
+        });
+        assertLeaseCurrent();
         return withEngineStoreAdmission(() =>
           applyPluginDoctorCompatibilityMigrations(read.snapshot.sourceConfig, {
             config: read.snapshot.sourceConfig,

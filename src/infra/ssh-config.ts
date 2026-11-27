@@ -20,9 +20,13 @@ function parseSshConfigOutput(output: string): SshResolvedConfig {
     if (!line) {
       continue;
     }
-    const [key, ...rest] = line.split(/\s+/);
-    const value = rest.join(" ").trim();
-    if (!key || !value) {
+    const separator = line.search(/\s/);
+    if (separator < 0) {
+      continue;
+    }
+    const key = line.slice(0, separator);
+    const value = line.slice(separator + 1).trim();
+    if (!value) {
       continue;
     }
     switch (key) {

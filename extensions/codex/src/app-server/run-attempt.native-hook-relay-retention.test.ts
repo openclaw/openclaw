@@ -63,6 +63,13 @@ function childTool(agentId: string, command?: string): JsonObject {
 }
 
 const relaySuccess = { stdout: "", stderr: "", exitCode: 0 };
+// Delivery removes the stable credential name before it writes, so only removals
+// after the last write clear a delivered credential.
+function credentialRemovalsAfterDelivery(requests: ReadonlyArray<{ method: string }>) {
+  const methods = requests.map(({ method }) => method);
+  return methods.slice(methods.lastIndexOf("fs/writeFile") + 1).filter((m) => m === "fs/remove")
+    .length;
+}
 const registration = (relayId: string) =>
   nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId);
 
@@ -125,7 +132,6 @@ function createRelay(
     attemptTimeoutMs: 30_000,
     startupTimeoutMs: 1_000,
     turnStartTimeoutMs: 1_000,
-    loopDetectionPreToolUseRelay: false,
     signal,
     hostCapabilities,
     onPreToolUseFailure: () => {},
@@ -258,7 +264,7 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
                   ...admission,
                   admit: async (invocation, assertSource, preparation) => {
                     try {
-                      await admission.admit(invocation, assertSource, preparation);
+                      return await admission.admit(invocation, assertSource, preparation);
                     } finally {
                       if (invocation.toolUseId === "abandoned-input") {
                         lateAdmissionSettled.resolve();
@@ -284,8 +290,9 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
       target = "child-thread",
       toolName = "multi_agent_v1send_input",
       signal?: AbortSignal,
-    ) =>
-      invokeRelay(
+    ) => {
+      relay.bindForegroundTurn("parent-thread", turnId);
+      return invokeRelay(
         relay.relayId,
         {
           session_id: "parent-thread",
@@ -296,6 +303,7 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
         },
         signal,
       );
+    };
     const followup = (turnId: string, callId: string, signal?: AbortSignal) =>
       invoke(turnId, callId, "child-thread", "collaborationfollowup_task", signal);
     const request = {
@@ -311,6 +319,24 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
       throw new Error("Expected child execution custody");
     }
     try {
+      const saved = "00000000-0000-4000-8000-000000000042";
+      const metadata = threadRead({
+        childThreadId: saved,
+        parentThreadId: "old-parent",
+        threadStatus: "notLoaded",
+      });
+      metadata.thread.modelProvider = "test-provider";
+      client.setThreadRead(saved, metadata);
+      await client.item(collabItem("resumeAgent", [saved]), "parent-b");
+      const refusal = await invoke("parent-b", "resumed-worker", saved);
+      expect(refusal.exitCode).toBe(0);
+      expect(JSON.parse(refusal.stdout).hookSpecificOutput).toEqual({
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason:
+          "Cannot verify this worker belongs to the current parent. Check the original task before assigning new work.",
+      });
+
       await expect(invoke("parent-b", "denied-steer")).rejects.toThrow(
         "same admitted model source",
       );
@@ -706,7 +732,7 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
         });
         expect(registration(relayId)).toBeDefined();
         if (remote) {
-          expect(harness.requests.some(({ method }) => method === "fs/remove")).toBe(false);
+          expect(credentialRemovalsAfterDelivery(harness.requests)).toBe(0);
         }
         fixture.closeHost();
         fixture.closeAdmission();
@@ -736,7 +762,7 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
         await harness.notify(childTerminal);
         await nativeHookRelayUnregisterQueue.flush();
         if (remote) {
-          expect(harness.requests.filter(({ method }) => method === "fs/remove")).toHaveLength(1);
+          expect(credentialRemovalsAfterDelivery(harness.requests)).toBe(1);
         }
         expect(registration(relayId)).toBeUndefined();
         await expect(invokeRelay(relayId, childTool(childThreadId, "allow-child"))).rejects.toThrow(

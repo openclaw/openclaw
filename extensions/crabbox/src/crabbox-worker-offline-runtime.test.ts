@@ -5,7 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { listDirectoryTreeStrict } from "openclaw/plugin-sdk/file-access-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createCrabboxOfflineRuntimeSetup,

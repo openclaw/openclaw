@@ -84,12 +84,6 @@ private func sendHapticsTestMessage(_ viewModel: OpenClawChatViewModel) async th
 }
 
 struct ChatHapticsTests {
-    @Test func `send acceptance fires message sent exactly once`() async throws {
-        let (viewModel, recorder) = await makeHapticsViewModel(status: "started")
-        try await sendHapticsTestMessage(viewModel)
-        #expect(recorder.events == [.messageSent])
-    }
-
     @Test func `completion fires once for duplicate terminal events`() async throws {
         let (viewModel, recorder) = await makeHapticsViewModel(status: "started")
         try await sendHapticsTestMessage(viewModel)

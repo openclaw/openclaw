@@ -3,15 +3,13 @@ import type { MatrixClient } from "../sdk.js";
 import { listMatrixPins, pinMatrixMessage, unpinMatrixMessage } from "./pins.js";
 import type { MatrixRawEvent } from "./types.js";
 
-function message(eventId: string, body: string, timestamp = 123) {
-  return {
-    event_id: eventId,
-    sender: "@alice:example.org",
-    type: "m.room.message",
-    origin_server_ts: timestamp,
-    content: { msgtype: "m.text", body },
-  };
-}
+const message = (eventId: string, body: string, timestamp = 123) => ({
+  event_id: eventId,
+  sender: "@alice:example.org",
+  type: "m.room.message",
+  origin_server_ts: timestamp,
+  content: { msgtype: "m.text", body },
+});
 
 const room = "!room:example.org";
 function createPinsClient(seedPinned: string[], events: Record<string, MatrixRawEvent> = {}) {
@@ -32,7 +30,6 @@ function createPinsClient(seedPinned: string[], events: Record<string, MatrixRaw
         }
         return event;
       },
-      stop: vi.fn(),
     } as unknown as MatrixClient,
     getPinned: () => pinned,
     sendStateEvent,
@@ -51,13 +48,15 @@ it.each([
   expect(sendStateEvent).toHaveBeenCalledTimes(repetitions);
 });
 
-it("lists pinned ids and summarizes only resolvable events", async () => {
+it.each([undefined, 1])("lists resolvable pinned events with limit %s", async (limit) => {
   const { client } = createPinsClient(["$a", "$missing"], { $a: message("$a", "hello") });
-
-  expect(await listMatrixPins(room, { client })).toMatchObject({
-    pinned: ["$a", "$missing"],
+  const getEvent = vi.spyOn(client, "getEvent");
+  const pinned = ["$a", "$missing"].slice(0, limit);
+  expect(await listMatrixPins(room, { client, limit })).toMatchObject({
+    pinned,
     events: [{ body: "hello", eventId: "$a" }],
   });
+  expect(getEvent.mock.calls.map(([, eventId]) => eventId)).toEqual(pinned);
 });
 
 it("keeps other pinned messages visible when a poll repeats its pagination cursor", async () => {

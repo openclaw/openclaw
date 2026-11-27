@@ -45,7 +45,7 @@ it("reports each failed start once, retries it, and bounds retained failures", a
   expect(showToast).toHaveBeenCalledTimes(9);
   expect(showToast).toHaveBeenLastCalledWith(
     expect.objectContaining({
-      message: "Session didn't start: Gateway refused the session",
+      message: "Couldn’t start the session. Try again. Gateway refused the session",
       actionLabel: "Try again",
     }),
   );

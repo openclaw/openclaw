@@ -4,6 +4,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "../../api/types.ts";
+import { hasOperatorSelfReadAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatQuestionsEnglish } from "../../i18n/locales/en-chat-questions.ts";
 import { redactToolDetail } from "../../lib/browser-redact.ts";
@@ -28,6 +29,7 @@ import {
   type PendingChatAbort,
 } from "./chat-abort-request.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
+import { setChatQueuePaused } from "./chat-queue-pause.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { formatConnectError } from "./connect-error.ts";
@@ -38,7 +40,11 @@ import {
 } from "./history-merge.ts";
 import { resetChatInputHistoryNavigation, type ChatInputHistoryState } from "./input-history.ts";
 import type { ToolStreamHost, ToolStreamState } from "./tool-stream-contract.ts";
-import { resetToolStream, resetToolStreamRun } from "./tool-stream-state.ts";
+import {
+  resetToolStream,
+  resetToolStreamRun,
+  retireToolStreamLiveState,
+} from "./tool-stream-state.ts";
 
 registerChatQuestionsEnglish();
 
@@ -200,20 +206,34 @@ export function adoptStartedChatRun(
   }
 }
 
+type ChatRunErrorHost = {
+  chatRunError?: ChatRunError | null;
+  chatDismissedRunErrorId?: string | null;
+};
+
 export function setChatRunError(
-  state: { chatRunError?: ChatRunError | null },
+  state: ChatRunErrorHost,
   summary: string,
   runId?: string,
   kind?: ChatRunError["kind"],
 ) {
   chatRunPresentation(state).batch(() => {
     setChatRunOwner(state, runId);
+    if (runId && runId === state.chatDismissedRunErrorId) {
+      return;
+    }
     state.chatRunError = {
       ...(kind ? { kind } : {}),
       summary: redactToolDetail(summary.trim()),
       ...(runId ? { runId } : {}),
     };
   });
+}
+
+/** Hides the current run failure until a different run fails. */
+export function dismissChatRunError(state: ChatRunErrorHost) {
+  state.chatDismissedRunErrorId = state.chatRunError?.runId ?? null;
+  state.chatRunError = null;
 }
 
 type SessionRunHost = {
@@ -312,7 +332,7 @@ async function abortChatRun(state: ChatAbortRunState, intent?: ChatAbortIntent, 
   const captured = intent ?? currentChatAbortIntent(state, client);
   // Session cancellation still answers to the run that owned the Stop action.
   const target = scope ? currentChatAbortIntent(state, client, scope) : captured;
-  const result = await requestChatAbort(client, target);
+  const result = await requestChatAbort(client, { ...target, userInitiated: true });
   return settleChatAbortResponse(state, captured, result);
 }
 
@@ -352,11 +372,19 @@ export async function replayPendingChatAbort(host: ChatAbortHost): Promise<boole
   const access = readChatSessionActionAccess(
     { client, hello: host.hello, phase: "connected" },
     true,
-    { session, sessionAbortable: intent.sessionAbortable },
+    { session, sessionAbortable: intent.sessionAbortable, runId: intent.runId },
   ).abort;
-  if (!access.allowed && access.cause === "session-not-owned" && !session) {
-    // Reconnect can precede the canonical row. Its publication retries this
-    // one exact intent; absence must neither authorize it nor discard it.
+  if (
+    !access.allowed &&
+    !session &&
+    (access.cause === "session-not-owned" ||
+      (access.cause === "missing-scope" &&
+        intent.invitedSend &&
+        host.hello?.auth &&
+        hasOperatorSelfReadAccess(host.hello.auth)))
+  ) {
+    // Reconnect can precede ownership or invitation evidence on the canonical row.
+    // Its publication retries this exact intent; absence cannot authorize it.
     return false;
   }
   // Consume before sending so repeated publications cannot duplicate the
@@ -372,10 +400,12 @@ export async function replayPendingChatAbort(host: ChatAbortHost): Promise<boole
 }
 
 export async function handleAbortChat(host: ChatAbortHost, opts?: ChatAbortOptions): Promise<void> {
-  chatOutboxOwner(host).admissions.cancelRequests(
-    host,
-    resolveUiConversationIdentity(host, host.sessionKey),
-  );
+  const scope = resolveUiConversationIdentity(host, host.sessionKey);
+  chatOutboxOwner(host).admissions.cancelRequests(host, scope);
+  // Park before the request: the aborted terminal event can beat its response and
+  // would otherwise send the next queued row. A failed Stop leaves the rows parked
+  // behind a visible Resume, which is the recoverable side to err on.
+  setChatQueuePaused(host, true, scope);
   const disconnectedIntent =
     !host.connected && host.client ? currentChatAbortIntent(host, host.client) : null;
   const pendingAbort =
@@ -528,6 +558,9 @@ function applyChatRunLifecycle(host: RunLifecycleHost, options: ReconcileOptions
 
   if (options.clearIndicators ?? true) {
     clearRunIndicators(host, runId);
+  }
+  if (options.outcome && runId) {
+    retireToolStreamLiveState(host, runId);
   }
   if (options.clearLocalRun) {
     host.chatStream = null;

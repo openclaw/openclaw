@@ -26,6 +26,12 @@ export type RequestClientOptions = {
   /** Complete versioned REST base supplied by the Discord endpoint override. */
   apiBaseUrl?: string;
   signal?: AbortSignal;
+  /**
+   * Originating invocation cancellation. Drops queued work that was never
+   * issued and stops retry waits; requests already dispatched settle normally
+   * so a successful write is never reported as unsent.
+   */
+  callerSignal?: AbortSignal;
   timeout?: number;
   queueRequests?: boolean;
   fetch?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
@@ -168,6 +174,8 @@ export class RequestClient {
           assertReadAuthority?.();
         }
       : assertReadAuthority;
+    const callerSignal = this.options.callerSignal;
+    callerSignal?.throwIfAborted();
     assertCurrent?.();
     if (!this.options.queueRequests) {
       return await this.executeRequest(method, path, params, routeKey, assertCurrent, effect);
@@ -178,6 +186,7 @@ export class RequestClient {
       priority: getRequestPriority(method, path),
       query: params.query,
       data: { data: params.data, assertCurrent, effect },
+      ...(callerSignal ? { signal: callerSignal } : {}),
     });
   }
 

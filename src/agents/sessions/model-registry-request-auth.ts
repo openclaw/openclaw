@@ -1,5 +1,6 @@
 import type { Model } from "../../llm/types.js";
 import { applyLocalNoAuthHeaders, resolveExplicitProviderNoAuth } from "../model-auth-markers.js";
+import { modelTransportRoutesMatch } from "../model-compat-catalog.js";
 import type { AuthStorage } from "./auth-storage.js";
 import type { ProviderRequestConfig, ResolvedRequestAuth } from "./model-registry-sources.js";
 import {
@@ -7,6 +8,22 @@ import {
   resolveConfigValueUncached,
   resolveHeadersOrThrow,
 } from "./resolve-config-value.js";
+
+/** Authored request settings apply only to their captured provider routes. */
+export function scopeModelProviderRequestConfig(
+  config: ProviderRequestConfig | undefined,
+  model: Model,
+): ProviderRequestConfig | undefined {
+  if (
+    config?.baseUrls &&
+    !config.baseUrls.some((baseUrl) =>
+      modelTransportRoutesMatch({ baseUrl }, { baseUrl: model.baseUrl }),
+    )
+  ) {
+    return undefined;
+  }
+  return config;
+}
 
 /** Resolves registry request auth after the registry has scoped the provider to this route. */
 export async function resolveModelRegistryRequestAuth(params: {
@@ -37,7 +54,7 @@ export async function resolveModelRegistryRequestAuth(params: {
     const apiKey =
       apiKeyFromAuthStorage ??
       (!usesAwsSdkAuth && providerConfig?.apiKey
-        ? resolveConfigValueOrThrow(
+        ? await resolveConfigValueOrThrow(
             providerConfig.apiKey,
             `API key for provider "${model.provider}"`,
           )
@@ -53,8 +70,11 @@ export async function resolveModelRegistryRequestAuth(params: {
           : headers,
         description,
       );
-    const providerHeaders = resolveHeaders(providerConfig?.headers, `provider "${model.provider}"`);
-    const modelHeaders = resolveHeaders(
+    const providerHeaders = await resolveHeaders(
+      providerConfig?.headers,
+      `provider "${model.provider}"`,
+    );
+    const modelHeaders = await resolveHeaders(
       params.modelHeaders,
       `model "${model.provider}/${model.id}"`,
     );

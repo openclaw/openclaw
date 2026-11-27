@@ -5,7 +5,7 @@ import type { DoctorProgressMeasure } from "../infra/doctor-progress.js";
 import type { ExistingAgentDatabaseTarget } from "../infra/session-sqlite-migration-readers.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { agentEngineInput } from "../state/openclaw-agent-db-engine.js";
-import { stateEngineInput } from "../state/openclaw-state-db-engine.js";
+import { stateEngineInput } from "../state/openclaw-state-db-engine-input.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { BackupSqliteSnapshotFact } from "./backup-resource-inventory.js";
 import type { DoctorDatabasePreflight } from "./doctor-database-preflight.js";

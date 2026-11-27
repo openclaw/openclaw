@@ -25,7 +25,7 @@ const gitRepository = {
   repositoryStatus: "git",
 };
 const clientCwd = "/home/peter/client-work";
-const dialogSelector = `openclaw-modal-dialog[label='New session defaults for "Client work"']`;
+const dialogSelector = `openclaw-modal-dialog[label='New session defaults for “Client work”']`;
 const groupSelector = '[data-session-section="category:Client work"]';
 const defaultsSelector = '.sidebar-session-group-menu [data-value="group-defaults"]';
 type Gateway = Awaited<ReturnType<typeof installMockGateway>>;
@@ -328,7 +328,7 @@ suite.define(() => {
             page,
             `group-defaults-${groupCwd ? "folder" : "workspace"}.png`,
           );
-          await expectText(environment, "Couldn't verify Git");
+          await expectText(environment, "Couldn’t verify Git");
           await expect.poll(() => save.isDisabled()).toBe(true);
           expect(await gateway.getRequests("sessions.groups.update")).toHaveLength(0);
 
@@ -367,8 +367,8 @@ suite.define(() => {
         const { dialog, environment, save } = await openDefaults(page);
         await expectAttribute(environment, "data-session-group-environment", "restricted");
         await expect.poll(() => save.isDisabled()).toBe(true);
-        await expectText(environment, "requires operator.admin");
-        await expect.poll(() => environment.textContent()).not.toContain("Couldn't verify Git");
+        await expectText(environment, "You need admin access");
+        await expect.poll(() => environment.textContent()).not.toContain("Couldn’t verify Git");
         expect(await gateway.getRequests("sessions.groups.update")).toHaveLength(0);
 
         await gateway.setMethodResponse("worktrees.branches", gitRepository);
@@ -429,7 +429,10 @@ suite.define(() => {
 
       await page.reload();
       const unavailable = page.locator(".new-session-page__catalog-unavailable");
-      await expectText(unavailable, "This session target is unavailable.");
+      await expectText(
+        unavailable,
+        "Couldn’t use this device or workspace. Refresh and try again.",
+      );
       await expect.poll(() => start.isDisabled()).toBe(true);
       await expect.poll(() => message.inputValue()).toBe("keep this draft");
     });
@@ -483,7 +486,8 @@ suite.define(() => {
           message: "rejected group defaults",
         });
 
-        const alert = dialog.getByRole("alert");
+        await dialog.locator("openclaw-toast-host").getByRole("alert").waitFor();
+        const alert = dialog.locator('.exec-approval-error[role="alert"]');
         await alert.waitFor({ state: "visible" });
         await expectText(alert, "rejected group defaults");
         await expectAttribute(modeTrigger, "data-value", "local");
@@ -565,7 +569,10 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}new?group=Deleted`);
         const unavailable = page.locator(".new-session-page__catalog-unavailable");
         await unavailable.waitFor();
-        await expectText(unavailable, "This session target is unavailable.");
+        await expectText(
+          unavailable,
+          "Couldn’t use this device or workspace. Refresh and try again.",
+        );
         await page.locator(".new-session-page__message").fill("do not create this session");
         const start = page.getByRole("button", { name: "Start session" });
         await expect.poll(() => start.isDisabled()).toBe(true);

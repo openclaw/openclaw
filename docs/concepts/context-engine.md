@@ -135,6 +135,8 @@ OpenClaw calls two optional subagent lifecycle hooks:
 
 The `assemble` method can return a `systemPromptAddition` string. OpenClaw prepends this to the system prompt for the run. This lets engines inject dynamic recall guidance, retrieval instructions, or context-aware hints without requiring static workspace files.
 
+Generic CLI backends such as `claude-cli` call `assemble()` after `bootstrap()` on every agent turn and send the `systemPromptAddition` with that turn's input (for `claude-cli`, as turn context beside OpenClaw's runtime facts). The CLI system prompt stays byte-identical across turns, so a per-turn addition does not invalidate the CLI's prompt cache or restart a warm CLI process.
+
 ## The legacy engine
 
 The built-in `legacy` engine preserves OpenClaw's original behavior:
@@ -437,8 +439,9 @@ info: {
 ```
 
 Native Codex and OpenClaw embedded agent runs satisfy `assemble-before-prompt`.
-Generic CLI backends do not, so engines that require it are rejected before the
-CLI process starts.
+Generic CLI backends do not: the CLI's native session owns its history, so they
+use only `systemPromptAddition` and ignore the assembled messages. Engines that
+require the capability are rejected before the CLI process starts.
 
 ### Failure isolation
 
@@ -449,6 +452,11 @@ for the current Gateway process and downgrades context-engine work to the
 built-in `legacy` engine. The error is logged with the failed operation so the
 operator can repair, update, or disable the plugin without the agent going
 silent.
+
+Subagent hook failures do not quarantine the engine. When
+`prepareSubagentSpawn` throws, the subagent spawn fails with that error. When
+`onSubagentEnded` throws, OpenClaw logs the failure and continues subagent
+cleanup. Later turns and hooks keep using the selected engine.
 
 Host admission and resource-ownership failures before factory entry propagate
 without quarantining the engine. Factory rejections caused by cancellation of

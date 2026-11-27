@@ -4,6 +4,7 @@ import { createPluginRuntimeStore } from "../plugin-sdk/runtime-store.js";
 import { runPluginRegisterSyncInRegistry } from "./loader-module-runtime.js";
 import { createPluginRecord } from "./loader-records.js";
 import { PluginInstance } from "./plugin-instance.js";
+import type { OpenClawPluginServiceContextV3 } from "./plugin-registration.types.js";
 import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import {
   clearActivePluginRegistry,
@@ -353,6 +354,38 @@ describe("plugin service registration identity", () => {
         { phase: "stop", value: 37, runtime },
       ]);
       expect(calls.every((call) => call.runtime === runtime)).toBe(true);
+    } finally {
+      await services.stop();
+    }
+  });
+
+  it("delivers V3 session work through registration and retires it with the service", async () => {
+    const { builder, createRecord } = createRegistrationFixture();
+    const record = createRecord("session-work-owner");
+    const instance = new PluginInstance(record.id, { record, registry: builder.registry });
+    let received: OpenClawPluginServiceContextV3 | undefined;
+    instance.run(() =>
+      builder.createApi(record, { config: {} }).registerService({
+        apiVersion: 3,
+        id: "durable-service",
+        start(context) {
+          received = context;
+        },
+      }),
+    );
+    const services = await startPluginServices({ registry: builder.registry, config: {} });
+    try {
+      const context = expectDefined(received, "registered V3 service context");
+      expect(context.sessionWork.version).toBe(1);
+      expect(context.scheduler.signal.aborted).toBe(false);
+      await expect(context.sessionWork.run("", async () => "unused")).rejects.toThrow(
+        "bounded logical operation ID",
+      );
+      await services.stop();
+      expect(context.scheduler.signal.aborted).toBe(true);
+      await expect(context.sessionWork.run("job", async () => "unused")).rejects.toThrow(
+        "no longer active",
+      );
     } finally {
       await services.stop();
     }

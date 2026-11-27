@@ -4,6 +4,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { validateUpdateRunResult } from "../../../packages/gateway-protocol/src/index.js";
+import { installPrivateUpdateHandoffWorker } from "../../../test/helpers/private-update-handoff-store.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -44,13 +45,13 @@ export const resolveUpdateInstallSurfaceMock =
   vi.fn<
     typeof import("../../infra/update-runner-install-surface.js").resolveUpdateInstallSurface
   >();
-export const resolveStartupInstallStatusMock =
+const resolveStartupInstallStatusMock =
   vi.fn<typeof import("../../infra/update-install-status.js").resolveStartupInstallStatus>();
 const getLatestUpdateRestartSentinelMock = vi.fn<() => RestartSentinelPayload | null>(() => null);
 const refreshLatestUpdateRestartSentinelMock = vi.fn<() => Promise<RestartSentinelPayload | null>>(
   async () => null,
 );
-export const recordLatestUpdateRestartSentinelMock = vi.fn();
+const recordLatestUpdateRestartSentinelMock = vi.fn();
 export const isRestartEnabledMock = vi.fn(() => true);
 const readPackageVersionMock = vi.fn(async () => "1.0.0");
 const versionMock = vi.hoisted(() => ({ value: "1.0.0" }));
@@ -85,9 +86,9 @@ export const startManagedServiceUpdateHandoffMock = vi.fn<
   handoffId: params?.handoffId ?? "handoff-default",
   installRoot: params?.root ?? "/tmp/openclaw",
 }));
-export const claimManagedServiceUpdateHandoffMock = vi.fn<
+const claimManagedServiceUpdateHandoffMock = vi.fn<
   typeof import("../../infra/update-managed-service-handoff.js").claimManagedServiceUpdateHandoff
->(() => true);
+>(async () => true);
 export const transferManagedServiceUpdateHandoffMock = vi.fn<
   typeof import("../../infra/update-managed-service-handoff.js").transferManagedServiceUpdateHandoff
 >(async () => true);
@@ -108,6 +109,8 @@ export async function withTransferredUpdateHandoff(
   const managerStatePath = path.join(root, "manager-state.json");
   const managerPath = path.join(root, "manager.cjs");
   const managerPreloadPath = path.join(root, "manager-preload.cjs");
+  const managerEntryPath = path.join(root, "manager-entry.cjs");
+  const managerUsedPath = path.join(root, "manager-used");
   await fs.writeFile(
     updaterPath,
     `
@@ -128,6 +131,7 @@ export async function withTransferredUpdateHandoff(
   );
   const tempRoot = await import("../../infra/tmp-openclaw-dir.js");
   const tmp = vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(root);
+  const leaseWorker = installPrivateUpdateHandoffWorker(root);
   const handoff = await vi.importActual<
     typeof import("../../infra/update-managed-service-handoff.js")
   >("../../infra/update-managed-service-handoff.js");
@@ -157,34 +161,49 @@ export async function withTransferredUpdateHandoff(
       managerPreloadPath,
       `
     const children = require("node:child_process");
+    const fs = require("node:fs");
     const spawn = children.spawn;
-    children.spawn = (command, args, options) => command === "launchctl"
-      ? spawn(process.execPath, [${JSON.stringify(managerPath)}, ...args], options)
-      : spawn(command, args, options);
+    children.spawn = (command, args, options) => {
+      if (command !== "launchctl") return spawn(command, args, options);
+      fs.writeFileSync(${JSON.stringify(managerUsedPath)}, "launchctl");
+      return spawn(process.execPath, [${JSON.stringify(managerPath)}, ...args], options);
+    };
   `,
     );
+    await fs.writeFile(
+      managerEntryPath,
+      `require(${JSON.stringify(managerPreloadPath)});
+process.argv.splice(1, 1);
+require(process.argv[1]);`,
+    );
+    const workerRuntime = await import("../../infra/runtime-worker-url.js");
+    const resolveRuntimeArgs = workerRuntime.resolveRuntimeArgs;
     startManagedServiceUpdateHandoffMock.mockImplementationOnce(async (params) => {
-      helper = await handoff.startManagedServiceUpdateHandoff({
-        ...params,
-        root,
-        supervisor: "launchd",
-        env: {
-          ...process.env,
-          NODE_OPTIONS:
-            `${process.env.NODE_OPTIONS ?? ""} --require ${JSON.stringify(managerPreloadPath)}`.trim(),
-        },
-        parentPid,
-        execPath: process.execPath,
-        argv1: updaterPath,
-        runId: undefined,
-        meta: {},
-        beforePark: async () => {
-          await params.beforePark?.();
-          await onNotice(params.runId!);
-          expect(parent.exitCode).toBeNull();
-        },
-      });
-      return helper;
+      // The helper resolves its launch argv before building the updater commands.
+      const launch = vi
+        .spyOn(workerRuntime, "resolveRuntimeArgs")
+        .mockImplementationOnce((execPath) => [...resolveRuntimeArgs(execPath), managerEntryPath]);
+      try {
+        helper = await handoff.startManagedServiceUpdateHandoff({
+          ...params,
+          root,
+          supervisor: "launchd",
+          env: { ...process.env },
+          parentPid,
+          execPath: process.execPath,
+          argv1: updaterPath,
+          runId: undefined,
+          meta: {},
+          beforePark: async () => {
+            await params.beforePark?.();
+            await onNotice(params.runId!);
+            expect(parent.exitCode).toBeNull();
+          },
+        });
+        return helper;
+      } finally {
+        launch.mockRestore();
+      }
     });
     transferManagedServiceUpdateHandoffMock.mockImplementationOnce(
       handoff.transferManagedServiceUpdateHandoff,
@@ -198,6 +217,7 @@ export async function withTransferredUpdateHandoff(
       },
       { timeout: 5_000 },
     );
+    expect(await fs.readFile(managerUsedPath, "utf8")).toBe("launchctl");
     parent.stdin?.end();
     await vi.waitFor(() => fs.access(updatedPath), { timeout: 5_000 });
   } finally {
@@ -213,6 +233,7 @@ export async function withTransferredUpdateHandoff(
       await fs.rm(path.dirname(helper.logPath), { recursive: true, force: true });
     }
     tmp.mockRestore();
+    leaseWorker.mockRestore();
   }
 }
 
@@ -245,10 +266,10 @@ export const scheduleGatewayRestartMock = vi.fn(
   }),
 );
 
-const readGatewayOwnerLeaseMock = vi.hoisted(() =>
-  vi.fn<typeof import("../../infra/gateway-owner-lease.js").readGatewayOwnerLease>(),
+const readGatewayOwnerLeaseAsyncMock = vi.hoisted(() =>
+  vi.fn<typeof import("../../infra/gateway-owner-lease.js").readGatewayOwnerLeaseAsync>(),
 );
-export { readGatewayOwnerLeaseMock };
+export { readGatewayOwnerLeaseAsyncMock };
 
 export type UpdateRunPayload = {
   runId: string;
@@ -373,7 +394,7 @@ vi.mock("../../daemon/gateway-entrypoint.js", async (original) => ({
 
 vi.mock("../../infra/gateway-owner-lease.js", async (original) => ({
   ...(await original<typeof import("../../infra/gateway-owner-lease.js")>()),
-  readGatewayOwnerLease: readGatewayOwnerLeaseMock,
+  readGatewayOwnerLeaseAsync: readGatewayOwnerLeaseAsyncMock,
 }));
 
 vi.mock("../../../packages/gateway-protocol/src/index.js", async (importOriginal) => ({
@@ -470,7 +491,8 @@ beforeEach(() => {
   resolveStartupInstallStatusMock.mockReset();
   resolveStartupInstallStatusMock.mockResolvedValue({
     root: "/tmp/openclaw",
-    status: { root: "/tmp/openclaw", installKind: "git", packageManager: "pnpm" },
+    // Package installs keep the handler these suites cover; Git installs use src/update/.
+    status: { root: "/tmp/openclaw", installKind: "package", packageManager: "pnpm" },
     installReceipt: null,
   });
   getLatestUpdateRestartSentinelMock.mockClear();
@@ -479,7 +501,7 @@ beforeEach(() => {
   recordLatestUpdateRestartSentinelMock.mockClear();
   startManagedServiceUpdateHandoffMock.mockReset();
   transferManagedServiceUpdateHandoffMock.mockReset().mockResolvedValue(true);
-  claimManagedServiceUpdateHandoffMock.mockReset().mockReturnValue(true);
+  claimManagedServiceUpdateHandoffMock.mockReset().mockResolvedValue(true);
   cancelManagedServiceUpdateHandoffMock.mockReset().mockResolvedValue("restored-in-process");
   startManagedServiceUpdateHandoffMock.mockImplementation(async (params) => ({
     status: "started",
@@ -491,7 +513,7 @@ beforeEach(() => {
   }));
   scheduleGatewayRestartMock.mockClear();
   scheduleGatewayRestartMock.mockReturnValue({ scheduled: true });
-  readGatewayOwnerLeaseMock.mockReset().mockImplementation(() =>
+  readGatewayOwnerLeaseAsyncMock.mockReset().mockImplementation(async () =>
     detectRespawnSupervisorMock.mock.results.at(-1)?.value
       ? undefined
       : {
@@ -516,9 +538,8 @@ export async function invokeUpdateRun(
     commands: { ownerAllowFrom: ["slack:C0123ABC", "slack:C0456DEF"] },
   },
   contextOverrides: Record<string, unknown> = {},
-  authority: Pick<
-    GatewayRequestHandlerOptions,
-    "sessionMutationCommitGuard" | "hasCurrentClientAuthority"
+  authority: Partial<
+    Pick<GatewayRequestHandlerOptions, "sessionMutationCommitGuard" | "signal" | "client">
   > = {},
 ) {
   setRuntimeConfigSnapshot(runtimeConfig);
@@ -566,8 +587,9 @@ export async function captureUpdateRunPayload(
   return payload;
 }
 
+// update.run reads the install status to route, then the package handler reads it again.
 export function mockGlobalInstallSurface(root = "/tmp/openclaw-global") {
-  resolveStartupInstallStatusMock.mockResolvedValueOnce({
+  resolveStartupInstallStatusMock.mockResolvedValue({
     root,
     status: { root, installKind: "package", packageManager: "npm" },
     installReceipt: null,
@@ -577,13 +599,5 @@ export function mockGlobalInstallSurface(root = "/tmp/openclaw-global") {
     mode: "npm",
     root,
     packageRoot: root,
-  });
-}
-
-export function mockGitInstallSurface(root: string) {
-  resolveStartupInstallStatusMock.mockResolvedValueOnce({
-    root,
-    status: { root, installKind: "git", packageManager: "pnpm" },
-    installReceipt: null,
   });
 }

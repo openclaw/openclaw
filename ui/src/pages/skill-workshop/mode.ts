@@ -24,6 +24,12 @@ export function resolveWorkshopMode(
   return configured === "propose" ? "propose" : "off";
 }
 
+/** True only when the loaded config turns every plugin off; unknown stays false. */
+export function arePluginsDisabled(runtimeConfig: RuntimeConfigCapability | undefined): boolean {
+  const config = resolveEditableSnapshotConfig(runtimeConfig?.state.configSnapshot);
+  return asRecord(config?.plugins)?.enabled === false;
+}
+
 /** Patch the plugin's own config key; returns an error message or null on success. */
 export async function setWorkshopMode(
   runtimeConfig: RuntimeConfigCapability,

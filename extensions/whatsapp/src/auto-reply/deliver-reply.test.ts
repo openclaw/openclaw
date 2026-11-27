@@ -376,7 +376,7 @@ describe("deliverWebReply", () => {
       msg,
       audio
         ? {
-            audio: Buffer.from(ext === "mp3" ? "opus-output" : "ogg"),
+            audio: Buffer.from("opus-output"),
             ptt: true,
             mimetype: "audio/ogg; codecs=opus",
           }

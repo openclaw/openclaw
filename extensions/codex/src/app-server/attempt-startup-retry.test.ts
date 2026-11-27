@@ -1,4 +1,3 @@
-import * as childProcess from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -20,10 +19,11 @@ import {
   releaseLeasedSharedCodexAppServerClient,
 } from "./shared-client.js";
 import { findCodexAppServerSpawnError } from "./spawn-error.js";
+import * as stdioWorker from "./stdio-worker.js";
 import * as processSnapshot from "./transport-process-snapshot.js";
 
-vi.mock("node:child_process", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:child_process")>()),
+vi.mock("./stdio-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./stdio-worker.js")>()),
 }));
 
 vi.mock("./desktop-generation.js", async (importOriginal) => ({
@@ -92,7 +92,7 @@ async function createStartupFailureFixture(
   return { root, spawnCountPath, requestLogPath, pluginConfig };
 }
 
-function waitForFixtureReady(child: childProcess.ChildProcess): Promise<void> {
+function waitForFixtureReady(child: stdioWorker.CodexStdioChild): Promise<void> {
   const ready = Promise.withResolvers<void>();
   let output = "";
   const finish = (error?: Error) => {
@@ -120,18 +120,15 @@ function waitForFixtureReady(child: childProcess.ChildProcess): Promise<void> {
 }
 
 function observeFixtureSpawn(fixture: { root: string }, waitForReady = true) {
-  const spawn = childProcess.spawn;
+  const spawn = stdioWorker.spawnCodexStdio;
   const observed: {
-    child?: childProcess.ChildProcess;
+    child?: stdioWorker.CodexStdioChild;
     ready?: Promise<void>;
     closed?: Promise<unknown>;
   } = {};
-  vi.spyOn(childProcess, "spawn").mockImplementation((...args) => {
+  vi.spyOn(stdioWorker, "spawnCodexStdio").mockImplementation((...args) => {
     const spawned = spawn(...args);
-    if (
-      Array.isArray(args[1]) &&
-      args[1].includes(path.join(fixture.root, "startup-failure.mjs"))
-    ) {
+    if (args[1].includes(path.join(fixture.root, "startup-failure.mjs"))) {
       observed.child = spawned;
       observed.ready = waitForReady ? waitForFixtureReady(spawned) : undefined;
       observed.closed = once(spawned, "close");
@@ -314,10 +311,12 @@ describe("Codex app-server startup retry", () => {
     const fixture = await createStartupFailureFixture("refusal");
     const command = path.join(fixture.root, "missing-executable");
     fixture.pluginConfig.appServer.command = command;
-    const spawnSpy = vi.spyOn(childProcess, "spawn");
+    const spawnSpy = vi.spyOn(stdioWorker, "spawnCodexStdio");
     const error = await startFixtureAttempt(fixture).catch((caught: unknown) => caught);
-    expect(findCodexAppServerSpawnError(error)).toMatchObject({
+    expect(findCodexAppServerSpawnError(error)).toBe(error);
+    expect(error).toMatchObject({
       command,
+      message: `Codex cannot run: ${command} or its working directory was not found. Repair the executable or working directory and restart the Gateway.`,
       cause: expect.objectContaining({ code: "ENOENT" }),
     });
     await expect(startFixtureAttempt(fixture)).rejects.toBe(error);

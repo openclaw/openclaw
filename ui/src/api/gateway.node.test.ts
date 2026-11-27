@@ -540,29 +540,24 @@ describe("GatewayBrowserClient", () => {
       code: "BROWSER_WEBSOCKET_SECURITY_ERROR",
       reason: "security error",
       guidance:
-        "Browser refused the Gateway WebSocket for security reasons. Use wss:// when the Control UI is served over HTTPS/Tailscale Serve, or open the loopback dashboard at http://127.0.0.1:18789.",
+        "Browser refused the Gateway WebSocket for security reasons. Use wss:// when OpenClaw is served over HTTPS/Tailscale Serve, or open it on loopback at http://127.0.0.1:18789.",
     },
     {
-      name: "TypeError",
+      name: "SyntaxError",
       message: "constructor failed",
       code: "BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR",
       reason: "websocket error",
-      guidance: "Could not create the Gateway WebSocket: constructor failed",
+      guidance:
+        "Couldn’t create the Gateway WebSocket. Check the Gateway WebSocket URL and browser security policy. Details: constructor failed",
     },
   ])(
     "reports $name socket construction failures without retrying",
     async ({ name, message, code, reason, guidance }) => {
       vi.useFakeTimers();
       const onClose = vi.fn();
-      vi.stubGlobal(
-        "WebSocket",
-        class {
-          static OPEN = 1;
-          constructor() {
-            throw Object.assign(new Error(message), { name });
-          }
-        },
-      );
+      vi.stubGlobal("WebSocket", function () {
+        throw Object.assign(new Error(message), { name });
+      });
       const client = createClient({
         url: "ws://gateway.example:18789",
         token: "shared-auth-token",

@@ -14,6 +14,17 @@ The registration call itself, and the two optional capabilities a registered har
 
 **Import:** `openclaw/plugin-sdk/agent-harness`
 
+For an ephemeral `/btw` answer, a native `runSideQuestion` hook can call
+`params.prepareIsolatedSideQuestion()`. The host supplies the sanitized conversation,
+current images, system prompt, exact model credential, deadline, and a live authority
+check for a fresh tool-free completion. Serialize the context, then call the returned
+`prepareRequest` inside the completion deadline before sending it. This preserves
+the host's final request policy. Send only its returned text and images, keeping
+image order when converting them to native attachments. If the result has
+`kind: "handled"`, return its `result`: the
+host's session-fork owner has already answered the question. Do not persist either
+result in the parent conversation or reuse the preparer after the hook returns.
+
 ```typescript
 import type { AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";

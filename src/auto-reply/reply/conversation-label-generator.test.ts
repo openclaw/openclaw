@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import { createDiagnosticLogRecordCapture } from "../../logging/test-helpers/diagnostic-log-capture.js";
@@ -11,7 +11,8 @@ const runIsolatedCompletion = vi.hoisted(() => vi.fn());
 const resolveSimpleCompletionSelectionForAgent = vi.hoisted(() => vi.fn());
 
 vi.mock("../../agents/isolated-completion.js", () => ({ runIsolatedCompletion }));
-vi.mock("../../agents/simple-completion-runtime.js", () => ({
+// mock-isolation: Keep label fallback tests independent of real provider and catalog state.
+vi.mock("../../agents/simple-completion-selection.js", () => ({
   resolveSimpleCompletionSelectionForAgent,
 }));
 
@@ -294,10 +295,9 @@ describe("generateConversationLabelWithFallback", () => {
         ).agents.defaults,
       },
     };
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
+    const operatorAuthority = createTestOperatorAuthority({
       profileId: "label-reader",
       scopes: ["operator.write"],
-      assertCurrent: () => {},
       modelPolicy: prepareOperatorModelPolicy({
         cfg,
         policy: {

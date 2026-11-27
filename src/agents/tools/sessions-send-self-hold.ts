@@ -14,6 +14,7 @@ import { readOperatorToolGatewayAuthority } from "../../gateway/operator-tool-ga
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { captureExecRequestOwners } from "../../infra/exec-request-context.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import { findSessionControllerOperationByRunId } from "../../sessions/session-controller.queries.js";
 import { isCronSessionKey } from "../../sessions/session-key-utils.js";
@@ -23,13 +24,15 @@ import { captureAgentPluginRuntimeRefresh } from "../plugin-runtime-refresh.js";
 import { withSandboxRuntimeStatusInWorker } from "../sandbox/runtime-status.js";
 import { resolveSandboxToolPolicyForAgent } from "../sandbox/tool-policy.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "../subagents/registry/subagent-registry-read.js";
+import type { SubagentRunRecord } from "../subagents/registry/subagent-registry.types.js";
+import { getSubagentRunRuntimeKey } from "../subagents/registry/subagent-run-generation.js";
 import { prepareSessionCapabilityRead } from "../subagents/spawn/subagent-session-store.js";
 import { jsonResult } from "./common.js";
 import {
   getGatewayToolCallerIdentity,
   resolveGatewayToolOperatorSelection,
 } from "./gateway-caller-context.js";
-import { handoffSessionTool } from "./session-tool-handoff.js";
+import { handoffSessionTool, type HandoffScope } from "./session-tool-handoff.js";
 import type { SessionsSendToolOptions } from "./sessions-send-tool.types.js";
 
 type Refusal = NonNullable<ReturnType<typeof readAgentSelfHeldRefusal>>;
@@ -42,21 +45,23 @@ type Send = {
   args: Record<string, unknown>;
   sessionKey: string;
   targetAgentId: string;
-  sessionId: string;
-  lifecycleRevision?: string;
   storePath: string;
-  targetTask?: SessionsSendToolOptions["expectedTargetTask"];
-  targetRun: SessionsSendToolOptions["expectedTargetRun"];
+  hadTask: boolean;
+  targetRunOwner?: object;
   requesterParentOwned: boolean;
 };
+type RetainedWork = { scope?: HandoffScope };
 type HeldSend = {
   send: Send;
+  work: RetainedWork;
   state:
     | { kind: "retained"; proof: Refusal }
     | { kind: "replaying" }
+    | { kind: "stopped"; cause: "reset" | "deleted" }
     | { kind: "settled"; result: unknown };
 };
 type Batch = {
+  work: RetainedWork;
   operations: Map<string, HeldSend>;
   requester: {
     origin: NonNullable<ReturnType<typeof getGatewayToolCallerIdentity>>["requesterOrigin"];
@@ -69,6 +74,75 @@ type Batch = {
   ready: Promise<unknown>;
 };
 const batches = new WeakMap<ReplyOperation, Batch>();
+/**
+ * Retained sends, so a reset or delete of their target can stop them. Weak: a handoff that never
+ * replays (its requester stopped first) does not keep its sends alive.
+ */
+const retainedSends = new Set<WeakRef<HeldSend>>();
+function trackRetainedSend(held: HeldSend): void {
+  for (const ref of retainedSends) {
+    const existing = ref.deref();
+    if (!existing || (existing.state.kind !== "retained" && existing.state.kind !== "replaying")) {
+      retainedSends.delete(ref);
+    }
+  }
+  retainedSends.add(new WeakRef(held));
+}
+/** A live handoff keeps only its captured child incarnation reachable after the parent ends. */
+export function hasRetainedSessionSendForSubagent(entry: SubagentRunRecord): boolean {
+  const owner = getSubagentRunRuntimeKey(entry);
+  for (const ref of retainedSends) {
+    const held = ref.deref();
+    if (!held || (held.state.kind !== "retained" && held.state.kind !== "replaying")) {
+      retainedSends.delete(ref);
+      continue;
+    }
+    const scope = held.work.scope;
+    if (held.send.targetRunOwner !== owner || !scope || scope.signal.aborted) {
+      continue;
+    }
+    try {
+      scope.assertCurrent();
+      return true;
+    } catch {
+      // Revoked work cannot keep a child parked while its cleanup settles.
+    }
+  }
+  return false;
+}
+
+/** Settles a send that a reset or delete stopped while it waited; reports it once. */
+function settleStopped(held: HeldSend): unknown {
+  if (held.state.kind !== "stopped") {
+    return undefined;
+  }
+  const result = { runId: held.send.runId, status: "not_delivered", stopCause: held.state.cause };
+  held.state = { kind: "settled", result };
+  return result;
+}
+
+/**
+ * Reset and delete stop the retained sends to the chat they end, with that cause. A replay
+ * addresses the chat by key and never infers a stop from a changed transcript or revision.
+ */
+export function stopRetainedSessionSends(
+  chat: { agentId: string; sessionKeys: readonly string[] },
+  cause: "reset" | "deleted",
+): void {
+  for (const ref of retainedSends) {
+    const held = ref.deref();
+    if (!held || (held.state.kind !== "retained" && held.state.kind !== "replaying")) {
+      retainedSends.delete(ref);
+    } else if (
+      held.state.kind === "retained" &&
+      normalizeAgentId(held.send.targetAgentId) === normalizeAgentId(chat.agentId) &&
+      chat.sessionKeys.includes(held.send.sessionKey)
+    ) {
+      held.state = { kind: "stopped", cause };
+      retainedSends.delete(ref);
+    }
+  }
+}
 
 /** Capture original identity and turn ownership; replay resolves config and policy afresh. */
 export function createSelfHeldSendRetainer(
@@ -150,7 +224,8 @@ export function createSelfHeldSendRetainer(
     if (batch && !isDeepStrictEqual(batch.requester, requester)) {
       return notRetained("different-requester");
     }
-    const held: HeldSend = { send, state: { kind: "retained", proof } };
+    const work = batch?.work ?? {};
+    const held: HeldSend = { send, work, state: { kind: "retained", proof } };
     const context = getAgentToolExecutionContext();
     const yieldMode =
       context?.toolCall.id === toolCallId &&
@@ -159,7 +234,13 @@ export function createSelfHeldSendRetainer(
         ? "conditional"
         : "after_turn";
     if (!batch) {
-      batch = { operations: new Map([[send.runId, held]]), requester, ready: Promise.resolve() };
+      trackRetainedSend(held);
+      batch = {
+        work,
+        operations: new Map([[send.runId, held]]),
+        requester,
+        ready: Promise.resolve(),
+      };
       batches.set(operation, batch);
       const ownedBatch = batch;
       batch.ready = handoffSessionTool({
@@ -171,10 +252,20 @@ export function createSelfHeldSendRetainer(
         onYield: options.onYield,
         yield: yieldMode,
         retainRequester: true,
+        retainWork: (scope) => {
+          work.scope = scope;
+          return () => {
+            delete work.scope;
+          };
+        },
         senderIsOwner: options.senderIsOwner,
         run: async (scope) => {
           const outcomes: unknown[] = [];
           for (const item of ownedBatch.operations.values()) {
+            const stoppedBefore = settleStopped(item);
+            if (stoppedBefore) {
+              outcomes.push(stoppedBefore);
+            }
             if (item.state.kind !== "retained") {
               continue;
             }
@@ -284,6 +375,12 @@ export function createSelfHeldSendRetainer(
               // result must not be replaced by a later classification check.
               const assertCurrent = prepared.policy.read;
               assertCurrent();
+              // A reset or delete of the target recorded its stop while this send waited.
+              const stopped = settleStopped(item);
+              if (stopped) {
+                outcomes.push(stopped);
+                continue;
+              }
               item.state = { kind: "replaying" };
               const result = await replay(
                 {
@@ -293,11 +390,8 @@ export function createSelfHeldSendRetainer(
                   signal: scope.signal,
                   assertSourceCurrent: assertCurrent,
                   idempotencyKey: item.send.runId,
-                  expectedTargetSessionId: item.send.sessionId,
                   expectedTargetStorePath: item.send.storePath,
-                  expectedTargetLifecycleRevision: item.send.lifecycleRevision ?? null,
-                  expectedTargetTask: item.send.targetTask,
-                  expectedTargetRun: item.send.targetRun,
+                  expectTargetTask: item.send.hadTask,
                   retainedReplay: true,
                 },
                 {
@@ -313,7 +407,7 @@ export function createSelfHeldSendRetainer(
             } catch (error) {
               const result = {
                 runId: item.send.runId,
-                status: item.state.kind === "retained" ? "not_delivered" : "uncertain",
+                status: item.state.kind === "replaying" ? "uncertain" : "not_delivered",
                 error: formatErrorMessage(error),
               };
               item.state = { kind: "settled", result };
@@ -331,6 +425,7 @@ export function createSelfHeldSendRetainer(
         throw error;
       });
     } else if (!batch.operations.has(send.runId)) {
+      trackRetainedSend(held);
       batch.operations.set(send.runId, held);
     }
     try {
@@ -363,26 +458,14 @@ export function createSelfHeldSendRetainer(
       requesterParentOwned: boolean;
       args: Record<string, unknown>;
       toolCallId: string;
-      readTarget: () => { storePath: string; entry: SessionEntry | undefined };
+      readTarget: () => { storePath: string };
     }) {
       const original = getLatestLiveSubagentRunByChildSessionKey(
         input.sessionKey,
         undefined,
         input.targetAgentId,
       );
-      const targetRun = original
-        ? {
-            runId: original.runId,
-            taskRunId: original.taskRunId,
-            generation: original.generation,
-            createdAt: original.createdAt,
-          }
-        : null;
-      return (proof: Refusal, mode: Send["mode"], targetTask?: Send["targetTask"]) => {
-        const target = input.readTarget();
-        if (!target.entry) {
-          throw new Error("Retained send requires its refused target incarnation");
-        }
+      return (proof: Refusal, mode: Send["mode"]) => {
         return retain(
           proof,
           {
@@ -395,11 +478,9 @@ export function createSelfHeldSendRetainer(
                 ? { ...input.args, timeoutSeconds: 0, watch: undefined }
                 : input.args,
             mode,
-            targetRun,
-            targetTask,
-            sessionId: target.entry.sessionId,
-            lifecycleRevision: target.entry.lifecycleRevision,
-            storePath: target.storePath,
+            hadTask: Boolean(original),
+            targetRunOwner: original ? getSubagentRunRuntimeKey(original) : undefined,
+            storePath: input.readTarget().storePath,
           },
           input.toolCallId,
         );

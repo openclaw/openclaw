@@ -30,6 +30,7 @@ import type {
   HeaderSessionOperation,
 } from "./chat-pane-session-menu-contract.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
+import { showMoveToProjectDialog } from "./components/move-to-project-dialog.tsx";
 
 export async function openHeaderSessionGroup(
   owner: Pick<ReturnType<ChatHeaderSessionActionSource["readOwner"]>, "context" | "state">,
@@ -55,6 +56,27 @@ export async function openHeaderSessionGroup(
   });
 }
 
+async function moveHeaderSessionToProject(
+  owner: ReturnType<ChatHeaderSessionActionSource["readOwner"]>,
+  row: GatewaySessionRow,
+): Promise<void> {
+  const client = owner.context.gateway.snapshot.client;
+  if (!client) {
+    return;
+  }
+  const outcomeOwner = owner.headerOutcomeOwner;
+  try {
+    await showMoveToProjectDialog({
+      client,
+      key: row.key,
+      ...(row.agentId ? { agentId: row.agentId } : {}),
+      signal: owner.headerSessionDraftAbortController.signal,
+    });
+  } catch (error) {
+    owner.publishHeaderError(error, outcomeOwner);
+  }
+}
+
 export async function revealHeaderWorkspace(
   owner: Pick<
     ReturnType<ChatHeaderSessionActionSource["readOwner"]>,
@@ -73,7 +95,11 @@ export async function revealHeaderWorkspace(
     ...(agentId ? { agentId } : {}),
   });
   if (!result.ok) {
-    owner.publishHeaderError(result.error ?? "Failed to reveal session workspace.", outcomeOwner);
+    owner.publishHeaderError(
+      result.error ??
+        "Couldn’t show the session workspace. Open the folder manually on the Gateway device.",
+      outcomeOwner,
+    );
   }
 }
 
@@ -218,6 +244,9 @@ export async function runChatHeaderSessionAction(
     owner.openContinueInTerminalDialog(row);
     return;
   }
+  if (action.kind === "move-to-project") {
+    return moveHeaderSessionToProject(owner, row);
+  }
   if (action.kind === "toggle-pin") {
     const current = owner.state ? selectedChatSessionRow(owner.state) : undefined;
     if (
@@ -267,6 +296,7 @@ type HeaderSessionMutationAdmission = {
   scope: SidebarSessionMutationScope & { signal: AbortSignal };
   owner: string;
   draftSignal: AbortSignal;
+  isCurrent?: () => boolean;
 };
 export async function runHeaderSessionMutation(
   owner: ReturnType<ChatHeaderSessionActionSource["readOwner"]>,
@@ -292,10 +322,13 @@ export async function runHeaderSessionMutation(
   const outcomeOwner = admission?.owner ?? owner.headerOutcomeOwner;
   const draftSignal = admission?.draftSignal ?? owner.headerSessionDraftAbortController.signal;
   const capturedRow = admission ? row : { ...row };
+  const isCurrent = (candidate: SidebarSessionMutationScope) =>
+    owner.isHeaderSessionActionCurrent(candidate, outcomeOwner) &&
+    (admission?.isCurrent?.() ?? true);
   try {
     const { runHeaderSessionOperation } = await import("./chat-pane-session-operations.ts");
     return await runHeaderSessionOperation(action, capturedRow, scope, {
-      isCurrent: (candidate) => owner.isHeaderSessionActionCurrent(candidate, outcomeOwner),
+      isCurrent,
       publishError: (error) => owner.publishHeaderError(error, outcomeOwner),
       selectSession: (key) => owner.onPaneSessionChange?.(owner.paneId, key),
       label: (candidate) => owner.resolveHeaderSessionTitle(candidate),
@@ -320,7 +353,7 @@ export async function runHeaderSessionMutation(
       },
     });
   } catch (error) {
-    if (owner.isHeaderSessionActionCurrent(scope, outcomeOwner)) {
+    if (isCurrent(scope)) {
       owner.publishHeaderError(error, outcomeOwner);
     }
   }

@@ -229,7 +229,7 @@ final class VoiceWakeManager {
     private func startRecognition() throws {
         guard self.isEnabled, self.suppressionReasons.isEmpty else { return }
 
-        self.invalidatePendingCommand()
+        self.cancelPendingCommand()
         self.recognitionGeneration &+= 1
         let recognitionGeneration = self.recognitionGeneration
         self.recognitionTask?.cancel()
@@ -264,7 +264,7 @@ final class VoiceWakeManager {
         // Speech can deliver buffered results after cancellation. Retire the
         // callback owner before any task or audio teardown begins.
         self.recognitionGeneration &+= 1
-        self.invalidatePendingCommand()
+        self.cancelPendingCommand()
         let hadRecognitionPipeline = self.recognitionRequest != nil
 
         self.recognitionTask?.cancel()
@@ -323,8 +323,10 @@ final class VoiceWakeManager {
         }
 
         guard let transcript else { return }
-        guard let cmd = Self.extractCommand(
-            from: transcript, segments: segments, triggers: self.activeTriggerWords)
+        guard let cmd = WakeWordGate.match(
+            transcript: transcript,
+            segments: segments,
+            config: WakeWordGateConfig(triggers: self.activeTriggerWords, minPostTriggerGap: 0.45))?.command
         else { return }
 
         if self.lastDispatched?.generation == recognitionGeneration,
@@ -365,19 +367,21 @@ final class VoiceWakeManager {
             self.suppressionReasons.isEmpty
     }
 
-    func invalidatePendingCommand() {
-        self.commandTask?.cancel()
-        self.commandTask = nil
+    /// Tears down recognition and restarts active listening, beyond canceling a pending command.
+    func discardCaptureForRouteChange() {
+        // A route change also retires buffered recognition results. Canceling only
+        // the send task lets the old microphone capture dispatch into the new chat.
+        let wasListening = self.isListening
+        self.isListening = false
+        self.tearDownRecognitionPipeline()
+        if wasListening {
+            self.scheduleStart()
+        }
     }
 
-    nonisolated static func extractCommand(
-        from transcript: String,
-        segments: [WakeWordSegment],
-        triggers: [String],
-        minPostTriggerGap: TimeInterval = 0.45) -> String?
-    {
-        let config = WakeWordGateConfig(triggers: triggers, minPostTriggerGap: minPostTriggerGap)
-        return WakeWordGate.match(transcript: transcript, segments: segments, config: config)?.command
+    private func cancelPendingCommand() {
+        self.commandTask?.cancel()
+        self.commandTask = nil
     }
 
     private func configureOwnedAudioSession() throws {

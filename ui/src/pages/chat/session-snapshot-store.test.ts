@@ -18,6 +18,7 @@ import {
   type ChatMessageCache,
   type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
+import { SIDEBAR_SNAPSHOT_PROJECTION_VERSION } from "./session-sidebar-snapshot.ts";
 import {
   CHAT_SNAPSHOT_METADATA_STORE_NAME as METADATA,
   CHAT_SNAPSHOT_STORE_NAME as SNAPSHOTS,
@@ -56,7 +57,11 @@ function boardSnapshot(cacheKey: string, message: string, receivedAtMs = 100) {
   };
 }
 
-function historyState(content: unknown, commands = true): ChatSessionSnapshot["historyState"] {
+function historyState(
+  content: unknown,
+  commands = true,
+  skillReferenceable?: boolean,
+): ChatSessionSnapshot["historyState"] {
   const message = { role: "user", content };
   return {
     stateRevision: {
@@ -67,7 +72,14 @@ function historyState(content: unknown, commands = true): ChatSessionSnapshot["h
     ...(commands
       ? {
           commands: [
-            { name: "x", description: "", source: "skill", scope: "text", acceptsArgs: true },
+            {
+              name: "x",
+              description: "",
+              source: "skill",
+              scope: "text",
+              acceptsArgs: true,
+              ...(skillReferenceable !== undefined ? { skillReferenceable } : {}),
+            },
           ],
         }
       : {}),
@@ -373,7 +385,7 @@ describe("persistent chat session snapshots", () => {
     expect((await new SessionSnapshotStore().read(sessionKey))?.board).toBeNull();
   });
 
-  it.each(["plain", "pairing", "legacy"])(
+  it.each(["plain", "pairing", "legacy", "referenceable", "slash-only"])(
     "persists raw metadata with its receipts unless privacy projection changes it (%s)",
     async (mode) => {
       const value: ChatSessionSnapshot = {
@@ -384,6 +396,7 @@ describe("persistent chat session snapshots", () => {
             ? [{ type: "openclaw_pairing_qr", data: "synthetic-private-pairing" }]
             : "Follow up.",
           mode !== "legacy",
+          mode === "referenceable" ? true : mode === "slash-only" ? false : undefined,
         ),
       };
       await seed(value);
@@ -403,7 +416,7 @@ describe("persistent chat session snapshots", () => {
     await putRawRecord(
       {
         sessionKey: sidebarKey,
-        projectionVersion: 4,
+        projectionVersion: SIDEBAR_SNAPSHOT_PROJECTION_VERSION,
         savedAt: Date.now(),
         model: { ...sidebarSnapshot, peoplePresenceFilter: undefined, offlineUsers: undefined },
       },
@@ -486,13 +499,31 @@ describe("persistent chat session snapshots", () => {
     expect(await new SessionSnapshotStore().read(privateKey)).toBeNull();
   });
 
-  it.each(["direct", "prewarmed"])("discards the previous projection (%s)", async (mode) => {
+  it.each(["direct", "prewarmed"])("retires a v16 display-trimmed snapshot (%s)", async (mode) => {
     await persist(writer, sessionKey, snapshot("current"));
-    await putRawRecord(envelope(sessionKey, snapshot("old"), 10));
+    // v16 cut [m1, m8, m2, …, m7, m9, …, m82] at display index two.
+    // Paging before its first held row (m2) can only return m1.
+    const messages = Array.from({ length: 82 }, (_, index) => index + 1)
+      .filter((seq) => seq !== 1 && seq !== 8)
+      .map((seq) => ({ role: "assistant", __openclaw: { id: `m${seq}`, seq } }));
+    await putRawRecord(
+      envelope(
+        sessionKey,
+        {
+          ...snapshot(),
+          messages,
+          deltaCursor: "cursor-for-incomplete-history",
+          pagination: { hasMore: true, needsBoundary: true, totalMessages: 82 },
+        },
+        16,
+      ),
+    );
     if (mode === "prewarmed") {
       void prewarmChatSnapshot(sessionKey);
     }
     expect(await new SessionSnapshotStore().read(sessionKey)).toBeNull();
+    expect(await readRawRecord(sessionKey)).toBeUndefined();
+    expect(await readRawRecord(sessionKey, METADATA)).toBeUndefined();
   });
 
   it("purges all legacy unscoped history rather than adopting an unknown account", async () => {

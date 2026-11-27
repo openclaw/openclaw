@@ -5,7 +5,7 @@ import { isNativeEmbedHost, isNativeWebChromeHost } from "./native-web-chrome.ts
 const MOBILE_NAV_MAX_WIDTH = 900;
 const NATIVE_WEB_CHROME_MOBILE_NAV_MAX_WIDTH = 600;
 const FLOATING_HEADER_MEDIA_QUERY =
-  "(max-width: 600px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)";
+  "(max-width: 640px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)";
 const hasNativeShellClass = (...classNames: string[]) =>
   [
     "openclaw-native-macos",
@@ -13,6 +13,15 @@ const hasNativeShellClass = (...classNames: string[]) =>
     "openclaw-native-web-chrome",
     ...classNames,
   ].some((className) => document.documentElement.classList.contains(className));
+
+export function usesBrowserDrawer(mobileNavLayout: boolean): boolean {
+  return (
+    mobileNavLayout &&
+    !hasNativeShellClass("openclaw-native-desktop") &&
+    !isNativeEmbedHost() &&
+    !isNativeWebChromeHost()
+  );
+}
 
 export function mobileNavLayoutMediaQuery(): string {
   if (isNativeWebChromeHost()) {
@@ -22,7 +31,7 @@ export function mobileNavLayoutMediaQuery(): string {
 }
 
 export function isMobileNavLayout(): boolean {
-  return globalThis.matchMedia?.(mobileNavLayoutMediaQuery()).matches ?? false;
+  return globalThis.matchMedia(mobileNavLayoutMediaQuery()).matches;
 }
 
 function usesChatHeader(routeId: RouteId): boolean {
@@ -31,7 +40,7 @@ function usesChatHeader(routeId: RouteId): boolean {
     // The draft wears chat's header on phones, so opening a session moves nothing.
     (routeId === "new-session" &&
       !isNativeEmbedHost() &&
-      (globalThis.matchMedia?.(FLOATING_HEADER_MEDIA_QUERY).matches ?? false))
+      globalThis.matchMedia(FLOATING_HEADER_MEDIA_QUERY).matches)
   );
 }
 
@@ -64,7 +73,7 @@ export function shouldFloatShellHeader(params: {
     params.routeId !== "new-session" &&
     !params.onboarding &&
     !hasNativeShellClass("openclaw-native-desktop") &&
-    (globalThis.matchMedia?.(FLOATING_HEADER_MEDIA_QUERY).matches ?? false)
+    globalThis.matchMedia(FLOATING_HEADER_MEDIA_QUERY).matches
   );
 }
 

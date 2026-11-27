@@ -2,6 +2,7 @@
 import { getActiveCronJobCount } from "../cron/active-jobs.js";
 import { getSuspensionVisibleCronTaskRunCount } from "../cron/service/active-run-cancellation.js";
 import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import {
   getRpcSourceIdentity,
   isRpcSourceQueued,
@@ -44,6 +45,28 @@ export function createGatewayServerActiveWorkInspectors(
     getTerminalPersistence: () =>
       entries().filter(([, entry]) => hasTerminalPersistence(entry)).length,
     getTerminalPersistenceHolders: () => holders(hasTerminalPersistence),
+    getTerminalPersistenceDiagnostics: () => {
+      const pending = entries().filter(([, entry]) => hasTerminalPersistence(entry));
+      const now = Date.now();
+      let oldestAgeMs: number | null = 0;
+      for (const [, entry] of pending) {
+        const observedAt = entry.adapter.projectSessionTerminalObservedAt;
+        if (observedAt === undefined) {
+          oldestAgeMs = null;
+          break;
+        }
+        oldestAgeMs = Math.max(oldestAgeMs, now - observedAt);
+      }
+      return {
+        oldestAgeMs,
+        // Run IDs already correlate Gateway logs; omit session keys and redact before truncation.
+        runIds: pending.slice(0, 8).map(([runId]) =>
+          redactSensitiveText(runId, { mode: "tools" })
+            .replace(/\p{Cc}/gu, " ")
+            .slice(0, 256),
+        ),
+      };
+    },
     getTerminalSessions: () => context.terminalSessions?.size ?? 0,
   };
 }

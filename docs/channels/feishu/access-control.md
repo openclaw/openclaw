@@ -50,6 +50,11 @@ including when consecutive messages are combined.
 The receiving bot's own mention is kept as well. Command matching ignores addressing
 without removing it from the agent's context.
 
+Card actions with a chat ID must have a known conversation type before running a
+command or opening a confirmation card. If a card omits the type and Feishu cannot
+resolve it, OpenClaw sends a refusal to the same chat. Click again after lookup
+recovers; unresolved chats do not use DM policy.
+
 ### Mentions in bot-started threads
 
 Set `requireMentionInBotThreads: false` to accept messages without an @mention in

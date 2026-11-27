@@ -1,6 +1,7 @@
 import { createChannelDeliveryAccumulator } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import { resolveOutboundMediaAccessForConfig } from "openclaw/plugin-sdk/outbound-media";
 import { chunkMarkdownTextWithMode, resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import {
   deliverTextOrMediaReply,
@@ -39,10 +40,13 @@ export async function deliverIMessageReply(params: {
   const accepted = createChannelDeliveryAccumulator({
     kind: reply.mediaUrls.length > 0 ? "media" : "text",
   });
+  const mediaAccess = resolveOutboundMediaAccessForConfig(cfg);
   const sendAccepted = async (text: string, mediaUrl?: string) => {
     const sent = await sendMessageIMessage(target, text, {
       config: cfg,
-      ...(mediaUrl ? { mediaUrl, ...(payload.audioAsVoice ? { audioAsVoice: true } : {}) } : {}),
+      ...(mediaUrl
+        ? { mediaUrl, mediaAccess, ...(payload.audioAsVoice ? { audioAsVoice: true } : {}) }
+        : {}),
       maxBytes,
       accountId,
       replyToId: payload.replyToId,

@@ -1,5 +1,7 @@
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { defineCodexBuildState } from "../build-state.js";
 import { readThreadParentThreadId, readThreadSpawnSource } from "./native-subagent-assignment.js";
+import { buildCodexNativeSubagentAgentPathKey } from "./native-subagent-delivery-receipts.js";
 import { resolveNativeModelParentOwner } from "./native-subagent-model-lookup.js";
 import {
   createNativeModelSourceOwner,
@@ -53,6 +55,7 @@ type InputDependencies = {
   currentModelExecution: (threadId: string) => ParentOwner | undefined;
   admissions: ReadonlyMap<string, NativeChildAdmissionEvidence[]>;
   canPrepareReceiver: (state: ParentState, threadId: string) => boolean;
+  retiredChildren: RetiredNativeChildPaths;
   prepareReceiver: (state: ParentState, threadId: string, nativeParentThreadId?: string) => boolean;
   registerChildThread: AdmissionDrainDependencies["registerChildThread"];
   admit: (
@@ -65,10 +68,48 @@ type InputDependencies = {
   interruptModelExecution?: (threadId: string, turnId: string) => void;
 };
 
+/** Codex agent paths: `/root` plus lowercase task-name segments (codex-protocol agent_path.rs). */
+function isCodexCanonicalAgentPath(path: string): boolean {
+  return /^\/root(?:\/[a-z0-9_]+)*$/.test(path);
+}
+
+/**
+ * Task names outlive a parent registration: a later turn may address the same native child
+ * by its path, or need its ID named back. Keyed by native parent thread, then agent path.
+ */
+export class RetiredNativeChildPaths {
+  private readonly byParent = new Map<string, Map<string, string>>();
+
+  /** `liveAliases` is the monitor's registration-scoped agent-path index. */
+  constructor(private readonly liveAliases: Map<string, string>) {}
+
+  /** Drops a pruned registration's aliases while keeping the child's canonical task paths. */
+  retire(registrationThreadId: string, known: KnownChild, threadId: string): void {
+    for (const path of known.agentPaths) {
+      this.liveAliases.delete(buildCodexNativeSubagentAgentPathKey(registrationThreadId, path));
+      // Every alias names its child; only canonical paths resolve as targets.
+      let paths = this.byParent.get(known.nativeParentThreadId);
+      if (!paths) {
+        paths = new Map();
+        this.byParent.set(known.nativeParentThreadId, paths);
+      }
+      paths.set(path, threadId);
+    }
+  }
+
+  /** The child that held a canonical path under this native parent before its registration ended. */
+  childForAgentPath(nativeParentThreadId: string, agentPath: string): string | undefined {
+    return this.byParent.get(nativeParentThreadId)?.get(agentPath);
+  }
+
+  /** Native child thread IDs an earlier registration of this native parent observed. */
+  childThreadIds(nativeParentThreadId: string): Iterable<string> {
+    return this.byParent.get(nativeParentThreadId)?.values() ?? [];
+  }
+}
+
 function nativeAgentPath(known: KnownChild | undefined): string | undefined {
-  const paths = [...(known?.agentPaths ?? [])].filter((path) =>
-    /^\/root(?:\/[a-z0-9_]+)*$/.test(path),
-  );
+  const paths = [...(known?.agentPaths ?? [])].filter(isCodexCanonicalAgentPath);
   return paths.length === 1 ? paths[0] : undefined;
 }
 
@@ -104,6 +145,25 @@ function nativeRootThreadId(
   return undefined;
 }
 
+/** Codex resolves only agent IDs and registered task paths; name the IDs the model can use. */
+function unidentifiedTargetError(
+  message: string,
+  request: NativeModelToolInputRequest,
+  dependencies: InputDependencies,
+): Error {
+  const ids = new Set(dependencies.retiredChildren.childThreadIds(request.threadId));
+  for (const [threadId, known] of dependencies.knownChildren) {
+    if (known.nativeParentThreadId === request.threadId) {
+      ids.add(threadId);
+    }
+  }
+  return new Error(
+    ids.size > 0
+      ? `${message}. Pass the exact agent ID as the target; agent IDs for this thread: ${[...ids].join(", ")}`
+      : `${message}; use its exact thread ID`,
+  );
+}
+
 function resolveInputTarget(
   request: NativeModelToolInputRequest,
   dependencies: InputDependencies,
@@ -124,15 +184,22 @@ function resolveInputTarget(
         return path ? [path.slice(0, path.lastIndexOf("/"))] : [];
       }),
   );
+  // A registered parent that is not itself a native child is the conversation's root thread,
+  // even when this registration has not yet observed any of its children.
+  const senderIsRegisteredRoot =
+    dependencies.parents.has(request.threadId) && !dependencies.knownChildren.has(request.threadId);
   const senderPath =
     nativeAgentPath(dependencies.knownChildren.get(request.threadId)) ??
-    (childParentPaths.size === 1 ? childParentPaths.values().next().value : undefined);
+    (childParentPaths.size === 1 ? childParentPaths.values().next().value : undefined) ??
+    (senderIsRegisteredRoot ? "/root" : undefined);
   const nativeRoot =
     nativeRootThreadId(request.threadId, dependencies.knownChildren) ??
     (senderPath === "/root" ? request.threadId : undefined);
   if (!senderPath || !nativeRoot) {
-    throw new Error(
-      "Codex native target lineage is not currently identified; use its exact thread ID",
+    throw unidentifiedTargetError(
+      "Codex native target lineage is not currently identified",
+      request,
+      dependencies,
     );
   }
   const path = target.startsWith("/") ? target : `${senderPath}/${target}`;
@@ -144,11 +211,29 @@ function resolveInputTarget(
       known.agentPaths.has(path) &&
       nativeRootThreadId(threadId, dependencies.knownChildren) === nativeRoot,
   );
-  if (matches.length !== 1) {
-    throw new Error("Codex native target is not currently identified; use its exact thread ID");
+  if (matches.length === 1) {
+    return matches[0]![0];
   }
-  return matches[0]![0];
+  // An earlier registration of this sender saw the child under that canonical path.
+  const retired =
+    matches.length === 0
+      ? dependencies.retiredChildren.childForAgentPath(request.threadId, path)
+      : undefined;
+  if (!retired) {
+    throw unidentifiedTargetError(
+      "Codex native target is not currently identified",
+      request,
+      dependencies,
+    );
+  }
+  return retired;
 }
+
+// The monitor and relay can come from different copies of this plugin build.
+export const NativeModelInputReceiverLineageError = defineCodexBuildState(
+  "openclaw.codexNativeInputLineageError",
+  () => class extends Error {},
+)();
 
 /** Qualification is read before the native handler; source custody remains with its existing call. */
 export async function prepareNativeModelToolInput(
@@ -338,7 +423,9 @@ export async function prepareNativeModelToolInput(
     }
     assertCurrent();
     if (targetChild && nativeParentThreadId !== targetChild.nativeParentThreadId) {
-      throw new Error("Codex native input receiver lineage changed during preparation");
+      throw new NativeModelInputReceiverLineageError(
+        "Codex native input receiver lineage changed during preparation",
+      );
     }
     if (!dependencies.prepareReceiver(state, thread.id, nativeParentThreadId)) {
       throw new Error("Codex native input receiver cannot retain this sender's admitted source");

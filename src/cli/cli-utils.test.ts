@@ -4,6 +4,11 @@ import { ExitError } from "../runtime.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 import { registerDnsCli } from "./dns-cli.js";
 import {
+  formatCliFailureLines,
+  formatCliJsonFailure,
+  recordCliGatewayRunFailure,
+} from "./failure-output.js";
+import {
   applyResolvedCommandOutputMode,
   withConsoleLogsRoutedToStderrForJson,
 } from "./json-output-mode.js";
@@ -62,16 +67,25 @@ describe("runCommandWithRuntime", () => {
     expect(runtime.exit.mock.calls).toEqual([[1], [1]]);
   });
 
-  it("bubbles JSON-mode failures to the process-level owner", async () => {
+  it("reports JSON failures once while retaining the original envelope", async () => {
     const runtime = { error: vi.fn(), exit: vi.fn() };
+    const error = new Error("archive missing");
+    recordCliGatewayRunFailure(error, "run-1");
     await withConsoleLogsRoutedToStderrForJson(["--json"], async () => {
       applyResolvedCommandOutputMode(true);
-      await expect(
-        runCommandWithRuntime(runtime, rejectWith(new Error("archive missing"))),
-      ).rejects.toThrow("archive missing");
+      const caught = await runCommandWithRuntime(runtime, rejectWith(error)).catch(
+        (err: unknown) => err,
+      );
+      expect(formatCliJsonFailure(caught)).toEqual({
+        ok: false,
+        runId: "run-1",
+        origin: "gateway",
+        error: { type: "cli_error", message: "archive missing" },
+      });
+      expect(formatCliFailureLines({ title: "failed", error: caught })).toEqual([]);
     });
-
-    expect([runtime.error.mock.calls, runtime.exit.mock.calls]).toEqual([[], []]);
+    expect(runtime.error.mock.calls).toEqual([["archive missing"]]);
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 });
 
@@ -113,6 +127,10 @@ it.each([
   [parseByteSize, "10kb", 10 * 1024],
   [parseByteSize, `${Number.MAX_SAFE_INTEGER}.1`, Number.MAX_SAFE_INTEGER],
   [parseDurationMs, "0.5s", 500],
+  [parseDurationMs, "2.0235s", 2024],
+  [parseDurationMs, "2023.5ms", 2024],
+  [parseDurationMs, "2s23.49999999999999999ms", 2023],
+  [parseDurationMs, "9007199254740990ms0.25ms0.25ms", Number.MAX_SAFE_INTEGER],
   [parseDurationMs, "  1H30M  ", 5_400_000],
   [parseDurationMs, "0.4ms0.4ms", 1],
   [parseDurationMs, "9007199254740990ms1ms", Number.MAX_SAFE_INTEGER],

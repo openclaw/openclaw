@@ -1,12 +1,14 @@
 import { createMemo, For, Show } from "solid-js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { MenuHeading } from "../../components/solid/menu-heading.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
 import {
   presenceActivityLabel,
   presenceViewerActivity,
   presenceViewerLabel,
+  presenceUserLabel,
   type PresenceViewer,
 } from "../../lib/presence-users.ts";
 import { registerEnglishCatalog, getLocale, t } from "../../lib/reactive/i18n.ts";
@@ -20,18 +22,17 @@ type ActivityPerson = PresenceViewer & {
 };
 
 type PeopleView = {
-  filters: SessionActivityFilters;
-  onFiltersChange: (filters: SessionActivityFilters) => void;
+  filters: Pick<SessionActivityFilters, "personId">;
   presentationRevision?: number;
   result?: Pick<SessionsListResult, "peopleIncomplete">;
 };
 
 export function isUnresolvedPerson(person: PresenceViewer): boolean {
-  return !person.name && !person.email && presenceViewerLabel(person) === person.id;
+  return !presenceUserLabel(person).isSharedOwner && !person.name?.trim();
 }
 
 function compactPersonLabel(person: PresenceViewer): string {
-  return isUnresolvedPerson(person) && person.id.length > 8
+  return isUnresolvedPerson(person) && !person.id.includes("@") && person.id.length > 8
     ? `${person.id.slice(0, 8)}…`
     : presenceViewerLabel(person);
 }
@@ -115,16 +116,17 @@ function PersonRow(props: {
 
 export function PeopleControl(props: {
   view: PeopleView;
+  onPersonChange: (personId: string | null) => void;
   people: readonly ActivityPerson[];
   selectedPerson: PresenceViewer | null;
-  totalSessions: number;
+  totalSessions: number | undefined;
 }) {
   let anchor!: HTMLButtonElement;
   let popover: PopoverHandle | undefined;
   const phone = createMediaQuery(ACTIVITY_PHONE_QUERY);
   const selectPerson = (personId: string | null) => {
-    popover?.hide();
-    props.view.onFiltersChange({ ...props.view.filters, personId });
+    popover?.overlay.request(false, "return");
+    props.onPersonChange(personId);
   };
   const visible = () => props.people.slice(0, 3);
   const overflow = () => props.people.length - visible().length;
@@ -189,7 +191,7 @@ export function PeopleControl(props: {
           type="button"
           class="btn btn--sm activity-feed__people-clear"
           aria-label={t("activityFeed.clearPersonFilter")}
-          onClick={() => props.view.onFiltersChange({ ...props.view.filters, personId: null })}
+          onClick={() => props.onPersonChange(null)}
         >
           <Icon name="x" />
         </button>
@@ -222,9 +224,7 @@ export function PeopleControl(props: {
           {unresolved().length > 0 ? (
             <>
               <div class="session-menu__separator" role="separator" />
-              <div class="activity-feed__people-group-label">
-                {t("activityFeed.unresolvedIdentities")}
-              </div>
+              <MenuHeading label={t("activityFeed.unresolvedIdentities")} />
               <div data-activity-unresolved>
                 <For each={unresolved()} keyed={(person) => person.id}>
                   {(person) => (

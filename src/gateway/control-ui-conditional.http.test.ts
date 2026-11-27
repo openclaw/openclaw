@@ -1,6 +1,12 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import { createServer, request, type IncomingMessage, type Server } from "node:http";
+import {
+  createServer,
+  request,
+  ServerResponse,
+  type IncomingMessage,
+  type Server,
+} from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
 import { brotliCompressSync, brotliDecompressSync, gunzipSync, gzipSync } from "node:zlib";
@@ -59,6 +65,7 @@ describe.each([
   let server: Server | undefined;
   let assetUrl: string;
   let baseUrl: string;
+  let rootState: ControlUiRootState;
 
   beforeAll(async () => {
     const root = tempDirs.make("openclaw-ui-conditional-");
@@ -76,7 +83,13 @@ describe.each([
     await write("assets/selected.js", assetBody);
     await write("assets/selected.js.gz", gzipSync(assetBody));
     await write("assets/selected.js.br", brotliCompressSync(assetBody));
+    await write("assets/shared-Br123456.js", assetBody);
+    await write("assets/shared-Br123456.js.br", brotliCompressSync(assetBody));
+    await write("assets/shared-Id123456.js", assetBody);
     await write("assets/cold.js", assetBody);
+    for (const name of ["get", "head", "forbidden", "absent", "excluded"]) {
+      await write(`assets/cold-${name}-A1234567.js`, assetBody);
+    }
     for (const publicAsset of ["themes/absolutely.css", "sw.js"]) {
       await write(publicAsset, assetBody, modifiedAt);
     }
@@ -86,7 +99,7 @@ describe.each([
       "index.html",
       `<html data-openclaw-control-ui-build-id="source-build"><head><script>const fragment = 'href="unfinished';</script><script src="./assets/app-fixture.js"></script><link href="./assets/app.css"><link rel="icon" href="./favicon.svg"><link rel="icon" href="${basePath}/favicon-32.png"></head></html>`,
     );
-    const rootState: ControlUiRootState = {
+    rootState = {
       kind,
       path: root,
       realPath: root,
@@ -111,6 +124,144 @@ describe.each([
   });
 
   if (kind === "bundled" && basePath === "") {
+    it("skips absent sidecar work across cold HTTP representations", async () => {
+      const read = vi.spyOn(WorkerTaskPool.prototype, "run");
+      const list = vi.spyOn(fsSync.promises, "readdir");
+      for (const [name, method, accept, status, tasks] of [
+        ["get", "GET", "br, gzip", 200, 1],
+        ["head", "HEAD", "br, gzip", 200, 1],
+        ["forbidden", "GET", "br, gzip, identity;q=0", 406, 1],
+        ["missing", "GET", "br, gzip, identity;q=0", 404, 1],
+      ] as const) {
+        read.mockClear();
+        const { response, body } = await requestAsset(
+          `${baseUrl}/assets/cold-${name}-A1234567.js`,
+          method,
+          { "Accept-Encoding": accept },
+        );
+        expect(response.statusCode).toBe(status);
+        expect(response.headers["content-encoding"]).toBeUndefined();
+        if (status === 200) {
+          expect(response.headers.vary).toBe("Accept-Encoding");
+          expect(response.headers["content-length"]).toBe(String(assetBody.byteLength));
+          expect(body).toEqual(method === "GET" ? assetBody : Buffer.alloc(0));
+        }
+        expect(read).toHaveBeenCalledTimes(tasks);
+      }
+      expect(list).toHaveBeenCalledOnce();
+      read.mockClear();
+      expect(
+        (
+          await requestAsset(`${baseUrl}/assets/cold-get-A1234567.js`, "GET", {
+            "Accept-Encoding": "br, gzip",
+          })
+        ).body,
+      ).toEqual(assetBody);
+      expect(read).not.toHaveBeenCalled();
+      expect(list).toHaveBeenCalledOnce();
+    });
+
+    it.each([
+      ["absent", "br, gzip, identity;q=0"],
+      ["excluded", "*;q=0"],
+    ])("reuses the %s asset's 406 while rechecking unknown paths", async (name, accept) => {
+      const read = vi.spyOn(WorkerTaskPool.prototype, "run");
+      const headers = { "Accept-Encoding": accept };
+      for (const expectedReads of [1, 0]) {
+        read.mockClear();
+        expect(
+          (await requestAsset(`${baseUrl}/assets/cold-${name}-A1234567.js`, "GET", headers))
+            .response.statusCode,
+        ).toBe(406);
+        expect(read).toHaveBeenCalledTimes(expectedReads);
+        read.mockClear();
+        expect(
+          (await requestAsset(`${baseUrl}/assets/unavailable-${name}-A1234567.js`, "GET", headers))
+            .response.statusCode,
+        ).toBe(404);
+        expect(read).toHaveBeenCalledOnce();
+      }
+    });
+
+    it("keeps public content immutable across builds and revalidates changed versions", async () => {
+      if (rootState.kind !== "bundled") {
+        throw new Error("Expected bundled test root");
+      }
+      const firstHash = "a".repeat(64);
+      const secondHash = "b".repeat(64);
+      const asset = `${baseUrl}/themes/absolutely.css`;
+      try {
+        for (const buildId of [
+          `build-a-${firstHash}`,
+          `build-b-${firstHash}`,
+          `build-c-${secondHash}`,
+        ]) {
+          rootState.publicAssetBuildId = buildId;
+          const version = buildId === `build-c-${secondHash}` ? secondHash : firstHash;
+          const document = await requestAsset(baseUrl, "GET");
+          expect(document.body.toString()).toContain(
+            `data-openclaw-control-ui-build-id="${buildId}"`,
+          );
+          expect(document.body.toString()).toContain(`href="/favicon.svg?v=${version}"`);
+          for (const currentVersion of [version, buildId]) {
+            const current = await requestAsset(`${asset}?v=${currentVersion}`, "GET");
+            expect(current.body).toEqual(assetBody);
+            expect(current.response.headers["cache-control"]).toBe(
+              "public, max-age=31536000, immutable",
+            );
+          }
+        }
+        for (const version of [firstHash, `build-a-${firstHash}`, `build-b-${firstHash}`]) {
+          const stale = await requestAsset(`${asset}?v=${version}`, "GET");
+          expect(stale.response.headers["cache-control"]).toBe("no-cache");
+        }
+      } finally {
+        rootState.publicAssetBuildId = "fixture-build";
+      }
+    });
+
+    it.each([
+      { file: "shared-Br123456.js", encoding: "br" },
+      { file: "shared-Id123456.js", encoding: "identity" },
+    ])(
+      "shares a bundled $encoding body across different client preferences",
+      async ({ file, encoding }) => {
+        const read = vi.spyOn(WorkerTaskPool.prototype, "run");
+        const sent = vi.spyOn(ServerResponse.prototype, "end");
+        const get = async (accept: string) => {
+          const { response, body } = await requestAsset(`${baseUrl}/assets/${file}`, "GET", {
+            "Accept-Encoding": accept,
+          });
+          expect(response.statusCode).toBe(200);
+          expect(response.headers.vary).toBe("Accept-Encoding");
+          expect(response.headers["content-encoding"]).toBe(encoding === "br" ? "br" : undefined);
+          expect(encoding === "br" ? brotliDecompressSync(body) : body).toEqual(assetBody);
+        };
+        await Promise.all([get("br, gzip"), get("br")]);
+        await get("br, gzip");
+        await get("br");
+        const bodies = sent.mock.calls.flatMap(([chunk]) =>
+          Buffer.isBuffer(chunk) ? [chunk] : [],
+        );
+        expect(bodies).toHaveLength(4);
+        const uniqueBodies = new Set(bodies);
+        const workerBodyReads = read.mock.calls.filter(
+          ([input]) => (input as ControlUiFileRead).readBody,
+        ).length;
+        const retainedBytes = Array.from(uniqueBodies).reduce(
+          (sum, body) => sum + body.byteLength,
+          0,
+        );
+        const observation = { workerBodyReads, uniqueBuffers: uniqueBodies.size, retainedBytes };
+        expect(observation, JSON.stringify(observation)).toEqual({
+          workerBodyReads: 1,
+          uniqueBuffers: 1,
+          retainedBytes:
+            encoding === "br" ? brotliCompressSync(assetBody).byteLength : assetBody.byteLength,
+        });
+      },
+    );
+
     it("reads only negotiated bodies while alternating cold encoding preferences", async () => {
       const read = vi.spyOn(WorkerTaskPool.prototype, "run");
       for (const [accept, encoding, bodyReads] of [

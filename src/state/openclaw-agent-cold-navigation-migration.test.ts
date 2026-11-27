@@ -11,11 +11,11 @@ import {
   quoteSqliteIdentifier,
 } from "../infra/sqlite-schema-sql.js";
 import { AGENT_COLD_NAVIGATION_SCHEMA_VERSION as target } from "./openclaw-agent-db-contract.js";
+import { agentDatabaseIntegrityBeforeMutationSteps } from "./openclaw-agent-db-schema-admission.js";
 import {
   assertOpenClawAgentSchemaContains,
   getOpenClawAgentMigrationSchema,
 } from "./openclaw-agent-db-schema-helpers.js";
-import { agentDatabaseIntegrityBeforeMutationSteps } from "./openclaw-agent-db-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { assertOpenClawMigrationWitnessPreserved } from "./openclaw-migration-witness.js";
 import {
@@ -222,7 +222,7 @@ it("restores the scoped predecessor without discarding unrelated later writes", 
   );
 });
 
-it("checks only schema facts before the v39 crossing", async () => {
+it("checks pending-input mutation integrity before crossing from v38 to the current schema", async () => {
   await withFixture("integrity-scope.sqlite", async ({ database }) => {
     const observer = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
     try {
@@ -237,7 +237,22 @@ it("checks only schema facts before the v39 crossing", async () => {
         observer.queries.filter((sql) =>
           /^PRAGMA (?:quick_check|integrity_check|foreign_key_check)/u.test(sql),
         ),
-      ).toEqual(["PRAGMA quick_check('schema_meta');"]);
+      ).toEqual([
+        // A version step never scans the whole file; the next Gateway start owes that check.
+        "PRAGMA integrity_check('sqlite_schema');",
+        ...[
+          "schema_meta",
+          "session_conversations",
+          "session_members",
+          "session_nodes",
+          "session_pending_inputs",
+          "session_transcript_active_events",
+          "session_windows",
+        ].flatMap((table) => [
+          `PRAGMA integrity_check('${table}');`,
+          `PRAGMA foreign_key_check('${table}');`,
+        ]),
+      ]);
       expect(
         resolveSchemaMigrationIntegrityCheck(
           {

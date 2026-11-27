@@ -1,28 +1,47 @@
+import os from "node:os";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import type { ResourceProfile } from "../../infra/gateway-resource-profile.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
-import { AsyncContext } from "../../shared/async-context.js";
-import { createSpawnBrokerHost, type SpawnBrokerHost } from "./host.js";
+import { gatewaySpawnBrokerState } from "./context-state.js";
+import type { SpawnBrokerHost } from "./host.js";
 
-const context = new AsyncContext<SpawnBrokerHost | undefined>(Symbol("spawnBroker"));
-let gatewayStartupDisabled = false;
+export { getSpawnBroker, runWithSpawnBroker } from "./context-state.js";
 
 /** A failed startup optimization stays disabled across Gateway restarts in this process. */
 export async function startGatewaySpawnBroker(options: {
   onReady: (pid: number, restarted: boolean) => void;
   onStartupFailure: (message: string) => void | Promise<void>;
+  /** The profile this start will resolve; lean keeps the broker's memory for requests. */
+  profile?: ResourceProfile;
 }): Promise<SpawnBrokerHost | undefined> {
-  if (gatewayStartupDisabled) {
+  if (gatewaySpawnBrokerState.startupDisabled || options.profile === "lean") {
+    return undefined;
+  }
+  const constrained = process.constrainedMemory();
+  const memory = constrained > 0 ? Math.min(os.totalmem(), constrained) : os.totalmem();
+  // On small hosts, keep the broker's resident memory available to requests.
+  // Direct spawning retains the existing lifecycle at the cost of Linux fork latency.
+  if (memory <= 1024 ** 3) {
     return undefined;
   }
   let broker: SpawnBrokerHost | undefined;
   let entryPath: string = runtimeProcessEntrypoints.spawnBroker.distWorkerPath;
   try {
-    broker = createSpawnBrokerHost({ onReady: options.onReady });
+    const { createSpawnBrokerHost } = await import("./host.js");
+    broker = createSpawnBrokerHost({
+      onReady: options.onReady,
+      onClosed: () => {
+        if (gatewaySpawnBrokerState.host === broker) {
+          gatewaySpawnBrokerState.host = undefined;
+        }
+      },
+    });
     entryPath = broker.entryPath;
     await broker.ready();
+    gatewaySpawnBrokerState.host = broker;
     return broker;
   } catch (error) {
-    gatewayStartupDisabled = true;
+    gatewaySpawnBrokerState.startupDisabled = true;
     let reason = toErrorObject(error, "Spawn broker startup failed").message;
     try {
       await broker?.close();
@@ -36,12 +55,4 @@ export async function startGatewaySpawnBroker(options: {
     );
     return undefined;
   }
-}
-
-export function runWithSpawnBroker<T>(host: SpawnBrokerHost | undefined, run: () => T): T {
-  return context.getStore() === host ? run() : context.run(host, run);
-}
-
-export function getSpawnBroker(): SpawnBrokerHost | undefined {
-  return gatewayStartupDisabled ? undefined : context.getStore();
 }

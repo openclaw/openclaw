@@ -19,7 +19,7 @@ it.each([
   ["Unicode case folding", "ſearch", "**Search**"],
   ["composed query", "CAFÉ now", "**Cafe**\u0301 now"],
   ["decomposed query", "cafe\u0301 now", "**Café** now"],
-  ["hex color", "Use #fff now", "**Use** #fff now"],
+  ["hex color", "Use #ffffff now", "**Use** #ffffff now"],
   ["link label", "see the docs", "See [the docs](https://docs.openclaw.ai/chat)"],
   ["link target", "docs.openclaw.ai/chat", "See [the docs](https://docs.openclaw.ai/chat)"],
   ["html block", "proof steps", "<details>\n<summary>Proof</summary>\n\nsteps\n</details>"],

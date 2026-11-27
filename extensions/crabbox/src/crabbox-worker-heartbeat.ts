@@ -1,4 +1,4 @@
-import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
+import { withCommandProcessScope, type SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import {
   crabboxCommandError,
   runCrabboxCommandWithCoordinatorRetry,
@@ -70,14 +70,29 @@ export function createCrabboxHeartbeatManager(dependencies: { warn: (message: st
     }
     entry.timer = setTimeout(() => {
       entry.timer = undefined;
-      entry.pending = heartbeat(entry);
+      // Join physical command cleanup before retrying, without giving the next timer a closed scope.
+      entry.pending = withCommandProcessScope(() => heartbeat(entry)).then((retry) => {
+        if (retry) {
+          schedule(entry);
+        }
+      });
+      void entry.pending.catch((error: unknown) => {
+        if (isCurrent(entry)) {
+          entry.failureWarned = true;
+          warn(
+            entry,
+            error instanceof Error ? error.message : "Crabbox heartbeat cleanup failed",
+            false,
+          );
+        }
+      });
     }, delayMs);
     entry.timer.unref?.();
   };
 
-  const heartbeat = async (entry: HeartbeatEntry): Promise<void> => {
+  const heartbeat = async (entry: HeartbeatEntry): Promise<boolean> => {
     if (!isCurrent(entry)) {
-      return;
+      return false;
     }
     let result: SpawnResult;
     const startedAt = Date.now();
@@ -103,11 +118,10 @@ export function createCrabboxHeartbeatManager(dependencies: { warn: (message: st
         entry.failureWarned = true;
         warn(entry, error instanceof Error ? error.message : "Crabbox heartbeat failed");
       }
-      schedule(entry);
-      return;
+      return true;
     }
     if (!isCurrent(entry)) {
-      return;
+      return false;
     }
     if (result.termination === "exit" && result.code === 0) {
       try {
@@ -130,12 +144,10 @@ export function createCrabboxHeartbeatManager(dependencies: { warn: (message: st
           );
         }
         entry.failureWarned = true;
-        schedule(entry);
-        return;
+        return true;
       }
       entry.failureWarned = false;
-      schedule(entry);
-      return;
+      return true;
     }
     if (providerDoesNotSupportHeartbeat(result)) {
       warn(
@@ -143,14 +155,14 @@ export function createCrabboxHeartbeatManager(dependencies: { warn: (message: st
         `Crabbox provider ${entry.provider} does not support heartbeat for worker lease ${entry.id}`,
         false,
       );
-      return;
+      return false;
     }
     if (!entry.failureWarned) {
       entry.failureWarned = true;
       const message = crabboxCommandError("heartbeat", result).message;
       warn(entry, message.replace("(timeout)", `(timeout after ${Date.now() - startedAt} ms)`));
     }
-    schedule(entry);
+    return true;
   };
 
   const stop = async (leaseId: string): Promise<void> => {

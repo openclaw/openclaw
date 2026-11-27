@@ -15,6 +15,7 @@ import {
   resolveImmutableSqliteFileUri,
   resolveNodeSqliteLocation,
 } from "./node-sqlite.js";
+import { readSqliteDatabaseAdmissionIdentity } from "./sqlite-database-admission-record.js";
 import { resolveSqliteDatabaseFilePath } from "./sqlite-database-admission.js";
 
 const originalPrepare = Reflect.get(DatabaseSync.prototype, "prepare") as DatabaseSync["prepare"];
@@ -112,6 +113,40 @@ describe("node SQLite locations", () => {
       }
     },
   );
+  it.each([false, true])(
+    "defers an expected file identity until native open (replaced: %s)",
+    (replaced) => {
+      const pathname = path.join(dirs.make("sqlite-deferred-identity-"), "database.sqlite");
+      const seed = openNodeSqliteDatabase(pathname);
+      seed.exec("CREATE TABLE proof(value INTEGER); INSERT INTO proof VALUES(42)");
+      seed.close();
+      const expected = readSqliteDatabaseAdmissionIdentity(fs.statSync(pathname, { bigint: true }));
+      const database = openNodeSqliteDatabase(pathname, { open: false }, expected);
+      try {
+        expect(database.isOpen).toBe(false);
+        if (replaced) {
+          fs.renameSync(pathname, `${pathname}.retained`);
+          const successor = openNodeSqliteDatabase(pathname);
+          successor.exec("CREATE TABLE successor(value INTEGER); INSERT INTO successor VALUES(99)");
+          successor.close();
+          const bytes = fs.readFileSync(pathname);
+          expect(() => database.open()).toThrow(
+            "SQLite staging database changed before native open",
+          );
+          expect(database.isOpen).toBe(false);
+          expect(fs.readFileSync(pathname)).toEqual(bytes);
+        } else {
+          database.open();
+          expect(database.prepare("SELECT value FROM proof").get()).toEqual({ value: 42 });
+        }
+      } finally {
+        if (database.isOpen) {
+          database.close();
+        }
+      }
+    },
+  );
+
   it("preserves Windows long paths in non-creating writable URIs", () => {
     const pathname = String.raw`C:\deep state\openclaw.sqlite`;
     expect(resolveExistingSqliteFileUri(pathname, "win32")).toBe(

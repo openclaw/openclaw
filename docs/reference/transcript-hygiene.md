@@ -60,9 +60,25 @@ rows. `/btw` and `/side` remain ephemeral.
 
 ## Delivered automation results
 
-Canonical `openclaw` / `automation-result` assistant rows remain in model history,
-even when their text matches the preceding assistant reply and their usage is
-zero. The historical duplicate filter still removes marker-free delivery mirrors.
+Canonical `openclaw` / `automation-result` rows stay assistant rows in the
+transcript and in chat history. Model context gets each one as a labelled user
+message instead: an `[OpenClaw background result]` line says the agent sent the
+text to the user from a separate background run, the user saw it, and it is a
+record, not a new request. The original text follows the label. The label is
+constant, so the projection is the same for a row on every request.
+
+The model never produced these rows in this conversation, and nothing in the
+conversation prompted them. Replayed as assistant turns, a run of consecutive
+hourly automation results looked like the model's own spontaneous habit, and the
+model continued it with fabricated future reports. The same projection runs
+before history assembly, at provider dispatch, and in exact-replay facts, and it
+runs before turn merging, so a result can never merge into an assistant turn on
+any route. Sessions that already hold results get one prompt-cache miss when
+this projection first applies.
+
+The historical duplicate filter still removes marker-free delivery mirrors. It
+never removes an automation result, even when its text matches the preceding
+assistant reply.
 
 ## Failed attempts and recovery
 
@@ -76,9 +92,20 @@ thinking, omits unfinished calls and partial text, and uses a replayable stop re
 The stored failure and billing facts remain unchanged. This uses existing
 assistant-row shapes and requires no database migration.
 
+Responses item-conflict recovery receipts survive discarded failed or silent
+assistant content as empty replay rows. The transport consumes their metadata
+without sending an empty assistant message, preserving the repaired identity
+boundary after a failed retry or session reopen.
+
 Direct Anthropic Messages append-only replay also keeps failed and recovered
 assistant frames separate, along with consecutive user turns. Strict routes
 retain their role-merging behavior.
+
+User-row merging happens at submission, after the current input is resolved.
+Runtime-context carriers and operator updates remain separate from user input,
+preserving their authority and cache boundaries. Bedrock Converse still merges
+all adjacent user rows to satisfy its alternation requirement, including `/btw`
+requests. History limits count adjacent input rows as one turn on merging routes.
 
 ## Global rule: runtime context is not user transcript
 
@@ -150,13 +177,14 @@ Implementation:
 - `sanitizeContentBlocksImages` in `src/agents/tool-images.ts`
 - Max image side is configurable via `agents.defaults.imageMaxDimensionPx`
   (default: `1200`)
-- Unsigned blank text blocks are removed while this pass walks replay content.
+- Unsigned blank user and assistant text blocks are removed during replay.
   Blank assistant text with a provider replay signature is retained byte-for-byte,
   including whitespace-only messages, so later reasoning keeps its
   original request prefix and item order.
   Assistant turns that become empty are dropped unless they own opaque
-  provider replay state; user and tool-result turns that become empty receive
-  a non-empty omitted-content placeholder.
+  provider replay state; user turns that become empty receive a non-empty
+  omitted-content placeholder. Tool-result text, including blank blocks, is
+  preserved for each provider's transport to encode consistently across turns.
 
 ---
 
@@ -301,7 +329,8 @@ inter-session user turns that only have provenance metadata.
 - Historical calls to tools absent from the outgoing catalog, including tools whose
   schemas were rejected, replay as assistant text together with their results.
   The model still sees errors such as `Tool session_status not found`. Declared
-  calls retain native tool protocol, with their results kept together in mixed
+  calls, and calls to Tool Search directory tools that a direct call hydrates,
+  retain native tool protocol, with their results kept together in mixed
   batches. This deterministic request projection leaves stored history unchanged.
 - Historical assistant thinking/reasoning blocks are stripped before replay
   so local and proxy-style OpenAI-compatible servers do not receive
@@ -325,7 +354,7 @@ inter-session user turns that only have provenance metadata.
 
 **Anthropic / Minimax (Anthropic-compatible)**
 
-- Prefix-binding Claude models, such as Fable 5.1, persist runtime-context carriers
+- Prefix-binding Claude models persist runtime-context carriers
   as hidden custom messages immediately after their user turn and replay them in
   place. Inline inbound metadata on older user turns is also retained. This
   model-scoped append-only policy includes Bedrock, Vertex, and Foundry routes.
@@ -334,8 +363,12 @@ inter-session user turns that only have provenance metadata.
   authority their protocol supports; Anthropic-family and external plugin adapters
   retain the labeled user representation, while OpenAI-compatible adapters use
   system or developer authority.
-  Carriers are excluded from chat history and compaction summarization. Other
-  Claude models and Anthropic-compatible models keep transient carriers, avoiding
+  Every Claude model binds the prefix except a closed list of older generations
+  (Claude 3, Claude 4.x, Opus 5, Sonnet 5, Fable 5, Mythos 5, Mythos Preview), so
+  newly released Claude models, such as Fable 5.2, are prefix-binding without an
+  OpenClaw update.
+  Carriers are excluded from chat history and compaction summarization. Those
+  older Claude models and Anthropic-compatible models keep transient carriers, avoiding
   repeated cache-read charges and context use for old carriers when nothing binds
   the prefix.
 - Tool result pairing repair and synthetic tool results.

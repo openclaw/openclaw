@@ -107,6 +107,11 @@ interface is for async tool-result transforms that must run before the selected
 harness feeds tool output back into the model. Supported runtime ids are
 `agentsapi`, `codex`, and `openclaw`.
 
+The Gateway and standalone agent runtimes register enabled middleware when
+they prepare a plugin generation. Tool results use the registrations from
+their run's generation. A successful plugin reload or install publishes
+updated registrations for subsequent runs.
+
 Middleware options may combine `runtimes` with a `matcher` tool-name list.
 Each registration keeps that pair intact, so registering the same handler for
 different runtimes does not broaden either matcher. Matchers use non-empty
@@ -193,8 +198,10 @@ owns the fallback when no admitted message exists.
 
 Supply `messages` as an array or an async loader, which runs only when a `before_prompt_build`
 hook needs history. Heartbeat-only contributions do not read conversation history.
-The production-private `resolveAgentHarnessHistoryLimits` helper applies the shared
-Codex and Agents API transcript read budget.
+The production-private `resolveAgentHarnessHistoryLimits` helper applies the embedded
+runner's transcript read guard (16 MiB or 10,000 events) to Codex, Agents API and Muse.
+Harness history therefore holds everything since the latest compaction and only grows
+between compactions. Its `contextTokenBudget` argument is deprecated and ignored.
 
 Agents API retains the first successfully prepared, bounded hook history for
 retries of the same logical run and native session. Prompt hooks still run on
@@ -203,7 +210,7 @@ at the original before-turn snapshot. Accepted steering therefore does not force
 a new transcript read through the original message's now-stale admission.
 This snapshot is data, not renewed transcript-read permission: later transcript
 changes are observed by the next logical run, and a changed recorder, session,
-run identity, or history budget requires a fresh read. Session reset and run
+or run identity requires a fresh read. Session reset and run
 cancellation retain their existing authority checks.
 
 The `developerInstructions.build` callback receives `toolsAllow` and
@@ -350,6 +357,12 @@ Set `event.modelIterations` when the harness observes model calls directly, and
 `event.skillsUsed` from the run's skill-usage record. `ctx.modelIterations` and
 `ctx.skillWorkshopAvailable` are deprecated aliases for those two fields,
 supported through 2026-12-31.
+
+Set `completedTurnSource` to the transcript target and entry id of the turn's
+final message. The helpers resolve it once, under the turn lease, and pass
+`ctx.completedTurn` to `agent_end` hooks. Omit it when the turn left no final
+entry that should be reviewed. `skillExperienceReviewSource` is its deprecated
+alias, supported through 2026-12-31.
 
 Pass `ctx.foregroundPromptContext` built with
 `buildEmbeddedForegroundPromptContext(params, agentDir)` from the same

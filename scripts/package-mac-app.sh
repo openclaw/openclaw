@@ -427,24 +427,26 @@ else
   fi
   chmod +x "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
   /usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT" 2>/dev/null || true
+  # The helper is a separate executable: it cannot inherit OpenClaw's Frameworks rpath.
+  /usr/bin/install_name_tool -change @rpath/libswiftCompatibilitySpan.dylib \
+    @executable_path/../Frameworks/libswiftCompatibilitySpan.dylib \
+    "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
 fi
 
 SPARKLE_FRAMEWORK_PRIMARY="$(sparkle_framework_for_arch "$PRIMARY_ARCH")"
-if [ -d "$SPARKLE_FRAMEWORK_PRIMARY" ]; then
-  echo "✨ Embedding Sparkle.framework"
-  cp -R "$SPARKLE_FRAMEWORK_PRIMARY" "$APP_ROOT/Contents/Frameworks/"
-  if [[ "${#BUILD_ARCHS[@]}" -gt 1 ]]; then
-    OTHER_FRAMEWORKS=()
-    for arch in "${BUILD_ARCHS[@]}"; do
-      if [[ "$arch" == "$PRIMARY_ARCH" ]]; then
-        continue
-      fi
-      OTHER_FRAMEWORKS+=("$(sparkle_framework_for_arch "$arch")")
-    done
-    merge_framework_machos "$SPARKLE_FRAMEWORK_PRIMARY" "$APP_ROOT/Contents/Frameworks/Sparkle.framework" "${OTHER_FRAMEWORKS[@]}"
-  fi
-  chmod -R a+rX "$APP_ROOT/Contents/Frameworks/Sparkle.framework"
+echo "✨ Embedding Sparkle.framework"
+cp -R "$SPARKLE_FRAMEWORK_PRIMARY" "$APP_ROOT/Contents/Frameworks/"
+if [[ "${#BUILD_ARCHS[@]}" -gt 1 ]]; then
+  OTHER_FRAMEWORKS=()
+  for arch in "${BUILD_ARCHS[@]}"; do
+    if [[ "$arch" == "$PRIMARY_ARCH" ]]; then
+      continue
+    fi
+    OTHER_FRAMEWORKS+=("$(sparkle_framework_for_arch "$arch")")
+  done
+  merge_framework_machos "$SPARKLE_FRAMEWORK_PRIMARY" "$APP_ROOT/Contents/Frameworks/Sparkle.framework" "${OTHER_FRAMEWORKS[@]}"
 fi
+chmod -R a+rX "$APP_ROOT/Contents/Frameworks/Sparkle.framework"
 
 echo "📦 Copying Swift 6.2 compatibility libraries"
 SWIFT_COMPAT_LIB="$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-6.2/macosx/libswiftCompatibilitySpan.dylib"
@@ -614,6 +616,9 @@ stop_packaged_app_if_running() {
   echo "ERROR: Packaged OpenClaw bundle did not exit: ${pids[*]}" >&2
   return 1
 }
+
+echo "🔎 Verifying app native dependency closure"
+node "$ROOT_DIR/scripts/lib/mac-runtime-portability.mjs" "$APP_ROOT"
 
 if [[ -n "${SIGN_IDENTITY:-}" ]]; then
   echo "🔏 Signing bundle with explicit SIGN_IDENTITY"

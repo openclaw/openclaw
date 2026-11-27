@@ -6,7 +6,7 @@
   },
   "name": "Diffs",
   "description": "OpenClaw read-only diff viewer plugin and file renderer for agents.",
-  "catalog": { "featured": true, "order": 40 },
+  "catalog": { "featured": true, "order": 40, "sidebar": true },
   "contracts": {
     "tools": ["diffs"]
   },
@@ -230,5 +230,9 @@
         }
       }
     }
-  }
+  },
+  "recommendedPrompts": [
+    "Help me get standalone diff artifacts ready.",
+    "Turn my before-and-after text or patch into a diff artifact without changing the source."
+  ]
 }

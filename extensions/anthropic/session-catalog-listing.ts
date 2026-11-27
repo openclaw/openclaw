@@ -4,7 +4,7 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
 import {
   publishSessionCatalogHost,
-  type SessionCatalogProvider,
+  type SessionCatalogListProviderParams,
 } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CLAUDE_LOCAL_SESSION_HOST_ID } from "./session-catalog-adoption.js";
@@ -56,10 +56,31 @@ export async function listLocalClaudeSessionPage(
   value: unknown,
   homeDir?: string,
   scanOptions?: { configDir?: string; includeDesktop?: boolean },
+  exportSource?: SessionCatalogListProviderParams["exportSource"],
 ): Promise<ClaudeSessionCatalogPage> {
   const resolvedHome = homeDir ?? resolveClaudeCatalogHomeDir();
   const resolvedScanOptions =
     scanOptions ?? (homeDir === undefined ? gatewayClaudeScanOptions(true) : {});
+  if (exportSource) {
+    // A saved locator is bound to one physical transcript. A free-text page or
+    // a truncated general scan cannot establish that the selected file is gone.
+    if (!exportSource.sourceHomeId) {
+      return { sessions: [] };
+    }
+    const { records } = await listClaudeSessions(resolvedHome, {
+      ...resolvedScanOptions,
+      sessionId: exportSource.threadId,
+    });
+    return {
+      sessions: records
+        .filter(
+          (record) =>
+            record.threadId === exportSource.threadId &&
+            record.sourceHomeId === exportSource.sourceHomeId,
+        )
+        .map(({ filePath: _filePath, ...session }) => session),
+    };
+  }
   const params = readListParams(value);
   const offset = decodeOffset(params.cursor, "catalog");
   const search = params.searchTerm?.toLocaleLowerCase();
@@ -103,21 +124,25 @@ export async function readLocalClaudeTranscriptPage(
   value: unknown,
   homeDir?: string,
   scanOptions?: { configDir?: string; includeDesktop?: boolean },
+  sourceHomeId?: string,
 ): Promise<Omit<ClaudeSessionTranscriptPage, "hostId" | "label">> {
   const resolvedHome = homeDir ?? resolveClaudeCatalogHomeDir();
   const resolvedScanOptions =
     scanOptions ?? (homeDir === undefined ? gatewayClaudeScanOptions(true) : {});
   const params = readTranscriptParams(value);
   const lookupOptions = { ...resolvedScanOptions, sessionId: params.threadId };
+  const matches = (record: { threadId: string; sourceHomeId?: string }) =>
+    record.threadId === params.threadId &&
+    (sourceHomeId === undefined || sourceHomeId === record.sourceHomeId);
   let filePath = (await listClaudeSessions(resolvedHome, lookupOptions)).records.find(
-    (record) => record.threadId === params.threadId,
+    matches,
   )?.filePath;
   if (!filePath) {
     // A just-created session can race the stamp snapshot. Specific reads must retry against disk so
     // opening a new thread never fails only because the assembled catalog is still warm.
     filePath = (
       await listClaudeSessions(resolvedHome, { ...lookupOptions, forceRefresh: true })
-    ).records.find((record) => record.threadId === params.threadId)?.filePath;
+    ).records.find(matches)?.filePath;
   }
   if (!filePath) {
     throw new ClaudeCatalogParamsError("Claude session is unavailable");
@@ -125,9 +150,9 @@ export async function readLocalClaudeTranscriptPage(
   const handle = await fs.open(filePath, "r");
   try {
     const stat = await handle.stat();
-    const requestedEnd = params.cursor ? decodeOffset(params.cursor, "transcript") : stat.size;
+    const requestedEnd = params.cursor ? decodeOffset(params.cursor, "chat history") : stat.size;
     if (requestedEnd > stat.size) {
-      throw new ClaudeCatalogParamsError("transcript cursor is invalid");
+      throw new ClaudeCatalogParamsError("chat history cursor is invalid");
     }
     let position = requestedEnd;
     let scanned = 0;
@@ -143,7 +168,7 @@ export async function readLocalClaudeTranscriptPage(
       const chunk = Buffer.allocUnsafe(size);
       const filled = await readFileWindowFully(handle, chunk, position);
       if (filled !== size) {
-        throw new Error("Claude transcript changed while it was being read");
+        throw new Error("Claude chat history changed while it was being read");
       }
       scanned += filled;
       let right = filled;
@@ -185,7 +210,7 @@ export async function readLocalClaudeTranscriptPage(
       }
     }
     if (position > 0 && found.length < params.limit) {
-      throw new Error("Claude transcript page exceeded the safe scan limit");
+      throw new Error("Claude chat history page exceeded the safe scan limit");
     }
     const requested = found.slice(0, params.limit);
     const selected: typeof requested = [];
@@ -221,7 +246,8 @@ export async function listClaudeSessionCatalog(params: {
   runtime: PluginRuntime;
   query?: unknown;
   allowProcessHomeFallback?: boolean;
-  listNodes?: Parameters<SessionCatalogProvider["list"]>[0]["listNodes"];
+  listNodes?: SessionCatalogListProviderParams["listNodes"];
+  exportSource?: SessionCatalogListProviderParams["exportSource"];
   onHost?: (host: ClaudeSessionCatalogHost) => void;
   waitUntil?: (completion: Promise<void>) => void;
   signal?: AbortSignal;
@@ -254,6 +280,7 @@ export async function listClaudeSessionCatalog(params: {
                   },
                   resolveClaudeCatalogHomeDir(),
                   scanOptions,
+                  params.exportSource,
                 )),
               };
             } catch {
@@ -374,6 +401,7 @@ export async function listClaudeSessionCatalog(params: {
 }
 
 export async function readClaudeSessionTranscript(params: {
+  sourceHomeId?: string;
   runtime: PluginRuntime;
   hostId: string;
   threadId: string;
@@ -381,7 +409,7 @@ export async function readClaudeSessionTranscript(params: {
   limit: number;
   allowProcessHomeFallback?: boolean;
 }): Promise<ClaudeSessionTranscriptPage> {
-  const cursor = readOptionalCursor(params.cursor, "transcript");
+  const cursor = readOptionalCursor(params.cursor, "chat history");
   if (params.hostId === CLAUDE_LOCAL_SESSION_HOST_ID) {
     assertClaudeLocalAccess(params.hostId, params.allowProcessHomeFallback);
     return {
@@ -395,6 +423,7 @@ export async function readClaudeSessionTranscript(params: {
         },
         resolveClaudeCatalogHomeDir(),
         gatewayClaudeScanOptions(params.allowProcessHomeFallback),
+        params.sourceHomeId,
       )),
     };
   }
@@ -431,9 +460,9 @@ export async function readClaudeSessionTranscript(params: {
     page.threadId !== params.threadId ||
     Buffer.byteLength(JSON.stringify(page), "utf8") > MAX_TRANSCRIPT_PAGE_BYTES
   ) {
-    throw new Error("Claude node returned an invalid transcript page");
+    throw new Error("Claude node returned an invalid chat history page");
   }
-  const nextCursor = readNodePageCursor(page, "Claude node returned an invalid transcript page");
+  const nextCursor = readNodePageCursor(page, "Claude node returned an invalid chat history page");
   return {
     hostId: params.hostId,
     label: resolveNodeLabel(node),

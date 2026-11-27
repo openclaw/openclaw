@@ -3,8 +3,13 @@ import type { DB } from "../state/openclaw-state-db.generated.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { readRestartSentinelRowSync } from "./restart-sentinel-store.js";
 import type { EngineConnection } from "./sql-connection.js";
+import { runSqliteReadSnapshotSync } from "./sqlite-transaction.js";
 import { inspectUpdateRunAbandonment } from "./update-run-activity.js";
-import { decodeRun, hasStoredUpdateRecovery } from "./update-run-read.kernel.js";
+import {
+  decodeRun,
+  hasStoredUpdateRecovery,
+  readUpdateRunRecord,
+} from "./update-run-read.kernel.js";
 import type {
   UpdateRunReconciliationCandidate,
   UpdateRunReconciliationInput,
@@ -44,10 +49,10 @@ export function inspectUpdateRunReconciliation(
   return { record, rule };
 }
 
-export function readUpdateRunReconciliationCandidates(
+function readUpdateRunReconciliationRows(
   db: EngineConnection,
   input: UpdateRunReconciliationInput,
-): UpdateRunReconciliationCandidate[] {
+) {
   if (!tableExists(db, "update_runs")) {
     return [];
   }
@@ -61,7 +66,27 @@ export function readUpdateRunReconciliationCandidates(
   if (input.excludeRunId) {
     query = query.where("run_id", "!=", input.excludeRunId);
   }
-  return executeSqliteQuerySync(db, query.orderBy("run_id")).rows.map((row) =>
-    inspectUpdateRunReconciliation(db, decodeRun(row), input),
+  return executeSqliteQuerySync(db, query.orderBy("run_id")).rows;
+}
+
+export function readUpdateRunReconciliationCandidate(db: EngineConnection, runId: string) {
+  return runSqliteReadSnapshotSync(db, () => {
+    const run = tableExists(db, "update_runs") ? readUpdateRunRecord(db, runId) : undefined;
+    return run ? inspectUpdateRunReconciliation(db, run, {}) : undefined;
+  });
+}
+
+export function readUpdateRunReconciliationCandidates(
+  db: EngineConnection,
+  input: UpdateRunReconciliationInput,
+): UpdateRunReconciliationCandidate[] {
+  // An empty selection needs no composite snapshot; nonempty reads start over inside it.
+  if (!db.isTransaction && readUpdateRunReconciliationRows(db, input).length === 0) {
+    return [];
+  }
+  return runSqliteReadSnapshotSync(db, () =>
+    readUpdateRunReconciliationRows(db, input).map((row) =>
+      inspectUpdateRunReconciliation(db, decodeRun(row), input),
+    ),
   );
 }

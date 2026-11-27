@@ -25,6 +25,7 @@ import { createCodexNativeHookRemoteCredential } from "./native-hook-relay-remot
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import type { CodexNativeModelInputTools } from "./native-model-input-tools.js";
 import type { CodexNativeProcessAuthority } from "./native-process-authority.js";
+import { NativeModelInputReceiverLineageError } from "./native-subagent-model-input.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import {
   CODEX_NATIVE_SUBAGENT_SUBMISSION_HOOK_TOOL,
@@ -194,7 +195,6 @@ export function createCodexNativeHookRelay(params: {
   attemptTimeoutMs: number;
   startupTimeoutMs: number;
   turnStartTimeoutMs: number;
-  loopDetectionPreToolUseRelay: boolean;
   signal: AbortSignal;
   hostCapabilities: EmbeddedRunAttemptParams["hostCapabilities"];
   nativeProcessAuthority?: {
@@ -251,6 +251,7 @@ export function createCodexNativeHookRelay(params: {
   let remoteCleanup: Promise<void> | undefined;
   const relay = registerNativeHookRelayForBundledRuntime({
     provider: "codex",
+    requireForegroundTurn: true,
     relayId: buildCodexNativeHookRelayId({
       agentId: params.agentId,
       sessionId: params.sessionId,
@@ -271,7 +272,6 @@ export function createCodexNativeHookRelay(params: {
     ...(params.requester ? { requester: params.requester } : {}),
     ...(params.approvalContext ? { approvalContext: params.approvalContext } : {}),
     allowedEvents: params.events,
-    preToolUseLoopDetection: params.loopDetectionPreToolUseRelay,
     ttlMs: resolveCodexNativeHookRelayTtlMs({
       explicitTtlMs: params.options?.ttlMs,
       attemptTimeoutMs: params.attemptTimeoutMs,
@@ -317,7 +317,7 @@ export function createCodexNativeHookRelay(params: {
                       } catch (error) {
                         return toErrorObject(
                           error,
-                          "Native spawn execution authority is no longer current",
+                          "Native subagent spawn was denied. Start a new turn to retry.",
                         ).message;
                       }
                     }
@@ -336,21 +336,28 @@ export function createCodexNativeHookRelay(params: {
                   );
                 }
                 assertAdmissionCurrent();
-                const request = {
-                  client: admission.client(),
-                  threadId,
-                  turnId: invocation.turnId,
-                  itemId: invocation.toolUseId,
-                };
-                await codexNativeSubagentMonitorRuntime.prepareModelInput({
-                  ...request,
-                  target: targetThreadId,
-                  readQualification: admission.readQualification,
-                  signal: preparation.signal,
-                  assertCurrent: preparation.assertCurrent,
-                });
+                const denyInput = await codexNativeSubagentMonitorRuntime
+                  .prepareModelInput({
+                    client: admission.client(),
+                    threadId,
+                    turnId: invocation.turnId,
+                    itemId: invocation.toolUseId,
+                    target: targetThreadId,
+                    readQualification: admission.readQualification,
+                    signal: preparation.signal,
+                    assertCurrent: preparation.assertCurrent,
+                  })
+                  .catch((error: unknown) => {
+                    if (!(error instanceof NativeModelInputReceiverLineageError)) {
+                      throw error;
+                    }
+                    return () => {
+                      assertAdmissionCurrent();
+                      return "Cannot verify this worker belongs to the current parent. Check the original task before assigning new work.";
+                    };
+                  });
                 assertAdmissionCurrent();
-                return undefined;
+                return denyInput;
               }
               if (
                 !params.nativeProcessAuthority ||

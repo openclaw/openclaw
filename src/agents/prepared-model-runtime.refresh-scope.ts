@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { hasPendingGatewayRestart } from "../infra/restart.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { withAgentRosterFactsBatch } from "./agent-scope-config.js";
@@ -38,6 +39,14 @@ export function refreshCommittedProviderCatalogs(
 ): void {
   for (const owner of owners) {
     if (owner.provenance !== "configured" || owner.pending || owner.needsRefresh) {
+      continue;
+    }
+    // Headless startup needs configured turn facts; acquire inventory when a client asks for it.
+    if (
+      !owner.catalogInventory &&
+      !owner.catalogAttempt &&
+      owner.input.config.gateway?.controlUi?.enabled === false
+    ) {
       continue;
     }
     owner.catalogRecovery = undefined;
@@ -347,8 +356,13 @@ export function createPreparedModelRuntimeRecovery(host: {
     ) {
       return;
     }
-    if (Date.now() < recovery.retryAfter) {
-      throw new PreparedModelRuntimeRecoveryError(agentId, "backoff", recovery.retryAfter, {
+    // Restart owns recovery while its live preparation still leaves inbound admission open.
+    const now = Date.now();
+    const retryAfter = hasPendingGatewayRestart()
+      ? now + CATALOG_RECOVERY_DEMAND_COOLDOWN_MS
+      : recovery.retryAfter;
+    if (now < retryAfter) {
+      throw new PreparedModelRuntimeRecoveryError(agentId, "backoff", retryAfter, {
         cause: recovery.error,
       });
     }

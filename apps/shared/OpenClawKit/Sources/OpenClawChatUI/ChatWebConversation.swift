@@ -108,20 +108,30 @@ extension OpenClawChatViewModel {
         return NativeConversationContext(agentId: agent, sessionKey: self.sessionKey)
     }
 
+    /// The visible composer only; a destination draft may still be loading,
+    /// which the async checks below wait for.
     public var hasPendingNativeConversationInput: Bool {
-        // Session selection restores the destination draft before the renderer changes.
         self.hasDraftToSend || self.isAttachmentOwnerPinned || self.isSending || self.isSubmittingDraft
     }
 
-    public func hasPendingNativeConversationInput(for context: NativeConversationContext) -> Bool {
+    public func hasPendingNativeConversationInput(for context: NativeConversationContext) async -> Bool {
+        await self.composerDraftSync.load?.value
         guard !self.hasPendingNativeConversationInput else { return true }
         guard !self.matchesWebConversationContext(context) else { return false }
         // Web-originated routes report their destination before native selection restores its draft.
         let key = self.composerSessionKey(for: context.sessionKey, agentID: context.agentId)
-        return self.draftsBySession[key]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        // A switch-away save that lands releases its in-memory copy.
+        await self.composerDraftWrites?.value
+        if self.draftsBySession[key]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            return true
+        }
+        guard let store = self.composerDraftStore else { return false }
+        guard let draft = await store.loadComposerDraft(key: key) else { return true }
+        return !draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draft.attachments.isEmpty
     }
 
     public func hasPendingNativeConversationWork() async -> Bool {
+        await self.composerDraftSync.load?.value
         if self.hasPendingNativeConversationInput { return true }
         guard let outbox else { return false }
         let session = self.currentSessionSnapshot()

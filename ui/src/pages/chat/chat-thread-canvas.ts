@@ -170,12 +170,9 @@ export function reconcileTerminalCanvasMessages(messages: unknown[]): unknown[] 
 /** Reconcile live copies after the owned previews and stream rows have been placed. */
 export function reconcileLiveCanvasPreviews(
   items: ChatItem[],
-  hiddenHistoryKeys: ReadonlySet<string>,
-  hiddenInputKeys: ReadonlySet<string>,
+  hiddenKeys: ReadonlySet<string>,
 ): ChatItem[] {
-  const ownedCanvas = collectOwnedCanvasPreviews(
-    items.filter((item) => !hiddenHistoryKeys.has(item.key) && !hiddenInputKeys.has(item.key)),
-  );
+  const ownedCanvas = collectOwnedCanvasPreviews(items.filter((item) => !hiddenKeys.has(item.key)));
   for (const item of items) {
     if (item.kind === "stream") {
       item.text = stripOwnedCanvasShortcodes(item.text, item.runId, ownedCanvas);

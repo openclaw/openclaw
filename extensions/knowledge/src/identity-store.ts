@@ -1,14 +1,16 @@
-import { constants, closeSync, fsyncSync, lstatSync, openSync, realpathSync } from "node:fs";
+import { constants, closeSync, lstatSync, openSync, realpathSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   openNodeSqliteDatabase,
+  observeSqliteConnection,
   tableExists,
   tableHasColumn,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { Check } from "typebox/value";
+import { syncKnowledgeDirectory } from "./directory-sync.js";
 import type { IdentityStore } from "./real-vault.js";
 import {
   ensureKnowledgeSchema,
@@ -167,7 +169,9 @@ export class SqliteIdentityStore implements IdentityStore {
     if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1) {
       throw unavailable();
     }
-    const db = openNodeSqliteDatabase(this.filename, { timeout: BUSY_TIMEOUT_MS });
+    const db = observeSqliteConnection(
+      openNodeSqliteDatabase(this.filename, { timeout: BUSY_TIMEOUT_MS }),
+    );
     try {
       const current = isKnowledgeSchemaCurrent(db, stateSchema());
       const after = lstatSync(this.filename);
@@ -196,12 +200,7 @@ export class SqliteIdentityStore implements IdentityStore {
       throw e instanceof UnrecognizedSchema ? unavailable() : e;
     }
     if (created) {
-      const parent = openSync(path.dirname(this.filename), constants.O_RDONLY);
-      try {
-        fsyncSync(parent);
-      } finally {
-        closeSync(parent);
-      }
+      syncKnowledgeDirectory(path.dirname(this.filename));
     }
     installAdditiveTables(db);
   }

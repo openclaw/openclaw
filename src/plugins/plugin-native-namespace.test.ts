@@ -3,10 +3,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
 import {
   capturePluginNativeNamespace,
   finishPluginNativeNamespace,
   pluginNativeNamespaceIsCurrent,
+  writablePluginNativeMember,
 } from "./plugin-native-namespace.js";
 import type { PluginNativeNamespaceFact } from "./plugin-source-admission.types.js";
 
@@ -16,6 +18,56 @@ afterEach(() => vi.restoreAllMocks());
 const originalBytes = Buffer.from("unchanged native companion\n");
 const changedBytes = Buffer.from("different native companion\n");
 const modifiedAt = new Date("2020-01-01T00:00:00Z");
+
+it.each([
+  { recapture: false, swap: false },
+  { recapture: true, swap: false },
+  { recapture: false, swap: true },
+  { recapture: true, swap: true },
+])(
+  "verifies copy-like links (recapture: $recapture, source swap: $swap)",
+  ({ recapture, swap }) => {
+    const root = dirs.make("plugin-copying-link-");
+    const sourceDirectory = path.join(root, "source");
+    fs.mkdirSync(sourceDirectory);
+    const source = path.join(sourceDirectory, "addon.node");
+    fs.writeFileSync(source, originalBytes);
+    const capture = (name: string, previous?: PluginNativeNamespaceFact) => {
+      const capturedRoot = path.join(root, name);
+      fs.mkdirSync(capturedRoot);
+      const result = capturePluginNativeNamespace({
+        sourceDirectory,
+        boundary: sourceDirectory,
+        capturedRoot,
+        managed: true,
+        copyOnly: false,
+        previous,
+      });
+      finishPluginNativeNamespace(result.fact);
+      return result;
+    };
+    const previous = recapture ? capture("previous").fact : undefined;
+    const link = vi.spyOn(fs, "linkSync").mockImplementation((from, to) => {
+      fs.copyFileSync(from, to);
+      if (swap) {
+        fs.renameSync(from, `${String(from)}.original`);
+        fs.writeFileSync(from, changedBytes);
+      }
+    });
+    if (swap) {
+      expect(() => capture("next", previous)).toThrow(/Native plugin .*changed/);
+    } else {
+      const { fact, changed } = capture("next", previous);
+      const captured = path.join(fact.capturedRoot, "content", "addon.node");
+      expect(fs.readFileSync(captured)).toEqual(originalBytes);
+      expect(fs.readFileSync(captured)).toEqual(fs.readFileSync(source));
+      expect(fs.statSync(captured).ino).not.toBe(fs.statSync(source).ino);
+      expect(changed.size).toBe(0);
+      expect(pluginNativeNamespaceIsCurrent(fact, sourceDirectory)).toBe(true);
+    }
+    expect(link).toHaveBeenCalled();
+  },
+);
 
 function namespaceFixture(phase: "fresh-copy" | "dormant-finish" | "recapture") {
   const root = dirs.make("plugin-native-namespace-");
@@ -49,6 +101,7 @@ function namespaceFixture(phase: "fresh-copy" | "dormant-finish" | "recapture") 
   const name = phase === "recapture" ? "second" : "first";
   return {
     ...fixture,
+    previous,
     previousFile: fixture.capturedFile("first"),
     capturedFile: fixture.capturedFile(name),
     observedFile: phase === "fresh-copy" ? sourceFile : fixture.capturedFile(name),
@@ -59,6 +112,25 @@ function namespaceFixture(phase: "fresh-copy" | "dormant-finish" | "recapture") 
     },
   };
 }
+
+it.each(["dormant-finish", "recapture"] as const)(
+  "preserves published member facts during %s",
+  (phase) => {
+    const fixture = namespaceFixture(phase);
+    const prior = fixture.previous!;
+    const members = freezeTrustedJsonSnapshot(structuredClone(prior.members));
+    const before = structuredClone(members);
+    prior.members = members;
+    expect(writablePluginNativeMember(prior, "missing.bin")).toBeUndefined();
+    expect(prior.members).toBe(members);
+    const updated = fixture.finish();
+    expect(updated.members["LICENSE.md"]?.contentHash).toBe(
+      createHash("sha256").update(originalBytes).digest("hex"),
+    );
+    expect(prior.members).not.toBe(members);
+    expect(members).toEqual(before);
+  },
+);
 
 // Model an Endpoint-DLP stamp only after a real descriptor read, not before admission.
 // Identify the inode rather than the pathname so the stimulus also follows retained links.

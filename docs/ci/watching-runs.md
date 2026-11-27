@@ -248,6 +248,11 @@ reviewers inspect the code, tests, and CI to assess correctness.
 
 When the check fails, update the PR body instead of pushing another code commit.
 
+## Adaptive test observations
+
+See [adaptive CI experiments](/ci/adaptive-testing) to export test observations
+from resource-reporter logs without changing which tests CI runs.
+
 ## Related
 
 - [Install overview](/install)

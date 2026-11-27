@@ -1,7 +1,7 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { readSessionArchiveText } from "../../test/helpers/session-archive.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import { readSessionArchiveContentSync } from "../config/sessions/archive-compression.js";
 import * as sessions from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { markCanonicalSessionValidationPending } from "../config/sessions/session-canonical-key.js";
@@ -147,7 +147,7 @@ it.each([false, true])(
         expect(deleted.deleted).toBe(true);
         expect(sessions.loadExactSessionEntryReadOnly(destination)).toBeUndefined();
         expect(deleted.archivedTranscripts).toHaveLength(1);
-        expect(readSessionArchiveContentSync(deleted.archivedTranscripts[0]!.archivedPath)).toBe(
+        expect(readSessionArchiveText(deleted.archivedTranscripts[0]!.archivedPath)).toBe(
           `${events.map((event) => JSON.stringify(event)).join("\n")}\n`,
         );
       });

@@ -2,6 +2,7 @@ import { vi } from "vitest";
 import { createMockSubsystemLogger } from "../../../test/helpers/mock-subsystem-logger.js";
 import type { OperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { testing as embeddedRunsTesting } from "../../agents/embedded-agent-runner/runs.test-support.js";
+import { sharingPolicyClient } from "../session-sharing.test-utils.js";
 import { createTalkClientAgentConsultRunner } from "./client-agent-consult.js";
 import {
   config,
@@ -9,13 +10,17 @@ import {
   mocks,
   type ConsultParams,
 } from "./client-gateway-control.agent-consult.test-support.js";
-import type { TalkAgentConsultAuthority } from "./client-tool-authority.js";
+import {
+  resolveTalkAgentConsultAuthority,
+  type TalkAgentConsultAuthority,
+} from "./client-tool-authority.js";
 
 export function createConsultRunner(
   overrides: Partial<Parameters<typeof createTalkClientAgentConsultRunner>[0]> = {},
 ) {
   return createTalkClientAgentConsultRunner({
     config,
+    authority: resolveTalkAgentConsultAuthority(sharingPolicyClient({ scopes: ["operator.read"] })),
     context: { logGateway: createMockSubsystemLogger("gateway/test") },
     sessionTarget: {
       agentId: "researcher",
@@ -35,7 +40,11 @@ export function createRunner(
   registerRun: NonNullable<
     Parameters<typeof createTalkClientAgentConsultRunner>[0]["registerRun"]
   > = vi.fn(async () => ({ release: vi.fn(), isCurrent: () => true })),
-  authority: TalkAgentConsultAuthority = { senderIsOwner: false, toolsAllow: ["read"] },
+  authority: TalkAgentConsultAuthority = {
+    ...resolveTalkAgentConsultAuthority(sharingPolicyClient({ scopes: ["operator.read"] })),
+    senderIsOwner: false,
+    toolsAllow: ["read"],
+  },
   options: { ownerConnId?: string } = {},
 ) {
   return createConsultRunner({ registerRun, authority, ...options });
@@ -55,8 +64,11 @@ export function resetConsultFixture() {
       close: mocks.close,
     }),
   );
-  mocks.runEmbeddedAgentCore.mockResolvedValue({ payloads: [] });
-  mocks.controlRealtimeVoiceAgentRun.mockResolvedValue({
+  mocks.runEmbeddedAgentCore.mockResolvedValue({
+    payloads: [],
+    meta: { durationMs: 0, terminalReply: { disposition: "visible", text: "done" } },
+  });
+  mocks.controlTalkAgentRun.mockResolvedValue({
     ok: true,
     mode: "steer",
     sessionKey: "agent:researcher:talk",
