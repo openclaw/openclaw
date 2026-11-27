@@ -5935,7 +5935,13 @@ function createCompactNodeTestShardBundles(
         )
       : finalJobs;
   if (measuredJobs.length > compactJobCap) {
-    if (options.runnerBackend === "hybrid" && !prioritizeSerialGateway) {
+    const packingBackend =
+      options.runnerBackend === "hybrid"
+        ? "hybrid"
+        : options.runnerBackend === "github" && options.mainValidation
+          ? "github"
+          : undefined;
+    if (packingBackend && !prioritizeSerialGateway) {
       // Rebuild from source so the alternate order passes every admission and
       // runtime-placement check before any rows are published.
       return createCompactNodeTestShardBundles(
@@ -5949,10 +5955,10 @@ function createCompactNodeTestShardBundles(
         true,
       );
     }
-    if (options.runnerBackend === "hybrid") {
+    if (packingBackend) {
       measuredJobs = packCompactNodeTestJobsToCapacity(measuredJobs, {
         compactJobCap,
-        runnerBackend: options.runnerBackend,
+        runnerBackend: packingBackend,
         estimateGroupSeconds: estimateStripeSeconds,
       });
     } else {
