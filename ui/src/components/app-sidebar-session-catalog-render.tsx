@@ -137,14 +137,12 @@ function renderCatalogHostGroup(
     }));
     const color = createMemo(() => normalizeSessionColorValue(readSession().color ?? ""));
     const active = createMemo(() => key() === params.snapshot.routeSessionKey);
-    const ownRunActive = () => {
+    const running = () => {
       const row = adoptedRow();
       return row
         ? row.isRunVisuallyActive === true
         : readSession().status === "active" || readSession().status === "running";
     };
-    const background = () => !ownRunActive() && (adoptedRow()?.backgroundProcessCount ?? 0) > 0;
-    const running = () => ownRunActive() || background();
     const canOpenTerminal = () =>
       readSession().canOpenTerminal === true && params.snapshot.terminalAvailable;
     const openMenu = (x: number, y: number, trigger?: HTMLElement) =>
@@ -223,7 +221,6 @@ function renderCatalogHostGroup(
                 <SessionGlyph
                   content={undefined}
                   running={running()}
-                  background={background()}
                   runVisibility={sessionRunVisibility}
                 />
               ) : undefined}

@@ -20,6 +20,7 @@ import {
 import { formatCliCommand } from "./command-format.js";
 import type { CronCliJobMatch } from "./cron-cli/cron-cli-error.js";
 import { ExpectedCliError } from "./expected-cli-error.js";
+import { getCliFailureContext, installProcessFailureListener } from "./failure-context.js";
 import { isJsonOutputModeActive } from "./json-output-mode.js";
 import { exitAfterSignalExitBarriers } from "./signal-exit-barrier.js";
 
@@ -39,7 +40,18 @@ export class ReportedCliCommandError extends ExpectedCliError {
   }
 }
 
-export function handleCliUncaughtException(error: unknown, argv?: string[]): void {
+export function installCliUncaughtExceptionHandler(argv?: string[]): void {
+  const context = getCliFailureContext();
+  if (context && argv) {
+    context.argv = argv;
+  }
+  installProcessFailureListener("uncaughtException", handleCliUncaughtException);
+}
+
+export function handleCliUncaughtException(
+  error: unknown,
+  argv = getCliFailureContext()?.argv ?? process.argv,
+): void {
   if (isUncaughtExceptionHandled(error)) {
     return;
   }
@@ -50,13 +62,13 @@ export function handleCliUncaughtException(error: unknown, argv?: string[]): voi
     );
     return;
   }
-  if (isJsonOutputModeActive(argv ?? process.argv)) {
+  if (isJsonOutputModeActive(argv)) {
     defaultRuntime.writeJson(formatCliJsonFailure(error));
   }
   for (const line of formatCliFailureLines({
     title: "OpenClaw hit an unexpected runtime error.",
     error,
-    argv: argv ?? process.argv,
+    argv,
   })) {
     console.error(line);
   }

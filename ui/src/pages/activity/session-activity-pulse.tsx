@@ -29,7 +29,13 @@ export function renderSessionActivityPulse(props: {
     const labels = pulse.buckets.length > 12 ? 4 : 2;
     const peak = Math.max(...pulse.buckets);
     return {
-      label: (index: number) => period.format(activityPulseBucketStart(time, pulse.since, index)),
+      // The Gateway returns the first requested boundary, which can fall on a local half hour.
+      label: (index: number) =>
+        period.format(
+          time === "24h"
+            ? pulse.since + index * 3_600_000
+            : activityPulseBucketStart(time, pulse.since, index),
+        ),
       windowLabel: time === "all" ? t("activity.pulse.lastYear") : t(TIME_LABELS[time]),
       sessions: pulse.buckets.reduce((sum, count) => sum + count, 0),
       peak,

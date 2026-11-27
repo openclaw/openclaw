@@ -187,6 +187,8 @@ Before downgrading, stop and settle sandbox streams on the current version. Olde
 
 Set `cron.triggers.enabled: false` to disable streams together with condition-trigger scripts and script payloads. Disabling or removing the job stops the process; Gateway shutdown waits for process-tree teardown. Fast failures restart with the scheduler's built-in error backoff. Five consecutive runs shorter than 60 seconds leave the job in an error state and use the normal failure-alert path; manually re-enable the job to clear the restart cap.
 
+On Linux, a separate native process owner retains the stream's descendants if its command anchor crashes. It stops and reaps those descendants before the stream can restart, including children that detached into another process group. Losing that final cleanup owner still leaves the stream in an error state: re-enabling does not override unconfirmed cleanup. Inspect and stop the original workload through its service or container manager before restarting the Gateway and re-enabling it.
+
 ```bash
 openclaw automations add \
   --name "Build event stream" \

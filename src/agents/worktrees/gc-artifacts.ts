@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { constants, type Dirent } from "node:fs";
+import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -26,7 +26,6 @@ import {
 import { readPendingWorktrees } from "./pending-slots.js";
 import { captureWorktreeRegistryReadGuard, readRegistryWorktrees } from "./registry-read.js";
 import { worktreeGcRevision } from "./registry-read.kernel.js";
-import { isWorktreePermissionError } from "./removal-errors.js";
 import { deleteRetiredCheckout, isRetiredCheckoutDeletionPending } from "./removal-git.js";
 import { captureWorktreeRunEndContext } from "./run-end-lifecycle.js";
 import { retireExpiredManagedWorktreeSnapshot } from "./snapshot-host.js";
@@ -231,50 +230,6 @@ export async function collectRetiredWorktreeArtifacts({
   return { orphansDeleted, snapshotsPruned };
 }
 
-async function restoreOrphanDirectoryWriteAccess(
-  root: string,
-  assertCurrent: () => void,
-): Promise<void> {
-  const uid = process.getuid?.();
-  if (uid === undefined) {
-    return;
-  }
-  const visit = async (directory: string): Promise<void> => {
-    const stat = await fs.lstat(directory);
-    // Never chmod files: pnpm may hardlink them to its shared store.
-    if (!stat.isDirectory() || stat.uid !== uid) {
-      return;
-    }
-    const canonical = await fs.realpath(directory);
-    if (!isPathInside(root, canonical)) {
-      throw new Error(`Orphan directory escaped removal root: ${directory}`);
-    }
-    if ((stat.mode & 0o200) === 0) {
-      // Pin the directory itself so a replaced leaf cannot chmod a symlink target.
-      const handle = await fs.open(
-        directory,
-        constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
-      );
-      try {
-        const current = await handle.stat();
-        if (current.uid !== uid || current.dev !== stat.dev || current.ino !== stat.ino) {
-          throw new Error(`Orphan directory changed during permission repair: ${directory}`);
-        }
-        assertCurrent();
-        await handle.chmod(current.mode | 0o200);
-      } finally {
-        await handle.close();
-      }
-    }
-    for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
-      if (entry.isDirectory()) {
-        await visit(path.join(directory, entry.name));
-      }
-    }
-  };
-  await visit(root);
-}
-
 async function reconcileOrphans(
   env: NodeJS.ProcessEnv,
   getConfig: (() => OpenClawConfig) | undefined,
@@ -417,23 +372,7 @@ async function reconcileOrphans(
         });
         candidates.add(candidate);
         assertCurrent();
-        try {
-          await deleteRetiredCheckout(candidate);
-        } catch (error) {
-          if (!isWorktreePermissionError(error)) {
-            throw error;
-          }
-          const current = await fs.lstat(candidate);
-          if (!current.isDirectory() || current.dev !== source.dev || current.ino !== source.ino) {
-            throw new Error(`Orphan removal root changed during cleanup: ${candidate}`, {
-              cause: error,
-            });
-          }
-          await restoreOrphanDirectoryWriteAccess(candidate, assertCurrent);
-          assertCurrent();
-          // One repair and one retry; an unrepaired orphan must not block its siblings.
-          await deleteRetiredCheckout(candidate);
-        }
+        await deleteRetiredCheckout(candidate);
         orphanFailures.delete(candidate);
         deleted += 1;
       } catch (error) {

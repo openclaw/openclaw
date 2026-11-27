@@ -281,6 +281,7 @@
   "realtime-voice-provider",
   "meeting-page-script-runtime",
   "meeting-config",
+  "meeting-plugin-entry",
   "meeting-runtime",
   "transcripts",
   "media-understanding",

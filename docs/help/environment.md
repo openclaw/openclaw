@@ -156,11 +156,14 @@ Installed third-party plugins may declare additional credential variables in the
 | `OPENCLAW_OFFLINE`                      | Prevent downloads of pinned agent helper binaries.                                              |
 | `OPENCLAW_BROWSER_HEADLESS`             | Force managed browser launches headed (`0`) or headless (`1`).                                  |
 | `OPENCLAW_DISABLE_BONJOUR`              | Force Bonjour advertising on (`0`) or off (`1`).                                                |
-| `OPENCLAW_NO_AUTO_UPDATE`               | Disable automatic update applies.                                                               |
+| `OPENCLAW_NO_AUTO_UPDATE`               | Disable automatic update checks, applies, and Gateway update telemetry with `1`.                |
 | `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS`    | Allow trusted private-DNS `ws://` connections as a break-glass override.                        |
 | `OPENCLAW_ALLOW_MULTI_GATEWAY`          | Allow multiple Gateway processes while preserving per-state ownership locks.                    |
 | `OPENCLAW_SKIP_CHANNELS`                | Start the Gateway without channel transports for troubleshooting.                               |
 | `OPENCLAW_THEME`                        | Force the TUI palette to `light` or `dark`.                                                     |
+
+See [Telemetry controls](/gateway/telemetry#telemetry-controls) for the scope of
+`OPENCLAW_NO_AUTO_UPDATE` and the separate feature statistics and ClawHub controls.
 
 For bundled plugin development, `OPENCLAW_DEV_RELOAD_BUNDLED_PLUGINS=1` lets
 `openclaw plugins reload` load edited bundled plugin code without restarting the
@@ -218,6 +221,9 @@ what is never included.
 | Variable                    | Purpose                                                             |
 | --------------------------- | ------------------------------------------------------------------- |
 | `CLAWHUB_DISABLE_TELEMETRY` | Disable ClawHub install reporting with `1`, `true`, `yes`, or `on`. |
+
+This setting also removes analytics attribution from Control UI plugin searches.
+See [Telemetry controls](/gateway/telemetry#telemetry-controls).
 
 `CLAWDHUB_DISABLE_TELEMETRY` is accepted when `CLAWHUB_DISABLE_TELEMETRY` is unset or blank.
 

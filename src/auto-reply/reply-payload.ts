@@ -294,7 +294,7 @@ export type ReplyPayloadMetadata = {
   commandReply?: true;
   /** Inline acknowledgements accompany a model turn and do not own another command input. */
   inlineCommandReply?: true;
-  /** A read-only status command exchange belongs in history, not model context. */
+  /** A status or fast approval exchange belongs in history, not model context. */
   contextFreeCommand?: true;
   /** Host-owned acknowledgement after this final payload is confirmed delivered. */
   onFinalDeliverySuccess?: () => void;

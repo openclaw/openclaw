@@ -71,6 +71,28 @@ struct ChatInputHistoryTests {
         #expect(history.cancel() == "working draft")
     }
 
+    @Test func `paging an older identical input preserves the path back to the draft`() {
+        var history = ChatInputHistory()
+        history.seed(transcriptInputs: ["middle", "same"])
+        #expect(history.previous(draft: "working draft") == "same")
+
+        history.seed(transcriptInputs: ["same", "middle", "same"])
+
+        #expect(history.next() == "working draft")
+    }
+
+    @Test func `evicting an older duplicate keeps the selected input`() {
+        var history = ChatInputHistory()
+        let middle = (1..<(ChatInputHistory.limit - 1)).map { "entry-\($0)" }
+        history.seed(transcriptInputs: ["same"] + middle + ["same"])
+        #expect(history.previous(draft: "working draft") == "same")
+
+        history.record("newest")
+
+        #expect(history.next() == "newest")
+        #expect(history.next() == "working draft")
+    }
+
     @Test func `late successful input preserves active recall draft`() {
         var history = ChatInputHistory()
         history.record("older")

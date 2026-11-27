@@ -17,8 +17,7 @@ export class ChatMessageReveal {
     if (command?.target !== "message") {
       return;
     }
-    if (this.reveal(root, command, virtualizer)) {
-      state.scrollCommand = { behavior: command.behavior, target: "index" };
+    if (this.reveal(root, command, state, virtualizer)) {
       return;
     }
     // Expanding folded work can move the target beyond the initially mounted rows.
@@ -34,6 +33,7 @@ export class ChatMessageReveal {
   private reveal(
     root: Node | null,
     { messageId, behavior }: { messageId: string; behavior: ScrollBehavior },
+    state: Pick<TranscriptOffsetState, "scrollCommand">,
     virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
   ): boolean {
     const bubble = [...this.messageElements.values()].find(
@@ -55,7 +55,8 @@ export class ChatMessageReveal {
       element.getBoundingClientRect().top -
       element.clientTop +
       (rect.height - element.clientHeight) / 2;
-    // Replace the row target so virtualizer reconciliation cannot undo the bubble reveal.
+    // The final bubble offset can arrive synchronously, including when it is already visible.
+    state.scrollCommand = { behavior, target: "message-offset" };
     virtualizer.scrollToOffset(offset, { behavior });
     const duration = behavior === "auto" ? 1_000 : 1_200;
     bubble.style.setProperty("--duration", `${duration}ms`);

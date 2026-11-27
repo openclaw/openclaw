@@ -635,6 +635,14 @@ model switching; a cron job's own model and fallback list remain independent of
 that pin. Router-key authentication failures and router budget denials retain
 their normal credential cooldown behavior.
 
+ClawRouter owns account rotation and per-model capacity, so a ClawRouter failure
+classified as a rate limit or overload never puts the ClawRouter key into a local
+cooldown, even with a day-long `Retry-After`. Other ClawRouter models stay
+selectable, and the limited model stays eligible: a later request for it asks
+ClawRouter again. A `429` that reports a billing or budget denial still cools
+down the key. A rate-limit cooldown that an earlier release stored for the key
+stops blocking requests after the update.
+
 `invalid_request_error` alone does not identify the cause: Anthropic also uses it
 for exhausted upstream credits. Check the bounded, credential-redacted
 `providerError` in the HTTP `400` `[model-fetch]` log. Request-format failures

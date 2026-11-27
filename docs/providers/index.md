@@ -57,6 +57,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Liquid AI (Decision models)](/providers/liquid-ai)
 - [Liquid Inference](/providers/liquid-inference)
 - [LiteLLM (unified gateway)](/providers/litellm)
+- [Llama (llama.cpp's desktop app)](/providers/llama)
 - [llama.cpp (managed or existing server)](/plugins/llama-cpp)
 - [llmman (local + hybrid local/hosted models)](/providers/llmman)
 - [LM Studio (local models)](/providers/lmstudio)

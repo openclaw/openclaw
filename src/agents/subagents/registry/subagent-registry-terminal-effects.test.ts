@@ -188,9 +188,7 @@ it.each(["keep", "delete", "quiet", "suppressed"] as const)(
         requesterSettleWake: { status: "pending" },
         browserCleanupDispatchedAt: expect.any(Number),
       });
-      expect(completed.requesterSettleWake?.retireAfterSettle).toBe(
-        mode === "delete" ? true : undefined,
-      );
+      expect(completed.retireAfterSettle).toBe(mode === "delete" ? true : undefined);
       expect(cleanupBrowser).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ sessionKeys: ["agent:worker:global"] }),
       );

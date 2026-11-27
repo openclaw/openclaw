@@ -21,6 +21,7 @@ import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.j
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { resolveExternalPackageRuntimeEntrypointUrl } from "../infra/runtime-process-url.js";
 import { resolveRuntimeArgs } from "../infra/runtime-worker-url.js";
+import type { DoctorMaintenancePending } from "./doctor-maintenance-pending.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
 const COMPLETION_CACHE_WRITE_TIMEOUT_MS = 30_000;
@@ -178,13 +179,33 @@ export function shellCompletionStatusToRepairEffects(
  * Slow dynamic profiles are upgraded to cached completion; configured profiles with a missing
  * cache regenerate it; missing completion prompts unless non-interactive mode is active.
  */
+/** A finding is repaired; a missing profile is offered only when Doctor can ask. */
+function planShellCompletionRepair(
+  status: ShellCompletionStatus,
+  options: { nonInteractive?: boolean },
+): { finding?: HealthFinding; offerInstall: boolean } {
+  const [finding] = shellCompletionStatusToHealthFindings(status);
+  return {
+    finding,
+    offerInstall: !finding && !status.profileInstalled && options.nonInteractive !== true,
+  };
+}
+
+/** Read-only: whether `doctorShellCompletion` would write the cache or a shell profile. */
+export async function checkShellCompletionRepairPending(
+  options: { nonInteractive?: boolean } = {},
+): Promise<DoctorMaintenancePending> {
+  const plan = planShellCompletionRepair(await checkShellCompletionStatus(CLI_NAME), options);
+  return plan.finding || plan.offerInstall ? "work" : "none";
+}
+
 export async function doctorShellCompletion(
   prompter: DoctorPrompter,
   options: { nonInteractive?: boolean } = {},
 ): Promise<void> {
   const status = await checkShellCompletionStatus(CLI_NAME);
   const regenerate = !status.usesSlowPattern && status.profileInstalled;
-  const [finding] = shellCompletionStatusToHealthFindings(status);
+  const { finding, offerInstall } = planShellCompletionRepair(status, options);
 
   // Slow dynamic completion runs the CLI during shell startup; cache it to keep login shells fast.
   if (finding) {
@@ -193,8 +214,7 @@ export async function doctorShellCompletion(
       "Shell completion",
     );
   } else if (
-    status.profileInstalled ||
-    options.nonInteractive ||
+    !offerInstall ||
     !(await prompter.confirm({
       message: `Enable ${status.shell} shell completion for ${CLI_NAME}?`,
       initialValue: true,

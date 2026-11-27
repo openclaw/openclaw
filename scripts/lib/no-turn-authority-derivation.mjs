@@ -13,16 +13,12 @@ const TURN_FLAGS = new Set([
   "reconnectResumeRequested",
   "isLinkedOwnerDevice",
   "isAuthenticatedOwner",
-  "recordedOperatorAuthority",
-  "senderIsOwnerByScope",
-  "isHumanTurn",
-  "canPrepareSkillAuthoring",
   "prepareCommandOwnerAuthority",
   "isConfiguredCommandOwner",
 ]);
 export const TURN_FLAG_FILES = new Set([
   "src/agents/tools/gateway-tool.ts",
-  "src/auto-reply/command-auth.ts",
+  "src/auto-reply/command-owner-facts.ts",
   "src/auto-reply/reply/reply-source-admission.ts",
   "src/auto-reply/reply/session-event-target.ts",
   "src/auto-reply/reply/session.ts",
@@ -50,7 +46,6 @@ export const OWNER_PRODUCER_FILES = new Set([
   "extensions/discord/src/voice/speaker-context.ts", // realtime voice speaker, `ownerAllowFrom`
   // Channel command owner: the `commands.ownerAllowFrom` config match. Asserted-identity owners
   // and pre-turn senders have no grant yet, so this fact still sets the bit.
-  "src/auto-reply/command-auth.ts",
   "src/auto-reply/reply/reply-source-admission.ts",
   "src/gateway/agent-turn/agent-run-user-turn.ts",
   // Scheduled write: an operator-authorized job's operator-policy message action.

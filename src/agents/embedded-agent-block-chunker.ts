@@ -9,6 +9,7 @@ import {
   isSafeFenceBreak,
   scanFenceSpans,
 } from "../../packages/markdown-core/src/fences.js";
+import { findMarkdownCodeRegions } from "../../packages/markdown-core/src/markdown-code-regions.js";
 import { prepareIndentedCode } from "./embedded-agent-block-chunker.code.js";
 import {
   findHtmlIslandSpans,
@@ -351,8 +352,20 @@ export class EmbeddedBlockChunker {
       tables.push(...islands);
       tables.sort((left, right) => left.start - right.start);
     }
-    const unsafe = tables.length > 0 ? mergeBreakSpans([...fenceSpans, ...tables]) : fenceSpans;
-    const spans: BreakSpans = { fences: fenceSpans, tables, unsafe };
+    const wholeFence = fenceSpans[0]?.start === 0 && fenceSpans[0].end === source.length;
+    // Below the cap, a paragraph flush can only cut at a blank line between blocks.
+    const paragraphOnly = chunking.flushOnParagraph && !force && source.length < maxChars;
+    const inlineCode =
+      !paragraphOnly && !wholeFence && /`[^`]+`/u.test(source)
+        ? findMarkdownCodeRegions(source).filter(
+            (span) => !span.block && span.end - span.start <= maxChars,
+          )
+        : [];
+    const unsafe =
+      tables.length || inlineCode.length
+        ? mergeBreakSpans([...fenceSpans, ...tables, ...inlineCode])
+        : fenceSpans;
+    const spans = { fences: fenceSpans, tables, unsafe, inlineCode };
     const originalIndex = (index: number) =>
       removedFenceInfo.reduce(
         (offset, removed) => offset + (removed.at <= index ? removed.length : 0),
@@ -614,7 +627,7 @@ export class EmbeddedBlockChunker {
   #pickBreakIndex(
     { force, mutablePreview }: BlockChunkDrain,
     buffer: string,
-    spans: BreakSpans,
+    spans: BreakSpans & { inlineCode: BreakSpan[] },
     chunking: BlockReplyChunking,
     minCharsOverride?: number,
     offset = 0,
@@ -709,11 +722,17 @@ export class EmbeddedBlockChunker {
         // prefix and a trailing fragment solely to reserve its last cluster.
         return { index: 0 };
       }
-      return {
-        index:
-          wholeEnd ||
-          (firstGraphemeClusterLength(graphemeSource) >= forcedBreakIndex ? forcedBreakIndex : 0),
-      };
+      const index =
+        wholeEnd ||
+        (firstGraphemeClusterLength(graphemeSource) >= forcedBreakIndex ? forcedBreakIndex : 0);
+      const inline = findFenceSpanAt(spans.inlineCode, offset + index);
+      if (inline && inline.start > offset) {
+        const beforeCode = inline.start - offset;
+        return {
+          index: findGraphemeChunkEnd(graphemeSource, 0, beforeCode, beforeCode, false) || index,
+        };
+      }
+      return { index };
     }
 
     return { index: -1 };

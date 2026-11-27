@@ -146,7 +146,8 @@ it.for(["aborted", "draining"] as const)(
       void recovery.catch(() => {});
       try {
         await withinTest(entered.promise, test.signal);
-        expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({});
+        const predecessor = { sourceRunId: "predecessor" };
+        expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual(predecessor);
         if (mode === "aborted") {
           const error = new Error("Another restart interrupted admission");
           controller.abort(error);
@@ -161,7 +162,9 @@ it.for(["aborted", "draining"] as const)(
           accepted.resolve({ ok: true });
           await recovery;
         }
-        expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({});
+        expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual(
+          mode === "aborted" ? predecessor : {},
+        );
         expect(enqueue).toHaveBeenCalledOnce();
       } finally {
         accepted.resolve({ ok: true });

@@ -8,6 +8,10 @@ import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.
 import { reserveSubagentCompletionControllerSource } from "../announce/subagent-announce-controller-source.js";
 import { loadSessionEntryByKey } from "../announce/subagent-announce-delivery.runtime.js";
 import {
+  acceptsAnnounceDeliveryResult,
+  resolveAnnounceCleanupOutcome,
+} from "../announce/subagent-announce-obligation.js";
+import {
   matchesSubagentChildSessionOwner,
   resolveRecordedRequester,
   resolveSubagentChildAgentId,
@@ -383,7 +387,10 @@ export const startSubagentAnnounceCleanupFlow = (
       context,
       entry,
       cleanup,
-      shouldCreditPriorDelivery ? "delivered" : handedOff ? "requester_waiting" : announceOutcome,
+      resolveAnnounceCleanupOutcome(announceOutcome, {
+        delivered: shouldCreditPriorDelivery,
+        handedOff,
+      }),
       cleanupGeneration,
       stateContext,
     );
@@ -455,21 +462,22 @@ export const startSubagentAnnounceCleanupFlow = (
         return;
       }
       assertCurrent();
-      // A stale announce cannot replace a delivery already committed by requester-settle.
-      if (entry.delivery?.status === "delivered") {
-        return;
-      }
       const delivery = resolveRequesterDeliveryOutcome([entry], observedDelivery);
-      // A late failure cannot rearm an announcement transferred to the batch.
-      // Committed sends still retain their delivery evidence.
-      if (!delivery.delivered && requesterTookCompletion(entry)) {
+      if (
+        !acceptsAnnounceDeliveryResult(delivery, {
+          delivered: entry.delivery?.status === "delivered",
+          handedOff: requesterTookCompletion(entry),
+        })
+      ) {
         return;
       }
       await commit(
         (draft, previous) => {
           if (
-            draft.delivery?.status === "delivered" ||
-            (!delivery.delivered && requesterTookCompletion(draft))
+            !acceptsAnnounceDeliveryResult(delivery, {
+              delivered: draft.delivery?.status === "delivered",
+              handedOff: requesterTookCompletion(draft),
+            })
           ) {
             return false;
           }
