@@ -17,8 +17,7 @@ export type ScribeOptions = {
   "claim-consolidation": { schedule: ReviewSchedule };
   conversations: { scope: ConversationScope; since: ConversationSince; schedule?: string };
   granola: { meetings: GranolaMeetings; since: GranolaSince; schedule?: string };
-  /** `progress` keeps a checkpoint in Knowledge, so an interrupted import can continue. */
-  memory: { sources: MemorySource[]; progress?: boolean };
+  memory: { sources: MemorySource[] };
   /**
    * `userToken` also reads the channels the owner's Slack user token can access; `dms` also reads
    * direct messages and group DMs.
@@ -248,11 +247,6 @@ const SLACK_DM_WORDS = {
   off: "skipped.",
   on: "included.",
 } as const;
-/** Title of the note page a Memory import with saved progress keeps its file list on. */
-export const MEMORY_CHECKPOINT = "Knowledge scribe checkpoint · Learn from Memory";
-/** The `knowledge_source_check` provider a Memory import with saved progress binds each file to. */
-export const MEMORY_SOURCE = "openclaw-memory";
-const MEMORY_PROGRESS = `Progress: saved on the Knowledge note page "${MEMORY_CHECKPOINT}", so an interrupted import can continue.`;
 const MEMORY_WORDS: Record<MemorySource, string> = {
   "memory-md": "MEMORY.md",
   "daily-notes": "daily notes (memory/YYYY-MM-DD.md)",
@@ -305,10 +299,7 @@ function workSettings(setup: ScribeSetup, wording = CURRENT_WORDING, amounts = t
     ];
   }
   if ("sources" in options) {
-    return [
-      `Memory files: ${listWords(options.sources.map((source) => MEMORY_WORDS[source]))}.`,
-      ...(options.progress ? [MEMORY_PROGRESS] : []),
-    ];
+    return [`Memory files: ${listWords(options.sources.map((source) => MEMORY_WORDS[source]))}.`];
   }
   if ("userToken" in options) {
     return [
@@ -350,7 +341,7 @@ const WORK: Record<ScribeId, string> = {
   granola:
     'Follow "Learn from Granola" in the "Scribe runs" section of the knowledge-meeting-ingest skill, for the Granola meetings in the settings.',
   memory:
-    'Follow "Learn from Memory" in the "Scribe runs" section of the knowledge-ingest skill, for the Memory files in the settings. Never change Memory files.',
+    'Follow "Learn from Memory" in the "Scribe runs" section of the knowledge-ingest skill, for the Memory files in the settings. Check saved progress for their current hashes before reading them, and save progress after each file. Never change Memory files.',
   slack:
     'Follow "Learn from Slack" in the "Scribe runs" section of the knowledge-source-ingest skill, for the Slack channels in the settings. Never post, react or change anything in Slack.',
 };
@@ -473,7 +464,6 @@ export function runPrompt(setup: ScribeSetup, wording = CURRENT_WORDING, amounts
  */
 export function setupPrompt(setup: ScribeSetup) {
   const scribe = scribeById(setup.scribe)!;
-  const progress = "progress" in setup.options && setup.options.progress === true;
   return [
     `Run the Knowledge scribe "${scribe.title}" once, in this conversation. ${UNATTENDED}`,
     "",
@@ -487,42 +477,12 @@ export function setupPrompt(setup: ScribeSetup) {
     "Steps:",
     ...numbered([
       accessStep("Starting the scribe again from the Scribes page fixes it."),
-      progress ? `${WORK[scribe.id]} ${PROGRESS_WORK.start}` : WORK[scribe.id],
-      progress ? PROGRESS_END : endStep("done", `one sentence with counts: ${COUNTS[scribe.id]}`),
+      WORK[scribe.id],
+      endStep("done", `one sentence with counts: ${COUNTS[scribe.id]}`),
     ]),
     "",
     FAILED,
     ...(CURRENT_WORDING.rules?.[scribe.id] ? ["", CURRENT_WORDING.rules[scribe.id]!] : []),
-  ].join("\n");
-}
-
-// How a Memory import with saved progress keeps it, and the closing line that counts its files.
-const PROGRESS_WORK = {
-  start: 'Save progress as "Saved progress" there says, starting a new file list.',
-  continue:
-    'Follow "Saved progress" under "Learn from Memory" in the knowledge-ingest skill. Recompute every listed file\'s SHA-256 before skipping any file. Replace each changed file\'s entire checkpoint line with its path and new hash, clearing any "nothing new" marker. Keep the checkpoint\'s file list and never change Memory files.',
-};
-const PROGRESS_END = `${endStep("done", `one sentence with counts: ${COUNTS.memory}`)} Use \`done\` only when every file on the checkpoint is done; otherwise end with \`Scribe status: needs attention — <files done> of <files listed> files imported\`.`;
-
-/**
- * The message that continues a Memory import with saved progress in its conversation, after a
- * turn stopped before every file was imported: it keeps the checkpoint's file list.
- */
-export function continuePrompt() {
-  const scribe = scribeById("memory")!;
-  return [
-    `Continue the Knowledge scribe "${scribe.title}" in this conversation. ${UNATTENDED}`,
-    "",
-    `An earlier turn stopped before every Memory file was imported. ${MEMORY_PROGRESS}`,
-    "",
-    "Steps:",
-    ...numbered([
-      accessStep("Starting the scribe again from the Scribes page fixes it."),
-      PROGRESS_WORK.continue,
-      PROGRESS_END,
-    ]),
-    "",
-    FAILED,
   ].join("\n");
 }
 

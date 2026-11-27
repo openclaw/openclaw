@@ -58,17 +58,11 @@ which can be started again.
   `Knowledge scribe checkpoint · Learn from Granola`, so an interrupted run
   resumes. Defaults are your meetings (recorded by you or with you invited)
   from the last 7 days.
-- **Learn from Memory** brings `memory-core` notes into Knowledge once. Memory
-  itself is not changed. With **Save progress** checked in its start dialog
-  (off by default), it lists the selected files on a checkpoint page,
-  `Knowledge scribe checkpoint · Learn from Memory`. A file counts as imported
-  once the save of its items leaves a Knowledge source receipt for its exact
-  contents, or once its line is marked `nothing new` because Knowledge already
-  had everything in it. An import that stops partway shows **Needs attention**
-  with how many files are imported, and **Continue** picks it up with the files
-  not imported yet; a file that stopped halfway is read again. It shows
-  **Done** only when every file on the checkpoint is imported. If saved
-  progress can't be read, select **Retry** to check it again.
+- **Learn from Memory** brings `memory-core` notes into Knowledge once and
+  saves progress as each file finishes. If an import stops, start it again
+  with the same files selected. It skips files that are unchanged since the
+  last completed pass and checks any unfinished or changed files. Your
+  original Memory files stay intact.
 - **Learn from Slack** reads Slack channels through the
   [Slack plugin](#the-slack-plugin) and saves the decisions, commitments, and
   project news discussed there, updating the people, companies, and projects

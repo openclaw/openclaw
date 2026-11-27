@@ -29,11 +29,6 @@ export function fixture(world: {
   canAdmin?: boolean;
   /** plugins.inspect answer for the Granola plugin; absent reads as not installed. */
   granola?: { installed: boolean; enabled: boolean; authorized?: boolean };
-  /** Body of the Memory import checkpoint page in the viewed store; absent when there is none. */
-  checkpoint?: string;
-  checkpointWindow?: number;
-  /** Memory files with a Knowledge source receipt, by path and SHA-256. */
-  receipts?: string[];
 }) {
   // HTMLDialogElement is incomplete in jsdom.
   Object.assign(HTMLDialogElement.prototype, {
@@ -62,15 +57,13 @@ export function fixture(world: {
           session:
             Object.values(world.sessions ?? {}).find((row) => row.key === params?.key) ?? null,
         };
-      case "chat.history": {
-        const history = world.history?.[String(params?.sessionKey)] ?? [];
-        const end = typeof params?.cursor === "string" ? Number(params.cursor) : history.length;
-        const start = Math.max(0, end - Number(params?.limit ?? history.length));
+      case "chat.history":
         return {
-          messages: history.slice(start, end),
-          olderCursor: start ? String(start) : undefined,
+          messages:
+            typeof params?.sessionKey === "string"
+              ? (world.history?.[params.sessionKey] ?? [])
+              : [],
         };
-      }
       case "cron.runs":
         return {
           entries: world.runs ?? [
@@ -124,31 +117,8 @@ export function fixture(world: {
   const host = { request, connection, sessions: { create, open }, basePath };
   const load = vi.fn(async () => true);
   const scribesTab = document.createElement("button");
-  const feature = {
-    invoke: vi.fn(
-      async (operation: string, input?: { offset?: number; key?: string; sha256?: string }) => {
-        if (operation === "lookup") {
-          return world.checkpoint === undefined
-            ? { outcome: "missing", hits: [] }
-            : { outcome: "found", hits: [{ record: { id: "page-checkpoint" } }] };
-        }
-        if (operation === "source_check") {
-          const receipt = `${input?.key} ${input?.sha256}`;
-          return { state: world.receipts?.includes(receipt) ? "unchanged" : "missing" };
-        }
-        const body = world.checkpoint ?? "";
-        const offset = input?.offset ?? 0;
-        const end = offset + (world.checkpointWindow ?? body.length);
-        return {
-          record: { body: body.slice(offset, end), hash: "checkpoint-version" },
-          content: { nextOffset: end < body.length ? end : null },
-        };
-      },
-    ),
-  };
   const ui = {
     s: { context: { host }, scribe: "", storesSnapshot: undefined, tab: "scribes" },
-    feature,
     live: () => true,
     viewedAgent: () => "main",
     displayName: (id: string) => (id === "main" ? "Main" : id),
@@ -166,7 +136,7 @@ export function fixture(world: {
     page.replaceChildren(target);
     return target;
   };
-  return { ui, calls, request, create, open, load, render, page, scribesTab, feature };
+  return { ui, calls, request, create, open, load, render, page, scribesTab };
 }
 export const reviewSession = {
   "Scribe · Knowledge Consolidation": {

@@ -8,11 +8,9 @@ import {
   pluginStateText,
   scribeTile,
 } from "./scribe-dialog.js";
-import { importProgressValue } from "./scribe-import-progress.js";
 import { openScheduleDialog } from "./scribe-schedule-dialog.js";
 import { settingsValue } from "./scribe-settings-dialog.js";
 import {
-  continueScribe,
   needsUpgrade,
   replacesTurnCreated,
   repairScribe,
@@ -212,7 +210,7 @@ export async function scribes(ui: Page, n: number, target: HTMLElement) {
   const agentId = ui.viewedAgent();
   const selected = scribeById(s.scribe);
   const [loaded, detection] = await Promise.all([
-    loadScribes(host, agentId, ui.feature),
+    loadScribes(host, agentId),
     // A detail only needs detection for its plugin; the list shows every scribe's facts.
     selected && !selected.plugin
       ? Promise.resolve({})
@@ -223,7 +221,7 @@ export async function scribes(ui: Page, n: number, target: HTMLElement) {
   if (host.connection.canAdmin) {
     const wrote = await Promise.all(snapshots.map((snapshot) => update(ui, snapshot, agentId)));
     if (wrote.some(Boolean)) {
-      snapshots = await loadScribes(host, agentId, ui.feature);
+      snapshots = await loadScribes(host, agentId);
     }
   }
   const snapshot = selected && snapshots.find((entry) => entry.scribe.id === selected.id);
@@ -247,9 +245,8 @@ export async function scribes(ui: Page, n: number, target: HTMLElement) {
 }
 
 /** Number of the agent's scribes that are on, for the Scribes tab count. */
-export async function countScribesOn(ui: Page, agentId: string) {
-  const loaded = await loadScribes(ui.s.context.host, agentId, ui.feature);
-  return loaded.filter((entry) => isOn(entry.status)).length;
+export async function countScribesOn(host: Parameters<typeof loadScribes>[0], agentId: string) {
+  return (await loadScribes(host, agentId)).filter((entry) => isOn(entry.status)).length;
 }
 
 /** Tab label with the count of scribes that are on. */
@@ -450,7 +447,7 @@ function detail(
   detection: ScribeDetection,
   runError?: string,
 ) {
-  const { scribe, job, session, status, progress } = snapshot;
+  const { scribe, job, session, status } = snapshot;
   const host = ui.s.context.host;
   const { agentId, agentName, storeName } = pageNames(ui);
   // Every automation control is an administrator's write.
@@ -472,7 +469,6 @@ function detail(
     run: () => Promise<unknown>,
     done: string,
     className = "knowledge-button knowledge-small",
-    allowed?: boolean,
   ) => {
     const node = button(
       text,
@@ -480,8 +476,7 @@ function detail(
         controls.forEach((other) => (other.disabled = true));
         feedback.textContent = "";
         feedback.className = "knowledge-dialog-feedback";
-        const restore = () =>
-          controls.forEach((other) => (other.disabled = !(allowed ?? canAdmin)));
+        const restore = () => controls.forEach((other) => (other.disabled = !canAdmin));
         run().then(
           () => {
             restore();
@@ -497,8 +492,8 @@ function detail(
       },
       className,
     );
-    node.disabled = !(allowed ?? canAdmin);
-    if (allowed === undefined && !canAdmin) {
+    node.disabled = !canAdmin;
+    if (!canAdmin) {
       node.title = NEEDS_ADMIN;
     }
     controls.push(node);
@@ -565,22 +560,11 @@ function detail(
     turnOff.disabled = !canAdmin;
     actions.append(turnOff);
   }
-  // An import that saved its progress and stopped short continues from its checkpoint. Without
-  // an automation, no other control shares the group.
-  const retryProgress = !job && progress === "unavailable";
-  const continues = !job && progress && progress !== "unavailable" && status === "attention";
-  if (continues) {
-    const attempt = crypto.randomUUID();
-    const run = () => continueScribe(host, snapshot, agentId, attempt);
-    const primary = "knowledge-button knowledge-primary knowledge-small";
-    const done = `Continuing ${scribeLabel(scribe)}.`;
-    actions.append(control("Continue", run, done, primary, canStart(ui, scribe)));
-  }
   if (!job && status !== "starting") {
     const again = button(
-      status === "failing" || continues || retryProgress ? "Start again…" : scribe.startLabel,
+      status === "failing" ? "Start again…" : scribe.startLabel,
       () => start(ui, snapshot, detection),
-      `knowledge-button${continues || retryProgress ? "" : " knowledge-primary"} knowledge-small`,
+      "knowledge-button knowledge-primary knowledge-small",
     );
     again.disabled = !canStart(ui, scribe);
     actions.append(again);
@@ -652,9 +636,6 @@ function detail(
     );
   } else if (status === "done") {
     facts.push(["Schedule", "Once, nothing scheduled"]);
-  }
-  if (progress) {
-    facts.push(["Progress", importProgressValue(progress, () => void ui.load())]);
   }
   facts.push(
     [
