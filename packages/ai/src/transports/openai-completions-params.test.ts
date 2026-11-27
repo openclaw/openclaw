@@ -864,11 +864,8 @@ describe("OpenAI completions compatibility and tools", () => {
         { ...proxy, compat: { strictMessageKeys: true } },
         { ...historyContext(), tools: [] },
         [
-          {
-            role: "assistant",
-            content:
-              "[tool call id=call_1 name=lookup_weather] {}\n[tool result id=call_1 name=lookup_weather] sunny",
-          },
+          { role: "assistant", content: null },
+          { role: "tool", content: "sunny" },
         ],
       ],
     ];
