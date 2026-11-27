@@ -169,6 +169,23 @@ describe("memory actor fork and cut", () => {
   it("rewinds and switches branches while retaining the original window and rejecting old identity", async () => {
     const { parent, acquire } = await fixture();
     const expectedState = { sessionId: "parent-session", lifecycleRevision: "parent-lifecycle" };
+    const boundary = {
+      type: "compaction",
+      id: "summary",
+      parentId: "a2",
+      firstKeptEntryId: "u2",
+      tokensBefore: 100,
+      summary: "First question answered",
+    };
+    await commitMemory(storage(parent), "session.event.append", {
+      scope: {
+        agentId: "main",
+        sessionKey: parentKey,
+        storePath,
+        sessionId: expectedState.sessionId,
+      },
+      eventJson: JSON.stringify(boundary),
+    });
     const intent = {
       canonicalSourceKey: parentKey,
       sourceKey: parentKey,
@@ -183,6 +200,7 @@ describe("memory actor fork and cut", () => {
     expect(rewind).toMatchObject({
       status: "created",
       editorText: "Edit this",
+      entry: { compactionCount: 0 },
       editorAttachments: [{ mimeType: "image/png", data: "c3ludGhldGlj" }],
     });
     assert(rewind.status === "created", "Rewind failed");
@@ -215,7 +233,8 @@ describe("memory actor fork and cut", () => {
       // The original window is retained: every seeded event plus the one control.
       expect(old.snapshot.events).toMatchObject([
         ...transcript,
-        { type: "leaf", parentId: "a2", targetId: "a1" },
+        boundary,
+        { type: "leaf", parentId: boundary.id, targetId: "a1" },
       ]);
     }
     const branch = await readMemory(storage(active), "session.parentFork.source", {});
@@ -227,18 +246,18 @@ describe("memory actor fork and cut", () => {
       intent: {
         ...intent,
         mode: "switch",
-        entryId: "a2",
+        entryId: boundary.id,
         expectedState: {
           sessionId: rewind.entry.sessionId,
           lifecycleRevision: rewind.entry.lifecycleRevision,
         },
       },
     });
-    expect(switched.status).toBe("created");
+    expect(switched).toMatchObject({ status: "created", entry: { compactionCount: 1 } });
     const restored = await acquire();
     expect(
       (await readMemory(storage(restored), "session.parentFork.source", {}))?.branchEntries,
-    ).toHaveLength(4);
+    ).toHaveLength(5);
   });
 
   it("forks only the prefix before a user message and preserves source identity", async () => {

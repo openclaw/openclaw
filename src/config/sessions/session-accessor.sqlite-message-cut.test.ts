@@ -363,7 +363,7 @@ it("rewinds by repointing the active leaf and returns the editor text", async ()
     claudeCliSessionId: undefined,
     cliSessionBindings: undefined,
     cliSessionIds: undefined,
-    compactionCount: undefined,
+    compactionCount: 0,
     transcriptByteCompactionLatch: undefined,
     contextTokens: undefined,
     contextTokensSource: undefined,
@@ -380,6 +380,35 @@ it("rewinds by repointing the active leaf and returns the editor text", async ()
     to: "chat-123",
     accountId: undefined,
   });
+});
+
+it("counts only the selected branch after its last reset", async () => {
+  const { scope, params } = await createSession();
+  const compact = (id: string, parentId: string) =>
+    appendEvent(scope, {
+      type: "compaction",
+      id,
+      parentId,
+      firstKeptEntryId: parentId,
+      summary: id,
+      tokensBefore: 100,
+    });
+  await compact("before-reset", "assistant-2");
+  await appendEvent(scope, { type: "reset", id: "reset", parentId: "before-reset" });
+  await compact("retained", "reset");
+  await appendMessage(scope, {
+    eventId: "edit",
+    parentId: "retained",
+    message: { role: "user", content: "Edit me" },
+  });
+  await compact("original-tip", "edit");
+
+  const cut = await rewind({ ...params, entryId: "edit" });
+  const restored = await switchBranch({ ...params, leafEntryId: "original-tip" });
+  expect([cut, restored]).toMatchObject([
+    { status: "created", entry: { compactionCount: 1 } },
+    { status: "created", entry: { compactionCount: 2 } },
+  ]);
 });
 
 // Canonical navigation is neither the raw parent chain nor raw child links, and a

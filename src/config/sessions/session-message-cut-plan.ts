@@ -20,6 +20,7 @@ import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
   selectSessionTranscriptTreeTipNodes,
+  type SessionTranscriptTree,
 } from "./transcript-tree.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 import { MIN_READABLE_SESSION_VERSION } from "./version.js";
@@ -70,11 +71,11 @@ export type SessionMessageCutReader = {
   /** True when the canonical navigation owner lists this entry as a selectable tip. */
   isBranchTip(entryId: string): boolean;
   /**
-   * True when the canonical owner resolves the planned control to this target.
+   * Count since the last reset on the selected path, or undefined for an invalid selection.
    * Reset normalization can rewrite a control onto the current leaf, which would
    * silently ignore the request, so both modes refuse instead.
    */
-  canonicalSelectionHolds(targetId: string | null): boolean;
+  selectedCompactionCount(targetId: string | null): number | undefined;
   /** Canonical path to this leaf, as physical sequences; indexed readers only. */
   canonicalBranchPathSeqs?(leafEventId: string): readonly number[] | undefined;
   activeLeafEventId(): string | null;
@@ -82,6 +83,30 @@ export type SessionMessageCutReader = {
   tailEventId(): string | null;
   allocateEventId(): string;
 };
+
+export function countCompactionsSinceReset(events: Iterable<unknown>): number {
+  let count = 0;
+  for (const event of events) {
+    const type = asRecord(event)?.type;
+    if (type === "reset") {
+      count = 0;
+    } else if (type === "compaction") {
+      count++;
+    }
+  }
+  return count;
+}
+
+export function countSelectedPathCompactions(
+  tree: SessionTranscriptTree<unknown>,
+  targetId: string | null,
+) {
+  return tree.leafId === targetId
+    ? countCompactionsSinceReset(
+        selectSessionTranscriptTreePathNodes(tree, targetId).map(({ entry }) => entry),
+      )
+    : undefined;
+}
 
 /**
  * Reader for a memory-resident transcript, where the whole event list is already
@@ -136,7 +161,8 @@ export function createMemorySessionMessageCutReader(
         selectSessionTranscriptTreeTipNodes(tree).some((tip) => tip.id === entryId)
       );
     },
-    canonicalSelectionHolds: (targetId) => resolve(targetId).leafId === targetId,
+    selectedCompactionCount: (targetId) =>
+      countSelectedPathCompactions(resolve(targetId), targetId),
     activeLeafEventId: () => tree.leafId,
     tailEventId: () => tree.nodes.at(-1)?.id ?? null,
     allocateEventId,
@@ -234,7 +260,8 @@ export function planInPlaceSessionMessageCut(
   }
   // A later reset re-roots navigation, so the canonical owner would rewrite this
   // control onto the current leaf and ignore the request. Refuse it instead.
-  if (!reader.canonicalSelectionHolds(repointTargetId)) {
+  const compactionCount = reader.selectedCompactionCount(repointTargetId);
+  if (compactionCount === undefined) {
     return { status: params.mode === "switch" ? "not-branch-tip" : "off-active-path" };
   }
   if (settledWorkspaceConflicts(currentEntry, params)) {
@@ -259,7 +286,12 @@ export function planInPlaceSessionMessageCut(
     result: {
       status: "created",
       key: params.targetKey,
-      entry: buildMessageCutSessionEntry(currentEntry, params, currentEntry.sessionId),
+      entry: buildMessageCutSessionEntry(
+        currentEntry,
+        params,
+        currentEntry.sessionId,
+        compactionCount,
+      ),
       ...readMessageCutEditorFields(message),
     },
   };
@@ -321,6 +353,7 @@ function buildMessageCutSessionEntry(
   currentEntry: SessionEntry,
   params: SessionMessageCutIntent,
   sessionId: string,
+  compactionCount?: number,
 ): SessionEntry {
   const forked = params.mode === "fork";
   const workspace = params.settledLocalWorkspace;
@@ -365,7 +398,7 @@ function buildMessageCutSessionEntry(
     contextTokens: undefined,
     contextTokensSource: undefined,
     contextBudgetStatus: undefined,
-    compactionCount: undefined,
+    compactionCount,
     transcriptByteCompactionLatch: undefined,
     memoryFlush: undefined,
     cliSessionBindings: undefined,

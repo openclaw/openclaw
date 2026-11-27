@@ -5,13 +5,19 @@
 // transcript into the worker heap, then appends one `leaf` control row.
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQueryTakeFirstSync,
+  iterateSqliteQuerySync,
+} from "../../infra/kysely-sync.js";
 import { SqliteJsonlReadBudgetExceededError } from "../../infra/sqlite-jsonl-budget-error.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { scanSessionTranscriptNavigationTree } from "./session-accessor.sqlite-branch-summaries.js";
 import { commitSqliteSessionDeletion } from "./session-accessor.sqlite-deletion.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
-import { getActiveTranscriptKysely } from "./session-accessor.sqlite-projection-read.js";
+import {
+  getActiveTranscriptKysely,
+  selectActiveTranscriptEventRows,
+} from "./session-accessor.sqlite-projection-read.js";
 import { getSessionKysely, type ResolvedSqliteScope } from "./session-accessor.sqlite-scope.js";
 import {
   readNextTranscriptSeq,
@@ -19,6 +25,8 @@ import {
 } from "./session-accessor.sqlite-transcript-state.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import {
+  countCompactionsSinceReset,
+  countSelectedPathCompactions,
   planInPlaceSessionMessageCut,
   type SessionMessageCutReader,
 } from "./session-message-cut-plan.js";
@@ -240,10 +248,30 @@ function createSessionMessageCutReader(
         )
       );
     },
-    canonicalSelectionHolds(targetId) {
-      // A reset after the selection is the only normalization that can move the
-      // planned control's target, so an ordinary cut answers without the scan.
-      return !hasResetAfterSelection(targetId) || resolve(targetId).leafId === targetId;
+    selectedCompactionCount(targetId) {
+      if (scanned?.targetId === targetId || hasResetAfterSelection(targetId)) {
+        return countSelectedPathCompactions(resolve(targetId), targetId);
+      }
+      if (targetId === null) {
+        return 0;
+      }
+      // Ordinary rewinds retain an active prefix. Only its non-message rows can
+      // be boundaries; read their types in path order, not their bodies.
+      const position = readIdentity(targetId)?.active_position;
+      if (position == null) {
+        return undefined;
+      }
+      return countCompactionsSinceReset(
+        iterateSqliteQuerySync(
+          database.db,
+          selectActiveTranscriptEventRows(database)
+            .select(transcriptPredicateSql(database.db, "navigation_last_type", "event").as("type"))
+            .where("active.session_id", "=", sessionId)
+            .where("active.active_position", "<=", position)
+            .where("active.message_position", "is", null)
+            .orderBy("active.active_position", "asc"),
+        ),
+      );
     },
     canonicalBranchPathSeqs(leafEventId) {
       return selectSessionTranscriptTreePathNodes(resolve(leafEventId), leafEventId).flatMap(
