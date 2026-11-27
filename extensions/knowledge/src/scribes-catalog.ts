@@ -173,7 +173,7 @@ export const scribeDeclarationKey = (id: ScribeId) => `knowledge:scribe:${id}`;
  * conversation, with its memory access and workspace, so it reads the current skills instead of
  * earlier runs' history.
  */
-export const SCRIBE_SESSION_TARGET = "current";
+export const SCRIBE_SESSION_TARGET = "isolated";
 /**
  * chat.send idempotency key for one once-run attempt in one session. A scribe reuses its
  * conversation across starts, so each attempt (one dialog) gets its own key; retries within

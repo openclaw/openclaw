@@ -133,7 +133,7 @@ export async function runHeartbeatActiveHoursRuntime(options: HeartbeatRuntimeOp
           enabled: true,
           schedule: { kind: "every", everyMs: AUTOMATION_INTERVAL_MS },
           activeHours: activeHours(false),
-          sessionTarget: "main",
+          sessionTarget: "session:main",
           wakeMode: "now",
           payload: { kind: "agentTurn", message: "Perform the scheduled check" },
           delivery: { mode: "none" },

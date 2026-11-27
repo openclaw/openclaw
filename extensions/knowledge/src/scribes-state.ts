@@ -42,7 +42,8 @@ export type ScribeJob = {
   enabled: boolean;
   configRevision?: string;
   sessionTarget?: string;
-  /** The conversation that created the automation; a `current` job runs as its child. */
+  includeRecentChat?: boolean;
+  /** The conversation that supplies context to a fresh run. */
   sessionKey?: string;
   schedule: { kind: string; expr?: string; tz?: string; everyMs?: number; at?: string };
   failureAlert?: false | { after?: number };
@@ -84,7 +85,7 @@ export type ScribeRun = {
   usage?: { total_tokens?: number };
   /** The run's id; `cron.history` reads its transcript by it, after its session is cleaned up. */
   runId?: string;
-  /** The session the run executed in; a `current` job runs each time in a new one. */
+  /** The session the run executed in. Isolated runs each get a new session. */
   sessionKey?: string;
 };
 
@@ -280,15 +281,18 @@ async function findSessions(host: ScribeReader, agentId: string, scribe: ScribeD
 
 const SESSION_TARGET = "session:";
 
+function usesRecentChat(job: ScribeJob): boolean {
+  return job.sessionTarget === SCRIBE_SESSION_TARGET && job.includeRecentChat === true;
+}
+
 /**
- * The conversation a scribe automation belongs to: the session a `session:<key>` job runs in, or
- * the conversation a `current` job runs as a child of.
+ * The conversation a scribe continues or reads for recent chat.
  */
 export function jobConversationKey(job: ScribeJob) {
   if (job.sessionTarget?.startsWith(SESSION_TARGET)) {
     return job.sessionTarget.slice(SESSION_TARGET.length);
   }
-  return job.sessionTarget === SCRIBE_SESSION_TARGET ? job.sessionKey : undefined;
+  return usesRecentChat(job) ? job.sessionKey : undefined;
 }
 
 /** The sessions the scribe's automations target, by exact key; deleted ones are left out. */
@@ -369,7 +373,7 @@ const messageTime = (message: unknown) =>
   isRecord(message) && typeof message.timestamp === "number" ? message.timestamp : undefined;
 
 /**
- * The status line of a `current` job's latest run, which ran in its own session, with the run's
+ * The status line of an isolated job's latest run with recent chat, with the run's
  * start time. Read through `cron.history`, which keeps a run's transcript after its session is
  * cleaned up. Undefined when the job has not run in one or its transcript can't be read.
  * A job that runs in its conversation answers there instead; `loadScribes` reads those.
@@ -380,7 +384,7 @@ async function latestRunResult(
   conversationKey: string,
   agentId: string,
 ) {
-  if (job.sessionTarget !== SCRIBE_SESSION_TARGET || !job.state.lastRunAtMs) {
+  if (!usesRecentChat(job) || !job.state.lastRunAtMs) {
     return undefined;
   }
   const [run] = await loadRuns(host, job, agentId, 1).catch(() => []);
@@ -415,7 +419,7 @@ export async function loadScribes(host: ScribeReader, agentId: string): Promise<
       // What the page shows as the last result: with an automation, only a run's answer (in the
       // conversation for a job that runs there); without one, the latest answer.
       let { result } = job ? parseScribeResult(messages, isRunMessage) : { result: said };
-      // A run of a `current` job answers in its own session; it supersedes the conversation's
+      // A fresh run answers in its own session; it supersedes the conversation's
       // answer unless a message was sent after it began.
       const run =
         job && session ? await latestRunResult(host, job, session.key, agentId) : undefined;

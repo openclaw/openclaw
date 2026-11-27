@@ -109,6 +109,7 @@ async function declareScribe(
     name: scribeAutomationName(scribe),
     sessionKey,
     sessionTarget: SCRIBE_SESSION_TARGET,
+    includeRecentChat: true,
     enabled,
     schedule: declaration.schedule,
   };

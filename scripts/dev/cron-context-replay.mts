@@ -130,7 +130,7 @@ type ReplayInference =
 
 /**
  * The runtime a bound job's existing run picks from the entry its cron session copies
- * (a `current` job's creating conversation, a `session:` job's row). The model comes
+ * (a recent-chat job's creating conversation or a `session:` job's row). The model comes
  * from the scheduled-model selection owner the run and capture use; when it cannot be
  * resolved for the bound provider, the comparison is reported unresolved. A job with a
  * recorded runtime no longer copies its creating conversation's model, so its scheduled

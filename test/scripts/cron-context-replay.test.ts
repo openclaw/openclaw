@@ -266,12 +266,13 @@ describe("replayInferenceRuntimes", () => {
       legacy: "openai/gpt-5 (refused: not the bound provider)",
     },
   ])(
-    "compares a current job's scheduled model with its conversation's $provider model",
+    "compares a recent-chat job's scheduled model with its conversation's $provider model",
     async ({ provider, model, legacy }) => {
       const cfg: OpenClawConfig = { agents: { defaults: { model: "anthropic/claude-haiku-4-5" } } };
       const job = storedJob({
         agentId: "main",
-        sessionTarget: "current",
+        sessionTarget: "isolated",
+        includeRecentChat: true,
         sessionKey: parentKey,
         inferenceBinding: {
           provider: "anthropic",

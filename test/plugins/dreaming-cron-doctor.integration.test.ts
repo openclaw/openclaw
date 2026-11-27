@@ -48,7 +48,7 @@ function makeJob(id: string, fields: Partial<CronStoredJob> = {}): CronStoredJob
     createdAtMs: 1_800_000_000_000,
     updatedAtMs: 1_800_000_000_005,
     schedule: { kind: "every", everyMs: 60_000 },
-    sessionTarget: "main",
+    sessionTarget: "session:main",
     wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text: "operator event" },
     state: { nextRunAtMs: 1_800_000_060_000, lastRunStatus: "ok" },

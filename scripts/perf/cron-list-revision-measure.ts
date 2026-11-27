@@ -95,7 +95,7 @@ const stores = Array.from({ length: 2 }, (_, storeIndex) => {
       createdAtMs: 1_800_000_000_000,
       updatedAtMs: 1_800_000_000_000,
       schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "main",
+      sessionTarget: "session:main",
       wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: "synthetic 🦞 payload\n".repeat(64).slice(0, 1024) },
       state: { nextRunAtMs: 1_800_000_060_000 + index },

@@ -232,7 +232,7 @@ it.each([
     await creatorCron.waitForIdle();
   }
   const job = expectDefined((await fixture.read())[0], "stored child automation");
-  expect(job.sessionTarget).toBe("current");
+  expect(job).toMatchObject({ sessionTarget: "isolated", includeRecentChat: true });
   expect(job.sourceConversation).toMatchObject({ sessionKey: SESSION, sessionId: SESSION_ID });
   if (scenario === "no operator source") {
     expect(job.operatorSource).toBeUndefined();

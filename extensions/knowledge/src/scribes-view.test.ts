@@ -10,6 +10,8 @@ import {
   reviewSession,
 } from "./scribes-view.test-support.js";
 
+const recentChatPlacement = { sessionTarget: "isolated", includeRecentChat: true } as const;
+
 afterEach(() => document.body.replaceChildren());
 
 it("lists On and Available scribes with honest detection and a tab count", async () => {
@@ -75,7 +77,7 @@ it("starts the Granola scribe once the plugin is connected", async () => {
         failureAlert: { after: 2 },
         name: "Knowledge scribe · Learn from Granola",
         sessionKey: "agent:main:dock:new",
-        sessionTarget: "current",
+        ...recentChatPlacement,
         enabled: true,
         schedule: { kind: "cron", expr: "0 10,14,18 * * 1-5", tz: timezone },
         agentId: "main",
@@ -435,7 +437,7 @@ it("upgrades an automation an agent turn created only when the administrator cho
     ...reviewJob,
     enabled: false,
     sessionKey: "s-review",
-    sessionTarget: "current",
+    ...recentChatPlacement,
     scheduledToolPolicy: { mode: "account" },
     payload: {
       kind: "agentTurn",
@@ -484,7 +486,7 @@ it("upgrades an automation an agent turn created only when the administrator cho
         idleOnly: true,
         name: "Knowledge scribe · Knowledge Consolidation",
         sessionKey: "s-review",
-        sessionTarget: "current",
+        ...recentChatPlacement,
         enabled: false,
         schedule: reviewJob.schedule,
         agentId: "main",
@@ -558,7 +560,7 @@ it("updates an administrator's earlier automation in place", async () => {
         patch: {
           name: "Knowledge scribe · Knowledge Consolidation",
           sessionKey: "s-review",
-          sessionTarget: "current",
+          ...recentChatPlacement,
           enabled: true,
           schedule: reviewJob.schedule,
           payload: { kind: "agentTurn", message: currentReview() },
@@ -575,7 +577,7 @@ it("offers an edited run message the current one and replaces it on confirm", as
   const job = {
     ...reviewJob,
     sessionKey: "s-review",
-    sessionTarget: "current",
+    ...recentChatPlacement,
     payload: { kind: "agentTurn", message: differing },
   };
   const { render, ui, calls, page, load } = fixture({
@@ -648,7 +650,7 @@ it.each([true, false])(
       ...reviewJob,
       enabled: false,
       sessionKey: "s-review",
-      sessionTarget: "current",
+      ...recentChatPlacement,
       payload: { kind: "agentTurn", message: currentReview() },
       state: { ...reviewJob.state, autoDisabled: { reason: "consecutive-failures" } },
     };
@@ -667,7 +669,7 @@ it.each([true, false])(
         patch: {
           name: "Knowledge scribe · Knowledge Consolidation",
           sessionKey: "s-review",
-          sessionTarget: "current",
+          ...recentChatPlacement,
           enabled: true,
           schedule: reviewJob.schedule,
           payload: { kind: "agentTurn", message: currentReview() },
@@ -734,7 +736,7 @@ it("repairs a scribe whose conversation is gone into a new one, replacing a turn
     id: "job-elsewhere",
     enabled: false,
     sessionKey: "s-gone",
-    sessionTarget: "current",
+    ...recentChatPlacement,
     scheduledToolPolicy: { mode: "account" },
   };
   // Its conversation is gone, so the scribe reads as Conversation not found until it starts again.
@@ -871,7 +873,7 @@ it("keeps failed run-history reads distinct from an empty history and recovers o
 it("changes a scribe's schedule on its automation", async () => {
   const job = {
     ...reviewJob,
-    sessionTarget: "current",
+    ...recentChatPlacement,
     sessionKey: "s-review",
     schedule: { kind: "cron", expr: "45 3 * * 0", tz: "America/Los_Angeles" },
     payload: { kind: "agentTurn", message: currentReview(), model: "provider/model" },
@@ -899,7 +901,7 @@ it("changes a scribe's schedule on its automation", async () => {
         patch: {
           name: "Knowledge scribe · Knowledge Consolidation",
           sessionKey: "s-review",
-          sessionTarget: "current",
+          ...recentChatPlacement,
           enabled: true,
           schedule: { kind: "cron", expr: "45 3 * * *", tz: "America/Los_Angeles" },
           payload: { kind: "agentTurn", message: currentReview("45 3 * * *") },
@@ -926,7 +928,7 @@ const conversationsJob = (message: string) => ({
   ...reviewJob,
   id: "job-conversations",
   declarationKey: "knowledge:scribe:conversations",
-  sessionTarget: "current",
+  ...recentChatPlacement,
   sessionKey: "s-conversations",
   schedule: { kind: "cron", expr: "0 4 * * *", tz: "America/Los_Angeles" },
   payload: { kind: "agentTurn", message },
@@ -938,7 +940,7 @@ const settingsUpdate = (message: string) => [
     patch: {
       name: "Knowledge scribe · Learn from conversations",
       sessionKey: "s-conversations",
-      sessionTarget: "current",
+      ...recentChatPlacement,
       enabled: true,
       schedule: { kind: "cron", expr: "0 4 * * *", tz: "America/Los_Angeles" },
       payload: { kind: "agentTurn", message },

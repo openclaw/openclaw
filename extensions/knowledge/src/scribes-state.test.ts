@@ -536,7 +536,11 @@ describe("scribes state", () => {
     const load = async (conversation: unknown[]) => {
       const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
         if (method === "cron.list") {
-          const current = { sessionTarget: "current", sessionKey: "s-owner" };
+          const current = {
+            sessionTarget: "isolated",
+            includeRecentChat: true,
+            sessionKey: "s-owner",
+          };
           return { jobs: [{ ...job(current), declarationKey: "knowledge:scribe:conversations" }] };
         }
         if (method === "sessions.describe") {
