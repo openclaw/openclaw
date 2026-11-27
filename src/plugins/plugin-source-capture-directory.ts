@@ -276,6 +276,42 @@ export async function hasPluginNativeCaptureCleanupCandidates(stateDir: string):
   return false;
 }
 
+/**
+ * Read-only: whether `prunePluginNativeCaptureDirectories` would act on any root. It walks the
+ * same roots without custody. A managed root counts even when its payload is retained, because
+ * reclaiming it takes the root's SQLite custody lock; only that lock proves it is released.
+ */
+export async function hasPluginNativeCaptureReclaimCandidates(stateDir: string): Promise<boolean> {
+  let found = false;
+  let failure: unknown;
+  const recordFailure = (error: unknown) => {
+    failure ??= error;
+  };
+  const collect = () => {
+    found = true;
+  };
+  await reclaimInstances(
+    path.resolve(resolvePluginSourceCapturesDirectory(stateDir)),
+    recordFailure,
+    false,
+    undefined,
+    undefined,
+    collect,
+  ).catch(recordFailure);
+  await reclaimInstances(
+    tmpdir(),
+    recordFailure,
+    false,
+    undefined,
+    resolvePluginSourceCaptureFallbackPrefix(stateDir),
+    collect,
+  ).catch(recordFailure);
+  if (!found && failure !== undefined) {
+    throw failure instanceof Error ? failure : new Error(formatErrorMessage(failure));
+  }
+  return found;
+}
+
 /** The caller holds plugin lifecycle or offline maintenance custody and fresh index references. */
 export async function prunePluginNativeCaptureDirectories(
   stateDir: string,

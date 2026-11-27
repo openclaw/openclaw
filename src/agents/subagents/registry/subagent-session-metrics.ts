@@ -1,6 +1,7 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 
 type SubagentSessionStartRecord = Pick<SubagentRunRecord, "sessionStartedAt"> & {
   execution: Pick<SubagentRunRecord["execution"], "startedAt">;
@@ -67,7 +68,7 @@ export function resolveSubagentSessionStatus(
 
 /** A yielded run waiting for a continuation: a message or its children's results. */
 export function isSubagentRunPausedForContinuation(entry: SubagentSessionStatusRecord): boolean {
-  if (entry.pauseReason !== "sessions_yield") {
+  if (!isSubagentPausedByYield(entry)) {
     return false;
   }
   const status = resolveSubagentSessionStatus(entry);

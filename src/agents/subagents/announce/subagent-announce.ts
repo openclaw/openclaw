@@ -58,6 +58,10 @@ import {
 import { runDescendantWake } from "./subagent-announce-descendant-wake.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import {
+  createSubagentAnnounceObligation,
+  type SubagentAnnounceFlowOutcome,
+} from "./subagent-announce-obligation.js";
+import {
   resolveAnnounceOrigin,
   resolveSubagentCompletionOrigin,
   type DeliveryContext,
@@ -82,12 +86,7 @@ const loadSubagentRegistryRuntime = createLazyPromise(
 
 export { captureSubagentCompletionReply } from "./subagent-announce-output.js";
 
-/** Anything not delivered, queued or held by a waiting requester settles into requester history. */
-export type SubagentAnnounceFlowOutcome =
-  | "delivered"
-  | "session_queued"
-  | "requester_waiting"
-  | "undelivered";
+export type { SubagentAnnounceFlowOutcome } from "./subagent-announce-obligation.js";
 
 function buildAnnounceReplyInstruction(params: {
   requesterIsSubagent: boolean;
@@ -154,24 +153,8 @@ export async function runSubagentAnnounceFlow(
 async function runSubagentAnnounceFlowBound(
   params: SubagentAnnounceFlowParams,
 ): Promise<SubagentAnnounceFlowOutcome> {
-  let announceOutcome: SubagentAnnounceFlowOutcome = "undelivered";
-  let deliveryResultReported = false;
-  const reportDeliveryResult = async (delivery: SubagentAnnounceDeliveryResult) => {
-    if (deliveryResultReported) {
-      return;
-    }
-    deliveryResultReported = true;
-    // A receipt observer may fail after handoff. Keep the transport outcome
-    // authoritative so cleanup does not replay work the requester already consumed.
-    announceOutcome = delivery.delivered
-      ? "delivered"
-      : delivery.reason === "completion_handoff_pending" && delivery.path === "none"
-        ? "requester_waiting"
-        : delivery.path === "queued"
-          ? "session_queued"
-          : "undelivered";
-    await params.onDeliveryResult?.(delivery);
-  };
+  const obligation = createSubagentAnnounceObligation(params.onDeliveryResult);
+  const reportDeliveryResult = obligation.report;
   const expectsCompletionMessage = params.expectsCompletionMessage === true;
   let shouldDeleteChildSession = params.cleanup === "delete";
   const childSessionEffectsAllowed = () =>
@@ -346,89 +329,21 @@ async function runSubagentAnnounceFlowBound(
       }
     }
 
-    const fallbackReply =
-      params.terminalReply || failedTerminalOutcome ? undefined : params.fallbackReply?.trim();
-    const visibleFallback =
-      fallbackReply && !isSilentReplyText(fallbackReply) ? fallbackReply : undefined;
-
-    const childRun = subagentRuns.get(params.childRunId);
-    if (childRun?.childSessionKey === params.childSessionKey && completionDeliveryAllowed()) {
-      ownResult = await readSubagentRunAnnounceResult(childRun);
-      reply = ownResult.text;
+    const preparedReply = await prepareChildAnnounceReply(params, {
+      reply,
+      outcome,
+      legacySilent,
+      allowFailedOutputCapture,
+      completionDeliveryAllowed,
+      prepareChildSessionEffects,
+      childSessionEffectsAllowed,
+    });
+    if (preparedReply.silent) {
+      return "delivered";
     }
-
-    if (params.terminalReply?.disposition === "silent") {
-      if (!expectsCompletionMessage) {
-        return "delivered";
-      }
-      reply = undefined;
-    }
-    if (
-      params.terminalReply?.disposition === "empty" &&
-      outcome.status === "timeout" &&
-      (await prepareChildSessionEffects()) &&
-      childSessionEffectsAllowed()
-    ) {
-      const timeoutProgress = await readSubagentTimeoutProgress(
-        params.childSessionKey,
-        params.timeoutMs,
-        outcome,
-        params.childAgentId,
-      );
-      // Empty remains the authoritative terminal fact. Transcript text is a
-      // timeout-only progress hint and must never reclassify silence as output.
-      if (timeoutProgress) {
-        reply = timeoutProgress;
-      }
-    }
-    if (
-      !params.terminalReply &&
-      (!ownResult || !childRun || !getSubagentTerminalReplySummary(childRun))
-    ) {
-      if (
-        !legacySilent &&
-        !reply &&
-        allowFailedOutputCapture &&
-        (await prepareChildSessionEffects()) &&
-        childSessionEffectsAllowed()
-      ) {
-        reply = await readSubagentOutput(params.childSessionKey, outcome, {
-          childAgentId: params.childAgentId,
-        });
-      }
-      if (
-        !legacySilent &&
-        !reply?.trim() &&
-        allowFailedOutputCapture &&
-        (await prepareChildSessionEffects()) &&
-        childSessionEffectsAllowed()
-      ) {
-        reply = await readLatestSubagentOutputWithRetry({
-          sessionKey: params.childSessionKey,
-          childAgentId: params.childAgentId,
-          maxWaitMs: params.timeoutMs,
-          outcome,
-        });
-      }
-      if (!reply?.trim() && visibleFallback) {
-        reply = visibleFallback;
-      }
-      if (legacySilent && !reply?.trim() && !expectsCompletionMessage) {
-        return "delivered";
-      }
-    }
-
-    const childSessionCurrent = await prepareChildSessionEffects();
-    if (!ownResult && (!childSessionCurrent || !childSessionEffectsAllowed())) {
-      reply =
-        params.terminalReply?.disposition === "visible"
-          ? (params.roundOneReply ?? params.terminalReply.text)
-          : params.terminalReply
-            ? undefined
-            : legacySilent
-              ? visibleFallback
-              : (params.roundOneReply ?? visibleFallback);
-    }
+    reply = preparedReply.reply;
+    ownResult = preparedReply.ownResult;
+    const { childSessionCurrent } = preparedReply;
 
     const taskLabel = params.label || params.task || "task";
     const statusLabel = killed
@@ -620,7 +535,7 @@ async function runSubagentAnnounceFlowBound(
       throw err;
     }
     defaultRuntime.error(`Subagent announce failed: ${String(err)}`);
-    if (!deliveryResultReported) {
+    if (!obligation.reported) {
       await reportDeliveryResult({
         delivered: false,
         path: "none",
@@ -651,5 +566,117 @@ async function runSubagentAnnounceFlowBound(
       });
     }
   }
-  return announceOutcome;
+  return obligation.outcome;
+}
+
+/** Read one authoritative child result; legacy transcript recovery stays confined here. */
+async function prepareChildAnnounceReply(
+  params: SubagentAnnounceFlowParams,
+  context: {
+    reply: string | undefined;
+    outcome: SubagentRunOutcome;
+    legacySilent: boolean;
+    allowFailedOutputCapture: boolean;
+    completionDeliveryAllowed: () => boolean;
+    prepareChildSessionEffects: () => Promise<boolean>;
+    childSessionEffectsAllowed: () => boolean;
+  },
+) {
+  let { reply } = context;
+  const {
+    outcome,
+    legacySilent,
+    allowFailedOutputCapture,
+    completionDeliveryAllowed,
+    prepareChildSessionEffects,
+    childSessionEffectsAllowed,
+  } = context;
+  const failedTerminalOutcome = outcome.status === "error";
+  const expectsCompletionMessage = params.expectsCompletionMessage === true;
+  let ownResult: PreparedAnnounceResult | undefined;
+  const fallbackReply =
+    params.terminalReply || failedTerminalOutcome ? undefined : params.fallbackReply?.trim();
+  const visibleFallback =
+    fallbackReply && !isSilentReplyText(fallbackReply) ? fallbackReply : undefined;
+
+  const childRun = subagentRuns.get(params.childRunId);
+  if (childRun?.childSessionKey === params.childSessionKey && completionDeliveryAllowed()) {
+    ownResult = await readSubagentRunAnnounceResult(childRun);
+    reply = ownResult.text;
+  }
+
+  if (params.terminalReply?.disposition === "silent") {
+    if (!expectsCompletionMessage) {
+      return { silent: true as const };
+    }
+    reply = undefined;
+  }
+  if (
+    params.terminalReply?.disposition === "empty" &&
+    outcome.status === "timeout" &&
+    (await prepareChildSessionEffects()) &&
+    childSessionEffectsAllowed()
+  ) {
+    const timeoutProgress = await readSubagentTimeoutProgress(
+      params.childSessionKey,
+      params.timeoutMs,
+      outcome,
+      params.childAgentId,
+    );
+    // Empty remains the authoritative terminal fact. Transcript text is a
+    // timeout-only progress hint and must never reclassify silence as output.
+    if (timeoutProgress) {
+      reply = timeoutProgress;
+    }
+  }
+  if (
+    !params.terminalReply &&
+    (!ownResult || !childRun || !getSubagentTerminalReplySummary(childRun))
+  ) {
+    if (
+      !legacySilent &&
+      !reply &&
+      allowFailedOutputCapture &&
+      (await prepareChildSessionEffects()) &&
+      childSessionEffectsAllowed()
+    ) {
+      reply = await readSubagentOutput(params.childSessionKey, outcome, {
+        childAgentId: params.childAgentId,
+      });
+    }
+    if (
+      !legacySilent &&
+      !reply?.trim() &&
+      allowFailedOutputCapture &&
+      (await prepareChildSessionEffects()) &&
+      childSessionEffectsAllowed()
+    ) {
+      reply = await readLatestSubagentOutputWithRetry({
+        sessionKey: params.childSessionKey,
+        childAgentId: params.childAgentId,
+        maxWaitMs: params.timeoutMs,
+        outcome,
+      });
+    }
+    if (!reply?.trim() && visibleFallback) {
+      reply = visibleFallback;
+    }
+    if (legacySilent && !reply?.trim() && !expectsCompletionMessage) {
+      return { silent: true as const };
+    }
+  }
+
+  const childSessionCurrent = await prepareChildSessionEffects();
+  if (!ownResult && (!childSessionCurrent || !childSessionEffectsAllowed())) {
+    reply =
+      params.terminalReply?.disposition === "visible"
+        ? (params.roundOneReply ?? params.terminalReply.text)
+        : params.terminalReply
+          ? undefined
+          : legacySilent
+            ? visibleFallback
+            : (params.roundOneReply ?? visibleFallback);
+  }
+
+  return { silent: false as const, reply, ownResult, childSessionCurrent };
 }

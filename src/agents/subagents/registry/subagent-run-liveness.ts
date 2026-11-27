@@ -2,6 +2,7 @@ import { hasLiveAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { ownsSwarmRunReservation } from "../swarm/swarm-scheduler.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import {
   getSubagentRunRuntimeKey,
   isSameSubagentRunOwner,
@@ -64,7 +65,7 @@ export function hasSubagentRunEnded<T extends { execution: { endedAt?: number } 
 
 export function isYieldedSubagentRun(entry: SubagentRunRecord): boolean {
   return (
-    entry.pauseReason === "sessions_yield" &&
+    isSubagentPausedByYield(entry) &&
     !entry.killIntent &&
     !entry.killReconciliation &&
     entry.suppressAnnounceReason !== "killed" &&
@@ -76,7 +77,7 @@ export function isYieldedSubagentRun(entry: SubagentRunRecord): boolean {
 export function isRequesterSettleMemberReady(entry: SubagentRunRecord): boolean {
   return (
     entry.execution.status !== "running" &&
-    entry.pauseReason !== "sessions_yield" &&
+    !isSubagentPausedByYield(entry) &&
     hasSubagentRunEnded(entry)
   );
 }

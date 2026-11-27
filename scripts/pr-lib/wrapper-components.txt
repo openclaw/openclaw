@@ -1057,6 +1057,7 @@ src/infra/dedupe.ts
 src/infra/deep-merge.ts
 src/infra/deferred-plugin-migrations.contract.ts
 src/infra/deferred-plugin-migrations.cohort.ts
+src/infra/deferred-plugin-migrations.read.kernel.ts
 src/infra/deferred-plugin-migrations.ts
 src/infra/deferred-plugin-session-transcript-read.worker.ts
 src/infra/delivery-queue-cache.ts
@@ -2165,6 +2166,7 @@ src/state/openclaw-agent-db-existing-write.ts
 src/state/openclaw-agent-db-identity.ts
 src/state/openclaw-agent-db-lease-inspection.ts
 src/state/openclaw-agent-db-lease-provenance.ts
+src/state/openclaw-agent-db-lease-rows.ts
 src/state/openclaw-agent-db-lease.ts
 src/state/openclaw-agent-db-legacy-schema.ts
 src/state/openclaw-agent-db-lifecycle.ts
@@ -2898,6 +2900,7 @@ src/sessions/input-provenance.ts
 src/sessions/model-overrides.ts
 src/sessions/nested-tool-activity.ts
 src/sessions/provider-review.ts
+src/sessions/sessions-send-failure-notice.ts
 src/sessions/transcript-anchor-page.ts
 src/sessions/transcript-display-position.ts
 src/sessions/transcript-record-visibility.ts

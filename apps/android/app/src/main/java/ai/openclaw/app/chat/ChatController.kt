@@ -582,8 +582,6 @@ class ChatController internal constructor(
   internal val selectedActiveRunPresentation: StateFlow<ChatActiveRunPresentation> =
     selectedActiveRunPresentationState.asStateFlow()
 
-  private val _streamingAssistantText = MutableStateFlow<String?>(null)
-  val streamingAssistantText: StateFlow<String?> = _streamingAssistantText.asStateFlow()
   private val streamingAssistantState = MutableStateFlow<StreamingAssistant?>(null)
   internal val streamingAssistant: StateFlow<StreamingAssistant?> = streamingAssistantState.asStateFlow()
 
@@ -7321,13 +7319,8 @@ class ChatController internal constructor(
       val owner = liveRunOwner(runId)
       val previous = streamingAssistantState.value
       val key = if (previous != null && previous.owner == owner) previous.readerKey else owner?.let { localRunKey(it.runId) }
-      setStreamingAssistant(StreamingAssistant(owner, text, key))
+      streamingAssistantState.value = StreamingAssistant(owner, text, key)
     }
-  }
-
-  private fun setStreamingAssistant(value: StreamingAssistant?) {
-    streamingAssistantState.value = value
-    _streamingAssistantText.value = value?.text
   }
 
   private fun clearLiveRunUi(
@@ -7338,7 +7331,7 @@ class ChatController internal constructor(
       val retiringOwner = if (runId != null && owner != null) ChatRunOwner(owner, runId) else null
       if (runId != null && retiringOwner == null) return
       if (runId == null || streamingAssistantState.value?.owner == retiringOwner) {
-        setStreamingAssistant(null)
+        streamingAssistantState.value = null
       }
       if (runId == null) {
         turnToolCallsById.clear()
@@ -7773,7 +7766,7 @@ class ChatController internal constructor(
       if (previousOwner != null) {
         val nextOwner = previousOwner.copy(runId = newRunId)
         val stream = streamingAssistantState.value
-        if (stream?.owner == previousOwner) setStreamingAssistant(stream.copy(owner = nextOwner))
+        if (stream?.owner == previousOwner) streamingAssistantState.value = stream.copy(owner = nextOwner)
         turnToolCallsById.entries.filter { it.key.first == previousOwner }.forEach { (key, tool) ->
           turnToolCallsById.remove(key)
           turnToolCallsById.putIfAbsent(nextOwner to tool.toolCallId, tool)
