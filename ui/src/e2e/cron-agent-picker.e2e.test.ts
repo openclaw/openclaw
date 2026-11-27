@@ -108,9 +108,8 @@ suite.define(() => {
       await installGateway(page, roster.slice(0, 1));
       await page.goto(`${suite.server.baseUrl}cron?new`);
       await page.waitForFunction(() => window.openclawControlUi?.snapshot().rosterReady === true);
-      const titles = page.locator(".cron-editor-placement .settings-row__title");
-      await titles.first().waitFor();
-      expect(await titles.allTextContents()).toEqual(["Runs in"]);
+      await page.getByText("Runs in", { exact: true }).waitFor();
+      expect(await agentPicker(page).count()).toBe(0);
     });
   });
 });

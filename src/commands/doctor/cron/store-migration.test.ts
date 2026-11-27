@@ -385,26 +385,6 @@ it("normalizes isolated legacy jobs without mutating runtime code paths", () => 
   expect("isolation" in expectDefined(job, "job test invariant")).toBe(false);
 });
 
-it("converts saved current jobs without changing their linked conversation", () => {
-  const sessionKey = "agent:main:dashboard:garden";
-  const sourceConversation = { sessionKey, sessionId: "source", lifecycleRevision: "revision" };
-  const { job, result } = normalizeLegacy({
-    sessionTarget: "current",
-    sessionKey,
-    sourceConversation,
-    payload: agentPayload(),
-  });
-  expect(job).toMatchObject({
-    sessionTarget: "isolated",
-    includeRecentChat: true,
-    sessionKey,
-    sourceConversation,
-    enabled: true,
-  });
-  expect(result.pausedSessionTargetJobs).toEqual([]);
-  expect(normalizeStoredCronJobs(result.jobs).mutated).toBe(false);
-});
-
 it.each(["explicit", "session-key"])(
   "pins the %s agent's configured main conversation without adding announce delivery",
   (owner) => {
@@ -429,16 +409,6 @@ it.each(["explicit", "session-key"])(
     expect(result.pausedSessionTargetJobs).toEqual([]);
   },
 );
-
-it("pauses and preserves a current job when its creating conversation is missing", () => {
-  const { job, result } = normalizeLegacy({ sessionTarget: "current", payload: agentPayload() });
-  expect(job).toMatchObject({ sessionTarget: "isolated", enabled: false, payload: agentPayload() });
-  expect(job).not.toHaveProperty("includeRecentChat");
-  expect(result.pausedSessionTargetJobs).toEqual([
-    expect.stringContaining("no usable creating conversation"),
-  ]);
-  expect(result.removedJobs).toEqual([]);
-});
 
 const at = "2026-04-01T10:00:00.000Z";
 it.each([
@@ -533,12 +503,19 @@ it.each([
 ])(
   "normalizes target %s with binding %s without changing the rest of the job",
   (sessionTarget, sessionKey, target, binding) => {
+    const current = sessionTarget?.trim().toLowerCase() === "current";
+    const pauses = current && !binding;
+    const sourceConversation =
+      current && binding
+        ? { sessionKey: binding, sessionId: "source", lifecycleRevision: "revision" }
+        : undefined;
     const job = makeLegacyJob({
       id: "session-target",
       description: undefined,
-      enabled: false,
+      enabled: current,
       sessionTarget,
       sessionKey,
+      ...(sourceConversation ? { sourceConversation } : {}),
       owner: { agentId: "main", sessionKey: sourceSessionKey },
       payload: agentPayload(),
       delivery: { mode: "announce" },
@@ -549,10 +526,9 @@ it.each([
       ...structuredClone(job),
       sessionTarget: target,
       sessionKey: binding,
-      ...(sessionTarget?.trim().toLowerCase() === "current" && binding
-        ? { includeRecentChat: true }
-        : {}),
-      ...(sessionTarget === "current" && !binding
+      enabled: current && !pauses,
+      ...(sourceConversation ? { includeRecentChat: true } : {}),
+      ...(pauses
         ? {
             state: {
               consecutiveErrors: 2,
@@ -566,6 +542,10 @@ it.each([
 
     expect(result.jobs).toEqual([expected]);
     expect(result.mutated).toBe(true);
+    expect(result.pausedSessionTargetJobs).toEqual(
+      pauses ? [expect.stringContaining("no usable creating conversation")] : [],
+    );
+    expect(result.removedJobs).toEqual([]);
     const canonical = normalizeStoredCronJobs(result.jobs);
     expect(canonical.mutated).toBe(false);
     expect(canonical.jobs).toEqual([expected]);

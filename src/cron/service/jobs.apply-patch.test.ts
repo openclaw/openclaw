@@ -142,7 +142,7 @@ describe("applyJobPatch delivery merge", () => {
       const job = makeMainJob();
 
       expect(() => applyJobPatch(job, { delivery })).toThrow(
-        'cron channel delivery config is only supported for sessionTarget="isolated"',
+        "System event payloads do not support announce delivery",
       );
     },
   );

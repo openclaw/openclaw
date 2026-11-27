@@ -147,27 +147,15 @@ describe("cron protocol validators", () => {
   const agentPayload = { kind: "agentTurn", message: "tick" };
   const scheduledToolPolicy = { version: 1, mode: "trusted" };
   it.each([
-    ["isolated", true],
-    ["session:project-alpha", false],
-  ] as const)(
-    "accepts %s placement with includeRecentChat=%s on create and update",
-    (sessionTarget, includeRecentChat) => {
-      for (const [validate, input] of addAndUpdate({
-        sessionTarget,
-        includeRecentChat,
-        payload: agentPayload,
-      })) {
-        expect(validate(input)).toBe(true);
-      }
-    },
-  );
-
-  it.each([
     [{}, true],
     [{ scheduledToolPolicy }, false],
     [{ failureAlert }, false],
     [{ failureAlert: null }, false],
-    [{ sessionTarget: "session:project-alpha", payload: agentPayload }, true],
+    [{ sessionTarget: "isolated", includeRecentChat: true, payload: agentPayload }, true],
+    [
+      { sessionTarget: "session:project-alpha", includeRecentChat: false, payload: agentPayload },
+      true,
+    ],
     [
       {
         sessionTarget: "isolated",
@@ -213,7 +201,8 @@ describe("cron protocol validators", () => {
     [{ scheduledToolPolicy }, false],
     [{ failureAlert }, true],
     [{ failureAlert: null }, true],
-    [{ sessionTarget: "session:project-alpha" }, true],
+    [{ sessionTarget: "isolated", includeRecentChat: true }, true],
+    [{ sessionTarget: "session:project-alpha", includeRecentChat: false }, true],
     [{ payload: { kind: "command", argv: ["sh", "-lc", "echo updated"] } }, true],
     [{ payload: { kind: "agentTurn", model: null } }, true],
     [

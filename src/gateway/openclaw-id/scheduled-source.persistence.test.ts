@@ -47,8 +47,8 @@ afterEach(() => {
 it.each([
   { kind: "member", target: "isolated", reset: false, direct: false },
   { kind: "owner", target: "isolated", reset: false, direct: false },
-  { kind: "member", target: "main", reset: false, direct: false },
-  { kind: "owner", target: "main", reset: false, direct: false },
+  { kind: "member", target: "conversation", reset: false, direct: false },
+  { kind: "owner", target: "conversation", reset: false, direct: false },
   { kind: "member", target: "isolated", reset: true, direct: false },
   { kind: "member", target: "isolated", reset: false, direct: true },
   { kind: "member", target: "isolated", reset: false, direct: true, directAdmin: true },
@@ -204,7 +204,7 @@ it.each([
             agentId: "main",
             enabled: true,
             schedule: { kind: "every", everyMs: 3_600_000 },
-            sessionTarget: target,
+            sessionTarget: target === "isolated" ? target : `session:${fixture.target.sessionKey}`,
             wakeMode: "now",
             payload: { kind: "agentTurn", message: "Must not run", toolsAllow: ["probe"] },
             trigger: { script: "return {fire:false}" },
@@ -302,7 +302,7 @@ it.each([
         expect(payload).not.toHaveBeenCalled();
         expect(observed?.openclawIdPrincipal).toEqual(fixture.snapshot.openclawIdPrincipal);
         expect(sender).toEqual(
-          kind === "member" ? { senderIsOwner: false } : target === "main" ? undefined : {},
+          kind === "member" ? { senderIsOwner: false } : target === "conversation" ? undefined : {},
         );
       } finally {
         cron.stop();

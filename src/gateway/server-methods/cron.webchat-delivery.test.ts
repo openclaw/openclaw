@@ -32,7 +32,7 @@ async function withWebchatTool(
   check: (fixture: {
     add: (
       delivery?: CronDelivery,
-      target?: "current" | "isolated",
+      includeRecentChat?: boolean,
     ) => ReturnType<ReturnType<typeof createCronTool>["execute"]>;
     tool: ReturnType<typeof createCronTool>;
     cron: CronService;
@@ -135,13 +135,14 @@ async function withWebchatTool(
       await check({
         cron,
         tool,
-        add: async (delivery, target = "current") => {
+        add: async (delivery, includeRecentChat = true) => {
           return await tool.execute("webchat-condition-watcher", {
             action: "add",
             job: {
               name: "WebChat condition watcher",
               enabled: false,
-              sessionTarget: target,
+              sessionTarget: "isolated",
+              includeRecentChat,
               schedule: { kind: "every", everyMs: 60_000 },
               payload: { kind: "agentTurn", message: "Report the condition result." },
               trigger: { script: "return { fire: false };", once: true },
@@ -169,6 +170,7 @@ describe("WebChat automation creation through the tool and Gateway", () => {
         job: {
           name: "basketball-reminder",
           enabled: false,
+          sessionTarget: "session:main",
           schedule: { kind: "at", at, everyMs: 1, anchorMs: 0, expr: "", tz: "", staggerMs: 0 },
           trigger: { script: "return { fire: true };", once: true },
           payload: {
@@ -220,7 +222,7 @@ describe("WebChat automation creation through the tool and Gateway", () => {
   it("previews the creating conversation on add, but not a name-only update", async () => {
     await withWebchatTool(
       async ({ add, cron, tool }) => {
-        const added = await add(undefined, "isolated");
+        const added = await add(undefined, false);
         const [job] = await cron.list({ includeDisabled: true });
         const updated = await tool.execute("edit-delivery", {
           action: "update",

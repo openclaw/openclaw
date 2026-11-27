@@ -195,10 +195,10 @@ function addJob(
 }
 
 it.each([
-  { scope: "operator.cron", ocid: false, target: "current" },
-  { scope: "operator.write", ocid: false, target: "current" },
+  { scope: "operator.cron", ocid: false, target: "isolated" },
+  { scope: "operator.write", ocid: false, target: "isolated" },
   { scope: "operator.write", ocid: true, target: "isolated" },
-  { scope: "operator.write", ocid: true, target: "main" },
+  { scope: "operator.write", ocid: true, target: `session:${SESSION}` },
 ])(
   "admits $scope automation creation without owner authority (OCID=$ocid target=$target)",
   async ({ scope, ocid, target }) => {
@@ -270,7 +270,8 @@ it.each([
                 senderIsOwner: false,
               });
               const result = await addJob(tools, "Restricted caller job", {
-                ...(ocid ? { sessionTarget: target } : {}),
+                sessionTarget: target,
+                includeRecentChat: !ocid,
                 payload: ocid
                   ? { kind: "script", script: "return {}", timeoutSeconds: 30 }
                   : { ...timedPayload },

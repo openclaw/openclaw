@@ -45,11 +45,12 @@ function PlacementConversation(
   const selected = () => (recentChat() ? props.form.sessionKey : props.form.sessionTarget.slice(8));
   const label = () =>
     t(recentChat() ? "cron.form.recentChatConversation" : "cron.form.conversation");
-  const result = createMemo(async () => {
+  const result = createMemo(() => {
     const agent = agentId();
-    const query = search().trim();
-    if (!props.connected || !agent || !props.listConversations) return undefined;
-    return await props.listConversations(agent, query);
+    if (!props.connected || !agent || !props.listConversations) {
+      return undefined;
+    }
+    return props.listConversations(agent, search().trim());
   });
   const options = createMemo(() => {
     const rows = (result()?.sessions ?? []).map((row) => ({
@@ -62,11 +63,15 @@ function PlacementConversation(
         : agentId() && `agent:${agentId()}:${props.agentsList?.mainKey ?? "main"}`;
     if (primary) {
       const index = rows.findIndex((row) => row.value === primary);
-      if (index >= 0) rows.splice(index, 1);
+      if (index >= 0) {
+        rows.splice(index, 1);
+      }
       rows.unshift({ value: primary, label: t("cron.form.mainConversation") });
     }
     const key = selected();
-    if (key && !rows.some((row) => row.value === key)) rows.unshift({ value: key, label: key });
+    if (key && !rows.some((row) => row.value === key)) {
+      rows.unshift({ value: key, label: key });
+    }
     return [{ value: "", label: t("cron.form.chooseConversation"), disabled: true }, ...rows];
   });
   const id = () => inputIdForField(props.field);
