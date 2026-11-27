@@ -361,8 +361,8 @@ export function truncateToolResultText(
   if (text.length <= maxChars && estimateToolResultTextChars(text, budgetOptions) <= maxChars) {
     return text;
   }
-  const initialKeptText = sliceToolResultTextToBudget(text, maxChars, budgetOptions);
-  const defaultSuffix = suffixFactory(Math.max(1, text.length - initialKeptText.length));
+  // The omitted count never exceeds the text length, so its notice never outgrows this one.
+  const defaultSuffix = suffixFactory(text.length);
   const budget = Math.max(
     minKeepChars,
     maxChars - estimateToolResultTextChars(defaultSuffix, budgetOptions),

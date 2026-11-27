@@ -1029,6 +1029,15 @@ describe("truncateToolResultText head+tail strategy", () => {
     expect(result.length * 4).toBeLessThanOrEqual(8_192);
   });
 
+  it("keeps the tail when the omitted count gains a digit", () => {
+    // 9,999 chars past a full-budget prefix, but over 10,000 once head, tail and notice share it.
+    const text = `${"a".repeat(25_990)}LAST-TAIL`;
+    const result = truncateToolResultText(text, 16_000);
+
+    expect(result.endsWith("LAST-TAIL")).toBe(true);
+    expect(result.length).toBeLessThanOrEqual(16_000);
+  });
+
   it("cuts the head on a line boundary", () => {
     const text = Array.from({ length: 400 }, (_, i) => `line ${i}: ${"x".repeat(50)}`).join("\n");
     const result = truncateToolResultText(text, 10_000);
