@@ -12,7 +12,6 @@ import {
   finishUpdateRun,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
-import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -179,12 +178,10 @@ describe("owned completed update publication", () => {
     const before = fs.readFileSync(f.databasePath);
     f.release();
     const cleanupOwners: Array<string | undefined> = [];
-    const cleanupAttempt = vi
-      .spyOn(cleanup, "cleanupCompletedUpdateRecovery")
-      .mockImplementation(() => {
-        cleanupOwners.push(captureGatewayStateOwner(f.databasePath)?.role);
-        return Promise.reject(new Error("synthetic cleanup failure"));
-      });
+    vi.spyOn(cleanup, "cleanupCompletedUpdateRecovery").mockImplementation(() => {
+      cleanupOwners.push(captureGatewayStateOwner(f.databasePath)?.role);
+      return Promise.reject(new Error("synthetic cleanup failure"));
+    });
     const jsonOutput = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
     const settled = await f.settle(f.result, captured);
     const result = await publishUpdateCommandTerminalResult(f.params, settled.result, {
@@ -204,17 +201,6 @@ describe("owned completed update publication", () => {
       }),
     );
     expect(jsonOutput.mock.calls[0]?.[0]).not.toHaveProperty("captured");
-    // A historical report is not permission for the next update to skip admission.
-    cleanupAttempt.mockRestore();
-    f.write(
-      "INSERT INTO config_machine_state(state_key, value_json, updated_at_ms) VALUES(?, ?, ?)",
-      `update.recovery.${f.run.runId}`,
-      "{}",
-      Date.now(),
-    );
-    await expect(assertUpdateRecoveryAdmission({ env: f.run.env })).rejects.toMatchObject({
-      name: "ZodError",
-    });
   });
 
   it.each([
@@ -254,7 +240,7 @@ describe("owned completed update publication", () => {
   });
 
   it.each(["malformed recovery", "interrupted publication", "closed executor"])(
-    "rejects capture after %s",
+    "preserves publication ownership after %s",
     async (condition) => {
       const f = fixture();
       if (condition === "malformed recovery") {
@@ -264,7 +250,8 @@ describe("owned completed update publication", () => {
           "{}",
           Date.now(),
         );
-        await expect(f.capture()).rejects.toThrow();
+        await expect(f.capture()).resolves.toBeUndefined();
+        await expect(f.settle()).rejects.toBeInstanceOf(UpdateCommandPendingRecoveryFailure);
       } else if (condition === "interrupted publication") {
         fs.mkdirSync(path.join(path.dirname(f.databasePath), ".openclaw-restore-synthetic"));
         await expect(f.capture()).rejects.toThrow("Interrupted shared-database publication");

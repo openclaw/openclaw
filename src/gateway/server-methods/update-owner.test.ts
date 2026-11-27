@@ -217,9 +217,7 @@ it.each(promptUpdateCases)(
         runtimeInfo: { channel },
       });
       const action = expectDefined(
-        prompt.match(
-          /`gateway`: use ([\w.]+) only when the installation uses the built-in updater/u,
-        )?.[1],
+        prompt.match(/`gateway`\s+([\w.]+)\s+only for built-in-updater installs/u)?.[1],
         "prompt-advertised built-in update action",
       );
       expect(action).toBe("update.run");

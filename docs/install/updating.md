@@ -181,6 +181,20 @@ The Gateway's `update.run` and `openclaw update` both use one path:
    update or trigger rollback. A successful reload's warnings stay in the plugin
    step details without marking activation failed or requesting a retry.
 
+Saved update history does not grant or refuse a new release update. After taking
+its preparation lock and checking the installation, the serving release marks
+other unfinished runs `failed` with reason `interrupted`, then continues. It
+preserves its own run and the run handed over by its serving launcher trial.
+Historical plugin-cohort records remain unchanged; the new update does not
+adopt or replay their rollback.
+
+Recovery admission still refuses a live in-place update lease and an
+`.openclaw-restore-*` directory that may contain the only original state files.
+Current preparation locks, active trials, and ordinary preflight checks still
+apply. Owned release leftovers are collected by path after the Gateway is ready,
+never by matching version strings. Doctor retains its separate cleanup for old
+in-place updater runtimes; that process census is not on the update critical path.
+
 Packaged bundled plugins belong to the selected core release, not a second
 plugin installation. Channel synchronization retires obsolete compiled-bundle
 install records before it plans package updates; switching to a packaged bundle
@@ -434,6 +448,13 @@ Expiry stops client work and joins connection cleanup; it does not cancel an
 accepted server update or invalidate a published trial. Run `openclaw update status`
 before retrying an unconfirmed request. Preparation and installed-package delegation
 retain their own lifecycle budgets. The installed CLI must contain this repair.
+
+The serving Gateway settles its resident activation run from core readiness, not
+from a detached maintenance tick. It waits for the resident launcher's committed
+trial acknowledgment; if their IPC channel disconnects, it reads the trial once
+from disk instead. A slow acknowledgment cannot spend a one-shot settlement before
+the launcher commits. Required plugin work stays on the Gateway's existing update
+watcher. The candidate must contain this repair; older installed CLIs need no change.
 
 Gateway post-ready maintenance and `openclaw update repair` refresh the known
 legacy Git launcher from development build `d44f263`, which incorrectly counted

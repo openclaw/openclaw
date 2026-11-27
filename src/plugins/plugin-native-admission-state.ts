@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { isPathInside } from "../infra/path-guards.js";
 import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
@@ -114,8 +115,33 @@ export function adoptPluginNativeAdmissions(
   }
 }
 
+/** Return a detached receipt only when the live generation has new facts to publish. */
+export function updatePluginNativeAdmissionReceipt(
+  state: AdmissionState,
+  key: string,
+  proposed: PluginSourceAdmissionReceipt,
+): PluginSourceAdmissionReceipt | undefined {
+  const replaced = state.receipts.get(key);
+  // A pending publication already owns a detached receipt. Otherwise preserve the
+  // clone-before-compare boundary, including normalization of caller-owned prototypes.
+  if (
+    replaced &&
+    state.publications.get(key)?.data.receipt === replaced &&
+    isDeepStrictEqual(replaced, proposed)
+  ) {
+    return undefined;
+  }
+  const next = structuredClone(proposed);
+  if (isDeepStrictEqual(replaced, next)) {
+    return undefined;
+  }
+  state.receipts.set(key, next);
+  releaseReplacedNamespaces(state, replaced);
+  return next;
+}
+
 /** A replaced receipt retires unreferenced file facts before pruning namespace maps. */
-export function releaseReplacedNamespaces(
+function releaseReplacedNamespaces(
   state: AdmissionState,
   replaced: PluginSourceAdmissionReceipt | undefined,
 ): void {

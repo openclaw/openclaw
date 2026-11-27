@@ -24,7 +24,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 // the PR that removes work. NODE_OPTIONS carries the ledger into descendant processes
 // that inherit the environment and into every worker; spawn calls are counted
 // separately for descendants that start with a clean environment.
-const COLD_START_BUDGET = { nodeProcesses: 4, nodeSpawns: 5, workerThreads: 19 };
+const COLD_START_BUDGET = { nodeProcesses: 4, nodeSpawns: 5, workerThreads: 17 };
 
 const LEDGER_PRELOAD = `
 import fs from "node:fs";

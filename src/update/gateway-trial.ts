@@ -16,6 +16,7 @@ import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
 import type { LegacyTrial } from "./legacy-trial-record.js";
 import {
+  collectReleases,
   readTrial,
   readUpdateLock,
   releaseUpdateLock,
@@ -206,6 +207,8 @@ export async function settleRunFromTrial(
   trial: Trial | null,
   prefix = resolvePrefix(),
 ): Promise<void> {
+  // Ready releases prune by owned path; stale updater records do not gate preparation.
+  void collectReleases(prefix).catch(() => undefined);
   if (
     trial?.outcome &&
     trial.runId &&
@@ -359,8 +362,9 @@ export async function announceReady(buildId: string | null): Promise<void> {
       resolve(message.trial as Trial | null);
     }
   };
+  const onDisconnect = () => resolve(null);
   process.on("message", onMessage);
-  const timer = setTimeout(() => resolve(null), 2000);
+  process.once("disconnect", onDisconnect);
   try {
     process.send({ type: "openclaw.ready", buildId }, (error) => {
       if (error) {
@@ -370,7 +374,7 @@ export async function announceReady(buildId: string | null): Promise<void> {
     const confirmed = await promise;
     await settleRunFromTrial(confirmed ?? (await readTrial()));
   } finally {
-    clearTimeout(timer);
     process.off("message", onMessage);
+    process.off("disconnect", onDisconnect);
   }
 }
