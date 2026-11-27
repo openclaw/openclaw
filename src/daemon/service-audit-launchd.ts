@@ -93,7 +93,10 @@ export async function auditLaunchdDefinition(
   }
   const wrapperPath = resolveLaunchAgentEnvWrapperPath(env, resolveLaunchAgentLabel(env));
   const args = installed.ProgramArguments;
-  const wrapperIndex = Array.isArray(args) && args[0] === LAUNCH_AGENT_ENV_WRAPPER_SHELL ? 1 : 0;
+  const launcherOffset = Array.isArray(args) && args[1] === "_gateway-service" ? 2 : 0;
+  const wrapperIndex =
+    launcherOffset +
+    (Array.isArray(args) && args[launcherOffset] === LAUNCH_AGENT_ENV_WRAPPER_SHELL ? 1 : 0);
   if (
     Array.isArray(args) &&
     args[wrapperIndex] === wrapperPath &&
@@ -159,6 +162,7 @@ export async function auditLaunchdDefinition(
     "WorkingDirectory",
     "EnvironmentVariables",
     "Comment",
+    "AssociatedBundleIdentifiers",
   ]);
   const legacyLogs = resolveGatewayLogPaths(env);
   // Stable releases used 60s/1s throttles and state-directory logs.

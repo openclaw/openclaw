@@ -458,9 +458,16 @@ unused builds only after a successful health check.
 ### Service permissions after an update
 
 App-managed Bun services use a stable executable path,
-`<state>/runtime/service/bun`, to preserve Messages Automation permission across
-updates. The first move to this path, including migration from Node, requires
-Automation approval once.
+`<state>/runtime/service/bun`, so runtime updates do not change the executable
+path macOS sees. Moving from Node or changing the responsible app may require a
+fresh Automation approval.
+
+The app-managed LaunchAgent starts the signed `openclaw-mac` helper before the
+private Bun runtime. macOS may attribute the Gateway and its child tools to
+OpenClaw.app as responsible code. Confirm the name shown in each Privacy pane
+and retry the actual file, Automation, and Computer Control operation; a visible
+row alone does not prove access. Services installed from a standalone CLI keep
+their own runtime identity.
 
 Replacing an ad-hoc or source-built Bun can also reset Full Disk Access, even
 if System Settings still shows it enabled. Grant access again for

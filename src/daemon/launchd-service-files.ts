@@ -18,6 +18,7 @@ import {
 } from "./launchd-legacy-ca-migration.js";
 import {
   LAUNCH_AGENT_ENV_WRAPPER_SHELL,
+  LAUNCH_AGENT_APP_SERVICE_COMMAND,
   buildLaunchAgentPlist,
   normalizeLaunchdPlistXml,
   quoteLaunchAgentEnvironmentValue,
@@ -262,10 +263,30 @@ async function prepareLaunchAgentPlist(
       ];
     }
   }
+  if (params.appLauncherPath) {
+    if (
+      !path.isAbsolute(params.appLauncherPath) ||
+      !params.appLauncherPath.endsWith("/Contents/MacOS/openclaw-mac")
+    ) {
+      throw new Error(
+        "App launcher must be the absolute openclaw-mac executable inside OpenClaw.app",
+      );
+    }
+    if (!["ai.openclaw.mac", "ai.openclaw.mac.debug"].includes(params.appBundleIdentifier ?? "")) {
+      throw new Error("App launcher requires the running OpenClaw.app bundle identifier");
+    }
+    // Keep the signed helper alive as launchd's first executable and the Gateway's responsible app.
+    programArguments = [
+      params.appLauncherPath,
+      LAUNCH_AGENT_APP_SERVICE_COMMAND,
+      ...programArguments,
+    ];
+  }
   return buildLaunchAgentPlist({
     label: params.label,
     comment: resolveGatewayServiceDescription(params),
     programArguments,
+    associatedBundleIdentifier: params.appLauncherPath ? params.appBundleIdentifier : undefined,
     workingDirectory: params.workingDirectory,
     stdoutPath: params.stdoutPath,
     // Diagnostics reads stdout; launchd needs both handles pointed at that same file.
@@ -491,7 +512,17 @@ export async function writeLaunchAgentPlist(
       captured.restore,
     );
   }
-  const { env, programArguments, workingDirectory, environment, description, stdout, warn } = args;
+  const {
+    env,
+    programArguments,
+    appLauncherPath,
+    appBundleIdentifier,
+    workingDirectory,
+    environment,
+    description,
+    stdout,
+    warn,
+  } = args;
   const label = resolveLaunchAgentLabel(env);
   await assertNoSystemLaunchDaemonOwnership(label);
 
@@ -512,6 +543,8 @@ export async function writeLaunchAgentPlist(
     env,
     label,
     programArguments,
+    appLauncherPath,
+    appBundleIdentifier,
     workingDirectory,
     description,
     stdoutPath,
@@ -573,6 +606,8 @@ export async function rewriteLaunchAgentPlistForRestart({
       env,
       label,
       programArguments: existing.programArguments,
+      appLauncherPath: existing.appLauncherPath,
+      appBundleIdentifier: existing.appBundleIdentifier,
       workingDirectory: existing.workingDirectory,
       description: serviceDescription,
       stdoutPath,

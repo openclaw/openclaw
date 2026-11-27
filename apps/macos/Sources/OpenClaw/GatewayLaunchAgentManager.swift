@@ -345,6 +345,16 @@ enum GatewayLaunchAgentManager {
         if let runtime, !launchAgentExists || replaceRuntime {
             arguments += ["--runtime", "bun", "--runtime-path", runtime.serviceBun.path]
         }
+        let existingLauncher = launchAgentExists && self.launchdConfigSnapshot()?
+            .programArguments.first?.hasSuffix("/Contents/MacOS/openclaw-mac") == true
+        if BundledRuntime.isBundledApp && (runtime != nil || existingLauncher) {
+            guard let bundleIdentifier = Bundle.main.bundleIdentifier else { return arguments }
+            arguments += [
+                "--app-launcher-path", Bundle.main.bundleURL
+                    .appendingPathComponent("Contents/MacOS/openclaw-mac").path,
+                "--app-bundle-identifier", bundleIdentifier,
+            ]
+        }
         return arguments
     }
 
@@ -470,12 +480,18 @@ enum GatewayLaunchAgentManager {
         environmentWrapper: URL) -> [String]?
     {
         var command = programArguments[...]
-        if command.first == "/bin/sh" { command = command.dropFirst() }
+        if command.first?.hasSuffix("/Contents/MacOS/openclaw-mac") == true {
+            command = command.dropFirst()
+            guard command.first == "_gateway-service" else { return nil }
+            command = command.dropFirst()
+        }
+        let hasShellWrapper = command.first == "/bin/sh"
+        if hasShellWrapper { command = command.dropFirst() }
         if command.first == environmentWrapper.path {
             command = command.dropFirst()
             guard command.first == environmentFile.path else { return nil }
             command = command.dropFirst()
-        } else if programArguments.first == "/bin/sh" {
+        } else if hasShellWrapper {
             return nil
         }
         guard let executable = command.first, executable.hasPrefix("/") else { return nil }
@@ -505,12 +521,14 @@ enum GatewayLaunchAgentManager {
         else { return nil }
         let prefix = Array(command[..<service])
         guard self.serviceCLIEntrypoint(prefix) != nil else { return nil }
+        let serviceArguments = snapshot.programArguments.first?.hasSuffix("/Contents/MacOS/openclaw-mac") == true
+            ? snapshot.programArguments.dropFirst(2) : snapshot.programArguments[...]
         return InstalledServiceCLI(
             prefix: self.concreteServicePrefix(prefix),
             sqliteLibrary: snapshot.environment["OPENCLAW_SQLITE_LIBRARY"],
             environment: snapshot.environment,
-            usesGeneratedEnvironment: snapshot.programArguments.first == "/bin/sh" ||
-                snapshot.programArguments.first == environmentWrapper.path,
+            usesGeneratedEnvironment: serviceArguments.first == "/bin/sh" ||
+                serviceArguments.first == environmentWrapper.path,
             sourcePrefix: prefix)
     }
 

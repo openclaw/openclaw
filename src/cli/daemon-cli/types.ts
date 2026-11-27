@@ -18,6 +18,8 @@ export type DaemonInstallOptions = {
   port?: string | number;
   runtime?: string;
   runtimePath?: string;
+  appLauncherPath?: string;
+  appBundleIdentifier?: string;
   expectedRuntimePin?: string;
   restoreServiceCli?: string;
   token?: string;

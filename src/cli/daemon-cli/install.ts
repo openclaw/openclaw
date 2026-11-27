@@ -632,6 +632,8 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
         stdout,
         warn,
         programArguments,
+        appLauncherPath: opts.appLauncherPath,
+        appBundleIdentifier: opts.appBundleIdentifier,
         workingDirectory,
         environment,
         environmentValueSources,

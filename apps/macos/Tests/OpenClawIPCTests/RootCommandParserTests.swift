@@ -1,7 +1,33 @@
+import Foundation
 import Testing
 @testable import OpenClawMacCLI
 
 struct RootCommandParserTests {
+    @Test func `signed service launcher accepts only the managed Gateway shape`() {
+        let home = URL(fileURLWithPath: "/fixture")
+        let root = "/fixture/.openclaw"
+        let bun = root + "/runtime/service/bun"
+        let entry = root + "/runtime/build/lib/node_modules/openclaw/openclaw.mjs"
+        let file = root + "/service-env/ai.openclaw.gateway.env"
+        let wrapper = root + "/service-env/ai.openclaw.gateway-env-wrapper.sh"
+        let command = ["/bin/sh", wrapper, file, bun, "--no-install", entry, "gateway", "--port", "18789"]
+        let parsed = AppGatewayServiceCommand(arguments: command, homeDirectory: home)
+        #expect(parsed?.executable.path == "/bin/sh")
+        #expect(parsed?.arguments == Array(command.dropFirst()))
+        #expect(AppGatewayServiceCommand(arguments: [bun, entry, "gateway"], homeDirectory: home)?
+            .executable.path == bun)
+        #expect(AppGatewayServiceCommand(arguments: [wrapper, file, bun, entry, "gateway"], homeDirectory: home)?
+            .executable.path == wrapper)
+        for invalid in [
+            ["/bin/sh", "/tmp/wrapper", file, bun, entry, "gateway"],
+            ["/bin/sh", wrapper, file, "/usr/bin/node", entry, "gateway"],
+            ["/bin/sh", wrapper, file, bun, entry, "exec"],
+            ["/bin/sh", wrapper, file, bun, "/tmp/openclaw.mjs", "gateway"],
+        ] {
+            #expect(AppGatewayServiceCommand(arguments: invalid, homeDirectory: home) == nil)
+        }
+    }
+
     @Test func `empty args resolve to app control`() {
         #expect(resolveRootCommandAction([]) == .control([]))
     }
