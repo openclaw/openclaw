@@ -4,20 +4,20 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import gmailPlugin from "../../extensions/gmail/index.js";
+import { createTestPluginApi } from "../../../src/plugin-sdk/plugin-test-api.js";
+import type { PluginServiceRegistration } from "../../../src/plugins/registry-types.js";
+import { createRegistry, startPluginServices } from "../../../src/plugins/services.test-support.js";
+import { createTestGatewayScheduler } from "../../../src/test-utils/gateway-scheduler-clock.js";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
-} from "../../test/helpers/fixture-receipts.js";
-import { withinTest } from "../../test/helpers/promise.js";
+} from "../../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../../test/helpers/promise.js";
 import {
   isProcessAlive as alive,
   waitForProcessExit,
-} from "../../test/scripts/live-process-fixture.test-support.js";
-import { createTestPluginApi } from "../plugin-sdk/plugin-test-api.js";
-import type { PluginServiceRegistration } from "../plugins/registry-types.js";
-import { createRegistry, startPluginServices } from "../plugins/services.test-support.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+} from "../../../test/scripts/live-process-fixture.test-support.js";
+import gmailPlugin from "../index.js";
 import { createGmailConfig } from "./gmail.test-support.js";
 
 const describePosix = process.platform === "win32" ? describe.skip : describe;

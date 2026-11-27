@@ -23,7 +23,8 @@ const mocks = vi.hoisted(() => ({
   defaultRuntime: { log: vi.fn(), error: vi.fn(), writeJson: vi.fn(), exit: vi.fn() },
 }));
 
-vi.mock("../logging/subsystem.js", () => ({ createSubsystemLogger: () => mocks.log }));
+// mock-isolation: capture watcher logging without writing host log files.
+vi.mock("../../../src/logging/subsystem.js", () => ({ createSubsystemLogger: () => mocks.log }));
 
 vi.mock("node:child_process", async () => {
   const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
@@ -34,13 +35,13 @@ vi.mock("node:child_process", async () => {
 });
 
 // mock-isolation: all command completion and cancellation is controlled by this fixture.
-vi.mock("../process/exec.js", () => ({
+vi.mock("../../../src/process/exec.js", () => ({
   runCommandWithTimeout: mocks.runCommandWithTimeout,
   runUtf8CommandWithTimeout: mocks.runUtf8CommandWithTimeout,
 }));
 
-vi.mock("../../extensions/gmail/src/gmail-gog.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../extensions/gmail/src/gmail-gog.js")>()),
+vi.mock("./gmail-gog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./gmail-gog.js")>()),
   inspectGogUpgrade: mocks.inspectGogUpgrade,
   upgradeGog: mocks.upgradeGog,
 }));
@@ -52,10 +53,12 @@ vi.mock("@clack/prompts", () => ({
 }));
 
 // mock-isolation: terminate only the fixture's fake child processes.
-vi.mock("../process/kill-tree.js", () => ({ killProcessTree: mocks.killProcessTree }));
+vi.mock("../../../src/process/kill-tree.js", () => ({ killProcessTree: mocks.killProcessTree }));
 
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
+vi.mock("../../../src/config/config.js", async () => {
+  const actual = await vi.importActual<typeof import("../../../src/config/config.js")>(
+    "../../../src/config/config.js",
+  );
   return {
     ...actual,
     captureRuntimeConfigAsyncReader: () => mocks.readRuntimeConfig,
@@ -63,9 +66,10 @@ vi.mock("../config/config.js", async () => {
 });
 
 // mock-isolation: capture service output and exit instead of affecting this test process.
-vi.mock("../runtime.js", () => ({ defaultRuntime: mocks.defaultRuntime }));
+vi.mock("../../../src/runtime.js", () => ({ defaultRuntime: mocks.defaultRuntime }));
 
-vi.mock("../../extensions/gmail/src/gmail-setup-utils.js", () => ({
+// mock-isolation: simulate prerequisites without installing tools or configuring endpoints.
+vi.mock("./gmail-setup-utils.js", () => ({
   ensureDependency: mocks.ensureDependency,
   ensureGcloudAuth: vi.fn(),
   ensureSubscription: vi.fn(),
@@ -76,13 +80,13 @@ vi.mock("../../extensions/gmail/src/gmail-setup-utils.js", () => ({
 }));
 
 // mock-isolation: resolve fixture executables without inspecting the host installation.
-vi.mock("../infra/executable-path.js", () => ({
+vi.mock("../../../src/infra/executable-path.js", () => ({
   resolveExecutable: vi.fn((name: string) => name),
   resolveExecutablePath: vi.fn((name: string) => name),
 }));
 
-const { runGmailService } = await import("./gmail-ops.js");
-const { stopGmailWatcher } = await import("../../extensions/gmail/runtime-api.js");
+const { runGmailService } = await import("../../../src/hooks/gmail-ops.js");
+const { stopGmailWatcher } = await import("../runtime-api.js");
 
 const ttyDescriptors = [process.stdin, process.stdout].map((stream) =>
   Object.getOwnPropertyDescriptor(stream, "isTTY"),

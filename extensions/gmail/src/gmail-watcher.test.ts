@@ -1,11 +1,11 @@
-import { expectDefined } from "@openclaw/normalization-core";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
-} from "../test-utils/gateway-scheduler-clock.js";
-import { withMockedPlatform } from "../test-utils/vitest-spies.js";
+} from "../../../src/test-utils/gateway-scheduler-clock.js";
+import { withMockedPlatform } from "../../../src/test-utils/vitest-spies.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   commandSuccess,
   gogSchemaSuccess,
@@ -36,30 +36,29 @@ vi.mock("node:child_process", async () => {
 });
 
 // mock-isolation: binary availability belongs to the controlled watcher fixture.
-vi.mock("../skills/loading/config.js", () => ({ hasBinary: mocks.hasBinary }));
+vi.mock("../../../src/skills/loading/config.js", () => ({ hasBinary: mocks.hasBinary }));
 
 // mock-isolation: resolve synthetic executables without inspecting host installations.
-vi.mock("../infra/executable-path.js", () => ({
+vi.mock("../../../src/infra/executable-path.js", () => ({
   resolveExecutable: mocks.resolveExecutable,
   resolveExecutablePath: mocks.resolveExecutable,
 }));
 
 // mock-isolation: command completion is driven by the fixture, not real tools.
-vi.mock("../process/exec.js", () => ({
+vi.mock("../../../src/process/exec.js", () => ({
   runCommandWithTimeout: mocks.runCommandWithTimeout,
   runUtf8CommandWithTimeout: mocks.runUtf8CommandWithTimeout,
 }));
 
 // mock-isolation: terminate only the fixture's fake child processes.
-vi.mock("../process/kill-tree.js", () => ({ killProcessTree: mocks.killProcessTree }));
+vi.mock("../../../src/process/kill-tree.js", () => ({ killProcessTree: mocks.killProcessTree }));
 
-vi.mock("../logging/subsystem.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../logging/subsystem.js")>()),
+vi.mock("../../../src/logging/subsystem.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../src/logging/subsystem.js")>()),
   createSubsystemLogger: () => mocks.log,
 }));
 
-const { startGmailWatcher, stopGmailWatcher } =
-  await import("../../extensions/gmail/src/gmail-watcher.js");
+const { startGmailWatcher, stopGmailWatcher } = await import("./gmail-watcher.js");
 
 let nextMockPid = 1234;
 

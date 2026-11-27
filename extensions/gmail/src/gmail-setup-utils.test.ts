@@ -1,17 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import "../test-utils/prepare-compiled-subprocesses.js";
-import { withTestDir } from "../test-helpers/temp-dir.js";
-import { withEnvAsync } from "../test-utils/env.js";
-import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
-import { withMockedPlatform } from "../test-utils/vitest-spies.js";
+import "../../../src/test-utils/prepare-compiled-subprocesses.js";
+import { withTestDir } from "../../../src/test-helpers/temp-dir.js";
+import { withEnvAsync } from "../../../src/test-utils/env.js";
+import { createCommandResult } from "../../../src/test-utils/npm-spec-install-test-helpers.js";
+import { withMockedPlatform } from "../../../src/test-utils/vitest-spies.js";
 
 const itUnix = process.platform === "win32" ? it.skip : it;
 const { runCommand } = vi.hoisted(() => ({ runCommand: vi.fn() }));
 
 // mock-isolation: setup command results are synthetic and must not invoke real cloud tools.
-vi.mock("../process/exec.js", () => ({ runCommandWithTimeout: runCommand }));
+vi.mock("../../../src/process/exec.js", () => ({ runCommandWithTimeout: runCommand }));
 
 const success = createCommandResult();
 const tailscaleStatus = { ...success, stdout: '{"Self":{"DNSName":"fixture.example."}}' };
@@ -23,13 +23,13 @@ const noisy = {
   stderr: `${progress}\r\n\u001b[31mstderr final detail\u001b[0m\r\n`,
 };
 
-let utils: typeof import("../../extensions/gmail/src/gmail-setup-utils.js");
-let configEval: typeof import("../shared/config-eval.js");
+let utils: typeof import("./gmail-setup-utils.js");
+let configEval: typeof import("../../../src/shared/config-eval.js");
 beforeEach(async () => {
   runCommand.mockReset();
   vi.resetModules();
-  configEval = await import("../shared/config-eval.js");
-  utils = await import("../../extensions/gmail/src/gmail-setup-utils.js");
+  configEval = await import("../../../src/shared/config-eval.js");
+  utils = await import("./gmail-setup-utils.js");
 });
 afterEach(() => {
   vi.restoreAllMocks();

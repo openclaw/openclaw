@@ -644,4 +644,3 @@ Gateway sources cannot supply original links. Receivers use the advertised catal
 pair for every list/read, and the legacy pair only when the catalog pair is absent.
 These selectors narrow publication, not reader authority.
 See [Session Share](/plugins/session-share) for numbered setup and disclosure.
-

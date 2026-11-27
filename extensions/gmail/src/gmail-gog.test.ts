@@ -1,14 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { inspectGog, inspectGogUpgrade, upgradeGog } from "../../extensions/gmail/src/gmail-gog.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { SpawnResult } from "../process/exec.js";
+import type { SpawnResult } from "../../../src/process/exec.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { inspectGog, inspectGogUpgrade, upgradeGog } from "./gmail-gog.js";
 import { gogServeSchema } from "./gmail.test-support.js";
 
 const mocks = vi.hoisted(() => ({ run: vi.fn() }));
 // mock-isolation: supply external command responses without executing host tools.
-vi.mock("../process/exec.js", () => ({ runUtf8CommandWithTimeout: mocks.run }));
+vi.mock("../../../src/process/exec.js", () => ({ runUtf8CommandWithTimeout: mocks.run }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const success = (stdout = ""): SpawnResult => ({

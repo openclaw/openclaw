@@ -7,7 +7,7 @@ import {
   GMAIL_WATCH_HOOK_TOKEN_ENV,
   parseTopicPath,
   resolveGmailHookRuntimeConfig,
-} from "../../extensions/gmail/src/gmail.js";
+} from "./gmail.js";
 import { createGmailConfig } from "./gmail.test-support.js";
 
 const baseConfig = createGmailConfig("openclaw@gmail.com");

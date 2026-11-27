@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getAsyncWorkSignal } from "openclaw/plugin-sdk/concurrency-runtime";
 import {
   CommandProcessCleanupError,
@@ -11,6 +10,7 @@ import {
   type SpawnResult,
 } from "openclaw/plugin-sdk/process-runtime";
 import { resolveBrewExecutable } from "openclaw/plugin-sdk/setup-tools";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveGogServeInvocation } from "./gmail.js";
 
 type GogTokenEnvSupport = "supported" | "unsupported" | "indeterminate";

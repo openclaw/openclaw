@@ -4,7 +4,6 @@
   "private": true,
   "description": "OpenClaw Gmail Pub/Sub watcher plugin",
   "type": "module",
-  "dependencies": { "@openclaw/normalization-core": "workspace:*" },
   "devDependencies": { "@openclaw/plugin-sdk": "workspace:*" },
   "openclaw": { "extensions": ["./index.ts"] }
 }

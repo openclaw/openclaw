@@ -14,13 +14,7 @@ export default definePluginEntry({
       id: "gmail-watch",
       apiVersion: 2,
       reload: {
-        configPrefixes: [
-          "hooks.enabled",
-          "hooks.gmail",
-          "hooks.path",
-          "hooks.token",
-          "gateway.port",
-        ],
+        configPrefixes: ["hooks.enabled", "hooks.gmail", "hooks.path", "hooks.token"],
       },
       start(context) {
         if (

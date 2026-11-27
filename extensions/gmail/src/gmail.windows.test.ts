@@ -1,11 +1,11 @@
 // Gmail Windows tests cover gog watcher command invocation on Windows.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import "../test-utils/prepare-compiled-subprocesses.js";
-import { getWindowsInstallRoots } from "../infra/windows-install-roots.js";
-import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
+import "../../../src/test-utils/prepare-compiled-subprocesses.js";
+import { getWindowsInstallRoots } from "../../../src/infra/windows-install-roots.js";
+import { withMockedWindowsPlatform } from "../../../src/test-utils/vitest-spies.js";
 
-const { resolveGogServeInvocation } = await import("../../extensions/gmail/src/gmail.js");
+const { resolveGogServeInvocation } = await import("./gmail.js");
 
 function expectedTrustedCmdExe(): string {
   return path.win32.join(getWindowsInstallRoots().systemRoot, "System32", "cmd.exe");

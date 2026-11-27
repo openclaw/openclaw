@@ -1,16 +1,18 @@
-import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   resolveGatewayPort,
   DEFAULT_GATEWAY_PORT,
 } from "openclaw/plugin-sdk/gateway-config-runtime";
+import { asPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import {
   buildWindowsCmdExeCommandLine,
   isWindowsBatchCommand,
   resolveTrustedWindowsCmdExe,
 } from "openclaw/plugin-sdk/process-runtime";
+import {
+  normalizeOptionalString,
+  normalizeUniqueStringEntries,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type GmailConfig = NonNullable<NonNullable<OpenClawConfig["hooks"]>["gmail"]>;
 type HooksGmailTailscaleMode = NonNullable<NonNullable<GmailConfig["tailscale"]>["mode"]>;
