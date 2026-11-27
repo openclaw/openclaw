@@ -257,7 +257,7 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
     await image.decode();
     expect(image.naturalWidth).toBe(400);
     expect(fetchMock).toHaveBeenCalledOnce();
-    expect(new URL(fetchMock.mock.calls[0]![0], location.href).searchParams.get("v")).toBe("4");
+    expect(new URL(fetchMock.mock.calls[0]![0], location.href).searchParams.get("v")).toBe("5");
   });
 
   it.each([

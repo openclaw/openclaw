@@ -315,11 +315,13 @@ public enum ChatCodeHighlightCache {
             var lastUse: UInt64
         }
 
-        private var entries: [String: Entry] = [:]
+        private var entries: [Data: Entry] = [:]
         private var access: UInt64 = 0
         private let capacity = 160
 
-        mutating func value(for key: String, create: () -> AttributedString) -> AttributedString {
+        mutating func value(for contentKey: String, create: () -> AttributedString) -> AttributedString {
+            // Swift String equality merges canonical spellings, but the cached text retains the original bytes.
+            let key = Data(contentKey.utf8)
             self.access &+= 1
             if var entry = self.entries[key] {
                 entry.lastUse = self.access

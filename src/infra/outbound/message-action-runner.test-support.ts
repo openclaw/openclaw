@@ -23,10 +23,6 @@ export const workspaceConfig = {
   channels: { workspace: { botToken: "workspace-test", appToken: "workspace-app-test" } },
 } as OpenClawConfig;
 
-export const directChatConfig = {
-  channels: { directchat: { allowFrom: ["*"] } },
-} as OpenClawConfig;
-
 export const directOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   sendText: async () => ({ channel: "test", messageId: "test" }),
@@ -65,28 +61,6 @@ export function registerSlackTextPlugin(
 export function createMessageActionContextFixture() {
   const handleWorkspaceAction = vi.fn(successfulAction);
   const handleForumAction = vi.fn(successfulAction);
-  const localChatBase = createChannelTestPluginBase({
-    id: "localchat",
-    label: "Local Chat",
-    capabilities: { chatTypes: ["direct", "group"], media: true },
-  });
-  const localChatTestPlugin: ChannelPlugin = {
-    ...localChatBase,
-    meta: {
-      ...localChatBase.meta,
-      selectionLabel: "Local Chat (local)",
-      blurb: "Local chat test stub.",
-      aliases: ["local"],
-    },
-    outbound: directOutbound,
-    messaging: {
-      normalizeTarget: (raw) => raw.trim() || undefined,
-      targetResolver: {
-        looksLikeId: (raw) => raw.trim().length > 0,
-        hint: "<handle|chat_id:ID>",
-      },
-    },
-  };
   const resolvedDmTestPlugin: ChannelPlugin = {
     ...createChannelTestPluginBase({
       id: "slackdm",
@@ -119,13 +93,10 @@ export function createMessageActionContextFixture() {
   };
   return {
     handleWorkspaceAction,
-    handleForumAction,
     setup(): void {
       registerPlugins(
         withActions(workspaceTestPlugin, ["read"], handleWorkspaceAction),
-        directChatTestPlugin,
         withActions(forumTestPlugin, ["topic-create", "topic-edit"], handleForumAction),
-        localChatTestPlugin,
         resolvedDmTestPlugin,
       );
       handleWorkspaceAction.mockClear();
@@ -237,21 +208,12 @@ export const workspaceTestPlugin = createConfiguredTestPlugin({
       : null,
 });
 
-export const forumTestPlugin = createConfiguredTestPlugin({
+const forumTestPlugin = createConfiguredTestPlugin({
   id: "forum",
   isConfigured: (cfg) => hasChannelBotToken(cfg.channels?.forum),
   resolveTarget: (normalized) => ({
     to: normalized.replace(/^forum:/i, ""),
     kind: normalized.startsWith("@") ? "user" : "group",
-  }),
-});
-
-export const directChatTestPlugin = createConfiguredTestPlugin({
-  id: "directchat",
-  isConfigured: (cfg) => Boolean(cfg.channels?.directchat),
-  resolveTarget: (normalized) => ({
-    to: normalized,
-    kind: normalized.endsWith("@g.us") ? "group" : "user",
   }),
 });
 

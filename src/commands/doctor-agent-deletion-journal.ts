@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import {
@@ -9,12 +10,69 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { quoteCliArg, quotePowerShellArg } from "../cli/quote-cli-arg.js";
 import { createConfigIO } from "../config/io.js";
 import { isTransientSqliteBackupPath } from "../infra/backup-volatile-filter.js";
+import { readOnlyOpenWouldCreateSqliteSidecars } from "../infra/sqlite-files.js";
+import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
+import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
 import { prepareStateDatabaseInitialization } from "../state/openclaw-state-db-initialization.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
-import { quarantineAgentDeletionJournal } from "./doctor-agent-deletion-journal-quarantine.js";
+import {
+  quarantineAgentDeletionJournal,
+  readAgentDeletionJournalRecoverySource,
+} from "./doctor-agent-deletion-journal-quarantine.js";
 import { restoreDoctorMissingJournalStores } from "./doctor-agent-deletion-journal-restore.js";
 import type { DoctorDatabasePreflight } from "./doctor-database-preflight.js";
+import type { DoctorMaintenancePending } from "./doctor-maintenance-pending.js";
+
+/**
+ * Read-only: whether {@link repairDoctorAgentDeletionJournal} would write under `--fix`.
+ * It follows the repair's gates on the prepared discovery (a missing journal that is not a
+ * fresh install, stores it holds back for verification) and reads the journal rows the
+ * quarantine inspects, without copying the state database. It cannot read PostgreSQL rows
+ * here, nor a store no connection holds open (that read would create its WAL sidecars).
+ */
+export function checkDoctorAgentDeletionJournalPending(params: {
+  preflight: DoctorDatabasePreflight;
+  env: NodeJS.ProcessEnv;
+}): DoctorMaintenancePending {
+  const discovery = params.preflight.agentDatabaseMigrationDiscovery?.discovery;
+  if (!discovery) {
+    return "none";
+  }
+  const statePath = resolveOpenClawStateSqlitePath(params.env);
+  const missing =
+    discovery.deletionJournal.status === "unavailable" &&
+    discovery.deletionJournal.cause === "missing";
+  if (missing) {
+    // The repair only warns when the inventory or the ownership config is incomplete.
+    if (
+      discovery.failures.length > 0 ||
+      (discovery.unverifiedTargets.length === 0 &&
+        prepareStateDatabaseInitialization(statePath, params.env).kind === "fresh") ||
+      params.preflight.agentDatabaseRecoveryConfigValid !== true
+    ) {
+      return "none";
+    }
+    return "work";
+  }
+  if (discovery.unverifiedTargets.length > 0) {
+    return "work";
+  }
+  if (isStatePostgres() || isArtifactPreservingStateRead()) {
+    return "undecidable";
+  }
+  if (!existsSync(statePath)) {
+    return "none";
+  }
+  if (readOnlyOpenWouldCreateSqliteSidecars(statePath)) {
+    return "undecidable";
+  }
+  const source = withExistingOpenClawStateDatabaseReadOnly(readAgentDeletionJournalRecoverySource, {
+    env: params.env,
+  });
+  return source && (source.missing || source.invalid.length > 0) ? "work" : "none";
+}
 
 /** Doctor alone reconstructs lost deletion history and records the stores it cannot verify. */
 export async function repairDoctorAgentDeletionJournal(params: {

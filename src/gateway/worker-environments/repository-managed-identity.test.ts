@@ -31,11 +31,10 @@ import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { prepareRepositoryGitHubIdentity } from "./repository-github-identity.js";
 import {
   createManagedRepositoryProfile,
+  createRepositoryPolicyReconciler,
   createRepositoryPolicySource,
 } from "./repository-policy-node.test-support.js";
 import * as support from "./service.test-support.js";
-import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
-import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 
 support.setupWorkerEnvironmentServiceSuite((_config, root) => {
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
@@ -284,37 +283,7 @@ for (const kind of ["pat", "oauth", "native"] as const) {
           baseManifestRef: prepared.result.manifestRef,
         };
       },
-      reconcileWorkspace: async (input) => {
-        if (input.source.kind !== "repository") {
-          throw new Error("Expected repository");
-        }
-        const manifest = await captureWorkspaceManifest({
-          root: input.remoteWorkspaceDir,
-          baseCommit,
-        });
-        const checkpoint = await input.source.prepareCheckpoint({
-          stagingRoot: input.remoteWorkspaceDir,
-          baseManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
-          currentManifestRaw: serializeWorkerWorkspaceManifest(manifest.manifest),
-          baseManifestRef: base.manifestRef,
-          currentManifestRef: manifest.manifestRef,
-        });
-        return {
-          manifestRef: manifest.manifestRef,
-          changed: false,
-          verifyStable: async () => {
-            expect(
-              (await captureWorkspaceManifest({ root: input.remoteWorkspaceDir, baseCommit }))
-                .manifestRef,
-            ).toBe(manifest.manifestRef);
-          },
-          verifyLocalStable: () => checkpoint.verify(),
-          publishStagedResult: async () => {
-            await checkpoint.publish();
-          },
-          discardPreparedStagedResult: () => checkpoint.discard(),
-        };
-      },
+      reconcileWorkspace: createRepositoryPolicyReconciler({ base, baseCommit }),
     });
     let taskCalls = 0;
     const checkout = async () => {

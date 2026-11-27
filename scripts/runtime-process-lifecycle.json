@@ -1,4 +1,18 @@
 {
+  "cronReadOnly": {
+    "retainedReads": {
+      "owner": "src/cron/store/read-only.ts",
+      "start": "lazy",
+      "retire": "Retire after two idle minutes, with up to five minutes on adaptive reuse. Closing the canonical state path joins its retained pool.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    },
+    "dedicatedInspection": {
+      "owner": "src/cron/store/read-only.ts",
+      "start": "lazy",
+      "retire": "Join the worker before releasing snapshot pins or finishing maintenance. Retain custody for retry if retirement fails.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    }
+  },
   "directoryWatchHost": {
     "subscriptions": {
       "owner": "src/infra/directory-watch-host.ts",
@@ -20,6 +34,80 @@
       "owner": "src/plugins/plugin-generation-preparation-pool.ts",
       "start": "lazy",
       "retire": "Close the pool when the last capture client releases its artifacts and roots. Runtime shutdown drains the remaining clients.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    }
+  },
+  "pluginModelCatalogRead": {
+    "pooledReads": {
+      "owner": "src/agents/plugin-model-catalog-read.ts",
+      "start": "lazy",
+      "retire": "Retire after one idle minute, extended to five minutes after adaptive reuse. Memory pressure can retire idle workers sooner. Close the pool when its source generation retires or the process shuts down.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    },
+    "leanHosted": {
+      "owner": "src/infra/shared-worker-host.ts",
+      "start": "lazy",
+      "retire": "Follow the read pool's retirement policy and await endpoint cleanup. The last endpoint joins the host. Failed stops or missed acknowledgements force host retirement.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    },
+    "startupPublication": {
+      "owner": "src/gateway/server-startup-model-runtime.ts",
+      "start": "eager",
+      "retire": "Read existing plugin catalogs during configured startup publication when needed. Use the same pooled or lean-hosted reader and its retirement policy.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    }
+  },
+  "preparedModelCatalog": {
+    "gatewayShared": {
+      "owner": "src/agents/prepared-model-catalog-worker.ts",
+      "start": "lazy",
+      "retire": "Retain the singleton for the Gateway plugin generation with no idle timeout. Drain retiring borrowers independently. Close the worker on generation retirement, worker failure, or shutdown.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    },
+    "gatewayConfiguredRefresh": {
+      "owner": "src/agents/prepared-model-runtime.refresh-scope.ts",
+      "start": "eager",
+      "retire": "Reuse the Gateway singleton for due provider discovery after configured owners publish. Headless startup defers its first discovery until demand. Follow the shared pool's retirement policy.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    },
+    "ownerScoped": {
+      "owner": "src/agents/prepared-model-catalog-worker.ts",
+      "start": "lazy",
+      "retire": "Retain the worker without an idle timeout. On owner retirement or shutdown, drain pending captures, join the worker, and release its watch channel and captured source.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    }
+  },
+  "sessionTranscript": {
+    "pooledRequests": {
+      "owner": "src/config/sessions/session-transcript-worker-resources.ts",
+      "start": "lazy",
+      "retire": "Rotate history and search lanes after five idle minutes and other lanes after 90 seconds. Pool-level idle timeouts, memory pressure, and shutdown can retire idle slots earlier.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    },
+    "startupPrewarm": {
+      "owner": "src/gateway/server-startup-handler-prewarm.ts",
+      "start": "eager",
+      "retire": "Reuse the history lane for existing stores after Gateway readiness with Control UI enabled and sufficient memory. The lane rotates after five idle minutes, or earlier under pressure or shutdown.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    },
+    "operatorConnectPrewarm": {
+      "owner": "src/gateway/server/ws-connection/connect-session.ts",
+      "start": "lazy",
+      "retire": "The operator connection reuses the history lane for existing stores. Repeated prewarms share work by database and lane without refreshing its idle deadline.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    },
+    "leanHosted": {
+      "owner": "src/infra/shared-worker-host.ts",
+      "start": "lazy",
+      "retire": "Follow the pool's retirement policy and await endpoint cleanup. The last endpoint joins the host. Failed stops or missed acknowledgements force host retirement.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    }
+  },
+  "sharedWorkerHost": {
+    "hostedEndpoints": {
+      "owner": "src/infra/shared-worker-host.ts",
+      "start": "lazy",
+      "retire": "Start with the first eligible endpoint and join the host when the last endpoint stops. A failed or overdue endpoint stop retires the host.",
       "memory": { "scope": "worker-heap", "expectedMiB": null }
     }
   },
@@ -62,6 +150,76 @@
       "owner": "src/infra/sqlite-snapshot-staging-owner.ts",
       "start": "lazy",
       "retire": "Rotate the worker after the last preparation and retained directory release. Runtime shutdown drains admitted preparations and joins the pool.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    }
+  },
+  "sqliteStore": {
+    "standaloneCarriers": {
+      "owner": "src/infra/sqlite-worker-broker-lifecycle.ts",
+      "start": "lazy",
+      "retire": "Retire the worker after the last backend closes and pending opens settle. External stores use isolated slots. Join worker exit when native close cannot prove release.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    },
+    "sharedStateStores": {
+      "owner": "src/state/openclaw-state-worker-owner.ts",
+      "start": "lazy",
+      "retire": "Retire ordinary shared-state owners after 30 idle minutes or under memory pressure. Maintenance and cleanup clients close with their scopes.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    },
+    "gatewayRestartSentinel": {
+      "owner": "src/gateway/server-startup-sidecars.ts",
+      "start": "eager",
+      "retire": "Reuse the shared-state carrier and its retirement policy for the post-ready restart-sentinel check.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    },
+    "gatewayAgentPreparation": {
+      "owner": "src/gateway/server-agent-database-startup.ts",
+      "start": "eager",
+      "retire": "Retain the agent database owner through deferred startup preparation and publication. Its ordinary idle and shutdown policies govern retirement.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    },
+    "cliAgentStores": {
+      "owner": "src/state/openclaw-agent-execution-owner.ts",
+      "start": "lazy",
+      "retire": "Retire idle agent database owners after 30 seconds in a one-shot command. CLI cleanup joins accepted operations and closes the owner.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    },
+    "retainedGeneration": {
+      "owner": "src/infra/sqlite-worker-broker.ts",
+      "start": "lazy",
+      "retire": "Bind slots to the captured source generation. On generation retirement, settle accepted operations and close its backends before joining the empty slots.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    },
+    "leanHosted": {
+      "owner": "src/infra/shared-worker-host.ts",
+      "start": "lazy",
+      "retire": "Stop the broker endpoint after its last backend closes and pending opens settle. The final endpoint joins the physical host. Failed stops retire the host.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    }
+  },
+  "stateRead": {
+    "retainedReads": {
+      "owner": "src/state/openclaw-state-read-worker.ts",
+      "start": "lazy",
+      "retire": "Use base idle timeouts of 30 minutes for the primary worker and 30 seconds for surplus workers. Source shutdown seals admission, drains accepted reads, and joins the pools.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    },
+    "awaitedInspection": {
+      "owner": "src/state/openclaw-state-read-worker.ts",
+      "start": "lazy",
+      "retire": "Retire a standalone reader on task close after its read. Admission and maintenance can reuse the worker. Read or native cleanup failures force retirement.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    },
+    "postgresSnapshotExporter": {
+      "owner": "src/state/openclaw-state-postgres-snapshot.ts",
+      "start": "lazy",
+      "retire": "Hold the snapshot until its consumers release it, then join the exporter task, retire the worker, and close the dedicated pool.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    },
+    "leanHosted": {
+      "owner": "src/infra/shared-worker-host.ts",
+      "start": "lazy",
+      "retire": "Follow the pool's retirement policy and await endpoint cleanup. The last endpoint joins the host. Failed stops or missed acknowledgements force host retirement.",
       "memory": { "scope": "worker-heap", "expectedMiB": null }
     }
   },

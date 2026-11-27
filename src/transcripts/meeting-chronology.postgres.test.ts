@@ -69,6 +69,7 @@ it.skipIf(!connection)("paginates PostgreSQL chronology with exact summaries", (
         ],
         retainedInstant: 1704067200000,
         speakers: ["Sam", "Sam (2)"],
+        liveSequence: 3,
       });
     } finally {
       if (child.exitCode === null && child.signalCode === null) {

@@ -42,7 +42,12 @@ function setup(
   return { ...state, control, changed, targetSelected, draw, find };
 }
 // Keep cold picker compilation outside the interaction readiness checks.
-beforeAll(() => import("../chat/components/chat-model-picker-panel.tsx"));
+beforeAll(() =>
+  Promise.all([
+    import("../chat/components/chat-model-picker-panel.tsx"),
+    import("../chat/components/chat-effort-picker-panel.tsx"),
+  ]),
+);
 afterEach(() => {
   managed.reset();
   vi.restoreAllMocks();
@@ -88,6 +93,8 @@ it("reuses runtime resolution until model inputs change, including mutable defau
 });
 
 it("does not borrow a provider for an ambiguous draft target", async () => {
+  // The model view test covers the first open of the lazy panel.
+  await import("../chat/components/chat-model-picker-panel.tsx");
   const { control, context, changed } = setup([
     testModel("openai", "model", {
       reasoning: true,

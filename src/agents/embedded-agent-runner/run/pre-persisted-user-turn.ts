@@ -564,12 +564,7 @@ const compactedTurnReplayKeyPrefix = (turnKey: string) => `${turnKey}:replay:`;
  */
 export async function persistCompactedCurrentUserTurnReplay(params: {
   activeSession: { agent: { state: { messages: AgentMessage[] } } };
-  sessionManager: Pick<
-    SessionManager,
-    "appendMessageAsync" | "buildSessionContext" | "getBranch"
-  > & {
-    setNextUserMessagePersistence?: (mode: "normal" | "suppress") => void;
-  };
+  sessionManager: Pick<SessionManager, "appendMessageAsync" | "buildSessionContext" | "getBranch">;
   currentUserTurnMessage: PersistedUserTurnMessage | undefined;
 }): Promise<void> {
   const { activeSession, sessionManager, currentUserTurnMessage } = params;
@@ -591,9 +586,7 @@ export async function persistCompactedCurrentUserTurnReplay(params: {
     idempotencyKey: replayKey,
     display: false,
   };
-  sessionManager.setNextUserMessagePersistence?.("normal");
   await sessionManager.appendMessageAsync(replayed);
-  sessionManager.setNextUserMessagePersistence?.("suppress");
   activeSession.agent.state.messages = sanitizeCompactionReplayMessages(
     sessionManager.buildSessionContext().messages,
   );

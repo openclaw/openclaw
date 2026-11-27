@@ -112,7 +112,7 @@ async function swapStagedPackageDirectory(
   let publicationUncertain = false;
   let publication: string | null;
   let displacedCandidateRoot: string | undefined;
-  const baseline = createPackageIntegrityReader(params.timeoutMs);
+  const baseline = createPackageIntegrityReader(params.timeoutMs, { warnings });
   const launchers: PackageLauncherBackup = { entries: [] };
   const shims = launchers.entries;
   const rollback: Array<(assertCurrent: () => void) => Promise<void>> = [];

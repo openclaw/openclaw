@@ -79,7 +79,10 @@ import {
   type WorkflowStep,
   writeExecutable,
 } from "./ci-workflow.test-support.js";
-import { runGeneratedPublisherScenario } from "./generated-publisher.test-support.js";
+import {
+  runGeneratedPublisherReconcileThenPublish,
+  runGeneratedPublisherScenario,
+} from "./generated-publisher.test-support.js";
 import {
   gitPathShimShellPrelude,
   resolveGitOutsideFixtures,
@@ -102,6 +105,7 @@ const CONTROL_UI_LOCALE_REFRESH_WORKFLOW = ".github/workflows/control-ui-locale-
 const NATIVE_APP_LOCALE_REFRESH_WORKFLOW = ".github/workflows/native-app-locale-refresh.yml";
 const CREATE_GENERATED_PR_TOKENS_ACTION = ".github/actions/create-generated-pr-tokens/action.yml";
 const PUBLISH_GENERATED_PR_ACTION = ".github/actions/publish-generated-pr/action.yml";
+const PUBLISH_GENERATED_PR_POLICY = ".github/actions/publish-generated-pr/policy.py";
 const PINNED_GIT_OWNER = {
   name: "Prepare Git owner",
   uses: "openclaw/openclaw/.github/actions/git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef",
@@ -1193,6 +1197,120 @@ AFTER_CD
     }
   });
 
+  it.skipIf(process.platform === "win32")(
+    "disarms a stale generated PR before locale matrix work",
+    () => {
+      const result = runGeneratedPublisherScenario(null, {
+        autoMerge: true,
+        existingAutoMergeMethod: "SQUASH",
+        existingPr: true,
+        mode: "reconcile-stale",
+        updateSource: true,
+      });
+
+      expect(result.branchHead).toBe(result.initialBranch);
+      expect(result.mergeCalls).toContain("--disable-auto");
+      expect(result.summary).toContain("Preserved stale generated pull request");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "leaves stale PR auto-merge unchanged when current main only changed unrelated paths",
+    () => {
+      const result = runGeneratedPublisherScenario(null, {
+        autoMerge: true,
+        existingAutoMergeMethod: "SQUASH",
+        existingPr: true,
+        invalidationPaths: "unrelated",
+        mode: "reconcile-stale",
+        updateSource: true,
+      });
+
+      expect(result.branchHead).toBe(result.initialBranch);
+      expect(result.mergeCalls).toBe("");
+      expect(result.summary).toBe("");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "rearms exact-head auto-merge only after fresh generated output is published",
+    () => {
+      const { publish, reconcile } = runGeneratedPublisherReconcileThenPublish();
+
+      expect(reconcile.mergeCalls).toContain("--disable-auto");
+      expect(publish.generatedA).toBe("desired-a");
+      expect(publish.mergeCalls).toContain("--disable-auto");
+      expect(publish.mergeCalls).toContain("--auto --squash --match-head-commit");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")("keeps publisher preflight mutation-free", () => {
+    const result = runGeneratedPublisherScenario(null, {
+      autoMerge: true,
+      existingAutoMergeMethod: "SQUASH",
+      existingPr: true,
+      mode: "preflight",
+      repository: "openclaw/clawgrit-reports",
+    });
+
+    expect(result.branchHead).toBe(result.initialBranch);
+    expect(result.mergeCalls).toBe("");
+    expect(result.summary).toBe("");
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "fails closed when a stale generated branch moves during early disarm",
+    () => {
+      const beforeDisarm = runGeneratedPublisherScenario(null, {
+        autoMerge: true,
+        existingAutoMergeMethod: "SQUASH",
+        existingPr: true,
+        expectFailure: true,
+        mode: "reconcile-stale",
+        reconcileHeadRace: true,
+        updateSource: true,
+      });
+      const duringDisarm = runGeneratedPublisherScenario(null, {
+        autoMerge: true,
+        disarmRace: true,
+        existingAutoMergeMethod: "SQUASH",
+        existingPr: true,
+        expectFailure: true,
+        mode: "reconcile-stale",
+        updateSource: true,
+      });
+
+      expect(beforeDisarm.mergeCalls).toBe("");
+      expect(beforeDisarm.summary).toBe("");
+      expect(duringDisarm.mergeCalls).toContain("--disable-auto");
+      expect(duringDisarm.summary).not.toContain("Preserved stale");
+    },
+  );
+
+  it("keeps generated publisher action and policy inventories paired", () => {
+    const workflowFiles = globSync(".github/workflows/*.{yml,yaml}");
+    for (const workflowFile of workflowFiles) {
+      const workflow = parse(readFileSync(workflowFile, "utf8"));
+      const triggerPaths = workflow.on?.push?.paths ?? [];
+      expect(triggerPaths.includes(PUBLISH_GENERATED_PR_POLICY), workflowFile).toBe(
+        triggerPaths.includes(PUBLISH_GENERATED_PR_ACTION),
+      );
+      for (const job of Object.values(workflow.jobs ?? {}) as Array<{
+        steps?: Array<{ uses?: string; with?: Record<string, string> }>;
+      }>) {
+        for (const step of job.steps ?? []) {
+          if (step.uses !== "./.github/actions/publish-generated-pr") {
+            continue;
+          }
+          const invalidationPaths = step.with?.["invalidation-paths"]?.trim().split("\n") ?? [];
+          if (invalidationPaths.includes(PUBLISH_GENERATED_PR_ACTION)) {
+            expect(invalidationPaths, workflowFile).toContain(PUBLISH_GENERATED_PR_POLICY);
+          }
+        }
+      }
+    }
+  });
+
   type PublicationCase = {
     name: string;
     change?: "a" | "b";
@@ -1801,14 +1919,12 @@ AFTER_CD
     expect(evaluateWorkflowExpression(job["runs-on"], manualDispatch)).toBe("ubuntu-24.04");
     expect(evaluateWorkflowExpression(parallelism!, manualDispatch)).toBe(1);
     const prepareRun = expectDefined(prepare.run, "Docker smoke package preparation");
-    expect(prepareRun).toContain("pnpm build:ci-artifacts");
-    const declarations =
-      "OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0 node --import ./scripts/tsx.mjs scripts/write-unified-entry-dts.ts";
-    expect(prepareRun).toContain(declarations);
-    expect(prepareRun.indexOf("pnpm build:ci-artifacts")).toBeLessThan(
-      prepareRun.indexOf(declarations),
-    );
-    expect(prepareRun.indexOf(declarations)).toBeLessThan(
+    const build = "OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0 pnpm build";
+    expect(prepareRun).toContain(build);
+    expect(prepareRun).not.toContain("build:ci-artifacts");
+    expect(prepareRun).not.toContain("scripts/write-unified-entry-dts.ts");
+    expect(prepareRun.indexOf("pnpm clean:dist")).toBeLessThan(prepareRun.indexOf(build));
+    expect(prepareRun.indexOf(build)).toBeLessThan(
       prepareRun.indexOf("node scripts/package-openclaw-for-docker.mjs --skip-build"),
     );
     expect(prepareRun).toContain("node scripts/package-openclaw-for-docker.mjs --skip-build");
@@ -3669,11 +3785,15 @@ server.listen(0, "127.0.0.1", () => {
   it("rebuilds only new hosted Linux pnpm store generations without losing bootstrap assets", () => {
     const warmer = readWorkflow(".github/workflows/vitest-cache-warm.yml");
     const steps = warmer.jobs.dependencies.steps as WorkflowStep[];
-    const fresh = requiredWorkflowStep(steps, "Populate fresh hosted Linux dependency store");
+    const setup = requiredWorkflowStep(steps, "Setup Node environment");
+    expect(setup.with?.["install-deps"]).toBe("false");
+    const fresh = requiredWorkflowStep(steps, "Prepare fresh hosted Linux dependency store");
+    const install = requiredWorkflowStep(steps, "Install publisher dependencies");
     const outputs = {
       "cache-mode": "read-write",
       "pnpm-store-cache-key": "new-dependency-generation",
       "pnpm-store-cache-hit": "false",
+      "dependency-cache-hit": "false",
     };
     const context = {
       eventName: "schedule" as const,
@@ -3705,7 +3825,26 @@ server.listen(0, "127.0.0.1", () => {
         }),
       ).toBe(false);
     }
-    expect(steps.indexOf(fresh)).toBeLessThan(
+    for (const [platform, hit, dependencyCache] of [
+      ["linux", "true", "true"],
+      ["linux", "false", "true"],
+      ["linux-hosted", "", "false"],
+      ["macos", "", "false"],
+    ] as const) {
+      const installContext = {
+        ...context,
+        matrix: { platform },
+        steps: { "setup-node-env": { outputs: { ...outputs, "dependency-cache-hit": hit } } },
+      };
+      expect(evaluateWorkflowExpression(install.env?.DEPENDENCY_CACHE, installContext)).toBe(
+        dependencyCache,
+      );
+      expect(evaluateWorkflowExpression(install.env?.DEPENDENCY_CACHE_HIT, installContext)).toBe(
+        hit,
+      );
+    }
+    expect(steps.indexOf(fresh)).toBeLessThan(steps.indexOf(install));
+    expect(steps.indexOf(install)).toBeLessThan(
       steps.indexOf(requiredWorkflowStep(steps, "Save exact dependency cache")),
     );
 
@@ -3730,7 +3869,7 @@ server.listen(0, "127.0.0.1", () => {
     writeFileSync(path.join(store, "toolchain", "pnpm.tgz"), "authenticated bootstrap bytes");
     writeFileSync(
       path.join(root, ".github/actions/setup-node-env/install-dependencies.sh"),
-      'test "$DEPENDENCY_CACHE_HIT" = false && test "$FROZEN_LOCKFILE" = true && touch installed\n',
+      'test "$DEPENDENCY_CACHE_HIT" = false && test "$FROZEN_LOCKFILE" = true && echo install >> installed\n',
     );
     const result = runWorkflowShellScript(expectDefined(fresh.run, "fresh store script"), {
       cwd: root,
@@ -3743,7 +3882,28 @@ server.listen(0, "127.0.0.1", () => {
       },
     });
     expect(result.status, result.stderr).toBe(0);
-    expect(existsSync(path.join(root, "installed"))).toBe(true);
+    expect(existsSync(path.join(root, "installed"))).toBe(false);
+    const installation = runWorkflowShellScript(expectDefined(install.run, "publisher install"), {
+      cwd: root,
+      env: {
+        ...process.env,
+        ...Object.fromEntries(
+          Object.entries(install.env ?? {}).map(([key, value]) => [
+            key,
+            typeof value === "string" && value.startsWith("${{")
+              ? String(
+                  evaluateWorkflowExpression(value, {
+                    ...context,
+                    matrix: { platform: "linux-hosted" },
+                  }),
+                )
+              : String(value),
+          ]),
+        ),
+      },
+    });
+    expect(installation.status, installation.stderr).toBe(0);
+    expect(readFileSync(path.join(root, "installed"), "utf8")).toBe("install\n");
     expect(readFileSync(path.join(store, "toolchain", "pnpm.tgz"), "utf8")).toBe(
       "authenticated bootstrap bytes",
     );
@@ -6639,6 +6799,30 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     ).toBe(boat ? "boat-xlarge" : "blacksmith-8vcpu-ubuntu-2404");
   });
 
+  it("prepares Android CodeQL on runners without an installed SDK or Gradle outputs", () => {
+    const { steps } = readWorkflow(".github/workflows/codeql-android-critical-security.yml").jobs
+      .android;
+    const node = steps.find(
+      (step: WorkflowStep) => step.uses === "./.github/actions/setup-node-env",
+    );
+    const toolchain = steps.find(
+      (step: WorkflowStep) => step.uses === "./.github/actions/setup-android-toolchain",
+    );
+    const init = steps.find((step: WorkflowStep) =>
+      step.uses?.startsWith("github/codeql-action/init@"),
+    );
+    const build = steps.find((step: WorkflowStep) => step.run?.includes(":app:assemblePlayDebug"));
+
+    expect(toolchain).toBeDefined();
+    expect(steps.indexOf(node)).toBeLessThan(steps.indexOf(toolchain));
+    expect(steps.indexOf(toolchain)).toBeLessThan(steps.indexOf(init));
+    expect(steps.indexOf(init)).toBeLessThan(steps.indexOf(build));
+    expect(node.with["install-deps"]).toBe("false");
+    expect(toolchain.with["install-native-deps"]).toBe("true");
+    expect(toolchain.with["gradle-cache-mode"]).toBe("off");
+    expect(build.env.JAVA_HOME).toBe(`\${{ steps.${toolchain.id}.outputs.gradle-java-home }}`);
+  });
+
   it("keeps network CodeQL off unrelated source-only refactors", () => {
     const workflow = readFileSync(".github/workflows/codeql-critical-quality.yml", "utf8");
     const networkConfig = readFileSync(
@@ -6812,12 +6996,25 @@ it("pins generated publisher and maturity owners before credentials and selected
       const jobSteps = (job as { steps?: WorkflowStep[] }).steps ?? [];
       return jobSteps.flatMap((step, index) =>
         step.uses === "./.github/actions/publish-generated-pr"
-          ? [{ index, length: jobSteps.length }]
+          ? [{ index, length: jobSteps.length, mode: step.with?.mode }]
           : [],
       );
     });
-    expect(publishers, file).toHaveLength(1);
-    expect(publishers[0]?.index, file).toBe(publishers[0]!.length - 1);
+    const finalPublishers = publishers.filter(
+      ({ mode }) => mode === undefined || mode === "publish",
+    );
+    expect(finalPublishers, file).toHaveLength(1);
+    expect(finalPublishers[0]?.index, file).toBe(finalPublishers[0]!.length - 1);
+    if (
+      file === CONTROL_UI_LOCALE_REFRESH_WORKFLOW ||
+      file === NATIVE_APP_LOCALE_REFRESH_WORKFLOW
+    ) {
+      const preflight = workflow.jobs["publisher-preflight"];
+      const early = requiredWorkflowStep(preflight.steps, "Reconcile stale generated locale PR");
+      expect(early.with?.mode).toContain("reconcile-stale");
+      expect(early.with?.["invalidation-paths"]).toContain(PUBLISH_GENERATED_PR_POLICY);
+      expect(workflow.jobs.refresh.needs).toContain("publisher-preflight");
+    }
   }
 });
 

@@ -161,10 +161,6 @@ export function createSessionEntry(overrides: SessionEntryFixture = {}): Interna
   } as InternalSessionEntry);
 }
 
-export function createAssistantToolCallMessage(content: unknown[]) {
-  return { role: "assistant", content, stopReason: "toolUse" };
-}
-
 export type SubagentRunParamsOverrides = Pick<RegisterSubagentRunParams, "runId"> &
   Partial<RegisterSubagentRunParams>;
 
@@ -214,7 +210,7 @@ export function createSubagentRunRecord(overrides: SubagentRunRecordOverrides): 
 
 type TaskCompletionEvent = Extract<AgentInternalEvent, { type: "task_completion" }>;
 
-export function createTaskCompletionEvent(
+function createTaskCompletionEvent(
   overrides: Partial<TaskCompletionEvent> = {},
 ): TaskCompletionEvent {
   return {

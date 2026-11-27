@@ -84,14 +84,15 @@ describe.skipIf(!connection)("protected PostgreSQL upgrade carrier", () => {
       const config = {
         database: { engine: "postgres" as const, postgres: { connection: restricted.toString() } },
       };
-      const before = (await client.query("SELECT nspname FROM pg_namespace ORDER BY nspname")).rows;
       const database = admin.database.replaceAll('"', '""');
       await expect(preflightPostgresUpgrade([anchorPath], config)).rejects.toThrow(
         `GRANT CREATE ON DATABASE "${database}" TO "${role}";`,
       );
-      expect(
-        (await client.query("SELECT nspname FROM pg_namespace ORDER BY nspname")).rows,
-      ).toEqual(before);
+      const ownedSchemas = await client.query(
+        "SELECT nspname FROM pg_namespace WHERE nspowner = $1::regrole",
+        [role],
+      );
+      expect(ownedSchemas.rows).toEqual([{ nspname: namespace }]);
     } finally {
       await client.query(`DROP SCHEMA IF EXISTS "${namespace}" CASCADE; DROP ROLE "${role}"`);
     }

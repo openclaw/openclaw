@@ -21,7 +21,10 @@ import {
 } from "../state/openclaw-state-db.js";
 import { ensureMeetingTranscriptsSchema } from "./sqlite-schema.js";
 import { queryTranscriptReadEntries, type TranscriptReadOptions } from "./store-read.js";
-import { readTranscriptSessionEntries } from "./store-sqlite-read.js";
+import {
+  readTranscriptSessionEntries,
+  readTranscriptSummarySnapshot,
+} from "./store-sqlite-read.js";
 import {
   writeMeetingTranscriptSessionInDatabase,
   writeMeetingTranscriptSummaryInDatabase,
@@ -36,6 +39,7 @@ export type ChronologyProof = {
   pages: { selectors: string[]; hasMore: boolean }[];
   retainedInstant: unknown;
   speakers: string[];
+  liveSequence: number | undefined;
 };
 
 async function runChronologyHost(input: { path: string; connection: string }): Promise<void> {
@@ -147,6 +151,7 @@ if (parentPort) {
       sessionId: "speaker-identities",
       startedAt: "2024-01-03T00:00:00.000Z",
     };
+    const nextLiveSequence = 3;
     runOpenClawStateWriteTransaction(({ db }) => {
       writeMeetingTranscriptSessionInDatabase(db, {
         session: speakerSession,
@@ -168,6 +173,11 @@ if (parentPort) {
         { id: "speaker-two", label: "Sam" },
         { id: "speaker-one", label: "Samuel" },
       ]) {
+        // An update covering the first two turns only needs a snapshot after the third append.
+        assert.equal(
+          readTranscriptSummarySnapshot(db, speakerSession, 2, nextLiveSequence),
+          undefined,
+        );
         appendMeetingTranscriptUtterance({
           database: db,
           metadataJson: null,
@@ -191,6 +201,12 @@ if (parentPort) {
       queryTranscriptReadEntries(postgresDb, { session: speakerSession, limit: 1 }).entries[0]
         ?.participants ?? [];
     assert.deepEqual(speakers, ["Sam", "Sam (2)"]);
+    const snapshot = readTranscriptSummarySnapshot(postgresDb, speakerSession, 2, nextLiveSequence);
+    assert.deepEqual(
+      snapshot?.turns.map((turn) => turn.speakerLabel),
+      ["Sam (2)", "Sam"],
+    );
+    assert.equal(snapshot?.hasSpeakerAliases, true);
     port.postMessage({
       threadId,
       list: page({ limit: 20 }).selectors,
@@ -206,6 +222,7 @@ if (parentPort) {
         .prepare("SELECT started_at_ms FROM meeting_transcript_sessions WHERE selector = ?")
         .get("tie-a-iso")?.started_at_ms,
       speakers,
+      liveSequence: snapshot?.nextSequence,
     } satisfies ChronologyProof);
   } catch (error) {
     port.postMessage({ error: error instanceof Error ? error.stack : String(error) });

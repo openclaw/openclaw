@@ -3,6 +3,7 @@ import path from "node:path";
 import type { UpdateRunParams } from "../../packages/gateway-protocol/src/index.js";
 import { resolveNodeService } from "../daemon/node-service.js";
 import { summarizeGatewayServiceLayout } from "../daemon/service-layout.js";
+import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { readGatewayLockProcessCmdline } from "../infra/gateway-lock-process.js";
@@ -12,6 +13,12 @@ import { readPackageVersion } from "../infra/package-json.js";
 import { resolveUpdateInstallKind } from "../infra/update-check.js";
 import { readBuiltGatewayBuildId } from "../infra/update-git-runtime.js";
 import { detectGlobalInstallManagerForRoot } from "../infra/update-global.js";
+import { resolveUpdateInstallRoot } from "../infra/update-install-root.js";
+import {
+  prepareManagedHandoffLeaseStore,
+  resolveManagedUpdateLeaseDatabasePath,
+} from "../infra/update-managed-service-handoff-lease.js";
+import { resolveLegacyGatewayManagedUpdateLeaseDatabasePath } from "../infra/update-managed-service-handoff-legacy-store.js";
 import { ignoreNonCleanupCommandError } from "../process/exec-result.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolvePrefix } from "./store.js";
@@ -122,6 +129,41 @@ export async function checkUpdateInstallationSlot(
   root: string,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<void> {
+  const currentDatabasePath = resolveManagedUpdateLeaseDatabasePath();
+  const key = resolveUpdateInstallRoot(root);
+  for (const databasePath of [
+    currentDatabasePath,
+    resolveLegacyGatewayManagedUpdateLeaseDatabasePath(currentDatabasePath),
+  ]) {
+    if (!databasePath) {
+      continue;
+    }
+    const store = await prepareManagedHandoffLeaseStore({
+      databasePath,
+      serviceManagerEnv: resolveServiceManagerEnv(env),
+    });
+    let observed;
+    try {
+      observed = store.read(key);
+    } catch (error) {
+      if (hasErrnoCode(error, "ENOENT")) {
+        continue;
+      }
+      throw error;
+    }
+    if (observed.kind === "absent") {
+      continue;
+    }
+    const lease = observed.kind === "current" ? observed.lease : store.readLegacyParent(key);
+    if (
+      lease &&
+      (store.processState(lease.helper) === "live" || store.processState(lease.executor) === "live")
+    ) {
+      throw new Error(
+        "An in-place updater is still using this installation. Let that update finish, then retry.",
+      );
+    }
+  }
   const target = await fs
     .realpath(path.join(resolvePrefix(env), "openclaw"))
     .catch((error: unknown) => {

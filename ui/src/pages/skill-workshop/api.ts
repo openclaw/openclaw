@@ -22,7 +22,7 @@ export async function loadWorkshopSnapshot(client: GatewayBrowserClient, agentId
 
 /** `name` is the skill the mutation affects; a draft mutation also names the reviewed draft. */
 export type WorkshopMutation =
-  | { method: "skills.workshop.archive"; name: string }
+  | { method: "skills.workshop.archive"; name: string; undoRestoreChangeId?: string }
   | { method: "skills.workshop.restore"; name: string; versionId?: string }
   | {
       method: "skills.workshop.applyDraft" | "skills.workshop.discardDraft";
@@ -41,9 +41,10 @@ export function undoMutationFor(
 ): WorkshopMutation | null {
   const { skillName: name, versionId } = change;
   if (!versionId) {
-    return change.action === "create" || change.action === "restore"
-      ? { method: "skills.workshop.archive", name }
-      : null;
+    if (change.action === "restore") {
+      return { method: "skills.workshop.archive", name, undoRestoreChangeId: change.id };
+    }
+    return change.action === "create" ? { method: "skills.workshop.archive", name } : null;
   }
   const retained = list.archived
     .find((skill) => skill.name === name)
