@@ -494,6 +494,7 @@ it.for(["acknowledgement", "status", "poll delay"] as const)(
           // without consuming the budget we reserve for the withheld response.
           await waitForFast(() => expect(peer.requests).toContain("update.run"));
           if (scenario === "status") {
+            await waitForFast(() => expect(peer.requests).toContain("update.runs.get"));
             await withinTest(
               awaitGateBeforeSettlement(
                 firstStatusClosed.promise,
